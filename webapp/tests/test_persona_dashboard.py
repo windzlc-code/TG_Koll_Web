@@ -4365,7 +4365,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         fetch_source = source[start:end]
         self.assertIn("keywords,", fetch_source)
         self.assertIn("/hot_candidates/cooldown", fetch_source)
-        self.assertNotIn("热点抓取准备失败，请稍后重试。", fetch_source)
+        self.assertIn("热点抓取准备失败，请稍后重试。", fetch_source)
 
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()
@@ -4629,7 +4629,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertRegex(mocked.call_args_list[1].args[0]["keywordDigest"], r"^[0-9a-f]{64}$")
 
-    def test_fetch_persona_hot_candidates_skips_local_keyword_prep_in_remote_mode(self):
+    def test_fetch_persona_hot_candidates_sends_new_host_keywords_in_remote_mode(self):
         self._write_archives()
         fetched = {
             "ok": True,
@@ -4642,26 +4642,24 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         with (
             mock.patch.object(server, "configured_remote_fetch_mode", return_value="remote_required"),
-            mock.patch.object(server, "_prepare_persona_hot_keywords") as prepared,
             mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fetched) as mocked,
         ):
             body = server._fetch_persona_hot_candidates(
                 "persona-1",
                 server.PersonaDashboardHotCandidatesFetchPayload(
-                    keywords=["must-not-send"],
+                    keywords=["历史老师", "历史课堂"],
                     search_mode="strict",
                 ),
             )
 
         self.assertTrue(body["ok"])
-        prepared.assert_not_called()
         mocked.assert_called_once()
         payload = mocked.call_args.args[0]
         self.assertEqual(payload["action"], "fetch-hot-candidates")
         self.assertEqual(payload["archiveId"], "persona-1")
-        self.assertNotIn("keywords", payload)
-        self.assertNotIn("keywordStrategyVersion", payload)
-        self.assertNotIn("keywordDigest", payload)
+        self.assertEqual(payload["keywords"], ["历史老师", "历史课堂"])
+        self.assertEqual(payload["keywordStrategyVersion"], server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION)
+        self.assertRegex(payload["keywordDigest"], r"^[0-9a-f]{64}$")
         self.assertNotIn("archiveSnapshot", payload)
 
     def test_hot_keyword_gateway_html_error_is_not_exposed(self):

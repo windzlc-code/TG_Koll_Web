@@ -1044,6 +1044,8 @@ def _run_tool_r18_job_once(
     if capability in {"persona.hot_candidates.v1", "persona.hot_keywords.v1"}:
         runtime_payload.pop("archiveSnapshot", None)
         runtime_payload["keywords"] = _clean_hot_keywords(runtime_payload.get("keywords"))
+        if capability == "persona.hot_candidates.v1" and not _has_current_hot_keyword_strategy(runtime_payload):
+            raise RuntimeError("persona hot keywords must use the current new-host strategy")
     for private_field in (
         "accountId", "account_id", "senderUsername", "sender_username",
         "userId", "user_id", "loginUsername", "login_username",
@@ -1349,10 +1351,9 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
         if capability == "persona.hot_candidates.v1":
             if normalized.get("_poolRefill"):
                 raise ProtocolError("background pool refill cannot be submitted externally")
-            # The old host owns the persona dataset and keyword strategy.
-            normalized.pop("keywords", None)
-            normalized.pop("keywordStrategyVersion", None)
-            normalized.pop("keywordDigest", None)
+            normalized["keywords"] = _clean_hot_keywords(normalized.get("keywords"))
+            if not _has_current_hot_keyword_strategy(normalized):
+                raise ProtocolError("persona hot keywords must use the current new-host strategy")
         if capability == "crm.threads_live_search.v1" and normalized.get("liveOnly") is not True:
             raise ProtocolError("CRM live search must remain live-only")
         normalized.pop("sourcePolicy", None)

@@ -473,7 +473,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
                 }
             )
 
-    def test_persona_hot_envelope_accepts_archive_id_without_snapshot_or_keywords(self) -> None:
+    def test_persona_hot_envelope_keeps_new_host_keywords_and_drops_snapshot(self) -> None:
         capability, unit_id, payload = _validate_envelope(
             {
                 "capability": "persona.hot_candidates.v1",
@@ -482,9 +482,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
                     "action": "fetch-hot-candidates",
                     "archiveId": "archive_empty_keywords",
                     "archiveSnapshot": {"id": "archive_empty_keywords", "posts": []},
-                    "keywords": ["must-not-cross"],
-                    "keywordStrategyVersion": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
-                    "keywordDigest": "0" * 64,
+                    **current_keyword_strategy(["女性成长", "心理疗愈"]),
                     "liveOnly": False,
                     "recordShown": False,
                 },
@@ -493,10 +491,24 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(capability, "persona.hot_candidates.v1")
         self.assertEqual(unit_id, "archive_empty_keywords")
         self.assertEqual(payload["archiveId"], "archive_empty_keywords")
+        self.assertEqual(payload["keywords"], ["女性成长", "心理疗愈"])
         self.assertNotIn("archiveSnapshot", payload)
-        self.assertNotIn("keywords", payload)
-        self.assertNotIn("keywordStrategyVersion", payload)
-        self.assertNotIn("keywordDigest", payload)
+
+    def test_persona_hot_envelope_rejects_empty_keywords_from_new_host(self) -> None:
+        with self.assertRaisesRegex(ProtocolError, "keywords"):
+            _validate_envelope(
+                {
+                    "capability": "persona.hot_candidates.v1",
+                    "unit_id": "archive_empty_keywords",
+                    "payload": {
+                        "action": "fetch-hot-candidates",
+                        "archiveId": "archive_empty_keywords",
+                        "keywords": [],
+                        "liveOnly": False,
+                        "recordShown": False,
+                    },
+                }
+            )
 
     def test_persona_hot_envelope_requires_archive_id(self) -> None:
         with self.assertRaisesRegex(ProtocolError, "archive id"):
@@ -506,6 +518,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
                     "unit_id": "archive_missing_id",
                     "payload": {
                         "action": "fetch-hot-candidates",
+                        **current_keyword_strategy(["女性成长"]),
                         "liveOnly": False,
                         "recordShown": False,
                     },
@@ -702,8 +715,8 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertNotIn("profile_dir", payload)
         self.assertEqual(payload["_workerCapability"], "persona.hot_candidates.v1")
         self.assertEqual(payload["archiveId"], "archive_12345678")
+        self.assertEqual(payload["keywords"], ["理发师", "理发店趣事"])
         self.assertNotIn("archiveSnapshot", payload)
-        self.assertNotIn("keywords", payload)
         with self.assertRaises(ProtocolError):
             _validate_envelope(
                 {

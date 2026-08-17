@@ -236,10 +236,9 @@ class RemoteFetchControlTests(unittest.TestCase):
                     self.assertTrue(client.calls[-1]["unit_id"].startswith("unit_"))
                     if capability == "persona.hot_candidates.v1":
                         self.assertNotIn("archiveSnapshot", client.calls[-1]["payload"])
-                        self.assertNotIn("keywords", client.calls[-1]["payload"])
         self.assertEqual(server._PERSONA_HOT_REMOTE_JOB_IDS, {})
 
-    def test_remote_hot_fetch_sends_archive_id_only_without_snapshot_or_keywords(self) -> None:
+    def test_remote_hot_fetch_sends_new_host_keywords_without_archive_snapshot(self) -> None:
         client = _FakeRemoteFetchClient()
         with (
             patch.object(server, "configured_remote_fetch_client", return_value=client),
@@ -254,9 +253,9 @@ class RemoteFetchControlTests(unittest.TestCase):
                 {
                     "action": "fetch-hot-candidates",
                     "archiveId": "persona-a",
-                    "keywords": ["must-not-send"],
+                    "keywords": ["女性成长", "心理疗愈"],
                     "keywordStrategyVersion": 45,
-                    "keywordDigest": "0" * 64,
+                    "keywordDigest": "a" * 64,
                     "archiveSnapshot": {"id": "persona-a", "posts": []},
                     "liveOnly": False,
                     "recordShown": False,
@@ -270,15 +269,15 @@ class RemoteFetchControlTests(unittest.TestCase):
         sent = client.calls[-1]["payload"]
         self.assertEqual(sent["archiveId"], "persona-a")
         self.assertEqual(sent["action"], "fetch-hot-candidates")
+        self.assertEqual(sent["keywords"], ["女性成长", "心理疗愈"])
+        self.assertEqual(sent["keywordStrategyVersion"], 45)
+        self.assertEqual(sent["keywordDigest"], "a" * 64)
         self.assertIs(sent["userInitiated"], True)
         self.assertIs(sent["recordShown"], False)
         self.assertIs(sent["liveOnly"], False)
         self.assertEqual(sent["limit"], 12)
         self.assertEqual(sent["searchMode"], "strict")
         self.assertNotIn("archiveSnapshot", sent)
-        self.assertNotIn("keywords", sent)
-        self.assertNotIn("keywordStrategyVersion", sent)
-        self.assertNotIn("keywordDigest", sent)
 
     def test_remote_crm_payload_is_allowlisted_and_contains_only_ephemeral_snapshot(self) -> None:
         client = _FakeRemoteFetchClient()
@@ -363,27 +362,18 @@ class RemoteFetchControlTests(unittest.TestCase):
         ):
             self.assertFalse(server._crm_collector_live_search_enabled())
 
-    def test_keyword_generation_is_sent_to_old_host_without_snapshot(self) -> None:
+    def test_keyword_generation_stays_on_new_host(self) -> None:
         client = _FakeRemoteFetchClient()
         with (
             patch.object(server, "configured_remote_fetch_client", return_value=client),
-            patch.object(server, "_remote_fetch_archive_snapshot", return_value={"id": "persona-a", "posts": []}),
             patch.dict(os.environ, {"TG_REMOTE_FETCH_MODE": "remote_required"}),
         ):
             result = server._run_remote_persona_hot_workflow(
                 {"action": "prepare-hot-keywords", "archiveId": "persona-a", "searchMode": "strict"},
                 timeout_seconds=60,
             )
-        self.assertTrue(result["ok"])
-        sent = client.calls[-1]
-        self.assertEqual(sent["capability"], "persona.hot_keywords.v1")
-        self.assertEqual(sent["payload"], {
-            "action": "prepare-hot-keywords",
-            "archiveId": "persona-a",
-            "searchMode": "strict",
-        })
-        self.assertNotIn("archiveSnapshot", sent["payload"])
-        self.assertNotIn("keywords", sent["payload"])
+        self.assertIsNone(result)
+        self.assertEqual(client.calls, [])
 
     def test_remote_payload_includes_current_snapshots_and_output_only(self) -> None:
         client = _FakeRemoteFetchClient()

@@ -100,7 +100,12 @@ const DEFAULT_REFRESH_FRESHNESS_DAYS = 30;
 // page collection bounded to the UI promise instead of letting a slow source
 // monopolise Chromium after the caller has already timed out.
 const SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS = 30_000;
-const SENTIMENT_HOT_TOTAL_TIMEOUT_MS = 30_000;
+const SENTIMENT_HOT_DEFAULT_TOTAL_TIMEOUT_MS = 30_000;
+function sentimentHotTotalTimeoutMs(): number {
+  const raw = Number(process.env.SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS || process.env.SENTIMENT_HOT_TOTAL_TIMEOUT_MS || 0);
+  if (Number.isFinite(raw) && raw >= 10_000) return Math.min(120_000, Math.floor(raw));
+  return SENTIMENT_HOT_DEFAULT_TOTAL_TIMEOUT_MS;
+}
 const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
@@ -2339,14 +2344,14 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       fetchInstagramReaderSearchCandidates({
         archiveId,
         keywords,
-        queries: instagramQueries.slice(0, INSTAGRAM_READER_QUERY_LIMIT),
+        queries: instagramQueries.slice(0, liveOnlyRefresh ? 8 : INSTAGRAM_READER_QUERY_LIMIT),
         limit: poolLimit,
         refresh: args.refresh === true,
         freshnessDays: strictFreshOnly ? operationalFreshnessDays : undefined,
         searchMode: strictFreshOnly ? searchMode : undefined,
         warnings,
       }),
-      Math.min(8_000, remainingSentimentHotTotalBudgetMs(startedAt, 6_000)),
+      Math.min(liveOnlyRefresh ? 25_000 : 8_000, remainingSentimentHotTotalBudgetMs(startedAt, liveOnlyRefresh ? 8_000 : 6_000)),
       [],
     ).catch((error) => {
       warnings.push("Instagram reader 抓取失敗：" + (error instanceof Error ? error.message : String(error)));
@@ -2427,8 +2432,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       limit,
       { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays },
     ).length;
-    if (liveReadyCount < limit && instagramQueries.length > 0 && hasSentimentHotTotalBudget(startedAt, 6_000)) {
-      const instagramTimeoutMs = Math.min(8_000, remainingSentimentHotTotalBudgetMs(startedAt, 4_000));
+    if (liveReadyCount < limit && instagramQueries.length > 0 && hasSentimentHotTotalBudget(startedAt, liveOnlyRefresh ? 8_000 : 6_000)) {
+      const instagramTimeoutMs = Math.min(liveOnlyRefresh ? 25_000 : 8_000, remainingSentimentHotTotalBudgetMs(startedAt, liveOnlyRefresh ? 6_000 : 4_000));
       if (instagramTimeoutMs >= 4_000) {
         const beforeInstagramCount = candidates.length;
         const readerCandidates = await measureSentimentStage(
@@ -2889,11 +2894,11 @@ async function withSentimentTimeout<T>(promise: Promise<T>, timeoutMs: number, f
 }
 
 function remainingSentimentHotTotalBudgetMs(startedAt: number, reserveMs = 0): number {
-  return Math.max(1_000, SENTIMENT_HOT_TOTAL_TIMEOUT_MS - (Date.now() - startedAt) - reserveMs);
+  return Math.max(1_000, sentimentHotTotalTimeoutMs() - (Date.now() - startedAt) - reserveMs);
 }
 
 function hasSentimentHotTotalBudget(startedAt: number, minRemainingMs = 1_000): boolean {
-  return SENTIMENT_HOT_TOTAL_TIMEOUT_MS - (Date.now() - startedAt) >= minRemainingMs;
+  return sentimentHotTotalTimeoutMs() - (Date.now() - startedAt) >= minRemainingMs;
 }
 
 function pushSentimentHotWarning(warnings: string[], warning: string) {
