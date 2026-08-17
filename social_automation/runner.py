@@ -11692,28 +11692,6 @@ def _threads_sidebar_compose_opener(page):
         return structured
     selectors = [
         'a[href]',
-        '[aria-label*="New thread" i]',
-        '[aria-label*="Start a thread" i]',
-        '[aria-label*="Create" i]',
-        '[aria-label*="Compose" i]',
-        '[aria-label*="发帖" i]',
-        '[aria-label*="發文" i]',
-        '[aria-label*="新贴文" i]',
-        '[aria-label*="新貼文" i]',
-        '[aria-label*="新串文" i]',
-        '[aria-label*="撰写新" i]',
-        '[aria-label*="撰寫新" i]',
-        '[aria-label*="撰寫串文" i]',
-        '[aria-label*="建立串文" i]',
-        '[aria-label*="新規スレッド" i]',
-        '[aria-label*="새 스레드" i]',
-        '[aria-label*="ланцюжок" i]',
-        '[aria-label*="Новий" i]',
-        'text="New thread"',
-        'text="新串文"',
-        'text="撰寫串文"',
-        'text="建立串文"',
-        'text="Новий ланцюжок"',
     ]
     try:
         viewport_width = float(page.evaluate("() => window.innerWidth") or 1920)
@@ -11779,23 +11757,19 @@ def _threads_compose_opener_by_structure(page):
                 };
                 const square = rect => Math.abs(rect.width - rect.height) <= 14;
                 const iconSize = rect => rect.width >= 32 && rect.width <= 88 && rect.height >= 32 && rect.height <= 88;
-                const nameOf = node => String(
-                    node.getAttribute('aria-label') || node.getAttribute('title') || node.innerText || node.textContent || ''
-                ).replace(/\\s+/g, ' ').trim();
-                const composeWords = [
-                    'new thread', 'start a thread', 'create', 'compose',
-                    '发帖', '發文', '新贴文', '新貼文', '新串文', '撰写', '撰寫', '建立串',
-                    'ланцюжок', 'новий', 'поток', 'ветк', 'hilo', '스레드', 'スレッド'
-                ];
                 const plusLike = node => {
-                    const name = nameOf(node);
                     const svg = node.querySelector('svg');
                     const markup = svg ? String(svg.innerHTML || '') : '';
-                    return name.includes('+') || name.includes('＋') || /plus|add|M11|line x1/i.test(markup);
-                };
-                const looksCompose = node => {
-                    const name = nameOf(node).toLowerCase();
-                    return plusLike(node) || composeWords.some(word => name.includes(word));
+                    const glyph = Array.from(node.childNodes).some(child => {
+                        if (child.nodeType !== Node.TEXT_NODE) return false;
+                        const text = String(child.textContent || '').replace(/\\s+/g, '');
+                        return text === '+' || text === '＋';
+                    });
+                    const iconChild = Array.from(node.querySelectorAll('span, i, svg')).some(child => {
+                        const text = String(child.textContent || '').replace(/\\s+/g, '');
+                        return text === '+' || text === '＋';
+                    });
+                    return glyph || iconChild || /plus|M11|line x1/i.test(markup);
                 };
                 const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"], [tabindex="0"]')).filter(visible);
                 const leftItems = [];
@@ -11807,11 +11781,10 @@ def _threads_compose_opener_by_structure(page):
                         node,
                         y: rect.top,
                         plus: plusLike(node),
-                        compose: looksCompose(node),
                     });
                 }
                 leftItems.sort((a, b) => a.y - b.y);
-                const leftPick = leftItems.find(item => item.plus || item.compose);
+                const leftPick = leftItems.find(item => item.plus);
                 if (leftPick) {
                     leftPick.node.setAttribute('data-vecto-compose-opener', '1');
                     return 'left-rail';

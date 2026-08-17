@@ -4238,15 +4238,17 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             "reject",
         )
 
-    def test_threads_compose_opener_prefers_left_plus_row_over_right_fab(self):
+    def test_threads_compose_opener_prefers_left_plus_icon_over_right_fab(self):
         source = Path(runner.__file__).read_text(encoding="utf-8")
         opener = source.split("def _threads_compose_opener_by_structure(", 1)[1].split("def _ensure_threads_compose_ready(", 1)[0]
-        self.assertLess(opener.index("return 'left-rail'"), opener.index("return 'fab'"))
-        self.assertIn("ланцюжок", opener)
-        self.assertIn("name.includes('+')", opener)
-        self.assertIn("rect.width > 380", opener)
         sidebar = source.split("def _threads_sidebar_compose_opener(", 1)[1].split("def _threads_compose_opener_by_structure(", 1)[0]
-        self.assertIn('text="Новий ланцюжок"', sidebar)
+        self.assertLess(opener.index("return 'left-rail'"), opener.index("return 'fab'"))
+        self.assertIn("plusLike(node)", opener)
+        self.assertNotIn("ланцюжок", source)
+        self.assertNotIn("Новий", source)
+        self.assertNotIn("composeWords", opener)
+        self.assertNotIn('text="New thread"', sidebar)
+        self.assertNotIn('text="新串文"', sidebar)
 
     def test_threads_compose_opener_uses_bottom_right_plus_structure(self):
         empty = mock.Mock()
@@ -4267,30 +4269,24 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertIs(result, marked)
         page.evaluate.assert_called()
 
-    def test_threads_sidebar_compose_opener_accepts_traditional_chinese_sidebar_text(self):
-        text_span = mock.Mock()
-        text_span.is_visible.return_value = True
-        text_span.get_attribute.return_value = None
-        text_span.bounding_box.return_value = {"x": 18, "y": 110, "width": 80, "height": 36}
-        sidebar_opener = mock.Mock()
-        sidebar_opener.count.return_value = 1
-        sidebar_opener.is_visible.return_value = True
-        sidebar_opener.get_attribute.return_value = None
-        sidebar_opener.bounding_box.return_value = {"x": 10, "y": 98, "width": 145, "height": 50}
-        text_span.locator.return_value = sidebar_opener
-        sidebar_group = mock.Mock()
-        sidebar_group.count.return_value = 1
-        sidebar_group.nth.return_value = text_span
+    def test_threads_sidebar_compose_opener_falls_back_to_new_href_not_language_text(self):
+        compose_link = mock.Mock()
+        compose_link.is_visible.return_value = True
+        compose_link.get_attribute.return_value = "https://www.threads.com/new"
+        compose_link.bounding_box.return_value = {"x": 24, "y": 120, "width": 180, "height": 40}
+        anchors = mock.Mock()
+        anchors.count.return_value = 1
+        anchors.nth.return_value = compose_link
         empty = mock.Mock()
         empty.count.return_value = 0
         page = mock.Mock()
         page.url = "https://www.threads.com/"
-        page.evaluate.return_value = 1920
-        page.locator.side_effect = lambda selector: sidebar_group if selector == 'text="新串文"' else empty
+        page.evaluate.side_effect = ["", 1920]
+        page.locator.side_effect = lambda selector: anchors if selector == "a[href]" else empty
 
         result = runner._threads_sidebar_compose_opener(page)
 
-        self.assertIs(result, sidebar_opener)
+        self.assertIs(result, compose_link)
 
     def test_threads_compose_ready_does_not_use_inline_home_composer(self):
         page = mock.Mock()
