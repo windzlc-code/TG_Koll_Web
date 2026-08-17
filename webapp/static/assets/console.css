@@ -17164,6 +17164,71 @@ body.persona-media-sorting {
     var(--proxy-purchase-paper);
 }
 
+.account-proxy-picker-preload {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 12px;
+  min-height: 280px;
+  padding: 36px 20px;
+  text-align: center;
+}
+
+.account-proxy-picker-preload-spinner {
+  width: 46px;
+  height: 46px;
+  border: 4px solid rgba(18, 110, 170, .16);
+  border-top-color: #126eaa;
+  border-right-color: #102c47;
+  border-radius: 50%;
+  animation: account-proxy-picker-spin .85s linear infinite;
+}
+
+.account-proxy-picker-preload-icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  color: #fff;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #1678b4, #102c47);
+}
+
+.account-proxy-picker-preload-icon .ui-network-icon {
+  display: block;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.account-proxy-picker-preload strong {
+  color: #102c47;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.account-proxy-picker-preload p {
+  margin: 0;
+  max-width: 280px;
+  color: #64758a;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.account-proxy-picker-preload [data-account-proxy-preload-retry] {
+  min-height: 40px;
+  margin-top: 4px;
+  padding: 0 16px;
+}
+
+@keyframes account-proxy-picker-spin {
+  to { transform: rotate(360deg); }
+}
+
 .account-proxy-region-guide {
   display: flex;
   align-items: center;
@@ -28823,6 +28888,7 @@ body.console-page {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .account-proxy-picker-preload-spinner,
   .login-assistance-spinner,
   .login-assistance-progress-note span,
   .login-assistance-success :is(circle, path) {
