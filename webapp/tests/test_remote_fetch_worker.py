@@ -531,7 +531,8 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(unit_id, "archive_empty_keywords")
         self.assertEqual(payload["archiveId"], "archive_empty_keywords")
         self.assertEqual(payload["keywords"], ["女性成长", "心理疗愈"])
-        self.assertNotIn("archiveSnapshot", payload)
+        self.assertEqual(payload["archiveSnapshot"]["id"], "archive_empty_keywords")
+        self.assertEqual(payload["archiveSnapshot"]["posts"], [])
 
     def test_persona_hot_envelope_rejects_empty_keywords_from_new_host(self) -> None:
         with self.assertRaisesRegex(ProtocolError, "keywords"):
@@ -755,7 +756,8 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(payload["_workerCapability"], "persona.hot_candidates.v1")
         self.assertEqual(payload["archiveId"], "archive_12345678")
         self.assertEqual(payload["keywords"], ["理发师", "理发店趣事"])
-        self.assertNotIn("archiveSnapshot", payload)
+        self.assertEqual(payload["archiveSnapshot"]["id"], "archive_12345678")
+        self.assertEqual(payload["archiveSnapshot"]["posts"], [])
         with self.assertRaises(ProtocolError):
             _validate_envelope(
                 {
@@ -816,7 +818,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(payload["action"], "prepare-hot-keywords")
         self.assertEqual(payload["archiveId"], "archive_12345678")
         self.assertEqual(payload["searchMode"], "strict")
-        self.assertNotIn("archiveSnapshot", payload)
+        self.assertEqual(payload["archiveSnapshot"]["id"], "archive_12345678")
 
     def test_runtime_uses_only_the_leased_collector_profile(self) -> None:
         class FakePool:

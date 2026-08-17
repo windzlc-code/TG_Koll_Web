@@ -58,6 +58,53 @@ def _hot_public_probe_enabled() -> bool:
     return Path("/data/hot-public-probe").is_file()
 
 
+_PERSONA_HOT_SNAPSHOT_SETUP_FIELDS = (
+    "genres",
+    "interests",
+    "trendTopics",
+    "personaType",
+    "personality",
+    "personaPersonality",
+    "personaStyle",
+    "contentTheme",
+    "customTopic",
+    "tweetStyleProfile",
+    "tweetStyleSample",
+    "chineseScript",
+    "script",
+    "locale",
+    "targetMarket",
+    "market",
+    "region",
+    "personaDescription",
+    "personaName",
+)
+
+
+def _sanitize_persona_hot_archive_snapshot(value: Any, archive_id: str) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    clean_id = str(archive_id or "").strip()
+    if not clean_id or str(value.get("id") or "").strip() != clean_id:
+        return None
+    raw_setup = value.get("setup") if isinstance(value.get("setup"), dict) else {}
+    safe_setup: dict[str, Any] = {}
+    for key in _PERSONA_HOT_SNAPSHOT_SETUP_FIELDS:
+        item = raw_setup.get(key)
+        if item is None or isinstance(item, (str, bool, int, float)):
+            if item is not None:
+                safe_setup[key] = item
+        elif isinstance(item, list) and all(isinstance(part, str) for part in item):
+            safe_setup[key] = list(item)
+    return {
+        "id": clean_id,
+        "name": str(value.get("name") or "")[:200],
+        "content": str(value.get("content") or "")[:4_000],
+        "setup": safe_setup,
+        "posts": [],
+    }
+
+
 def _collector_platform(payload: Mapping[str, Any]) -> str:
     explicit = str(payload.get("platform") or "").strip().lower()
     if explicit in {"threads", "instagram"}:
@@ -1103,7 +1150,6 @@ def _run_tool_r18_job_once(
     background_refill = bool(runtime_payload.pop("_poolRefill", False))
     runtime_payload.pop("userInitiated", None)
     if capability in {"persona.hot_candidates.v1", "persona.hot_keywords.v1"}:
-        runtime_payload.pop("archiveSnapshot", None)
         runtime_payload["keywords"] = _clean_hot_keywords(runtime_payload.get("keywords"))
         if capability == "persona.hot_candidates.v1" and not _has_current_hot_keyword_strategy(runtime_payload):
             raise RuntimeError("persona hot keywords must use the current new-host strategy")
@@ -1433,7 +1479,11 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
         if not archive_id:
             raise ProtocolError("persona archive id is required")
         normalized["archiveId"] = archive_id
-        normalized.pop("archiveSnapshot", None)
+        snapshot = _sanitize_persona_hot_archive_snapshot(normalized.get("archiveSnapshot"), archive_id)
+        if snapshot is not None:
+            normalized["archiveSnapshot"] = snapshot
+        elif "archiveSnapshot" in normalized:
+            raise ProtocolError("archiveSnapshot does not match archiveId")
     if capability == "persona.hot_post_metrics.v1":
         post_snapshot = normalized.get("postSnapshot")
         post_id = str(normalized.get("postId") or "").strip()

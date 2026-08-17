@@ -14246,6 +14246,8 @@ _REMOTE_FETCH_SAFE_SETUP_FIELDS = frozenset({
     "targetMarket",
     "market",
     "region",
+    "personaDescription",
+    "personaName",
 })
 
 _REMOTE_CRM_FETCH_FIELDS = frozenset({
@@ -14291,7 +14293,11 @@ _REMOTE_PERSONA_HOT_REQUEST_FIELDS = frozenset({
 
 
 def _remote_fetch_persona_hot_request(payload: dict[str, Any]) -> dict[str, Any]:
-    """Send archiveId, search params, and new-host keywords. Never send the persona archive."""
+    """Send archiveId, new-host keywords, and a sanitized persona snapshot.
+
+    The old collector does not store every new-host persona. The snapshot is
+    the only way an arbitrary newly created persona can be scraped.
+    """
 
     remote_payload: dict[str, Any] = {}
     for key in _REMOTE_PERSONA_HOT_REQUEST_FIELDS:
@@ -14308,6 +14314,12 @@ def _remote_fetch_persona_hot_request(payload: dict[str, Any]) -> dict[str, Any]
     ][:32]
     if keywords:
         remote_payload["keywords"] = keywords
+    snapshot = payload.get("archiveSnapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = _remote_fetch_archive_snapshot(archive_id)
+    safe_snapshot = _remote_fetch_safe_archive_value(snapshot, archive_id)
+    if safe_snapshot is not None:
+        remote_payload["archiveSnapshot"] = safe_snapshot
     return remote_payload
 
 
@@ -14926,9 +14938,13 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
                 status_code=503,
                 detail=detail or "热点关键词模型暂时不可用，请稍后重试。",
             )
+    archive_snapshot = _remote_fetch_archive_snapshot(clean_id)
+    if archive_snapshot is None:
+        raise HTTPException(status_code=404, detail="人设不存在。")
     fetch_payload: dict[str, Any] = {
             "action": "fetch-hot-candidates",
             "archiveId": clean_id,
+            "archiveSnapshot": archive_snapshot,
             "prompt": str(payload.prompt or "").strip(),
             # A foreground click must always execute one public Reader search.
             # The old host may merge its candidate pool, but a full pool must

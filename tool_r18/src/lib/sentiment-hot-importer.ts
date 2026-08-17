@@ -1444,6 +1444,59 @@ function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentH
   return rankSearchKeywords(normalized).slice(0, sentimentHotKeywordTargetForMode(mode));
 }
 
+function personaHotStrategySourceText(archive: Partial<Pick<PersonaArchive, "name" | "content" | "setup">> | undefined): string {
+  const setup = (archive?.setup || {}) as Record<string, any>;
+  const list = (value: unknown) => Array.isArray(value) ? value.map(cleanText).filter(Boolean) : [];
+  return [
+    archive?.name ? `人设名称：${archive.name}` : "",
+    list(setup.genres).length ? `内容领域：${list(setup.genres).join("、")}` : "",
+    list(setup.interests).length ? `兴趣标签：${list(setup.interests).join("、")}` : "",
+    cleanText(setup.contentTheme) ? `内容主题：${cleanText(setup.contentTheme)}` : "",
+    cleanText(setup.customTopic) ? `人设主题：${cleanText(setup.customTopic)}` : "",
+    cleanText(setup.personaDescription) ? `人设简介：${cleanText(setup.personaDescription).slice(0, 400)}` : "",
+    cleanText(archive?.content) ? `人设说明：${cleanText(archive?.content).slice(0, 400)}` : "",
+    list(setup.trendTopics).length ? `平台标签关键词：${list(setup.trendTopics).join("、")}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+export function seedSentimentHotSearchStrategyFromPersona(archive: Partial<Pick<PersonaArchive, "name" | "content" | "setup">> | undefined): SentimentHotSearchStrategy {
+  const setup = (archive?.setup || {}) as Record<string, any>;
+  const blobs = [
+    ...(Array.isArray(setup.genres) ? setup.genres : []),
+    ...(Array.isArray(setup.interests) ? setup.interests : []),
+    ...(Array.isArray(setup.trendTopics) ? setup.trendTopics : []),
+    setup.contentTheme,
+    setup.customTopic,
+    setup.personaDescription,
+    archive?.content,
+  ];
+  const seeds: string[] = [];
+  for (const blob of blobs) {
+    const text = String(blob || "");
+    const parts = [
+      ...text.split(/[，,、；;。.!！？?\s\/|和与及]+/),
+      ...(text.match(/[\u3400-\u9fff]{2,8}/g) || []),
+    ];
+    for (const part of parts) {
+      const term = normalizeSentimentSearchKeyword(part);
+      if (isConcreteSearchKeyword(term)) seeds.push(term);
+    }
+  }
+  const unique = [...new Set(seeds)].slice(0, 20);
+  if (unique.length === 0) return emptySentimentHotSearchStrategy();
+  return {
+    primaryQueries: unique.slice(0, 16),
+    broadQueries: unique.slice(0, 12),
+    ecosystemQueries: unique.slice(0, 8),
+    requiredAnchorTerms: unique.slice(0, 6),
+    normalAnchorTerms: unique.slice(0, 6),
+    strictAcceptTerms: unique.slice(0, 16),
+    normalAcceptTerms: unique.slice(0, 20),
+    rejectTerms: [],
+    domainSummary: unique.slice(0, 4).join("、"),
+  };
+}
+
 function emptySentimentHotSearchStrategy(): SentimentHotSearchStrategy {
   return {
     primaryQueries: [],
@@ -1981,11 +2034,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
 }): Promise<SentimentHotSearchStrategy> {
   const archive = args.archive || {};
   const setup = archive.setup || {};
-  const personaText = [
-    archive.name ? `人设名称：${archive.name}` : "",
-    Array.isArray((setup as any).genres) && (setup as any).genres.length ? `内容领域：${(setup as any).genres.join("、")}` : "",
-    Array.isArray((setup as any).trendTopics) && (setup as any).trendTopics.length ? `平台标签关键词：${(setup as any).trendTopics.join("、")}` : "",
-  ].filter(Boolean).join("\n");
+  const personaText = personaHotStrategySourceText(archive);
   if (!personaText.trim()) return emptySentimentHotSearchStrategy();
   const chineseScript = cleanText((setup as any).chineseScript || (setup as any).script || (setup as any).locale).toLowerCase();
   const targetMarket = cleanText((setup as any).targetMarket || (setup as any).market || (setup as any).region).toLowerCase();
@@ -2092,6 +2141,11 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
       return strategy;
     }
     args.warnings.push("模型未返回符合当前人设核心的有效热点关键词。");
+    const seeded = seedSentimentHotSearchStrategyFromPersona(archive);
+    if (sentimentHotStrategyHasModelTerms(seeded)) {
+      args.warnings.push("已用人设领域词回退生成搜索关键词。");
+      return seeded;
+    }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     args.warnings.push(
@@ -2099,6 +2153,11 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
         ? "热点关键词生成超时，请稍后重试。"
         : "热点关键词服务暂时不可用，请稍后重试。",
     );
+  }
+  const seeded = seedSentimentHotSearchStrategyFromPersona(archive);
+  if (sentimentHotStrategyHasModelTerms(seeded)) {
+    args.warnings.push("已用人设领域词回退生成搜索关键词。");
+    return seeded;
   }
   return emptySentimentHotSearchStrategy();
 }

@@ -4660,7 +4660,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["keywords"], ["历史老师", "历史课堂"])
         self.assertEqual(payload["keywordStrategyVersion"], server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION)
         self.assertRegex(payload["keywordDigest"], r"^[0-9a-f]{64}$")
-        self.assertNotIn("archiveSnapshot", payload)
+        self.assertEqual(payload["archiveSnapshot"]["id"], "persona-1")
 
     def test_hot_keyword_gateway_html_error_is_not_exposed(self):
         detail = server._normalize_persona_hot_workflow_error_detail(

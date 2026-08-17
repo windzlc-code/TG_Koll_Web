@@ -56,6 +56,7 @@ import {
   parseThreadsReaderSearchMarkdownCandidates,
   persistSentimentReaderMarkdown,
   resolveSentimentHotCandidateOrigin,
+  seedSentimentHotSearchStrategyFromPersona,
   formatPublicThreadsReaderMarkdown,
   readerMarkdownLooksEmpty,
   extractThreadsSearchPrefetchPayload,
@@ -263,6 +264,16 @@ describe("sentiment hot importer", () => {
       capturedAt: new Date().toISOString(),
       warnings: [],
     } as any)).toBe("candidate_pool");
+    expect(seedSentimentHotSearchStrategyFromPersona({
+      name: "李杰",
+      content: "热爱二次元，常去菜市场捡漏的大叔。",
+      setup: { genres: ["二次元", "市井生活"], interests: ["捡漏", "菜市场"], customTopic: "动漫T恤提环保袋" },
+    } as any).primaryQueries.some((term) => /二次元|菜市场|捡漏|市井/.test(term))).toBe(true);
+    expect(seedSentimentHotSearchStrategyFromPersona({
+      name: "任意人设",
+      content: "只写了钓鱼和路亚装备分享，没有填写领域标签。",
+      setup: {},
+    } as any).primaryQueries.some((term) => /钓鱼|路亚/.test(term))).toBe(true);
     expect(resolveSentimentHotCandidateOrigin({
       id: "cache",
       platform: "threads",

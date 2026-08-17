@@ -235,7 +235,7 @@ class RemoteFetchControlTests(unittest.TestCase):
                     self.assertEqual(client.calls[-1]["capability"], capability)
                     self.assertTrue(client.calls[-1]["unit_id"].startswith("unit_"))
                     if capability == "persona.hot_candidates.v1":
-                        self.assertNotIn("archiveSnapshot", client.calls[-1]["payload"])
+                        self.assertEqual(client.calls[-1]["payload"].get("archiveId"), "persona-a")
         self.assertEqual(server._PERSONA_HOT_REMOTE_JOB_IDS, {})
 
     def test_remote_hot_fetch_sends_new_host_keywords_without_archive_snapshot(self) -> None:
@@ -277,7 +277,8 @@ class RemoteFetchControlTests(unittest.TestCase):
         self.assertIs(sent["liveOnly"], False)
         self.assertEqual(sent["limit"], 12)
         self.assertEqual(sent["searchMode"], "strict")
-        self.assertNotIn("archiveSnapshot", sent)
+        self.assertEqual(sent["archiveSnapshot"]["id"], "persona-a")
+        self.assertEqual(sent["archiveSnapshot"]["posts"], [])
 
     def test_remote_crm_payload_is_allowlisted_and_contains_only_ephemeral_snapshot(self) -> None:
         client = _FakeRemoteFetchClient()
