@@ -10504,16 +10504,12 @@ body.persona-touch-dragging .persona-list-card:active {
   display: none;
 }
 
-.persona-public-media-edit-menu.is-open > .persona-public-media-edit-popover {
-  display: grid;
-}
-
 .persona-public-media-edit-popover {
   position: absolute;
   right: 0;
   bottom: calc(100% + 7px);
   z-index: 20;
-  display: grid;
+  display: none;
   width: 132px;
   gap: 3px;
   padding: 6px;
@@ -10521,6 +10517,15 @@ body.persona-touch-dragging .persona-list-card:active {
   border-radius: 10px;
   background: var(--panel-solid);
   box-shadow: var(--panel-shadow);
+}
+
+.persona-public-media-edit-menu.is-open > .persona-public-media-edit-popover,
+.persona-public-media-edit-menu[open] > .persona-public-media-edit-popover {
+  display: grid;
+}
+
+.persona-public-media-edit-popover[hidden] {
+  display: none !important;
 }
 
 .console-page :is(.console-shell, .console-modal) .persona-public-media-edit-popover button {

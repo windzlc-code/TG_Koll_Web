@@ -730,6 +730,11 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("function togglePersonaMediaEditMenu", self.script)
         self.assertIn('closeConsoleDropdowns(event.target.closest("[data-console-dropdown]"));', self.script)
         self.assertIn(".persona-public-media-edit-menu.is-open > .persona-public-media-edit-trigger", self.styles)
+        popover_rule = self.styles.split(".persona-public-media-edit-popover {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: none;", popover_rule)
+        self.assertNotIn("display: grid;", popover_rule)
+        self.assertIn(".persona-public-media-edit-menu.is-open > .persona-public-media-edit-popover", self.styles)
+        self.assertIn(".persona-public-media-edit-popover[hidden]", self.styles)
 
         hot_editor = self.script.split("function startPersonaHotCandidateEdit", 1)[1].split(
             "function cancelPersonaHotCandidateEdit",
