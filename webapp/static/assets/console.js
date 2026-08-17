@@ -28125,7 +28125,7 @@ function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
     <div class="account-proxy-source-row">
       <div class="account-proxy-type-tabs" role="tablist" aria-label="代理来源">
         <button type="button" class="is-active" role="tab" aria-selected="true" data-account-proxy-type="supplier">平台</button>
-        <button type="button" role="tab" aria-selected="false" data-account-proxy-type="selected">用户</button>
+        <button type="button" role="tab" aria-selected="false" data-account-proxy-type="selected">已选择</button>
       </div>
       <button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="${esc(scope)}" aria-pressed="${selectedProxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button>
     </div>
@@ -28135,7 +28135,7 @@ function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
         <input type="hidden" data-account-proxy-filter="country" value="" />
         <details class="account-proxy-select-menu" data-console-dropdown data-account-proxy-filter-menu="country">
           <summary aria-label="选择代理地区"><span data-account-proxy-filter-label="country">请选择地区</span><i aria-hidden="true"></i></summary>
-          <div class="account-proxy-select-menu-options" data-account-proxy-filter-options="country" role="listbox" aria-label="代理地区"></div>
+          <div class="account-proxy-select-menu-options" data-account-proxy-filter-options="country" role="listbox" aria-label="代理地区" popover="auto"></div>
         </details>
       </div>
       <label class="account-proxy-city-filter"><span>城市</span><select data-account-proxy-filter="city" aria-label="城市" title="城市" disabled><option value="">请先选择地区</option></select></label>
@@ -28149,6 +28149,56 @@ function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
       </details>
     </div>
   </div>`;
+}
+
+function bindAccountProxyCountryMenu(modal) {
+  const menu = modal?.querySelector('[data-account-proxy-filter-menu="country"]');
+  const summary = menu?.querySelector("summary");
+  const options = menu?.querySelector('[data-account-proxy-filter-options="country"]');
+  if (!menu || !summary || !options || typeof options.showPopover !== "function") return () => {};
+
+  const position = () => {
+    if (!menu.open || !options.matches(":popover-open")) return;
+    const rect = summary.getBoundingClientRect();
+    const viewportGap = 8;
+    const below = Math.max(0, window.innerHeight - rect.bottom - viewportGap);
+    const above = Math.max(0, rect.top - viewportGap);
+    const openAbove = below < 170 && above > below;
+    const availableHeight = openAbove ? above : below;
+    const maxHeight = Math.max(120, Math.min(240, availableHeight - 4));
+    options.style.left = `${Math.max(viewportGap, rect.left)}px`;
+    options.style.top = openAbove
+      ? `${Math.max(viewportGap, rect.top - maxHeight - 4)}px`
+      : `${rect.bottom + 4}px`;
+    options.style.width = `${Math.min(rect.width, window.innerWidth - (viewportGap * 2))}px`;
+    options.style.maxHeight = `${maxHeight}px`;
+  };
+  const hide = () => {
+    if (options.matches(":popover-open")) options.hidePopover();
+  };
+  const onMenuToggle = () => {
+    if (!menu.open) {
+      hide();
+      return;
+    }
+    if (!options.matches(":popover-open")) options.showPopover();
+    position();
+  };
+  const onPopoverToggle = (event) => {
+    if (event.newState === "closed" && menu.open) menu.removeAttribute("open");
+  };
+  const modalScroller = modal.querySelector(".console-modal-content");
+  menu.addEventListener("toggle", onMenuToggle);
+  options.addEventListener("toggle", onPopoverToggle);
+  modalScroller?.addEventListener("scroll", position, { passive: true });
+  window.addEventListener("resize", position);
+  return () => {
+    hide();
+    menu.removeEventListener("toggle", onMenuToggle);
+    options.removeEventListener("toggle", onPopoverToggle);
+    modalScroller?.removeEventListener("scroll", position);
+    window.removeEventListener("resize", position);
+  };
 }
 
 function accountProxyPickerFilters(modal) {
@@ -28318,6 +28368,11 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
     const canChoose = proxy.available !== false && Boolean(proxyId);
     const action = selected ? "当前使用" : "选择使用";
     const status = selected ? "当前使用" : (canChoose ? "可选择" : "已占用");
+    const boundCount = Math.max(0, Number(proxy.bound_account_count) || 0);
+    const usageTone = boundCount >= 4 ? "danger" : (boundCount >= 3 ? "warning" : (boundCount === 2 ? "notice" : (boundCount === 1 ? "safe" : "idle")));
+    const usageHint = boundCount >= 4
+      ? `已超出建议上限，${boundCount} 个账号正在使用`
+      : (boundCount === 3 ? "已达到 3 个账号的建议上限" : `${boundCount}/3 个账号正在使用`);
     const ownershipType = String(proxy.ownership_type || "shared").toLowerCase();
     const renewal = ownershipType === "owned" && proxy.purchase_order_id
       ? `<button type="button" class="proxy-market-mini-renewal" data-account-proxy-renewal-order="${esc(proxy.purchase_order_id)}" data-renewal-enabled="${proxy.renewal_enabled ? "true" : "false"}" aria-pressed="${proxy.renewal_enabled ? "true" : "false"}"><span>自动续费</span><i aria-hidden="true"></i></button>`
@@ -28327,7 +28382,7 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
       <div class="proxy-market-mini-card-banner">
         <div class="proxy-market-mini-card-head">
           <span class="proxy-market-mini-card-kinds"><span class="proxy-market-mini-kind" data-kind="${esc(kind)}">用户选择</span><span class="proxy-market-mini-country">${esc(country)}</span></span>
-          <span class="proxy-market-mini-stock">${esc(status)}</span>
+          <span class="proxy-market-mini-card-badges"><span class="proxy-market-mini-usage" data-tone="${esc(usageTone)}" title="${esc(usageHint)}">${boundCount}/3</span><span class="proxy-market-mini-stock">${esc(status)}</span></span>
         </div>
         <strong class="proxy-market-mini-title">${esc(regionLabel)}代理 IP</strong>
       </div>
@@ -28782,8 +28837,10 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       window.requestAnimationFrame(() => returnModal.querySelector("[data-account-proxy-picker-open]")?.focus({ preventScroll: true }));
     }
   };
+  let releaseCountryMenu = () => {};
   const close = (proxyId = null) => {
     if (!pickerDialog.isConnected) return;
+    releaseCountryMenu();
     if (returnModal) pickerDialog.replaceWith(originalDialog);
     else modalRoot.remove();
     restoreReturnModal(proxyId);
@@ -28909,6 +28966,8 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       close();
     }
   });
+
+  releaseCountryMenu = bindAccountProxyCountryMenu(modalRoot);
 
   if (!returnModal) {
     modalRoot.querySelector("[data-account-proxy-picker-cancel]")?.addEventListener("click", close);

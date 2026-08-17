@@ -17374,7 +17374,8 @@ body.persona-media-sorting {
 
 .account-proxy-source-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 176px auto;
+  justify-content: start;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -17623,15 +17624,10 @@ body.persona-media-sorting {
   border-color: var(--proxy-purchase-blue, var(--accent));
 }
 
-.account-proxy-select-menu[open] {
-  height: auto;
-}
-
 .account-proxy-select-menu-options {
-  position: absolute;
+  position: fixed;
   z-index: 40;
-  top: calc(100% + 4px);
-  left: 0;
+  inset: auto;
   display: grid;
   width: 100%;
   max-height: min(240px, 42dvh);
@@ -17644,6 +17640,11 @@ body.persona-media-sorting {
   background: var(--panel-solid, #fff);
   box-shadow: 0 10px 24px rgba(16, 44, 71, .14);
   box-sizing: border-box;
+}
+
+.account-proxy-select-menu-options:popover-open {
+  display: grid;
+  margin: 0;
 }
 
 .account-proxy-select-menu-options button {
@@ -17670,12 +17671,6 @@ body.persona-media-sorting {
 .account-proxy-select-menu-options button.is-active {
   color: #fff;
   background: var(--proxy-purchase-deep, #0b3f73);
-}
-
-.account-proxy-select-menu[open] .account-proxy-select-menu-options {
-  position: relative;
-  top: auto;
-  margin-top: 4px;
 }
 
 .account-proxy-filter-menu {
@@ -17879,6 +17874,33 @@ body.persona-media-sorting {
   color: #fff;
   background: var(--proxy-purchase-navy, #102c47);
 }
+
+.proxy-market-mini-card-badges {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.proxy-market-mini-usage {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  min-height: 22px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #536273;
+  background: rgba(255, 255, 255, .9);
+  font-size: 11px;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+
+.proxy-market-mini-usage[data-tone="safe"] { color: #08725f; background: #ddf7ef; }
+.proxy-market-mini-usage[data-tone="notice"] { color: #0b6688; background: #dff5fb; }
+.proxy-market-mini-usage[data-tone="warning"] { color: #8a5a00; background: #fff0c7; }
+.proxy-market-mini-usage[data-tone="danger"] { color: #a51d17; background: #ffe0dc; }
 
 .proxy-market-mini-card-banner {
   display: grid;
@@ -18088,13 +18110,14 @@ body.persona-media-sorting {
   .account-proxy-clear { height: 30px; min-height: 30px; padding: 0 7px; border-radius: 7px; font-size: 10px; }
   .account-proxy-clear .ui-no-proxy-icon { width: 14px; height: 14px; flex-basis: 14px; }
   .account-proxy-options.proxy-market-mini-grid { grid-template-columns: minmax(0, 1fr); gap: 6px; }
-  .account-proxy-options .proxy-market-mini-card { gap: 4px; padding: 8px; min-height: 0; border-radius: 9px; box-shadow: 0 5px 14px rgba(16, 44, 71, .06); }
-  .account-proxy-options .proxy-market-mini-card-banner { gap: 4px; margin: -8px -8px 0; padding: 7px 8px 6px; border-radius: 8px 8px 5px 5px; }
+  .account-proxy-options .proxy-market-mini-card { gap: 6px; padding: 10px; min-height: 0; border-radius: 9px; box-shadow: 0 5px 14px rgba(16, 44, 71, .06); }
+  .account-proxy-options .proxy-market-mini-card-banner { gap: 5px; margin: -10px -10px 0; padding: 9px 10px 8px; border-radius: 8px 8px 5px 5px; }
   .account-proxy-options .proxy-market-mini-title { font-size: 12px; line-height: 1.2; }
   .proxy-market-mini-kind,
   .proxy-market-mini-country,
-  .proxy-market-mini-stock { min-height: 19px; padding: 1px 6px; font-size: 9px; }
-  .proxy-market-compact-fields > div { gap: 1px; padding: 4px 6px; }
+  .proxy-market-mini-stock,
+  .proxy-market-mini-usage { min-height: 19px; padding: 1px 6px; font-size: 9px; }
+  .proxy-market-compact-fields > div { gap: 2px; padding: 6px 7px; }
   .proxy-market-compact-fields dt { font-size: 8px; line-height: 1.1; }
   .proxy-market-compact-fields dd { font-size: 10px; line-height: 1.2; }
   .proxy-market-mini-card > button { height: 30px; min-height: 30px; padding: 0 8px; box-sizing: border-box; font-size: 11px; }
