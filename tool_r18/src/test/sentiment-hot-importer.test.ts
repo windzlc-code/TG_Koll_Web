@@ -789,7 +789,48 @@ describe("sentiment hot importer", () => {
     expect(keywords).not.toContain("煙火氣");
     expect(keywords).not.toContain("菜市場");
     expect(keywords).not.toContain("二次元大叔");
-    expect(resolveSentimentHotManualQueryKeywords(["菜市場真實體驗", "環保袋二次元", "二次元 吐槽", "撿漏 真實"], null, "strict")).toEqual([]);
+    expect(resolveSentimentHotManualQueryKeywords(["菜市場真實體驗", "二次元 吐槽", "撿漏 真實", "理財 對比"], null, "strict")).toEqual([]);
+  });
+
+  it("uses the same hollow and object-noun rules for unrelated persona domains", () => {
+    const finance = resolveSentimentHotManualQueryKeywords([
+      "基金定投",
+      "指數基金",
+      "債券配息",
+      "存股清單",
+      "便宜",
+      "攻略",
+      "經驗",
+      "理財真實體驗",
+    ], null, "strict");
+    expect(finance).toContain("基金定投");
+    expect(finance).toContain("指數基金");
+    expect(finance).not.toContain("便宜");
+    expect(finance).not.toContain("攻略");
+    expect(finance).not.toContain("經驗");
+    expect(finance).not.toContain("理財真實體驗");
+
+    const fitness = resolveSentimentHotManualQueryKeywords([
+      "深蹲訓練",
+      "硬拉動作",
+      "蛋白粉",
+      "減脂餐",
+      "便宜",
+      "大叔",
+      "健身 吐槽",
+    ], null, "strict");
+    expect(fitness).toContain("深蹲訓練");
+    expect(fitness).toContain("蛋白粉");
+    expect(fitness).not.toContain("便宜");
+    expect(fitness).not.toContain("大叔");
+    expect(fitness).not.toContain("健身 吐槽");
+  });
+
+  it("does not reject concrete objects just because another persona once overused them", () => {
+    const keywords = resolveSentimentHotManualQueryKeywords(["環保袋", "動漫文化", "手辦"], null, "strict");
+    expect(keywords).toContain("環保袋");
+    expect(keywords).toContain("動漫文化");
+    expect(keywords).toContain("手辦");
   });
 
   it("keeps a full object-noun keyword batch instead of collapsing to a few families", () => {
