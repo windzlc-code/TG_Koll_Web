@@ -4119,8 +4119,7 @@ async function canLeavePersonaDraftEdit(personaId, targetStep = "") {
     showMsg("commandMsg", "当前是 AI 重写新草稿状态，请先生成并选择新草稿后再进入配图。", false);
     return false;
   }
-  if (personaDraftEditHasSessionChanges(personaId)) return true;
-  if (status.editing) {
+  if (personaDraftEditHasSessionChanges(personaId)) {
     const action = await confirmSaveDraftEditBeforeLeave();
     if (action === "save") createPersonaDraftPost().catch((error) => showMsg("commandMsg", error.detail || error.message || "保存修改失败", false));
     if (action === "discard") {
@@ -4129,6 +4128,7 @@ async function canLeavePersonaDraftEdit(personaId, targetStep = "") {
     }
     return false;
   }
+  if (status.editing) discardPersonaDraftEdit(personaId);
   return true;
 }
 
