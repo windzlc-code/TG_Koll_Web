@@ -29107,9 +29107,14 @@ function accountProxyPurchaseErrorText(error) {
     "The purchase duration is fixed by the administrator": "购买时长由管理员固定，请刷新后重试。",
     "Provider cost exceeds the configured ceiling": "供应商成本超出上限，请换一个地区或联系管理员。",
     "Only USD provider quotes are supported": "当前只支持美元报价，请联系管理员。",
+    "Real purchasing requires PROXYCHEAP_EXECUTE_SAFE_RECONCILIATION=true after provider confirmation": "真实采购尚未开通安全对账，请联系管理员确认后再试。",
     INVALID_CITY: "所选城市当前无法下单，请换一个城市后重试。",
     INVALID_COUNTRY: "所选地区当前无法下单，请换一个地区后重试。",
     PURCHASES_DISABLED: "平台代理采购尚未配置，请联系管理员。",
+    SAFE_RECONCILIATION_NOT_CONFIRMED: "真实采购尚未开通安全对账，请联系管理员确认后再试。",
+    QUOTE_EXPIRED: "报价已过期，请重新选择后重试。",
+    PRICE_CHANGED: "供应商价格已变化，请重新确认后再购买。",
+    PROVIDER_BALANCE_INSUFFICIENT: "供应商账户余额不足，请联系管理员。",
   };
   return mapped[text] || mapped[String(error?.code || error?.detail?.code || "")] || text || "平台代理选择失败";
 }
@@ -29143,7 +29148,8 @@ function setAccountProxyPurchaseProgress(modal, text = "") {
   });
 }
 
-async function waitForAccountProxyPurchase(order = {}, onProgress) {
+async function waitForAccountProxyPurchase(order, onProgress) {
+  order = order || {};
   let current = order || {};
   for (let attempt = 0; attempt < 12 && current?.id && !current?.social_proxy_id; attempt += 1) {
     const status = String(current.status || "").toLowerCase();

@@ -3758,6 +3758,111 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("function accountProxyPurchaseDialogHtml", self.source)
         self.assertNotIn("account-proxy-purchase-modal", self.styles)
 
+    def test_account_proxy_purchase_frontend_loop_uses_mocked_purchase_apis(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const requests = [];
+            const notices = [];
+            global.window = global;
+            global.document = {{
+              createElement() {{
+                return {{
+                  className: "",
+                  innerHTML: "",
+                  setAttribute() {{}},
+                  remove() {{}},
+                }};
+              }},
+            }};
+            function esc(value) {{ return String(value || ""); }}
+            function numberText(value) {{ return String(value || 0); }}
+            function accountProxyPickerFilters() {{ return {{ country: "US", city: "纽约" }}; }}
+            function accountProxyCountry() {{ return {{ label: "美国", code: "US" }}; }}
+            function accountProxyPurchaseCityLabel() {{ return "纽约"; }}
+            function setAccountProxyPickerNotice(_modal, text) {{ notices.push(String(text || "")); }}
+            function showMsg(_id, text) {{ notices.push(String(text || "")); }}
+            function invalidateAccountProxyPoolCache() {{}}
+            async function loadAccountProxyPickerPool() {{}}
+            async function fetchSocialDataShared() {{}}
+            function updateAccountProxyChoice() {{}}
+            async function openConsoleModal() {{ return true; }}
+            {self._function_source("accountProxyPurchaseErrorText")}
+            {self._function_source("setAccountProxyPurchaseProgress")}
+            async {self._function_source("waitForAccountProxyPurchase")}
+            async {self._function_source("purchaseAccountProxySupplierOption")}
+
+            function makeModal(monthlyFree) {{
+              return {{
+                isConnected: true,
+                dataset: {{}},
+                __accountProxyPoolData: {{
+                  monthly_free: {{ available: monthlyFree }},
+                  purchase_options: {{ default_period: {{ value: 1 }} }},
+                }},
+                querySelectorAll() {{ return []; }},
+                querySelector() {{
+                  return {{
+                    appendChild() {{}},
+                    querySelector() {{ return null; }},
+                    remove() {{}},
+                    innerHTML: "",
+                    setAttribute() {{}},
+                  }};
+                }},
+              }};
+            }}
+            const button = {{
+              closest() {{
+                return {{
+                  querySelector() {{
+                    return {{ getAttribute() {{ return "false"; }} }};
+                  }},
+                }};
+              }},
+            }};
+
+            async function api(path, options = {{}}) {{
+              requests.push({{ path, body: options.body || "" }});
+              if (path === "/api/proxy-purchases/quotes") {{
+                return {{ quote: {{ id: "quote-paid", charge_points: 12 }} }};
+              }}
+              if (path === "/api/proxy-purchases/orders") {{
+                return {{ order: {{ id: "order-paid", status: "active", social_proxy_id: "proxy-paid" }} }};
+              }}
+              if (path === "/api/proxy-purchases/monthly-free") {{
+                return {{ order: {{ id: "order-free", status: "active", social_proxy_id: "proxy-free" }} }};
+              }}
+              throw new Error("unexpected " + path);
+            }}
+
+            (async () => {{
+              const freeId = await purchaseAccountProxySupplierOption(makeModal(true), button);
+              assert.equal(freeId, "proxy-free");
+              assert.ok(requests.some((item) => item.path === "/api/proxy-purchases/monthly-free"));
+              assert.ok(requests.every((item) => item.path !== "/api/proxy-purchases/quotes"));
+              assert.ok(requests[0].body.includes('"city":"纽约"'));
+              assert.ok(notices.some((item) => item.includes("正在提交免费选择")));
+
+              requests.length = 0;
+              notices.length = 0;
+              const paidId = await purchaseAccountProxySupplierOption(makeModal(false), button);
+              assert.equal(paidId, "proxy-paid");
+              assert.ok(requests.some((item) => item.path === "/api/proxy-purchases/quotes"));
+              assert.ok(requests.some((item) => item.path === "/api/proxy-purchases/orders"));
+              assert.ok(requests.every((item) => item.path !== "/api/proxy-purchases/monthly-free"));
+              assert.equal(
+                accountProxyPurchaseErrorText({{ code: "INVALID_CITY", detail: {{ code: "INVALID_CITY", message: "x" }} }}),
+                "所选城市当前无法下单，请换一个城市后重试。"
+              );
+            }})().catch((error) => {{
+              console.error(error);
+              process.exit(1);
+            }});
+            """
+        )
+        self._run_node(harness)
+
     def test_totp_code_card_uses_stable_svg_ring_and_millisecond_clock(self):
         controller = self._function_source("createAccountTotpController")
 

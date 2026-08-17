@@ -565,6 +565,110 @@ class ProxyPurchaseApiTests(unittest.TestCase):
         self.assertEqual(audit["resource_id"], "order-test")
         self.assertEqual(audit["outcome"], "success")
 
+    def test_frontend_picker_payloads_match_backend_models(self):
+        from webapp.proxy_purchase_api import (
+            ProxyMonthlyFreePayload,
+            ProxyOrderPayload,
+            ProxyQuotePayload,
+        )
+
+        quote = ProxyQuotePayload(
+            country="TW",
+            city="台北",
+            period_months=1,
+            auto_renew=False,
+        )
+        free = ProxyMonthlyFreePayload(
+            country="TW",
+            city="台北",
+            period_months=1,
+            auto_renew=False,
+            client_request_id="client-req-1",
+        )
+        order = ProxyOrderPayload(
+            quote_id="proxy-quote-1",
+            idempotency_key="proxy-purchase:client-req-1",
+        )
+        self.assertEqual(quote.country, "TW")
+        self.assertEqual(free.client_request_id, "client-req-1")
+        self.assertEqual(order.idempotency_key, "proxy-purchase:client-req-1")
+
+    def test_purchase_closed_loop_quote_order_poll_and_user_pool(self):
+        from webapp.system_proxy_pool import list_system_proxy_pool_options
+
+        options = self.client.get("/api/proxy-purchases/options")
+        self.assertEqual(options.status_code, 200, options.text)
+        catalog = options.json()
+        self.assertTrue(catalog["configured"])
+        self.assertTrue(catalog["live_purchasing_enabled"])
+        self.assertIn("US", catalog["cities"])
+        self.assertEqual(catalog["cities"]["US"][0]["name_zh"], "纽约")
+
+        bad_city = self.client.post(
+            "/api/proxy-purchases/quotes",
+            json={"country": "US", "city": "NoSuchCity", "period_months": 1, "auto_renew": False},
+        )
+        self.assertEqual(bad_city.status_code, 422, bad_city.text)
+        self.assertEqual(bad_city.json()["code"], "INVALID_CITY")
+        self.assertIn("城市", bad_city.json()["detail"]["message"])
+
+        quote_response = self.client.post(
+            "/api/proxy-purchases/quotes",
+            json={"country": "US", "city": "纽约", "period_months": 1, "auto_renew": False},
+        )
+        self.assertEqual(quote_response.status_code, 200, quote_response.text)
+        quote = quote_response.json()["quote"]
+        self.assertEqual(quote["city"], "New York")
+        self.assertTrue(quote["id"])
+
+        order_response = self.client.post(
+            "/api/proxy-purchases/orders",
+            headers={"Idempotency-Key": "closed-loop-paid"},
+            json={"quote_id": quote["id"], "idempotency_key": "closed-loop-paid"},
+        )
+        self.assertEqual(order_response.status_code, 200, order_response.text)
+        order = order_response.json()["order"]
+        self.assertEqual(order["status"], "active")
+        self.assertTrue(order["social_proxy_id"])
+
+        polled = self.client.get(f"/api/proxy-purchases/orders/{order['id']}")
+        self.assertEqual(polled.status_code, 200, polled.text)
+        self.assertEqual(polled.json()["order"]["social_proxy_id"], order["social_proxy_id"])
+
+        with app_db.db() as conn:
+            pool = list_system_proxy_pool_options(conn, owner_user_id=self.user_id)
+        owned = [item for item in pool if item.get("social_proxy_id") == order["social_proxy_id"]]
+        self.assertEqual(len(owned), 1)
+        self.assertEqual(owned[0]["ownership_type"], "owned")
+        self.assertEqual(owned[0]["purchase_order_id"], order["id"])
+
+    def test_monthly_free_closed_loop_returns_owned_proxy_for_picker(self):
+        from webapp.system_proxy_pool import list_system_proxy_pool_options
+
+        response = self.client.post(
+            "/api/proxy-purchases/monthly-free",
+            json={
+                "country": "US",
+                "city": "纽约",
+                "period_months": 1,
+                "auto_renew": False,
+                "client_request_id": "closed-loop-free",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        order = response.json()["order"]
+        self.assertEqual(order["status"], "active")
+        self.assertTrue(order["social_proxy_id"])
+        self.assertTrue(response.json()["allowance"]["available"])
+
+        polled = self.client.get(f"/api/proxy-purchases/orders/{order['id']}")
+        self.assertEqual(polled.json()["order"]["social_proxy_id"], order["social_proxy_id"])
+        with app_db.db() as conn:
+            pool = list_system_proxy_pool_options(conn, owner_user_id=self.user_id)
+        owned = [item for item in pool if item.get("social_proxy_id") == order["social_proxy_id"]]
+        self.assertEqual(len(owned), 1)
+        self.assertEqual(owned[0]["ownership_type"], "owned")
+
     def test_worker_jobs_have_separate_exception_boundaries(self):
         calls = []
 
