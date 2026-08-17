@@ -699,8 +699,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn("function personaEditingMediaAcceptsUploadOnly", self.script)
         preview = inline.split("任务结果预览", 1)[1]
         self.assertNotIn("renderPersonaEditableMediaGrid(", preview)
-        self.assertIn("postMediaItems.length || personaDraftMediaTargetIsEditing(persona)", inline)
-        self.assertLess(inline.index("renderPersonaEditableMediaGrid(postMediaItems"), inline.index("任务结果预览"))
+        self.assertIn("renderPersonaCurrentDraftMediaPreview(postMediaItems", preview)
+        self.assertNotIn("postMediaItems.length || personaDraftMediaTargetIsEditing(persona)", inline)
         self.assertIn("任务结果预览", inline)
         self.assertIn("personaMediaImageCount", inline)
         self.assertIn('renderUploadDropzone("personaMediaTaskFiles"', inline)
