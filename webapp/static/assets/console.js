@@ -27739,13 +27739,35 @@ function accountResidentialProxy(account = null) {
 }
 
 function accountResidentialProxyLabel(account = null) {
-  const proxy = accountResidentialProxy(account);
+  const proxy = accountResidentialProxy(account)
+    || (account && (account.exit_ip || account.host || account.social_proxy_id) ? account : null);
   if (!proxy) return "未使用代理 IP";
     const checkedIp = String(proxy.last_check_result?.response?.ip || "").trim();
-  const endpoint = checkedIp || String(proxy.host || "").trim();
-  const region = String(proxy.country || "").trim();
+  const endpoint = checkedIp || String(proxy.exit_ip || proxy.host || "").trim();
+  const region = String(accountProxyCountry(proxy).label || proxy.country || "").trim();
   const status = String(proxy.status || "").toLowerCase() === "failed" ? "检测失败" : "住宅 IP";
   return `${status}：${endpoint || "已配置"}${region ? ` · ${region}` : ""}`;
+}
+
+function resolveAccountProxyForLabel(proxyId = "", poolData = null, proxySource = null) {
+  const cleanId = String(proxyId || "").trim();
+  if (!cleanId) return null;
+  if (proxySource && (proxySource.exit_ip || proxySource.host || proxySource.id || proxySource.social_proxy_id)) {
+    return proxySource;
+  }
+  const fromState = socialProxyById(cleanId);
+  if (fromState) return fromState;
+  return (Array.isArray(poolData?.options) ? poolData.options : [])
+    .find((item) => String(item?.social_proxy_id || "").trim() === cleanId) || null;
+}
+
+function accountProxyBoundLabel(proxyId = "", poolData = null, proxySource = null) {
+  const proxy = resolveAccountProxyForLabel(proxyId, poolData, proxySource);
+  if (!proxy) return accountResidentialProxyLabel({ proxy_id: proxyId });
+  const ip = String(proxy.exit_ip || proxy.last_check_result?.response?.ip || proxy.host || "").trim();
+  const region = accountProxyCountry(proxy).label;
+  const city = accountProxyCityZh(proxy.city || "", accountProxyCountryCode(proxy), poolData?.purchase_options || {});
+  return [ip || "已分配", region, city].filter(Boolean).join(" · ");
 }
 
 function proxySelectOptions(options, selected = "") {
@@ -29189,6 +29211,15 @@ async function saveAccountProxyBinding(accountId = "", proxyId = "", expectedPro
       : { clear_residential_proxy: true, expected_proxy_id: String(expectedProxyId || "").trim() }),
   });
   state.accountPoolAccountId = String(result.account?.id || cleanAccountId);
+  const nextAccount = result.account || null;
+  if (nextAccount?.id) {
+    const index = (state.socialAccounts || []).findIndex((item) => String(item.id) === String(nextAccount.id));
+    if (index >= 0) state.socialAccounts[index] = { ...state.socialAccounts[index], ...nextAccount };
+    else state.socialAccounts = [...(state.socialAccounts || []), nextAccount];
+  } else {
+    const current = accountById(cleanAccountId);
+    if (current) current.proxy_id = selectedProxyId;
+  }
   showMsg("socialMsg", selectedProxyId ? "代理 IP 已绑定。" : "代理 IP 已解绑。", true);
   void loadSocial({ force: true }).then(() => {
     renderSocialAccounts();
@@ -29222,9 +29253,10 @@ async function commitAccountProxyPickerSelection(modal, accountId = "", proxyId 
 }
 
 function accountProxyEntryCopy(proxyId = "", poolData = null, proxySource = null) {
+  const cleanId = String(proxyId || "").trim();
   return {
     title: "代理 IP",
-    detail: proxyId ? accountResidentialProxyLabel(proxySource || { proxy_id: proxyId }) : "未使用代理 IP",
+    detail: cleanId ? accountProxyBoundLabel(cleanId, poolData, proxySource) : "未使用代理 IP",
     action: "选择代理",
   };
 }
@@ -29240,7 +29272,7 @@ function accountProxyEntryCardHtml(proxyId = "", poolData = null, proxySource = 
 
 function updateAccountProxyEntryCard(container, proxyId = "", poolData = state.accountProxyPoolSnapshot) {
   const card = container?.querySelector?.("[data-account-proxy-picker-open]");
-  const proxy = socialProxyById(proxyId);
+  const proxy = resolveAccountProxyForLabel(proxyId, poolData);
   if (card) card.outerHTML = accountProxyEntryCardHtml(proxyId, poolData, proxy);
 }
 
@@ -29323,7 +29355,11 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
         const cleanProxyId = String(proxyId || "").trim();
         returnModal.dataset.selectedProxyId = cleanProxyId;
         if (mode === "edit") returnModal.dataset.originalProxyId = cleanProxyId;
-        updateAccountProxyEntryCard(returnModal, cleanProxyId);
+        updateAccountProxyEntryCard(
+          returnModal,
+          cleanProxyId,
+          modalRoot.__accountProxyPoolData || state.accountProxyPoolSnapshot,
+        );
       }
       returnModal.dataset.accountModalPage = "editor";
       delete returnModal.__accountProxyPickerClose;
@@ -29344,16 +29380,16 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   const completeSelection = async (proxyId = "") => {
     const cleanProxyId = String(proxyId || "").trim();
     updateAccountProxyChoice(modalRoot, cleanProxyId);
-    setAccountProxyPickerNotice(modalRoot, cleanProxyId ? "已选中该代理 IP，正在保存…" : "已解除代理，正在保存…", true);
+    setAccountProxyPickerNotice(modalRoot, cleanProxyId ? "正在绑定代理 IP…" : "正在解除代理…", true);
     if (mode === "create") {
       state.accountPoolCreateDraft = { ...(state.accountPoolCreateDraft || {}), proxy_id: cleanProxyId };
-      setAccountProxyPickerNotice(modalRoot, cleanProxyId ? "已选中该代理 IP。" : "已解除代理。", true);
+      close(cleanProxyId);
       return true;
     }
     const saved = await commitAccountProxyPickerSelection(modalRoot, cleanAccountId, cleanProxyId);
     if (saved) {
       modalRoot.dataset.originalProxyId = cleanProxyId;
-      setAccountProxyPickerNotice(modalRoot, cleanProxyId ? "已选中该代理 IP。" : "已解除代理。", true);
+      close(cleanProxyId);
     } else {
       updateAccountProxyChoice(modalRoot, modalRoot.dataset.originalProxyId || "");
       setAccountProxyPickerNotice(modalRoot, "代理绑定失败，已恢复原来的选择。", false);
@@ -29446,13 +29482,6 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       }
       const selectedCard = event.target.closest("[data-account-proxy-card]");
       if (selectedCard && !event.target.closest("button")) {
-        const selectedButton = selectedCard.querySelector("[data-account-proxy-owned-choice]");
-        const unbindButton = selectedCard.querySelector(".account-proxy-unbind");
-        if (unbindButton) await completeSelection("");
-        else if (selectedButton && !selectedButton.disabled) {
-          const selectedOwnedProxyId = await selectOwnedAccountProxyOption(modalRoot, selectedButton.dataset.accountProxyOwnedChoice || "");
-          if (selectedOwnedProxyId) await completeSelection(selectedOwnedProxyId);
-        }
         return;
       }
       const renewal = event.target.closest("[data-account-proxy-renewal-order]");

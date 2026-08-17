@@ -17528,10 +17528,15 @@ body.persona-media-sorting {
   background: var(--proxy-purchase-navy, #102c47);
 }
 
-.account-proxy-source-row > .account-proxy-clear[aria-pressed="true"] {
-  color: #fff;
-  border-color: var(--proxy-purchase-navy, #102c47);
-  background: var(--proxy-purchase-navy, #102c47);
+.account-proxy-source-row > .account-proxy-clear,
+.account-proxy-source-row > .account-proxy-clear[aria-pressed="true"],
+.account-proxy-source-row > .account-proxy-clear:hover,
+.account-proxy-source-row > .account-proxy-clear:focus-visible,
+.account-proxy-source-row > .account-proxy-clear:active {
+  color: var(--ink) !important;
+  border-color: #c9d6e3 !important;
+  background: #fff !important;
+  background-image: none !important;
 }
 
 .account-proxy-source-row > .account-proxy-clear .ui-no-proxy-icon {
@@ -19447,10 +19452,12 @@ body.persona-media-sorting {
 .proxy-market-mini-card > button.proxy-market-mini-renewal[aria-pressed="true"],
 .proxy-market-mini-card > button.proxy-market-mini-renewal:hover,
 .proxy-market-mini-card > button.proxy-market-mini-renewal:focus-visible,
-.proxy-market-mini-card > button.proxy-market-mini-renewal:active {
-  border-color: #c9d6e3;
-  background: #fff;
-  color: var(--ink);
+.proxy-market-mini-card > button.proxy-market-mini-renewal:active,
+.proxy-market-mini-card > button.proxy-market-mini-renewal[aria-busy="true"] {
+  border-color: #c9d6e3 !important;
+  background: #fff !important;
+  background-image: none !important;
+  color: var(--ink) !important;
 }
 
 .proxy-market-mini-renewal i {
@@ -22575,6 +22582,34 @@ body.console-page {
   }
 
 }
+
+.console-page :is(.console-shell, .console-modal) :is(
+  button.proxy-market-mini-renewal,
+  button.account-proxy-clear,
+  button.account-proxy-unbind
+)[aria-busy="true"],
+.console-page :is(.console-shell, .console-modal) :is(
+  button.proxy-market-mini-renewal,
+  button.account-proxy-clear,
+  button.account-proxy-unbind
+):hover,
+.console-page :is(.console-shell, .console-modal) :is(
+  button.proxy-market-mini-renewal,
+  button.account-proxy-clear,
+  button.account-proxy-unbind
+):focus-visible,
+.console-page :is(.console-shell, .console-modal) :is(
+  button.proxy-market-mini-renewal,
+  button.account-proxy-clear,
+  button.account-proxy-unbind
+):active {
+  color: var(--ink) !important;
+  background: #fff !important;
+  background-image: none !important;
+  border-color: #c9d6e3 !important;
+  box-shadow: none !important;
+}
+
 [data-daily-publish-action][aria-disabled="true"],
 [data-daily-publish-action].is-daily-publish-locked {
   border-color: #d86a62 !important;
