@@ -17972,10 +17972,19 @@ body.persona-media-sorting {
   background: #126eaa;
 }
 
-.account-proxy-unbind {
+.account-proxy-unbind,
+.proxy-market-mini-card > button.account-proxy-unbind {
   color: #126eaa;
   border-color: #8cb9d4;
   background: #fff;
+}
+
+.proxy-market-mini-card > button.account-proxy-unbind:not(:disabled):hover,
+.proxy-market-mini-card > button.account-proxy-unbind:not(:disabled):focus-visible,
+.proxy-market-mini-card > button.account-proxy-unbind:not(:disabled):active {
+  color: #0b4e83;
+  border-color: #126eaa;
+  background: #eef8fd;
 }
 
 .account-proxy-picker-notice {

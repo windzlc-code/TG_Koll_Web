@@ -172,6 +172,7 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertIn(".account-proxy-picker-location-row", self.console_styles)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.console_styles)
         self.assertIn('.account-proxy-source-row > .account-proxy-clear[aria-pressed="true"]', self.console_styles)
+        self.assertIn(".proxy-market-mini-card > button.account-proxy-unbind", self.console_styles)
         self.assertIn(".proxy-market-mini-renewal", self.console_styles)
         self.assertIn('.proxy-market-mini-card > button.proxy-market-mini-renewal[aria-pressed="true"],', self.console_styles)
         self.assertIn("height: 32px !important;", self.console_styles)
