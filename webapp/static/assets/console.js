@@ -424,6 +424,9 @@ const state = {
   mobilePublishingTaskId: "",
   mobilePublishingTaskIds: [],
   mobilePublishingTaskStartedAt: 0,
+  publishAssistanceAccountId: "",
+  publishAssistancePersonaId: "",
+  publishAssistanceDismissed: false,
   publishMobileSelectionExpanded: false,
   publishFiles: [],
   socialFiles: [],
@@ -5494,10 +5497,11 @@ function selectedPublishAccountForPersona(persona) {
 
 async function choosePublishPlatformAccount(persona, {
   title = "选择发布平台",
-  message = "先选择发布平台，确认后才会创建任务。",
+  message = "点击发布平台后会立即开始执行。",
   confirmText = "执行任务",
   modalKey = "publish-platform-picker",
   persistSelection = true,
+  confirmOnPlatformSelect = true,
 } = {}) {
   const accounts = publishPlatformAccountsForPersona(persona).filter(canSubmitPublishWithAccount);
   if (!accounts.length) {
@@ -5556,6 +5560,7 @@ async function choosePublishPlatformAccount(persona, {
           `[data-publish-platform-tab="${CSS.escape(platform)}"]`
         ),
       });
+      if (confirmOnPlatformSelect) modal.querySelector("[data-console-modal-confirm]")?.click();
     });
   });
   const result = await request;
@@ -8586,7 +8591,7 @@ function renderPublishPreviewMedia(items = [], { deferLoad = false } = {}) {
                 <strong>媒体不可预览</strong>
                 <small>${esc(item?.reason || "原始文件已失效")}</small>
               </div>
-              <span class="publish-preview-media-badge">第 ${esc(index + 1)} 个</span>
+              <span class="publish-preview-media-badge" aria-label="第 ${esc(index + 1)} 个">${esc(index + 1)}</span>
             </div>`;
         }
         const previewIndex = Math.max(0, previewRows.indexOf(item));
@@ -8598,7 +8603,7 @@ function renderPublishPreviewMedia(items = [], { deferLoad = false } = {}) {
               lowPriority: true,
               deferLoad,
             })}
-            <span class="publish-preview-media-badge">第 ${esc(index + 1)} 个 · ${esc(mediaKindLabel(item.type))}</span>
+            <span class="publish-preview-media-badge" aria-label="第 ${esc(index + 1)} 个 · ${esc(mediaKindLabel(item.type))}">${esc(index + 1)}</span>
           </div>`;
       }).join("")}
     </div>`;
@@ -14858,7 +14863,7 @@ function renderSimpleFlowModule(moduleId) {
   const publishSelectionA11yAttrs = publishSelectionItems.length
     ? `aria-controls="publishMobileSelectionStrip" aria-expanded="${publishSelectionExpanded ? "true" : "false"}"`
     : "";
-  const actionHtml = moduleId === "automation" || ["automation_tasks", "publish_history"].includes(publishModeForAction) ? "" : `<div class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}">${moduleId === "publishing" ? renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction, publishSelectionExpanded) : ""}${moduleId === "publishing" && publishSelectionItems.length ? `<button id="clearPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-clear" title="清空选择" aria-label="清空选择" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">${renderClearSelectionIcon()}</button>` : ""}<button id="executeSimpleFlow" type="button" class="primary${moduleId === "publishing" ? " persona-gradient-outline-action" : ""}" aria-busy="${actionBusy ? "true" : "false"}" ${publishSelectionA11yAttrs} ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${(state.simpleFlowPending || actionBlocked) ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(moduleId === "publishing" ? "任务执行中" : `${actionLabel}中`, true, actionBusyStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && !mobilePublishingTaskPending && dailyPublishIsLocked() ? "今日任务已锁定" : esc(actionLabel)))}${publishSelectionBadge}</button>${moduleId === "publishing" && publishSelectionItems.length ? `<button id="cancelPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-cancel" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">取消</button>` : ""}</div>`;
+  const actionHtml = moduleId === "automation" || ["automation_tasks", "publish_history"].includes(publishModeForAction) ? "" : `<div class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}">${moduleId === "publishing" ? renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction, publishSelectionExpanded) : ""}${moduleId === "publishing" && publishSelectionItems.length ? `<button id="clearPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-clear" title="清空选择" aria-label="清空选择" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">${renderClearSelectionIcon()}</button>` : ""}<button id="executeSimpleFlow" type="button" class="primary${moduleId === "publishing" ? " persona-gradient-outline-action" : ""}" aria-busy="${actionBusy ? "true" : "false"}" ${publishSelectionA11yAttrs} ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${(state.simpleFlowPending || actionBlocked || mobilePublishingTaskPending) ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(moduleId === "publishing" ? "任务执行中" : `${actionLabel}中`, true, actionBusyStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && !mobilePublishingTaskPending && dailyPublishIsLocked() ? "今日任务已锁定" : esc(actionLabel)))}${publishSelectionBadge}</button>${!publishSelectionExpanded ? renderPublishAssistanceRestoreButton() : ""}${moduleId === "publishing" && publishSelectionItems.length ? `<button id="cancelPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-cancel" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">取消</button>` : ""}</div>`;
   $("moduleBody").innerHTML = `
     ${body}
     ${actionHtml}
@@ -14876,6 +14881,7 @@ function renderSimpleFlowModule(moduleId) {
   bindSimpleFlowInputs(moduleId);
   applyDailyPublishButtonLocks($("moduleBody"));
   if (moduleId === "publishing") bindPublishMobileSelectionLongPress();
+  bindPublishAssistanceRestore($("moduleBody") || document);
   $("clearPublishMobileSelectionEdit")?.addEventListener("click", () => {
     const persona = selectedPersona();
     const source = normalizePublishContentSource();
@@ -14904,9 +14910,7 @@ function renderSimpleFlowModule(moduleId) {
       delete trigger.dataset.publishSelectionLongPress;
       return;
     }
-    if (moduleId === "publishing" && state.mobilePublishingTaskId) {
-      const taskId = state.mobilePublishingTaskId;
-      openLiveBrowserTaskView(taskId);
+    if (moduleId === "publishing" && mobilePublishingTask()) {
       return;
     }
     if (state.simpleFlowPending) return;
@@ -15767,7 +15771,10 @@ async function submitPersonaPublishTask() {
       updatePersonaPublishResultView(persona.id);
     });
     await loadSocial();
-    if (taskId && !waitingForSchedule) openPublishAssistanceView(taskId, { accountId: account.id, personaId: persona.id });
+    if (taskId && !waitingForSchedule && !deferMobilePublishingBrowserView(taskId)) {
+      bindPublishAssistanceContext({ accountId: account.id, personaId: persona.id });
+      openPublishAssistanceView(taskId, { accountId: account.id, personaId: persona.id });
+    }
   } finally {
     setActionLocked(lockParts, false);
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
@@ -16826,11 +16833,57 @@ function deferMobilePublishingBrowserView(taskIds = "", startedAt = 0) {
   const cleanTaskIds = (Array.isArray(taskIds) ? taskIds : [taskIds])
     .map((taskId) => String(taskId || "").trim())
     .filter(Boolean);
-  if (!cleanTaskIds.length || !isMobileNavMode()) return false;
+  if (!cleanTaskIds.length) return false;
   state.mobilePublishingTaskIds = Array.from(new Set(cleanTaskIds));
   state.mobilePublishingTaskId = state.mobilePublishingTaskIds[0];
   state.mobilePublishingTaskStartedAt = toastTimestampMs(startedAt) || Date.now();
-  return true;
+  state.publishAssistanceDismissed = false;
+  return false;
+}
+
+function bindPublishAssistanceContext(options = {}) {
+  const accountId = String(options.accountId || "").trim();
+  const personaId = String(options.personaId || "").trim();
+  if (accountId) state.publishAssistanceAccountId = accountId;
+  if (personaId) state.publishAssistancePersonaId = personaId;
+}
+
+function shouldShowPublishAssistanceRestore() {
+  if (!state.publishAssistanceDismissed) return false;
+  if (document.getElementById("loginAssistanceModal")) return false;
+  return Boolean(mobilePublishingTask());
+}
+
+function renderPublishAssistanceRestoreButton() {
+  if (!shouldShowPublishAssistanceRestore()) return "";
+  return `<button type="button" class="publish-assistance-restore" data-restore-publish-assistance title="打开发布助手" aria-label="打开发布助手">发布助手</button>`;
+}
+
+function restorePublishAssistanceView() {
+  const task = mobilePublishingTask();
+  const taskId = String(task?.id || state.mobilePublishingTaskId || "").trim();
+  if (!taskId) return;
+  state.publishAssistanceDismissed = false;
+  openPublishAssistanceView(taskId, {
+    accountId: state.publishAssistanceAccountId || task?.account_id || "",
+    personaId: state.publishAssistancePersonaId || task?.persona_id || "",
+  });
+}
+
+function syncPublishAssistanceRestore() {
+  if (state.activeModule === "publishing") {
+    renderSimpleFlowModule("publishing");
+    return;
+  }
+  if (isPersonaWorkspaceModule()) renderPersonaDetail();
+}
+
+function bindPublishAssistanceRestore(root = document) {
+  root.querySelector("[data-restore-publish-assistance]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    restorePublishAssistanceView();
+  });
 }
 
 async function executeSimpleFlow() {
@@ -16868,7 +16921,10 @@ async function executeSimpleFlow() {
           .map((task) => String(task.id || "").trim())
           .filter(Boolean);
         const immediateTaskId = immediateTaskIds[0] || "";
-        if (immediateTaskId && !deferMobilePublishingBrowserView(immediateTaskIds, state.simpleFlowPendingStartedAt)) openPublishAssistanceView(immediateTaskId, { accountId });
+        if (immediateTaskId && !deferMobilePublishingBrowserView(immediateTaskIds, state.simpleFlowPendingStartedAt)) {
+          bindPublishAssistanceContext({ accountId, personaId: persona?.id || "" });
+          openPublishAssistanceView(immediateTaskId, { accountId });
+        }
         return;
       }
     }
@@ -16891,7 +16947,10 @@ async function executeSimpleFlow() {
         taskPanel: personaId ? "persona" : "regular",
         personaId,
       });
-      if (taskType === "publish_post" && !isFutureScheduledSocialTask(result?.task) && !deferMobilePublishingBrowserView(taskId)) openPublishAssistanceView(taskId, { accountId, personaId });
+      if (taskType === "publish_post" && !isFutureScheduledSocialTask(result?.task) && !deferMobilePublishingBrowserView(taskId)) {
+        bindPublishAssistanceContext({ accountId, personaId });
+        openPublishAssistanceView(taskId, { accountId, personaId });
+      }
     }
     return;
   }
@@ -19709,6 +19768,7 @@ async function submitAutomationPlan() {
     confirmText: "创建并执行",
     modalKey: "automation-plan-platform-picker",
     persistSelection: false,
+    confirmOnPlatformSelect: false,
   });
   if (!account) return;
   const validationError = validateAutomationPlanDraft(draft, account);
@@ -26318,6 +26378,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         ${renderUploadDropzone("personaPublishFiles", { label: "任务素材", hint: publishHint || "拖动图片或视频到这里，或点击选择。" })}
         <div class="row-actions">
           <button type="button" class="primary persona-gradient-outline-action" data-persona-publish-submit ${dailyPublishActionAttrs()} ${(publishCanSubmit && selectedPost && !publishBusy) ? "" : "disabled"}>${dailyPublishIsLocked() ? "今日任务已锁定" : (publishWaitsForManualLogin ? "等待人工验证" : (publishBusy ? renderBusyButtonContent("任务执行中", true, publishBusyStartedAt) : "执行任务"))}</button>
+          ${renderPublishAssistanceRestoreButton()}
         </div>
         <div id="personaPublishResult">${publishResult || renderModuleEmptyState({
           icon: "task",
@@ -27047,6 +27108,7 @@ function openTaskAssistanceView(taskId = "", options) {
   const mode = String(options.mode || "login").trim() || "login";
   const existing = document.getElementById("loginAssistanceModal");
   if (existing) closeConsoleModal(null, existing);
+  if (mode === "publish") state.publishAssistanceDismissed = false;
   const account = selectedSocialAccount(accountId)
     || (state.socialAccounts || []).find((item) => String(item?.id || "") === String(accountId || ""))
     || {};
@@ -27096,6 +27158,16 @@ function openTaskAssistanceView(taskId = "", options) {
   modal.__cleanup = () => {
     stopped = true;
     if (timer) window.clearTimeout(timer);
+    if (mode !== "publish") return;
+    window.setTimeout(() => {
+      if (document.getElementById("loginAssistanceModal")) return;
+      const currentTask = (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId)
+        || mobilePublishingTask();
+      const status = loginAssistanceTaskStatus(currentTask || { id: cleanTaskId, status: "queued" });
+      if (!["preparing", "queued", "running", "need_manual"].includes(status)) return;
+      state.publishAssistanceDismissed = true;
+      syncPublishAssistanceRestore();
+    }, 0);
   };
   modal.addEventListener("click", async (event) => {
     const stopButton = event.target.closest("[data-login-assistance-stop]");
@@ -32696,7 +32768,10 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
       });
     });
     await loadSocial();
-    if (firstImmediateTaskId && !deferMobilePublishingBrowserView(firstImmediateTaskId)) openPublishAssistanceView(firstImmediateTaskId);
+    if (firstImmediateTaskId && !deferMobilePublishingBrowserView(firstImmediateTaskId)) {
+      bindPublishAssistanceContext({ accountId: firstImmediateTask?.account_id || "", personaId: firstImmediateTask?.persona_id || "" });
+      openPublishAssistanceView(firstImmediateTaskId);
+    }
     return result;
   } finally {
     setActionLocked(lockParts, false);
@@ -34695,6 +34770,10 @@ function bindEvents() {
         renderPersonaDetail();
         renderConfirmSummary();
       }).catch((error) => showMsg("commandMsg", error.detail || error.message || "停止任务失败", false));
+      return;
+    }
+    if (event.target.closest("[data-restore-publish-assistance]")) {
+      restorePublishAssistanceView();
       return;
     }
     if (event.target.closest("[data-persona-publish-submit]")) submitPersonaPublishTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));

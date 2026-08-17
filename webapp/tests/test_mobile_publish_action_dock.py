@@ -217,12 +217,12 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("async function preflightSimpleFlowExecution", SCRIPT)
         self.assertIn("await promptPersonaAccountBinding(persona);", SCRIPT)
 
-    def test_mobile_publish_task_stays_on_the_task_page_until_the_second_tap(self):
+    def test_mobile_publish_task_opens_assistant_and_restores_beside_execute(self):
         self.assertIn('mobilePublishingTaskId: ""', SCRIPT)
         self.assertIn("mobilePublishingTaskIds: []", SCRIPT)
         self.assertIn("mobilePublishingTaskStartedAt: 0", SCRIPT)
         self.assertIn("function deferMobilePublishingBrowserView(taskIds = \"\", startedAt = 0)", SCRIPT)
-        self.assertIn("if (!cleanTaskIds.length || !isMobileNavMode()) return false;", SCRIPT)
+        self.assertIn("if (!cleanTaskIds.length) return false;", SCRIPT)
         self.assertIn("state.mobilePublishingTaskIds = Array.from(new Set(cleanTaskIds));", SCRIPT)
         self.assertIn("state.mobilePublishingTaskId = state.mobilePublishingTaskIds[0];", SCRIPT)
         self.assertIn("state.mobilePublishingTaskStartedAt = toastTimestampMs(startedAt) || Date.now();", SCRIPT)
@@ -231,13 +231,18 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("state.mobilePublishingTaskId = \"\";", SCRIPT)
         self.assertIn("state.mobilePublishingTaskIds = [];", SCRIPT)
         self.assertIn("state.mobilePublishingTaskStartedAt = 0;", SCRIPT)
-        self.assertIn("openLiveBrowserTaskView(taskId);", SCRIPT)
+        self.assertIn("function renderPublishAssistanceRestoreButton", SCRIPT)
+        self.assertIn("function restorePublishAssistanceView", SCRIPT)
+        self.assertIn("data-restore-publish-assistance", SCRIPT)
         self.assertIn('renderBusyButtonContent(moduleId === "publishing" ? "任务执行中"', SCRIPT)
         self.assertIn(
             "!deferMobilePublishingBrowserView(immediateTaskIds, state.simpleFlowPendingStartedAt)",
             SCRIPT,
         )
         self.assertIn("!deferMobilePublishingBrowserView(firstImmediateTaskId)", SCRIPT)
+        self.assertIn("openPublishAssistanceView(immediateTaskId, { accountId })", SCRIPT)
+        self.assertIn("if (moduleId === \"publishing\" && mobilePublishingTask())", SCRIPT)
+        self.assertNotIn("openLiveBrowserTaskView(taskId);", SCRIPT[SCRIPT.index("if ($(\"executeSimpleFlow\"))"):SCRIPT.index("async function executeSimpleFlow")])
 
     def test_mobile_publish_media_defers_decode_and_offscreen_paint(self):
         self.assertIn('loading="lazy" decoding="async"', SCRIPT)
