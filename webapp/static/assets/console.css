@@ -7387,8 +7387,11 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-hot-editor-copy textarea {
   min-height: 190px;
-  resize: vertical;
+  height: auto;
+  overflow: hidden;
+  resize: none;
   line-height: 1.55;
+  field-sizing: content;
 }
 
 .persona-hot-editor-section-head {
@@ -7419,7 +7422,7 @@ body.persona-touch-dragging .persona-list-card:active {
   }
 
   .persona-hot-editor-copy textarea {
-    min-height: 150px;
+    min-height: 190px;
   }
 
   .persona-hot-editor-source {

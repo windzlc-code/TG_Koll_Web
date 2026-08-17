@@ -4960,7 +4960,7 @@ function renderPersonaHotCandidateEditorModal(persona, candidate) {
           <strong>推文正文</strong>
           <small>${esc(personaHotMetricSummary(candidate))}</small>
         </div>
-        <textarea rows="9" data-persona-hot-content-editor="${esc(candidateId)}">${esc(personaHotEditedContent(persona.id, candidate))}</textarea>
+        <textarea rows="9" class="persona-hot-editor-content--full" data-persona-hot-content-editor="${esc(candidateId)}">${esc(personaHotEditedContent(persona.id, candidate))}</textarea>
       </section>
       <section class="persona-hot-editor-media">
         <div class="persona-hot-editor-section-head">
@@ -4978,6 +4978,14 @@ function renderPersonaHotCandidateEditorModal(persona, candidate) {
       </section>
     </div>`;
   translateConsoleLanguage(content, currentLanguage());
+  queueMicrotask(() => resizePersonaHotEditorContent(content.querySelector("[data-persona-hot-content-editor]")));
+}
+
+function resizePersonaHotEditorContent(textarea) {
+  const node = textarea || document.querySelector("[data-persona-hot-content-editor]");
+  if (!node) return;
+  node.style.height = "auto";
+  node.style.height = `${Math.max(node.scrollHeight, 190)}px`;
 }
 
 function choosePersonaHotEditorFiles(persona, candidateId, { replaceIndex = null } = {}) {
@@ -34149,6 +34157,7 @@ function bindEvents() {
     }
     if (event.target?.matches?.("[data-persona-hot-content-editor]")) {
       snapshotPersonaHotPreviewContent();
+      resizePersonaHotEditorContent(event.target);
       renderConfirmSummary();
       return;
     }
