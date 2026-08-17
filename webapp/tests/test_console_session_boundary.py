@@ -3453,8 +3453,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("await selectOwnedAccountProxyOption", picker)
         self.assertIn("await completeSelection(selectedOwnedProxyId)", picker)
         self.assertIn("presentPurchasedAccountProxy(modalRoot, purchasedProxyId)", picker)
+        self.assertIn("openAccountProxySelectionSuccess", picker)
+        self.assertIn('if (action === "return") close(purchasedProxyId)', picker)
         self.assertNotIn("await completeSelection(purchasedProxyId)", picker)
         self.assertIn("dismissAll()", picker)
+        self.assertIn("close(cleanProxyId)", picker)
         self.assertIn('event.target.closest("[data-account-proxy-picker-cancel]")', picker)
         self.assertNotIn("[data-account-proxy-picker-cancel], [data-account-proxy-picker-back]", picker)
         self.assertIn("highlightAccountProxyCard(modalRoot, selectedCard.dataset.accountProxyProxyId || \"\")", picker)
@@ -3788,6 +3791,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             async function fetchSocialDataShared() {{}}
             function updateAccountProxyChoice() {{}}
             function presentPurchasedAccountProxy() {{ return true; }}
+            async function configureAccountProxySelection() {{ return "proxy-configured"; }}
             async function openConsoleModal() {{ return true; }}
             {self._function_source("accountProxyPurchaseErrorText")}
             {self._function_source("setAccountProxyPurchaseProgress")}
@@ -3845,7 +3849,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               assert.ok(requests.every((item) => item.path !== "/api/proxy-purchases/quotes"));
               assert.ok(requests[0].body.includes('"city":"纽约"'));
               assert.ok(notices.some((item) => item.includes("正在提交免费选择")));
-              assert.ok(notices.some((item) => item.includes("请点击「选择使用」")));
+              assert.ok(notices.some((item) => item.includes("购买成功，代理已配置")));
 
               requests.length = 0;
               notices.length = 0;
@@ -3858,6 +3862,76 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
                 accountProxyPurchaseErrorText({{ code: "INVALID_CITY", detail: {{ code: "INVALID_CITY", message: "x" }} }}),
                 "所选城市当前无法下单，请换一个城市后重试。"
               );
+            }})().catch((error) => {{
+              console.error(error);
+              process.exit(1);
+            }});
+            """
+        )
+        self._run_node(harness)
+
+    def test_account_proxy_purchase_auto_configures_and_offers_return_or_close(self):
+        configure = self._function_source("configureAccountProxySelection")
+        success = self._function_source("openAccountProxySelectionSuccess")
+        purchase = self._function_source("purchaseAccountProxySupplierOption")
+        picker = self._function_source("openAccountProxyPickerModal")
+
+        self.assertIn("state.accountPoolCreateDraft", configure)
+        self.assertIn("saveAccountProxyBinding", configure)
+        self.assertIn("updateAccountProxyEntryCard", configure)
+        self.assertIn('text: "返回"', success)
+        self.assertIn('text: "关闭"', success)
+        self.assertIn("configureAccountProxySelection(modal, purchasedProxyId)", purchase)
+        self.assertIn("购买成功，代理已配置", purchase)
+        self.assertIn("openAccountProxySelectionSuccess", picker)
+        self.assertIn('if (action === "return") close(purchasedProxyId)', picker)
+        self.assertIn("close(cleanProxyId)", picker)
+
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("node:assert/strict");
+            const binds = [];
+            global.window = global;
+            global.state = {{ accountPoolCreateDraft: {{}}, accountProxyPoolSnapshot: {{}} }};
+            function accountProxyBindingChanged(left, right) {{
+              return String(left || "") !== String(right || "");
+            }}
+            async function saveAccountProxyBinding(accountId, proxyId, expected) {{
+              binds.push({{ accountId, proxyId, expected }});
+              return true;
+            }}
+            function updateAccountProxyChoice(modal, proxyId) {{
+              modal.choice = String(proxyId || "");
+            }}
+            function updateAccountProxyEntryCard(modal, proxyId) {{
+              modal.entryProxyId = String(proxyId || "");
+            }}
+            async {self._function_source("configureAccountProxySelection")}
+
+            (async () => {{
+              const createModal = {{
+                dataset: {{ accountEditorMode: "create", originalProxyId: "" }},
+              }};
+              const created = await configureAccountProxySelection(createModal, "proxy-new");
+              assert.equal(created, "proxy-new");
+              assert.equal(state.accountPoolCreateDraft.proxy_id, "proxy-new");
+              assert.equal(createModal.dataset.selectedProxyId, "proxy-new");
+              assert.equal(createModal.entryProxyId, "proxy-new");
+              assert.equal(binds.length, 0);
+
+              const editModal = {{
+                dataset: {{
+                  accountEditorMode: "edit",
+                  accountEditorId: "acc-1",
+                  originalProxyId: "",
+                }},
+              }};
+              const bound = await configureAccountProxySelection(editModal, "proxy-owned");
+              assert.equal(bound, "proxy-owned");
+              assert.equal(binds.length, 1);
+              assert.equal(binds[0].accountId, "acc-1");
+              assert.equal(binds[0].proxyId, "proxy-owned");
+              assert.equal(editModal.dataset.selectedProxyId, "proxy-owned");
             }})().catch((error) => {{
               console.error(error);
               process.exit(1);

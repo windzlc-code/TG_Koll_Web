@@ -27756,7 +27756,10 @@ function socialProxyById(proxyId = "") {
 }
 
 function accountResidentialProxy(account = null) {
-  return socialProxyById(account?.proxy_id || "") || account?.residential_proxy || null;
+  return socialProxyById(account?.proxy_id || "")
+    || account?.residential_proxy
+    || resolveAccountProxyForLabel(account?.proxy_id || "", state.accountProxyPoolSnapshot)
+    || null;
 }
 
 function accountResidentialProxyLabel(account = null) {
@@ -28406,21 +28409,25 @@ function openAccountProxySelectionSuccess(proxyId = "", poolData = {}) {
   const location = systemProxyPoolLocation(proxy, poolData?.purchase_options || {});
   const proxyIp = String(proxy.exit_ip || proxy.last_check_result?.response?.ip || proxy.host || "").trim() || "已分配";
   return openConsoleModal({
-    title: "代理选择成功",
+    title: "购买成功",
     contentHtml: `<div class="account-proxy-selection-success">
       <div class="login-assistance-visual">${renderLoginAssistanceVisual({ phase: "success" })}</div>
       <div class="account-proxy-selection-success-copy">
-        <strong>代理 IP 已成功选择</strong>
-        <p>当前账号已使用新的专属网络环境，可继续保存账号或执行登录。</p>
+        <strong>代理 IP 已配置</strong>
+        <p>已自动绑定到当前账号。请返回填写账号密码后登录，或关闭当前页面。</p>
       </div>
       <dl class="account-proxy-selection-success-details">
         <div><dt>地区与城市</dt><dd>${esc(location)}</dd></div>
         <div><dt>代理 IP</dt><dd>${esc(proxyIp)}</dd></div>
       </dl>
     </div>`,
-    confirmText: "完成",
+    showConfirm: false,
     showCancel: false,
     showClose: false,
+    extraActions: [
+      { text: "返回", value: "return", primary: true },
+      { text: "关闭", value: "close" },
+    ],
     modalKey: "account-proxy-selection-success",
     stack: true,
     dismissOnBackdrop: false,
@@ -29139,6 +29146,33 @@ function presentPurchasedAccountProxy(modal, proxyId = "") {
   return true;
 }
 
+async function configureAccountProxySelection(modal, proxyId) {
+  const cleanProxyId = String(proxyId || "").trim();
+  if (!modal || !cleanProxyId) return false;
+  const accountId = String(modal.dataset.accountEditorId || "").trim();
+  const mode = modal.dataset.accountEditorMode || (accountId ? "edit" : "create");
+  const expectedProxyId = String(modal.dataset.originalProxyId || "").trim();
+  if (mode === "edit" && accountId) {
+    if (accountProxyBindingChanged(expectedProxyId, cleanProxyId)) {
+      const saved = await saveAccountProxyBinding(accountId, cleanProxyId, expectedProxyId);
+      if (saved === false) return false;
+    }
+  } else {
+    state.accountPoolCreateDraft = { ...(state.accountPoolCreateDraft || {}), proxy_id: cleanProxyId };
+  }
+  modal.dataset.selectedProxyId = cleanProxyId;
+  modal.dataset.boundProxyId = cleanProxyId;
+  modal.dataset.highlightedProxyId = cleanProxyId;
+  modal.dataset.originalProxyId = cleanProxyId;
+  updateAccountProxyChoice(modal, cleanProxyId);
+  updateAccountProxyEntryCard(
+    modal,
+    cleanProxyId,
+    modal.__accountProxyPoolData || state.accountProxyPoolSnapshot,
+  );
+  return cleanProxyId;
+}
+
 function setAccountProxyPurchaseProgress(modal, text = "") {
   const message = String(text || "").trim();
   setAccountProxyPickerNotice(modal, message, true);
@@ -29246,16 +29280,23 @@ async function purchaseAccountProxySupplierOption(modal, button) {
       await loadAccountProxyPickerPool(modal);
       return false;
     }
-    setAccountProxyPurchaseProgress(modal, "代理已就绪，正在加入「已选择」…");
+    setAccountProxyPurchaseProgress(modal, "代理已就绪，正在自动配置…");
     await fetchSocialDataShared({ force: true });
     if (!modal.isConnected) return false;
     invalidateAccountProxyPoolCache();
     await loadAccountProxyPickerPool(modal);
-    presentPurchasedAccountProxy(modal, String(order.social_proxy_id));
+    const purchasedProxyId = String(order.social_proxy_id);
+    presentPurchasedAccountProxy(modal, purchasedProxyId);
+    const configured = await configureAccountProxySelection(modal, purchasedProxyId);
     setAccountProxyPurchaseProgress(modal, "");
-    setAccountProxyPickerNotice(modal, "购买成功，请点击「选择使用」完成绑定。", true);
-    showMsg("socialMsg", monthlyFree ? "免费平台代理已就绪，请选择使用。" : "平台代理已就绪，请选择使用。", true);
-    return String(order.social_proxy_id);
+    if (configured === false) {
+      setAccountProxyPickerNotice(modal, "购买成功，但自动配置失败，请点击「选择使用」。", false);
+      showMsg("socialMsg", "购买成功，但自动配置失败，请点击「选择使用」。", false);
+      return purchasedProxyId;
+    }
+    setAccountProxyPickerNotice(modal, "购买成功，代理已配置。", true);
+    showMsg("socialMsg", monthlyFree ? "免费平台代理已配置，请返回填写账号密码后登录。" : "平台代理已配置，请返回填写账号密码后登录。", true);
+    return purchasedProxyId;
   } catch (error) {
     const message = accountProxyPurchaseErrorText(error);
     setAccountProxyPurchaseProgress(modal, "");
@@ -29349,6 +29390,7 @@ async function saveAccountProxyBinding(accountId = "", proxyId = "", expectedPro
     const current = accountById(cleanAccountId);
     if (current) current.proxy_id = selectedProxyId;
   }
+  if (typeof updateAccountStatusViews === "function") updateAccountStatusViews();
   showMsg("socialMsg", selectedProxyId ? "代理 IP 已绑定。" : "代理 IP 已解绑。", true);
   void loadSocial({ force: true }).then(() => {
     renderSocialAccounts();
@@ -29525,13 +29567,13 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
     setAccountProxyPickerNotice(modalRoot, cleanProxyId ? "正在绑定代理 IP…" : "正在解除代理…", true);
     if (mode === "create") {
       state.accountPoolCreateDraft = { ...(state.accountPoolCreateDraft || {}), proxy_id: cleanProxyId };
-      dismissAll();
+      close(cleanProxyId);
       return true;
     }
     const saved = await commitAccountProxyPickerSelection(modalRoot, cleanAccountId, cleanProxyId);
     if (saved) {
       modalRoot.dataset.originalProxyId = cleanProxyId;
-      dismissAll();
+      close(cleanProxyId);
     } else {
       updateAccountProxyChoice(modalRoot, modalRoot.dataset.originalProxyId || "");
       setAccountProxyPickerNotice(modalRoot, "代理绑定失败，已恢复原来的选择。", false);
@@ -29614,7 +29656,14 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
       const supplierChoice = event.target.closest("[data-account-proxy-supplier-choice]");
       if (supplierChoice && !supplierChoice.disabled) {
         const purchasedProxyId = await purchaseAccountProxySupplierOption(modalRoot, supplierChoice);
-        if (purchasedProxyId) presentPurchasedAccountProxy(modalRoot, purchasedProxyId);
+        if (!purchasedProxyId) return;
+        presentPurchasedAccountProxy(modalRoot, purchasedProxyId);
+        const action = await openAccountProxySelectionSuccess(
+          purchasedProxyId,
+          modalRoot.__accountProxyPoolData || {},
+        );
+        if (action === "return") close(purchasedProxyId);
+        else dismissAll();
         return;
       }
       const ownedChoice = event.target.closest("[data-account-proxy-owned-choice]");

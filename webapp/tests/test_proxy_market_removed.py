@@ -219,9 +219,11 @@ class ProxyMarketRemovalTests(unittest.TestCase):
             self.console_script.index("function openAccountProxySelectionSuccess"):
             self.console_script.index("function accountProxyPoolFiltersHtml")
         ]
-        self.assertIn('title: "代理选择成功"', success)
+        self.assertIn('title: "购买成功"', success)
         self.assertIn('modalKey: "account-proxy-selection-success"', success)
         self.assertIn('renderLoginAssistanceVisual({ phase: "success" })', success)
+        self.assertIn('text: "返回"', success)
+        self.assertIn('text: "关闭"', success)
         self.assertIn('showCancel: false', success)
         self.assertIn('dismissOnBackdrop: false', success)
         self.assertIn("account-proxy-selection-success", self.console_styles)
