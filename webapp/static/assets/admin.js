@@ -9072,14 +9072,16 @@ function renderProxyPurchasedAssets(payload = {}) {
       item.expires_at ? `到期 ${formatTime(item.expires_at)}` : "未返回到期时间",
     );
     const actionCell = document.createElement("td");
+    const actionRow = document.createElement("div");
+    actionRow.className = "proxy-market-table-actions";
     const share = createProxyMarketIconButton(
       "共享给用户",
       "share",
       item.market_item_id,
-      '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M19 8v6M22 11h-6"></path>',
-      "primary",
+      '<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"></path><path d="m16 6-4-4-4 4"></path><path d="M12 2v13"></path>',
     );
-    actionCell.appendChild(share);
+    actionRow.appendChild(share);
+    actionCell.appendChild(actionRow);
     const shareMeta = document.createElement("span");
     shareMeta.textContent = Number(item.shared_user_count || 0) ? `已共享 ${Number(item.shared_user_count)} 人` : "未共享";
     actionCell.appendChild(shareMeta);
@@ -9815,8 +9817,10 @@ async function loadProxyMarketShareCustomers() {
 function closeProxyMarketSharePanel() {
   adminState.proxyMarketShareItemId = "";
   adminState.proxyMarketShareSelected = new Set();
-  const panel = el("proxyMarketSharePanel");
-  if (panel) panel.hidden = true;
+  const modal = el("proxyMarketShareModal");
+  if (!modal) return;
+  modal.style.display = "none";
+  modal.setAttribute("aria-hidden", "true");
 }
 
 function renderProxyMarketShareUsers() {
@@ -9862,8 +9866,11 @@ async function openProxyMarketSharePanel(itemId) {
   adminState.proxyMarketShareItemId = String(item.market_item_id || "");
   setText("proxyMarketShareTitle", `共享 ${item.host || item.display_name || item.market_item_id}`);
   setText("proxyMarketShareMeta", `${String(item.proxy_type || "").toUpperCase()} ${item.host || "-"}:${item.port || "-"} · 当前归属 ${item.username || item.user_id || "-"}`);
-  const panel = el("proxyMarketSharePanel");
-  if (panel) panel.hidden = false;
+  const modal = el("proxyMarketShareModal");
+  if (modal) {
+    modal.style.display = "grid";
+    modal.setAttribute("aria-hidden", "false");
+  }
   setMsg("proxyMarketShareMsg", "正在加载可共享用户...");
   try {
     const [users, shares] = await Promise.all([
@@ -9875,7 +9882,7 @@ async function openProxyMarketSharePanel(itemId) {
     if (el("proxyMarketShareQuery")) el("proxyMarketShareQuery").value = "";
     renderProxyMarketShareUsers();
     setMsg("proxyMarketShareMsg", `已选 ${adminState.proxyMarketShareSelected.size} 人，保存后这些用户可在选择代理页直接使用。`);
-    panel?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    window.setTimeout(() => el("proxyMarketShareQuery")?.focus(), 0);
   } catch (error) {
     setMsg("proxyMarketShareMsg", `共享名单读取失败：${getErrorMessage(error)}`, false);
     throw error;
@@ -9893,7 +9900,7 @@ async function saveProxyMarketSharePanel() {
     body: JSON.stringify({ user_ids: userIds, confirm_impact: true }),
   });
   await loadProxyPurchasedAssets();
-  setMsg("proxyMarketShareMsg", `已共享给 ${Number(result?.user_ids?.length || 0)} 位用户`, true);
+  closeProxyMarketSharePanel();
   showAdminPublicPrompt({
     title: "已购代理已共享",
     message: `该代理已共享给 ${Number(result?.user_ids?.length || 0)} 位用户，他们可在选择代理页面直接使用。`,
@@ -10874,6 +10881,15 @@ function bindActions() {
     }
   });
   el("btnCancelProxyMarketShare")?.addEventListener("click", () => closeProxyMarketSharePanel());
+  el("btnProxyMarketShareClose")?.addEventListener("click", () => closeProxyMarketSharePanel());
+  el("proxyMarketShareModal")?.addEventListener("click", (event) => {
+    if (event.target === el("proxyMarketShareModal")) closeProxyMarketSharePanel();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const modal = el("proxyMarketShareModal");
+    if (modal && modal.getAttribute("aria-hidden") === "false") closeProxyMarketSharePanel();
+  });
   el("proxyMarketSettingsForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     setMsg("proxyMarketSettingsMsg", "正在保存代理策略...");

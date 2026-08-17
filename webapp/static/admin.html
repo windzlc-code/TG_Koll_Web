@@ -23,7 +23,8 @@
 
     .proxy-market-admin-head-actions svg,
     .proxy-market-admin-actions svg,
-    .proxy-market-table-actions svg {
+    .proxy-market-table-actions svg,
+    .page-admin .proxy-market-icon-button svg {
       width: 16px;
       height: 16px;
       fill: none;
@@ -295,18 +296,14 @@
       pointer-events: none;
     }
 
-    .proxy-market-share-panel {
-      margin-top: 16px;
-      padding: 14px;
-      border: 1px solid var(--line, #d9e0e8);
-      border-radius: 10px;
-      background: color-mix(in srgb, var(--surface, #fff) 92%, var(--line, #d9e0e8));
+    .page-admin .proxy-market-share-dialog {
+      width: min(560px, calc(100vw - 32px));
     }
 
     .proxy-market-share-user-list {
       display: grid;
       gap: 6px;
-      max-height: 280px;
+      max-height: min(320px, 46vh);
       margin-top: 10px;
       overflow: auto;
     }
@@ -1335,22 +1332,6 @@
               </table>
             </div>
             <div id="proxyMarketPurchasedMsg" class="msg" role="status" aria-live="polite"></div>
-            <div class="proxy-market-share-panel" id="proxyMarketSharePanel" hidden>
-              <div class="proxy-market-admin-band-head">
-                <div>
-                  <h3 id="proxyMarketShareTitle">共享已购代理</h3>
-                  <div class="small" id="proxyMarketShareMeta">在下面勾选用户，保存后这些用户可在选择代理页直接使用。</div>
-                </div>
-                <div class="proxy-market-admin-actions">
-                  <button id="btnSaveProxyMarketShare" type="button" class="primary">保存共享</button>
-                  <button id="btnCancelProxyMarketShare" type="button" class="ghost">取消</button>
-                </div>
-              </div>
-              <label><span>搜索用户</span><input id="proxyMarketShareQuery" type="search" placeholder="用户名、姓名或用户 ID"></label>
-              <div class="small">已选 <strong id="proxyMarketShareSelectedCount">0</strong> 人</div>
-              <div class="proxy-market-share-user-list" id="proxyMarketShareUserList"></div>
-              <div id="proxyMarketShareMsg" class="msg" role="status" aria-live="polite"></div>
-            </div>
           </div>
         </div>
 
@@ -2347,6 +2328,30 @@
       </div>
       <div class="modal-footer">
         <button id="btnAdminPublicPromptDone" type="button" class="primary">知道了</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="proxyMarketShareModal" class="modal-overlay admin-public-action-modal" style="display:none" aria-hidden="true">
+    <div id="proxyMarketShareDialog" class="modal-card modal-card-narrow proxy-market-share-dialog" role="dialog" aria-modal="true" aria-labelledby="proxyMarketShareTitle" tabindex="-1">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="proxyMarketShareTitle">共享已购代理</div>
+          <div class="small" id="proxyMarketShareMeta">勾选用户后保存，这些用户可在选择代理页直接使用。</div>
+        </div>
+        <button id="btnProxyMarketShareClose" type="button" class="modal-close-icon" aria-label="关闭共享窗口">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body admin-public-action-body">
+        <label><span>搜索用户</span><input id="proxyMarketShareQuery" type="search" placeholder="用户名、姓名或用户 ID"></label>
+        <div class="small">已选 <strong id="proxyMarketShareSelectedCount">0</strong> 人</div>
+        <div class="proxy-market-share-user-list" id="proxyMarketShareUserList"></div>
+        <div id="proxyMarketShareMsg" class="msg" role="status" aria-live="polite"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="btnSaveProxyMarketShare" type="button" class="primary">保存共享</button>
+        <button id="btnCancelProxyMarketShare" type="button" class="ghost">取消</button>
       </div>
     </div>
   </div>
