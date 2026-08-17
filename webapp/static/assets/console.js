@@ -521,6 +521,8 @@ const state = {
   accountPasswordVisible: {},
   accountPoolCreateDraft: {},
   accountProxyPoolSnapshot: null,
+  accountProxyPoolCache: null,
+  accountProxyPoolLoadingPromise: null,
   accountClipboardText: "",
   proxyPoolPage: 1,
   proxyPoolPageSize: 10,
@@ -28207,8 +28209,8 @@ function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
   return `<div class="account-proxy-picker-filters" data-account-proxy-filters>
     <div class="account-proxy-source-row">
       <div class="account-proxy-type-tabs" role="tablist" aria-label="代理来源">
-        <button type="button" class="is-active" role="tab" aria-selected="true" data-account-proxy-type="supplier">平台</button>
-        <button type="button" role="tab" aria-selected="false" data-account-proxy-type="selected">已选择</button>
+        <button type="button" class="is-active" role="tab" aria-selected="true" data-account-proxy-type="supplier">平台 <span class="record-tab-count" data-account-proxy-type-count="supplier">0</span></button>
+        <button type="button" role="tab" aria-selected="false" data-account-proxy-type="selected">已选择 <span class="record-tab-count" data-account-proxy-type-count="selected">0</span></button>
       </div>
       <button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="${esc(scope)}" aria-pressed="${selectedProxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button>
     </div>
@@ -28629,36 +28631,66 @@ function applyAccountProxyPickerPool(modal, data = {}) {
     ? data.options.filter((item) => String(item?.ownership_type || "").toLowerCase() === "owned").length : 0;
   modal.querySelectorAll("[data-account-proxy-type]").forEach((button) => {
     const type = String(button.dataset.accountProxyType || "supplier");
-    button.dataset.count = String(type === "supplier" ? supplierCount : selectedCount);
+    const count = type === "supplier" ? supplierCount : selectedCount;
+    button.dataset.count = String(count);
+    const badge = button.querySelector("[data-account-proxy-type-count]");
+    if (badge) badge.textContent = String(count);
   });
   refreshAccountProxyPickerOptions(modal);
   return data;
 }
 
-async function fetchAccountProxyPickerPool() {
-  const [poolResult, purchaseResult] = await Promise.allSettled([
-    api("/api/persona_dashboard/automation/system-proxy-pool"),
-    api("/api/proxy-purchases/options"),
-  ]);
-  if (poolResult.status !== "fulfilled") throw poolResult.reason;
-  return {
-    ...(poolResult.value || {}),
-    purchase_options: purchaseResult.status === "fulfilled" ? (purchaseResult.value || {}) : {},
-    purchase_error: purchaseResult.status === "rejected"
-      ? (purchaseResult.reason?.detail || purchaseResult.reason?.message || "平台代理目录加载失败")
-      : "",
-  };
+const ACCOUNT_PROXY_POOL_TTL_MS = 10 * 60 * 1000;
+
+function readAccountProxyPoolCache({ allowStale = false } = {}) {
+  const cache = state.accountProxyPoolCache;
+  if (!cache?.data || !cache.fetchedAt) return null;
+  if (!allowStale && Date.now() - Number(cache.fetchedAt || 0) > ACCOUNT_PROXY_POOL_TTL_MS) return null;
+  return cache.data;
+}
+
+function writeAccountProxyPoolCache(data) {
+  state.accountProxyPoolSnapshot = data || {};
+  state.accountProxyPoolCache = { data: data || {}, fetchedAt: Date.now() };
+  return data;
+}
+
+function invalidateAccountProxyPoolCache() {
+  state.accountProxyPoolCache = null;
+}
+
+async function fetchAccountProxyPickerPool({ force = false } = {}) {
+  if (!force) {
+    const cached = readAccountProxyPoolCache();
+    if (cached) return cached;
+  }
+  if (state.accountProxyPoolLoadingPromise) return state.accountProxyPoolLoadingPromise;
+  const request = (async () => {
+    const [poolResult, purchaseResult] = await Promise.allSettled([
+      api("/api/persona_dashboard/automation/system-proxy-pool"),
+      api("/api/proxy-purchases/options"),
+    ]);
+    if (poolResult.status !== "fulfilled") throw poolResult.reason;
+    return writeAccountProxyPoolCache({
+      ...(poolResult.value || {}),
+      purchase_options: purchaseResult.status === "fulfilled" ? (purchaseResult.value || {}) : {},
+      purchase_error: purchaseResult.status === "rejected"
+        ? (purchaseResult.reason?.detail || purchaseResult.reason?.message || "平台代理目录加载失败")
+        : "",
+    });
+  })().finally(() => {
+    if (state.accountProxyPoolLoadingPromise === request) state.accountProxyPoolLoadingPromise = null;
+  });
+  state.accountProxyPoolLoadingPromise = request;
+  return request;
 }
 
 async function revealAccountProxyPicker(modal, selectedProxyId = "", { attachCountryMenu } = {}) {
   const content = modal?.querySelector?.(".account-proxy-picker-content");
   if (!content) return null;
-  content.innerHTML = accountProxyPickerPreloadHtml();
-  try {
-    const data = await fetchAccountProxyPickerPool();
-    if (!modal.isConnected) return data;
+  const paintReady = (data) => {
     const regions = Array.isArray(data?.purchase_options?.regions) ? data.purchase_options.regions : [];
-    if (data.purchase_error && !regions.length) {
+    if (data?.purchase_error && !regions.length) {
       content.innerHTML = accountProxyPickerPreloadHtml(data.purchase_error);
       return data;
     }
@@ -28666,6 +28698,20 @@ async function revealAccountProxyPicker(modal, selectedProxyId = "", { attachCou
     applyAccountProxyPickerPool(modal, data);
     if (typeof attachCountryMenu === "function") attachCountryMenu();
     return data;
+  };
+  const cached = readAccountProxyPoolCache({ allowStale: true });
+  if (cached) {
+    paintReady(cached);
+    fetchAccountProxyPickerPool({ force: true }).then((data) => {
+      if (modal.isConnected && data) applyAccountProxyPickerPool(modal, data);
+    }).catch(() => {});
+    return cached;
+  }
+  content.innerHTML = accountProxyPickerPreloadHtml();
+  try {
+    const data = await fetchAccountProxyPickerPool();
+    if (!modal.isConnected) return data;
+    return paintReady(data);
   } catch (error) {
     if (content.isConnected) {
       content.innerHTML = accountProxyPickerPreloadHtml(error.detail || error.message || "请稍后重试");
@@ -28679,7 +28725,7 @@ async function loadAccountProxyPickerPool(modal) {
   const options = modal.querySelector("[data-account-proxy-options]");
   if (options) options.setAttribute("aria-busy", "true");
   try {
-    const data = await fetchAccountProxyPickerPool();
+    const data = await fetchAccountProxyPickerPool({ force: true });
     if (!modal.isConnected) return data;
     applyAccountProxyPickerPool(modal, data);
     return data;

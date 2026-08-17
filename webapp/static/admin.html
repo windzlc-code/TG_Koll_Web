@@ -295,6 +295,35 @@
       pointer-events: none;
     }
 
+    .proxy-market-share-panel {
+      margin-top: 16px;
+      padding: 14px;
+      border: 1px solid var(--line, #d9e0e8);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--surface, #fff) 92%, var(--line, #d9e0e8));
+    }
+
+    .proxy-market-share-user-list {
+      display: grid;
+      gap: 6px;
+      max-height: 280px;
+      margin-top: 10px;
+      overflow: auto;
+    }
+
+    .proxy-market-share-user {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      padding: 6px 8px;
+      border-radius: 8px;
+    }
+
+    .proxy-market-share-user:hover {
+      background: color-mix(in srgb, var(--accent, #2563eb) 6%, transparent);
+    }
+
     .proxy-purchase-admin-hero {
       position: relative;
       overflow: hidden;
@@ -1192,13 +1221,13 @@
             </div>
             <div class="proxy-market-record-tabs" id="proxyMarketRecordsTabs" role="tablist" aria-label="代理 IP 记录视图">
               <button id="proxyMarketInventoryTab" class="proxy-market-record-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="proxyMarketInventoryPanel" tabindex="0" data-proxy-market-records-view="inventory">
-                库存 <span class="proxy-market-record-tab-count" id="proxyMarketInventoryTabCount">0</span>
+                库存 <span class="record-tab-count proxy-market-record-tab-count" id="proxyMarketInventoryTabCount">0</span>
               </button>
               <button id="proxyMarketAllocationTab" class="proxy-market-record-tab" type="button" role="tab" aria-selected="false" aria-controls="proxyMarketAllocationPanel" tabindex="-1" data-proxy-market-records-view="allocations">
-                分配记录 <span class="proxy-market-record-tab-count" id="proxyMarketAllocationTabCount">0</span>
+                分配记录 <span class="record-tab-count proxy-market-record-tab-count" id="proxyMarketAllocationTabCount">0</span>
               </button>
               <button id="proxyMarketPurchasedTab" class="proxy-market-record-tab" type="button" role="tab" aria-selected="false" aria-controls="proxyMarketPurchasedPanel" tabindex="-1" data-proxy-market-records-view="purchased">
-                已购代理 <span class="proxy-market-record-tab-count" id="proxyMarketPurchasedTabCount">0</span>
+                已购代理 <span class="record-tab-count proxy-market-record-tab-count" id="proxyMarketPurchasedTabCount">0</span>
               </button>
             </div>
           </div>
@@ -1306,6 +1335,22 @@
               </table>
             </div>
             <div id="proxyMarketPurchasedMsg" class="msg" role="status" aria-live="polite"></div>
+            <div class="proxy-market-share-panel" id="proxyMarketSharePanel" hidden>
+              <div class="proxy-market-admin-band-head">
+                <div>
+                  <h3 id="proxyMarketShareTitle">共享已购代理</h3>
+                  <div class="small" id="proxyMarketShareMeta">在下面勾选用户，保存后这些用户可在选择代理页直接使用。</div>
+                </div>
+                <div class="proxy-market-admin-actions">
+                  <button id="btnSaveProxyMarketShare" type="button" class="primary">保存共享</button>
+                  <button id="btnCancelProxyMarketShare" type="button" class="ghost">取消</button>
+                </div>
+              </div>
+              <label><span>搜索用户</span><input id="proxyMarketShareQuery" type="search" placeholder="用户名、姓名或用户 ID"></label>
+              <div class="small">已选 <strong id="proxyMarketShareSelectedCount">0</strong> 人</div>
+              <div class="proxy-market-share-user-list" id="proxyMarketShareUserList"></div>
+              <div id="proxyMarketShareMsg" class="msg" role="status" aria-live="polite"></div>
+            </div>
           </div>
         </div>
 

@@ -242,12 +242,13 @@ def list_system_proxy_pool_options(
          AND owned_proxy.status IN ('active', 'failed', 'pending')
         LEFT JOIN proxy_purchase_orders owned_order
           ON owned_order.id = item.provider_purchase_order_id
-         AND owned_order.user_id = ?
         LEFT JOIN proxy_renewal_schedules renewal
           ON renewal.order_id = owned_order.id
+        LEFT JOIN proxy_market_shares share
+          ON share.item_id = item.id AND share.user_id = ? AND share.status = 'active'
         WHERE (
           item.ownership_type = 'owned'
-          AND item.owner_user_id = ?
+          AND (item.owner_user_id = ? OR share.id IS NOT NULL)
           AND owned_proxy.id IS NOT NULL
           AND item.status NOT IN ('retired', 'expired')
         ) OR (
@@ -267,7 +268,7 @@ def list_system_proxy_pool_options(
     for row in rows:
         item = dict(row)
         ownership_type = str(item.get("ownership_type") or "shared").strip().lower()
-        owned = ownership_type == "owned" and int(item.get("owner_user_id") or 0) == owner_id
+        owned = ownership_type == "owned" and bool(str(item.get("social_proxy_id") or "").strip())
         selected = int(item.get("allocation_user_id") or 0) == owner_id
         if not selected and not owned:
             if str(item.get("status") or "") != "active":

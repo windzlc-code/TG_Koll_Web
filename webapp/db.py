@@ -2196,9 +2196,34 @@ def init_db() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_proxies_client_request "
             "ON social_proxies(user_id, client_request_id) WHERE client_request_id <> ''"
         )
+        conn.execute("DROP INDEX IF EXISTS idx_social_proxies_market_item")
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_proxies_market_item "
-            "ON social_proxies(market_item_id) WHERE market_item_id <> ''"
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_proxies_market_user "
+            "ON social_proxies(user_id, market_item_id) WHERE market_item_id <> ''"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS proxy_market_shares (
+              id TEXT PRIMARY KEY,
+              item_id TEXT NOT NULL,
+              user_id INTEGER NOT NULL,
+              social_proxy_id TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'active',
+              created_by INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              FOREIGN KEY(item_id) REFERENCES proxy_market_items(id),
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_market_active_share "
+            "ON proxy_market_shares(item_id, user_id) WHERE status = 'active'"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_proxy_market_share_user "
+            "ON proxy_market_shares(user_id, status, updated_at DESC)"
         )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_market_active_item "

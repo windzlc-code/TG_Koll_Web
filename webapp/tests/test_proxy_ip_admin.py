@@ -94,7 +94,7 @@ class ProxyIpAdminTests(unittest.TestCase):
         self.assertNotIn("/api/proxy-market/catalog", route_paths)
         self.assertNotIn("/api/proxy-market/me", route_paths)
         self.assertIn("/api/admin/proxy-market/items/{item_id}/purge", route_paths)
-        self.assertIn("/api/admin/proxy-market/items/{item_id}/assign", route_paths)
+        self.assertIn("/api/admin/proxy-market/items/{item_id}/shares", route_paths)
 
     def _create_user(self, username: str, *, is_admin: int = 0) -> int:
         from webapp.db import db
@@ -155,12 +155,13 @@ class ProxyIpAdminTests(unittest.TestCase):
         self.assertEqual(refused.status_code, 409, refused.text)
         self.assertIn("已购代理", refused.json()["detail"])
 
-    def test_admin_can_assign_purchased_proxy_to_a_customer(self):
+    def test_admin_can_share_purchased_proxy_with_multiple_customers(self):
         from webapp.db import db
         from webapp.system_proxy_pool import list_system_proxy_pool_options
 
         owner_id = self._create_user("proxy-buyer", is_admin=1)
-        target_id = self._create_user("proxy-receiver")
+        first_id = self._create_user("proxy-receiver-a")
+        second_id = self._create_user("proxy-receiver-b")
         with db() as conn:
             conn.execute(
                 """
@@ -170,10 +171,10 @@ class ProxyIpAdminTests(unittest.TestCase):
                   last_check_result_json, ownership_type, owner_user_id,
                   provider_purchase_order_id, provider_proxy_id, created_at, updated_at
                 ) VALUES (
-                  'owned_proxy_item_assign1', 'owned-assign-1', '已购葡萄牙代理', 'proxycheap',
+                  'owned_proxy_item_share1', 'owned-share-1', '已购葡萄牙代理', 'proxycheap',
                   'http', '198.51.100.21', 48859, ?, 'allocated', 'healthy', 1,
                   '{"ok":true,"exit_ip":"198.51.100.21"}', 'owned', ?,
-                  'proxy_order_assign1', '2311999', 1, 1
+                  'proxy_order_share1', '2311999', 1, 1
                 )
                 """,
                 (owner_id, owner_id),
@@ -184,51 +185,59 @@ class ProxyIpAdminTests(unittest.TestCase):
                   id, user_id, name, proxy_type, host, port, source, purchase_status,
                   status, market_item_id, created_at, updated_at
                 ) VALUES (
-                  'social_proxy_assign1', ?, '已购葡萄牙代理', 'http', '198.51.100.21', 48859,
-                  'provider_purchase', 'owned', 'active', 'owned_proxy_item_assign1', 1, 1
+                  'social_proxy_share_owner', ?, '已购葡萄牙代理', 'http', '198.51.100.21', 48859,
+                  'provider_purchase', 'owned', 'active', 'owned_proxy_item_share1', 1, 1
                 )
                 """,
                 (owner_id,),
             )
 
-        assigned = self.client.post(
-            "/api/admin/proxy-market/items/owned_proxy_item_assign1/assign",
-            json={"user_id": target_id, "confirm_impact": True},
+        saved = self.client.put(
+            "/api/admin/proxy-market/items/owned_proxy_item_share1/shares",
+            json={"user_ids": [first_id, second_id], "confirm_impact": True},
         )
-        self.assertEqual(assigned.status_code, 200, assigned.text)
-        payload = assigned.json()
-        self.assertTrue(payload["assigned"])
-        self.assertEqual(payload["user_id"], target_id)
-        self.assertEqual(payload["social_proxy_id"], "social_proxy_assign1")
+        self.assertEqual(saved.status_code, 200, saved.text)
+        payload = saved.json()
+        self.assertEqual(sorted(payload["user_ids"]), sorted([first_id, second_id]))
 
         with db() as conn:
             item = conn.execute(
-                "SELECT owner_user_id, status FROM proxy_market_items WHERE id = ?",
-                ("owned_proxy_item_assign1",),
+                "SELECT owner_user_id FROM proxy_market_items WHERE id = ?",
+                ("owned_proxy_item_share1",),
             ).fetchone()
-            proxy = conn.execute(
+            owner_proxy = conn.execute(
                 "SELECT user_id, purchase_status FROM social_proxies WHERE id = ?",
-                ("social_proxy_assign1",),
+                ("social_proxy_share_owner",),
             ).fetchone()
-            receiver_options = list_system_proxy_pool_options(conn, owner_user_id=target_id)
-            buyer_options = list_system_proxy_pool_options(conn, owner_user_id=owner_id)
-        self.assertEqual(int(item["owner_user_id"]), target_id)
-        self.assertEqual(int(proxy["user_id"]), target_id)
-        self.assertEqual(str(proxy["purchase_status"]), "owned")
+            copies = conn.execute(
+                "SELECT user_id, purchase_status FROM social_proxies WHERE market_item_id = ? ORDER BY user_id",
+                ("owned_proxy_item_share1",),
+            ).fetchall()
+            first_options = list_system_proxy_pool_options(conn, owner_user_id=first_id)
+            second_options = list_system_proxy_pool_options(conn, owner_user_id=second_id)
+            owner_options = list_system_proxy_pool_options(conn, owner_user_id=owner_id)
+        self.assertEqual(int(item["owner_user_id"]), owner_id)
+        self.assertEqual(int(owner_proxy["user_id"]), owner_id)
+        self.assertEqual(str(owner_proxy["purchase_status"]), "owned")
+        self.assertEqual([int(row["user_id"]) for row in copies], sorted([owner_id, first_id, second_id]))
         self.assertEqual(
-            [row["market_item_id"] for row in receiver_options if row["ownership_type"] == "owned"],
-            ["owned_proxy_item_assign1"],
+            [row["market_item_id"] for row in first_options if row["ownership_type"] == "owned"],
+            ["owned_proxy_item_share1"],
         )
         self.assertEqual(
-            [row["market_item_id"] for row in buyer_options if row["ownership_type"] == "owned"],
-            [],
+            [row["market_item_id"] for row in second_options if row["ownership_type"] == "owned"],
+            ["owned_proxy_item_share1"],
+        )
+        self.assertEqual(
+            [row["market_item_id"] for row in owner_options if row["ownership_type"] == "owned"],
+            ["owned_proxy_item_share1"],
         )
 
         shared = self.client.post(
             "/api/admin/proxy-market/items",
             json={
-                "sku": "SHARED-NO-ASSIGN",
-                "display_name": "共享不可分配",
+                "sku": "SHARED-NO-SHARE",
+                "display_name": "共享库存不可再共享",
                 "proxy_type": "socks5",
                 "host": "203.0.113.30",
                 "port": 1080,
@@ -237,9 +246,9 @@ class ProxyIpAdminTests(unittest.TestCase):
             },
         )
         self.assertEqual(shared.status_code, 200, shared.text)
-        refused = self.client.post(
-            f"/api/admin/proxy-market/items/{shared.json()['item']['id']}/assign",
-            json={"user_id": target_id, "confirm_impact": True},
+        refused = self.client.put(
+            f"/api/admin/proxy-market/items/{shared.json()['item']['id']}/shares",
+            json={"user_ids": [first_id], "confirm_impact": True},
         )
         self.assertEqual(refused.status_code, 409, refused.text)
 

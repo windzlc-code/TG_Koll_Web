@@ -498,15 +498,19 @@ def register_proxy_purchase_routes(
         _admin: dict[str, Any] = Depends(admin_dependency),
     ):
         with db() as conn:
-            return {
-                "ok": True,
-                "items": proxy_purchases.list_owned_assets(
-                    conn,
-                    query=query,
-                    status=status,
-                    limit=limit,
-                ),
-            }
+            items = proxy_purchases.list_owned_assets(
+                conn,
+                query=query,
+                status=status,
+                limit=limit,
+            )
+            total = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM proxy_market_items WHERE ownership_type = 'owned' AND provider_purchase_order_id <> ''"
+                ).fetchone()[0]
+                or 0
+            )
+            return {"ok": True, "items": items, "total": total}
 
     @app.post("/api/admin/proxy-purchases/orders/{order_id}/reconcile")
     def api_admin_proxy_purchase_reconcile(

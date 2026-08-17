@@ -2991,7 +2991,7 @@ def register_social_automation_routes(app: FastAPI) -> None:
             else:
                 rows = conn.execute(
                     "SELECT * FROM social_proxies WHERE user_id = ? AND ("
-                    "(source = 'provider_purchase' AND purchase_status = 'owned') OR "
+                    "(source = 'provider_purchase' AND purchase_status IN ('owned', 'shared')) OR "
                     "(source = 'marketplace' AND purchase_status = 'leased')) "
                     "ORDER BY updated_at DESC, created_at DESC",
                     (owner_user_id,),
@@ -4199,7 +4199,7 @@ def build_social_automation_overview(
         accounts = conn.execute(f"SELECT * FROM social_accounts{scope} ORDER BY updated_at DESC, created_at DESC", params).fetchall()
         proxy_scope = scope
         if user_id is not None and purchased_proxies_only:
-            proxy_scope = " WHERE user_id = ? AND source = 'provider_purchase' AND purchase_status = 'owned'"
+            proxy_scope = " WHERE user_id = ? AND source = 'provider_purchase' AND purchase_status IN ('owned', 'shared')"
         proxies = conn.execute(f"SELECT * FROM social_proxies{proxy_scope} ORDER BY updated_at DESC, created_at DESC", params).fetchall()
         public_accounts = _account_public_rows(
             conn,
@@ -13152,7 +13152,7 @@ def _account_public_rows(
     api_rows: dict[str, dict[str, Any]] = {}
     if proxy_ids:
         placeholders = ",".join("?" for _ in proxy_ids)
-        purchase_filter = " AND proxy.source = 'provider_purchase' AND proxy.purchase_status = 'owned'" if purchased_proxies_only else ""
+        purchase_filter = " AND proxy.source = 'provider_purchase' AND proxy.purchase_status IN ('owned', 'shared')" if purchased_proxies_only else ""
         proxy_rows = conn.execute(
             f"""
             SELECT proxy.*,

@@ -2265,7 +2265,11 @@ def list_owned_assets(
                ) AS bound_account_count,
                item.expires_at,
                item.created_at,
-               item.updated_at
+               item.updated_at,
+               (
+                 SELECT COUNT(*) FROM proxy_market_shares share
+                 WHERE share.item_id = item.id AND share.status = 'active'
+               ) AS shared_user_count
         FROM proxy_market_items item
         LEFT JOIN proxy_purchase_orders orders
           ON orders.id = item.provider_purchase_order_id
@@ -2312,6 +2316,7 @@ def list_owned_assets(
             "renewal_enabled": bool(row["renewal_enabled"]),
             "renewal_status": str(row["renewal_status"] or ""),
             "bound_account_count": int(row["bound_account_count"] or 0),
+            "shared_user_count": int(row["shared_user_count"] or 0),
             "expires_at": int(row["expires_at"] or 0),
             "created_at": int(row["created_at"] or 0),
             "updated_at": int(row["updated_at"] or 0),

@@ -17491,16 +17491,32 @@ body.persona-media-sorting {
   box-shadow: none;
 }
 
-.account-proxy-type-tabs button[data-account-proxy-type]::after {
-  content: attr(data-count);
-  position: absolute;
-  top: 50%;
-  right: 10px;
-  min-width: 15px;
-  transform: translateY(-50%);
-  color: currentColor;
-  font: 800 9px/1 ui-monospace, Consolas, monospace;
-  text-align: center;
+.record-tab-count,
+.proxy-market-record-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  margin-left: 5px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: inherit;
+  background: color-mix(in srgb, currentColor 13%, transparent);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.account-proxy-type-tabs button[data-account-proxy-type] {
+  padding-right: 13px;
+}
+
+.account-proxy-type-tabs .record-tab-count {
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .account-proxy-type-tabs button.is-active {
