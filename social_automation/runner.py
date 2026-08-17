@@ -11807,7 +11807,7 @@ def _threads_compose_opener_by_structure(page):
                 };
                 let best = null;
                 let bestScore = 0;
-                const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"]'));
+                const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"], [tabindex="0"]'));
                 for (const node of nodes) {
                     if (!visible(node)) continue;
                     const rect = node.getBoundingClientRect();
@@ -11816,21 +11816,24 @@ def _threads_compose_opener_by_structure(page):
                     if (kind === 'reject') continue;
                     const name = accessibleName(node).toLowerCase();
                     const hasSvg = Boolean(node.querySelector('svg'));
+                    const svgMarkup = hasSvg ? String(node.querySelector('svg').innerHTML || '') : '';
+                    const looksLikePlus = /plus|add|M\\s*11|M11|line x1/i.test(svgMarkup) || name === '+' || name.includes('＋');
                     const iconOnly = hasSvg && name.length <= 2;
                     const leftRail = rect.left + rect.width / 2 <= width * 0.32;
-                    const bottomRight = rect.left >= width * 0.62 && rect.top >= height * 0.58;
+                    const bottomRight = rect.left >= width * 0.55 && rect.top >= height * 0.52;
                     let score = 0;
                     if (kind === 'compose') score += 120;
                     if (wanted.some(label => name.includes(label))) score += 90;
-                    if (bottomRight && (iconOnly || hasSvg)) score += 100;
-                    if (leftRail && (iconOnly || hasSvg)) score += 45;
+                    if (looksLikePlus) score += 80;
+                    if (bottomRight && (iconOnly || hasSvg || looksLikePlus)) score += 100;
+                    if (leftRail && (iconOnly || hasSvg || looksLikePlus)) score += 45;
                     if (iconOnly) score += 15;
                     if (score > bestScore) {
                         best = node;
                         bestScore = score;
                     }
                 }
-                if (!best || bestScore < 90) return false;
+                if (!best || bestScore < 70) return false;
                 best.setAttribute('data-vecto-compose-opener', '1');
                 return true;
             }""",
@@ -11847,27 +11850,112 @@ def _threads_compose_opener_by_structure(page):
         return None
 
 
+def _threads_origin(page) -> str:
+    parsed = urlparse(str(getattr(page, "url", "") or THREADS_HOME))
+    host = str(parsed.hostname or "").lower()
+    if host not in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
+        return "https://www.threads.com"
+    scheme = str(parsed.scheme or "https") or "https"
+    return f"{scheme}://{host}"
+
+
+def _threads_url_is_compose(page) -> bool:
+    parsed = urlparse(str(getattr(page, "url", "") or ""))
+    path = str(parsed.path or "").rstrip("/").lower()
+    query = str(parsed.query or "").lower()
+    return (
+        path in {"/new", "/compose", "/intent/post"}
+        or path.endswith("/new")
+        or path.endswith("/compose")
+        or "compose" in query
+        or "composer" in query
+    )
+
+
+def _threads_page_compose_box(page):
+    return _visible_first(page, [
+        '[role="main"] [contenteditable="true"][role="textbox"]',
+        '[role="main"] [contenteditable="true"]',
+        '[contenteditable="true"][data-lexical-editor="true"]',
+        '[contenteditable="true"][aria-label*="thread" i]',
+        '[contenteditable="true"][aria-label*="串文" i]',
+        '[contenteditable="true"][aria-label*="贴文" i]',
+        '[contenteditable="true"][aria-label*="貼文" i]',
+        '[role="textbox"][contenteditable="true"]',
+    ], timeout_ms=1200)
+
+
+def _threads_active_compose_box(page):
+    dialog = _threads_dialog_compose_box(page)
+    if dialog is not None:
+        return dialog
+    if _threads_url_is_compose(page):
+        return _threads_page_compose_box(page)
+    return None
+
+
+def _threads_compose_direct_urls(page) -> list[str]:
+    origin = _threads_origin(page)
+    urls = [
+        f"{origin}/new",
+        f"{origin}/intent/post",
+        "https://www.threads.com/new",
+        "https://www.threads.net/new",
+    ]
+    unique: list[str] = []
+    for url in urls:
+        if url not in unique:
+            unique.append(url)
+    return unique
+
+
+def _wait_for_threads_compose_box(page, attempts: int = 6):
+    for _ in range(max(1, attempts)):
+        compose = _threads_active_compose_box(page)
+        if compose is not None:
+            return compose
+        _sleep_between(0.35, 0.6)
+    return None
+
+
+def _open_threads_compose_by_url(page, logger: AutomationLogger):
+    for url in _threads_compose_direct_urls(page):
+        logger.log(
+            "info",
+            "threads_publish_open_direct",
+            "页面按钮未稳定出现，改为直接打开 Threads 发帖页。",
+            {"url": url},
+        )
+        _goto(page, url, logger, "threads_publish_open_direct")
+        compose = _wait_for_threads_compose_box(page)
+        if compose is not None:
+            return compose
+    return None
+
+
 def _ensure_threads_compose_ready(
     page,
     logger: AutomationLogger,
     *,
     _home_recovery_attempted: bool = False,
 ):
-    compose = _threads_dialog_compose_box(page)
+    compose = _threads_active_compose_box(page)
     if compose is not None:
         return compose
     sidebar_opener = _threads_sidebar_compose_opener(page)
     if sidebar_opener is not None:
         _click_threads_compose_opener(page, sidebar_opener, logger)
-        _sleep_between(0.8, 1.6)
-        compose = _threads_dialog_compose_box(page)
+        compose = _wait_for_threads_compose_box(page, attempts=4)
         if compose is not None:
             return compose
+    compose = _open_threads_compose_by_url(page, logger)
+    if compose is not None:
+        return compose
     if not _home_recovery_attempted:
         logger.log(
             "warn",
             "threads_publish_open_recovery",
-            "Threads home URL is open but the left sidebar composer entry is not rendered; reloading the home page once.",
+            "Threads 发帖页仍未出现输入框，正在重载主页后重试一次。",
             {"url": _safe_navigation_url(getattr(page, "url", ""))},
         )
         _goto(page, THREADS_HOME, logger, "threads_publish_open_recovery")
@@ -11876,7 +11964,7 @@ def _ensure_threads_compose_ready(
             logger,
             _home_recovery_attempted=True,
         )
-    raise RuntimeError("无法通过 Threads 左侧栏打开发帖输入框。")
+    raise RuntimeError("无法打开 Threads 发帖输入框。")
 
 
 def _focus_threads_compose(page, compose, logger: AutomationLogger):
