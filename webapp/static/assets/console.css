@@ -16275,6 +16275,10 @@ body.persona-media-sorting {
     padding-bottom: 64px;
   }
 
+  .console-page #personaDetail:has(.persona-hot-import-dock) {
+    padding-bottom: 132px;
+  }
+
   .console-page .persona-draft-global-save-dock {
     position: fixed;
     z-index: 1400;
@@ -18950,7 +18954,7 @@ body.persona-media-sorting {
   grid-template-columns: none;
   gap: 8px;
   width: 100%;
-  padding: 10px 6px 4px;
+  padding: 6px 6px 4px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
   scroll-snap-type: x proximity;
@@ -18969,7 +18973,7 @@ body.persona-media-sorting {
   flex: 0 0 min(220px, 74vw);
   min-width: 156px;
   min-height: 50px;
-  padding: 7px 11px;
+  padding: 7px 28px 7px 11px;
   scroll-snap-align: start;
   border-radius: 10px;
   overflow: visible;
@@ -18978,8 +18982,8 @@ body.persona-media-sorting {
 .persona-platform-hot-badge {
   position: absolute;
   z-index: 2;
-  top: -8px;
-  right: -5px;
+  top: 4px;
+  right: 6px;
   display: inline-grid;
   place-items: center;
   min-width: 24px;
@@ -27045,6 +27049,10 @@ body.console-page {
     scroll-snap-type: x proximity;
     scrollbar-width: none;
     -webkit-overflow-scrolling: touch;
+  }
+
+  .console-page .account-pool-platforms.account-pool-platform-tabs.persona-content-platform-tabs {
+    padding: 6px 6px 4px;
   }
 
   .console-page .account-pool-platforms.account-pool-platform-tabs::-webkit-scrollbar {

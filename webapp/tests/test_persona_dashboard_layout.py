@@ -2730,7 +2730,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("platform: personaContentPlatform(persona)", payload)
         self.assertIn("platform: personaContentPlatform(persona)", create_post)
         self.assertIn(".persona-content-platform-tabs {", self.styles)
-        self.assertIn("overflow-x: auto;", self.styles[self.styles.index(".persona-content-platform-tabs {"):])
+        tabs_styles = self.styles[self.styles.index(".persona-content-platform-tabs {"):]
+        self.assertIn("overflow-x: auto;", tabs_styles)
+        badge_styles = self.styles[self.styles.index(".persona-platform-hot-badge {"):]
+        self.assertIn("top: 4px;", badge_styles)
+        self.assertIn("right: 6px;", badge_styles)
+        self.assertNotIn("top: -8px;", badge_styles.split("}", 1)[0])
 
     def test_persona_header_platform_logos_and_counts_share_content_platform_state(self):
         badge = self.console_script[

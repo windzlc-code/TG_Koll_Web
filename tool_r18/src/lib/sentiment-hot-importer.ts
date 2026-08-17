@@ -125,7 +125,7 @@ const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 36;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 37;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 28;
@@ -1299,7 +1299,7 @@ function filterConflictingSearchKeywords(keywords: string[]): string[] {
     && !isHollowSearchKeyword(term)
     && !isGenericPersonaContentTopic(term)
   )))];
-  const fluffSuffix = /(?:大叔|愛好者|爱好者|經驗|经验|攻略|生活|商品|物品|周邊商品|周边商品)$/u;
+  const fluffSuffix = /(?:大叔|愛好者|爱好者|經驗|经验|攻略|生活|周邊商品|周边商品)$/u;
   const withoutFluff = cleaned.filter((term) => {
     if (!fluffSuffix.test(term) || term.length <= 4) return true;
     const stem = term.replace(fluffSuffix, "");
@@ -1311,7 +1311,7 @@ function filterConflictingSearchKeywords(keywords: string[]): string[] {
     if (kept.some((existing) => existing !== term && existing.includes(term))) continue;
     const prefix = term.slice(0, Math.min(3, term.length));
     const sameFamily = kept.filter((existing) => existing.startsWith(prefix) && prefix.length >= 3).length;
-    if (sameFamily >= 2) continue;
+    if (sameFamily >= 5) continue;
     kept.push(term);
   }
   return withoutFluff.filter((term) => kept.includes(term));
@@ -2095,7 +2095,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "每个搜索词脱离上下文后仍应明确属于该领域。细分职业优先覆盖普通受众高频讨论的实体词、场景词、经验词、互动词和真实痛点，避免只有内部从业者才会搜索的低流量长短语。",
             "不要把 3 个以上意图词硬拼成一句搜索词；primaryQueries 和 broadQueries 每项优先 2-8 个汉字，最多 12 个汉字，必要时用短词而不是长句。",
             "必须按人设简介里的具体事物扩词：作品类型、商品、场所摊位、器材配件、消费对象各给不同搜索词，禁止只把两三个核心词来回拼接。",
-            "同一场所或主题词最多保留 1 个与具体物件的组合；禁止连续输出菜市场买菜、菜市场环保袋、菜市场省钱攻略这类同质变体。",
+            "同一场所或主题词最多保留 4 个与不同物件的组合，合计仍须接近 20 个可搜索词；禁止连续输出菜市场买菜、菜市场环保袋、菜市场省钱攻略这类空洞同质变体。",
             "禁止输出空洞抽象词：便宜、大叔、烟火气、买菜、好物、攻略、经验、爱好者、生活、日常、市井生活。",
             "避免把聊天、互动、日常、趣事、社区、客流、爱好、手工、穿搭、围裙、工具这类低流量或视觉词排在前面；只有当它们是该领域真实高热搜索对象时才可保留到靠后位置。",
             chineseSearchInstruction,
@@ -4076,7 +4076,7 @@ async function fetchThreadsSearchPageCandidates(args: {
   const excludedHistoryKeys = new Set<string>();
   const queryRound = Math.max(0, Math.floor(Number(args.queryRound) || 0));
   // Controller-issued keyword batches already rotate on the new host. Keep
-  // their order stable here so all eight selected terms are actually queried
+  // their order stable here so the selected object-noun terms are actually queried
   // instead of rotating into derived variants based on display history.
   const baseSeed = args.queryKeywords?.length
     ? 0

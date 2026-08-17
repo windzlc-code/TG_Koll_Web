@@ -792,6 +792,42 @@ describe("sentiment hot importer", () => {
     expect(resolveSentimentHotManualQueryKeywords(["菜市場真實體驗", "環保袋二次元", "二次元 吐槽", "撿漏 真實"], null, "strict")).toEqual([]);
   });
 
+  it("keeps a full object-noun keyword batch instead of collapsing to a few families", () => {
+    const keywords = resolveSentimentHotManualQueryKeywords([
+      "二次元手辦",
+      "動漫谷子",
+      "痛包",
+      "立牌",
+      "二手漫畫",
+      "動漫周邊",
+      "菜市場攤位",
+      "菜市場蔬菜",
+      "菜市場海鮮",
+      "撿漏商品",
+      "夜市攤",
+      "生活市集",
+      "動漫徽章",
+      "角色周邊",
+      "二手手辦",
+      "谷子店",
+      "痛包配件",
+      "攤位青菜",
+      "市集海鮮",
+      "漫畫單行本",
+      "便宜",
+      "大叔",
+      "煙火氣",
+    ], null, "strict");
+    expect(keywords.length).toBeGreaterThanOrEqual(16);
+    expect(keywords).toContain("二次元手辦");
+    expect(keywords).toContain("痛包配件");
+    expect(keywords).toContain("菜市場蔬菜");
+    expect(keywords).toContain("撿漏商品");
+    expect(keywords).not.toContain("便宜");
+    expect(keywords).not.toContain("大叔");
+    expect(keywords).not.toContain("煙火氣");
+  });
+
   it("does not change the source pipeline when custom freshness is disabled", () => {
     const candidate = {
       id: "unknown-date",

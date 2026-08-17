@@ -352,6 +352,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("persona-draft-global-save-dock persona-hot-import-dock", panel)
         self.assertIn("persona-draft-global-save-button persona-gradient-outline-action", panel)
         self.assertNotIn("查看草稿", panel)
+        self.assertIn("#personaDetail:has(.persona-hot-import-dock)", self.styles)
+        self.assertIn("padding-bottom: 132px;", self.styles[self.styles.index("#personaDetail:has(.persona-hot-import-dock)"):])
 
     def test_mobile_hotspot_cards_expand_without_inline_single_preview(self):
         mobile_hotspot = self.styles.split("@media (max-width: 980px) {\n  .persona-hot-layout {", 1)[1].split("\n}", 1)[0]
