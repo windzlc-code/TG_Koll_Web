@@ -22329,10 +22329,6 @@ async function submitPersonaMediaTask() {
     : String(allowedTaskTypes[0] || "persona_post_image");
   form.taskType = taskType;
   const lockParts = ["media_task", persona.id, post.id, taskType];
-  if (personaEditingMediaAcceptsUploadOnly()) {
-    showMsg("commandMsg", "编辑草稿时只能上传图片或视频，不能重新生成媒体。", false);
-    return;
-  }
   if (isActionLocked(...lockParts) || personaMediaTaskIsActive(persona.id, post.id, taskType)) {
     showMsg("commandMsg", "当前草稿已有同类型配图任务在队列或执行中，请等待完成后再提交。", false);
     return;
@@ -24150,10 +24146,9 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
           </div>
         ` : `
           <div class="persona-media-operation-pane">
-            ${personaEditingMediaAcceptsUploadOnly() ? "" : `
             <div class="form-grid persona-detail-controls persona-media-generation-controls">
               <label>生成张数
-                <select id="personaMediaImageCount" ${mediaModifyActive ? "disabled title=\"局部修改每次只生成 1 张图片\"" : ""}>
+                <select id="personaMediaImageCount">
                   ${[1, 2, 3, 4].map((count) => `<option value="${count}" ${count === Number(mediaForm.imageCount) ? "selected" : ""}>${count} 张</option>`).join("")}
                 </select>
               </label>
@@ -24167,21 +24162,20 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                   <option value="16:9" ${String(mediaForm.aspectRatio || "") === "16:9" ? "selected" : ""}>16:9</option>
                 </select>
               </label>` : ""}
-            </div>`}
-            ${personaEditingMediaAcceptsUploadOnly() ? `
-              ${postMediaItems.length
-                ? renderPersonaEditableMediaGrid(postMediaItems, {
-                  personaId: persona.id,
-                  source: "posts",
-                  postId: post.id,
-                  sourceLabel,
-                })
-                : renderPersonaCompactMediaUpload(persona, post)}
-            ` : `
-              ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
-              <div class="persona-inline-panel persona-inline-panel--nested persona-media-preview-surface" data-persona-media-preview-surface>
-                <strong>任务结果预览</strong>
-                ${mediaEditSourceUploadActive ? renderUploadDropzone("personaMediaEditSourceFile", {
+            </div>
+            ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
+            <div class="persona-inline-panel persona-inline-panel--nested persona-media-preview-surface" data-persona-media-preview-surface>
+              <strong>任务结果预览</strong>
+              ${personaEditingMediaAcceptsUploadOnly()
+                ? (postMediaItems.length
+                  ? renderPersonaEditableMediaGrid(postMediaItems, {
+                    personaId: persona.id,
+                    source: "posts",
+                    postId: post.id,
+                    sourceLabel,
+                  })
+                  : renderPersonaCompactMediaUpload(persona, post))
+                : (mediaEditSourceUploadActive ? renderUploadDropzone("personaMediaEditSourceFile", {
                   label: "上传替换编辑图片",
                   accept: "image/*",
                   hint: "可用一张自定义图片替换当前编辑源；仅支持图片。",
@@ -24196,10 +24190,9 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                   multiple: true,
                   publicMediaCards: true,
                   embeddedPreview: true,
-                })}
-                ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt, addMediaInputId: mediaUploadInputId })}
-              </div>
-            `}
+                }))}
+              ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt, addMediaInputId: mediaUploadInputId })}
+            </div>
           </div>
         `}
       </div>
@@ -33274,10 +33267,6 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-run-media-task]")) {
-      if (personaEditingMediaAcceptsUploadOnly()) {
-        showMsg("commandMsg", "编辑草稿时只能上传图片或视频，不能重新生成媒体。", false);
-        return;
-      }
       submitPersonaMediaTask().catch(() => {});
       return;
     }
