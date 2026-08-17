@@ -790,6 +790,11 @@ describe("sentiment hot importer", () => {
     expect(keywords).not.toContain("菜市場");
     expect(keywords).not.toContain("二次元大叔");
     expect(resolveSentimentHotManualQueryKeywords(["菜市場真實體驗", "二次元 吐槽", "撿漏 真實", "理財 對比"], null, "strict")).toEqual([]);
+    expect(resolveSentimentHotManualQueryKeywords(["環保袋 菜市場", "二次元 撿漏"], null, "strict")).toEqual([]);
+    const mixed = resolveSentimentHotManualQueryKeywords(["二次元", "菜市場", "二次元菜市場", "菜市場蔬菜"], null, "strict");
+    expect(mixed).toContain("二次元");
+    expect(mixed).toContain("菜市場蔬菜");
+    expect(mixed).not.toContain("二次元菜市場");
   });
 
   it("uses the same hollow and object-noun rules for unrelated persona domains", () => {

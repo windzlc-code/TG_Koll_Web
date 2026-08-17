@@ -125,7 +125,7 @@ const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 40;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 41;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 28;
@@ -1308,7 +1308,17 @@ function filterConflictingSearchKeywords(keywords: string[]): string[] {
     const stem = term.replace(fluffSuffix, "");
     return !cleaned.some((other) => other !== term && (other === stem || other.startsWith(stem)));
   });
-  const specificFirst = [...withoutFluff].sort((left, right) => right.length - left.length || left.localeCompare(right));
+  const compact = (value: string) => value.replace(/\s+/g, "");
+  const withoutRemix = withoutFluff.filter((term) => {
+    const text = compact(term);
+    return !withoutFluff.some((left) => {
+      const head = compact(left);
+      if (!head || head === text || !text.startsWith(head)) return false;
+      const rest = text.slice(head.length);
+      return withoutFluff.some((right) => compact(right) === rest);
+    });
+  });
+  const specificFirst = [...withoutRemix].sort((left, right) => right.length - left.length || left.localeCompare(right));
   const kept: string[] = [];
   for (const term of specificFirst) {
     if (kept.some((existing) => existing !== term && existing.includes(term))) continue;
@@ -1317,7 +1327,7 @@ function filterConflictingSearchKeywords(keywords: string[]): string[] {
     if (sameFamily >= 5) continue;
     kept.push(term);
   }
-  return withoutFluff.filter((term) => kept.includes(term));
+  return withoutRemix.filter((term) => kept.includes(term));
 }
 
 function expandSentimentHotCoreKeywordVariants(keywords: string[]): string[] {
@@ -1433,6 +1443,7 @@ function isConcreteSearchKeyword(value: unknown): boolean {
   const hasSearchLetters = hasHan(keyword) || /[a-z]/i.test(keyword);
   if (!keyword || !hasSearchLetters) return false;
   if (keyword.length < 2 || keyword.length > 32) return false;
+  if (/\s/.test(keyword)) return false;
   // Discovery intents are useful only when attached to a persona-domain
   // subject. Bare intent words drift into unrelated high-traffic topics.
   if (/韭菜/u.test(keyword)) return false;
@@ -2088,7 +2099,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "",
             "字段数量：primaryQueries 12-16，broadQueries 8-12，ecosystemQueries 4-8，requiredAnchorTerms 4-6，normalAnchorTerms 3-6，strictAcceptTerms 10-16，normalAcceptTerms 12-20，rejectTerms 4-8。",
             "先以人设名称中明确的职业、行业或主题作为严格主领域；简介里的具体对象、品牌、地区和擅长方向只能作为子主题，不能替代或过度收窄主领域。",
-            "平台标签关键词只是人设背景，不得直接当作独立搜索词。每个 primaryQueries、broadQueries、ecosystemQueries 都必须包含模型返回的 requiredAnchorTerms 或 normalAnchorTerms 中至少一个领域锚点。",
+            "平台标签关键词只是人设背景，不得直接当作独立搜索词。搜索词必须属于当前人设领域，优先写成连续短词；不要用空格把两个主题名拼在一起，也不要把两个锚点词互相拼接。正确写法是「该领域里的具体对象」，需要带锚点时只能是「锚点 + 对象」，不能是「锚点 + 另一个锚点」。",
             "职场趣事、生活日常、搞笑、故事、经验等通用内容类型必须与当前职业、行业、产品或主题锚点组合后才能输出，禁止单独输出或只与避坑、真实、推荐等意图词组合。",
             "primaryQueries 必须优先产出近 30 天内更可能出现高互动内容的短搜索词：只从当前人设资料里的具体对象、产品、场所、工具、作品、服务或消费对象扩词；其余再覆盖该人设的细分专长，总计至少 10 类。",
             "primaryQueries 前 12 个必须是互不相同的具体名词或短名词组合；禁止用对比、真实、吐槽、体验、变化、价格争议去批量拼接同一核心词，也禁止把示例或其它行业的词套到当前人设上。",
