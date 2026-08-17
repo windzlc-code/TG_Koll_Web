@@ -11212,7 +11212,7 @@ function renderShoppingBagIcon() {
 }
 
 function renderNoProxyIcon() {
-  return `<svg class="ui-action-icon ui-no-proxy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+  return `<svg class="ui-action-icon ui-no-proxy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
     <circle cx="12" cy="12" r="8.5"></circle><path d="m6 6 12 12"></path>
   </svg>`;
 }
