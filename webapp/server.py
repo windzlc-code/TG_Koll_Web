@@ -13785,11 +13785,33 @@ def _normalize_persona_hot_candidate(candidate: Any) -> dict[str, Any] | None:
     content = str(candidate.get("content") or "").strip()
     metrics = candidate.get("metrics") if isinstance(candidate.get("metrics"), dict) else {}
     engagement = candidate.get("engagement") if isinstance(candidate.get("engagement"), dict) else {}
+    origin = str(metrics.get("origin") or "").strip()
+    if origin not in {"live_spider", "search_cache", "candidate_pool", "database"}:
+        if metrics.get("liveFetch") is True or (
+            metrics.get("publicSearch") is True and str(metrics.get("crawler") or "").startswith("spider")
+        ):
+            origin = "live_spider"
+        elif metrics.get("archiveScopedFallback") or metrics.get("globalPersonaBackfill"):
+            origin = "candidate_pool"
+        elif str(metrics.get("source") or "") == "database":
+            origin = "database"
+        else:
+            origin = "search_cache" if metrics else "unknown"
+    origin_labels = {
+        "live_spider": "实时抓取",
+        "search_cache": "搜索缓存",
+        "candidate_pool": "候选池回补",
+        "database": "资料库回补",
+        "unknown": "来源未标记",
+    }
     return {
         "candidate_id": candidate_id,
         "id": candidate_id,
         "platform": str(candidate.get("platform") or "threads").strip() or "threads",
         "author": str(candidate.get("author") or "").strip(),
+        "origin": origin,
+        "origin_label": origin_labels.get(origin, origin),
+        "live_fetch": origin == "live_spider",
         "author_avatar": str(
             candidate.get("authorAvatar")
             or candidate.get("author_avatar")
@@ -14750,6 +14772,13 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
 
 PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 45
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 24
+_HOT_PUBLIC_PROBE_FLAG = Path("/data/hot-public-probe")
+
+
+def _hot_public_probe_enabled() -> bool:
+    if str(os.getenv("TG_HOT_PUBLIC_PROBE") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    return _HOT_PUBLIC_PROBE_FLAG.is_file()
 
 
 def _persona_hot_keyword_digest(keywords: list[str]) -> str:
@@ -14922,7 +14951,9 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "recordShown": False,
             # The new application owns keyword generation. The old collector
             # searches public pages with those keywords and may merge its pool.
-            "liveOnly": False,
+            # /data/hot-public-probe forces a public-page-only request for live
+            # verification and must not stay enabled in normal product traffic.
+            "liveOnly": _hot_public_probe_enabled(),
     }
     result = _run_persona_hot_workflow_cli(
         fetch_payload,

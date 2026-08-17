@@ -52,6 +52,12 @@ def _truthy_environment(name: str) -> bool:
     return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _hot_public_probe_enabled() -> bool:
+    if _truthy_environment("TG_HOT_PUBLIC_PROBE"):
+        return True
+    return Path("/data/hot-public-probe").is_file()
+
+
 def _collector_platform(payload: Mapping[str, Any]) -> str:
     explicit = str(payload.get("platform") or "").strip().lower()
     if explicit in {"threads", "instagram"}:
@@ -599,11 +605,13 @@ class JobStore:
             active_rows = connection.execute(
                 "SELECT payload_json FROM fetch_jobs WHERE capability='persona.hot_candidates.v1' AND status IN ('queued','running')"
             ).fetchall()
-            active = any(
-                str(json.loads(str(row["payload_json"] or "{}")).get("archiveId") or "").strip() == archive_id
-                for row in active_rows
+            active_payloads = [json.loads(str(row["payload_json"] or "{}")) for row in active_rows]
+            same_archive_active = any(
+                str(item.get("archiveId") or "").strip() == archive_id
+                for item in active_payloads
             )
-            if active:
+            interactive_active = any(not item.get("_poolRefill") for item in active_payloads)
+            if same_archive_active or interactive_active:
                 connection.execute(
                     "UPDATE fetch_pool_targets SET next_run_at=?,updated_at=? WHERE archive_id=?",
                     (timestamp + 60, timestamp, archive_id),
@@ -617,24 +625,27 @@ class JobStore:
             unit_id = f"pool_{hashlib.sha256(archive_id.encode('utf-8')).hexdigest()[:24]}"
             idempotency_key = f"pool:{hashlib.sha256(f'{archive_id}:{timestamp // interval}'.encode('utf-8')).hexdigest()[:24]}"
             job_id = f"job_{uuid.uuid4().hex[:24]}"
-            connection.execute(
-                """
-                INSERT INTO fetch_jobs(
-                  id,idempotency_key,request_hash,capability,unit_id,payload_json,
-                  status,created_at,updated_at
-                ) VALUES(?,?,?,?,?,?,'queued',?,?)
-                """,
-                (
-                    job_id,
-                    idempotency_key,
-                    request_hash(canonical_json_bytes(payload)),
-                    "persona.hot_candidates.v1",
-                    unit_id,
-                    json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                    timestamp,
-                    timestamp,
-                ),
-            )
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO fetch_jobs(
+                      id,idempotency_key,request_hash,capability,unit_id,payload_json,
+                      status,created_at,updated_at
+                    ) VALUES(?,?,?,?,?,?,'queued',?,?)
+                    """,
+                    (
+                        job_id,
+                        idempotency_key,
+                        request_hash(canonical_json_bytes(payload)),
+                        "persona.hot_candidates.v1",
+                        unit_id,
+                        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                return False
             return True
 
     def get(self, job_id: str) -> dict[str, Any] | None:
@@ -646,13 +657,21 @@ class JobStore:
         now = int(time.time())
         with self._lock, self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
+            queued = connection.execute(
                 """
                 SELECT * FROM fetch_jobs
                 WHERE status='queued' AND cancel_requested=0
-                ORDER BY created_at,id LIMIT 1
+                ORDER BY created_at,id
                 """
-            ).fetchone()
+            ).fetchall()
+            row = None
+            for candidate in queued:
+                payload = json.loads(str(candidate["payload_json"] or "{}"))
+                if not payload.get("_poolRefill"):
+                    row = candidate
+                    break
+            if row is None and queued:
+                row = queued[0]
             if row is None:
                 return None
             updated = connection.execute(
@@ -719,6 +738,41 @@ class JobStore:
             )
             row = connection.execute("SELECT * FROM fetch_jobs WHERE id=?", (job_id,)).fetchone()
             return self.public(row) if row is not None else None
+
+    def preempt_background_refills(self) -> list[str]:
+        """Stop queued/running pool jobs so an interactive button fetch can start."""
+        now = int(time.time())
+        running_ids: list[str] = []
+        with self._lock, self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT id, payload_json, status FROM fetch_jobs
+                WHERE capability='persona.hot_candidates.v1'
+                  AND status IN ('queued','running')
+                """
+            ).fetchall()
+            for row in rows:
+                payload = json.loads(str(row["payload_json"] or "{}"))
+                if not payload.get("_poolRefill"):
+                    continue
+                job_id = str(row["id"])
+                if str(row["status"]) == "queued":
+                    connection.execute(
+                        """
+                        UPDATE fetch_jobs
+                        SET cancel_requested=1, status='cancelled', finished_at=?, updated_at=?
+                        WHERE id=? AND status='queued'
+                        """,
+                        (now, now, job_id),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE fetch_jobs SET cancel_requested=1, updated_at=? WHERE id=? AND status='running'",
+                        (now, job_id),
+                    )
+                    running_ids.append(job_id)
+        return running_ids
 
     def retry(self, job_id: str, *, idempotency_key: str) -> tuple[dict[str, Any], bool]:
         with self._connection() as connection:
@@ -1027,7 +1081,14 @@ def _apply_hot_reader_execution_profile(
 ) -> None:
     runtime_environment["SENTIMENT_HOT_READER_CONCURRENCY"] = "4" if background_refill else "24"
     runtime_environment["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"] = "1" if background_refill else "0"
-    runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "55000" if background_refill else "90000"
+    # Interactive public search must finish inside the 30s button budget.
+    # Background refill may wait longer for the shared anonymous window.
+    runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "55000" if background_refill else "30000"
+    runtime_environment["SENTIMENT_HOT_READER_JITTER_MAX_MS"] = "5000" if background_refill else "200"
+    runtime_environment["SENTIMENT_HOT_READER_MAX_ATTEMPTS"] = "2" if background_refill else "1"
+    # Instagram public pages currently return a login wall and steal Spider
+    # slots from concurrent Threads keyword searches. Keep them on refill only.
+    runtime_environment["TG_HOT_READER_INCLUDE_INSTAGRAM"] = "1" if background_refill else "0"
 
 
 def _run_tool_r18_job_once(
@@ -1292,7 +1353,8 @@ class WorkerRuntime:
     def _loop(self) -> None:
         while not self.stop_event.is_set():
             self.store.publish_dataset_overview()
-            self.store.enqueue_due_pool_refill()
+            with contextlib.suppress(Exception):
+                self.store.enqueue_due_pool_refill()
             claimed = self.store.claim_next()
             if claimed is None:
                 self.wake_event.wait(1.0)
@@ -1347,7 +1409,8 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
         if normalized.get("recordShown") is not False:
             raise ProtocolError("remote fetch must set recordShown=false")
         if capability == "persona.hot_candidates.v1" and normalized.get("liveOnly") is not False:
-            raise ProtocolError("persona hot fetch must use the old-host candidate pool")
+            if not (normalized.get("liveOnly") is True and _hot_public_probe_enabled()):
+                raise ProtocolError("persona hot fetch must use the old-host candidate pool")
         if capability == "persona.hot_candidates.v1":
             if normalized.get("_poolRefill"):
                 raise ProtocolError("background pool refill cannot be submitted externally")
@@ -1523,6 +1586,13 @@ def create_worker_app(
         except (ProtocolError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             status = 409 if "conflicts" in str(exc) else 400
             raise HTTPException(status_code=status, detail=str(exc)) from exc
+        if (
+            created
+            and capability == "persona.hot_candidates.v1"
+            and not payload.get("_poolRefill")
+        ):
+            for refill_job_id in store.preempt_background_refills():
+                runtime.cancel(refill_job_id)
         runtime.wake()
         return JSONResponse(
             status_code=202,

@@ -21,6 +21,7 @@ import {
   buildModelOrderedThreadsSearchQueries,
   buildSentimentHotSearchStrategyCacheKey,
   buildThreadsReaderSearchUrl,
+  buildThreadsReaderSearchTargets,
   buildThreadsSearchUrl,
   candidateMatchesRequestedFreshness,
   candidateMatchesSentimentHotStrategyAnchors,
@@ -53,6 +54,12 @@ import {
   isSentimentHotCandidateRepeatEligible,
   parseThreadsPostViewCountFromText,
   parseThreadsReaderSearchMarkdownCandidates,
+  persistSentimentReaderMarkdown,
+  resolveSentimentHotCandidateOrigin,
+  formatPublicThreadsReaderMarkdown,
+  readerMarkdownLooksEmpty,
+  extractThreadsSearchPrefetchPayload,
+  buildSpiderSearchMarkdownFromHotCandidates,
   parseThreadsDetailEngagementMarkdown,
   parseThreadsDetailMediaMarkdown,
   parseThreadsSearchTextCandidates,
@@ -65,6 +72,9 @@ import {
   resolveSentimentHotDisplayHeatThreshold,
   resolveSentimentHotReaderConcurrency,
   resolveSentimentHotReaderTotalTimeoutMs,
+  resolveAnonymousReaderJitterMaxMs,
+  resolveAnonymousReaderJitterMs,
+  resolveAnonymousReaderMaxAttempts,
   shouldRunSentimentHotReaderPlatformsSerially,
   SENTIMENT_HOT_READER_CONCURRENCY,
   resolveSentimentHotTextModelPreference,
@@ -86,9 +96,20 @@ describe("sentiment hot importer", () => {
     expect(resolveSentimentHotReaderConcurrency("4")).toBe(4);
     expect(resolveSentimentHotReaderConcurrency("99")).toBe(24);
     expect(resolveSentimentHotReaderTotalTimeoutMs("55000")).toBe(55_000);
+    expect(resolveSentimentHotReaderTotalTimeoutMs("28000")).toBe(28_000);
     expect(resolveSentimentHotReaderTotalTimeoutMs("999999")).toBe(90_000);
+    expect(resolveAnonymousReaderJitterMaxMs("200")).toBe(200);
+    expect(resolveAnonymousReaderJitterMaxMs("999999")).toBe(5_000);
+    expect(resolveAnonymousReaderMaxAttempts("1")).toBe(1);
+    expect(resolveAnonymousReaderMaxAttempts("9")).toBe(2);
     expect(shouldRunSentimentHotReaderPlatformsSerially("1")).toBe(true);
     expect(shouldRunSentimentHotReaderPlatformsSerially("0")).toBe(false);
+  });
+
+  it("keeps interactive Reader jitter under 200ms so keyword searches start together", () => {
+    vi.stubEnv("SENTIMENT_HOT_READER_JITTER_MAX_MS", "200");
+    expect(resolveAnonymousReaderJitterMs(0)).toBe(0);
+    expect(resolveAnonymousReaderJitterMs(0.999999)).toBe(200);
   });
 
   it("retries only transient Reader failures that can benefit from a new proxy connection", () => {
@@ -206,6 +227,52 @@ describe("sentiment hot importer", () => {
     expect(buildThreadsSearchUrl("茶文化", true)).toBe(
       "https://www.threads.com/search?q=%E8%8C%B6%E6%96%87%E5%8C%96&filter=recent",
     );
+  });
+
+  it("builds two Spider public search rankings and does not emit a hosted Reader URL", () => {
+    expect(buildThreadsReaderSearchUrl("女性力量")).toBe("https://www.threads.com/search?q=%E5%A5%B3%E6%80%A7%E5%8A%9B%E9%87%8F");
+    expect(buildThreadsSearchUrl("女性力量", false, "tags")).toBe(
+      "https://www.threads.com/search?q=%E5%A5%B3%E6%80%A7%E5%8A%9B%E9%87%8F&serp_type=tags",
+    );
+    const targets = buildThreadsReaderSearchTargets("女性力量");
+    expect(targets.map((item) => item.ranking)).toEqual(["spider-default", "spider-ranked"]);
+    expect(targets.every((item) => item.targetUrl.startsWith("https://www.threads.com/search?"))).toBe(true);
+    expect(targets.some((item) => /jina/i.test(item.targetUrl))).toBe(false);
+    expect(targets[0].targetUrl).toBe("https://www.threads.com/search?q=%E5%A5%B3%E6%80%A7%E5%8A%9B%E9%87%8F");
+    expect(targets[1].targetUrl).toBe("https://www.threads.com/search?q=%E5%A5%B3%E6%80%A7%E5%8A%9B%E9%87%8F&serp_type=default");
+  });
+
+  it("distinguishes live Spider rows from pool and cache backfill", () => {
+    expect(resolveSentimentHotCandidateOrigin({
+      id: "live",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@a/post/abc",
+      content: "正文",
+      hotScore: 600,
+      metrics: { origin: "live_spider", liveFetch: true, crawler: "spider-http-hydration", publicSearch: true },
+      capturedAt: new Date().toISOString(),
+      warnings: [],
+    } as any)).toBe("live_spider");
+    expect(resolveSentimentHotCandidateOrigin({
+      id: "pool",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@a/post/def",
+      content: "正文",
+      hotScore: 600,
+      metrics: { archiveScopedFallback: true, origin: "candidate_pool" },
+      capturedAt: new Date().toISOString(),
+      warnings: [],
+    } as any)).toBe("candidate_pool");
+    expect(resolveSentimentHotCandidateOrigin({
+      id: "cache",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@a/post/ghi",
+      content: "正文",
+      hotScore: 600,
+      metrics: { origin: "search_cache", liveFetch: false },
+      capturedAt: new Date().toISOString(),
+      warnings: [],
+    } as any)).toBe("search_cache");
   });
 
   it("forces a persisted Threads GraphQL template into recent mode for freshness-scoped searches", () => {
@@ -1901,6 +1968,88 @@ Search Threads
     expect(recycled).toHaveLength(1);
     expect(recycled[0].metrics.matchedKeywords).toEqual([]);
     expect(recycled[0].hotScore).toBeGreaterThanOrEqual(500);
+  });
+
+  it("extracts prefetched Barcelona searchResults from Threads HTML without a browser", () => {
+    const html = `prefix {"data":{"searchResults":{"inform_module":null,"tag_info":null,"edges":[{"node":{"thread":{"id":"1","thread_items":[{"post":{"id":"1_2","code":"DbBAGPfk7XS","like_count":663,"taken_at":1784552915,"user":{"username":"168_0804"},"caption":{"text":"女子之身 能屈能伸 可以吃苦 也有能力享受幸福"},"text_post_app_info":{"direct_reply_count":25,"repost_count":1,"reshare_count":57}}}]}}}]}}} suffix`;
+    const payload = extractThreadsSearchPrefetchPayload(html);
+    const candidates = parseThreadsGraphqlSearchPayload({ payload, query: "女性力量", keywords: ["女性力量"] });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].author).toBe("168_0804");
+    expect(candidates[0].hotScore).toBeGreaterThanOrEqual(500);
+    const markdown = buildSpiderSearchMarkdownFromHotCandidates(candidates);
+    expect(markdown).toContain("Search • Threads");
+    expect(markdown).toContain("/post/DbBAGPfk7XS");
+    expect(markdown).toContain("讚 663");
+  });
+
+  it("treats Spider HTTP search shells as empty reader markdown", () => {
+    expect(readerMarkdownLooksEmpty("Search • Threads")).toBe(true);
+    expect(readerMarkdownLooksEmpty("Threads • Log in")).toBe(true);
+    expect(readerMarkdownLooksEmpty("Title: Search • Threads\n\n[author](https://www.threads.com/@a/post/abc)\n正文")).toBe(false);
+  });
+
+  it("wraps rendered Threads markdown with the Jina Search header", () => {
+    expect(formatPublicThreadsReaderMarkdown("[go](https://www.threads.com/@go/post/abc)\n女性力量")).toContain("Search • Threads");
+    expect(formatPublicThreadsReaderMarkdown("Search • Threads\n\nkeep")).toBe("Search • Threads\n\nkeep");
+  });
+
+  it("writes Spider reader output to a markdown file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-reader-md-"));
+    vi.stubEnv("TOOL_R18_RUNTIME_DIR", dir);
+    const filePath = persistSentimentReaderMarkdown(
+      "https://www.threads.com/search?q=%E5%A5%B3%E6%80%A7%E5%8A%9B%E9%87%8F",
+      "Search • Threads\n\n[go](https://www.threads.com/@go/post/abc)\n女性力量正文",
+      { crawler: "spider-markdown" },
+    );
+    const text = fs.readFileSync(filePath, "utf8");
+    expect(filePath.endsWith(".md")).toBe(true);
+    expect(text).toContain("crawler: spider-markdown");
+    expect(text).toContain("Search • Threads");
+    expect(text).toContain("女性力量正文");
+  });
+
+  it("normalizes rendered ISO dates into Jina markdown and parses them", () => {
+    const markdown = formatPublicThreadsReaderMarkdown(`
+搜尋 • Threads
+[ginger_nov](https://www.threads.com/@ginger_nov)
+[2026-8-2](https://www.threads.com/@ginger_nov/post/DbiqVm9ASMN)
+其實對年長女性的這種無法自控的雌競心態我會視而不見，50歲以上女性成長的環境對人格價值觀的塑造花了許多時間。
+讚 1041
+留言 29
+`);
+    expect(markdown).toContain("[08/02/2026](https://www.threads.com/@ginger_nov/post/DbiqVm9ASMN)");
+    const candidates = parseThreadsReaderSearchMarkdownCandidates({
+      query: "女性成長",
+      keywords: ["女性成長"],
+      includeUnmatched: true,
+      sourceUrl: "https://www.threads.com/search?q=%E5%A5%B3%E6%80%A7%E6%88%90%E9%95%B7",
+      text: markdown,
+    });
+    expect(candidates.length).toBeGreaterThan(0);
+    expect(candidates[0].sourceUrl).toContain("/post/DbiqVm9ASMN");
+    expect(candidates[0].content).toContain("女性成長");
+  });
+
+  it("parses Spider public-render markdown that uses Jina date links", () => {
+    const candidates = parseThreadsReaderSearchMarkdownCandidates({
+      query: "女性獨立",
+      keywords: ["女性獨立", "女性力量"],
+      sourceUrl: "https://www.threads.com/search?q=%E5%A5%B3%E6%80%A7%E7%8D%A8%E7%AB%8B",
+      text: `
+Search • Threads
+
+[zhengzheng_yeh](https://www.threads.com/@zhengzheng_yeh)
+[07/28/2026](https://www.threads.com/@zhengzheng_yeh/post/DbUYPBkkkyg)
+陳珮騏 女性獨立則天地皆寬 經濟上行時期的美感真的很能打動人
+5323
+80
+`,
+    });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].author).toBe("zhengzheng_yeh");
+    expect(candidates[0].sourceUrl).toContain("/post/DbUYPBkkkyg");
+    expect(candidates[0].hotScore).toBeGreaterThanOrEqual(500);
   });
 
   it("parses Threads reader links returned over plain http", () => {

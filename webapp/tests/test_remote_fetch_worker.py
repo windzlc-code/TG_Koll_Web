@@ -372,6 +372,45 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(target["next_run_at"], now + 60)
         self.assertEqual(refill_count, 0)
 
+    def test_claim_next_prefers_interactive_job_over_earlier_pool_refill(self) -> None:
+        self.store.submit(
+            idempotency_key="pool:earlier-refill:1234",
+            request_digest="1" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="pool_earlier_refill",
+            payload={
+                **self.pool_payload("archive_pool_first", user_initiated=False),
+                "_poolRefill": True,
+            },
+        )
+        interactive, _created = self.store.submit(
+            idempotency_key="capture:interactive-second:1234",
+            request_digest="2" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="archive_interactive_second",
+            payload=self.pool_payload("archive_interactive_second", user_initiated=True),
+        )
+        claimed = self.store.claim_next()
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed[0]["id"], interactive["id"])
+        self.assertFalse(claimed[1].get("_poolRefill"))
+
+    def test_preempt_background_refills_cancels_queued_pool_jobs(self) -> None:
+        pool, _created = self.store.submit(
+            idempotency_key="pool:preempt:1234",
+            request_digest="3" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="pool_preempt",
+            payload={
+                **self.pool_payload("archive_preempt", user_initiated=False),
+                "_poolRefill": True,
+            },
+        )
+        running = self.store.preempt_background_refills()
+        self.assertEqual(running, [])
+        stored = self.store.get(pool["id"])
+        self.assertEqual(stored["status"], "cancelled")
+
     def test_watermark_hysteresis_starts_below_50_and_continues_to_100(self) -> None:
         now = int(time.time())
         archive_id = "archive_full_water"
@@ -893,6 +932,10 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertNotIn("userInitiated", sent)
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "4")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "1")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "55000")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_JITTER_MAX_MS"], "5000")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_MAX_ATTEMPTS"], "2")
+        self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "1")
 
     def test_interactive_hot_fetch_uses_reader_without_leasing_account(self) -> None:
         class FakePool:
@@ -953,6 +996,10 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertTrue(sent["recordShown"])
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "24")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "0")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "30000")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_JITTER_MAX_MS"], "200")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_MAX_ATTEMPTS"], "1")
+        self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "0")
 
     def test_crm_live_search_rotates_account_after_sparse_result(self) -> None:
         class FakePool:

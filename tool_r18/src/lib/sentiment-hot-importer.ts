@@ -174,10 +174,29 @@ type AnonymousReaderProxyPool = {
 let anonymousReaderProxyCursor = 0;
 let anonymousReaderProxyRevision = -1;
 
+export function resolveAnonymousReaderJitterMaxMs(
+  value: unknown = process.env.SENTIMENT_HOT_READER_JITTER_MAX_MS,
+): number {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return ANONYMOUS_READER_JITTER_MAX_MS;
+  }
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) ? Math.max(0, Math.min(parsed, ANONYMOUS_READER_JITTER_MAX_MS)) : ANONYMOUS_READER_JITTER_MAX_MS;
+}
+
+export function resolveAnonymousReaderMaxAttempts(
+  value: unknown = process.env.SENTIMENT_HOT_READER_MAX_ATTEMPTS,
+): number {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(parsed, 2)) : ANONYMOUS_READER_MAX_ATTEMPTS;
+}
+
 export function resolveAnonymousReaderJitterMs(randomValue = Math.random()): number {
+  const maxMs = resolveAnonymousReaderJitterMaxMs();
+  if (maxMs <= 0) return 0;
+  const minMs = maxMs >= ANONYMOUS_READER_JITTER_MIN_MS ? ANONYMOUS_READER_JITTER_MIN_MS : 0;
   const bounded = Math.max(0, Math.min(0.999999, Number.isFinite(randomValue) ? randomValue : 0));
-  return ANONYMOUS_READER_JITTER_MIN_MS
-    + Math.floor(bounded * (ANONYMOUS_READER_JITTER_MAX_MS - ANONYMOUS_READER_JITTER_MIN_MS + 1));
+  return minMs + Math.floor(bounded * (maxMs - minMs + 1));
 }
 
 export function readerBodyHasUsablePostLinks(body: unknown): boolean {
@@ -200,6 +219,7 @@ export function anonymousReaderRetryReason(value: ReaderResponseSnapshot): strin
   if (status >= 500 && status <= 599) return `upstream_${status}`;
   if (/bad gateway|gateway timeout|service unavailable/i.test(String(value?.body || ""))) return "upstream_failure";
   if (readerBodyLooksLikeLoginWall(value?.body)) return "login_wall_or_challenge";
+  if (readerMarkdownLooksEmpty(value?.body)) return "empty_public_page";
   return "";
 }
 
@@ -296,6 +316,16 @@ const sharedReaderRateLimiter = new AdaptiveHotRateLimiter({
   maxBackoffMs: 30_000,
   recoverySuccessThreshold: 4,
 });
+const PUBLIC_READER_RENDER_MAX_CONCURRENCY = 1;
+const PUBLIC_READER_RENDER_QUERY_LIMIT = 1;
+const publicReaderRenderLimiter = new AdaptiveHotRateLimiter({
+  maxConcurrency: PUBLIC_READER_RENDER_MAX_CONCURRENCY,
+  initialConcurrency: PUBLIC_READER_RENDER_MAX_CONCURRENCY,
+  minConcurrency: 1,
+  baseBackoffMs: 500,
+  maxBackoffMs: 8_000,
+  recoverySuccessThreshold: 2,
+});
 const sharedReaderResponseCoordinator = createReaderResponseCoordinator({
   freshTtlMs: 5 * 60_000,
   staleTtlMs: 10 * 60_000,
@@ -350,9 +380,35 @@ const SENTIMENT_HOT_GENERIC_QUERY_INTENTS = [
   "痛点",
 ];
 
+function resolvePlaywrightChromeExecutables(): string[] {
+  const roots = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    "/ms-playwright",
+  ].map((value) => String(value || "").trim()).filter(Boolean);
+  const found: string[] = [];
+  for (const root of roots) {
+    try {
+      if (!fs.existsSync(root)) continue;
+      for (const entry of fs.readdirSync(root)) {
+        const chrome = path.join(root, entry, "chrome-linux64", "chrome");
+        const shell = path.join(root, entry, "chrome-headless-shell-linux64", "chrome-headless-shell");
+        if (fs.existsSync(chrome)) found.push(chrome);
+        if (fs.existsSync(shell)) found.push(shell);
+      }
+    } catch {
+      // Keep looking through the remaining Playwright browser roots.
+    }
+  }
+  return found;
+}
+
 function resolvePreferredChromeExecutablePath(): string | undefined {
   const candidates = [
     process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+    process.env.TG_HOT_SPIDER_CHROME_PATH,
+    process.env.CHROME_PATH,
+    process.env.GOOGLE_CHROME_BIN,
+    ...resolvePlaywrightChromeExecutables(),
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
@@ -2672,12 +2728,12 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     const liveDeficit = Math.max(1, candidateSourceTarget - cachedReadyCount);
     const liveCollectionLimit = Math.min(
       poolLimit,
-      Math.max(candidateSourceTarget, Math.min(limit * 2, liveDeficit * 2)),
+      Math.max(candidateSourceTarget, Math.min(limit * 4, Math.max(liveDeficit * 3, 30))),
     );
     const authenticatedOnly = args.sourcePolicy === "authenticated_only";
     const threadsTimeoutMs = Math.min(
-      args.sourcePolicy === "reader_only" ? 85_000 : SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS,
-      remainingSentimentHotTotalBudgetMs(startedAt, authenticatedOnly ? 1_000 : 5_000, totalTimeoutMs),
+      args.sourcePolicy === "reader_only" ? SENTIMENT_HOT_READER_ONLY_TOTAL_TIMEOUT_MS : SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS,
+      remainingSentimentHotTotalBudgetMs(startedAt, authenticatedOnly ? 1_000 : 1_000, totalTimeoutMs),
     );
     let threadsCandidates = await measureSentimentStage(
       warnings,
@@ -2696,7 +2752,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
           // search rows can match a broad query without being valid pool data.
           writeCache: false,
           searchMode,
-          deadlineAt: Date.now() + threadsTimeoutMs - (authenticatedOnly ? 500 : 3_000),
+          deadlineAt: Date.now() + threadsTimeoutMs - (authenticatedOnly ? 500 : 1_000),
           warnings,
           sourcePolicy: args.sourcePolicy,
           deferRelevanceGate: deferLiveSearchRelevanceGate,
@@ -2890,6 +2946,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     writeGlobalSentimentHotCandidatePool(displayCandidatePool);
   }
   candidates = finalizeSentimentHotCandidatesForDisplay(displayCandidatePool, limit, { archiveId: liveOnlyRefresh ? undefined : archiveId, keywords, excludeShown: !liveOnlyRefresh, searchMode, freshnessDays: operationalFreshnessDays });
+  const originCounts = { live_spider: 0, search_cache: 0, candidate_pool: 0, database: 0 };
+  for (const candidate of candidates) {
+    originCounts[resolveSentimentHotCandidateOrigin(candidate)] += 1;
+  }
+  warnings.push(
+    `来源区分：实时 Spider ${originCounts.live_spider}，搜索缓存 ${originCounts.search_cache}，候选池回补 ${originCounts.candidate_pool}，资料库回补 ${originCounts.database}。`,
+  );
   const shownHistoryKeys = liveOnlyRefresh ? new Set<string>() : getSentimentHotShownHistoryKeys(archiveId);
   if (!liveOnlyRefresh && candidates.length < limit) {
     const selectedKeys = new Set(candidates.flatMap((candidate) => getSentimentHotCandidateHistoryKeys(candidate)));
@@ -3457,6 +3520,34 @@ function sentimentCandidateSourceTier(candidate: SentimentHotCandidate): string 
   return "primary_hot";
 }
 
+export type SentimentHotCandidateOrigin = "live_spider" | "search_cache" | "candidate_pool" | "database";
+
+export function resolveSentimentHotCandidateOrigin(candidate: SentimentHotCandidate): SentimentHotCandidateOrigin {
+  const metrics = (candidate?.metrics || {}) as any;
+  const marked = cleanText(metrics.origin);
+  if (marked === "live_spider" || marked === "search_cache" || marked === "candidate_pool" || marked === "database") {
+    return marked;
+  }
+  if (metrics.globalPersonaBackfill || metrics.archiveScopedFallback || metrics.sourceTier === "fallback_history") {
+    return "candidate_pool";
+  }
+  if (metrics.source === "database") return "database";
+  if (metrics.liveFetch === true) return "live_spider";
+  if (metrics.publicSearch === true && String(metrics.crawler || "").startsWith("spider")) return "live_spider";
+  return "search_cache";
+}
+
+function stampHotCandidateOrigin(candidate: SentimentHotCandidate, origin: SentimentHotCandidateOrigin): SentimentHotCandidate {
+  return {
+    ...candidate,
+    metrics: {
+      ...(candidate.metrics || {}),
+      origin,
+      liveFetch: origin === "live_spider",
+    },
+  };
+}
+
 function sentimentHotHanCount(value: unknown): number {
   return (cleanSentimentCandidateContent(value).match(/[\u3400-\u9fff]/gu) || []).length;
 }
@@ -4000,8 +4091,8 @@ async function fetchThreadsSearchPageCandidates(args: {
   // succeeds. Do not discard that successful response at the old 8s wrapper;
   // keep three seconds of the 30s source budget for normalization and return.
   const readerInitialTimeoutMs = Math.min(
-    sourcePolicy === "reader_only" ? 82_000 : 15_000,
-    remainingSentimentDeadlineMs(args.deadlineAt, sourcePolicy === "reader_only" ? 82_000 : 15_000),
+    sourcePolicy === "reader_only" ? SENTIMENT_HOT_READER_ONLY_TOTAL_TIMEOUT_MS : 15_000,
+    remainingSentimentDeadlineMs(args.deadlineAt, sourcePolicy === "reader_only" ? SENTIMENT_HOT_READER_ONLY_TOTAL_TIMEOUT_MS : 15_000),
   );
   const readerCandidates = allowReader ? await withSentimentTimeout(fetchThreadsReaderSearchCandidates({
       archiveId: args.archiveId,
@@ -5145,17 +5236,32 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   return sortSentimentHotCandidatePool(results, args.keywords, args.limit, args.searchMode);
 }
 
-export function buildThreadsSearchUrl(query: string, recent = false): string {
+export function buildThreadsSearchUrl(query: string, recent = false, serpType?: "default" | "tags"): string {
   const params = new URLSearchParams({ q: String(query || "") });
   if (recent) params.set("filter", "recent");
+  if (serpType) params.set("serp_type", serpType);
   return `https://www.threads.com/search?${params.toString()}`;
 }
 
 export function buildThreadsReaderSearchUrl(query: string, recentSearch = false): string {
-  // Keep the public search route unchanged. Threads currently rejects the old
-  // `serp_type=tags` variant with HTTP 400, while the default route contains
-  // the searchable post hydration consumed below.
   return buildThreadsSearchUrl(query, recentSearch === true);
+}
+
+export function buildThreadsReaderSearchTargets(query: string, recentSearch = false): Array<{ query: string; targetUrl: string; ranking: "spider-default" | "spider-ranked" }> {
+  const text = String(query || "");
+  // Two Spider HTTP rankings, not a hosted Reader. `serp_type=tags` SSR is the
+  // same prefetch blob as `serp_type=default`; fetch default once as the
+  // complementary high-engagement ranking.
+  return [
+    { query: text, targetUrl: buildThreadsReaderSearchUrl(text, recentSearch), ranking: "spider-default" },
+    { query: text, targetUrl: buildThreadsSearchUrl(text, false, "default"), ranking: "spider-ranked" },
+  ];
+}
+
+function isAllowedSpiderPublicTarget(target: URL): boolean {
+  if (target.protocol !== "https:") return false;
+  const host = target.hostname.replace(/^www\./i, "").toLowerCase();
+  return host === "threads.com" || host === "threads.net" || host === "instagram.com";
 }
 
 const spiderRawHtmlByTargetUrl = new Map<string, string>();
@@ -5190,6 +5296,47 @@ function spiderHtmlToReaderText(html: string, targetUrl: string): string {
     .trim();
 }
 
+export function extractThreadsSearchPrefetchPayload(html: string): any | null {
+  const source = String(html || "");
+  const start = source.indexOf('{"data":{"searchResults"');
+  if (start < 0) return null;
+  let depth = 0;
+  for (let index = start; index < source.length && index - start < 600_000; index += 1) {
+    const char = source[index];
+    if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          const parsed = JSON.parse(source.slice(start, index + 1));
+          const edges = parsed?.data?.searchResults?.edges;
+          return Array.isArray(edges) ? parsed : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export function buildSpiderSearchMarkdownFromHotCandidates(candidates: SentimentHotCandidate[]): string {
+  const cards = (candidates || []).map((candidate) => {
+    const published = String(candidate.publishedAt || "").slice(0, 10);
+    const dateLabel = published.replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$2/$3/$1") || "post";
+    const likes = Number(candidate.engagement?.likeCount || (candidate.metrics as any)?.like_count || 0);
+    const comments = Number(candidate.engagement?.commentCount || (candidate.metrics as any)?.comment_count || 0);
+    return [
+      `[${candidate.author || "Threads"}](https://www.threads.com/@${encodeURIComponent(String(candidate.author || "").replace(/^@/, ""))})`,
+      `[${dateLabel}](${candidate.sourceUrl})`,
+      candidate.content,
+      likes ? `讚 ${likes}` : "",
+      comments ? `留言 ${comments}` : "",
+    ].filter(Boolean).join("\n");
+  }).filter(Boolean);
+  return formatPublicThreadsReaderMarkdown(cards.join("\n\n"));
+}
+
 export function readSpiderHydrationScripts(targetUrl: string): string[] {
   const html = spiderRawHtmlByTargetUrl.get(targetUrl) || "";
   if (!html) return [];
@@ -5198,7 +5345,67 @@ export function readSpiderHydrationScripts(targetUrl: string): string[] {
     const text = String(match[1] || "").trim();
     if (text.includes("text_post_app_info") || text.includes('"like_count"') || text.includes("searchResults")) scripts.push(text);
   }
+  const prefetch = extractThreadsSearchPrefetchPayload(html);
+  if (prefetch) scripts.unshift(JSON.stringify(prefetch));
   return scripts;
+}
+
+export function readerMarkdownLooksEmpty(body: unknown): boolean {
+  const text = String(body || "").trim();
+  if (!text) return true;
+  if (readerBodyLooksLikeLoginWall(text)) return true;
+  if (readerBodyHasUsablePostLinks(text)) return false;
+  return /^(?:title:\s*)?(?:search\s*•\s*threads|search threads|threads\s*•\s*log in|threads)\s*$/i.test(text);
+}
+
+export function formatPublicThreadsReaderMarkdown(text: string): string {
+  const rewritten = String(text || "").replace(
+    /\[(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\]\((https?:\/\/(?:www\.)?threads\.(?:com|net)\/@[^)\s]+\/post\/[^)\s]+)\)/g,
+    (_full, year, month, day, url) => `[${String(month).padStart(2, "0")}/${String(day).padStart(2, "0")}/${year}](${url})`,
+  ).trim();
+  if (!rewritten) return "";
+  return /search\s*•\s*threads|search threads/i.test(rewritten) ? rewritten : `Search • Threads\n\n${rewritten}`;
+}
+
+export function persistSentimentReaderMarkdown(targetUrl: string, markdown: string, extra: Record<string, string> = {}): string {
+  const digest = crypto.createHash("sha256").update(String(targetUrl || "")).digest("hex").slice(0, 16);
+  const filePath = resolveRuntimeFile(path.join("sentiment_reader_markdown", `${digest}.md`));
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const header = [
+    "---",
+    `url: ${String(targetUrl || "").replace(/\n/g, " ")}`,
+    `capturedAt: ${new Date().toISOString()}`,
+    ...Object.entries(extra).map(([key, value]) => `${key}: ${String(value || "").replace(/\n/g, " ")}`),
+    "---",
+    "",
+  ].join("\n");
+  fs.writeFileSync(filePath, `${header}${String(markdown || "").trim()}\n`, "utf8");
+  return filePath;
+}
+
+function playwrightProxyFromReaderUrl(proxyUrl?: string): { server: string; username?: string; password?: string } | undefined {
+  if (!proxyUrl) return undefined;
+  try {
+    const parsed = new URL(proxyUrl);
+    return {
+      server: `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}`,
+      ...(parsed.username ? { username: decodeURIComponent(parsed.username) } : {}),
+      ...(parsed.password ? { password: decodeURIComponent(parsed.password) } : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function buildPublicReaderChromiumLaunchOptions(proxyUrl?: string) {
+  const executablePath = resolvePreferredChromeExecutablePath();
+  const proxy = playwrightProxyFromReaderUrl(proxyUrl);
+  return {
+    headless: true,
+    ...(executablePath ? { executablePath } : {}),
+    ...(proxy ? { proxy } : {}),
+    args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+  };
 }
 
 const activeSpiderProcesses = new Set<ChildProcess>();
@@ -5213,31 +5420,19 @@ export async function shutdownSentimentSpiderProcesses(timeoutMs = 1_500): Promi
   }
 }
 
-async function runSpiderHttpOnly(args: {
+async function runSpiderProcess(args: {
   targetUrl: string;
   proxyUrl?: string;
   userAgent: string;
   timeoutMs: number;
   signal?: AbortSignal;
-}): Promise<ReaderResponseSnapshot> {
+  cliArgs: string[];
+}): Promise<any> {
   if (args.signal?.aborted) throw args.signal.reason;
-  const target = new URL(args.targetUrl);
-  if (target.protocol !== "https:") throw new Error("Spider public crawler only accepts HTTPS targets");
-  const cliArgs = [
-    "--url", target.toString(),
-    "--http",
-    "--limit", "1",
-    "--depth", "1",
-    "--agent", args.userAgent,
-    ...(args.proxyUrl ? ["--proxy-url", args.proxyUrl] : []),
-    "--return-format", "raw",
-    "scrape",
-    "--output-html",
-  ];
   const output = await new Promise<string>((resolve, reject) => {
     let settled = false;
     let abort: () => void = () => undefined;
-    const child = execFile(SPIDER_HTTP_CLI_PATH, cliArgs, {
+    const child = execFile(SPIDER_HTTP_CLI_PATH, args.cliArgs, {
       encoding: "utf8",
       timeout: Math.max(1_000, Math.floor(args.timeoutMs)),
       killSignal: "SIGKILL",
@@ -5250,7 +5445,7 @@ async function runSpiderHttpOnly(args: {
       settled = true;
       if (error) {
         const detail = String(stderr || "").trim().slice(-240);
-        reject(new Error(`Spider HTTP scrape failed: ${error.message}${detail ? ` (${detail})` : ""}`));
+        reject(new Error(`Spider scrape failed: ${error.message}${detail ? ` (${detail})` : ""}`));
         return;
       }
       resolve(String(stdout || ""));
@@ -5260,7 +5455,7 @@ async function runSpiderHttpOnly(args: {
       if (settled) return;
       settled = true;
       if (child.exitCode === null && !child.killed) child.kill("SIGKILL");
-      reject(args.signal?.reason instanceof Error ? args.signal.reason : new Error("Spider HTTP scrape aborted"));
+      reject(args.signal?.reason instanceof Error ? args.signal.reason : new Error("Spider scrape aborted"));
     };
     if (args.signal) {
       args.signal.addEventListener("abort", abort, { once: true });
@@ -5268,17 +5463,160 @@ async function runSpiderHttpOnly(args: {
     }
     child.once("close", () => activeSpiderProcesses.delete(child));
   });
-  const payload = JSON.parse(output);
+  try {
+    return JSON.parse(output);
+  } catch {
+    throw new Error("Spider scrape returned non-JSON output");
+  }
+}
+
+async function runSpiderMarkdownReader(args: {
+  targetUrl: string;
+  proxyUrl?: string;
+  userAgent: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<ReaderResponseSnapshot> {
+  const target = new URL(args.targetUrl);
+  if (!isAllowedSpiderPublicTarget(target)) {
+    throw new Error("Spider public crawler only accepts HTTPS Threads or Instagram targets");
+  }
+  const payload = await runSpiderProcess({
+    ...args,
+    cliArgs: [
+      "--url", target.toString(),
+      "--http",
+      "--limit", "1",
+      "--depth", "1",
+      "--agent", args.userAgent,
+      ...(args.proxyUrl ? ["--proxy-url", args.proxyUrl] : []),
+      "--return-format", "raw",
+      "scrape",
+      "--output-html",
+    ],
+  });
   const rawHtml = String(payload?.content || "");
   spiderRawHtmlByTargetUrl.set(target.toString(), rawHtml);
   while (spiderRawHtmlByTargetUrl.size > 40) spiderRawHtmlByTargetUrl.delete(spiderRawHtmlByTargetUrl.keys().next().value as string);
+  const prefetch = extractThreadsSearchPrefetchPayload(rawHtml);
+  const prefetchedCandidates = prefetch
+    ? parseThreadsGraphqlSearchPayload({ payload: prefetch, query: target.searchParams.get("q") || "", keywords: [] })
+    : [];
+  const markdown = prefetchedCandidates.length
+    ? buildSpiderSearchMarkdownFromHotCandidates(prefetchedCandidates)
+    : formatPublicThreadsReaderMarkdown(spiderHtmlToReaderText(rawHtml, target.toString()));
   const status = Math.floor(Number(payload?.status_code || 0));
+  const usable = prefetchedCandidates.length > 0 || readerBodyHasUsablePostLinks(markdown);
+  const loginWall = !usable && (readerBodyLooksLikeLoginWall(markdown) || readerBodyLooksLikeLoginWall(rawHtml));
+  const empty = !usable && readerMarkdownLooksEmpty(markdown);
+  const boundary = loginWall ? "login_wall" : empty ? "empty" : prefetchedCandidates.length ? "prefetch" : usable ? "html" : "empty";
+  persistSentimentReaderMarkdown(target.toString(), markdown, {
+    crawler: prefetchedCandidates.length ? "spider-prefetch-markdown" : "spider-markdown",
+    posts: String(prefetchedCandidates.length),
+    boundary,
+  });
+  const ok = status >= 200 && status < 300 && usable && !loginWall && !empty;
   return {
-    ok: status >= 200 && status < 300,
-    status,
-    headers: { "content-type": "text/html; spider-render=disabled", "x-public-crawler": "spider-cli/2.52.9" },
-    body: spiderHtmlToReaderText(rawHtml, target.toString()),
+    ok,
+    status: loginWall ? 401 : empty && status >= 200 && status < 300 ? 204 : status,
+    headers: {
+      "content-type": prefetchedCandidates.length ? "text/markdown; spider-reader=prefetch" : "text/markdown; spider-reader=html",
+      "x-public-crawler": "spider-cli/2.52.9",
+      "x-spider-boundary": boundary,
+    },
+    body: markdown,
   };
+}
+
+async function renderPublicPageToMarkdown(args: {
+  targetUrl: string;
+  proxyUrl?: string;
+  userAgent: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<ReaderResponseSnapshot> {
+  const target = new URL(args.targetUrl);
+  if (args.signal?.aborted) throw args.signal.reason;
+  const { chromium } = await import("playwright");
+  const browser = await chromium.launch(buildPublicReaderChromiumLaunchOptions(args.proxyUrl));
+  try {
+    const context = await browser.newContext({
+      locale: "zh-TW",
+      userAgent: args.userAgent,
+      ignoreHTTPSErrors: true,
+    });
+    const page = await context.newPage();
+    const gotoTimeout = Math.max(5_000, Math.min(16_000, Math.floor(args.timeoutMs)));
+    await page.goto(target.toString(), { waitUntil: "domcontentloaded", timeout: gotoTimeout });
+    await page.waitForSelector('a[href*="/post/"], a[href*="/t/"]', { timeout: Math.min(8_000, gotoTimeout) }).catch(() => undefined);
+    await page.waitForTimeout(Math.min(1_800, Math.max(400, gotoTimeout - 3_000))).catch(() => undefined);
+    const extracted = await page.evaluate(() => {
+      const cards: Array<{ author: string; href: string; date: string; content: string; likes: string; comments: string }> = [];
+      const seen = new Set<string>();
+      const han = (value: string) => (value.match(/[\u3400-\u9fff]/g) || []).length;
+      for (const anchor of Array.from(document.querySelectorAll('a[href*="/post/"]'))) {
+        const hrefAttr = String((anchor as HTMLAnchorElement).getAttribute("href") || (anchor as HTMLAnchorElement).href || "");
+        let href = hrefAttr;
+        try { href = new URL(hrefAttr, location.origin).href; } catch { /* keep original */ }
+        const match = href.match(/https?:\/\/(?:www\.)?threads\.(?:com|net)\/@([^/]+)\/post\/([A-Za-z0-9_-]+)/i);
+        if (!match || /\/media\/?$/i.test(href)) continue;
+        const key = `${match[1]}/${match[2]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        let root = anchor.parentElement as HTMLElement | null;
+        for (let depth = 0; depth < 10 && root; depth += 1) {
+          const sample = String(root.innerText || "");
+          if (han(sample) >= 20 || /讚\s*\d|赞\s*\d/.test(sample) || root.getAttribute("role") === "article") break;
+          root = root.parentElement;
+        }
+        const raw = String(root?.innerText || "").replace(/\u00a0/g, " ");
+        const lines = raw.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+        const content = lines
+          .filter((line) => han(line) >= 8)
+          .filter((line) => !/^(?:翻譯|翻译|Translate|无法显示贴文|無法顯示貼文)$/i.test(line))
+          .slice(0, 4)
+          .join(" ");
+        const numbers = lines.map((line) => line.replace(/,/g, "")).filter((line) => /^\d+(?:\.\d+)?[万萬千kKmM]?$/.test(line));
+        const dateLine = lines.find((line) => /^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(line)) || "";
+        cards.push({
+          author: match[1],
+          href: `https://www.threads.com/@${match[1]}/post/${match[2]}`,
+          date: dateLine,
+          content: content.slice(0, 800),
+          likes: numbers[0] || "",
+          comments: numbers[1] || "",
+        });
+      }
+      return cards;
+    }).catch(() => [] as Array<{ author: string; href: string; date: string; content: string; likes: string; comments: string }>);
+    const html = await page.content();
+    spiderRawHtmlByTargetUrl.set(target.toString(), html);
+    while (spiderRawHtmlByTargetUrl.size > 40) spiderRawHtmlByTargetUrl.delete(spiderRawHtmlByTargetUrl.keys().next().value as string);
+    const structured = extracted.length
+      ? extracted.map((card) => {
+        const dateLabel = card.date.replace(/^(\d{4})-(\d{1,2})-(\d{1,2})$/, (_full, year, month, day) => {
+          return `${String(month).padStart(2, "0")}/${String(day).padStart(2, "0")}/${year}`;
+        }) || "post";
+        return [
+          `[${card.author}](https://www.threads.com/@${card.author})`,
+          `[${dateLabel}](${card.href})`,
+          card.content,
+          card.likes,
+          card.comments,
+        ].filter(Boolean).join("\n");
+      }).join("\n\n")
+      : spiderHtmlToReaderText(html, target.toString());
+    const markdown = formatPublicThreadsReaderMarkdown(structured);
+    persistSentimentReaderMarkdown(target.toString(), markdown, { crawler: "spider-public-render" });
+    return {
+      ok: true,
+      status: 200,
+      headers: { "content-type": "text/markdown; spider-reader=public-render", "x-public-crawler": "spider-cli/2.52.9" },
+      body: markdown,
+    };
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
 }
 
 export function isCacheableSentimentReaderResponse(value: ReaderResponseSnapshot): boolean {
@@ -5287,6 +5625,7 @@ export function isCacheableSentimentReaderResponse(value: ReaderResponseSnapshot
     && value.status < 300
     && value.body.trim().length > 0
     && readerBodyHasUsablePostLinks(value.body)
+    && !readerMarkdownLooksEmpty(value.body)
     && !/<title>\s*(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable/i.test(value.body)
     && !readerBodyLooksLikeLoginWall(value.body);
 }
@@ -5309,22 +5648,24 @@ export async function fetchWithSharedPublicCrawlerLimit(
   const requestHeaders = new Headers(init.headers);
   const cacheKey = JSON.stringify({
     // Never reuse entries written by the retired hosted Reader path.
-    schema: "spider-http-response-v1",
+    schema: "spider-prefetch-response-v1",
     url: targetUrl,
     method: String(init.method || "GET").toUpperCase(),
     accept: requestHeaders.get("accept") || "",
     anonymousProxy: anonymousProxyPool.required ? `enabled:${anonymousProxyPool.revision}` : "disabled",
-    crawler: "spider-cli-2.52.9-http-only",
+    crawler: "spider-cli-2.52.9-markdown",
   });
   const snapshot = await sharedReaderResponseCoordinator.getOrLoad(
     cacheKey,
     async (): Promise<ReaderResponseSnapshot> => {
       let lastError: unknown;
       let lastSnapshot: ReaderResponseSnapshot | null = null;
+      const maxAttempts = resolveAnonymousReaderMaxAttempts();
       // Every request picks the next verified public proxy product. The
       // authenticated account pool and its sticky proxies are never touched.
-      for (let attempt = 0; attempt < ANONYMOUS_READER_MAX_ATTEMPTS; attempt += 1) {
-        // Random 1-5 second jitter prevents perfectly synchronized public bursts.
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        // Interactive jobs keep jitter under 200ms so 24 keyword searches
+        // start together. Refill keeps the wider 1-5s burst spacing.
         await new Promise((resolve) => setTimeout(resolve, resolveAnonymousReaderJitterMs()));
         try {
           const current = await sharedReaderRateLimiter.run(
@@ -5336,7 +5677,7 @@ export async function fetchWithSharedPublicCrawlerLimit(
                 throw new Error("Spider proxy pool is enabled but has no verified active product");
               }
               if (signal.aborted) throw signal.reason;
-              return runSpiderHttpOnly({
+              return runSpiderMarkdownReader({
                 targetUrl,
                 proxyUrl: anonymousProxy?.url,
                 userAgent: requestHeaders.get("user-agent") || "Mozilla/5.0",
@@ -5348,11 +5689,11 @@ export async function fetchWithSharedPublicCrawlerLimit(
           );
           lastSnapshot = current;
           const retryReason = anonymousReaderRetryReason(current);
-          if (!retryReason || attempt >= ANONYMOUS_READER_MAX_ATTEMPTS - 1) return current;
+          if (!retryReason || attempt >= maxAttempts - 1) return current;
           console.info(`[sentiment_hot_reader_failover] reason=${retryReason} attempt=${attempt + 1} proxy_failover=1`);
         } catch (error) {
           lastError = error;
-          if (attempt >= ANONYMOUS_READER_MAX_ATTEMPTS - 1 || !isRetryableAnonymousReaderError(error)) throw error;
+          if (attempt >= maxAttempts - 1 || !isRetryableAnonymousReaderError(error)) throw error;
           console.info(`[sentiment_hot_reader_failover] reason=network_or_timeout attempt=${attempt + 1} proxy_failover=1`);
         }
       }
@@ -5417,8 +5758,9 @@ async function fetchThreadsReaderSearchCandidates(args: {
       }));
       const parsed = [...new Map([...parsedHydration, ...parsedMarkdown].map((candidate) => [candidate.id, candidate])).values()];
       for (const candidate of parsed) globalPoolCandidates.set(candidate.id, candidate);
+      const collectCap = Math.max(args.limit * 3, 30);
       for (const candidate of parsed) {
-        if (all.length >= args.limit) continue;
+        if (all.length >= collectCap) continue;
         if (excluded.has(candidate.id)) continue;
         const normalized = candidateMeetsDisplayQuality(
           candidate,
@@ -5430,47 +5772,59 @@ async function fetchThreadsReaderSearchCandidates(args: {
         const dedupeKey = sentimentCandidateDedupeKey(normalized);
         if (all.some((item) => item.id === normalized.id) || allKeys.has(dedupeKey)) continue;
         allKeys.add(dedupeKey);
-        all.push(normalized);
+        all.push(stampHotCandidateOrigin(normalized, "live_spider"));
       }
     }
   };
-  // Spider's HTTP-only path remains a bounded secondary source. It never starts
-  // Chromium and therefore cannot steal browser slots from the authenticated
-  // GraphQL main chain.
-  for (let offset = 0; offset < args.queries.length; offset += THREADS_READER_QUERY_BATCH_SIZE) {
-    if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
-    const batchSearches = await Promise.all(
-      args.queries.slice(offset, offset + THREADS_READER_QUERY_BATCH_SIZE).map(async (query) => {
-        // Threads' public HTTP page can return only an application shell for
-        // `filter=recent`. Read the normal public result page and enforce the
-        // requested freshness window after parsing via candidateMeetsDisplayQuality.
-        const targetUrl = buildThreadsReaderSearchUrl(query, args.recentSearch);
-        try {
-          // Live Spider measurements on this host complete valid Threads HTML
-          // in roughly 11-12 seconds. Keep the existing parallel/query plan,
-          // but do not kill a successful public response at the old 10s edge.
-          const timeoutMs = Math.min(15_000, remainingSentimentDeadlineMs(args.deadlineAt, 15_000));
-          const response = await fetchWithSharedPublicCrawlerLimit(targetUrl, {
-            headers: {
-              "user-agent": "Mozilla/5.0",
-              accept: "text/plain, text/markdown, */*",
-              "cache-control": "max-age=300",
-            },
-          }, timeoutMs, args.refresh ? "blocking-refresh" : "swr");
-          if (!response.ok) return { query, targetUrl, text: "" };
-          return { query, targetUrl, text: await response.text() };
-        } catch {
-          return { query, targetUrl, text: "" };
-        }
-      }),
-    );
-    consumeSearches(batchSearches);
-    if (all.length >= args.limit) break;
+  // Spider HTTP is the only public crawler. It never starts Chromium and never
+  // calls a hosted Reader. Wave 1 is relevance search (`q=`). Wave 2 is the
+  // complementary high-engagement ranking (`serp_type=default`).
+  const searchWaves = [
+    args.queries.map((query) => buildThreadsReaderSearchTargets(query, args.recentSearch)[0]),
+    args.queries.map((query) => buildThreadsReaderSearchTargets(query, args.recentSearch)[1]),
+  ];
+  const collectCap = Math.max(args.limit * 3, 30);
+  const fetchOneSearch = async (target: { query: string; targetUrl: string; ranking: "spider-default" | "spider-ranked" }) => {
+    try {
+      const parsed = new URL(target.targetUrl);
+      if (!isAllowedSpiderPublicTarget(parsed)) return { ...target, text: "" };
+      const timeoutMs = Math.min(8_000, remainingSentimentDeadlineMs(args.deadlineAt, 8_000));
+      if (timeoutMs < 1_000) return { ...target, text: "" };
+      const response = await fetchWithSharedPublicCrawlerLimit(target.targetUrl, {
+        headers: {
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          accept: "text/html,application/xhtml+xml,text/markdown,text/plain,*/*",
+          "cache-control": "max-age=300",
+        },
+      }, timeoutMs, args.refresh ? "blocking-refresh" : "swr");
+      const text = response.ok ? await response.text() : "";
+      if (!text || readerMarkdownLooksEmpty(text) || readerBodyLooksLikeLoginWall(text)) {
+        return { ...target, text: "" };
+      }
+      return { ...target, text };
+    } catch {
+      return { ...target, text: "" };
+    }
+  };
+  for (const [waveIndex, wave] of searchWaves.entries()) {
+    if (all.length >= collectCap) break;
+    if (waveIndex > 0 && args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 4_000) break;
+    for (let offset = 0; offset < wave.length; offset += THREADS_READER_QUERY_BATCH_SIZE) {
+      if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
+      const targetBatch = wave.slice(offset, offset + THREADS_READER_QUERY_BATCH_SIZE);
+      console.info(`[sentiment_hot_reader_search] archiveId=${args.archiveId} concurrent=${targetBatch.length} wave=${waveIndex === 0 ? "spider-default" : "spider-ranked"} offset=${offset} have=${all.length} mode=spider-http`);
+      await Promise.all(targetBatch.map(async (target) => {
+        const search = await fetchOneSearch(target);
+        consumeSearches([search]);
+      }));
+      if (all.length >= collectCap) break;
+    }
   }
   writeGlobalSentimentHotCandidatePool([...globalPoolCandidates.values()]);
+  console.info(`[sentiment_hot_reader_search] archiveId=${args.archiveId} status=done accepted=${all.length} mode=spider-http`);
   return args.deferRelevanceGate
-    ? sortUsefulHotCandidates(all, args.limit)
-    : sortSentimentHotCandidatePool(all, args.keywords, args.limit, args.searchMode);
+    ? sortUsefulHotCandidates(all, collectCap)
+    : sortSentimentHotCandidatePool(all, args.keywords, collectCap, args.searchMode);
 }
 
 export function parseInstagramAuthenticatedSearchPayload(args: {
@@ -8213,6 +8567,15 @@ function normalizeSentimentPublishedAt(value: unknown): string | undefined {
       return new Date(Date.UTC(year, month - 1, day)).toISOString();
     }
   }
+  const isoDay = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (isoDay) {
+    const year = Number(isoDay[1]);
+    const month = Number(isoDay[2]);
+    const day = Number(isoDay[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return new Date(Date.UTC(year, month - 1, day)).toISOString();
+    }
+  }
   return normalizeThreadsRelativeTime(text);
 }
 
@@ -8228,7 +8591,7 @@ export function parseThreadsReaderSearchMarkdownCandidates(args: {
   if (!text || !/Search\s*•\s*Threads|Threads/i.test(text)) return [];
   const needleSource = [args.query, ...(args.keywords || [])].filter(Boolean);
   const needles = buildRelevanceNeedles(needleSource);
-  const postRegex = /\[((?:\d{2}\/\d{2}\/\d{2,4}|\d+(?:[.,]\d+)?(?:秒|分鐘|分钟|分|小時|小时|時|时|天|日|週|周|月|年|s|sec|secs|m|min|mins|h|hr|hrs|d|day|days|w|wk|wks|mo|mos|y|yr|yrs)))\]\(((?:https?):\/\/www\.threads\.(?:net|com)\/(?:@[^)\s]+\/post\/[^)\s]+|t\/[^)\s]+))\)\s*\n([\s\S]*?)(?=\n\[!\[Image\s+\d+:[^\]]*profile picture|\n\[[^\]\n]+]\((?:https?):\/\/www\.threads\.(?:net|com)\/@|$)/g;
+  const postRegex = /\[((?:\d{2}\/\d{2}\/\d{2,4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d+(?:[.,]\d+)?(?:秒|分鐘|分钟|分|小時|小时|時|时|天|日|週|周|月|年|s|sec|secs|m|min|mins|h|hr|hrs|d|day|days|w|wk|wks|mo|mos|y|yr|yrs)))\]\(((?:https?):\/\/(?:www\.)?threads\.(?:net|com)\/(?:@[^)\s]+\/post\/[^)\s]+|t\/[^)\s]+))\)\s*\n([\s\S]*?)(?=\n\[!\[Image\s+\d+:[^\]]*profile picture|\n\[[^\]\n]+]\((?:https?):\/\/(?:www\.)?threads\.(?:net|com)\/@|$)/g;
   const out: SentimentHotCandidate[] = [];
   let match: RegExpExecArray | null;
   while ((match = postRegex.exec(text)) !== null) {
@@ -8260,6 +8623,8 @@ export function parseThreadsReaderSearchMarkdownCandidates(args: {
         query: args.query,
         matchedKeywords: matchedNeedles,
         mediaCount: media.length,
+        publicSearch: true,
+        crawler: "spider-markdown",
         ...compactEngagementMetrics(engagement),
       },
       engagement,
@@ -8325,6 +8690,8 @@ export function parseThreadsReaderSearchMarkdownCandidates(args: {
         query: args.query,
         matchedKeywords: matchedNeedles,
         mediaCount: media.length,
+        publicSearch: true,
+        crawler: "spider-markdown",
         ...(publishedAt ? { publishedAtSource: "threads_shortcode_snowflake" } : {}),
         ...compactEngagementMetrics(engagement),
       },
@@ -8848,7 +9215,7 @@ function readThreadsSearchCandidateCache(archiveId: string, keywords: string[], 
         warnings: uniqueSentimentWarnings([...(candidate.warnings || []), THREADS_SEARCH_CACHE_WARNING]),
       }, keywords, searchMode, DEFAULT_REFRESH_FRESHNESS_DAYS);
       if (!normalized) continue;
-      byId.set(normalized.id, normalized);
+      byId.set(normalized.id, stampHotCandidateOrigin(normalized, "search_cache"));
     }
   }
   return sortSentimentHotCandidatePool([...byId.values()], keywords, limit, searchMode);
@@ -8885,6 +9252,8 @@ function readArchiveScopedThreadsCandidateBackfill(archiveId: string, keywords: 
           ...(candidate.metrics || {}),
           archiveScopedFallback: true,
           archiveScopedKeyword: storedKeyword,
+          origin: "candidate_pool",
+          liveFetch: false,
         },
       }, keywords, searchMode, DEFAULT_REFRESH_FRESHNESS_DAYS);
       if (!normalized) continue;
@@ -9706,6 +10075,8 @@ async function readCandidatesFromDatabase(args: { archiveId: string; keywords: s
         hotScore,
         metrics: {
           source: "database",
+          origin: "database",
+          liveFetch: false,
           seenCount: Number(row.seen_count || 0),
           spreadScore: Number(row.spread_score || 0),
           influenceScore: Number(row.influence_score || 0),
