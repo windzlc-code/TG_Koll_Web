@@ -79,6 +79,35 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(banned_via_health["title"], "账号已被限制")
         self.assertEqual(banned_via_health["phase"], "error")
 
+    def test_auto_login_does_not_surface_credentials_the_robot_can_submit(self):
+        control = {"totp_code_provider": lambda: {"available": True, "code": "123456"}}
+        runner._publish_login_assistance_state(mock.Mock(), control, {"status": "cookie_expired", "reason": "检测到登录表单"})
+        self.assertNotIn("login_assistance_state", control)
+        runner._publish_login_assistance_state(
+            mock.Mock(),
+            control,
+            {"status": "need_verification", "challenge_type": "authenticator_totp"},
+        )
+        self.assertNotIn("login_assistance_state", control)
+        runner._publish_login_assistance_state(mock.Mock(), control, {"status": "account_confirmation_required"})
+        self.assertNotIn("login_assistance_state", control)
+        runner._publish_login_assistance_state(mock.Mock(), control, {"status": "invalid_credentials", "reason": "密码错误"})
+        self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
+        handed = {}
+        runner._publish_login_assistance_state(
+            mock.Mock(),
+            handed,
+            {"status": "cookie_expired", "reason": "请填写账号密码"},
+            handoff=True,
+        )
+        self.assertEqual(handed["login_assistance_state"]["kind"], "credentials")
+        runner._publish_login_assistance_state(
+            mock.Mock(),
+            control,
+            {"status": "need_verification", "challenge_type": "sms_code"},
+        )
+        self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
+
     def test_login_assistance_only_publishes_interactive_milestones(self):
         control = {}
         runner._publish_login_assistance_state(mock.Mock(), control, {"status": "transient_error", "reason": "暂时打不开"})

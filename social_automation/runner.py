@@ -2890,7 +2890,7 @@ def _wait_or_raise_manual(
     if str(failed_status.get("status") or "") not in {"failed", "auto_login_failed", "manual_login_timeout", "cancelled", "banned", "disabled"}:
         failed_status["status"] = "failed"
         failed_status["reason"] = reason
-    _publish_login_assistance_state(page, context_control, failed_status)
+    _publish_login_assistance_state(page, context_control, failed_status, handoff=True)
     raise AutoLoginFailedError(reason, status, screenshot_path)
 
 
@@ -3227,6 +3227,7 @@ def _run_open_login(
                     "reason": str(exc),
                     "health_status": str(getattr(exc, "health_status", "") or ""),
                 },
+                handoff=True,
             )
             raise
         except AutoLoginFailedError as exc:
@@ -3237,16 +3238,17 @@ def _run_open_login(
                     "status": str(getattr(exc, "status", "") or "failed"),
                     "reason": str(exc),
                 },
+                handoff=True,
             )
             raise
         except Exception as exc:
             message = str(exc)
             if "社交自动化任务已取消" in message:
-                _publish_login_assistance_state(page, context_control, {"status": "cancelled", "reason": message})
+                _publish_login_assistance_state(page, context_control, {"status": "cancelled", "reason": message}, handoff=True)
                 raise
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
                 closed_reason = f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新打开登录窗口并保持到账号就绪。"
-                _publish_login_assistance_state(page, context_control, {"status": "failed", "reason": closed_reason})
+                _publish_login_assistance_state(page, context_control, {"status": "failed", "reason": closed_reason}, handoff=True)
                 raise NeedManualError(closed_reason, "cookie_expired") from exc
             if _is_transient_navigation_exception(message):
                 last_status = {
@@ -3385,7 +3387,7 @@ def _wait_for_manual_login_completion(
     initial_status = dict(last_status or {})
     initial_status.setdefault("status", status)
     initial_status.setdefault("reason", reason)
-    _publish_login_assistance_state(page, context_control, initial_status)
+    _publish_login_assistance_state(page, context_control, initial_status, handoff=True)
 
     def raise_manual_login_timeout() -> None:
         shot = _screenshot(page, screenshot_dir, task, "manual_login_timeout", logger)
@@ -3405,6 +3407,7 @@ def _wait_for_manual_login_completion(
             page,
             context_control,
             {"status": "manual_login_timeout", "reason": message},
+            handoff=True,
         )
         raise ManualTimeoutError(
             message,
@@ -3424,7 +3427,7 @@ def _wait_for_manual_login_completion(
                 message = str(exc)
                 if "Target page, context or browser has been closed" in message or "has been closed" in message:
                     closed_reason = f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新启动登录任务。"
-                    _publish_login_assistance_state(page, context_control, {"status": "failed", "reason": closed_reason})
+                    _publish_login_assistance_state(page, context_control, {"status": "failed", "reason": closed_reason}, handoff=True)
                     raise AutoLoginFailedError(
                         closed_reason,
                         "cookie_expired",
@@ -3441,7 +3444,7 @@ def _wait_for_manual_login_completion(
             if time.monotonic() >= deadline:
                 raise_manual_login_timeout()
             current_code = str(current_status.get("status") or "").strip()
-            _publish_login_assistance_state(page, context_control, current_status)
+            _publish_login_assistance_state(page, context_control, current_status, handoff=True)
             if current_code == "post_login_interstitial":
                 if _resolve_instagram_post_login_interstitial(page, logger):
                     if platform == "threads":
@@ -3462,7 +3465,7 @@ def _wait_for_manual_login_completion(
                         {"url": _safe_navigation_url(page.url), "details": _safe_login_status(stable_status), "manual_completion": True},
                         shot,
                     )
-                    _publish_login_assistance_state(page, context_control, stable_status)
+                    _publish_login_assistance_state(page, context_control, stable_status, handoff=True)
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 current_status = stable_status
                 current_code = str(current_status.get("status") or "").strip()
@@ -3486,7 +3489,7 @@ def _wait_for_manual_login_completion(
                 time.sleep(wait_seconds)
     except RuntimeError as exc:
         if "社交自动化任务已取消" in str(exc):
-            _publish_login_assistance_state(page, context_control, {"status": "cancelled", "reason": str(exc)})
+            _publish_login_assistance_state(page, context_control, {"status": "cancelled", "reason": str(exc)}, handoff=True)
         raise
 
 
@@ -3782,6 +3785,43 @@ def _login_assistance_collect_choices(page: Any, status: dict[str, Any]) -> list
     return _login_assistance_normalize_actions(found)
 
 
+def _login_assistance_requires_user(status: dict[str, Any] | None, context_control: dict[str, Any] | None = None) -> bool:
+    current = dict(status or {})
+    status_code = str(current.get("status") or "").strip().lower()
+    challenge_type = str(current.get("challenge_type") or "").strip().lower()
+    health = str(current.get("health_status") or "").strip().lower()
+    if health == "banned" or status_code in {
+        "banned",
+        "disabled",
+        "failed",
+        "auto_login_failed",
+        "cancelled",
+        "manual_login_timeout",
+        "invalid_credentials",
+        "need_manual",
+    }:
+        return True
+    if status_code == "ready":
+        return True
+    if status_code != "need_verification":
+        return False
+    if challenge_type in {
+        "sms_code",
+        "email_code",
+        "unknown_code",
+        "verification",
+        "numeric_image_captcha",
+        "method_selection",
+        "identity_challenge",
+        "human_verification",
+        "unknown_challenge",
+    }:
+        return True
+    if challenge_type in {"authenticator_totp", "", "none"}:
+        return _totp_provider(context_control) is None
+    return True
+
+
 def _login_assistance_is_milestone(presentation: dict[str, Any] | None) -> bool:
     current = dict(presentation or {})
     phase = str(current.get("phase") or "").strip().lower()
@@ -3805,13 +3845,21 @@ def _login_assistance_signature(presentation: dict[str, Any] | None) -> tuple[st
     )
 
 
-def _publish_login_assistance_state(page: Any, context_control: dict[str, Any] | None, status: dict[str, Any] | None) -> None:
+def _publish_login_assistance_state(
+    page: Any,
+    context_control: dict[str, Any] | None,
+    status: dict[str, Any] | None,
+    *,
+    handoff: bool = False,
+) -> None:
     if not isinstance(context_control, dict):
         return
     current = dict(status or {})
     if str(current.get("status") or "").strip().lower() == "need_verification" and not current.get("challenge_type"):
         with contextlib.suppress(Exception):
             current["challenge_type"] = str(_classify_verification_challenge(page).get("type") or "")
+    if not handoff and not _login_assistance_requires_user(current, context_control):
+        return
     if "actions" not in current and _login_assistance_choice_labels(current):
         with contextlib.suppress(Exception):
             current["actions"] = _login_assistance_collect_choices(page, current)
