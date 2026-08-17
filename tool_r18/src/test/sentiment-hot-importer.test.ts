@@ -211,7 +211,7 @@ describe("sentiment hot importer", () => {
     }, now)).toBe(false);
   });
 
-  it("keeps only long-form hot candidates with at least sixty readable characters", () => {
+  it("keeps hot candidates with at least twenty readable characters", () => {
     const candidate = (id: string, content: string) => ({
       id,
       platform: "threads",
@@ -225,8 +225,9 @@ describe("sentiment hot importer", () => {
       capturedAt: new Date().toISOString(),
     });
 
-    const short = candidate("short", "理发造型护理经验".repeat(4));
-    const long = candidate("long", "理发造型护理经验".repeat(8));
+    const content = "理发造型护理染发烫发剪发发型设计经验分享建议";
+    const short = candidate("short", content.slice(0, 19));
+    const long = candidate("long", content.slice(0, 20));
 
     expect(finalizeSentimentHotCandidatesForDisplay([short, long] as any, 10, {
       keywords: ["理发"],
@@ -509,7 +510,7 @@ describe("sentiment hot importer", () => {
     expect(queries).toContain("理財 詐騙");
   });
 
-  it("uses broad vertical model terms for strict discovery without widening strict acceptance", () => {
+  it("keeps broad vertical model terms out of strict discovery", () => {
     const strategy = {
       primaryQueries: ["理发师 顾客 吐槽", "理发店 奇葩客人", "剪头发 翻车", "男士理发 油头", "美发沙龙 职场"],
       ecosystemQueries: [],
@@ -523,7 +524,8 @@ describe("sentiment hot importer", () => {
       domainSummary: "理发与美发行业",
     } as any;
     expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).not.toContain("染发烫发价格踩雷");
-    expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).toContain("染发烫发价格踩雷");
+    expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).not.toContain("染发烫发价格踩雷");
+    expect(resolveSentimentHotModelQueryKeywords(strategy, "normal")).toContain("染发烫发价格踩雷");
   });
 
   it("puts persona-specific audience queries ahead of generic domain anchors", () => {
@@ -1155,6 +1157,66 @@ describe("sentiment hot importer", () => {
       searchMode: "strict",
       freshnessDays: 30,
     })).toHaveLength(1);
+  });
+
+  it("keeps a current Spider result when the post matches a concrete part of its compound query", () => {
+    const candidate = {
+      id: "spider-tire-service",
+      platform: "threads",
+      sourceUrl: "https://www.threads.com/@garage/post/tire-service",
+      author: "garage",
+      content: "跑了一萬公里結果要大保養，固定機油套組七百五十，耐磨後輪輪胎一千，火星塞二百五十，檢測一千八，總共花了四千元，耗時兩小時。",
+      media: [],
+      hotScore: 522,
+      publishedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+      metrics: {
+        source: "threads-reader-search",
+        crawler: "spider-http-hydration",
+        publicSearch: true,
+        query: "輪胎更換",
+        matchedKeywords: [],
+      },
+      capturedAt: new Date().toISOString(),
+    };
+    const controllerBatch = ["汽車維修", "汽車保養", "輪胎更換", "煞車維修"];
+
+    expect(candidateMatchesCurrentKeywords(candidate as any, controllerBatch, "strict")).toBe(true);
+    expect(finalizeSentimentHotCandidatesForDisplay([candidate] as any, 1, {
+      keywords: controllerBatch,
+      searchMode: "strict",
+      freshnessDays: 30,
+    })).toHaveLength(1);
+  });
+
+  it("filters public Reader hotspots with fewer than twenty Chinese characters", () => {
+    const candidate = (id: string, hanCount: number) => ({
+      id,
+      platform: "threads",
+      sourceUrl: `https://www.threads.com/@football/post/${id}`,
+      author: "football",
+      content: `${"足球賽事".repeat(6).slice(0, hanCount)} ${"match analysis details ".repeat(4)}`,
+      media: [],
+      hotScore: 800,
+      engagement: { likeCount: 800 },
+      publishedAt: new Date().toISOString(),
+      metrics: {
+        source: "threads-reader-search",
+        crawler: "spider-http-hydration",
+        publicSearch: true,
+        query: "足球賽事",
+        matchedKeywords: ["足球賽事"],
+      },
+      capturedAt: new Date().toISOString(),
+    });
+
+    expect(finalizeSentimentHotCandidatesForDisplay([
+      candidate("nineteen-han", 19),
+      candidate("twenty-han", 20),
+    ] as any, 10, {
+      keywords: ["足球賽事"],
+      searchMode: "strict",
+      freshnessDays: 30,
+    }).map((item) => item.id)).toEqual(["twenty-han"]);
   });
 
   it("rejects stale cache evidence from a generic query outside the current batch", () => {
@@ -1986,25 +2048,25 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesCurrentKeywords(relevant, keywords, "strict")).toBe(true);
   });
 
-  it("does not display hot candidates shorter than 25 Chinese characters", () => {
+  it("uses a twenty Chinese character floor for all hot candidates", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
-        id: "short-hot",
+        id: "nineteen-han",
         platform: "threads",
-        sourceUrl: "https://www.threads.net/@demo/post/short",
+        sourceUrl: "https://www.threads.net/@demo/post/nineteen-han",
         author: "demo",
-        content: "海外信貸最近討論很多，信用卡和銀行貸款都很熱門。",
+        content: "\u7406".repeat(19),
         media: [],
         hotScore: 90000,
         metrics: {},
         capturedAt: new Date().toISOString(),
       },
       {
-        id: "long-hot",
+        id: "twenty-han",
         platform: "threads",
-        sourceUrl: "https://www.threads.net/@demo/post/long",
+        sourceUrl: "https://www.threads.net/@demo/post/twenty-han",
         author: "demo",
-        content: "海外信貸最近討論很多，信用卡和銀行貸款都很熱門。有人整理收入證明、負債比、利率審核、還款節奏和現金流安排，提醒工薪族不要只看額度，也要確認長期風險。這種長文更適合改寫成人設乾貨。",
+        content: "\u7406".repeat(20),
         media: [],
         hotScore: 80000,
         metrics: {},
@@ -2012,10 +2074,10 @@ describe("sentiment hot importer", () => {
       },
     ] as any, 10);
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["long-hot"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["twenty-han"]);
   });
 
-  it("uses a sixty readable character floor for hot candidates", () => {
+  it("uses a twenty readable character floor for hot candidates", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -2027,19 +2089,19 @@ describe("sentiment hot importer", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
         ...base,
-        id: "under-60",
-        sourceUrl: "https://www.threads.net/@demo/post/under-60",
-        content: "\u7406".repeat(59),
+        id: "under-20",
+        sourceUrl: "https://www.threads.net/@demo/post/under-20",
+        content: "\u7406".repeat(19),
       },
       {
         ...base,
-        id: "at-60",
-        sourceUrl: "https://www.threads.net/@demo/post/at-60",
-        content: "\u7406".repeat(60),
+        id: "at-20",
+        sourceUrl: "https://www.threads.net/@demo/post/at-20",
+        content: "\u7406".repeat(20),
       },
     ] as any, 10);
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["at-60"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["at-20"]);
   });
 
   it("rejects concise authenticated Threads posts even when heat is high", () => {

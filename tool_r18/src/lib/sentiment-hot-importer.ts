@@ -48,9 +48,9 @@ const SENTIMENT_HOT_SCORE_FALLBACK_STEPS = [
 ] as const;
 // High-heat results remain preferred. For a sparse niche, the browser may add
 // recent, topic-anchored posts with verified engagement fields behind them.
-const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 25;
-const MIN_PUBLIC_THREADS_HOT_HAN_COUNT = 10;
-const MIN_SENTIMENT_HOT_READABLE_CHARACTER_COUNT = 60;
+const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 20;
+const MIN_PUBLIC_THREADS_HOT_HAN_COUNT = 20;
+const MIN_SENTIMENT_HOT_READABLE_CHARACTER_COUNT = 20;
 const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 2_000;
 const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
 const THREADS_SEARCH_CACHE_MAX_ROWS_PER_ARCHIVE = 40;
@@ -105,7 +105,7 @@ const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 40;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 41;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 28;
@@ -1377,18 +1377,8 @@ export function resolveSentimentHotModelQueryKeywords(
   if (!strategy || !sentimentHotStrategyHasModelTerms(strategy)) return [];
   if (mode === "strict") {
     const primaryQueries = prepareSentimentHotKeywordsForMode(strategy.primaryQueries, "normal");
-    const anchors = prepareSentimentHotKeywordsForMode([
-      ...strategy.requiredAnchorTerms,
-      ...strategy.normalAnchorTerms,
-    ], "normal");
-    const broadAnchors = prepareSentimentHotKeywordsForMode([
-      ...strategy.broadQueries,
-      ...strategy.ecosystemQueries,
-    ], "normal");
-    const supportTerms = prepareSentimentHotKeywordsForMode([
-      ...strategy.strictAcceptTerms,
-      ...strategy.normalAcceptTerms,
-    ], "normal");
+    const anchors = prepareSentimentHotKeywordsForMode(strategy.requiredAnchorTerms, "normal");
+    const supportTerms = prepareSentimentHotKeywordsForMode(strategy.strictAcceptTerms, "normal");
     // The first request batch should reflect what the persona's audience would
     // actually type, while two core anchors keep recall stable. Putting every
     // anchor first made new personas search only broad category names; putting
@@ -1402,13 +1392,12 @@ export function resolveSentimentHotModelQueryKeywords(
       ...firstBatch,
       ...primaryQueries.slice(6),
       ...anchors.slice(2),
-      ...broadAnchors,
       ...supportTerms,
-    ])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
+    ])].slice(0, SENTIMENT_HOT_STRICT_KEYWORD_TARGET);
   }
-  // Strict mode keeps its acceptance filter narrow, but discovery also needs
-  // the model's broad vertical queries. The final quality/anchor checks still
-  // reject posts that do not match the strict persona keywords.
+  // Broad-vertical discovery may use the direct parent domain and adjacent
+  // ecosystem. Strict discovery never reads these lists, so the two modes do
+  // not silently converge on the same public search batch.
   return prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, mode), mode);
 }
 
@@ -3550,7 +3539,19 @@ export function candidateMatchesCurrentKeywords(candidate: SentimentHotCandidate
   const strongNeedles = buildStrongRelevanceNeedlesForMode(relevanceKeywords, searchMode);
   const matchedCount = countMatchedNeedles(candidate, needles);
   const matchedStrongCount = countMatchedNeedles(candidate, strongNeedles);
-  if (matchedCount <= 0) return false;
+  const spiderSourceParts = source === "threads-reader-search"
+    && (candidate.metrics as any)?.publicSearch === true
+    && (candidate.metrics as any)?.crawler === "spider-http-hydration"
+    && sourceQuery.length >= 4
+    ? segmentPersonaWords(sourceQuery).filter((part) => (
+        part.length >= 2
+        && !isWeakRelevanceKeyword(part)
+        && !isGenericSentimentKeyword(part)
+      ))
+    : [];
+  const matchesSpiderSourcePart = spiderSourceParts.length > 0
+    && countMatchedNeedles(candidate, spiderSourceParts) > 0;
+  if (matchedCount <= 0 && !matchesSpiderSourcePart) return false;
   // Public Threads search can include recommendation cards unrelated to the
   // submitted term. Keep a card only when its visible author/content actually
   // contains the query or another current persona/platform tag.
