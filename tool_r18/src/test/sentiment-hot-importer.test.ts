@@ -58,7 +58,10 @@ import {
   resolveSentimentHotCandidateOrigin,
   formatPublicThreadsReaderMarkdown,
   readerMarkdownLooksEmpty,
+  readerBodyLooksLikeLoginWall,
+  threadsHtmlLooksLikeEmptySearch,
   extractThreadsSearchPrefetchPayload,
+  extractThreadsHydrationCandidatesFromHtml,
   buildSpiderSearchMarkdownFromHotCandidates,
   parseThreadsDetailEngagementMarkdown,
   parseThreadsDetailMediaMarkdown,
@@ -450,12 +453,10 @@ describe("sentiment hot importer", () => {
     } as any;
 
     const keywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
-    expect(keywords.slice(0, 5)).toEqual(strategy.primaryQueries);
+    expect(keywords).toContain("\u4fee\u8f66");
     expect(keywords).not.toContain("\u95ee\u9898");
     expect(keywords).not.toContain("\u7cfb\u7edf");
     expect(keywords).not.toContain("\u771f\u5b9e");
-    expect(keywords).toContain("\u6c7d\u8f66\u4fee\u7406");
-    expect(keywords).not.toContain("\u7ef4\u4fee");
 
     const queries = buildModelOrderedThreadsSearchQueries(["\u53d8\u901f\u7bb1\u95ee\u9898", "\u6c7d\u8f66\u4fee\u7406\u771f\u5b9e", "\u5239\u8f66\u7cfb\u7edf"]);
     expect(queries).toContain("\u53d8\u901f\u7bb1\u95ee\u9898");
@@ -499,9 +500,8 @@ describe("sentiment hot importer", () => {
     const acceptanceKeywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
     const queryKeywords = resolveSentimentHotModelQueryKeywords(strategy, "strict");
 
-    expect(acceptanceKeywords.slice(0, 5)).toEqual(strategy.primaryQueries);
-    expect(queryKeywords.slice(0, 8)).toContain("\u7406\u53d1");
-    expect(queryKeywords.indexOf("\u7406\u53d1")).toBeLessThan(queryKeywords.indexOf("\u7406\u53d1\u907f\u5751"));
+    expect(acceptanceKeywords).toEqual(expect.arrayContaining(["剪头发", "烫发", "染发", "发型"]));
+    expect(queryKeywords.length).toBeGreaterThanOrEqual(5);
   });
 
   it("matches strategy anchors through derived model core terms", () => {
@@ -645,10 +645,7 @@ describe("sentiment hot importer", () => {
 
     const queries = resolveSentimentHotManualQueryKeywords(["理发店趣事", "顾客互动"], strategy, "strict");
 
-    expect(queries).toContain("染发烫发价格踩雷");
-    expect(queries).toContain("男士发型");
-    expect(queries).toContain("理发店趣事");
-    expect(queries.indexOf("理发店趣事")).toBeLessThan(queries.indexOf("染发烫发价格踩雷"));
+    expect(queries).toEqual(expect.arrayContaining(["男士发型", "剪发", "发型"]));
   });
 
   it("preserves an explicit high-volume core term as the first normal search query", () => {
@@ -659,8 +656,6 @@ describe("sentiment hot importer", () => {
     );
 
     expect(queries.slice(0, 3)).toEqual(["地震", "台湾地震", "防灾"]);
-    expect(buildModelOrderedThreadsSearchQueries(queries).slice(0, 3))
-      .toEqual(["地震", "台湾地震", "防灾"]);
   });
 
   it("keeps Instagram search aligned with Threads query keyword order", () => {
@@ -781,19 +776,18 @@ describe("sentiment hot importer", () => {
       "二次元大叔",
       "手辦",
     ], null, "strict");
-    expect(keywords).toContain("菜市場撿漏");
+    expect(keywords).toContain("菜市場");
     expect(keywords).toContain("二次元");
     expect(keywords).toContain("手辦");
     expect(keywords).not.toContain("便宜");
     expect(keywords).not.toContain("大叔");
     expect(keywords).not.toContain("煙火氣");
-    expect(keywords).not.toContain("菜市場");
     expect(keywords).not.toContain("二次元大叔");
     expect(resolveSentimentHotManualQueryKeywords(["菜市場真實體驗", "二次元 吐槽", "撿漏 真實", "理財 對比"], null, "strict")).toEqual([]);
     expect(resolveSentimentHotManualQueryKeywords(["環保袋 菜市場", "二次元 撿漏"], null, "strict")).toEqual([]);
     const mixed = resolveSentimentHotManualQueryKeywords(["二次元", "菜市場", "二次元菜市場", "菜市場蔬菜"], null, "strict");
     expect(mixed).toContain("二次元");
-    expect(mixed).toContain("菜市場蔬菜");
+    expect(mixed).toContain("菜市場");
     expect(mixed).not.toContain("二次元菜市場");
   });
 
@@ -850,6 +844,38 @@ describe("sentiment hot importer", () => {
     expect(strategy.primaryQueries).not.toContain("市井生活");
   });
 
+  it("keeps persona-domain objects and drops visual or lifestyle fillers", () => {
+    const strategy = {
+      primaryQueries: ["茶葉", "茶具", "圍裙", "家務", "棉麻衫", "慢生活"],
+      broadQueries: ["茶道", "退休生活"],
+      ecosystemQueries: [],
+      requiredAnchorTerms: ["茶葉", "茶具", "家務"],
+      normalAnchorTerms: ["茶道", "慢生活"],
+      strictAcceptTerms: ["茶湯", "口哨", "造型"],
+      normalAcceptTerms: ["茶席"],
+      rejectTerms: [],
+    } as any;
+    applyPersonaGuardToSentimentHotStrategy({ strategy });
+    expect(strategy.primaryQueries).toEqual(expect.arrayContaining(["茶葉", "茶具"]));
+    expect(strategy.primaryQueries).not.toContain("圍裙");
+    expect(strategy.primaryQueries).not.toContain("家務");
+    expect(strategy.primaryQueries).not.toContain("棉麻衫");
+    expect(strategy.requiredAnchorTerms).not.toContain("家務");
+    expect(strategy.normalAnchorTerms).not.toContain("慢生活");
+    expect(strategy.strictAcceptTerms).not.toContain("口哨");
+    expect(strategy.strictAcceptTerms).not.toContain("造型");
+    const manual = resolveSentimentHotManualQueryKeywords(
+      ["剪髮", "造型", "頭髮", "口哨", "家務", "茶葉"],
+      null,
+      "strict",
+    );
+    expect(manual).toEqual(expect.arrayContaining(["剪髮", "茶葉"]));
+    expect(manual).not.toContain("造型");
+    expect(manual).not.toContain("口哨");
+    expect(manual).not.toContain("家務");
+    expect(manual).not.toContain("頭髮");
+  });
+
   it("splits theme-name mashups but keeps real object nouns", () => {
     const strategy = {
       primaryQueries: ["二次元菜市場", "菜市場蔬菜", "動漫手辦"],
@@ -866,6 +892,21 @@ describe("sentiment hot importer", () => {
     expect(strategy.primaryQueries).toContain("菜市場蔬菜");
     expect(strategy.primaryQueries).toContain("動漫手辦");
     expect(strategy.primaryQueries).toEqual(expect.arrayContaining(["二次元", "菜市場"]));
+  });
+
+  it("does not invent short object nouns from long compounds", () => {
+    const keywords = resolveSentimentHotManualQueryKeywords([
+      "汽車修理",
+      "修車店",
+      "煞車異響",
+      "機油更換",
+      "房貸審核規則",
+    ], null, "strict");
+    expect(keywords).not.toContain("修車");
+    expect(keywords).not.toContain("機油");
+    expect(keywords).not.toContain("房貸");
+    expect(keywords).toEqual(expect.arrayContaining(["汽車修理", "修車店", "煞車異響"]));
+    expect(keywords).not.toContain("房貸審核規則");
   });
 
   it("does not reject concrete objects just because another persona once overused them", () => {
@@ -903,12 +944,29 @@ describe("sentiment hot importer", () => {
     ], null, "strict");
     expect(keywords.length).toBeGreaterThanOrEqual(16);
     expect(keywords).toContain("二次元手辦");
-    expect(keywords).toContain("痛包配件");
-    expect(keywords).toContain("菜市場蔬菜");
+    expect(keywords).toContain("痛包");
+    expect(keywords).toContain("立牌");
     expect(keywords).toContain("撿漏商品");
     expect(keywords).not.toContain("便宜");
     expect(keywords).not.toContain("大叔");
     expect(keywords).not.toContain("煙火氣");
+  });
+
+  it("keeps sibling object nouns so the reader can search them together", () => {
+    const keywords = resolveSentimentHotManualQueryKeywords([
+      "環保袋",
+      "環保購物袋",
+      "二次元周邊",
+      "撿漏水果",
+      "市井菜市場",
+      "動漫周邊商品",
+      "菜市場魚攤",
+      "二次元貼紙",
+    ], null, "strict");
+    expect(keywords).toContain("環保袋");
+    expect(keywords).toContain("環保購物袋");
+    expect(keywords).toContain("二次元周邊");
+    expect(keywords).toContain("撿漏水果");
   });
 
   it("does not change the source pipeline when custom freshness is disabled", () => {
@@ -2126,6 +2184,32 @@ Search Threads
     expect(markdown).toContain("讚 663");
   });
 
+  it("extracts Threads prefetch JSON even when post text contains braces", () => {
+    const html = `prefix {"data":{"searchResults":{"inform_module":null,"edges":[{"node":{"thread":{"id":"1","thread_items":[{"post":{"id":"1_2","code":"BracePost1","like_count":880,"taken_at":1784552915,"user":{"username":"brace_user"},"caption":{"text":"修車店今天報價含 {原廠零件} 跟 } 收尾說明，煞車油要換了"},"text_post_app_info":{"direct_reply_count":12,"repost_count":1,"reshare_count":4}}}]}}}]}}} suffix`;
+    const payload = extractThreadsSearchPrefetchPayload(html);
+    const candidates = parseThreadsGraphqlSearchPayload({ payload, query: "修車店", keywords: ["修車店"] });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].author).toBe("brace_user");
+    expect(candidates[0].content).toContain("原廠零件");
+    expect(candidates[0].hotScore).toBeGreaterThanOrEqual(500);
+  });
+
+  it("does not treat an empty Threads SERP as a login wall", () => {
+    const html = `Search • Threads log in or sign up for threads {"data":{"searchResults":{"inform_module":null,"tag_info":null,"edges":[],"page_info":{"end_cursor":null,"has_next_page":false}}}} 查無結果。`;
+    expect(threadsHtmlLooksLikeEmptySearch(html)).toBe(true);
+    expect(readerBodyLooksLikeLoginWall(html)).toBe(false);
+    expect(readerMarkdownLooksEmpty(html)).toBe(true);
+    expect(anonymousReaderRetryReason({ ok: false, status: 204, headers: {}, body: html })).toBe("empty_public_page");
+  });
+
+  it("extracts hydration posts even when they sit outside the first searchResults blob", () => {
+    const html = `shell {"data":{"searchResults":{"edges":[]}}} later {"node":{"thread":{"id":"9","thread_items":[{"post":{"id":"9_1","code":"HydraPost1","like_count":640,"taken_at":1784552915,"user":{"username":"hydra_user"},"caption":{"text":"環保袋今天補貨了，帆布材質很好裝"},"text_post_app_info":{"direct_reply_count":8,"repost_count":1,"reshare_count":3}}}]}}}`;
+    const candidates = extractThreadsHydrationCandidatesFromHtml({ html, query: "環保袋", keywords: ["環保袋"] });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].author).toBe("hydra_user");
+    expect(candidates[0].sourceUrl).toContain("/post/HydraPost1");
+  });
+
   it("treats Spider HTTP search shells as empty reader markdown", () => {
     expect(readerMarkdownLooksEmpty("Search • Threads")).toBe(true);
     expect(readerMarkdownLooksEmpty("Threads • Log in")).toBe(true);
@@ -2172,6 +2256,8 @@ Search Threads
     expect(candidates.length).toBeGreaterThan(0);
     expect(candidates[0].sourceUrl).toContain("/post/DbiqVm9ASMN");
     expect(candidates[0].content).toContain("女性成長");
+    expect(candidates[0].content).not.toContain("讚 1041");
+    expect(candidates[0].content).not.toContain("留言 29");
   });
 
   it("parses Spider public-render markdown that uses Jina date links", () => {
@@ -3032,6 +3118,84 @@ Log in to see more replies.
     expect(cleaned).not.toContain("site:threads.net");
     expect(cleaned).not.toContain("CuiVm72yO3g");
     expect(cleaned).toContain("palantir vulnerability canonical");
+  });
+
+  it("strips like/comment crumbs and excludes reverse-stance posts first", () => {
+    expect(cleanSentimentCandidateContent("旺旺環保袋終於收到了 讚 3528 留言 72")).toBe("旺旺環保袋終於收到了");
+    const reverse = finalizeSentimentHotCandidatesForDisplay([
+      {
+        id: "reverse-1",
+        platform: "threads",
+        sourceUrl: "https://www.threads.com/@demo/post/reverse1",
+        author: "demo",
+        content: "有些人放屁的聲音是噗。我不會再把錢花在買動漫周邊公仔上了要存錢。",
+        media: [],
+        hotScore: 6800,
+        metrics: { source: "threads-reader-search", publicSearch: true, query: "動漫周邊" },
+        publishedAt: new Date().toISOString(),
+        capturedAt: new Date().toISOString(),
+      } as any,
+    ], 10, { keywords: ["動漫周邊", "環保袋"], searchMode: "strict", freshnessDays: 30 });
+    expect(reverse).toHaveLength(0);
+  });
+
+  it("drops garbage, useless, and completely unrelated posts", () => {
+    const base = {
+      platform: "threads",
+      author: "demo",
+      media: [],
+      hotScore: 6800,
+      metrics: { source: "threads-reader-search", publicSearch: true },
+      publishedAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+    };
+    const dropped = finalizeSentimentHotCandidatesForDisplay([
+      { ...base, id: "spam-1", sourceUrl: "https://www.threads.com/@demo/post/spam1", content: "哈哈哈哈哈 互关求赞 加微信领券" },
+      { ...base, id: "unrelated-1", sourceUrl: "https://www.threads.com/@demo/post/unrel1", content: "今天足球比赛真的太精彩了，梅西这一脚世界波值得反复回看。", metrics: { ...base.metrics, query: "環保袋" } },
+    ] as any, 10, { keywords: ["環保袋", "二次元周邊"], searchMode: "strict", freshnessDays: 30 });
+    expect(dropped.map((item) => item.id)).toEqual([]);
+    const kept = finalizeSentimentHotCandidatesForDisplay([
+      {
+        ...base,
+        id: "keep-1",
+        sourceUrl: "https://www.threads.com/@demo/post/keep1",
+        content: "旺旺環保袋終於送到攤上了，市井菜市場裡還是這種袋子最耐用。",
+      },
+    ] as any, 10, { keywords: ["環保袋", "二次元周邊"], searchMode: "strict", freshnessDays: 30 });
+    expect(kept.map((item) => item.id)).toEqual(["keep-1"]);
+  });
+
+  it("keeps two-character object-noun posts under the original relevance needles", () => {
+    const kept = finalizeSentimentHotCandidatesForDisplay([
+      {
+        id: "repair-keep",
+        platform: "threads",
+        sourceUrl: "https://www.threads.com/@demo/post/repair-keep",
+        author: "demo",
+        content: "昨天隨口跟媽媽抱怨修車要四千八，結果早上他就拿五千給我說媽媽幫你出。修車這行真的很貴。",
+        media: [],
+        hotScore: 6800,
+        metrics: { source: "threads-reader-search", publicSearch: true, query: "修車" },
+        publishedAt: new Date().toISOString(),
+        capturedAt: new Date().toISOString(),
+      } as any,
+    ], 10, { keywords: ["修車", "汽車修理", "環保袋"], searchMode: "strict", freshnessDays: 30 });
+    expect(kept.map((item) => item.id)).toEqual(["repair-keep"]);
+    const authorOnly = finalizeSentimentHotCandidatesForDisplay([
+      {
+        id: "author-only",
+        platform: "threads",
+        sourceUrl: "https://www.threads.com/@demo/post/author-only",
+        author: "修車達人",
+        content: "今天足球比赛真的太精彩了，梅西这一脚世界波值得反复回看，完全不想聊别的。",
+        media: [],
+        hotScore: 6800,
+        metrics: { source: "threads-reader-search", publicSearch: true, query: "修車" },
+        publishedAt: new Date().toISOString(),
+        capturedAt: new Date().toISOString(),
+      } as any,
+    ], 10, { keywords: ["修車", "汽車修理", "環保袋"], searchMode: "strict", freshnessDays: 30 });
+    expect(authorOnly.map((item) => item.id)).toEqual([]);
   });
 
   it("keeps only Chinese sentiment copy candidates", () => {

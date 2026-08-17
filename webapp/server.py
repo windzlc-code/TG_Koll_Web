@@ -12399,12 +12399,13 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     search_mode: str = "strict"
     writing_locale: str = "zh-TW"
     freshness_days: int = 30
-    freshness_policy: str = "legacy"
+    freshness_policy: str = "strict"
     keywords: list[str] = Field(default_factory=list)
 
 
 class PersonaDashboardHotCandidatesImportPayload(BaseModel):
     candidates: list[dict[str, Any]] = Field(default_factory=list)
+    recycle_candidates: list[dict[str, Any]] = Field(default_factory=list)
     platform: str = "threads"
 
 
@@ -14223,6 +14224,8 @@ def _remote_fetch_capability(payload: dict[str, Any]) -> str:
         return "crm.threads_live_search.v1"
     if action == "fetch-hot-candidates":
         return "persona.hot_candidates.v1"
+    if action == "recycle-hot-candidates":
+        return "persona.hot_recycle.v1"
     if action == "refresh-hot-post":
         return "persona.hot_post_metrics.v1"
     return ""
@@ -14314,6 +14317,31 @@ def _remote_fetch_persona_hot_request(payload: dict[str, Any]) -> dict[str, Any]
     ][:32]
     if keywords:
         remote_payload["keywords"] = keywords
+    if str(payload.get("action") or "").strip() == "recycle-hot-candidates":
+        recycled = []
+        for item in payload.get("candidates") if isinstance(payload.get("candidates"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            recycled.append({
+                "id": str(item.get("id") or "")[:80],
+                "platform": str(item.get("platform") or "threads")[:20],
+                "author": str(item.get("author") or "")[:80],
+                "sourceUrl": str(item.get("sourceUrl") or item.get("source_url") or "")[:500],
+                "content": str(item.get("content") or "")[:4000],
+                "hotScore": item.get("hotScore") if isinstance(item.get("hotScore"), (int, float)) else 0,
+                "metrics": item.get("metrics") if isinstance(item.get("metrics"), dict) else {},
+                "engagement": item.get("engagement") if isinstance(item.get("engagement"), dict) else {},
+                "publishedAt": str(item.get("publishedAt") or item.get("published_at") or "")[:40],
+                "capturedAt": str(item.get("capturedAt") or item.get("captured_at") or "")[:40],
+                "media": [
+                    {"url": str(media.get("url") or "")[:800], "type": str(media.get("type") or "image")[:20]}
+                    for media in (item.get("media") if isinstance(item.get("media"), list) else [])
+                    if isinstance(media, dict) and str(media.get("url") or "").strip()
+                ][:12],
+            })
+            if len(recycled) >= 20:
+                break
+        remote_payload["candidates"] = recycled
     snapshot = payload.get("archiveSnapshot")
     if not isinstance(snapshot, dict):
         snapshot = _remote_fetch_archive_snapshot(archive_id)
@@ -14782,7 +14810,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     return keywords
 
 
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 55
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 59
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 24
 _HOT_PUBLIC_PROBE_FLAG = Path("/data/hot-public-probe")
 
@@ -15249,6 +15277,11 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
     ]
     if mismatched_platforms:
         raise HTTPException(status_code=400, detail="热点推文只能保存到对应平台。")
+    leftover_candidates = [
+        item
+        for item in (payload.recycle_candidates if isinstance(getattr(payload, "recycle_candidates", None), list) else [])
+        if isinstance(item, dict)
+    ]
     result = _run_persona_hot_workflow_cli(
         {
             "action": "import-hot-candidates",
@@ -15257,6 +15290,17 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
         },
         timeout_seconds=180,
     )
+    if leftover_candidates:
+        with contextlib.suppress(Exception):
+            _run_persona_hot_workflow_cli(
+                {
+                    "action": "recycle-hot-candidates",
+                    "archiveId": clean_id,
+                    "searchMode": "strict",
+                    "candidates": leftover_candidates,
+                },
+                timeout_seconds=30,
+            )
     result_post_ids = {
         str(item.get("id") or "").strip()
         for item in (result.get("posts") if isinstance(result.get("posts"), list) else [])

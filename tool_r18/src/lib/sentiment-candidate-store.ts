@@ -220,6 +220,14 @@ export function rememberSentimentHotSelected(archiveId: string, candidateId: str
   });
 }
 
+export function forgetSentimentHotShown(archiveId: string, candidateIds: string[]) {
+  const forget = new Set((candidateIds || []).map((item) => String(item || "").trim()).filter(Boolean));
+  if (!forget.size) return;
+  updateState((state) => {
+    state.shown[archiveId] = (state.shown[archiveId] || []).filter((entry) => !forget.has(shownEntryId(entry)));
+  });
+}
+
 export function rememberSentimentHotImported(archiveId: string, candidateId: string) {
   updateState((state) => {
     const imported = new Set(state.imported[archiveId] || []);

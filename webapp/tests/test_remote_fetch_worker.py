@@ -998,10 +998,10 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertTrue(sent["recordShown"])
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "24")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "0")
-        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "30000")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "45000")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_JITTER_MAX_MS"], "200")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_MAX_ATTEMPTS"], "1")
-        self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "0")
+        self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "1")
 
     def test_crm_live_search_rotates_account_after_sparse_result(self) -> None:
         class FakePool:

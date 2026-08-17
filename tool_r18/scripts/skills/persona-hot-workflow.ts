@@ -12,6 +12,7 @@ import {
   listSentimentHotCandidatePoolStats,
   sentimentHotCandidatePoolLimits,
   prepareSentimentHotKeywords,
+  recycleUnusedSentimentHotCandidates,
   refreshSentimentSourceMetrics,
   warmSentimentHotSearchStrategy,
 } from "@/lib/sentiment-hot-importer";
@@ -63,6 +64,13 @@ type ImportHotCandidatesInput = {
   candidates?: Array<Partial<SentimentHotCandidate>>;
 };
 
+type RecycleHotCandidatesInput = {
+  action: "recycle-hot-candidates";
+  archiveId: string;
+  searchMode?: "normal" | "strict";
+  candidates?: Array<Partial<SentimentHotCandidate>>;
+};
+
 type RefreshHotPostInput = {
   action: "refresh-hot-post";
   archiveId: string;
@@ -85,7 +93,7 @@ type PoolStatsInput = {
   archiveIds?: string[];
 };
 
-type PersonaHotWorkflowInput = FetchHotCandidatesInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput;
+type PersonaHotWorkflowInput = FetchHotCandidatesInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RecycleHotCandidatesInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput;
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -274,6 +282,22 @@ async function appendCandidateAsPost(archiveId: string, candidate: SentimentHotC
   };
 }
 
+async function recycleHotCandidates(input: RecycleHotCandidatesInput) {
+  const archiveId = String(input.archiveId || "").trim();
+  if (!archiveId) throw new Error("人设不存在。");
+  const rawCandidates = Array.isArray(input.candidates) ? input.candidates : [];
+  const candidates = rawCandidates.map((item, index) => normalizeCandidate(item, index)).filter((item) => item.id && (item.sourceUrl || item.content));
+  return {
+    ok: true,
+    archiveId,
+    ...recycleUnusedSentimentHotCandidates({
+      archiveId,
+      candidates,
+      searchMode: input.searchMode,
+    }),
+  };
+}
+
 async function importHotCandidates(input: ImportHotCandidatesInput) {
   const archive = await loadPersonaArchive(String(input.archiveId || "").trim());
   if (!archive) throw new Error("人设不存在。");
@@ -376,6 +400,9 @@ async function main() {
   }
   if (input.action === "import-hot-candidates") {
     await printJsonAndExit(await importHotCandidates(input));
+  }
+  if (input.action === "recycle-hot-candidates") {
+    await printJsonAndExit(await recycleHotCandidates(input));
   }
   if (input.action === "refresh-hot-post") {
     await printJsonAndExit(await refreshHotPost(input));

@@ -40,10 +40,11 @@ ALLOWED_CAPABILITIES = {
     "crm.threads_live_search.v1": "fetch-hot-candidates",
     "persona.hot_candidates.v1": "fetch-hot-candidates",
     "persona.hot_keywords.v1": "prepare-hot-keywords",
+    "persona.hot_recycle.v1": "recycle-hot-candidates",
     "persona.hot_post_metrics.v1": "refresh-hot-post",
 }
 TERMINAL_STATES = {"success", "failed", "cancelled"}
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 55
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 59
 _SAFE_JOB_ID = re.compile(r"job_[0-9a-f]{24}")
 _PERSONA_ARCHIVE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
@@ -1128,14 +1129,12 @@ def _apply_hot_reader_execution_profile(
 ) -> None:
     runtime_environment["SENTIMENT_HOT_READER_CONCURRENCY"] = "4" if background_refill else "24"
     runtime_environment["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"] = "1" if background_refill else "0"
-    # Interactive public search must finish inside the 30s button budget.
+    # Interactive public search must cover Threads and Instagram in one click.
     # Background refill may wait longer for the shared anonymous window.
-    runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "55000" if background_refill else "30000"
+    runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "55000" if background_refill else "45000"
     runtime_environment["SENTIMENT_HOT_READER_JITTER_MAX_MS"] = "5000" if background_refill else "200"
     runtime_environment["SENTIMENT_HOT_READER_MAX_ATTEMPTS"] = "2" if background_refill else "1"
-    # Instagram public pages currently return a login wall and steal Spider
-    # slots from concurrent Threads keyword searches. Keep them on refill only.
-    runtime_environment["TG_HOT_READER_INCLUDE_INSTAGRAM"] = "1" if background_refill else "0"
+    runtime_environment["TG_HOT_READER_INCLUDE_INSTAGRAM"] = "1"
 
 
 def _run_tool_r18_job_once(
@@ -1474,6 +1473,7 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
     if capability in {
         "persona.hot_candidates.v1",
         "persona.hot_keywords.v1",
+        "persona.hot_recycle.v1",
     }:
         archive_id = str(normalized.get("archiveId") or "").strip()
         if not archive_id:
