@@ -1459,11 +1459,18 @@ body.site-mobile-menu-active {
   min-height: 42px;
   padding: 0 12px;
   box-sizing: border-box;
-  color: var(--ink, #071314);
+  color: #071314;
+  caret-color: #071314;
+  -webkit-text-fill-color: #071314;
   background: #ffffff;
   border: 1px solid var(--line, #d7e2df);
   border-radius: var(--radius, 8px);
   font: inherit;
+}
+
+.site-auth-feedback-form input::placeholder {
+  color: #65787b;
+  -webkit-text-fill-color: #65787b;
 }
 
 .site-auth-feedback-form input:focus {

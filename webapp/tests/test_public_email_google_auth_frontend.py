@@ -239,6 +239,12 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn('security_verification_method: String(securityVerification.method || "")', self.script)
         self.assertIn('security_challenge_id: String(securityVerification.context?.challenge_id || "")', self.script)
         self.assertIn('detail.code === "SECURITY_VERIFICATION_REQUIRED"', self.script)
+        self.assertIn('name="security_code" type="text"', security_dialog)
+        self.assertIn("if (input.maxLength !== nextMaxLength) input.value = \"\"", security_dialog)
+        self.assertNotIn("        if (input) {\n          input.value = \"\";\n          input.maxLength", security_dialog)
+        nav_styles = (STATIC_DIR / "assets" / "opc" / "site-navigation.css").read_text(encoding="utf-8")
+        self.assertIn("-webkit-text-fill-color: #071314", nav_styles)
+        self.assertIn(".site-auth-feedback-form input::placeholder", nav_styles)
 
     def test_errors_are_rendered_as_text_and_linked_to_fields(self):
         registration_slice = self.script[

@@ -1193,7 +1193,7 @@ async function showLoginSecurityVerification(verification = {}, statusMessage = 
     dialogClass: "is-form",
     contentHtml: `<form class="site-auth-feedback-form" data-login-security-form>
       <div class="site-auth-feedback-email" data-login-security-email><span>验证码已发送至</span><strong></strong></div>
-      <label><span data-login-security-label>邮箱验证码</span><input name="security_code" inputmode="numeric" autocomplete="one-time-code" maxlength="32" required></label>
+      <label><span data-login-security-label>邮箱验证码</span><input name="security_code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="32" spellcheck="false" autocapitalize="off" autocorrect="off" required></label>
       <p class="site-auth-feedback-form-status" data-login-security-status aria-live="polite"></p>
       <div class="site-auth-feedback-actions">
         <button type="button" class="site-auth-feedback-cancel" data-login-security-branch></button>
@@ -1214,8 +1214,9 @@ async function showLoginSecurityVerification(verification = {}, statusMessage = 
         if (emailValue) emailValue.textContent = String(verification?.masked_email || "账号邮箱");
         if (label) label.textContent = usingEmail ? "邮箱验证码" : "MFA 动态验证码或恢复码";
         if (input) {
-          input.value = "";
-          input.maxLength = usingEmail ? 6 : 32;
+          const nextMaxLength = usingEmail ? 6 : 32;
+          if (input.maxLength !== nextMaxLength) input.value = "";
+          input.maxLength = nextMaxLength;
           input.inputMode = usingEmail ? "numeric" : "text";
           input.placeholder = usingEmail ? "请输入 6 位验证码" : "请输入 MFA 验证码";
         }
