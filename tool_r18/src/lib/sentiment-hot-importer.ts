@@ -2368,11 +2368,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     const liveDeficit = Math.max(1, candidateSourceTarget - cachedReadyCount);
     const liveCollectionLimit = Math.min(
       poolLimit,
-      Math.max(candidateSourceTarget, Math.min(limit * 2, liveDeficit * 2)),
+      liveOnlyRefresh
+        ? Math.max(limit * 3, 24)
+        : Math.max(candidateSourceTarget, Math.min(limit * 2, liveDeficit * 2)),
     );
     const authenticatedOnly = args.sourcePolicy === "authenticated_only";
     const threadsTimeoutMs = Math.min(
-      SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS,
+      liveOnlyRefresh ? 60_000 : SENTIMENT_HOT_STAGE_BROWSER_TIMEOUT_MS,
       remainingSentimentHotTotalBudgetMs(startedAt, authenticatedOnly ? 1_000 : 8_000),
     );
     let threadsCandidates = await measureSentimentStage(
@@ -3673,11 +3675,11 @@ async function fetchThreadsSearchPageCandidates(args: {
   // A blocked Reader response can need several fresh proxy exits before one
   // succeeds. Do not discard that successful response at the old 8s wrapper;
   // keep three seconds of the 30s source budget for normalization and return.
-  const readerInitialTimeoutMs = Math.min(15_000, remainingSentimentDeadlineMs(args.deadlineAt, 15_000));
+  const readerInitialTimeoutMs = Math.min(args.ignoreHistory ? 35_000 : 15_000, remainingSentimentDeadlineMs(args.deadlineAt, args.ignoreHistory ? 35_000 : 15_000));
   const readerPromise = allowReader ? withSentimentTimeout(fetchThreadsReaderSearchCandidates({
       archiveId: args.archiveId,
       keywords: args.keywords,
-      queries: queries.slice(0, THREADS_READER_QUERY_BATCH_SIZE),
+      queries: queries.slice(0, args.ignoreHistory ? THREADS_READER_TOTAL_QUERY_LIMIT : THREADS_READER_QUERY_BATCH_SIZE),
       limit: sourceLimit,
       refresh: args.refresh,
       excludeIds: excluded,
@@ -3761,10 +3763,13 @@ async function fetchThreadsSearchPageCandidates(args: {
   // posts first; the default search can expose higher-heat posts, and the same
   // freshnessDays filter below still rejects anything outside the allowed window.
   if (allowReader && byId.size < args.limit) {
-    const remainingQueries = queries.slice(THREADS_READER_QUERY_BATCH_SIZE, THREADS_READER_TOTAL_QUERY_LIMIT);
+    const remainingQueries = queries.slice(
+      args.ignoreHistory ? THREADS_READER_TOTAL_QUERY_LIMIT : THREADS_READER_QUERY_BATCH_SIZE,
+      args.ignoreHistory ? 32 : THREADS_READER_TOTAL_QUERY_LIMIT,
+    );
     for (let offset = 0; offset < remainingQueries.length && byId.size < args.limit; offset += THREADS_READER_QUERY_BATCH_SIZE) {
       if (args.deadlineAt && remainingSentimentDeadlineMs(args.deadlineAt, 0) < 2_000) break;
-      const extraTimeoutMs = Math.min(6_000, remainingSentimentDeadlineMs(args.deadlineAt, 6_000));
+      const extraTimeoutMs = Math.min(args.ignoreHistory ? 12_000 : 6_000, remainingSentimentDeadlineMs(args.deadlineAt, args.ignoreHistory ? 12_000 : 6_000));
       const extraCandidates = await withSentimentTimeout(fetchThreadsReaderSearchCandidates({
         archiveId: args.archiveId,
         keywords: args.keywords,
