@@ -11662,14 +11662,6 @@ def _dismiss_threads_compose_dialogs(page, logger: AutomationLogger) -> None:
         _sleep_between(0.5, 0.9)
 
 
-_THREADS_COMPOSE_LABELS = (
-    "new thread", "start a thread", "create", "compose", "what's new",
-    "发帖", "發文", "新贴文", "新貼文", "新串文", "撰写新", "撰寫新",
-    "撰寫串文", "撰写串文", "建立串文", "開始新串文", "开始新串文",
-    "新規スレッド", "새 스레드",
-)
-
-
 def _threads_compose_href_kind(href: str, page_url: str) -> str:
     raw = str(href or "").strip()
     if not raw:
@@ -11695,6 +11687,9 @@ def _threads_compose_href_kind(href: str, page_url: str) -> str:
 
 
 def _threads_sidebar_compose_opener(page):
+    structured = _threads_compose_opener_by_structure(page)
+    if structured is not None:
+        return structured
     selectors = [
         'a[href]',
         '[aria-label*="New thread" i]',
@@ -11761,17 +11756,14 @@ def _threads_sidebar_compose_opener(page):
                 best_center_x = center_x
             except Exception:
                 continue
-    if best is not None:
-        return best
-    return _threads_compose_opener_by_structure(page)
+    return best
 
 
 def _threads_compose_opener_by_structure(page):
     try:
         marked = page.evaluate(
-            """labels => {
+            """() => {
                 document.querySelectorAll('[data-vecto-compose-opener]').forEach(node => node.removeAttribute('data-vecto-compose-opener'));
-                const wanted = (labels || []).map(item => String(item || '').toLowerCase()).filter(Boolean);
                 const width = window.innerWidth || 0;
                 const height = window.innerHeight || 0;
                 const visible = node => {
@@ -11782,155 +11774,66 @@ def _threads_compose_opener_by_structure(page):
                         && style.display !== 'none'
                         && style.pointerEvents !== 'none';
                 };
-                const accessibleName = node => String(
-                    node.getAttribute('aria-label')
-                    || node.getAttribute('title')
-                    || node.innerText
-                    || node.textContent
-                    || ''
+                const square = rect => Math.abs(rect.width - rect.height) <= 14;
+                const iconSize = rect => rect.width >= 32 && rect.width <= 88 && rect.height >= 32 && rect.height <= 88;
+                const nameOf = node => String(
+                    node.getAttribute('aria-label') || node.getAttribute('title') || node.innerText || node.textContent || ''
                 ).replace(/\\s+/g, ' ').trim();
-                const hrefOf = node => String(node.getAttribute('href') || node.closest('a')?.getAttribute('href') || '');
-                const hrefKind = href => {
-                    try {
-                        const url = new URL(href, window.location.href);
-                        const host = String(url.hostname || '').toLowerCase();
-                        if (!['threads.net', 'www.threads.net', 'threads.com', 'www.threads.com'].includes(host)) return 'reject';
-                        const path = String(url.pathname || '').replace(/\\/+$/, '').toLowerCase();
-                        const query = String(url.search || '').toLowerCase();
-                        if (['/new', '/compose', '/intent/post'].includes(path) || path.endsWith('/new') || path.endsWith('/compose')) return 'compose';
-                        if (query.includes('compose') || query.includes('composer')) return 'compose';
-                        if (!path || path === '/' || path.startsWith('/search') || path.startsWith('/@') || ['/activity', '/notifications', '/login', '/explore'].includes(path)) return 'reject';
-                    } catch (error) {
-                        return 'unknown';
-                    }
-                    return 'unknown';
+                const plusLike = node => {
+                    const name = nameOf(node);
+                    const svg = node.querySelector('svg');
+                    const markup = svg ? String(svg.innerHTML || '') : '';
+                    return name === '+' || name.includes('＋') || /plus|add|M11|line x1/i.test(markup);
                 };
-                let best = null;
-                let bestScore = 0;
-                const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"], [tabindex="0"]'));
+                const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="link"], [tabindex="0"]')).filter(visible);
+                let fab = null;
+                let fabCorner = Infinity;
                 for (const node of nodes) {
-                    if (!visible(node)) continue;
                     const rect = node.getBoundingClientRect();
-                    const href = hrefOf(node);
-                    const kind = hrefKind(href);
-                    if (kind === 'reject') continue;
-                    const name = accessibleName(node).toLowerCase();
-                    const hasSvg = Boolean(node.querySelector('svg'));
-                    const svgMarkup = hasSvg ? String(node.querySelector('svg').innerHTML || '') : '';
-                    const looksLikePlus = /plus|add|M\\s*11|M11|line x1/i.test(svgMarkup) || name === '+' || name.includes('＋');
-                    const iconOnly = hasSvg && name.length <= 2;
-                    const leftRail = rect.left + rect.width / 2 <= width * 0.32;
-                    const bottomRight = rect.left >= width * 0.55 && rect.top >= height * 0.52;
-                    let score = 0;
-                    if (kind === 'compose') score += 120;
-                    if (wanted.some(label => name.includes(label))) score += 90;
-                    if (looksLikePlus) score += 80;
-                    if (bottomRight && (iconOnly || hasSvg || looksLikePlus)) score += 100;
-                    if (leftRail && (iconOnly || hasSvg || looksLikePlus)) score += 45;
-                    if (iconOnly) score += 15;
-                    if (score > bestScore) {
-                        best = node;
-                        bestScore = score;
+                    const fromRight = width - (rect.left + rect.width);
+                    const fromBottom = height - (rect.top + rect.height);
+                    if (fromRight > 150 || fromBottom > 170) continue;
+                    if (!node.querySelector('svg') || !square(rect) || !iconSize(rect)) continue;
+                    const corner = fromRight + fromBottom;
+                    if (corner < fabCorner) {
+                        fab = node;
+                        fabCorner = corner;
                     }
                 }
-                if (!best || bestScore < 70) return false;
-                best.setAttribute('data-vecto-compose-opener', '1');
-                return true;
-            }""",
-            list(_THREADS_COMPOSE_LABELS),
+                if (fab) {
+                    fab.setAttribute('data-vecto-compose-opener', '1');
+                    return 'fab';
+                }
+                const leftIcons = [];
+                for (const node of nodes) {
+                    const rect = node.getBoundingClientRect();
+                    const centerX = rect.left + rect.width / 2;
+                    if (centerX > Math.max(110, width * 0.18)) continue;
+                    if (!node.querySelector('svg') || !square(rect) || !iconSize(rect)) continue;
+                    leftIcons.push({ node, y: rect.top, plus: plusLike(node) });
+                }
+                leftIcons.sort((a, b) => a.y - b.y);
+                const leftPlus = leftIcons.find(item => item.plus);
+                const leftPick = leftPlus || (leftIcons.length >= 3 ? leftIcons[2] : null);
+                if (leftPick) {
+                    leftPick.node.setAttribute('data-vecto-compose-opener', '1');
+                    return 'left-rail';
+                }
+                return '';
+            }"""
         )
     except Exception:
-        marked = False
+        marked = ""
     if not marked:
         return None
     try:
-        locator = page.locator('[data-vecto-compose-opener="1"]').first
-        return locator if locator.count() and locator.is_visible(timeout=800) else None
+        group = page.locator('[data-vecto-compose-opener="1"]')
+        if not group.count():
+            return None
+        locator = group.first
+        return locator if locator.is_visible(timeout=800) else None
     except Exception:
         return None
-
-
-def _threads_origin(page) -> str:
-    parsed = urlparse(str(getattr(page, "url", "") or THREADS_HOME))
-    host = str(parsed.hostname or "").lower()
-    if host not in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
-        return "https://www.threads.com"
-    scheme = str(parsed.scheme or "https") or "https"
-    return f"{scheme}://{host}"
-
-
-def _threads_url_is_compose(page) -> bool:
-    parsed = urlparse(str(getattr(page, "url", "") or ""))
-    path = str(parsed.path or "").rstrip("/").lower()
-    query = str(parsed.query or "").lower()
-    return (
-        path in {"/new", "/compose", "/intent/post"}
-        or path.endswith("/new")
-        or path.endswith("/compose")
-        or "compose" in query
-        or "composer" in query
-    )
-
-
-def _threads_page_compose_box(page):
-    return _visible_first(page, [
-        '[role="main"] [contenteditable="true"][role="textbox"]',
-        '[role="main"] [contenteditable="true"]',
-        '[contenteditable="true"][data-lexical-editor="true"]',
-        '[contenteditable="true"][aria-label*="thread" i]',
-        '[contenteditable="true"][aria-label*="串文" i]',
-        '[contenteditable="true"][aria-label*="贴文" i]',
-        '[contenteditable="true"][aria-label*="貼文" i]',
-        '[role="textbox"][contenteditable="true"]',
-    ], timeout_ms=1200)
-
-
-def _threads_active_compose_box(page):
-    dialog = _threads_dialog_compose_box(page)
-    if dialog is not None:
-        return dialog
-    if _threads_url_is_compose(page):
-        return _threads_page_compose_box(page)
-    return None
-
-
-def _threads_compose_direct_urls(page) -> list[str]:
-    origin = _threads_origin(page)
-    urls = [
-        f"{origin}/new",
-        f"{origin}/intent/post",
-        "https://www.threads.com/new",
-        "https://www.threads.net/new",
-    ]
-    unique: list[str] = []
-    for url in urls:
-        if url not in unique:
-            unique.append(url)
-    return unique
-
-
-def _wait_for_threads_compose_box(page, attempts: int = 6):
-    for _ in range(max(1, attempts)):
-        compose = _threads_active_compose_box(page)
-        if compose is not None:
-            return compose
-        _sleep_between(0.35, 0.6)
-    return None
-
-
-def _open_threads_compose_by_url(page, logger: AutomationLogger):
-    for url in _threads_compose_direct_urls(page):
-        logger.log(
-            "info",
-            "threads_publish_open_direct",
-            "页面按钮未稳定出现，改为直接打开 Threads 发帖页。",
-            {"url": url},
-        )
-        _goto(page, url, logger, "threads_publish_open_direct")
-        compose = _wait_for_threads_compose_box(page)
-        if compose is not None:
-            return compose
-    return None
 
 
 def _ensure_threads_compose_ready(
@@ -11939,23 +11842,21 @@ def _ensure_threads_compose_ready(
     *,
     _home_recovery_attempted: bool = False,
 ):
-    compose = _threads_active_compose_box(page)
+    compose = _threads_dialog_compose_box(page)
     if compose is not None:
         return compose
     sidebar_opener = _threads_sidebar_compose_opener(page)
     if sidebar_opener is not None:
         _click_threads_compose_opener(page, sidebar_opener, logger)
-        compose = _wait_for_threads_compose_box(page, attempts=4)
+        _sleep_between(0.8, 1.6)
+        compose = _threads_dialog_compose_box(page)
         if compose is not None:
             return compose
-    compose = _open_threads_compose_by_url(page, logger)
-    if compose is not None:
-        return compose
     if not _home_recovery_attempted:
         logger.log(
             "warn",
             "threads_publish_open_recovery",
-            "Threads 发帖页仍未出现输入框，正在重载主页后重试一次。",
+            "Threads 主页发帖按钮未点开输入框，正在重载主页后按固定位置再点一次。",
             {"url": _safe_navigation_url(getattr(page, "url", ""))},
         )
         _goto(page, THREADS_HOME, logger, "threads_publish_open_recovery")
@@ -11964,7 +11865,7 @@ def _ensure_threads_compose_ready(
             logger,
             _home_recovery_attempted=True,
         )
-    raise RuntimeError("无法打开 Threads 发帖输入框。")
+    raise RuntimeError("无法点击打开 Threads 发帖输入框。")
 
 
 def _focus_threads_compose(page, compose, logger: AutomationLogger):
