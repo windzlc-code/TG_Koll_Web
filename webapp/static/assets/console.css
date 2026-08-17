@@ -10447,7 +10447,8 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .console-page :is(.console-shell, .console-modal) .persona-public-media-card-actions > button,
-.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-menu > summary {
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-menu > summary,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-trigger {
   display: inline-grid;
   place-items: center;
   width: 32px;
@@ -10468,6 +10469,9 @@ body.persona-touch-dragging .persona-list-card:active {
 .console-page :is(.console-shell, .console-modal) .persona-public-media-edit-menu > summary:hover,
 .console-page :is(.console-shell, .console-modal) .persona-public-media-edit-menu > summary:focus-visible,
 .console-page :is(.console-shell, .console-modal) .persona-public-media-edit-menu[open] > summary,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-menu.is-open > .persona-public-media-edit-trigger,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-trigger:hover,
+.console-page :is(.console-shell, .console-modal) .persona-public-media-edit-trigger:focus-visible,
 .console-page :is(.console-shell, .console-modal) .persona-public-media-card-actions > button.is-active {
   color: var(--accent-ink);
   border-color: var(--accent);
@@ -10500,13 +10504,17 @@ body.persona-touch-dragging .persona-list-card:active {
   display: none;
 }
 
+.persona-public-media-edit-menu.is-open > .persona-public-media-edit-popover {
+  display: grid;
+}
+
 .persona-public-media-edit-popover {
   position: absolute;
   right: 0;
   bottom: calc(100% + 7px);
   z-index: 20;
   display: grid;
-  width: 116px;
+  width: 132px;
   gap: 3px;
   padding: 6px;
   border: 1px solid var(--line);

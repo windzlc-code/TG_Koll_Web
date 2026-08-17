@@ -552,9 +552,9 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn("appendedResults", self.script)
         self.assertNotIn("renderPersonaTaskMediaPreview(null, [])", self.script)
         self.assertNotIn("function renderPersonaPublicMediaAddTile(inputId", self.script)
-        self.assertGreaterEqual(self.script.count('renderUploadDropzone("personaMediaTaskFiles"'), 2)
-        self.assertGreaterEqual(self.script.count('label: "添加媒体"'), 2)
-        self.assertGreaterEqual(self.script.count('hint: "仅支持图片；可作为 AI 生成的参考素材。"'), 2)
+        self.assertGreaterEqual(self.script.count('renderUploadDropzone("personaMediaTaskFiles"'), 1)
+        self.assertGreaterEqual(self.script.count('label: "添加媒体"'), 1)
+        self.assertGreaterEqual(self.script.count('hint: "仅支持图片；可作为 AI 生成的参考素材。"'), 1)
         self.assertIn('class="account-pool-add-button upload-zone-mobile-picker"', self.script)
         self.assertIn("const mediaUploadState = captureUploadDropzoneState(\"personaMediaTaskFiles\");", self.script)
         self.assertIn('files.forEach((file) => body.append("files", file, file.name));', self.script)
@@ -566,10 +566,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("min-height: 0;", public_add_tile)
         self.assertNotIn("height: 100%;", public_add_tile)
         self.assertNotIn("aspect-ratio: auto;", public_add_tile)
-        self.assertGreaterEqual(self.script.count('renderUploadDropzone("personaMediaEditSourceFile"'), 2)
-        self.assertGreaterEqual(self.script.count('accept: "image/*"'), 2)
-        self.assertGreaterEqual(self.script.count("imageEditSource: true"), 2)
-        self.assertGreaterEqual(self.script.count("publicMediaCards: true"), 4)
+        self.assertGreaterEqual(self.script.count('renderUploadDropzone("personaMediaEditSourceFile"'), 1)
+        self.assertGreaterEqual(self.script.count('accept: "image/*"'), 1)
+        self.assertGreaterEqual(self.script.count("imageEditSource: true"), 1)
+        self.assertGreaterEqual(self.script.count("publicMediaCards: true"), 2)
         self.assertIn('publicMediaCards ? "data-public-media-cards" : ""', self.script)
         self.assertIn('input.matches("[data-public-media-cards]")', self.script)
         self.assertIn('class="persona-public-media-card persona-upload-media-card', self.script)
@@ -588,34 +588,17 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("files = imageFiles.slice(-1);", self.script)
         self.assertIn("const files = modifyItem ? [] : mediaUploadState.files;", self.script)
 
-    def test_ai_upload_lives_inside_task_preview_and_replaces_only_preview_content(self):
+    def test_ai_upload_keeps_draft_media_grid_and_appends_generated_images(self):
         inline = self.script.split("function renderPersonaInlineMediaComposer", 1)[1].split(
             "function taskOutputMediaItems", 1
         )[0]
-        self.assertIn('data-persona-media-preview-surface', inline)
-        self.assertLess(inline.index("任务结果预览"), inline.index('renderUploadDropzone("personaMediaTaskFiles"'))
-        self.assertGreaterEqual(self.script.count("embeddedPreview: true"), 4)
-        self.assertIn('class="persona-media-task-result-preview"', self.script)
-        self.assertIn('previewSurface.classList.toggle("has-upload-preview", files.length > 0);', self.script)
-        self.assertIn(
-            ".persona-media-preview-surface.has-upload-preview .persona-media-task-result-preview",
-            self.styles,
-        )
-
-        result_renderer = self.script.split("function renderPersonaMediaTaskResult", 1)[1].split(
-            "function renderPersonaCreateWorkbench", 1
-        )[0]
-        self.assertIn('title: "等待生成结果"', result_renderer)
-        self.assertIn(
-            'detail: "提交任务后，结果预览会显示在这里并可直接添加至草稿"',
-            result_renderer,
-        )
-        self.assertIn('action: renderUploadAddMediaButton(addMediaInputId)', result_renderer)
-        self.assertNotIn('renderPersonaTaskMediaPreview(taskState, [], { addMediaInputId })', result_renderer)
-        self.assertIn(
-            ".persona-media-task-result-preview .empty-state-action",
-            self.styles,
-        )
+        self.assertIn("renderPersonaEditableMediaGrid(postMediaItems", inline)
+        self.assertIn("data-persona-run-media-task", inline)
+        self.assertIn("生成修改图", inline)
+        self.assertIn("function autoAttachPersonaGeneratedMedia", self.script)
+        self.assertIn("replaceExisting: false", self.script)
+        self.assertNotIn('data-persona-media-preview-surface', inline)
+        self.assertNotIn("任务结果预览", inline)
 
     def test_image_edit_flow_uses_textarea_box_and_preserves_label_fill(self):
         shared_border_selector = ".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {"
@@ -718,8 +701,11 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('type === "image" && !selectionControlsModify', upload_renderer)
         self.assertIn('data-upload-media-modify="${esc(index)}"', upload_renderer)
         self.assertIn('data-persona-post-media-modify="${esc(index)}"', editable_renderer)
+        self.assertIn("modifyAttribute:", editable_renderer)
         self.assertIn('item.type === "image"', editable_renderer)
+        self.assertNotIn("form.operationMode = \"generate\"", self.script.split("async function setPersonaCustomMediaModifySource", 1)[1].split("function applyPersonaImageEditSourceReplacement", 1)[0])
         self.assertIn("function setPersonaCustomMediaModifySource", self.script)
+        self.assertIn("function autoAttachPersonaGeneratedMedia", self.script)
         self.assertIn("function personaCustomMediaModifyItem", self.script)
         self.assertIn('image_edit_mode: Boolean(modifyItem)', self.script)
         self.assertIn('data-persona-post-media-modify]', self.script)
@@ -739,8 +725,11 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             "function renderPersonaPublicMediaFooter", 1
         )[0]
         self.assertIn("data-console-dropdown", menu_renderer)
+        self.assertIn("data-persona-media-edit-toggle", menu_renderer)
+        self.assertIn("媒体修改", menu_renderer)
+        self.assertIn("function togglePersonaMediaEditMenu", self.script)
         self.assertIn('closeConsoleDropdowns(event.target.closest("[data-console-dropdown]"));', self.script)
-        self.assertIn(".persona-public-media-edit-menu[open] > summary", self.styles)
+        self.assertIn(".persona-public-media-edit-menu.is-open > .persona-public-media-edit-trigger", self.styles)
 
         hot_editor = self.script.split("function startPersonaHotCandidateEdit", 1)[1].split(
             "function cancelPersonaHotCandidateEdit",
@@ -757,7 +746,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             'event.target.closest(".persona-public-media-preview-shell")',
             hot_editor,
         )
-        self.assertIn('event.target.closest("summary")', hot_editor)
+        self.assertIn('event.target.closest("[data-persona-media-edit-toggle]")', hot_editor)
 
         console_click_handler = self.script.split(
             'const personaMediaSelect = event.target.closest("[data-persona-media-select-index]")',

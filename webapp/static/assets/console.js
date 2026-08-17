@@ -5076,6 +5076,11 @@ function startPersonaHotCandidateEdit(persona, candidateId) {
   modal.addEventListener("click", (event) => {
     closeConsoleDropdowns(event.target.closest("[data-console-dropdown]"));
     event.stopPropagation();
+    const mediaEditToggle = event.target.closest("[data-persona-media-edit-toggle]");
+    if (mediaEditToggle) {
+      togglePersonaMediaEditMenu(mediaEditToggle);
+      return;
+    }
     const previewButton = event.target.closest("[data-media-preview-group]");
     if (previewButton) {
       openPersonaMediaLightbox(previewButton.dataset.mediaPreviewGroup || "", Number(previewButton.dataset.mediaPreviewIndex || 0));
@@ -22149,10 +22154,12 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
     dismissToastByKey(`persona-generate:${personaId}:media`);
     delete state.personaMediaRuns[String(personaId || "").trim()];
   }
+  let autoAttached = false;
   if (becameTerminal) {
     const ok = status === "success";
     if (ok && taskType === "persona_post_image") {
       clearPersonaMediaPrompt(personaId);
+      autoAttached = await autoAttachPersonaGeneratedMedia(personaId, postId);
     }
     appendEvent(ok ? "success" : (status === "failed" ? "failed" : "cancelled"), `${taskTitle}：${statusLabel(status)}`, {
       key: `task:${taskId}`,
@@ -22175,7 +22182,8 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
     });
   }
   if (
-    String(selectedPersona()?.id || "") === String(personaId || "")
+    !autoAttached
+    && String(selectedPersona()?.id || "") === String(personaId || "")
     && String(selectedPersonaPost()?.id || "") === String(postId || "")
     && isPersonaWorkspaceModule()
     && shouldRender
@@ -22184,6 +22192,21 @@ async function refreshPersonaMediaTask(personaId, postId, taskId) {
     renderConfirmSummary();
   }
   return detail;
+}
+
+async function autoAttachPersonaGeneratedMedia(personaId, postId) {
+  if (
+    String(selectedPersona()?.id || "") !== String(personaId || "")
+    || String(personaMediaTargetPost(selectedPersona()).post?.id || "") !== String(postId || "")
+  ) return false;
+  const taskState = personaMediaTaskState(personaId, postId);
+  const items = taskState ? personaTaskMediaItems(taskState) : [];
+  if (!items.length) return false;
+  taskState.selectedMediaKeys = items.map((item) => personaTaskMediaKey(item)).filter(Boolean);
+  await attachPersonaTaskMediaToPost();
+  const persona = selectedPersona();
+  if (persona) delete personaFormState(persona.id).media.customModifySource;
+  return true;
 }
 
 async function watchPersonaMediaTask(personaId, postId, taskId) {
@@ -22371,7 +22394,6 @@ async function submitPersonaMediaTask() {
     const result = await api("/api/tasks/submit", { method: "POST", body });
     clearUploadDropzoneState("personaMediaTaskFiles", mediaUploadState.stateKey);
     clearUploadDropzoneState("personaMediaEditSourceFile", editSourceUploadState.stateKey);
-    delete form.customModifySource;
     const key = personaMediaTaskKey(persona.id, post.id);
     const previousResults = currentTaskState
       ? personaTaskMediaBatches(currentTaskState).filter((batch) => taskOutputMediaItems(batch.detail || {}, batch.taskId).length > 0)
@@ -22386,7 +22408,7 @@ async function submitPersonaMediaTask() {
       replacementMediaByKey: currentTaskState?.replacementMediaByKey && typeof currentTaskState.replacementMediaByKey === "object"
         ? { ...currentTaskState.replacementMediaByKey }
         : {},
-      modifyMediaKey: "",
+      modifyMediaKey: String(currentTaskState?.modifyMediaKey || ""),
       selectedMediaKeys: null,
       selectedMediaIndexes: null,
       detail: {
@@ -22518,11 +22540,9 @@ function setPersonaTaskMediaModifySource(mediaKey) {
   clearUploadDropzoneState("personaMediaEditSourceFile");
   const form = personaFormState(persona.id).media;
   form.imageCount = 1;
-  form.prompt = "";
-  if (nextKey) pendingPersonaMediaScrollId = String(persona.id || "");
+  if (nextKey) form.prompt = "";
   renderPersonaDetail();
   renderConfirmSummary();
-  if (nextKey) scrollPersonaMediaComposerIntoView(persona.id, { focusEditPrompt: true });
 }
 
 async function personaCustomMediaFile(item, fallbackName = "custom-media-image") {
@@ -22566,8 +22586,8 @@ async function setPersonaCustomMediaModifySource({ item = null, input = null, in
       inputId: String(input?.id || ""),
       source: source === "favorites" ? "favorites" : "posts",
       postId: String(post.id || ""),
+      index: Number(index),
     };
-    form.operationMode = "generate";
     form.imageCount = 1;
     form.prompt = "";
   }
@@ -22577,10 +22597,8 @@ async function setPersonaCustomMediaModifySource({ item = null, input = null, in
   if (editSourceStateKey) {
     uploadFilesById.set(editSourceStateKey, sameSource || input?.id === "personaMediaTaskFiles" ? [] : [file]);
   }
-  if (!sameSource && scrollToComposer) pendingPersonaMediaScrollId = String(persona.id || "");
   renderPersonaDetail();
   renderConfirmSummary();
-  if (!sameSource && scrollToComposer) scrollPersonaMediaComposerIntoView(persona.id, { focusEditPrompt: true });
 }
 
 function applyPersonaImageEditSourceReplacement(input) {
@@ -24094,19 +24112,23 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
         ${isFavoriteMedia ? `<strong>收藏媒体</strong>` : renderPersonaMediaOperationTabs(operationMode)}
+        <div class="persona-media-operation-pane">
+          ${postMediaItems.length
+            ? renderPersonaEditableMediaGrid(postMediaItems, {
+              personaId: persona.id,
+              source: isFavoriteMedia ? "favorites" : "posts",
+              postId: post.id,
+              sourceLabel,
+            })
+            : (operationMode === "replace" ? renderPersonaCompactMediaUpload(persona, post) : "")}
         ${operationMode === "replace" ? `
-          <div class="persona-media-operation-pane">
-            ${postMediaItems.length
-              ? renderPersonaEditableMediaGrid(postMediaItems, {
-                personaId: persona.id,
-                source: isFavoriteMedia ? "favorites" : "posts",
-                postId: post.id,
-                sourceLabel,
-              })
-              : renderPersonaCompactMediaUpload(persona, post)}
-          </div>
+          ${mediaModifyActive ? `
+            ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
+            <div class="row-actions persona-media-task-actions">
+              <button type="button" class="primary" data-persona-run-media-task data-persona-media-action="generate" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : "生成修改图"}</button>
+            </div>
+          ` : ""}
         ` : `
-          <div class="persona-media-operation-pane">
             <div class="form-grid persona-detail-controls persona-media-generation-controls">
               <label>生成张数
                 <select id="personaMediaImageCount" ${mediaModifyActive ? "disabled title=\"局部修改每次只生成 1 张图片\"" : ""}>
@@ -24123,39 +24145,14 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                   <option value="16:9" ${String(mediaForm.aspectRatio || "") === "16:9" ? "selected" : ""}>16:9</option>
                 </select>
               </label>` : ""}
-              ${showVideoOptions ? `<label>视频分辨率
-                <select id="personaMediaResolution">
-                  <option value="720p" ${String(mediaForm.resolution || "720p") === "720p" ? "selected" : ""}>720p</option>
-                  <option value="1080p" ${String(mediaForm.resolution || "") === "1080p" ? "selected" : ""}>1080p</option>
-                </select>
-              </label>` : ""}
-              ${showVideoOptions ? `<label>时长（秒）
-                <input id="personaMediaDuration" type="number" min="2" max="15" value="${esc(mediaForm.duration || 2)}" />
-              </label>` : ""}
             </div>
             ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
-            <div class="persona-inline-panel persona-inline-panel--nested persona-media-preview-surface" data-persona-media-preview-surface>
-              <strong>任务结果预览</strong>
-              ${mediaEditSourceUploadActive ? renderUploadDropzone("personaMediaEditSourceFile", {
-                label: "上传替换编辑图片",
-                accept: "image/*",
-                hint: "可用一张自定义图片替换当前编辑源；仅支持图片。",
-                multiple: false,
-                imageEditSource: true,
-                publicMediaCards: true,
-                embeddedPreview: true,
-              }) : renderUploadDropzone("personaMediaTaskFiles", {
-                label: "添加媒体",
-                accept: "image/*",
-                hint: "仅支持图片；可作为 AI 生成的参考素材。",
-                multiple: !aiUploadSelectsModify,
-                publicMediaCards: true,
-                embeddedPreview: true,
-              })}
-              ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt, addMediaInputId: mediaUploadInputId })}
+            <div class="row-actions persona-media-task-actions">
+              <button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${mediaTaskState?.taskId ? "regenerate" : "generate"}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (mediaModifyActive ? "生成修改图" : (mediaTaskState?.taskId ? "重新生成" : "生成预览"))}</button>
+              ${mediaBusy ? `<button type="button" class="danger" data-persona-cancel-media-task="${esc(mediaTaskState?.taskId || "")}">停止任务</button>` : ""}
             </div>
-          </div>
         `}
+        </div>
       </div>
     </section>`;
 }
@@ -24319,10 +24316,26 @@ function renderPersonaPublicMediaOrder(displayIndex, { draggable = false, dragKi
   return `<span class="persona-public-media-order" aria-label="第 ${order} 个媒体"><span class="media-order-number">${esc(order)}</span></span>`;
 }
 
-function renderPersonaPublicMediaEditMenu({ displayIndex = 0, replaceAttribute = "", deleteAttribute = "" } = {}) {
-  return `<details class="persona-public-media-edit-menu" data-console-dropdown>
-    <summary title="编辑媒体" aria-label="编辑第 ${displayIndex + 1} 个媒体">${renderEditIcon()}</summary>
-    <div class="persona-public-media-edit-popover">
+function renderPersonaPublicMediaEditMenu({
+  displayIndex = 0,
+  replaceAttribute = "",
+  deleteAttribute = "",
+  modifyAttribute = "",
+  modifyActive = false,
+} = {}) {
+  return `<div class="persona-public-media-edit-menu" data-console-dropdown data-persona-media-edit-menu>
+    <button
+      type="button"
+      class="persona-public-media-edit-trigger ${modifyActive ? "is-active" : ""}"
+      data-persona-media-edit-toggle
+      title="编辑媒体"
+      aria-label="编辑第 ${displayIndex + 1} 个媒体"
+      aria-expanded="false"
+    >${renderEditIcon()}</button>
+    <div class="persona-public-media-edit-popover" hidden>
+      ${modifyAttribute ? `<button type="button" class="${modifyActive ? "is-active" : ""}" ${modifyAttribute} aria-pressed="${modifyActive ? "true" : "false"}">
+        <span aria-hidden="true">${renderPlusIcon()}</span><span>媒体修改</span>
+      </button>` : ""}
       <button type="button" ${replaceAttribute}>
         <span aria-hidden="true">${renderReplaceIcon()}</span><span>替换</span>
       </button>
@@ -24330,7 +24343,7 @@ function renderPersonaPublicMediaEditMenu({ displayIndex = 0, replaceAttribute =
         <span aria-hidden="true">${renderTrashIcon()}</span><span>删除</span>
       </button>
     </div>
-  </details>`;
+  </div>`;
 }
 
 function renderPersonaPublicMediaFooter(displayIndex, actions = "") {
@@ -24370,9 +24383,10 @@ function renderPersonaTaskMediaPreview(taskState, items = personaTaskMediaItems(
           </div>
           ${renderPersonaPublicMediaFooter(index, `
               <button type="button" data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" title="查看" aria-label="查看第 ${esc(index + 1)} 张图片">${renderEyeIcon()}</button>
-              <button type="button" class="${isModifySource ? "is-active" : ""}" data-persona-task-media-modify="${esc(mediaKey)}" title="${isModifySource ? "取消媒体修改" : "添加为图生图基础"}" aria-label="${isModifySource ? "取消" : "选择"}第 ${esc(index + 1)} 张图片进行媒体修改" aria-pressed="${isModifySource ? "true" : "false"}">${renderPlusIcon()}</button>
               ${renderPersonaPublicMediaEditMenu({
                 displayIndex: index,
+                modifyAttribute: `data-persona-task-media-modify="${esc(mediaKey)}"`,
+                modifyActive: isModifySource,
                 replaceAttribute: `data-persona-task-media-replace="${esc(mediaKey)}"`,
                 deleteAttribute: `data-persona-task-media-delete="${esc(mediaKey)}"`,
               })}
@@ -24473,6 +24487,13 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
       showCaption: false,
       interactive: false,
     });
+    const customModifySource = !hotMode && personaId ? personaFormState(personaId).media?.customModifySource : null;
+    const isModifySource = Boolean(
+      customModifySource?.file
+      && Number(customModifySource.index) === index
+      && String(customModifySource.postId || "") === postId
+      && String(customModifySource.source || "posts") === source
+    );
     const actions = `
       ${itemPreviewIndex >= 0 ? `<button
         type="button"
@@ -24481,14 +24502,12 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
         title="查看媒体"
         aria-label="查看第 ${index + 1} 个媒体"
       >${renderEyeIcon()}</button>` : ""}
-      ${!hotMode && item.type === "image" && !item.unavailable ? `<button
-        type="button"
-        data-persona-post-media-modify="${esc(index)}"
-        title="媒体修改"
-        aria-label="选择第 ${esc(index + 1)} 张图片进行媒体修改"
-      >${renderPlusIcon()}</button>` : ""}
       ${renderPersonaPublicMediaEditMenu({
         displayIndex: index,
+        modifyAttribute: !hotMode && item.type === "image" && !item.unavailable
+          ? `data-persona-post-media-modify="${esc(index)}"`
+          : "",
+        modifyActive: isModifySource,
         replaceAttribute: hotMode
           ? `data-persona-hot-editor-media-replace="${esc(index)}"`
           : `data-persona-edit-post-media="${esc(index)}"`,
@@ -24498,7 +24517,7 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
       })}
     `;
     return `
-      <div class="persona-public-media-card persona-edit-media-card ${isSelected ? "is-selected" : ""}" data-persona-media-card-index="${esc(index)}" role="listitem" draggable="false">
+      <div class="persona-public-media-card persona-edit-media-card ${isSelected ? "is-selected" : ""} ${isModifySource ? "is-modify-source" : ""}" data-persona-media-card-index="${esc(index)}" role="listitem" draggable="false">
         <div class="persona-public-media-preview-shell">
           ${renderPersonaPublicMediaSelectionButton({
             selected: isSelected,
@@ -30877,6 +30896,24 @@ function closeConsoleDropdowns(exceptMenu = null) {
   document.querySelectorAll("details[open][data-console-dropdown]").forEach((menu) => {
     if (menu !== exceptMenu) menu.removeAttribute("open");
   });
+  document.querySelectorAll("[data-persona-media-edit-menu].is-open").forEach((menu) => {
+    if (menu === exceptMenu) return;
+    menu.classList.remove("is-open");
+    menu.querySelector("[data-persona-media-edit-toggle]")?.setAttribute("aria-expanded", "false");
+    const popover = menu.querySelector(".persona-public-media-edit-popover");
+    if (popover) popover.hidden = true;
+  });
+}
+
+function togglePersonaMediaEditMenu(trigger) {
+  const menu = trigger?.closest?.("[data-persona-media-edit-menu]");
+  if (!menu) return;
+  const willOpen = !menu.classList.contains("is-open");
+  closeConsoleDropdowns(willOpen ? menu : null);
+  menu.classList.toggle("is-open", willOpen);
+  trigger.setAttribute("aria-expanded", willOpen ? "true" : "false");
+  const popover = menu.querySelector(".persona-public-media-edit-popover");
+  if (popover) popover.hidden = !willOpen;
 }
 
 function liveBrowserIsReady(session) {
@@ -33116,6 +33153,13 @@ function bindEvents() {
         renderPersonaDetail();
         renderConfirmSummary();
       }
+      return;
+    }
+    const mediaEditToggle = event.target.closest("[data-persona-media-edit-toggle]");
+    if (mediaEditToggle) {
+      event.preventDefault();
+      event.stopPropagation();
+      togglePersonaMediaEditMenu(mediaEditToggle);
       return;
     }
     const mediaOperationButton = event.target.closest("[data-persona-media-operation]");
