@@ -56,7 +56,6 @@ import {
   parseThreadsReaderSearchMarkdownCandidates,
   persistSentimentReaderMarkdown,
   resolveSentimentHotCandidateOrigin,
-  seedSentimentHotSearchStrategyFromPersona,
   formatPublicThreadsReaderMarkdown,
   readerMarkdownLooksEmpty,
   extractThreadsSearchPrefetchPayload,
@@ -264,16 +263,6 @@ describe("sentiment hot importer", () => {
       capturedAt: new Date().toISOString(),
       warnings: [],
     } as any)).toBe("candidate_pool");
-    expect(seedSentimentHotSearchStrategyFromPersona({
-      name: "李杰",
-      content: "热爱二次元，常去菜市场捡漏的大叔。",
-      setup: { genres: ["二次元", "市井生活"], interests: ["捡漏", "菜市场"], customTopic: "动漫T恤提环保袋" },
-    } as any).primaryQueries.some((term) => /二次元|菜市场|捡漏|市井/.test(term))).toBe(true);
-    expect(seedSentimentHotSearchStrategyFromPersona({
-      name: "任意人设",
-      content: "只写了钓鱼和路亚装备分享，没有填写领域标签。",
-      setup: {},
-    } as any).primaryQueries.some((term) => /钓鱼|路亚/.test(term))).toBe(true);
     expect(resolveSentimentHotCandidateOrigin({
       id: "cache",
       platform: "threads",
@@ -777,6 +766,30 @@ describe("sentiment hot importer", () => {
       normalAcceptTerms: [],
       domainSummary: "",
     } as any, "strict")).toEqual([]);
+  });
+
+  it("drops hollow and overlapping persona search keywords", () => {
+    const keywords = resolveSentimentHotManualQueryKeywords([
+      "菜市場撿漏",
+      "菜市場",
+      "菜市場買菜",
+      "菜市場環保袋",
+      "便宜",
+      "大叔",
+      "煙火氣",
+      "二次元",
+      "二次元大叔",
+      "手辦",
+    ], null, "strict");
+    expect(keywords).toContain("菜市場撿漏");
+    expect(keywords).toContain("二次元");
+    expect(keywords).toContain("手辦");
+    expect(keywords).not.toContain("便宜");
+    expect(keywords).not.toContain("大叔");
+    expect(keywords).not.toContain("煙火氣");
+    expect(keywords).not.toContain("菜市場");
+    expect(keywords).not.toContain("二次元大叔");
+    expect(resolveSentimentHotManualQueryKeywords(["菜市場真實體驗", "環保袋二次元", "二次元 吐槽", "撿漏 真實"], null, "strict")).toEqual([]);
   });
 
   it("does not change the source pipeline when custom freshness is disabled", () => {
