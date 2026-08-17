@@ -592,8 +592,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         )[0]
         self.assertIn('data-persona-media-preview-surface', inline)
         self.assertIn("任务结果预览", inline)
-        self.assertIn("currentItems: postMediaItems", inline)
+        self.assertIn("renderPersonaCurrentDraftMediaPreview(postMediaItems", inline)
+        self.assertIn("persona-public-media-add-tile", self.script)
         self.assertIn("function renderPersonaCurrentDraftMediaPreview", self.script)
+        self.assertIn("hideEmpty: Boolean(postMediaItems.length || aiUploadSelectsModify)", inline)
         self.assertNotIn("renderPersonaMediaOperationTabs(", inline)
         self.assertNotIn("自定义上传", inline)
         self.assertLess(inline.index("任务结果预览"), inline.index('renderUploadDropzone("personaMediaTaskFiles"'))

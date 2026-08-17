@@ -24158,6 +24158,15 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
             ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
             <div class="persona-inline-panel persona-inline-panel--nested persona-media-preview-surface" data-persona-media-preview-surface>
               <strong>任务结果预览</strong>
+              ${postMediaItems.length || aiUploadSelectsModify
+                ? renderPersonaCurrentDraftMediaPreview(postMediaItems, {
+                  postId: post.id,
+                  modifyIndex: mediaModifyItem?.customSource
+                    ? Number(personaFormState(persona.id).media?.customModifySource?.index)
+                    : -1,
+                  allowUpload: true,
+                })
+                : ""}
               ${mediaEditSourceUploadActive ? renderUploadDropzone("personaMediaEditSourceFile", {
                 label: "上传替换编辑图片",
                 accept: "image/*",
@@ -24166,15 +24175,20 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                 imageEditSource: true,
                 publicMediaCards: true,
                 embeddedPreview: true,
-              }) : renderUploadDropzone("personaMediaTaskFiles", {
+              }) : (postMediaItems.length || aiUploadSelectsModify ? "" : renderUploadDropzone("personaMediaTaskFiles", {
                 label: "添加媒体",
                 accept: "image/*",
                 hint: "仅支持图片；可作为 AI 生成的参考素材。",
                 multiple: !aiUploadSelectsModify,
                 publicMediaCards: true,
                 embeddedPreview: true,
+              }))}
+              ${renderPersonaMediaTaskResult(persona.id, post.id, {
+                mediaBusy,
+                mediaBusyStartedAt,
+                addMediaInputId: mediaUploadInputId,
+                hideEmpty: Boolean(postMediaItems.length || aiUploadSelectsModify),
               })}
-              ${renderPersonaMediaTaskResult(persona.id, post.id, { mediaBusy, mediaBusyStartedAt, addMediaInputId: mediaUploadInputId, currentItems: postMediaItems })}
             </div>
           </div>
         `}
@@ -24379,52 +24393,53 @@ function renderPersonaPublicMediaFooter(displayIndex, actions = "") {
   </div>`;
 }
 
-function renderPersonaCurrentDraftMediaPreview(items = [], { postId = "", modifyIndex = -1 } = {}) {
+function renderPersonaCurrentDraftMediaPreview(items = [], { postId = "", modifyIndex = -1, allowUpload = true } = {}) {
   const rows = Array.isArray(items) ? items : [];
-  if (!rows.length) return "";
   const groupId = registerMediaPreviewGroup(rows.filter((item) => item && item.previewUrl && !item.unavailable));
   let previewIndex = 0;
   const activeIndex = Number(modifyIndex);
-  return `<div class="persona-media-grid persona-task-media-grid" role="list" aria-label="当前草稿媒体">
-    ${rows.map((item, index) => {
-      const itemPreviewIndex = item?.previewUrl && !item?.unavailable ? previewIndex++ : -1;
-      const isModifySource = Number.isInteger(activeIndex) && activeIndex === index && activeIndex >= 0;
-      const preview = item.unavailable || !item.previewUrl ? `
-        <div class="persona-media-frame persona-media-frame--empty">
-          <strong>媒体不可预览</strong>
-          <small>${esc(item.reason || "原始文件已失效")}</small>
+  const inputId = "personaPostMediaUploadFiles";
+  const cards = rows.map((item, index) => {
+    const itemPreviewIndex = item?.previewUrl && !item?.unavailable ? previewIndex++ : -1;
+    const isModifySource = Number.isInteger(activeIndex) && activeIndex === index && activeIndex >= 0;
+    const preview = item.unavailable || !item.previewUrl ? `
+      <div class="file-preview-frame file-preview-frame--empty">媒体不可预览</div>
+    ` : (item.type === "video"
+      ? `<video class="file-preview-frame" src="${esc(adminWorkspaceUrl(item.previewUrl))}" muted playsinline draggable="false"></video>`
+      : `<img class="file-preview-frame" src="${esc(adminWorkspaceUrl(item.previewUrl))}" alt="" draggable="false" />`);
+    return `
+      <article class="persona-public-media-card persona-upload-media-card ${isModifySource ? "is-selected is-modify-source" : ""}" data-persona-current-media-index="${esc(index)}" data-persona-current-media-post="${esc(postId)}" role="listitem">
+        <div class="persona-public-media-preview-shell">
+          ${renderPersonaPublicMediaSelectionButton({
+            selected: isModifySource,
+            displayIndex: index,
+            dataAttribute: `data-persona-current-media-select="${esc(index)}"`,
+          })}
+          ${renderPersonaPublicMediaOrder(index)}
+          ${preview}
         </div>
-      ` : renderMediaPreviewButton(item, groupId, itemPreviewIndex, {
-        className: "persona-media-card",
-        frameClass: "persona-media-frame",
-        showCaption: false,
-        interactive: false,
-      });
-      return `
-        <div class="persona-public-media-card persona-task-media-card ${isModifySource ? "is-selected is-modify-source" : ""}" data-persona-current-media-index="${esc(index)}" data-persona-current-media-post="${esc(postId)}" role="listitem">
-          <div class="persona-public-media-preview-shell">
-            ${renderPersonaPublicMediaSelectionButton({
-              selected: isModifySource,
-              displayIndex: index,
-              dataAttribute: `data-persona-current-media-select="${esc(index)}"`,
-            })}
-            ${renderPersonaPublicMediaOrder(index)}
-            ${preview}
-          </div>
-          ${renderPersonaPublicMediaFooter(index, `
-            ${itemPreviewIndex >= 0 ? `<button type="button" data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(itemPreviewIndex)}" title="查看" aria-label="查看第 ${esc(index + 1)} 个媒体">${renderEyeIcon()}</button>` : ""}
-            ${renderPersonaPublicMediaEditMenu({
-              displayIndex: index,
-              modifyAttribute: "",
-              modifyActive: isModifySource,
-              replaceAttribute: `data-persona-edit-post-media="${esc(index)}"`,
-              deleteAttribute: `data-persona-delete-post-media="${esc(index)}"`,
-            })}
-          `)}
-        </div>
-      `;
-    }).join("")}
-  </div>`;
+        ${renderPersonaPublicMediaFooter(index, `
+          ${itemPreviewIndex >= 0 ? `<button type="button" data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(itemPreviewIndex)}" title="查看" aria-label="查看第 ${esc(index + 1)} 个媒体">${renderEyeIcon()}</button>` : ""}
+          ${renderPersonaPublicMediaEditMenu({
+            displayIndex: index,
+            modifyAttribute: "",
+            modifyActive: isModifySource,
+            replaceAttribute: `data-persona-edit-post-media="${esc(index)}"`,
+            deleteAttribute: `data-persona-delete-post-media="${esc(index)}"`,
+          })}
+        `)}
+      </article>
+    `;
+  }).join("");
+  return `
+    <div class="upload-zone has-files" data-persona-current-media-grid>
+      ${allowUpload ? `<input class="upload-zone-input" id="${esc(inputId)}" type="file" multiple accept="image/*,video/*" data-persona-direct-media-input />` : ""}
+      <div class="upload-thumbnail-grid persona-public-media-upload-grid" role="list" aria-label="当前草稿媒体">
+        ${cards}
+        ${allowUpload ? `<label class="upload-add-media persona-public-media-add-tile" for="${esc(inputId)}" title="添加媒体" aria-label="添加媒体">${renderPlusIcon()}</label>` : ""}
+      </div>
+    </div>
+  `;
 }
 
 function renderPersonaTaskMediaPreview(taskState, items = personaTaskMediaItems(taskState)) {
@@ -24686,27 +24701,15 @@ function renderPersonaImageLibraryGrid(library, selectedImageId = "") {
   }).join("")}${renderPersonaImageUploadPlaceholderCard()}</div>`;
 }
 
-function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0, addMediaInputId = "", currentItems = [] } = {}) {
+function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, mediaBusyStartedAt = 0, addMediaInputId = "", hideEmpty = false } = {}) {
   const taskState = personaMediaTaskState(personaId, postId);
   const items = taskState ? personaTaskMediaItems(taskState) : [];
-  const currentRows = Array.isArray(currentItems) ? currentItems : [];
-  const customSource = personaFormState(personaId).media?.customModifySource;
-  const customIndex = customSource && String(customSource.postId || "") === String(postId || "")
-    ? Number(customSource.index)
-    : NaN;
-  const currentPreview = renderPersonaCurrentDraftMediaPreview(currentRows, {
-    postId,
-    modifyIndex: Number.isInteger(customIndex) ? customIndex : -1,
-  });
-  const hasCards = currentRows.length > 0 || items.length > 0;
   const modifying = Boolean(personaTaskMediaModifyItem(taskState, items));
   const actionKind = taskState?.taskId ? "regenerate" : "generate";
   const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy ? "disabled" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (modifying ? "重生成图片" : (taskState?.taskId ? "重新生成" : "生成预览"))}</button>`;
   if (!taskState?.taskId) return `
     <div class="persona-media-task-result-preview">
-      ${hasCards
-        ? `${currentPreview}${renderUploadAddMediaButton(addMediaInputId)}`
-        : renderModuleEmptyState({
+      ${hideEmpty ? "" : renderModuleEmptyState({
         icon: "media",
         title: "等待生成结果",
         detail: "提交任务后，结果预览会显示在这里并可直接添加至草稿",
@@ -24727,15 +24730,14 @@ function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, me
   const missingPersonaImage = /人设图/.test(String(detail.error || "")) && !items.length;
   return `
     <div class="persona-media-task-result-preview">
-      ${hasCards ? "" : renderModuleEmptyState({
+      ${items.length || hideEmpty ? "" : renderModuleEmptyState({
         icon: "media",
         title: terminal ? "任务已结束，暂无可预览媒体" : "正在等待媒体结果",
         detail: terminal ? "可从任务日志确认生成情况" : "结果返回后会自动显示在这里",
         action: renderUploadAddMediaButton(addMediaInputId),
       })}
-      ${currentPreview}
-      ${renderPersonaTaskMediaPreview(taskState, items)}
-      ${hasCards ? renderUploadAddMediaButton(addMediaInputId) : ""}
+      ${hideEmpty ? "" : renderPersonaTaskMediaPreview(taskState, items)}
+      ${!hideEmpty && items.length ? renderUploadAddMediaButton(addMediaInputId) : ""}
     </div>
     <div class="row-actions persona-media-task-actions">
       ${runButton}
@@ -33434,7 +33436,7 @@ function bindEvents() {
       }
       return;
     }
-    const currentMediaCard = event.target.closest(".persona-task-media-card[data-persona-current-media-index]");
+    const currentMediaCard = event.target.closest("[data-persona-current-media-index]");
     if (
       currentMediaCard
       && !event.target.closest("button, a, input, label, [role=\"button\"]")
