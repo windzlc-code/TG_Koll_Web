@@ -3731,6 +3731,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
         self.assertIn("openConsoleModal", claim)
         self.assertIn("stack: true", claim)
+        self.assertIn("setAccountProxyPurchaseProgress", claim)
+        self.assertIn("accountProxyPurchaseErrorText", claim)
+        self.assertIn("/api/proxy-purchases/monthly-free", claim)
+        self.assertIn("/api/proxy-purchases/quotes", claim)
+        self.assertIn("/api/proxy-purchases/orders", claim)
+        self.assertIn("waitForAccountProxyPurchase", claim)
+        self.assertIn(".account-proxy-purchase-progress", self.styles)
         self.assertNotIn("本月免费机会领取后不可重复使用", claim)
         self.assertIn("选择后分配", cards)
         self.assertNotIn("购买后分配", cards)

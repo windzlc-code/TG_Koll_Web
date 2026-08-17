@@ -17175,6 +17175,7 @@ body.persona-media-sorting {
 }
 
 .account-proxy-picker-content {
+  position: relative;
   display: grid;
   gap: 12px;
   padding: 14px 18px 18px;
@@ -17247,6 +17248,32 @@ body.persona-media-sorting {
 
 @keyframes account-proxy-picker-spin {
   to { transform: rotate(360deg); }
+}
+
+.account-proxy-purchase-progress {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 28px 20px;
+  background: rgba(247, 250, 252, .94);
+  text-align: center;
+}
+
+.account-proxy-purchase-progress strong {
+  color: #102c47;
+  font-size: 15px;
+}
+
+.account-proxy-purchase-progress p {
+  margin: 0;
+  max-width: 280px;
+  color: #64758a;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .account-proxy-region-guide {

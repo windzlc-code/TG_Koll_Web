@@ -656,6 +656,27 @@ def _city_items(setup: Mapping[str, Any], country: str) -> list[dict[str, str]]:
     return result
 
 
+def _resolve_orderable_city_id(setup: Mapping[str, Any], country: str, city: str) -> str:
+    clean = str(city or "").strip()
+    if not clean:
+        return ""
+    items = _city_items(setup, country)
+    by_id = {str(item.get("id") or ""): item for item in items}
+    if clean in by_id:
+        return clean
+    needle = clean.casefold()
+    for item in items:
+        aliases = [
+            item.get("id"),
+            item.get("name"),
+            item.get("name_zh"),
+            item.get("label"),
+        ]
+        if any(str(alias or "").strip().casefold() == needle for alias in aliases):
+            return str(item.get("id") or "")
+    raise ProxyPurchaseError("INVALID_CITY", "所选城市当前无法下单，请换一个城市后重试", 422)
+
+
 def _city_raw_item(setup: Mapping[str, Any], country: str, city_id: str) -> Mapping[str, Any] | None:
     raw_cities = _setup_data(setup).get("cities")
     items = raw_cities.get(str(country or "").strip().upper(), []) if isinstance(raw_cities, Mapping) else []
@@ -852,7 +873,7 @@ def create_quote(
     provider = provider or provider_from_environment(conn)
     config = get_config(conn)
     if config.get("status") != "active" or not bool(config.get("enabled")):
-        raise ProxyPurchaseError("PURCHASES_DISABLED", "Proxy purchases are not configured", 503)
+        raise ProxyPurchaseError("PURCHASES_DISABLED", "平台代理采购尚未配置，请联系管理员", 503)
     clean_country = str(country or "").strip().upper()
     fixed_months = int(config["default_period_months"])
     months = int(period_months or fixed_months)
@@ -862,14 +883,12 @@ def create_quote(
         for item in _orderable_regions(setup, str(config.get("service_id") or ""))
     }
     if clean_country not in countries:
-        raise ProxyPurchaseError("INVALID_COUNTRY", "The selected region is not currently orderable", 422)
+        raise ProxyPurchaseError("INVALID_COUNTRY", "所选地区当前无法下单，请换一个地区后重试", 422)
     supported_periods = _supported_month_periods(setup)
     if months != fixed_months or (supported_periods and fixed_months not in supported_periods):
-        raise ProxyPurchaseError("INVALID_PERIOD", "The purchase duration is fixed by the administrator", 422)
-    clean_city = str(city or "").strip()
+        raise ProxyPurchaseError("INVALID_PERIOD", "购买时长由管理员固定，请刷新后重试", 422)
+    clean_city = _resolve_orderable_city_id(setup, clean_country, city)
     city_options = {item["id"]: item for item in _city_items(setup, clean_country)}
-    if clean_city and clean_city not in city_options:
-        raise ProxyPurchaseError("INVALID_CITY", "The selected city is not currently orderable", 422)
     request = _configuration(config, clean_country, months, city=clean_city, setup=setup)
     quoted = provider.quote(str(config["service_id"]), request)
     if quoted.currency != "USD":

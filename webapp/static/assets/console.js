@@ -21357,9 +21357,11 @@ async function cancelPersonaHotCandidates() {
 async function submitPersonaHotDraftImport(persona, selected, {
   replacementOpsByCandidate = {},
   preparedMediaOpsByCandidate = {},
+  leftoverCandidates = [],
   showCompletionModal = true,
   targetPlatform = personaContentPlatform(persona),
 } = {}) {
+  const leftover = Array.isArray(leftoverCandidates) ? leftoverCandidates : [];
   const resolvedTargetPlatform = normalizePersonaContentPlatform(targetPlatform);
   if (selected.some((candidate) => normalizePersonaContentPlatform(candidate?.platform) !== resolvedTargetPlatform)) {
     throw { detail: "热点推文只能保存到对应的平台。", status: 400 };
@@ -21369,6 +21371,22 @@ async function submitPersonaHotDraftImport(persona, selected, {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       platform: resolvedTargetPlatform,
+      recycle_candidates: leftover.map((candidate) => ({
+        id: candidate.id || candidate.candidate_id,
+        platform: candidate.platform,
+        author: candidate.author || "",
+        sourceUrl: candidate.source_url,
+        content: candidate.full_content || candidate.content || "",
+        hotScore: Number(candidate.hot_score || candidate.score || 0),
+        metrics: candidate.metrics || {},
+        engagement: candidate.engagement || {},
+        publishedAt: candidate.published_at || "",
+        capturedAt: candidate.captured_at || "",
+        media: Array.isArray(candidate.media_items) ? candidate.media_items.map((item) => ({
+          url: item.url || item.preview_url || "",
+          type: item.type || "",
+        })) : [],
+      })),
       candidates: selected.map((candidate) => ({
         id: candidate.id || candidate.candidate_id,
         platform: candidate.platform,
@@ -21574,9 +21592,12 @@ async function importPersonaHotDrafts(candidateIds = null, {
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
+    const selectedKeys = new Set(prepared.map((item) => personaHotCandidateKey(item)));
+    const leftoverCandidates = personaHotCandidates(persona).filter((item) => !selectedKeys.has(personaHotCandidateKey(item)));
     return await submitPersonaHotDraftImport(persona, prepared, {
       replacementOpsByCandidate,
       preparedMediaOpsByCandidate,
+      leftoverCandidates,
       showCompletionModal,
       targetPlatform: resolvedTargetPlatform,
     });
@@ -29074,11 +29095,60 @@ async function selectOwnedAccountProxyOption(modal, proxyId = "") {
   }
 }
 
-async function waitForAccountProxyPurchase(order = {}) {
+function accountProxyPurchaseErrorText(error) {
+  const raw = error && typeof error.detail === "object"
+    ? String(error.detail.message || error.detail.detail || error.detail.code || "")
+    : String(error?.detail || error?.message || "");
+  const text = raw.trim();
+  const mapped = {
+    "The selected city is not currently orderable": "所选城市当前无法下单，请换一个城市后重试。",
+    "The selected region is not currently orderable": "所选地区当前无法下单，请换一个地区后重试。",
+    "Proxy purchases are not configured": "平台代理采购尚未配置，请联系管理员。",
+    "The purchase duration is fixed by the administrator": "购买时长由管理员固定，请刷新后重试。",
+    "Provider cost exceeds the configured ceiling": "供应商成本超出上限，请换一个地区或联系管理员。",
+    "Only USD provider quotes are supported": "当前只支持美元报价，请联系管理员。",
+    INVALID_CITY: "所选城市当前无法下单，请换一个城市后重试。",
+    INVALID_COUNTRY: "所选地区当前无法下单，请换一个地区后重试。",
+    PURCHASES_DISABLED: "平台代理采购尚未配置，请联系管理员。",
+  };
+  return mapped[text] || mapped[String(error?.code || error?.detail?.code || "")] || text || "平台代理选择失败";
+}
+
+function setAccountProxyPurchaseProgress(modal, text = "") {
+  const message = String(text || "").trim();
+  setAccountProxyPickerNotice(modal, message, true);
+  const content = modal?.querySelector?.(".account-proxy-picker-content");
+  let overlay = modal?.querySelector?.("[data-account-proxy-purchase-progress]");
+  if (!message) {
+    overlay?.remove();
+    modal?.querySelectorAll("[data-account-proxy-supplier-choice]").forEach((button) => {
+      button.removeAttribute("aria-busy");
+    });
+    return;
+  }
+  if (!overlay && content) {
+    overlay = document.createElement("div");
+    overlay.className = "account-proxy-purchase-progress";
+    overlay.setAttribute("data-account-proxy-purchase-progress", "");
+    overlay.setAttribute("role", "status");
+    overlay.setAttribute("aria-live", "polite");
+    overlay.setAttribute("aria-busy", "true");
+    content.appendChild(overlay);
+  }
+  if (overlay) {
+    overlay.innerHTML = `<span class="account-proxy-picker-preload-spinner" aria-hidden="true"></span><strong>${esc(message)}</strong><p>正在联系供应商分配专属 IP，请稍候，不要关闭页面。</p>`;
+  }
+  modal?.querySelectorAll("[data-account-proxy-supplier-choice]").forEach((button) => {
+    button.setAttribute("aria-busy", "true");
+  });
+}
+
+async function waitForAccountProxyPurchase(order = {}, onProgress) {
   let current = order || {};
   for (let attempt = 0; attempt < 12 && current?.id && !current?.social_proxy_id; attempt += 1) {
     const status = String(current.status || "").toLowerCase();
     if (["failed", "expired", "cancelled", "refunded"].includes(status)) break;
+    if (typeof onProgress === "function") onProgress(attempt + 1);
     await new Promise((resolve) => window.setTimeout(resolve, attempt < 3 ? 1200 : 2500));
     const result = await api(`/api/proxy-purchases/orders/${encodeURIComponent(current.id)}`);
     current = result?.order || current;
@@ -29100,6 +29170,7 @@ async function purchaseAccountProxySupplierOption(modal, button) {
   const cityLabel = accountProxyPurchaseCityLabel(purchaseOptions, country, city);
   modal.dataset.accountProxyPurchasing = "true";
   modal.querySelectorAll("[data-account-proxy-supplier-choice]").forEach((node) => { node.disabled = true; });
+  setAccountProxyPickerNotice(modal, monthlyFree ? "正在准备免费选择…" : "正在准备购买报价…", true);
   try {
     let quote = null;
     if (!monthlyFree) {
@@ -29109,6 +29180,7 @@ async function purchaseAccountProxySupplierOption(modal, button) {
         body: JSON.stringify({ country, city, period_months: periodMonths, auto_renew: autoRenew }),
       });
       quote = quoteResult?.quote || null;
+      if (!quote?.id) throw { detail: "未能获取购买报价，请稍后重试。" };
     }
     const confirmation = await openConsoleModal({
       title: monthlyFree ? "确认免费选择" : "确认选择平台代理",
@@ -29121,6 +29193,7 @@ async function purchaseAccountProxySupplierOption(modal, button) {
       stack: true,
     });
     if (!confirmation || !modal.isConnected) return false;
+    setAccountProxyPurchaseProgress(modal, monthlyFree ? "正在提交免费选择…" : "正在提交购买订单…");
     const requestId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const result = monthlyFree
       ? await api("/api/proxy-purchases/monthly-free", {
@@ -29133,25 +29206,39 @@ async function purchaseAccountProxySupplierOption(modal, button) {
         headers: { "Content-Type": "application/json", "Idempotency-Key": `proxy-purchase:${requestId}` },
         body: JSON.stringify({ quote_id: quote.id, idempotency_key: `proxy-purchase:${requestId}` }),
       });
-    const order = await waitForAccountProxyPurchase(result?.order || {});
+    const order = await waitForAccountProxyPurchase(result?.order || {}, (attempt) => {
+      setAccountProxyPurchaseProgress(modal, `正在等待供应商分配 IP（${attempt}/12）…`);
+    });
     if (!order?.social_proxy_id) {
       const failed = ["failed", "expired", "cancelled", "refunded"].includes(String(order?.status || "").toLowerCase());
-      showMsg("socialMsg", failed ? (order?.message || "平台代理选择失败") : "选择请求已提交，代理就绪后会自动显示在用户选择选项卡。", !failed);
+      const message = failed
+        ? accountProxyPurchaseErrorText({ detail: order?.message || "平台代理选择失败" })
+        : "选择请求已提交，代理就绪后会自动显示在用户选择选项卡。";
+      setAccountProxyPurchaseProgress(modal, "");
+      setAccountProxyPickerNotice(modal, message, !failed);
+      showMsg("socialMsg", message, !failed);
       await loadAccountProxyPickerPool(modal);
       return false;
     }
+    setAccountProxyPurchaseProgress(modal, "代理已就绪，正在同步到账号…");
     await fetchSocialDataShared({ force: true });
     if (!modal.isConnected) return false;
+    invalidateAccountProxyPoolCache();
     await loadAccountProxyPickerPool(modal);
     updateAccountProxyChoice(modal, String(order.social_proxy_id));
+    setAccountProxyPurchaseProgress(modal, "");
     showMsg("socialMsg", monthlyFree ? "免费平台代理已选择。" : "平台代理已选择。", true);
     return String(order.social_proxy_id);
   } catch (error) {
-    showMsg("socialMsg", error.detail || error.message || "平台代理选择失败", false);
+    const message = accountProxyPurchaseErrorText(error);
+    setAccountProxyPurchaseProgress(modal, "");
+    setAccountProxyPickerNotice(modal, message, false);
+    showMsg("socialMsg", message, false);
     return false;
   } finally {
     if (modal.isConnected) {
       delete modal.dataset.accountProxyPurchasing;
+      setAccountProxyPurchaseProgress(modal, "");
       modal.querySelectorAll("[data-account-proxy-supplier-choice]").forEach((node) => { node.disabled = false; });
     }
   }

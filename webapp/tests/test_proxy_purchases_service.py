@@ -306,8 +306,21 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
             with app_db.db() as conn:
                 country_quote = create_quote(conn, user_id=self.user_id, country="US", city="", period_months=1, auto_renew=False, provider=provider)
                 self.assertEqual(country_quote["city"], "")
-                with self.assertRaisesRegex(ProxyPurchaseError, "duration"):
+                with self.assertRaisesRegex(ProxyPurchaseError, "时长"):
                     create_quote(conn, user_id=self.user_id, country="US", city="New York", period_months=2, auto_renew=False, provider=provider)
+        with mock.patch.object(proxy_purchases.exchange_rates, "get_usd_twd_rate", return_value=reference):
+            with app_db.db() as conn:
+                alias_quote = create_quote(
+                    conn,
+                    user_id=self.user_id,
+                    country="US",
+                    city="纽约",
+                    period_months=1,
+                    auto_renew=False,
+                    provider=provider,
+                    now=1_700_000_121,
+                )
+        self.assertEqual(alias_quote["city"], "New York")
 
     def test_unknown_execute_holds_points_and_never_retries(self):
         provider = _UnknownProvider()
