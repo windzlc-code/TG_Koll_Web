@@ -21180,12 +21180,9 @@ async function fetchPersonaHotCandidates(refresh = false) {
   try {
     const preparedKeywords = await preparePersonaHotKeywords(false);
     if (preparedKeywords.length) keywords = parsePersonaHotKeywordText(formatPersonaHotKeywordText(preparedKeywords));
-  } catch (error) {
-    if (!keywords.length) throw error;
-  }
-  if (!keywords.length) {
-    showMsg("commandMsg", "热点抓取准备失败，请稍后重试。", false);
-    return;
+  } catch (_error) {
+    // The old host owns keyword strategy. A failed prepare must not block
+    // the fetch request itself.
   }
   const controller = new AbortController();
   state.personaHotFetchControllers[personaKey]?.abort?.(new DOMException("Request replaced", "AbortError"));

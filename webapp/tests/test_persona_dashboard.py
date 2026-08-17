@@ -4365,6 +4365,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         fetch_source = source[start:end]
         self.assertIn("keywords,", fetch_source)
         self.assertIn("/hot_candidates/cooldown", fetch_source)
+        self.assertNotIn("热点抓取准备失败，请稍后重试。", fetch_source)
 
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()
