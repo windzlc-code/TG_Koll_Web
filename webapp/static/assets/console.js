@@ -28762,7 +28762,7 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
       </dl>
       ${renewal}
       ${bound
-        ? `<button type="button" class="ghost account-proxy-unbind" data-account-proxy-choice="" data-account-proxy-choice-scope="${esc(scope)}">${renderNoProxyIcon()}<span>解除使用</span></button>`
+        ? `<button type="button" class="account-proxy-unbind" data-account-proxy-choice="" data-account-proxy-choice-scope="${esc(scope)}">${renderNoProxyIcon()}<span>解除使用</span></button>`
         : `<button type="button" class="primary" ${choiceAttribute} data-account-proxy-choice-scope="${esc(scope)}" ${canChoose ? "" : "disabled"}>${renderNetworkIcon()}<span>${esc(action)}</span></button>`}
     </article>`;
   };
@@ -29439,7 +29439,11 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
     try {
       const activeDropdown = event.target.closest("[data-console-dropdown]");
       closeConsoleDropdowns(activeDropdown);
-      if (event.target.closest("[data-account-proxy-picker-cancel], [data-account-proxy-picker-back]")) {
+      if (event.target.closest("[data-account-proxy-picker-cancel]")) {
+        dismissAll();
+        return;
+      }
+      if (event.target.closest("[data-account-proxy-picker-back]")) {
         close();
         return;
       }
@@ -29536,7 +29540,7 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
     event.stopPropagation();
     if (event.key === "Escape") {
       event.preventDefault();
-      close();
+      dismissAll();
     }
   });
 
@@ -29546,7 +29550,7 @@ function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
   };
 
   if (!returnModal) {
-    modalRoot.querySelector("[data-account-proxy-picker-cancel]")?.addEventListener("click", close);
+    modalRoot.querySelector("[data-account-proxy-picker-cancel]")?.addEventListener("click", dismissAll);
   }
   /* accountProxyPickerReadyHtml is painted by revealAccountProxyPicker */
   void revealAccountProxyPicker(modalRoot, selectedProxyId, { attachCountryMenu }).then((data) => {

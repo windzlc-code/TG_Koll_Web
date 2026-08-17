@@ -3454,6 +3454,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("await completeSelection(selectedOwnedProxyId)", picker)
         self.assertIn("await completeSelection(purchasedProxyId)", picker)
         self.assertIn("dismissAll()", picker)
+        self.assertIn('event.target.closest("[data-account-proxy-picker-cancel]")', picker)
+        self.assertNotIn("[data-account-proxy-picker-cancel], [data-account-proxy-picker-back]", picker)
         self.assertIn("highlightAccountProxyCard(modalRoot, selectedCard.dataset.accountProxyProxyId || \"\")", picker)
         self.assertNotIn("if (unbindButton) await completeSelection", picker)
         self.assertIn('const originalProxyId = mode === "create"', picker)
