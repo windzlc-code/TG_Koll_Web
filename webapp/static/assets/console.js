@@ -28213,11 +28213,10 @@ function accountProxyCountry(proxyOrCountry = {}, countryCode = "") {
     || { code: rawCode.toUpperCase() || rawCountry.slice(0, 3).toUpperCase() || "GL", label: rawCountry || rawCode || "待识别" };
 }
 
-function systemProxyPoolLocation(proxy = {}) {
-  return [accountProxyCountry(proxy).label, proxy.region, proxy.city]
-    .map((value) => String(value || "").trim())
-    .filter(Boolean)
-    .join(" · ") || "待识别";
+function systemProxyPoolLocation(proxy = {}, purchaseOptions = {}) {
+  const country = accountProxyCountry(proxy).label;
+  const city = accountProxyCityZh(proxy.city || "", accountProxyCountryCode(proxy), purchaseOptions);
+  return [country, city].filter(Boolean).join(" · ") || "待识别";
 }
 
 function openAccountProxySelectionSuccess(proxyId = "", poolData = {}) {
@@ -28226,7 +28225,7 @@ function openAccountProxySelectionSuccess(proxyId = "", poolData = {}) {
   const poolProxy = (Array.isArray(poolData?.options) ? poolData.options : [])
     .find((option) => String(option?.social_proxy_id || "").trim() === cleanProxyId);
   const proxy = poolProxy || socialProxyById(cleanProxyId) || {};
-  const location = systemProxyPoolLocation(proxy);
+  const location = systemProxyPoolLocation(proxy, poolData?.purchase_options || {});
   const proxyIp = String(proxy.exit_ip || proxy.last_check_result?.response?.ip || proxy.host || "").trim() || "已分配";
   return openConsoleModal({
     title: "代理选择成功",
@@ -28388,10 +28387,36 @@ function accountProxyCountryCode(proxy = {}) {
   return String(accountProxyCountry(proxy).code || "").trim().toUpperCase();
 }
 
+function accountProxyCityLooksChinese(value = "") {
+  return /[\u4e00-\u9fff]/.test(String(value || ""));
+}
+
+function accountProxyCityZh(value = "", country = "", purchaseOptions = {}) {
+  const raw = String(value || "").trim();
+  if (!raw || accountProxyCityLooksChinese(raw)) return raw;
+  const catalogs = purchaseOptions?.cities && typeof purchaseOptions.cities === "object" ? purchaseOptions.cities : {};
+  const pools = [];
+  const countryCode = String(country || "").trim().toUpperCase();
+  if (countryCode && Array.isArray(catalogs[countryCode])) pools.push(catalogs[countryCode]);
+  Object.entries(catalogs).forEach(([code, list]) => {
+    if (code !== countryCode && Array.isArray(list)) pools.push(list);
+  });
+  const needle = normalizeAccountProxyCity(raw);
+  for (const list of pools) {
+    const hit = list.find((item) => [item?.id, item?.name, item?.name_zh, item?.label]
+      .some((candidate) => normalizeAccountProxyCity(candidate) === needle));
+    const zh = String(hit?.name_zh || "").trim();
+    if (zh) return zh;
+  }
+  return raw;
+}
+
 function accountProxyPurchaseCityLabel(options = {}, country = "", city = "") {
   const item = (Array.isArray(options?.cities?.[country]) ? options.cities[country] : [])
     .find((candidate) => String(candidate?.id || "") === String(city || ""));
-  return String(item?.name_zh || item?.name || item?.id || city || "").trim();
+  const zh = String(item?.name_zh || "").trim();
+  if (zh) return zh;
+  return accountProxyCityZh(item?.name || item?.id || city, country, options);
 }
 
 function normalizeAccountProxyCity(value = "") {
@@ -28461,7 +28486,10 @@ function accountProxyPoolFilterOptions(modal, poolData = {}) {
       && accountProxyCountryCode(item) === selectedCountry)
     .map((item) => String(item.city || "").trim())
     .filter(Boolean)
-    .map((value) => ({ value, label: value })) : [];
+    .map((value) => ({
+      value,
+      label: accountProxyCityZh(value, selectedCountry, purchaseOptions) || value,
+    })) : [];
   const cityMap = new Map(supplierCities.map((item) => [item.value, item]));
   poolCities.forEach((item) => {
     const normalized = normalizeAccountProxyCity(item.value);
@@ -28544,10 +28572,12 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
       : "选择后显示";
     const country = accountProxyCountry(proxy).code;
     const regionLabel = accountProxyCountry(proxy).label;
-    const cityLabel = String(proxy.city || proxy.region || "").trim() || "全部城市";
+    const cityLabel = accountProxyCityZh(proxy.city || "", country, purchaseOptions)
+      || (accountProxyCityLooksChinese(proxy.region) ? String(proxy.region || "").trim() : "")
+      || "全部城市";
     const canChoose = proxy.available !== false && Boolean(proxyId);
-    const action = selected ? "当前使用" : "选择使用";
-    const status = selected ? "当前使用" : (canChoose ? "可选择" : "已占用");
+    const action = selected ? "解除使用" : "选择使用";
+    const status = selected ? "当前选中" : (canChoose ? "可选择" : "已占用");
     const boundCount = Math.max(0, Number(proxy.bound_account_count) || 0);
     const usageTone = boundCount >= 4 ? "danger" : (boundCount >= 3 ? "warning" : (boundCount === 2 ? "notice" : (boundCount === 1 ? "safe" : "idle")));
     const usageHint = boundCount >= 4
@@ -28558,7 +28588,7 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
       ? `<button type="button" class="proxy-market-mini-renewal" data-account-proxy-renewal-order="${esc(proxy.purchase_order_id)}" data-renewal-enabled="${proxy.renewal_enabled ? "true" : "false"}" aria-pressed="${proxy.renewal_enabled ? "true" : "false"}"><span>自动续费</span><i aria-hidden="true"></i></button>`
       : `<div class="proxy-market-compact-renewal"><span>自动续费</span><strong>未开启</strong></div>`;
     const choiceAttribute = proxyId ? `data-account-proxy-owned-choice="${esc(proxyId)}"` : "";
-    return `<article class="proxy-market-mini-card" data-account-proxy-card="${esc(itemId)}" ${selected ? 'aria-current="true"' : ""}>
+    return `<article class="proxy-market-mini-card${selected ? " is-selected" : ""}" data-account-proxy-card="${esc(itemId)}" ${selected ? 'aria-current="true"' : ""}>
       <div class="proxy-market-mini-card-banner">
         <div class="proxy-market-mini-card-head">
           <span class="proxy-market-mini-card-kinds"><span class="proxy-market-mini-kind" data-kind="${esc(kind)}">用户选择</span><span class="proxy-market-mini-country">${esc(country)}</span></span>
@@ -28572,7 +28602,9 @@ function accountProxyOptionCardsHtml(selectedProxyId = "", { scope = "modal", po
         <div><dt>代理 IP</dt><dd>${esc(ipAddress)}</dd></div>
       </dl>
       ${renewal}
-      <button type="button" class="primary" ${choiceAttribute} data-account-proxy-choice-scope="${esc(scope)}" ${(selected || !canChoose) ? "disabled" : ""}>${renderNetworkIcon()}<span>${esc(action)}</span></button>
+      ${selected
+        ? `<button type="button" class="ghost account-proxy-unbind" data-account-proxy-choice="" data-account-proxy-choice-scope="${esc(scope)}">${renderNoProxyIcon()}<span>解除使用</span></button>`
+        : `<button type="button" class="primary" ${choiceAttribute} data-account-proxy-choice-scope="${esc(scope)}" ${canChoose ? "" : "disabled"}>${renderNetworkIcon()}<span>${esc(action)}</span></button>`}
     </article>`;
   };
   const supplierCard = () => {
@@ -28640,6 +28672,7 @@ function updateAccountProxyChoice(modal, proxyId = "") {
   modal.querySelectorAll("[data-account-proxy-card]").forEach((card) => {
     const selected = selectedMarketItemId
       && String(card.dataset.accountProxyCard || "").trim() === selectedMarketItemId;
+    card.classList.toggle("is-selected", Boolean(selected));
     card.toggleAttribute("aria-current", Boolean(selected));
     const button = card.querySelector("[data-account-proxy-owned-choice]");
     if (button) button.disabled = Boolean(selected);

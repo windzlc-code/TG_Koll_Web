@@ -17458,19 +17458,19 @@ body.persona-media-sorting {
 }
 
 .account-proxy-source-row {
-  display: grid;
-  grid-template-columns: 176px auto;
-  justify-content: start;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 10px;
   min-width: 0;
 }
 
 .account-proxy-type-tabs {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  justify-self: stretch;
-  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  width: auto;
+  max-width: calc(100% - 118px);
   gap: 5px;
   padding: 4px;
   border: 1px solid #c7d5e2;
@@ -17480,14 +17480,18 @@ body.persona-media-sorting {
 
 .account-proxy-type-tabs button {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 30px;
-  padding: 5px 30px 5px 13px;
+  padding: 5px 12px;
   color: #5b6c7e;
   border: 0;
   border-radius: 999px;
   background: transparent;
   font-size: 11px;
   font-weight: 800;
+  white-space: nowrap;
   box-shadow: none;
 }
 
@@ -17507,16 +17511,16 @@ body.persona-media-sorting {
   font-variant-numeric: tabular-nums;
 }
 
-.account-proxy-type-tabs button[data-account-proxy-type] {
-  padding-right: 13px;
-}
-
 .account-proxy-type-tabs .record-tab-count {
   min-width: 18px;
   height: 18px;
   margin-left: 6px;
   font-size: 10px;
   font-weight: 800;
+}
+
+.account-proxy-source-row > .account-proxy-clear {
+  margin-left: auto;
 }
 
 .account-proxy-type-tabs button.is-active {
@@ -17950,9 +17954,23 @@ body.persona-media-sorting {
   box-shadow: inset 0 0 0 1px rgba(22, 140, 189, .2);
 }
 
-.proxy-market-mini-card[aria-current="true"] {
-  border-color: var(--proxy-purchase-blue, #126eaa);
-  box-shadow: 0 10px 26px rgba(16, 44, 71, .12);
+.proxy-market-mini-card[aria-current="true"],
+.proxy-market-mini-card.is-selected {
+  border: 2px solid #126eaa;
+  background: #f3fbff;
+  box-shadow: 0 0 0 4px rgba(18, 110, 170, .16), 0 14px 28px rgba(16, 44, 71, .14);
+}
+
+.proxy-market-mini-card[aria-current="true"] .proxy-market-mini-stock,
+.proxy-market-mini-card.is-selected .proxy-market-mini-stock {
+  color: #fff;
+  background: #126eaa;
+}
+
+.account-proxy-unbind {
+  color: #126eaa;
+  border-color: #8cb9d4;
+  background: #fff;
 }
 
 .proxy-market-mini-card-head {
@@ -18182,8 +18200,7 @@ body.persona-media-sorting {
   .account-proxy-picker-filters { gap: 7px; }
   .account-proxy-type-tabs { gap: 3px; padding: 3px; }
   .account-proxy-picker-modal .account-proxy-type-tabs button { height: 26px; min-height: 26px !important; box-sizing: border-box; font-size: 10px; }
-  .account-proxy-picker-modal .account-proxy-type-tabs button[data-account-proxy-type] { padding: 0 25px 0 10px; }
-  .account-proxy-type-tabs button[data-account-proxy-type]::after { right: 7px; font-size: 8px; }
+  .account-proxy-picker-modal .account-proxy-type-tabs button[data-account-proxy-type] { padding: 0 10px; }
   .account-proxy-picker-location-row {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 5px;
