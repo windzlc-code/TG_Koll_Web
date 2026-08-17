@@ -71,6 +71,27 @@ def test_login_assistance_queue_accepts_only_the_current_prompt_and_never_echoes
     assert actions.get_nowait() == {"kind": "verification_code", "verification_code": "314159"}
 
 
+def test_login_assistance_queue_accepts_visible_page_choices():
+    actions = queue.Queue(maxsize=2)
+    control = {
+        "login_assistance_queue": actions,
+        "login_assistance_lock": threading.Lock(),
+        "login_assistance_pending": False,
+        "login_assistance_state": {
+            "kind": "choice",
+            "actions": [{"label": "Text message", "title": "短信"}],
+        },
+    }
+    payload = social_automation_api.LiveBrowserLoginAssistancePayload(kind="choice", action_label="Text message")
+    with (
+        mock.patch.object(social_automation_api, "_require_live_browser_manual_session", return_value="task-1"),
+        mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
+    ):
+        result = social_automation_api.queue_live_browser_login_assistance("live-task-1", payload)
+    assert result["kind"] == "choice"
+    assert actions.get_nowait() == {"kind": "choice", "action_label": "Text message"}
+
+
 def test_login_assistance_queue_preserves_alphanumeric_email_code_exactly():
     actions = queue.Queue(maxsize=2)
     control = {

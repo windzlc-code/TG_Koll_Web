@@ -49,6 +49,81 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(runner._login_assistance_presentation({"status": "ready"})["phase"], "success")
         self.assertNotEqual(runner._login_assistance_presentation({"status": "need_verification"})["phase"], "success")
 
+    def test_all_login_states_and_exceptions_have_distinct_live_prompts(self):
+        cases = {
+            "ready": ("success", "success", "登录成功"),
+            "invalid_credentials": ("attention", "credentials", "重新输入登录信息"),
+            "cookie_expired": ("attention", "credentials", "需要登录信息"),
+            "account_confirmation_required": ("attention", "confirm", "需要确认账号"),
+            "post_login_interstitial": ("running", "progress", "正在处理登录后提示"),
+            "transient_error": ("running", "progress", "正在执行登录"),
+            "totp_submitted": ("running", "progress", "正在验证"),
+            "threads_restore_required": ("running", "progress", "正在确认 Threads 登录"),
+            "need_manual": ("attention", "browser_interaction", "需要人工处理"),
+            "manual_login_timeout": ("error", "error", "处理超时"),
+            "cancelled": ("error", "error", "登录已停止"),
+            "failed": ("error", "error", "登录未完成"),
+            "banned": ("error", "error", "账号已被限制"),
+            "disabled": ("error", "error", "账号已被限制"),
+        }
+        for status, (phase, kind, title) in cases.items():
+            prompt = runner._login_assistance_presentation({"status": status, "reason": "测试原因"})
+            self.assertEqual(prompt["phase"], phase, status)
+            self.assertEqual(prompt["kind"], kind, status)
+            self.assertEqual(prompt["title"], title, status)
+        banned_via_health = runner._login_assistance_presentation({
+            "status": "cookie_expired",
+            "health_status": "banned",
+            "reason": "Account disabled",
+        })
+        self.assertEqual(banned_via_health["title"], "账号已被限制")
+        self.assertEqual(banned_via_health["phase"], "error")
+
+    def test_login_assistance_only_publishes_interactive_milestones(self):
+        control = {}
+        runner._publish_login_assistance_state(mock.Mock(), control, {"status": "transient_error", "reason": "暂时打不开"})
+        self.assertFalse(control)
+        runner._publish_login_assistance_state(
+            mock.Mock(),
+            control,
+            {"status": "need_verification", "challenge_type": "method_selection", "actions": [{"label": "Text message", "title": "短信"}]},
+        )
+        self.assertEqual(control["login_assistance_state"]["kind"], "choice")
+        self.assertEqual(control["login_assistance_state"]["title"], "选择验证方式")
+        self.assertEqual(control["login_assistance_state"]["actions"][0]["label"], "Text message")
+        runner._publish_login_assistance_state(
+            mock.Mock(),
+            control,
+            {"status": "need_verification", "challenge_type": "method_selection", "actions": [{"label": "Text message", "title": "短信"}]},
+        )
+        first_updated = control["login_assistance_state"]["updated_at"]
+        runner._publish_login_assistance_state(
+            mock.Mock(),
+            control,
+            {"status": "need_verification", "challenge_type": "method_selection", "actions": [{"label": "Text message", "title": "短信"}]},
+        )
+        self.assertEqual(control["login_assistance_state"]["updated_at"], first_updated)
+        captcha = runner._login_assistance_presentation({
+            "status": "need_verification",
+            "challenge_type": "numeric_image_captcha",
+        })
+        self.assertEqual(captcha["kind"], "verification_code")
+        self.assertEqual(captcha["title"], "输入图片验证码")
+
+    def test_open_login_publishes_interstitial_errors_and_submit_progress(self):
+        source = Path(runner.__file__).read_text(encoding="utf-8")
+        auto_login = source.split("def _run_open_login(", 1)[1].split("def _wait_for_manual_login_completion(", 1)[0]
+        wait_manual = source.split("def _wait_for_manual_login_completion(", 1)[1].split("def _login_assistance_has_cjk(", 1)[0]
+        self.assertLess(
+            auto_login.index('== "post_login_interstitial"'),
+            auto_login.index("if last_status.get(\"status\") == \"ready\""),
+        )
+        self.assertIn("_publish_login_assistance_state(page, context_control, last_status)", auto_login)
+        self.assertIn('"status": "cancelled"', auto_login)
+        self.assertIn('"status": "failed"', auto_login)
+        self.assertIn('{"status": "manual_login_timeout"', wait_manual)
+        self.assertIn('{"status": "cancelled"', wait_manual)
+
     def test_login_assistance_publishes_the_manual_deadline(self):
         control = {"login_assistance_expires_at": 1_900_000_000}
         runner._publish_login_assistance_state(
@@ -58,6 +133,25 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         )
         self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
         self.assertEqual(control["login_assistance_state"]["expires_at"], 1_900_000_000)
+
+    def test_choice_clicks_are_sent_to_the_visible_page_button(self):
+        actions = queue.Queue(maxsize=2)
+        actions.put_nowait({"kind": "choice", "action_label": "Text message"})
+        page, logger = mock.Mock(), mock.Mock()
+        page.is_closed.return_value = False
+        page.frames = []
+        page.context.pages = [page]
+        control = {
+            "login_assistance_queue": actions,
+            "login_assistance_lock": threading.Lock(),
+            "login_assistance_pending": True,
+        }
+        with mock.patch.object(runner, "_click_text_button", return_value=True) as click:
+            consumed = runner._process_login_assistance_action(page, "instagram", logger, control)
+        self.assertTrue(consumed)
+        click.assert_called_once()
+        self.assertEqual(click.call_args.args[2], ["Text message"])
+        self.assertEqual(control["login_assistance_state"]["title"], "正在验证")
 
     def test_login_assistance_is_persisted_to_the_live_browser_session(self):
         control = {"live_browser_session_id": "live_task-1"}

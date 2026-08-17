@@ -26693,12 +26693,12 @@ function loginAssistanceViewModel(task = {}, session = null) {
       message: "账号登录状态已确认，可以开始使用。",
     };
   }
-  if (["failed", "cancelled"].includes(taskStatus)) {
+  if (["failed", "cancelled"].includes(taskStatus) || assistance.phase === "error") {
     return {
       phase: "error",
       kind: "error",
-      title: taskStatus === "cancelled" ? "登录已停止" : "登录未完成",
-      message: String(task?.error || "本次登录任务没有完成，请稍后重试。"),
+      title: String(assistance.title || (taskStatus === "cancelled" || assistance.kind === "cancelled" ? "登录已停止" : "登录未完成")),
+      message: String(assistance.message || task?.error || "本次登录任务没有完成，请稍后重试。"),
     };
   }
   const bootstrapStarting = String(assistance.title || "") === "正在启动登录"
@@ -26728,6 +26728,15 @@ function loginAssistanceViewModel(task = {}, session = null) {
       remainingSeconds,
     };
   }
+  const actions = Array.isArray(assistance.actions)
+    ? assistance.actions
+      .map((item) => ({
+        kind: String(item?.kind || "choice"),
+        label: String(item?.label || "").trim(),
+        title: String(item?.title || item?.label || "").trim(),
+      }))
+      .filter((item) => item.label)
+    : [];
   return {
     phase: String(assistance.phase || "running"),
     kind: String(assistance.kind || "progress"),
@@ -26736,6 +26745,7 @@ function loginAssistanceViewModel(task = {}, session = null) {
     fieldLabel: String(assistance.field_label || "验证码"),
     inputMode: String(assistance.input_mode || "text"),
     submitLabel: String(assistance.submit_label || "提交并继续"),
+    actions,
     remainingSeconds,
   };
 }
@@ -26784,15 +26794,25 @@ function renderLoginAssistanceVisual(model = {}) {
   return `<span class="login-assistance-spinner" aria-hidden="true"></span>`;
 }
 
+function renderLoginAssistanceChoices(model = {}, session = null) {
+  const inputAllowed = Boolean(session?.input_allowed);
+  const actions = Array.isArray(model.actions) ? model.actions : [];
+  if (!actions.length) return "";
+  return `<div class="login-assistance-choices" role="group" aria-label="页面可用操作">
+    ${actions.map((item) => `<button type="button" class="login-assistance-choice" data-login-assistance-choice="${esc(item.label)}" ${inputAllowed ? "" : "disabled"}>${esc(item.title || item.label)}</button>`).join("")}
+  </div>`;
+}
+
 function renderLoginAssistanceAction(model = {}, session = null) {
   const inputAllowed = Boolean(session?.input_allowed);
+  const choices = renderLoginAssistanceChoices(model, session);
   if (model.kind === "verification_code") {
     return `<form class="login-assistance-form" data-login-assistance-form data-login-assistance-kind="verification_code">
       <label>${esc(model.fieldLabel)}
         <input name="verification_code" type="text" inputmode="${model.inputMode === "numeric" ? "numeric" : "text"}" autocomplete="one-time-code" maxlength="64" placeholder="请输入${esc(model.fieldLabel)}" required />
       </label>
       <button type="submit" class="primary" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在开放输入")}</button>
-    </form>`;
+    </form>${choices}`;
   }
   if (model.kind === "credentials") {
     return `<form class="login-assistance-form" data-login-assistance-form data-login-assistance-kind="credentials">
@@ -26803,13 +26823,16 @@ function renderLoginAssistanceAction(model = {}, session = null) {
         <input name="login_password" type="password" autocomplete="current-password" maxlength="512" placeholder="请输入登录密码" required />
       </label>
       <button type="submit" class="primary" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在开放输入")}</button>
-    </form>`;
+    </form>${choices}`;
   }
   if (model.kind === "confirm") {
-    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-submit="confirm" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在开放操作")}</button>`;
+    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-submit="confirm" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在开放操作")}</button>${choices}`;
+  }
+  if (model.kind === "choice") {
+    return `${choices || `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-live>${esc(model.submitLabel || "查看验证页面")}</button>`}`;
   }
   if (model.kind === "browser_interaction") {
-    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-live>${esc(model.submitLabel || "查看验证页面")}</button>`;
+    return `${choices}<button type="button" class="primary login-assistance-wide-action" data-login-assistance-live>${esc(model.submitLabel || "查看验证页面")}</button>`;
   }
   if (model.phase === "success") {
     return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-close>完成</button>`;
@@ -26833,6 +26856,7 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     model.fieldLabel,
     model.inputMode,
     model.submitLabel,
+    JSON.stringify(model.actions || []),
     taskStatus,
     Boolean(session?.input_allowed),
   ]);
@@ -26983,6 +27007,14 @@ function openLoginAssistanceView(taskId = "", accountId = "") {
     }
     if (event.target.closest("[data-login-assistance-submit='confirm']") && currentSession) {
       void submitLoginAssistance(modal, currentSession, { kind: "confirm" });
+      return;
+    }
+    const choice = event.target.closest("[data-login-assistance-choice]");
+    if (choice && currentSession) {
+      void submitLoginAssistance(modal, currentSession, {
+        kind: "choice",
+        action_label: String(choice.dataset.loginAssistanceChoice || ""),
+      });
     }
   });
   modal.addEventListener("submit", (event) => {

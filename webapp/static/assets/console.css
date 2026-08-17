@@ -29026,6 +29026,21 @@ body.console-page {
   font-size: 16px;
 }
 
+.login-assistance-choices {
+  display: grid;
+  gap: 8px;
+}
+
+.login-assistance-choice {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #b9c7d5;
+  border-radius: 10px;
+  background: #fff;
+  color: #17324d;
+  font-size: 14px;
+}
+
 .login-assistance-live-link {
   border: 0;
   background: transparent;

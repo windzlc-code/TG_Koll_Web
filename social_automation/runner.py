@@ -2884,6 +2884,13 @@ def _wait_or_raise_manual(
         {"status": status, "screenshot_path": screenshot_path, "details": last_status or {}},
         screenshot_path,
     )
+    failed_status = dict(last_status or {})
+    failed_status.setdefault("status", status or "failed")
+    failed_status.setdefault("reason", reason)
+    if str(failed_status.get("status") or "") not in {"failed", "auto_login_failed", "manual_login_timeout", "cancelled", "banned", "disabled"}:
+        failed_status["status"] = "failed"
+        failed_status["reason"] = reason
+    _publish_login_assistance_state(page, context_control, failed_status)
     raise AutoLoginFailedError(reason, status, screenshot_path)
 
 
@@ -2993,6 +3000,7 @@ def _run_open_login(
             elif platform == "threads":
                 last_status = _restore_threads_after_instagram_login(page, last_status, logger)
             if str(last_status.get("status") or "") == "post_login_interstitial":
+                _publish_login_assistance_state(page, context_control, last_status)
                 if _resolve_instagram_post_login_interstitial(page, logger):
                     if platform == "threads":
                         _goto(page, THREADS_HOME, logger, "threads_post_login_notice_return")
@@ -3194,6 +3202,15 @@ def _run_open_login(
                 if _auto_submit_login_form(page, platform, payload, logger, task, screenshot_dir, context_control):
                     login_attempts += 1
                     last_submit_monotonic = time.monotonic()
+                    _publish_login_assistance_state(
+                        page,
+                        context_control,
+                        {
+                            "status": "totp_submitted",
+                            "reason": "登录表单已提交，正在等待登录成功或平台验证。",
+                            "url": str(getattr(page, "url", "") or ""),
+                        },
+                    )
                     continue
                 elif _manual_takeover_requested(context_control):
                     continue
@@ -3201,18 +3218,43 @@ def _run_open_login(
                     self_heal_attempts += 1
                     _self_heal_login_page(page, platform, logger, task, screenshot_dir, "auto_login_form_not_ready", self_heal_attempts, cancel_event, context_control)
                     continue
-        except NeedManualError:
+        except NeedManualError as exc:
+            _publish_login_assistance_state(
+                page,
+                context_control,
+                {
+                    "status": str(getattr(exc, "status", "") or "need_manual"),
+                    "reason": str(exc),
+                    "health_status": str(getattr(exc, "health_status", "") or ""),
+                },
+            )
+            raise
+        except AutoLoginFailedError as exc:
+            _publish_login_assistance_state(
+                page,
+                context_control,
+                {
+                    "status": str(getattr(exc, "status", "") or "failed"),
+                    "reason": str(exc),
+                },
+            )
             raise
         except Exception as exc:
             message = str(exc)
+            if "社交自动化任务已取消" in message:
+                _publish_login_assistance_state(page, context_control, {"status": "cancelled", "reason": message})
+                raise
             if "Target page, context or browser has been closed" in message or "has been closed" in message:
-                raise NeedManualError(f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新打开登录窗口并保持到账号就绪。", "cookie_expired") from exc
+                closed_reason = f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新打开登录窗口并保持到账号就绪。"
+                _publish_login_assistance_state(page, context_control, {"status": "failed", "reason": closed_reason})
+                raise NeedManualError(closed_reason, "cookie_expired") from exc
             if _is_transient_navigation_exception(message):
                 last_status = {
                     "status": "transient_error",
-                    "reason": f"{_platform_name(platform)} navigation failed temporarily: {message.splitlines()[0][:240]}",
+                    "reason": f"{_platform_name(platform)} 页面暂时打不开，正在重试。",
                     "url": str(getattr(page, "url", "") or ""),
                 }
+                _publish_login_assistance_state(page, context_control, last_status)
                 logger.log(
                     "warn",
                     "open_login_transient_navigation",
@@ -3221,6 +3263,11 @@ def _run_open_login(
                 )
             else:
                 logger.log("warn", "open_login_poll", f"登录窗口状态检查失败：{exc}")
+                _publish_login_assistance_state(
+                    page,
+                    context_control,
+                    {"status": "transient_error", "reason": f"登录状态检查失败：{message.splitlines()[0][:240]}"},
+                )
         # A manual login session belongs to the user.  Do not press Escape,
         # reload, or navigate away from the page they are actively handling.
         if auto_submit and post_submit_waiting:
@@ -3354,6 +3401,11 @@ def _wait_for_manual_login_completion(
             },
             shot,
         )
+        _publish_login_assistance_state(
+            page,
+            context_control,
+            {"status": "manual_login_timeout", "reason": message},
+        )
         raise ManualTimeoutError(
             message,
             "manual_login_timeout",
@@ -3361,95 +3413,396 @@ def _wait_for_manual_login_completion(
             account_status="cookie_expired",
         )
 
-    while True:
-        _raise_if_cancelled(cancel_event)
-        if time.monotonic() >= deadline:
-            raise_manual_login_timeout()
-        try:
-            page.title(timeout=1000)
-        except Exception as exc:
-            message = str(exc)
-            if "Target page, context or browser has been closed" in message or "has been closed" in message:
-                raise AutoLoginFailedError(
-                    f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新启动登录任务。",
-                    "cookie_expired",
-                    screenshot_path,
-                ) from exc
-        if _process_login_assistance_action(page, platform, logger, context_control):
-            _wait_for_cancellation(0.8, cancel_event)
-            continue
-        if time.monotonic() >= deadline:
-            raise_manual_login_timeout()
-        current_status = _detect_platform_login_state(page, platform)
-        if platform == "threads":
-            current_status = _restore_threads_after_instagram_login(page, current_status, logger)
-        if time.monotonic() >= deadline:
-            raise_manual_login_timeout()
-        current_code = str(current_status.get("status") or "").strip()
-        _publish_login_assistance_state(page, context_control, current_status)
-        if current_code == "post_login_interstitial":
-            if _resolve_instagram_post_login_interstitial(page, logger):
-                if platform == "threads":
-                    _goto(page, THREADS_HOME, logger, "threads_post_login_notice_return")
-                continue
-        if current_code == "ready":
-            stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
+    try:
+        while True:
+            _raise_if_cancelled(cancel_event)
             if time.monotonic() >= deadline:
                 raise_manual_login_timeout()
-            if stable_status.get("status") == "ready":
-                _complete_pending_totp_verification(context_control)
-                _report_account_login_status(context_control, "ready", logger)
-                shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
-                logger.log(
-                    "info",
-                    "completion_node",
-                    f"{_platform_name(platform)} 登录成功节点已确认。",
-                    {"url": _safe_navigation_url(page.url), "details": _safe_login_status(stable_status), "manual_completion": True},
-                    shot,
-                )
-                _publish_login_assistance_state(page, context_control, stable_status)
-                return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
-            current_status = stable_status
+            try:
+                page.title(timeout=1000)
+            except Exception as exc:
+                message = str(exc)
+                if "Target page, context or browser has been closed" in message or "has been closed" in message:
+                    closed_reason = f"{_platform_name(platform)} 登录确认前浏览器窗口已关闭，请重新启动登录任务。"
+                    _publish_login_assistance_state(page, context_control, {"status": "failed", "reason": closed_reason})
+                    raise AutoLoginFailedError(
+                        closed_reason,
+                        "cookie_expired",
+                        screenshot_path,
+                    ) from exc
+            if _process_login_assistance_action(page, platform, logger, context_control):
+                _wait_for_cancellation(0.8, cancel_event)
+                continue
+            if time.monotonic() >= deadline:
+                raise_manual_login_timeout()
+            current_status = _detect_platform_login_state(page, platform)
+            if platform == "threads":
+                current_status = _restore_threads_after_instagram_login(page, current_status, logger)
+            if time.monotonic() >= deadline:
+                raise_manual_login_timeout()
             current_code = str(current_status.get("status") or "").strip()
-        if current_code and current_code != last_seen_status:
-            logger.log(
-                "info" if current_code == "ready" else "warn",
-                "manual_login_status",
-                f"{_platform_name(platform)} 人工登录状态已更新。",
-                {"status": current_code, "details": current_status},
-            )
-            last_seen_status = current_code
-        remaining_seconds = deadline - time.monotonic()
-        if remaining_seconds <= 0:
-            raise_manual_login_timeout()
-        wait_seconds = min(1.0, remaining_seconds)
-        wait = getattr(cancel_event, "wait", None) if cancel_event is not None else None
-        if callable(wait):
-            if wait(wait_seconds):
-                _raise_if_cancelled(cancel_event)
-        else:
-            time.sleep(wait_seconds)
+            _publish_login_assistance_state(page, context_control, current_status)
+            if current_code == "post_login_interstitial":
+                if _resolve_instagram_post_login_interstitial(page, logger):
+                    if platform == "threads":
+                        _goto(page, THREADS_HOME, logger, "threads_post_login_notice_return")
+                    continue
+            if current_code == "ready":
+                stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
+                if time.monotonic() >= deadline:
+                    raise_manual_login_timeout()
+                if stable_status.get("status") == "ready":
+                    _complete_pending_totp_verification(context_control)
+                    _report_account_login_status(context_control, "ready", logger)
+                    shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
+                    logger.log(
+                        "info",
+                        "completion_node",
+                        f"{_platform_name(platform)} 登录成功节点已确认。",
+                        {"url": _safe_navigation_url(page.url), "details": _safe_login_status(stable_status), "manual_completion": True},
+                        shot,
+                    )
+                    _publish_login_assistance_state(page, context_control, stable_status)
+                    return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
+                current_status = stable_status
+                current_code = str(current_status.get("status") or "").strip()
+            if current_code and current_code != last_seen_status:
+                logger.log(
+                    "info" if current_code == "ready" else "warn",
+                    "manual_login_status",
+                    f"{_platform_name(platform)} 人工登录状态已更新。",
+                    {"status": current_code, "details": current_status},
+                )
+                last_seen_status = current_code
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise_manual_login_timeout()
+            wait_seconds = min(1.0, remaining_seconds)
+            wait = getattr(cancel_event, "wait", None) if cancel_event is not None else None
+            if callable(wait):
+                if wait(wait_seconds):
+                    _raise_if_cancelled(cancel_event)
+            else:
+                time.sleep(wait_seconds)
+    except RuntimeError as exc:
+        if "社交自动化任务已取消" in str(exc):
+            _publish_login_assistance_state(page, context_control, {"status": "cancelled", "reason": str(exc)})
+        raise
+
+
+def _login_assistance_has_cjk(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in str(value or ""))
+
+
+def _login_assistance_message(reason: str, fallback: str) -> str:
+    clean = str(reason or "").strip()
+    if clean and _login_assistance_has_cjk(clean):
+        return clean
+    return str(fallback or clean or "正在同步登录状态。")
 
 
 def _login_assistance_presentation(status: dict[str, Any] | None) -> dict[str, Any]:
     current = dict(status or {})
     status_code = str(current.get("status") or "").strip().lower()
     challenge_type = str(current.get("challenge_type") or "").strip().lower()
+    health = str(current.get("health_status") or "").strip().lower()
     reason = str(current.get("reason") or "").strip()
+    actions = _login_assistance_normalize_actions(current.get("actions"))
     if status_code == "ready":
         return {"phase": "success", "kind": "success", "title": "登录成功", "message": "账号登录状态已确认，可以开始使用。", "challenge_type": challenge_type}
+    if health == "banned" or status_code in {"banned", "disabled"}:
+        return {
+            "phase": "error",
+            "kind": "error",
+            "title": "账号已被限制",
+            "message": _login_assistance_message(reason, "当前账号疑似被停用或封禁，无法继续自动登录。"),
+            "challenge_type": challenge_type,
+        }
+    if status_code == "manual_login_timeout":
+        return {
+            "phase": "error",
+            "kind": "error",
+            "title": "处理超时",
+            "message": _login_assistance_message(reason, "人工处理超时，请重新打开登录任务。"),
+            "challenge_type": challenge_type,
+        }
+    if status_code == "cancelled":
+        return {
+            "phase": "error",
+            "kind": "error",
+            "title": "登录已停止",
+            "message": _login_assistance_message(reason, "本次登录任务已取消。"),
+            "challenge_type": challenge_type,
+        }
+    if status_code in {"failed", "auto_login_failed"}:
+        return {
+            "phase": "error",
+            "kind": "error",
+            "title": "登录未完成",
+            "message": _login_assistance_message(reason, "本次登录任务没有完成，请稍后重试。"),
+            "challenge_type": challenge_type,
+        }
     if status_code in {"invalid_credentials", "cookie_expired"}:
-        return {"phase": "attention", "kind": "credentials", "title": "重新输入登录信息" if status_code == "invalid_credentials" else "需要登录信息", "message": reason or "当前页面需要账号和密码。", "field_label": "账号、邮箱或手机号", "submit_label": "提交并继续", "challenge_type": challenge_type}
+        return {
+            "phase": "attention",
+            "kind": "credentials",
+            "title": "重新输入登录信息" if status_code == "invalid_credentials" else "需要登录信息",
+            "message": _login_assistance_message(reason, "当前页面需要账号和密码。"),
+            "field_label": "账号、邮箱或手机号",
+            "submit_label": "提交并继续",
+            "challenge_type": challenge_type,
+            "actions": actions,
+        }
     if status_code == "account_confirmation_required":
-        return {"phase": "attention", "kind": "confirm", "title": "需要确认账号", "message": reason or "平台正在等待确认继续使用当前账号。", "submit_label": "确认并继续", "challenge_type": challenge_type}
+        return {
+            "phase": "attention",
+            "kind": "confirm",
+            "title": "需要确认账号",
+            "message": _login_assistance_message(reason, "平台正在等待确认继续使用当前账号。"),
+            "submit_label": "确认并继续",
+            "challenge_type": challenge_type,
+            "actions": actions,
+        }
     if status_code == "need_verification":
-        code_labels = {"sms_code": ("输入短信验证码", "短信验证码"), "email_code": ("输入邮箱验证码", "邮箱验证码"), "authenticator_totp": ("输入身份验证器验证码", "验证码"), "unknown_code": ("输入验证码", "验证码"), "verification": ("输入验证码", "验证码")}
+        code_labels = {
+            "sms_code": ("输入短信验证码", "短信验证码", "numeric"),
+            "email_code": ("输入邮箱验证码", "邮箱验证码", "text"),
+            "authenticator_totp": ("输入身份验证器验证码", "验证码", "numeric"),
+            "unknown_code": ("输入验证码", "验证码", "text"),
+            "verification": ("输入验证码", "验证码", "text"),
+            "numeric_image_captcha": ("输入图片验证码", "图片验证码", "text"),
+        }
         if challenge_type in code_labels:
-            title, label = code_labels[challenge_type]
-            input_mode = "numeric" if challenge_type in {"sms_code", "authenticator_totp"} else "text"
-            return {"phase": "attention", "kind": "verification_code", "title": title, "message": reason or "请填写平台当前要求的验证码。", "field_label": label, "input_mode": input_mode, "submit_label": "提交验证码", "challenge_type": challenge_type}
-        return {"phase": "attention", "kind": "browser_interaction", "title": "需要人工验证", "message": reason or "平台要求完成身份确认，请打开实时画面继续。", "submit_label": "查看验证页面", "challenge_type": challenge_type}
-    return {"phase": "running", "kind": "progress", "title": "正在执行登录", "message": reason or "正在检查页面并同步登录状态。", "challenge_type": challenge_type}
+            title, label, input_mode = code_labels[challenge_type]
+            return {
+                "phase": "attention",
+                "kind": "verification_code",
+                "title": title,
+                "message": _login_assistance_message(
+                    reason,
+                    "请对照实时画面输入图片中的验证码。" if challenge_type == "numeric_image_captcha" else "请填写平台当前要求的验证码。",
+                ),
+                "field_label": label,
+                "input_mode": input_mode,
+                "submit_label": "提交验证码",
+                "challenge_type": challenge_type,
+                "actions": actions,
+            }
+        if challenge_type == "method_selection":
+            return {
+                "phase": "attention",
+                "kind": "choice" if actions else "browser_interaction",
+                "title": "选择验证方式",
+                "message": _login_assistance_message(reason, "请选择一种验证方式，或打开实时画面继续。"),
+                "submit_label": "查看验证页面",
+                "challenge_type": challenge_type,
+                "actions": actions,
+            }
+        if challenge_type in {"identity_challenge", "human_verification", "unknown_challenge"}:
+            titles = {
+                "identity_challenge": "需要身份确认",
+                "human_verification": "需要真人验证",
+                "unknown_challenge": "需要人工验证",
+            }
+            return {
+                "phase": "attention",
+                "kind": "choice" if actions else "browser_interaction",
+                "title": titles[challenge_type],
+                "message": _login_assistance_message(reason, "请打开实时画面完成当前验证，或点击助手中的可用按钮。"),
+                "submit_label": "查看验证页面",
+                "challenge_type": challenge_type,
+                "actions": actions,
+            }
+        return {
+            "phase": "attention",
+            "kind": "choice" if actions else "browser_interaction",
+            "title": "需要人工验证",
+            "message": _login_assistance_message(reason, "平台要求完成身份确认，请打开实时画面继续。"),
+            "submit_label": "查看验证页面",
+            "challenge_type": challenge_type,
+            "actions": actions,
+        }
+    if status_code == "post_login_interstitial":
+        if actions:
+            return {
+                "phase": "attention",
+                "kind": "choice",
+                "title": "需要确认登录提示",
+                "message": _login_assistance_message(reason, "平台正在显示登录后确认页，请选择一个操作。"),
+                "submit_label": "查看实时画面",
+                "challenge_type": challenge_type,
+                "actions": actions,
+            }
+        return {
+            "phase": "running",
+            "kind": "progress",
+            "title": "正在处理登录后提示",
+            "message": _login_assistance_message(reason, "平台正在显示登录后确认页，系统会继续处理。"),
+            "challenge_type": challenge_type,
+        }
+    if status_code == "transient_error":
+        return {
+            "phase": "running",
+            "kind": "progress",
+            "title": "正在执行登录",
+            "message": _login_assistance_message(reason, "页面暂时异常，正在重试。"),
+            "challenge_type": challenge_type,
+        }
+    if status_code == "totp_submitted":
+        return {
+            "phase": "running",
+            "kind": "progress",
+            "title": "正在验证",
+            "message": _login_assistance_message(reason, "验证信息已提交，正在等待平台确认。"),
+            "challenge_type": challenge_type,
+        }
+    if status_code == "threads_restore_required":
+        return {
+            "phase": "running",
+            "kind": "progress",
+            "title": "正在确认 Threads 登录",
+            "message": _login_assistance_message(reason, "已完成 Instagram 登录，正在返回 Threads 确认会话。"),
+            "challenge_type": challenge_type,
+        }
+    if status_code == "need_manual":
+        return {
+            "phase": "attention",
+            "kind": "browser_interaction",
+            "title": "需要人工处理",
+            "message": _login_assistance_message(reason, "请打开实时画面继续当前登录。"),
+            "submit_label": "查看实时画面",
+            "challenge_type": challenge_type,
+        }
+    return {
+        "phase": "running",
+        "kind": "progress",
+        "title": "正在执行登录",
+        "message": _login_assistance_message(reason, "正在检查页面并同步登录状态。"),
+        "challenge_type": challenge_type,
+    }
+
+
+LOGIN_ASSISTANCE_CHOICE_GROUPS = {
+    "method_selection": [
+        "Text message", "Send SMS", "短信", "简讯", "簡訊", "手機簡訊",
+        "Email", "Send email", "电子邮件", "邮箱", "電子郵件",
+        "Authentication app", "Authenticator app", "身份验证应用", "验证器应用",
+        "WhatsApp",
+        "Try another way", "尝试其他方式", "试试其他方法", "選擇其他方式",
+    ],
+    "account_confirmation": [
+        "Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续",
+        "Continue", "继续", "确认", "Confirm",
+    ],
+    "post_login_interstitial": [
+        "Not now", "以后再说", "暫時不要", "稍后",
+        "Save info", "Save", "保存信息", "储存资讯", "保存",
+        "Continue", "继续",
+    ],
+    "identity_or_human": [
+        "Continue", "Confirm", "Next", "继续", "确认", "下一步",
+        "Try another way", "尝试其他方式",
+    ],
+    "verification_code": [
+        "Get a new code", "Resend code", "获取新验证码", "重新发送",
+        "Try another way", "尝试其他方式",
+    ],
+}
+
+
+def _login_assistance_normalize_actions(raw: Any) -> list[dict[str, str]]:
+    actions: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw or []:
+        if isinstance(item, str):
+            label = item.strip()
+            title = label
+        elif isinstance(item, dict):
+            label = str(item.get("label") or item.get("value") or "").strip()
+            title = str(item.get("title") or label).strip()
+        else:
+            continue
+        key = label.lower()
+        if not label or key in seen:
+            continue
+        seen.add(key)
+        actions.append({"kind": "choice", "label": label, "title": title or label})
+    return actions
+
+
+def _login_assistance_choice_labels(status: dict[str, Any]) -> list[str]:
+    status_code = str(status.get("status") or "").strip().lower()
+    challenge_type = str(status.get("challenge_type") or "").strip().lower()
+    if status_code == "account_confirmation_required":
+        return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["account_confirmation"])
+    if status_code == "post_login_interstitial":
+        return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["post_login_interstitial"])
+    if challenge_type == "method_selection":
+        return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["method_selection"])
+    if challenge_type in {"identity_challenge", "human_verification", "unknown_challenge"}:
+        return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["identity_or_human"])
+    if challenge_type in {"sms_code", "email_code", "authenticator_totp", "unknown_code", "verification", "numeric_image_captcha"}:
+        return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["verification_code"])
+    return []
+
+
+def _login_assistance_collect_choices(page: Any, status: dict[str, Any]) -> list[dict[str, str]]:
+    labels = _login_assistance_choice_labels(status)
+    if not labels or page is None:
+        return []
+    found: list[str] = []
+    script = """labels => {
+        const wanted = new Set((labels || []).map((item) => String(item || '').trim().toLowerCase()).filter(Boolean));
+        const matched = [];
+        const nodes = Array.from(document.querySelectorAll('button, a, [role="button"], [role="radio"], [role="option"]'));
+        for (const node of nodes) {
+            const text = String(node.innerText || node.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!text || !wanted.has(text.toLowerCase())) continue;
+            const rect = node.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            const style = window.getComputedStyle(node);
+            if (style.visibility === 'hidden' || style.display === 'none' || style.pointerEvents === 'none') continue;
+            if (!matched.some((item) => item.toLowerCase() === text.toLowerCase())) matched.push(text);
+        }
+        return matched;
+    }"""
+    surfaces = []
+    with contextlib.suppress(Exception):
+        surfaces = [surface for _action_page, surface in _login_assistance_surfaces(page)]
+    if not surfaces:
+        surfaces = [page]
+    for surface in surfaces:
+        evaluate = getattr(surface, "evaluate", None)
+        if not callable(evaluate):
+            continue
+        with contextlib.suppress(Exception):
+            visible = evaluate(script, labels)
+            if isinstance(visible, list):
+                found.extend(str(item) for item in visible if str(item or "").strip())
+    return _login_assistance_normalize_actions(found)
+
+
+def _login_assistance_is_milestone(presentation: dict[str, Any] | None) -> bool:
+    current = dict(presentation or {})
+    phase = str(current.get("phase") or "").strip().lower()
+    kind = str(current.get("kind") or "").strip().lower()
+    if phase in {"success", "error", "attention"}:
+        return True
+    return kind in {"credentials", "verification_code", "confirm", "choice", "browser_interaction", "success", "error"}
+
+
+def _login_assistance_signature(presentation: dict[str, Any] | None) -> tuple[str, ...]:
+    current = dict(presentation or {})
+    actions = _login_assistance_normalize_actions(current.get("actions"))
+    return (
+        str(current.get("phase") or ""),
+        str(current.get("kind") or ""),
+        str(current.get("title") or ""),
+        str(current.get("message") or ""),
+        str(current.get("field_label") or ""),
+        str(current.get("challenge_type") or ""),
+        "|".join(item["label"] for item in actions),
+    )
 
 
 def _publish_login_assistance_state(page: Any, context_control: dict[str, Any] | None, status: dict[str, Any] | None) -> None:
@@ -3459,7 +3812,12 @@ def _publish_login_assistance_state(page: Any, context_control: dict[str, Any] |
     if str(current.get("status") or "").strip().lower() == "need_verification" and not current.get("challenge_type"):
         with contextlib.suppress(Exception):
             current["challenge_type"] = str(_classify_verification_challenge(page).get("type") or "")
+    if "actions" not in current and _login_assistance_choice_labels(current):
+        with contextlib.suppress(Exception):
+            current["actions"] = _login_assistance_collect_choices(page, current)
     presentation = _login_assistance_presentation(current)
+    if not _login_assistance_is_milestone(presentation):
+        return
     expires_at = context_control.get("login_assistance_expires_at")
     if expires_at:
         presentation["expires_at"] = int(expires_at)
@@ -3468,6 +3826,10 @@ def _publish_login_assistance_state(page: Any, context_control: dict[str, Any] |
         previous_kind = str(previous.get("prompt_kind") or previous.get("kind") or "").strip().lower()
         next_kind = str(presentation.get("kind") or "").strip().lower()
         if previous_kind and previous_kind == next_kind and str(presentation.get("phase") or "") != "success":
+            return
+    if isinstance(previous, dict) and not previous.get("action_error"):
+        previous_compare = {key: previous.get(key) for key in ("phase", "kind", "title", "message", "field_label", "challenge_type", "actions")}
+        if _login_assistance_signature(previous_compare) == _login_assistance_signature(presentation):
             return
     presentation["updated_at"] = int(time.time())
     context_control["login_assistance_state"] = presentation
@@ -3617,6 +3979,18 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
             if action_page is None:
                 raise RuntimeError("当前页面没有可确认的按钮")
             message = "确认操作已提交，正在继续登录。"
+        elif kind == "choice":
+            label = str(action.get("action_label") or action.get("label") or "").strip()
+            if not label:
+                raise RuntimeError("请选择一个页面操作")
+            clicked = False
+            for action_page, surface in _login_assistance_surfaces(page):
+                if _click_text_button(surface, logger, [label], "mapped_login_choice"):
+                    clicked = True
+                    break
+            if not clicked:
+                raise RuntimeError("当前页面没有找到该操作按钮")
+            message = f"已点击「{label}」，正在继续登录。"
         else:
             raise RuntimeError("当前登录步骤不支持该操作")
     except Exception as exc:

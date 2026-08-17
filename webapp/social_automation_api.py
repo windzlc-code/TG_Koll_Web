@@ -557,6 +557,7 @@ class LiveBrowserLoginAssistancePayload(StrictProxyModel):
     verification_code: str = Field(default="", max_length=64)
     login_username: str = Field(default="", max_length=SOCIAL_ACCOUNT_LOGIN_USERNAME_MAX_LENGTH)
     login_password: str = Field(default="", max_length=SOCIAL_ACCOUNT_LOGIN_PASSWORD_MAX_LENGTH)
+    action_label: str = Field(default="", max_length=80)
 
 
 def configure_social_automation(*, data_dir: Path, new_id: Callable[[str], str] | None = None) -> None:
@@ -5348,6 +5349,8 @@ def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLog
         raise HTTPException(status_code=422, detail="请输入验证码")
     if kind == "credentials" and (not str(payload.login_username or "").strip() or not str(payload.login_password or "")):
         raise HTTPException(status_code=422, detail="请完整填写登录账号和密码")
+    if kind == "choice" and not str(payload.action_label or "").strip():
+        raise HTTPException(status_code=422, detail="请选择一个页面操作")
     actions = control.get("login_assistance_queue")
     if actions is None or not hasattr(actions, "put_nowait"):
         raise HTTPException(status_code=409, detail="登录映射通道尚未就绪，请稍后重试")
@@ -5360,7 +5363,16 @@ def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLog
         assistance = control.get("login_assistance_state")
         assistance = assistance if isinstance(assistance, dict) else {}
         expected_kind = str(assistance.get("kind") or "").strip().lower()
-        if kind not in {"verification_code", "credentials", "confirm"} or expected_kind != kind:
+        allowed_actions = {
+            str(item.get("label") or "").strip()
+            for item in (assistance.get("actions") or [])
+            if isinstance(item, dict) and str(item.get("label") or "").strip()
+        }
+        choice_label = str(payload.action_label or "").strip()
+        accepts_choice = kind == "choice" and choice_label in allowed_actions
+        if kind not in {"verification_code", "credentials", "confirm", "choice"} or (
+            expected_kind != kind and not accepts_choice
+        ):
             raise HTTPException(status_code=409, detail="登录页面状态已变化，请按页面最新提示重新操作")
         action = {"kind": kind}
         if kind == "verification_code":
@@ -5368,6 +5380,8 @@ def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLog
         elif kind == "credentials":
             action["login_username"] = str(payload.login_username or "").strip()
             action["login_password"] = str(payload.login_password or "")
+        elif kind == "choice":
+            action["action_label"] = choice_label
         try:
             actions.put_nowait(action)
         except queue.Full as exc:
