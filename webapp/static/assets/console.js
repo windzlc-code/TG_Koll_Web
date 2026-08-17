@@ -22344,6 +22344,12 @@ async function submitPersonaMediaTask() {
       ? editSourceUploadState.files.find((file) => fileKind(file) === "image") || null
       : null;
     if (uploadedEditSource) modifyItem = { ...modifyItem, replacementFile: uploadedEditSource };
+    if (modifyItem?.pendingItem && !modifyItem.replacementFile) {
+      modifyItem = {
+        ...modifyItem,
+        replacementFile: await personaCustomMediaFile(modifyItem.pendingItem, `media-${Number(modifyItem.sourceIndex) + 1}`),
+      };
+    }
     const files = modifyItem ? [] : mediaUploadState.files;
     const imageCount = files.filter((file) => fileKind(file) === "image").length;
     const minImages = Number(taskMeta[taskType]?.minImages || 0);
@@ -22596,15 +22602,45 @@ async function setPersonaCustomMediaModifySource({ item = null, input = null, in
     && String(current.source || "posts") === (source === "favorites" ? "favorites" : "posts")
     && Number(current.index) === Number(index)
   );
+  if (!input && item) {
+    snapshotPersonaCurrentForm();
+    if (String(current?.previewUrl || "").startsWith("blob:")) URL.revokeObjectURL(current.previewUrl);
+    if (sameDraft) delete form.customModifySource;
+    else {
+      form.customModifySource = {
+        file: null,
+        previewUrl: String(item.previewUrl || item.url || ""),
+        pendingItem: item,
+        inputId: "",
+        source: source === "favorites" ? "favorites" : "posts",
+        postId: String(post.id || ""),
+        index: Number(index),
+      };
+      form.imageCount = 1;
+      form.prompt = "";
+      personaCustomMediaFile(item, `media-${Number(index) + 1}`).then((readyFile) => {
+        const latest = personaFormState(persona.id).media?.customModifySource;
+        if (
+          latest
+          && Number(latest.index) === Number(index)
+          && String(latest.postId || "") === String(post.id || "")
+        ) latest.file = readyFile;
+      }).catch((error) => showMsg("commandMsg", error.detail || error.message || "图片无法进入媒体修改", false));
+    }
+    const taskState = personaMediaTaskState(persona.id, post.id);
+    if (taskState) taskState.modifyMediaKey = "";
+    syncPersonaCurrentMediaModifyUi(sameDraft ? -1 : Number(index));
+    renderConfirmSummary();
+    return;
+  }
   let file = input ? currentUploadDropzoneFiles(input)[Number(index)] : null;
-  if (!sameDraft && !file && item) file = await personaCustomMediaFile(item, `media-${Number(index) + 1}`);
-  if (!sameDraft && (!file || fileKind(file) !== "image")) {
+  if (!file || fileKind(file) !== "image") {
     showMsg("commandMsg", "媒体修改当前只支持图片。", false);
     return;
   }
   snapshotPersonaCurrentForm();
-  const sameUpload = Boolean(current?.file && file && uploadFileSignature(current.file) === uploadFileSignature(file));
-  const sameSource = sameDraft || sameUpload;
+  const sameUpload = Boolean(current?.file && uploadFileSignature(current.file) === uploadFileSignature(file));
+  const sameSource = sameUpload;
   if (sameSource) delete form.customModifySource;
   else {
     const previewUrl = URL.createObjectURL(file);
@@ -22624,7 +22660,7 @@ async function setPersonaCustomMediaModifySource({ item = null, input = null, in
   if (taskState) taskState.modifyMediaKey = "";
   const editSourceStateKey = uploadDropzoneStateKey("personaMediaEditSourceFile");
   if (editSourceStateKey) {
-    uploadFilesById.set(editSourceStateKey, sameSource || !input || input.id === "personaMediaTaskFiles" ? [] : [file]);
+    uploadFilesById.set(editSourceStateKey, sameSource || input.id === "personaMediaTaskFiles" ? [] : [file]);
   }
   renderPersonaDetail();
   renderConfirmSummary();
@@ -24303,16 +24339,18 @@ function personaCustomMediaModifyItem(taskState = null) {
   if (
     !persona
     || !post
-    || !customSource?.file
-    || fileKind(customSource.file) !== "image"
-    || String(customSource.postId || "") !== String(post.id || "")
-    || String(customSource.source || "posts") !== String(source || "posts")
+    || String(customSource?.postId || "") !== String(post.id || "")
+    || String(customSource?.source || "posts") !== String(source || "posts")
   ) return null;
+  const hasFile = Boolean(customSource?.file && fileKind(customSource.file) === "image");
+  const hasPending = Boolean(customSource?.pendingItem);
+  if (!hasFile && !hasPending) return null;
   return {
     type: "image",
-    label: customSource.file.name || "自定义编辑图片",
-    replacementFile: customSource.file,
-    sourceIndex: 0,
+    label: customSource.file?.name || customSource.pendingItem?.label || "自定义编辑图片",
+    replacementFile: hasFile ? customSource.file : null,
+    pendingItem: hasPending ? customSource.pendingItem : null,
+    sourceIndex: Number(customSource.index) || 0,
     customSource: true,
     inputId: String(customSource.inputId || ""),
   };
@@ -24399,6 +24437,53 @@ function renderPersonaPublicMediaFooter(displayIndex, actions = "") {
       ${actions}
     </div>
   </div>`;
+}
+
+function syncPersonaCurrentMediaModifyUi(activeIndex = -1) {
+  const selectedIndex = Number(activeIndex);
+  const modifying = Number.isInteger(selectedIndex) && selectedIndex >= 0;
+  document.querySelectorAll("[data-persona-current-media-index]").forEach((card) => {
+    const index = Number(card.dataset.personaCurrentMediaIndex);
+    const on = modifying && index === selectedIndex;
+    card.classList.toggle("is-selected", on);
+    card.classList.toggle("is-modify-source", on);
+    const button = card.querySelector("[data-persona-current-media-select]");
+    if (button) {
+      button.setAttribute("aria-pressed", on ? "true" : "false");
+      button.setAttribute("aria-label", `${on ? "取消选择" : "选择"}第 ${index + 1} 个媒体`);
+      button.innerHTML = renderPersonaMediaSelectionIcon(on);
+    }
+    card.querySelector("[data-persona-media-edit-toggle]")?.classList.toggle("is-active", on);
+  });
+  const field = document.querySelector(".persona-media-prompt-field");
+  if (field) {
+    field.classList.toggle("is-image-editing", modifying);
+    const label = field.querySelector(".persona-media-prompt-label");
+    if (label) label.textContent = modifying ? `图片局部修改提示词（第 ${selectedIndex + 1} 张）` : "补充提示词（可选）";
+    const textarea = field.querySelector("#personaMediaTaskPrompt");
+    if (textarea) {
+      textarea.placeholder = modifying
+        ? "请输入对选中图片的局部修改要求；未提及的区域、人物身份和画面细节将尽量保持不变。"
+        : "留空按当前推文生成；填写内容仅作为配图补充要求。";
+      if (modifying) textarea.value = "";
+    }
+  }
+  const imageCount = document.querySelector("#personaMediaImageCount");
+  if (imageCount) {
+    if (modifying) {
+      imageCount.value = "1";
+      imageCount.disabled = true;
+      imageCount.title = "局部修改每次只生成 1 张图片";
+    } else {
+      imageCount.disabled = false;
+      imageCount.removeAttribute("title");
+    }
+  }
+  const runButton = document.querySelector("[data-persona-run-media-task]");
+  if (runButton && runButton.getAttribute("aria-busy") !== "true") {
+    const hasTask = Boolean(runButton.dataset.personaMediaAction === "regenerate");
+    runButton.textContent = modifying ? "重生成图片" : (hasTask ? "重新生成" : "生成预览");
+  }
 }
 
 function renderPersonaCurrentDraftMediaPreview(items = [], { postId = "", modifyIndex = -1, allowUpload = true } = {}) {
