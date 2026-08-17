@@ -14782,7 +14782,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     return keywords
 
 
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 54
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 55
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 24
 _HOT_PUBLIC_PROBE_FLAG = Path("/data/hot-public-probe")
 

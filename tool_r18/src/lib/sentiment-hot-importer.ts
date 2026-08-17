@@ -125,7 +125,7 @@ const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 41;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 42;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 28;
@@ -1697,6 +1697,24 @@ export function resolveSentimentHotManualQueryKeywords(
   return explicitManualKeywords.slice(0, sentimentHotKeywordTargetForMode(mode));
 }
 
+function splitAnchorMashupTerms(terms: string[], anchors: string[]): string[] {
+  const compactAnchors = [...new Set(anchors.map((item) => item.replace(/\s+/g, "")).filter((item) => item.length >= 2))];
+  const out: string[] = [];
+  for (const term of terms) {
+    const text = String(term || "").replace(/\s+/g, "");
+    const pair = compactAnchors.find((left) => {
+      if (!text.startsWith(left) || text === left) return false;
+      return compactAnchors.includes(text.slice(left.length));
+    });
+    if (!pair) {
+      out.push(term);
+      continue;
+    }
+    out.push(pair, text.slice(pair.length));
+  }
+  return [...new Set(out.map(cleanText).filter(Boolean))];
+}
+
 export function applyPersonaGuardToSentimentHotStrategy(args: {
   strategy: SentimentHotSearchStrategy;
 }) {
@@ -1713,11 +1731,20 @@ export function applyPersonaGuardToSentimentHotStrategy(args: {
   args.strategy.requiredAnchorTerms = cleanModelTerms(args.strategy.requiredAnchorTerms).filter((term) => !isGenericPersonaContentTopic(term));
   args.strategy.normalAnchorTerms = cleanModelTerms(args.strategy.normalAnchorTerms).filter((term) => !isGenericPersonaContentTopic(term));
   const domainAnchors = [...new Set([...args.strategy.requiredAnchorTerms, ...args.strategy.normalAnchorTerms])];
-  args.strategy.primaryQueries = filterModelQueriesByDomainAnchors(cleanModelTerms(args.strategy.primaryQueries), domainAnchors);
-  args.strategy.broadQueries = filterModelQueriesByDomainAnchors(cleanModelTerms(args.strategy.broadQueries), domainAnchors);
-  args.strategy.ecosystemQueries = filterModelQueriesByDomainAnchors(cleanModelTerms(args.strategy.ecosystemQueries), domainAnchors);
-  args.strategy.strictAcceptTerms = cleanModelTerms(args.strategy.strictAcceptTerms);
-  args.strategy.normalAcceptTerms = cleanModelTerms(args.strategy.normalAcceptTerms);
+  args.strategy.primaryQueries = filterModelQueriesByDomainAnchors(
+    cleanModelTerms(splitAnchorMashupTerms(args.strategy.primaryQueries, domainAnchors)),
+    domainAnchors,
+  );
+  args.strategy.broadQueries = filterModelQueriesByDomainAnchors(
+    cleanModelTerms(splitAnchorMashupTerms(args.strategy.broadQueries, domainAnchors)),
+    domainAnchors,
+  );
+  args.strategy.ecosystemQueries = filterModelQueriesByDomainAnchors(
+    cleanModelTerms(splitAnchorMashupTerms(args.strategy.ecosystemQueries, domainAnchors)),
+    domainAnchors,
+  );
+  args.strategy.strictAcceptTerms = cleanModelTerms(splitAnchorMashupTerms(args.strategy.strictAcceptTerms, domainAnchors));
+  args.strategy.normalAcceptTerms = cleanModelTerms(splitAnchorMashupTerms(args.strategy.normalAcceptTerms, domainAnchors));
   args.strategy.rejectTerms = cleanModelTerms(args.strategy.rejectTerms);
   args.strategy.personaGuardTerms = [...new Set([
     ...args.strategy.normalAnchorTerms,

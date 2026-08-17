@@ -850,6 +850,24 @@ describe("sentiment hot importer", () => {
     expect(strategy.primaryQueries).not.toContain("市井生活");
   });
 
+  it("splits theme-name mashups but keeps real object nouns", () => {
+    const strategy = {
+      primaryQueries: ["二次元菜市場", "菜市場蔬菜", "動漫手辦"],
+      broadQueries: ["二次元 撿漏"],
+      ecosystemQueries: [],
+      requiredAnchorTerms: ["二次元", "菜市場", "動漫", "撿漏"],
+      normalAnchorTerms: ["市集"],
+      strictAcceptTerms: ["二次元菜市場", "菜市場蔬菜"],
+      normalAcceptTerms: ["動漫手辦"],
+      rejectTerms: [],
+    } as any;
+    applyPersonaGuardToSentimentHotStrategy({ strategy });
+    expect(strategy.primaryQueries).not.toContain("二次元菜市場");
+    expect(strategy.primaryQueries).toContain("菜市場蔬菜");
+    expect(strategy.primaryQueries).toContain("動漫手辦");
+    expect(strategy.primaryQueries).toEqual(expect.arrayContaining(["二次元", "菜市場"]));
+  });
+
   it("does not reject concrete objects just because another persona once overused them", () => {
     const keywords = resolveSentimentHotManualQueryKeywords(["環保袋", "動漫文化", "手辦"], null, "strict");
     expect(keywords).toContain("環保袋");
