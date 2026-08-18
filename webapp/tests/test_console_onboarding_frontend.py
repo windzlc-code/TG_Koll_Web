@@ -8,8 +8,8 @@ ONBOARDING_CSS_PATH = ROOT / "webapp" / "static" / "assets" / "console-onboardin
 
 
 def test_console_loads_isolated_onboarding_assets():
-    assert '/assets/console-onboarding.css?v=20260817-14' in CONSOLE_HTML
-    assert '/assets/console-onboarding.js?v=20260817-14' in CONSOLE_HTML
+    assert '/assets/console-onboarding.css?v=20260818-3' in CONSOLE_HTML
+    assert '/assets/console-onboarding.js?v=20260818-3' in CONSOLE_HTML
     assert 'id="consoleOnboardingLauncher"' not in CONSOLE_HTML
 
 
@@ -32,7 +32,7 @@ def test_onboarding_is_available_to_all_non_admin_users_and_can_be_reopened():
     assert 'if (homeLauncher) homeLauncher.hidden = false;' in script
     assert 'const cardOpen = Boolean(runtime.host?.querySelector(".console-onboarding-card"));' in script
     assert 'const reminderSuppressed = ["dismissed", "completed"].includes(progress.status);' in script
-    assert 'edgeLauncher.hidden = homeLauncherVisible || cardOpen || reminderSuppressed;' in script
+    assert 'edgeLauncher.hidden = homeLauncherVisible || cardOpen || reminderSuppressed || hasBeacon || currentSeen;' in script
     assert 'if (!runtime.guided && ["dismissed", "completed"].includes(progress.status))' in script
     assert 'function isEligibleUser(user)' in script
     eligibility_check = script.index('runtime.eligible = isEligibleUser(user);')
@@ -45,8 +45,10 @@ def test_onboarding_is_available_to_all_non_admin_users_and_can_be_reopened():
     launch_body = script[launch_start:launch_end]
     assert 'const progress = readProgress();' in launch_body
     assert 'if (progress.status === "active")' in launch_body
-    assert 'startGuide(resumeStep());' in launch_body
-    assert 'openReminder(resumeStep());' in launch_body
+    assert 'startGuide(index);' in launch_body
+    assert 'openReminder(index);' in launch_body
+    assert 'markBeaconSeen(index);' in launch_body
+    assert 'removeBeacons();' in launch_body
 
 
 def test_active_tutorial_only_marks_the_current_unfinished_step():
@@ -54,34 +56,36 @@ def test_active_tutorial_only_marks_the_current_unfinished_step():
 
     assert 'const activeIndex = progress.status === "active" ? resumeStep() : -1;' in script
     assert 'const completed = new Set(completedStepIds(progress));' in script
-    assert 'const shouldShow = (activeIndex < 0 || index === activeIndex) && !completed.has(step.id);' in script
+    assert 'const shouldShow = !cardOpen && index === firstUnseen;' in script
+    assert 'function markBeaconSeen(index)' in script
+    assert 'seenBeacons' in script
     assert 'if (!shouldShow || !beaconHost || beacon.parentElement !== beaconHost) removeBeacon(beacon);' in script
     assert 'if (!shouldShow) return;' in script
     assert 'if (latest.status === "active")' in script
     assert 'startGuide(resumeStep());' in script
     assert 'openReminder(index);' in script
     assert 'completedSteps:' in script
-    assert 'markStepCompleted(index);' in script
+    assert 'function markStepCompleted(index)' in script
+    assert 'markStepCompleted(runtime.currentStep);' in script
 
 
-def test_business_success_responses_advance_each_onboarding_step():
+def test_onboarding_hides_on_target_click_and_only_advances_on_next():
     script = ONBOARDING_JS_PATH.read_text(encoding="utf-8")
 
-    for endpoint in (
-        'path === "/api/persona_dashboard/personas"',
-        'path === "/api/persona_dashboard/personas/ai_create"',
-        'path === "/api/persona_dashboard/automation/accounts"',
-        'generate_posts\\/tasks\\/',
-        'path === "/api/persona_dashboard/automation/tasks"',
-        'persona_dashboard\\/refresh\\/',
-    ):
-        assert endpoint in script
-    assert 'document.addEventListener("click", armCurrentStepFromAction, true);' in script
-    assert 'runtime.actionArmedStep !== index' in script
-    assert 'Date.now() - runtime.actionArmedAt > 30 * 60 * 1000' in script
-    assert 'response.clone().json()' in script
-    assert 'navigateToStep(index + 1);' in script
-    assert 'completeGuide();' in script
+    assert 'function hideGuideAfterTargetClick(event)' in script
+    assert 'document.addEventListener("click", hideGuideAfterTargetClick, true);' in script
+    assert 'closeCard();' in script
+    assert 'if (action.hasAttribute("data-onboarding-next"))' in script
+    assert 'markStepCompleted(runtime.currentStep);' in script
+    assert 'navigateToStep(runtime.currentStep + 1, { followEntry: !isHandsOn() });' in script
+    assert 'function markHandsOn()' in script
+    assert 'function isHandsOn(' in script
+    assert 'followEntry && (ignoreHandsOn || !isHandsOn())' in script or 'const mayFollow = followEntry && (ignoreHandsOn || !isHandsOn());' in script
+    assert 'navigateToStep(index + 1);' not in script
+    assert 'armCurrentStepFromAction' not in script
+    assert 'advanceAfterRecognizedAction' not in script
+    assert 'installCompletionMonitor' not in script
+    assert 'window.fetch =' not in script
 
 
 def test_onboarding_covers_the_primary_business_flow_without_blocking_it():

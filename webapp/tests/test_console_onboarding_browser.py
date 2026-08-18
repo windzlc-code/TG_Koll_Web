@@ -46,7 +46,7 @@ def _launch_browser(playwright):
 
 
 @pytest.mark.parametrize("step_index,title,url,method,payload,next_title", STEP_CASES)
-def test_each_business_success_advances_without_reopening_old_prompt(
+def test_target_click_hides_guide_and_only_next_advances(
     step_index, title, url, method, payload, next_title
 ):
     sync_api = pytest.importorskip("playwright.sync_api")
@@ -73,9 +73,12 @@ def test_each_business_success_advances_without_reopening_old_prompt(
 
         page.locator(".console-onboarding-beacon").wait_for()
         assert page.locator(".console-onboarding-beacon").count() == 1
+        assert page.locator("#consoleOnboardingEdgeLauncher").is_hidden()
         page.locator(".console-onboarding-beacon").click()
         card = page.locator(".console-onboarding-card")
         assert card.locator("h2").inner_text() == title
+        assert page.locator(".console-onboarding-beacon").count() == 0
+        assert page.locator("#consoleOnboardingEdgeLauncher").is_hidden()
         assert card.locator("[data-onboarding-start]").count() == 0
         assert card.locator("[data-onboarding-jump]").count() == 0
         assert card.locator("[data-onboarding-next], [data-onboarding-complete]").count() == 1
@@ -88,22 +91,105 @@ def test_each_business_success_advances_without_reopening_old_prompt(
             "#btnPersonaDashboardSync",
         )
         page.locator(targets[step_index]).click()
+        page.locator(".console-onboarding-card").wait_for(state="detached", timeout=2000)
         page.evaluate(
             "([requestUrl, requestMethod]) => fetch(requestUrl, { method: requestMethod }).then((response) => response.json())",
             [url, method],
         )
-        page.locator(".console-onboarding-card h2").filter(has_text=next_title).wait_for(timeout=4000)
+        page.wait_for_timeout(500)
+        assert page.locator(".console-onboarding-card").count() == 0
+        assert page.locator(".console-onboarding-beacon").count() == 0
+        assert page.locator("#consoleOnboardingEdgeLauncher").is_hidden()
+        stored = json.loads(page.evaluate(f"localStorage.getItem({json.dumps(STORAGE_KEY)})"))
+        assert stored["step"] == step_index
+        assert STEP_IDS[step_index] not in stored.get("completedSteps", [])
+        assert STEP_IDS[step_index] in stored.get("seenBeacons", [])
+        assert stored.get("handsOn") is True
 
+        page.locator("#consoleOnboardingHomeLauncher").click()
+        card = page.locator(".console-onboarding-card")
+        assert card.locator("h2").inner_text() == title
+        assert page.locator(".console-onboarding-beacon").count() == 0
         if step_index < 4:
-            assert page.locator(".console-onboarding-beacon").count() == 1
-            assert page.locator(f'.console-onboarding-beacon[data-target-id="{STEP_IDS[step_index + 1]}"]').count() == 1
-            assert page.locator(f'.console-onboarding-beacon[data-target-id="{STEP_IDS[step_index]}"]').count() == 0
+            page.locator("[data-onboarding-next]").click()
+            page.locator(".console-onboarding-card h2").filter(has_text=next_title).wait_for(timeout=4000)
+            assert page.locator(".console-onboarding-beacon").count() == 0
             stored = json.loads(page.evaluate(f"localStorage.getItem({json.dumps(STORAGE_KEY)})"))
             assert stored["step"] == step_index + 1
             assert STEP_IDS[step_index] in stored["completedSteps"]
         else:
+            page.locator("[data-onboarding-complete]").click()
+            page.locator(".console-onboarding-card h2").filter(has_text=next_title).wait_for(timeout=4000)
             assert page.locator(".console-onboarding-beacon").count() == 0
             stored = json.loads(page.evaluate(f"localStorage.getItem({json.dumps(STORAGE_KEY)})"))
             assert stored["status"] == "completed"
-            assert STEP_IDS[step_index] in stored["completedSteps"]
+        browser.close()
+
+
+def test_next_follows_page_only_before_user_operates():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+
+        def route_request(route):
+            request_url = route.request.url
+            if request_url == "http://onboarding.test/":
+                route.fulfill(status=200, content_type="text/html", body=PAGE_HTML)
+                return
+            if request_url.endswith("/api/me"):
+                route.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps({"id": 7, "is_admin": False, "acting_admin": False}),
+                )
+                return
+            route.fulfill(status=200, content_type="application/json", body="{}")
+
+        page.route("**/*", route_request)
+        page.add_init_script(
+            f"localStorage.setItem({json.dumps(STORAGE_KEY)}, {json.dumps(json.dumps({'version': '2026.08', 'status': 'active', 'step': 0, 'completedSteps': []}))});"
+        )
+        page.goto("http://onboarding.test/")
+        page.add_script_tag(content=ONBOARDING_SCRIPT)
+        page.locator(".console-onboarding-beacon").wait_for()
+        page.evaluate(
+            """() => {
+              window.__onboardingNavClicks = [];
+              document.querySelectorAll("nav button").forEach((button) => {
+                button.addEventListener("click", () => {
+                  window.__onboardingNavClicks.push(button.getAttribute("data-module")
+                    || button.getAttribute("data-workspace-module")
+                    || button.getAttribute("data-view")
+                    || "");
+                });
+              });
+              document.querySelector("[data-account-pool-add]").hidden = true;
+              document.querySelector("[data-persona-generate-posts]").hidden = true;
+              document.querySelector("[data-persona-publish-submit]").hidden = true;
+            }"""
+        )
+        page.locator(".console-onboarding-beacon").click()
+        page.locator("[data-onboarding-next]").click()
+        page.locator(".console-onboarding-card h2").filter(has_text="添加并检查平台账号").wait_for(timeout=4000)
+        assert page.evaluate("window.__onboardingNavClicks") == ["accounts"]
+        stored = json.loads(page.evaluate(f"localStorage.getItem({json.dumps(STORAGE_KEY)})"))
+        assert stored.get("handsOn") is not True
+
+        page.evaluate("document.querySelector('[data-account-pool-add]').hidden = false")
+        page.locator("[data-account-pool-add]").click()
+        page.locator(".console-onboarding-card").wait_for(state="detached", timeout=2000)
+        stored = json.loads(page.evaluate(f"localStorage.getItem({json.dumps(STORAGE_KEY)})"))
+        assert stored.get("handsOn") is True
+
+        page.locator("#consoleOnboardingHomeLauncher").click()
+        page.evaluate(
+            """() => {
+              window.__onboardingNavClicks = [];
+              document.querySelector("[data-persona-generate-posts]").hidden = true;
+            }"""
+        )
+        page.locator("[data-onboarding-next]").click()
+        page.locator(".console-onboarding-card h2").filter(has_text="生成第一批推文").wait_for(timeout=4000)
+        assert page.evaluate("window.__onboardingNavClicks") == []
         browser.close()

@@ -245,6 +245,11 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("!deferMobilePublishingBrowserView(firstImmediateTaskId)", SCRIPT)
         self.assertIn("openPublishAssistanceView(immediateTaskId, { accountId })", SCRIPT)
         self.assertIn("if (moduleId === \"publishing\" && mobilePublishingTask())", SCRIPT)
+        self.assertIn("function publishAssistanceLooksSettled", SCRIPT)
+        self.assertIn("function releaseMobilePublishingTask", SCRIPT)
+        self.assertIn("function refreshPublishingDockAfterAssistanceSettle", SCRIPT)
+        self.assertIn("refreshPublishingDockAfterAssistanceSettle(cleanTaskId)", SCRIPT)
+        self.assertIn('phase !== "success" && phase !== "error"', SCRIPT)
         self.assertNotIn("openLiveBrowserTaskView(taskId);", SCRIPT[SCRIPT.index("if ($(\"executeSimpleFlow\"))"):SCRIPT.index("async function executeSimpleFlow")])
 
     def test_mobile_publish_media_defers_decode_and_offscreen_paint(self):

@@ -677,6 +677,13 @@ def _resolve_orderable_city_id(setup: Mapping[str, Any], country: str, city: str
     raise ProxyPurchaseError("INVALID_CITY", "所选城市当前无法下单，请换一个城市后重试", 422)
 
 
+def _selected_purchase_location(request_record: Mapping[str, Any] | None) -> tuple[str, str]:
+    request = request_record if isinstance(request_record, Mapping) else {}
+    city = str(request.get("cityName") or request.get("city") or "").strip()
+    region = str(request.get("region") or "").strip()
+    return city, region
+
+
 def _city_raw_item(setup: Mapping[str, Any], country: str, city_id: str) -> Mapping[str, Any] | None:
     raw_cities = _setup_data(setup).get("cities")
     items = raw_cities.get(str(country or "").strip().upper(), []) if isinstance(raw_cities, Mapping) else []
@@ -1319,6 +1326,9 @@ def _deliver_owned_proxy(
     country = str(
         _proxy_field(proxy, "country", "countryCode") or request_record.get("country") or ""
     ).upper()
+    selected_city, selected_region = _selected_purchase_location(request_record)
+    city = selected_city or str(_proxy_field(proxy, "city") or "")
+    region = selected_region or str(_proxy_field(proxy, "region", "state") or "")
     isp_name = str(_proxy_field(proxy, "isp", "ispName"))
     expires_at = _parse_timestamp(_proxy_field(proxy, "expiresAt", "expires_at", "expirationDate"))
     explicit_protocol = str(_proxy_field(proxy, "protocol", "proxyType", "type") or "").lower()
@@ -1364,8 +1374,8 @@ def _deliver_owned_proxy(
             username_cipher,
             password_cipher,
             country,
-            str(_proxy_field(proxy, "region", "state")),
-            str(_proxy_field(proxy, "city")),
+            region,
+            city,
             isp_name,
             "static_residential",
             "Owned provider purchase",
@@ -1406,8 +1416,8 @@ def _deliver_owned_proxy(
             "",
             "",
             country,
-            str(_proxy_field(proxy, "region", "state")),
-            str(_proxy_field(proxy, "city")),
+            region,
+            city,
             isp_name,
             "provider_purchase",
             "static_residential",

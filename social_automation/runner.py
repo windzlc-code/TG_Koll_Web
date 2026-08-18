@@ -19,6 +19,7 @@ from urllib.parse import quote, quote_plus, urljoin, urlparse
 INSTAGRAM_HOME = "https://www.instagram.com/"
 INSTAGRAM_LOGIN = "https://www.instagram.com/accounts/login/"
 THREADS_HOME = "https://www.threads.net/"
+THREADS_POST_SUBMIT_WATCH_SECONDS = 2
 DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS = 4
 LOGIN_FORM_WAIT_SECONDS = 12
 DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
@@ -11921,9 +11922,51 @@ def _normalize_threads_post_permalink(value: Any) -> str:
     if host not in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
         return ""
     path = str(parsed.path or "").rstrip("/")
+    if re.fullmatch(r"/t/[^/\s]+", path, flags=re.IGNORECASE):
+        return f"https://www.threads.net{path}"
     if not re.fullmatch(r"/@[^/\s]+/(?:post|thread)/[^/\s]+", path, flags=re.IGNORECASE):
         return ""
     return f"https://www.threads.net{path}"
+
+
+def _is_threads_short_permalink(value: Any) -> bool:
+    path = str(urlparse(_normalize_threads_post_permalink(value)).path or "")
+    return bool(re.fullmatch(r"/t/[^/\s]+", path, flags=re.IGNORECASE))
+
+
+def _threads_post_identity(value: Any) -> str:
+    path = str(urlparse(_normalize_threads_post_permalink(value)).path or "").rstrip("/")
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2 and parts[0].lower() == "t":
+        return parts[1].lower()
+    if len(parts) >= 3 and parts[1].lower() in {"post", "thread"}:
+        return parts[2].lower()
+    return ""
+
+
+def _dedupe_threads_permalinks(values: Iterable[Any]) -> list[str]:
+    chosen: dict[str, str] = {}
+    order: list[str] = []
+    for value in values:
+        permalink = _normalize_threads_post_permalink(value)
+        ident = _threads_post_identity(permalink)
+        if not permalink or not ident:
+            continue
+        existing = chosen.get(ident)
+        if existing is None:
+            chosen[ident] = permalink
+            order.append(ident)
+            continue
+        if _is_threads_short_permalink(existing) and not _is_threads_short_permalink(permalink):
+            chosen[ident] = permalink
+    return [chosen[ident] for ident in order]
+
+
+def _threads_permalink_in_baseline(permalink: str, baseline_permalinks: set[str]) -> bool:
+    ident = _threads_post_identity(permalink)
+    if ident and any(_threads_post_identity(item) == ident for item in baseline_permalinks):
+        return True
+    return _normalize_threads_post_permalink(permalink) in baseline_permalinks
 
 
 def _threads_publish_session_permalinks(context_control: dict[str, Any] | None) -> set[str]:
@@ -11962,43 +12005,34 @@ def _find_threads_post_permalink(page, caption: str) -> str:
             r"""caption => {
                 const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
                 const compact = value => normalize(value).replace(/\s+/g, '');
+                const isPostHref = href => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(href) || /\/t\/[^/?#]+/i.test(href);
+                const hrefOf = node => node.href || node.getAttribute('href') || '';
                 const normalizedCaption = normalize(caption);
                 const compactCaption = compact(caption);
+                const firstLine = normalizedCaption.split('\n')[0] || '';
                 const probes = [
-                    normalizedCaption.slice(0, 96),
-                    compactCaption.slice(0, 64),
-                ].filter(value => value.length >= 12);
+                    firstLine.slice(0, 48),
+                    normalizedCaption.slice(0, 48),
+                    compactCaption.slice(0, 32),
+                    firstLine.slice(0, 24),
+                    normalizedCaption.slice(0, 24),
+                ].filter(value => value.length >= 8);
                 const containsCaption = value => {
                     const normalizedValue = normalize(value);
                     const compactValue = compact(value);
-                    return normalizedValue.includes(normalizedCaption)
-                        || probes.some(probe => normalizedValue.includes(probe) || compactValue.includes(probe));
+                    return Boolean(normalizedCaption) && (
+                        normalizedValue.includes(normalizedCaption)
+                        || probes.some(probe => normalizedValue.includes(probe) || compactValue.includes(probe))
+                    );
                 };
-                const matches = Array.from(document.querySelectorAll('div, span, p')).filter(
-                    node => containsCaption(node.innerText || node.textContent)
-                );
-                matches.sort((left, right) => normalize(left.innerText || left.textContent).length - normalize(right.innerText || right.textContent).length);
-                for (const match of matches) {
-                    let root = match;
-                    for (let depth = 0; root && root !== document.body && depth < 12; depth += 1, root = root.parentElement) {
-                        const links = root.matches?.('a[href]') ? [root] : Array.from(root.querySelectorAll('a[href]'));
-                        const postLinks = links.filter(link => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(link.href || link.getAttribute('href') || ''));
-                        const uniquePostLinks = Array.from(new Map(postLinks.map(link => [link.href || link.getAttribute('href') || '', link])).values());
-                        if (uniquePostLinks.length === 1) return uniquePostLinks[0].href || uniquePostLinks[0].getAttribute('href') || '';
-                    }
-                }
-                const postLinks = Array.from(document.querySelectorAll('a[href]')).filter(
-                    link => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(link.href || link.getAttribute('href') || '')
-                );
+                const postLinks = Array.from(document.querySelectorAll('a[href]')).filter(link => isPostHref(hrefOf(link)));
                 for (const postLink of postLinks) {
                     let root = postLink;
                     for (let depth = 0; root && root !== document.body && depth < 12; depth += 1, root = root.parentElement) {
-                        const localLinks = Array.from(root.querySelectorAll('a[href]')).filter(
-                            link => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(link.href || link.getAttribute('href') || '')
-                        );
-                        const uniqueLocalLinks = new Set(localLinks.map(link => link.href || link.getAttribute('href') || ''));
+                        const localLinks = Array.from(root.querySelectorAll('a[href]')).filter(link => isPostHref(hrefOf(link)));
+                        const uniqueLocalLinks = new Set(localLinks.map(hrefOf));
                         if (uniqueLocalLinks.size === 1 && containsCaption(root.innerText || root.textContent)) {
-                            return postLink.href || postLink.getAttribute('href') || '';
+                            return hrefOf(postLink);
                         }
                     }
                 }
@@ -12022,9 +12056,26 @@ def _find_threads_post_permalinks(page) -> list[str] | None:
         return [current_url]
     try:
         candidates = page.evaluate(
-            r"""() => Array.from(document.querySelectorAll('a[href]'))
-                .map(link => link.href || link.getAttribute('href') || '')
-                .filter(href => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(href))"""
+            r"""() => {
+                const isPostHref = href => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(href) || /\/t\/[^/?#]+/i.test(href);
+                const hrefOf = node => node.href || node.getAttribute('href') || '';
+                const found = [];
+                const push = href => {
+                    if (href && isPostHref(href) && !found.includes(href)) found.push(href);
+                };
+                const cards = Array.from(document.querySelectorAll('article, [role="article"]'));
+                for (const card of cards) {
+                    const timeLink = card.querySelector('time')?.closest('a[href], [role="link"][href]');
+                    if (timeLink) push(hrefOf(timeLink));
+                    Array.from(card.querySelectorAll('a[href]')).forEach(link => push(hrefOf(link)));
+                }
+                Array.from(document.querySelectorAll('time')).forEach((node) => {
+                    const link = node.closest('a[href], [role="link"][href]');
+                    if (link) push(hrefOf(link));
+                });
+                Array.from(document.querySelectorAll('a[href]')).forEach(link => push(hrefOf(link)));
+                return found;
+            }"""
         )
     except Exception:
         return None
@@ -12036,10 +12087,69 @@ def _find_threads_post_permalinks(page) -> list[str] | None:
     return permalinks
 
 
-def _threads_permalink_belongs_to_profile(permalink: str, profile_url: str) -> bool:
+def _click_newest_unconfirmed_profile_post(
+    page,
+    logger: AutomationLogger,
+    profile_url: str,
+    baseline_permalinks: set[str],
+) -> bool:
+    baseline_ids = [
+        ident
+        for ident in (_threads_post_identity(item) for item in baseline_permalinks)
+        if ident
+    ]
+    try:
+        marked = page.evaluate(
+            r"""baselineIds => {
+                document.querySelectorAll('[data-vecto-confirm-target]').forEach((node) => node.removeAttribute('data-vecto-confirm-target'));
+                const known = new Set((baselineIds || []).map((value) => String(value || '').toLowerCase()).filter(Boolean));
+                const isPostHref = href => /\/@[^/]+\/(?:post|thread)\/[^/?#]+/i.test(href) || /\/t\/[^/?#]+/i.test(href);
+                const hrefOf = node => node.href || node.getAttribute('href') || '';
+                const identOf = href => {
+                    const match = String(href || '').match(/\/(?:post|thread|t)\/([^/?#]+)/i);
+                    return match ? String(match[1] || '').toLowerCase() : '';
+                };
+                const cards = Array.from(document.querySelectorAll('article, [role="article"]'));
+                for (const card of cards) {
+                    const timeNode = card.querySelector('time');
+                    if (!timeNode) continue;
+                    const hrefs = Array.from(card.querySelectorAll('a[href]')).map(hrefOf).filter(isPostHref);
+                    if (hrefs.some((href) => known.has(identOf(href)))) continue;
+                    const clickable = timeNode.closest('a, [role="link"], button')
+                        || card.querySelector('header a[href], header [role="link"], a[href]')
+                        || timeNode;
+                    const style = window.getComputedStyle(clickable);
+                    const rect = clickable.getBoundingClientRect();
+                    if (rect.width <= 0 || rect.height <= 0 || style.visibility === 'hidden' || style.display === 'none') continue;
+                    clickable.scrollIntoView({block: 'center', inline: 'center'});
+                    clickable.setAttribute('data-vecto-confirm-target', '1');
+                    return true;
+                }
+                return false;
+            }""",
+            baseline_ids,
+        )
+    except Exception as exc:
+        logger.log("debug", "threads_publish_confirm_card", "无法按结构定位新帖卡片。", {"error": str(exc)[:300]})
+        return False
+    if marked is not True:
+        return False
+    try:
+        target = page.locator('[data-vecto-confirm-target="1"]').first
+        return bool(_human_click(page, target, logger, "threads_publish_confirm_card"))
+    except Exception:
+        return False
+
+
+def _threads_permalink_belongs_to_profile(permalink: str, profile_url: str, *, current_url: str = "") -> bool:
     post = urlparse(_normalize_threads_post_permalink(permalink))
     profile = urlparse(_normalize_threads_profile_url(profile_url))
-    post_match = re.match(r"^/(@[^/]+)/", str(post.path or ""), flags=re.IGNORECASE)
+    post_path = str(post.path or "")
+    if re.fullmatch(r"/t/[^/\s]+", post_path, flags=re.IGNORECASE):
+        current_profile = _normalize_threads_profile_url(current_url)
+        expected_profile = _normalize_threads_profile_url(profile_url)
+        return bool(current_profile and expected_profile and current_profile == expected_profile)
+    post_match = re.match(r"^/(@[^/]+)/", post_path, flags=re.IGNORECASE)
     profile_match = re.match(r"^/(@[^/]+)$", str(profile.path or ""), flags=re.IGNORECASE)
     return bool(post_match and profile_match and post_match.group(1).lower() == profile_match.group(1).lower())
 
@@ -12054,8 +12164,10 @@ def _wait_for_threads_publish_success(
     cancel_event: Any | None = None,
     context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    deadline = time.time() + 90
+    started_at = time.time()
+    deadline = started_at + 90
     saw_dialog = False
+    dialog_closed_at: float | None = None
     baseline = {
         normalized
         for value in (previous_permalinks or set())
@@ -12068,30 +12180,25 @@ def _wait_for_threads_publish_success(
             _set_manual_takeover_waiting_for(context_control, "threads_confirmation")
         try:
             permalink = _normalize_threads_post_permalink(page.url)
-            if permalink and (
+            own_permalink = bool(permalink) and (
                 not profile_url
-                or (_threads_permalink_belongs_to_profile(permalink, profile_url) and (not baseline_known or permalink not in baseline))
-            ):
+                or _is_threads_short_permalink(permalink)
+                or _threads_permalink_belongs_to_profile(permalink, profile_url, current_url=str(getattr(page, "url", "") or ""))
+            )
+            if own_permalink and (not baseline_known or permalink not in baseline):
                 return {"confirmed": True, "submitted": True, "reason": "已检测到 Threads 帖子链接。", "url": permalink}
         except Exception:
             pass
-        if baseline_known and caption and profile_url:
-            candidate = _find_threads_post_permalink(page, caption)
-            if candidate and candidate not in baseline and _threads_permalink_belongs_to_profile(candidate, profile_url):
-                return {
-                    "confirmed": True,
-                    "submitted": True,
-                    "reason": "已在提交后的页面识别到本账号新帖链接。",
-                    "url": candidate,
-                }
         dialog_compose = _threads_dialog_compose_box(page)
         dialog_post_button = _threads_dialog_post_button(page)
         if dialog_compose is not None or dialog_post_button is not None:
             saw_dialog = True
-        elif saw_dialog:
+            dialog_closed_at = None
+        elif saw_dialog and dialog_closed_at is None:
+            dialog_closed_at = time.time()
+        watch_started_at = dialog_closed_at if dialog_closed_at is not None else (started_at if not saw_dialog else None)
+        if watch_started_at is not None and time.time() >= watch_started_at + THREADS_POST_SUBMIT_WATCH_SECONDS:
             return {"confirmed": False, "submitted": True, "reason": "Threads 编辑器已关闭，仍需帖子链接确认。", "url": ""}
-        elif time.time() > deadline - 84:
-            return {"confirmed": False, "submitted": True, "reason": "Threads 已返回信息流，仍需帖子链接确认。", "url": ""}
         _wait_for_cancellation(random.uniform(1.4, 2.2), cancel_event)
     logger.log("warn", "threads_publish_confirm", "等待 Threads 发布确认超时。", {"url": str(page.url or "")})
     return {"confirmed": False, "submitted": False, "reason": "等待 Threads 发布确认超时。", "url": ""}
@@ -12295,6 +12402,23 @@ def _wait_for_threads_own_post(
         for value in (previous_permalinks or set()) | ({previous_permalink} if previous_permalink else set())
         if (normalized := _normalize_threads_post_permalink(value))
     }
+    _set_task_assistance(
+        context_control,
+        title="正在校验发布结果",
+        message="帖子已提交，正在确认链接并保存截图。",
+        content=caption,
+    )
+    current_permalink = _normalize_threads_post_permalink(getattr(page, "url", ""))
+    if (
+        baseline_known
+        and current_permalink
+        and current_permalink not in baseline_permalinks
+        and (
+            _is_threads_short_permalink(current_permalink)
+            or _threads_permalink_belongs_to_profile(current_permalink, target_url)
+        )
+    ):
+        return {"confirmed": True, "reason": "提交后当前页已是本次发布帖子。", "url": current_permalink}
     try:
         _raise_if_cancelled(cancel_event)
         _goto(page, target_url, logger, "threads_publish_profile", timeout_ms=nav_timeout_ms, networkidle_ms=2500)
@@ -12305,6 +12429,7 @@ def _wait_for_threads_own_post(
     deadline = started_at + confirm_seconds
     attempt = 0
     refresh_count = 0
+    current_page_url = str(getattr(page, "url", "") or "")
     while True:
         _raise_if_cancelled(cancel_event)
         if _manual_takeover_requested(context_control):
@@ -12313,17 +12438,62 @@ def _wait_for_threads_own_post(
         if now >= deadline:
             break
         attempt += 1
-        current_permalinks = _find_threads_post_permalinks(page) or []
+        current_page_url = str(getattr(page, "url", "") or current_page_url)
+        current_permalinks = _dedupe_threads_permalinks(_find_threads_post_permalinks(page) or [])
         new_own_permalinks = [
             candidate
             for candidate in current_permalinks
-            if candidate not in baseline_permalinks and _threads_permalink_belongs_to_profile(candidate, target_url)
+            if not _threads_permalink_in_baseline(candidate, baseline_permalinks)
+            and _threads_permalink_belongs_to_profile(candidate, target_url, current_url=current_page_url)
         ]
-        if str(caption or "").strip():
-            matched_permalink = _find_threads_post_permalink(page, caption)
-            permalink = matched_permalink if matched_permalink in new_own_permalinks else ""
-        else:
-            permalink = new_own_permalinks[0] if len(new_own_permalinks) == 1 else ""
+        permalink = new_own_permalinks[0] if new_own_permalinks else ""
+        if not permalink and baseline_known and _click_newest_unconfirmed_profile_post(
+            page, logger, target_url, baseline_permalinks
+        ):
+            _wait_for_cancellation(0.8, cancel_event)
+            opened = _normalize_threads_post_permalink(getattr(page, "url", ""))
+            if (
+                opened
+                and not _threads_permalink_in_baseline(opened, baseline_permalinks)
+                and (
+                    _is_threads_short_permalink(opened)
+                    or _threads_permalink_belongs_to_profile(opened, target_url)
+                )
+            ):
+                permalink = opened
+                logger.log(
+                    "info",
+                    "threads_publish_confirm_card",
+                    "已按帖子卡片结构打开本次新帖。",
+                    {"url": permalink, "attempt": attempt},
+                )
+            else:
+                current_permalinks = _dedupe_threads_permalinks(_find_threads_post_permalinks(page) or [])
+                new_own_permalinks = [
+                    candidate
+                    for candidate in current_permalinks
+                    if not _threads_permalink_in_baseline(candidate, baseline_permalinks)
+                    and _threads_permalink_belongs_to_profile(candidate, target_url, current_url=str(getattr(page, "url", "") or current_page_url))
+                ]
+                permalink = new_own_permalinks[0] if new_own_permalinks else ""
+        if attempt == 1 or attempt % 5 == 0:
+            _set_task_assistance(
+                context_control,
+                title="正在校验发布结果",
+                message=f"帖子已提交，正在确认链接并保存截图（第 {attempt} 次检查）。",
+                content=caption,
+            )
+            logger.log(
+                "info",
+                "threads_publish_confirm_progress",
+                "正在校验发布结果。",
+                {
+                    "attempt": attempt,
+                    "new_permalinks": len(new_own_permalinks),
+                    "known_permalinks": len(current_permalinks),
+                    "urls": new_own_permalinks[:4],
+                },
+            )
         if baseline_known and permalink:
             return {"confirmed": True, "reason": "已在账号主页定位到本次发布帖子的链接。", "url": permalink}
         _wait_for_cancellation(random.uniform(1.8, 2.6), cancel_event)
@@ -12358,13 +12528,93 @@ def _dismiss_threads_cookie_consent(page, logger: AutomationLogger) -> bool:
     return marker not in _page_body_text_lower(page, timeout_ms=1500)
 
 
-def _threads_publish_evidence_page_ready(page, permalink: str) -> bool:
+def _threads_publish_evidence_url_matches(page, permalink: str) -> bool:
     expected_url = _normalize_threads_post_permalink(permalink)
-    current_url = _normalize_threads_post_permalink(getattr(page, "url", ""))
-    if not expected_url or current_url != expected_url:
+    raw_url = str(getattr(page, "url", "") or "")
+    current_url = _normalize_threads_post_permalink(raw_url)
+    if not expected_url:
+        return False
+    if current_url == expected_url:
+        return True
+    if current_url and _threads_post_identity(current_url) == _threads_post_identity(expected_url):
+        return True
+    if _is_threads_short_permalink(expected_url) and current_url and not _is_threads_short_permalink(current_url):
+        return True
+    post_id = _threads_post_identity(expected_url)
+    lowered = raw_url.lower()
+    return bool(post_id and post_id.lower() in lowered and re.search(r"/(?:post|thread|t)/", lowered))
+
+
+def _threads_publish_evidence_overlay_ready(page, permalink: str) -> bool:
+    post_id = _threads_post_identity(permalink)
+    if not post_id:
         return False
     try:
-        body_text = " ".join(str(page.locator("body").inner_text(timeout=3500) or "").lower().split())
+        return bool(
+            page.evaluate(
+                """postId => {
+                    const needle = String(postId || '').toLowerCase();
+                    const dialogs = Array.from(document.querySelectorAll('[role="dialog"]')).filter((node) => {
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+                    });
+                    return dialogs.some((dialog) => {
+                        const hrefs = Array.from(dialog.querySelectorAll('a[href]')).map((link) => String(link.href || '').toLowerCase());
+                        return hrefs.some((href) => href.includes(needle) && /\\/(?:post|thread|t)\\//.test(href));
+                    });
+                }""",
+                post_id,
+            )
+        )
+    except Exception:
+        return False
+
+
+def _click_threads_confirmed_post(page, permalink: str, logger: AutomationLogger) -> bool:
+    post_id = _threads_post_identity(permalink)
+    if not post_id:
+        return False
+    try:
+        marked = page.evaluate(
+            """postId => {
+                document.querySelectorAll('[data-vecto-evidence-target]').forEach((node) => node.removeAttribute('data-vecto-evidence-target'));
+                const needle = String(postId || '').toLowerCase();
+                const links = Array.from(document.querySelectorAll('a[href]'));
+                const hit = links.find((link) => {
+                    const href = String(link.href || link.getAttribute('href') || '').toLowerCase();
+                    return href.includes(needle) && /\\/(?:post|thread|t)\\//.test(href);
+                });
+                if (!hit) return false;
+                const clickable = hit.closest('a, [role="link"]') || hit;
+                clickable.scrollIntoView({block: 'center', inline: 'center'});
+                clickable.setAttribute('data-vecto-evidence-target', '1');
+                return true;
+            }""",
+            post_id,
+        )
+    except Exception as exc:
+        logger.log("debug", "threads_publish_result_open", "无法在当前页定位已确认的帖子链接。", {"error": str(exc)[:300]})
+        return False
+    if marked is not True:
+        return False
+    try:
+        target = page.locator('[data-vecto-evidence-target="1"]').first
+        return bool(_human_click(page, target, logger, "threads_publish_result_open"))
+    except Exception:
+        return False
+
+
+def _threads_publish_evidence_page_ready(page, permalink: str) -> bool:
+    expected_url = _normalize_threads_post_permalink(permalink)
+    if not expected_url:
+        return False
+    url_matches = _threads_publish_evidence_url_matches(page, permalink)
+    overlay_ready = False if url_matches else _threads_publish_evidence_overlay_ready(page, permalink)
+    if not url_matches and not overlay_ready:
+        return False
+    try:
+        body_text = " ".join(str(page.locator("body").inner_text(timeout=1500) or "").lower().split())
     except Exception:
         return False
     if not body_text:
@@ -12380,35 +12630,44 @@ def _threads_publish_evidence_page_ready(page, permalink: str) -> bool:
 
 
 def _capture_threads_publish_evidence(page, permalink: str, caption: str, screenshot_dir: Path, task: dict[str, Any], logger: AutomationLogger) -> str:
-    max_attempts = 3
     last_error = ""
-    for attempt in range(1, max_attempts + 1):
-        try:
-            _goto(page, permalink, logger, "threads_publish_result", timeout_ms=20000, networkidle_ms=3500)
-            if not _dismiss_threads_cookie_consent(page, logger):
-                raise RuntimeError("Threads cookie consent dialog is still covering the published post.")
-            if not _threads_publish_evidence_page_ready(page, permalink):
-                raise RuntimeError("Threads did not remain on the confirmed published-post page.")
-            _sleep_between(1.0, 1.6)
-            screenshot = _screenshot(page, screenshot_dir, task, "publish_done", logger)
-            if not screenshot:
-                raise RuntimeError("The validated Threads publish evidence screenshot could not be saved.")
+
+    def take_ready_screenshot() -> str:
+        if not _dismiss_threads_cookie_consent(page, logger):
+            return ""
+        if not _threads_publish_evidence_page_ready(page, permalink):
+            return ""
+        _sleep_between(0.3, 0.6)
+        return _screenshot(page, screenshot_dir, task, "publish_done", logger)
+
+    screenshot = take_ready_screenshot()
+    if screenshot:
+        return screenshot
+    if _click_threads_confirmed_post(page, permalink, logger):
+        _sleep_between(0.5, 0.8)
+        screenshot = take_ready_screenshot()
+        if screenshot:
             return screenshot
-        except Exception as exc:
-            last_error = str(exc)
-            if attempt < max_attempts:
-                logger.log(
-                    "warn",
-                    "publish_evidence_retry",
-                    "发布凭证页面尚未稳定，正在重新打开帖子页面后重试。",
-                    {"url": permalink, "attempt": attempt, "max_attempts": max_attempts, "error": last_error[:500]},
-                )
-                _sleep_between(0.8, 1.2)
+    try:
+        _goto(page, permalink, logger, "threads_publish_result", timeout_ms=12000, networkidle_ms=1500)
+        _sleep_between(0.4, 0.7)
+        if _click_threads_confirmed_post(page, permalink, logger):
+            _sleep_between(0.5, 0.8)
+        screenshot = take_ready_screenshot()
+        if screenshot:
+            return screenshot
+        last_error = "Threads did not remain on the confirmed published-post page."
+    except Exception as exc:
+        last_error = str(exc)
     logger.log(
         "warn",
         "publish_evidence_not_ready",
-        "发布已确认，但最终帖子页面连续重试后仍未稳定，未保存异常加载页截图。",
-        {"url": permalink, "attempts": max_attempts, "error": last_error[:500]},
+        "发布已确认，但帖子页未稳定，未保存首页或异常页截图。",
+        {
+            "url": permalink,
+            "current_url": str(getattr(page, "url", "") or ""),
+            "error": last_error[:500],
+        },
     )
     return ""
 
@@ -12504,9 +12763,7 @@ def _threads_profile_is_stably_empty(page, profile_url: str) -> bool:
     )
     if any(marker in body_text for marker in empty_markers):
         return True
-    profile_match = re.match(r"^/@([^/]+)$", str(urlparse(expected).path or ""), flags=re.IGNORECASE)
-    expected_handle = str(profile_match.group(1) if profile_match else "").strip().lower()
-    return bool(expected_handle and expected_handle in body_text)
+    return False
 
 
 def _wait_for_manual_threads_publish_completion(
@@ -12719,6 +12976,12 @@ def _run_threads_publish_post(
     confirmation_state = payload.get("_publish_confirmation")
     if isinstance(confirmation_state, dict) and confirmation_state.get("phase") == "confirm_only":
         _raise_if_cancelled(cancel_event)
+        _set_task_assistance(
+            context_control,
+            title="正在校验发布结果",
+            message="帖子已提交，正在确认链接并保存截图。",
+            content=str(confirmation_state.get("caption") or payload.get("caption") or payload.get("content") or payload.get("text") or "").strip(),
+        )
         if _manual_takeover_requested(context_control):
             _set_manual_takeover_waiting_for(context_control, "threads_confirmation")
         caption = str(confirmation_state.get("caption") or payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
@@ -12745,6 +13008,10 @@ def _run_threads_publish_post(
         )
         permalink = _normalize_threads_post_permalink(profile_confirmation.get("url")) if profile_confirmation.get("confirmed") else ""
         shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger) if permalink else ""
+        if permalink:
+            resolved = _normalize_threads_post_permalink(getattr(page, "url", ""))
+            if resolved and not _is_threads_short_permalink(resolved):
+                permalink = resolved
         if not permalink:
             reason = str(profile_confirmation.get("reason") or "Threads publish is still awaiting permalink confirmation.")
             shot = ""
@@ -12801,15 +13068,36 @@ def _run_threads_publish_post(
                 logger,
                 "threads_publish_baseline_background",
                 block_heavy_assets=True,
-            ) as verification_page:
-                return (
-                    verification_page is page,
-                    _capture_threads_profile_baseline(
-                        verification_page,
-                        profile_url,
-                        logger,
-                    ),
+            ) as blocked_page:
+                blocked_baseline = _capture_threads_profile_baseline(
+                    blocked_page,
+                    profile_url,
+                    logger,
                 )
+                if blocked_baseline:
+                    return blocked_page is page, blocked_baseline
+            logger.log(
+                "warn",
+                "threads_publish_baseline_retry_full",
+                "轻量主页没有读到帖子基线，改为完整加载后再读一次。",
+                {"blocked_baseline": None if blocked_baseline is None else len(blocked_baseline)},
+            )
+            with _temporary_background_page(
+                page,
+                logger,
+                "threads_publish_baseline_background",
+                block_heavy_assets=False,
+            ) as full_page:
+                full_baseline = _capture_threads_profile_baseline(
+                    full_page,
+                    profile_url,
+                    logger,
+                )
+                if full_baseline:
+                    return full_page is page, full_baseline
+                if blocked_baseline == set() or full_baseline == set():
+                    return full_page is page, set()
+                return full_page is page, full_baseline
 
         baseline_used_primary_page, previous_permalinks = _run_matrix_resource_phase(
             context_control,
@@ -13034,6 +13322,12 @@ def _run_threads_publish_post(
         success["submitted"] = True
         if not str(success.get("reason") or "").strip():
             success["reason"] = "Threads publish click was submitted while the page was navigating; checking the profile only."
+    _set_task_assistance(
+        context_control,
+        title="正在校验发布结果",
+        message="帖子已提交，正在确认链接并保存截图。",
+        content=caption,
+    )
     permalink = _normalize_threads_post_permalink(success.get("url")) if success.get("confirmed") else ""
     profile_confirmation: dict[str, Any] = {}
     if not permalink:
@@ -13057,6 +13351,9 @@ def _run_threads_publish_post(
         logger.log("warn", "threads_publish_confirmation_pending", message, {"submit": success, "profile": profile_confirmation}, shot)
         raise PublishConfirmationPendingError(message, shot, confirmation_state)
     shot = _capture_threads_publish_evidence(page, permalink, caption, screenshot_dir, task, logger)
+    resolved = _normalize_threads_post_permalink(getattr(page, "url", ""))
+    if resolved and not _is_threads_short_permalink(resolved):
+        permalink = resolved
     published = {
         **success,
         **profile_confirmation,

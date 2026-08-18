@@ -65,6 +65,8 @@ import {
   buildSpiderSearchMarkdownFromHotCandidates,
   parseThreadsDetailEngagementMarkdown,
   parseThreadsDetailMediaMarkdown,
+  mergeCandidateMedia,
+  personaHotStrategyDisplayName,
   parseThreadsSearchTextCandidates,
   refreshSentimentSourceMetrics,
   replaceThreadsSearchVariables,
@@ -132,8 +134,8 @@ describe("sentiment hot importer", () => {
     vi.stubEnv("AUTO_TWEET_API_CONFIG_PATH", configPath);
 
     expect(resolveSentimentHotTextModelPreference().split(",").map((model) => model.trim()).slice(0, 3)).toEqual([
-      "xai/grok-4.3",
       "xai/grok-4.5",
+      "xai/grok-4.3",
       "google/gemini-3.1-pro-preview",
     ]);
   });
@@ -382,6 +384,12 @@ describe("sentiment hot importer", () => {
       ...base,
       memorySummaries: ["昨天聊染发", "新的临时记忆"],
     }));
+  });
+
+  it("does not send slang nicknames like 老司机 to the keyword model", () => {
+    expect(personaHotStrategyDisplayName("理发师")).toBe("理发师");
+    expect(personaHotStrategyDisplayName("老司机")).toBe("按下方职业与内容领域理解的人设");
+    expect(personaHotStrategyDisplayName("老司機")).toBe("按下方职业与内容领域理解的人设");
   });
 
   it("separates hot-keyword strategy caches by configured platform tag keywords", () => {
@@ -745,7 +753,7 @@ describe("sentiment hot importer", () => {
 
   it("uses dedicated hot-topic text models before the configured global models", () => {
     const models = resolveSentimentHotTextModelPreference().split(",");
-    expect(models.slice(0, 2)).toEqual(["xai/grok-4.3", "xai/grok-4.5"]);
+    expect(models.slice(0, 2)).toEqual(["xai/grok-4.5", "xai/grok-4.3"]);
   });
 
   it("never manufactures fallback keywords when the model strategy is unavailable", () => {
@@ -874,6 +882,47 @@ describe("sentiment hot importer", () => {
     expect(manual).not.toContain("口哨");
     expect(manual).not.toContain("家務");
     expect(manual).not.toContain("頭髮");
+  });
+
+  it("keeps model object nouns when a new persona only has visual or lifestyle anchors", () => {
+    const strategy = {
+      primaryQueries: ["段子", "办公室", "同事", "枸杞茶", "笑话", "加班", "工位", "通勤"],
+      broadQueries: ["职场", "段子"],
+      ecosystemQueries: [],
+      requiredAnchorTerms: ["大叔", "家務", "慢生活"],
+      normalAnchorTerms: ["日常", "生活"],
+      strictAcceptTerms: ["造型", "口哨"],
+      normalAcceptTerms: ["頭髮"],
+      rejectTerms: [],
+      domainSummary: "幽默职场吐槽",
+    } as any;
+    applyPersonaGuardToSentimentHotStrategy({ strategy });
+    expect(strategy.requiredAnchorTerms).not.toContain("大叔");
+    expect(strategy.requiredAnchorTerms).not.toContain("家務");
+    expect(strategy.primaryQueries).toEqual(expect.arrayContaining(["办公室", "枸杞茶", "工位"]));
+    expect(strategy.primaryQueries.length).toBeGreaterThanOrEqual(5);
+    expect(strategy.requiredAnchorTerms.length).toBeGreaterThanOrEqual(3);
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).toEqual(
+      expect.arrayContaining(["办公室", "枸杞茶", "工位"]),
+    );
+  });
+
+  it("keeps short auto-repair object nouns when they do not contain the parent anchor", () => {
+    const strategy = {
+      primaryQueries: ["機油", "剎車片", "火星塞", "變速箱", "輪胎", "電瓶", "水泵", "冷氣"],
+      broadQueries: ["汽車零件", "保養"],
+      ecosystemQueries: [],
+      requiredAnchorTerms: ["汽車維修", "修車", "配件"],
+      normalAnchorTerms: ["汽車", "保養"],
+      strictAcceptTerms: ["機油", "剎車片", "火星塞", "變速箱", "輪胎", "電瓶", "水泵", "冷氣", "鈑金", "底盤"],
+      normalAcceptTerms: ["汽車零件", "保養"],
+      rejectTerms: [],
+      domainSummary: "資深汽車維修愛好者分享修車實操",
+    } as any;
+    applyPersonaGuardToSentimentHotStrategy({ strategy });
+    expect(strategy.primaryQueries.length).toBeGreaterThanOrEqual(5);
+    expect(strategy.primaryQueries).toEqual(expect.arrayContaining(["機油", "剎車片", "變速箱"]));
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict").length).toBeGreaterThanOrEqual(8);
   });
 
   it("splits theme-name mashups but keeps real object nouns", () => {
@@ -2438,6 +2487,124 @@ Sorry, we're having trouble playing this video.
     });
   });
 
+  it("keeps only the largest GraphQL image version for each carousel asset", () => {
+    const candidates = parseThreadsGraphqlSearchPayload({
+      query: "笑話",
+      keywords: ["笑話"],
+      payload: {
+        data: {
+          searchResults: {
+            edges: [{
+              node: {
+                thread_items: [{
+                  post: {
+                    pk: "3925594288747063999",
+                    code: "CarouselDedup",
+                    taken_at: Math.floor(Date.now() / 1000) - 3600,
+                    canonical_url: "https://www.threads.com/@vito50410/post/CarouselDedup",
+                    user: { username: "vito50410" },
+                    caption: {
+                      text: "今天這則笑話真的太好笑了，現場同事聽完直接笑到不行，會議幹話直接破防。",
+                    },
+                    like_count: 120,
+                    text_post_app_info: {
+                      direct_reply_count: 8,
+                      view_count: 1800,
+                    },
+                    carousel_media: [
+                      {
+                        image_versions2: {
+                          candidates: [
+                            { width: 1080, url: "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg?stp=dst-jpg_e35_s1080x1080" },
+                            { width: 640, url: "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg?stp=dst-jpg_s640x640" },
+                            { width: 320, url: "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg?stp=dst-jpg_s320x320" },
+                          ],
+                        },
+                      },
+                      {
+                        image_versions2: {
+                          candidates: [
+                            { width: 1080, url: "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg?stp=dst-jpg_e35_s1080x1080" },
+                            { width: 640, url: "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg?stp=dst-jpg_s640x640" },
+                            { width: 320, url: "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg?stp=dst-jpg_s320x320" },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                }],
+              },
+            }],
+          },
+        },
+      },
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].media.map((item) => item.url)).toEqual([
+      "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg?stp=dst-jpg_e35_s1080x1080",
+      "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg?stp=dst-jpg_e35_s1080x1080",
+    ]);
+  });
+
+  it("keeps a GraphQL carousel video as one video with its poster, not a fake extra image", () => {
+    const candidates = parseThreadsGraphqlSearchPayload({
+      query: "笑話",
+      keywords: ["笑話"],
+      payload: {
+        data: {
+          searchResults: {
+            edges: [{
+              node: {
+                thread_items: [{
+                  post: {
+                    pk: "3925594288747064002",
+                    code: "VideoPoster",
+                    taken_at: Math.floor(Date.now() / 1000) - 1800,
+                    canonical_url: "https://www.threads.com/@hkplaynd/post/VideoPoster",
+                    user: { username: "hkplaynd" },
+                    caption: { text: "今天這則笑話真的太好笑了，現場同事聽完直接笑到不行，會議幹話直接破防。" },
+                    like_count: 40,
+                    text_post_app_info: { direct_reply_count: 2, view_count: 800 },
+                    carousel_media: [
+                      {
+                        image_versions2: {
+                          candidates: [{ width: 720, url: "https://scontent.cdninstagram.com/v/t51.2885-15/poster1.jpg" }],
+                        },
+                        video_versions: [
+                          { width: 720, url: "https://scontent.cdninstagram.com/v/t50.2886-16/clip1.mp4" },
+                          { width: 360, url: "https://scontent.cdninstagram.com/v/t50.2886-16/clip1-small.mp4" },
+                        ],
+                      },
+                      {
+                        image_versions2: {
+                          candidates: [{ width: 1080, url: "https://scontent.cdninstagram.com/v/t51.2885-15/still2.jpg" }],
+                        },
+                      },
+                    ],
+                  },
+                }],
+              },
+            }],
+          },
+        },
+      },
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].media).toEqual([
+      {
+        type: "video",
+        url: "https://scontent.cdninstagram.com/v/t50.2886-16/clip1.mp4",
+        thumbnailUrl: "https://scontent.cdninstagram.com/v/t51.2885-15/poster1.jpg",
+      },
+      {
+        type: "image",
+        url: "https://scontent.cdninstagram.com/v/t51.2885-15/still2.jpg",
+      },
+    ]);
+  });
+
   it("parses current Threads search hydration scripts with real engagement totals", () => {
     const scripts = [JSON.stringify({
       require: [["ScheduledServerJS", "handle", null, [{
@@ -3084,6 +3251,109 @@ Log in to see more replies.
     expect(media.map((item) => item.url)).toEqual([
       "https://scontent-sea5-1.cdninstagram.com/v/t51.82787-15/post.jpg",
     ]);
+  });
+
+  it("dedupes Threads CDN size variants and keeps the largest copy", () => {
+    const media = parseThreadsDetailMediaMarkdown(`
+![Image 1](https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg?stp=dst-jpg_s640x640)
+![Image 2](https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg?stp=dst-jpg_e35_s1080x1080)
+![Image 3](https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg?stp=dst-jpg_s640x640)
+![Image 4](https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg)
+![Image 5](https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg?stp=dst-jpg_e35_s1080x1080)
+`);
+
+    expect(media.map((item) => item.url)).toEqual([
+      "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg",
+      "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg?stp=dst-jpg_e35_s1080x1080",
+    ]);
+  });
+
+  it("merges candidate media by asset identity instead of exact URL", () => {
+    const media = mergeCandidateMedia(
+      [
+        { type: "image", url: "https://scontent.cdninstagram.com/v/t51.2885-15/333333333_n.jpg?stp=dst-jpg_s640x640" },
+        { type: "image", url: "https://scontent.cdninstagram.com/v/t51.2885-15/444444444_n.jpg?stp=dst-jpg_s640x640" },
+      ],
+      [
+        { type: "image", url: "https://scontent.cdninstagram.com/v/t51.2885-15/333333333_n.jpg?stp=dst-jpg_e35_s1080x1080" },
+        { type: "image", url: "https://scontent.cdninstagram.com/v/t51.2885-15/444444444_n.jpg?stp=dst-jpg_s640x640" },
+        { type: "image", url: "https://scontent.cdninstagram.com/v/t51.2885-15/555555555_n.jpg" },
+      ],
+    );
+
+    expect(media.map((item) => item.url)).toEqual([
+      "https://scontent.cdninstagram.com/v/t51.2885-15/333333333_n.jpg?stp=dst-jpg_e35_s1080x1080",
+      "https://scontent.cdninstagram.com/v/t51.2885-15/444444444_n.jpg?stp=dst-jpg_s640x640",
+      "https://scontent.cdninstagram.com/v/t51.2885-15/555555555_n.jpg",
+    ]);
+  });
+
+  it("keeps only original hotspot post media and never repeats the same asset", () => {
+    const originals = [
+      "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg",
+      "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg",
+      "https://scontent.cdninstagram.com/v/t51.2885-15/333333333_n.jpg",
+      "https://scontent.cdninstagram.com/v/t51.2885-15/444444444_n.jpg",
+    ];
+    const markdown = parseThreadsDetailMediaMarkdown(`
+![Image 1: vito50410's profile picture](https://scontent.cdninstagram.com/v/t51.2885-19/profile_pic.jpg)
+${originals.flatMap((url) => [
+  `![Image](${url}?stp=dst-jpg_s640x640)`,
+  `![Image](${url}?stp=dst-jpg_e35_s1080x1080)`,
+  `![Image](${url})`,
+]).join("\n")}
+![Image](https://external-sea5-1.xx.fbcdn.net/emg1/v/t13/preview?url=https%3A%2F%2Fexample.com%2Fcover.jpg)
+[![Image 9: reply_user's profile picture](https://cdn.example.com/reply-s150x150.jpg)](https://www.threads.net/@reply)
+![Image 10](https://cdn.example.com/reply-body.jpg)
+Log in to see more replies.
+`);
+    const graphql = parseThreadsGraphqlSearchPayload({
+      query: "笑話",
+      keywords: ["笑話"],
+      payload: {
+        data: {
+          searchResults: {
+            edges: [{
+              node: {
+                thread_items: [{
+                  post: {
+                    pk: "3925594288747064001",
+                    code: "OriginalOnly",
+                    taken_at: Math.floor(Date.now() / 1000) - 1800,
+                    canonical_url: "https://www.threads.com/@vito50410/post/OriginalOnly",
+                    user: { username: "vito50410" },
+                    caption: { text: "今天這則笑話真的太好笑了，現場同事聽完直接笑到不行，會議幹話直接破防。" },
+                    like_count: 88,
+                    text_post_app_info: { direct_reply_count: 3, view_count: 900 },
+                    image_versions2: {
+                      candidates: [{ url: "https://scontent.cdninstagram.com/v/t51.82787-19/profile.jpg" }],
+                    },
+                    carousel_media: originals.map((url) => ({
+                      image_versions2: {
+                        candidates: [
+                          { width: 1080, url: `${url}?stp=dst-jpg_e35_s1080x1080` },
+                          { width: 640, url: `${url}?stp=dst-jpg_s640x640` },
+                          { width: 320, url: `${url}?stp=dst-jpg_s320x320` },
+                        ],
+                      },
+                    })),
+                  },
+                }],
+              },
+            }],
+          },
+        },
+      },
+    });
+
+    const merged = mergeCandidateMedia(markdown, graphql[0]?.media || []);
+    const identities = merged.map((item) => String(item.url).split("?")[0].split("/").pop());
+
+    expect(graphql).toHaveLength(1);
+    expect(merged.map((item) => item.url)).toEqual(originals);
+    expect(identities).toEqual(["111111111_n.jpg", "222222222_n.jpg", "333333333_n.jpg", "444444444_n.jpg"]);
+    expect(new Set(identities).size).toBe(identities.length);
+    expect(merged.every((item) => !/profile_pic|s150x150|emg1|reply-body|s640x640|s320x320/i.test(item.url))).toBe(true);
   });
 
   it("creates stable candidate ids from platform, url, and content", () => {

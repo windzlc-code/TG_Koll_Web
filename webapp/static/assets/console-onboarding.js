@@ -61,10 +61,8 @@
     observer: null,
     syncFrame: 0,
     cardPositionFrame: 0,
-    completionMonitorInstalled: false,
-    actionArmedStep: -1,
-    actionArmedAt: 0,
-    advancing: false,
+    targetClickHideInstalled: false,
+    followingEntry: false,
   };
 
   function storageKey(userId) {
@@ -88,6 +86,14 @@
     ));
   }
 
+  function seenBeaconIds(progress = readProgress()) {
+    return Array.from(new Set(
+      (Array.isArray(progress.seenBeacons) ? progress.seenBeacons : [])
+        .map((value) => String(value || "").trim())
+        .filter((value) => steps.some((step) => step.id === value)),
+    ));
+  }
+
   function writeProgress(status, step = runtime.currentStep, options = {}) {
     if (!runtime.storageKey) return;
     try {
@@ -99,9 +105,40 @@
         completedSteps: options.resetCompleted
           ? []
           : (options.completedSteps || completedStepIds(previous)),
+        seenBeacons: options.resetCompleted
+          ? []
+          : (options.seenBeacons || seenBeaconIds(previous)),
+        handsOn: options.resetCompleted
+          ? false
+          : Boolean(options.handsOn ?? previous.handsOn),
         updatedAt: Date.now(),
       }));
     } catch {}
+  }
+
+  function isHandsOn(progress = readProgress()) {
+    return progress.handsOn === true;
+  }
+
+  function markHandsOn() {
+    const previous = readProgress();
+    writeProgress(previous.status || "active", resumeStep(), {
+      completedSteps: completedStepIds(previous),
+      seenBeacons: seenBeaconIds(previous),
+      handsOn: true,
+    });
+  }
+
+  function markBeaconSeen(index) {
+    const step = steps[index];
+    if (!step) return;
+    const seen = new Set(seenBeaconIds());
+    seen.add(step.id);
+    const previous = readProgress();
+    writeProgress(previous.status || "active", Number.isInteger(previous.step) ? previous.step : index, {
+      completedSteps: completedStepIds(previous),
+      seenBeacons: Array.from(seen),
+    });
   }
 
   function markStepCompleted(index) {
@@ -191,10 +228,18 @@
       removeBeacons();
       return;
     }
+    const cardOpen = Boolean(runtime.host?.querySelector(".console-onboarding-card"));
     const activeIndex = progress.status === "active" ? resumeStep() : -1;
     const completed = new Set(completedStepIds(progress));
+    const seen = new Set(seenBeaconIds(progress));
+    const firstUnseen = steps.findIndex((step, index) => (
+      !completed.has(step.id)
+      && !seen.has(step.id)
+      && (activeIndex < 0 || index === activeIndex)
+      && Boolean(activeStepTarget(step))
+    ));
     steps.forEach((step, index) => {
-      const shouldShow = (activeIndex < 0 || index === activeIndex) && !completed.has(step.id);
+      const shouldShow = !cardOpen && index === firstUnseen;
       const target = activeStepTarget(step);
       const beaconHost = target?.parentElement || null;
       document.querySelectorAll(`.console-onboarding-beacon[data-target-id="${step.id}"]`).forEach((beacon) => {
@@ -237,6 +282,8 @@
       beacon.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
+        markBeaconSeen(index);
+        removeBeacons();
         const latest = readProgress();
         if (latest.status === "active") {
           startGuide(resumeStep());
@@ -281,11 +328,14 @@
   function launchReminder() {
     runtime.eligible = true;
     const progress = readProgress();
+    const index = resumeStep();
+    markBeaconSeen(index);
+    removeBeacons();
     if (progress.status === "active") {
-      startGuide(resumeStep());
+      startGuide(index);
       return;
     }
-    openReminder(resumeStep());
+    openReminder(index);
   }
 
   function ensureEdgeLauncher() {
@@ -333,8 +383,10 @@
     const homeLauncherVisible = Boolean(homeLauncher && visibleElement([homeLauncher]));
     const cardOpen = Boolean(runtime.host?.querySelector(".console-onboarding-card"));
     const reminderSuppressed = ["dismissed", "completed"].includes(progress.status);
+    const hasBeacon = Boolean(document.querySelector(".console-onboarding-beacon"));
+    const currentSeen = seenBeaconIds(progress).includes((steps[resumeStep()] || steps[0]).id);
     const edgeLauncher = ensureEdgeLauncher();
-    edgeLauncher.hidden = homeLauncherVisible || cardOpen || reminderSuppressed;
+    edgeLauncher.hidden = homeLauncherVisible || cardOpen || reminderSuppressed || hasBeacon || currentSeen;
   }
 
   function ensureHost() {
@@ -411,6 +463,8 @@
     const step = steps[index] || steps[0];
     runtime.currentStep = steps.indexOf(step);
     runtime.guided = false;
+    markBeaconSeen(runtime.currentStep);
+    removeBeacons();
     clearFocus();
     guideTarget(step)?.classList.add("is-onboarding-focus");
     const host = ensureHost();
@@ -446,8 +500,8 @@
     });
   }
 
-  function focusStepTarget(step, target) {
-    if (!target) return;
+  function focusStepTarget(step, target, { force = false } = {}) {
+    if (!target || (isHandsOn() && !force)) return;
     clearFocus();
     target.classList.add("is-onboarding-focus");
     target.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
@@ -455,18 +509,25 @@
     scheduleCardPosition(step);
   }
 
-  function navigateToStep(index, { render = true } = {}) {
+  function navigateToStep(index, { render = true, followEntry = false, ignoreHandsOn = false } = {}) {
     const step = steps[index] || steps[0];
     runtime.currentStep = steps.indexOf(step);
     clearFocus();
     const target = activeStepTarget(step);
+    const mayFollow = followEntry && (ignoreHandsOn || !isHandsOn());
     if (target) {
-      focusStepTarget(step, target);
-    } else {
+      focusStepTarget(step, target, { force: ignoreHandsOn });
+    } else if (mayFollow) {
+      runtime.followingEntry = true;
       activeEntryTarget(step)?.click();
+      window.setTimeout(() => {
+        runtime.followingEntry = false;
+      }, 0);
       waitForStepTarget(step).then((nextTarget) => {
-        focusStepTarget(step, nextTarget || activeEntryTarget(step));
+        focusStepTarget(step, nextTarget || activeEntryTarget(step), { force: ignoreHandsOn });
       });
+    } else if (!isHandsOn()) {
+      focusStepTarget(step, activeEntryTarget(step));
     }
     if (render) renderGuideStep(runtime.currentStep);
   }
@@ -475,7 +536,9 @@
     const step = steps[index] || steps[0];
     runtime.currentStep = steps.indexOf(step);
     runtime.guided = true;
+    markBeaconSeen(runtime.currentStep);
     writeProgress("active", runtime.currentStep);
+    removeBeacons();
     const last = runtime.currentStep === steps.length - 1;
     const previousCompleted = runtime.currentStep > 0
       && completedStepIds().includes(steps[runtime.currentStep - 1].id);
@@ -504,120 +567,35 @@
     if (readProgress().status !== "active") {
       writeProgress("active", Math.max(0, Math.min(index, steps.length - 1)), { resetCompleted: true });
     }
-    navigateToStep(Math.max(0, Math.min(index, steps.length - 1)));
+    navigateToStep(Math.max(0, Math.min(index, steps.length - 1)), { followEntry: !isHandsOn() });
     syncBeacons();
   }
 
-  function resetCompletionArm() {
-    runtime.actionArmedStep = -1;
-    runtime.actionArmedAt = 0;
+  function isGuideChromeClick(event) {
+    const target = event.target;
+    return target instanceof Element && Boolean(target.closest([
+      ".console-onboarding-card",
+      ".console-onboarding-surface",
+      ".console-onboarding-beacon",
+      ".console-onboarding-edge-launcher",
+      ".console-onboarding-home-launcher",
+    ].join(", ")));
   }
 
-  function armCurrentStepFromAction(event) {
-    const progress = readProgress();
-    if (progress.status !== "active") return;
-    const index = resumeStep();
-    const step = steps[index];
-    if (!step || !event.target?.closest?.(step.targetSelector)) return;
-    runtime.actionArmedStep = index;
-    runtime.actionArmedAt = Date.now();
+  function hideGuideAfterTargetClick(event) {
+    const card = runtime.host?.querySelector(".console-onboarding-card.is-guide, .console-onboarding-card.is-reminder");
+    if (!card) return;
+    const step = steps[runtime.currentStep];
+    if (runtime.followingEntry || !step || isGuideChromeClick(event)) return;
+    if (!event.target?.closest?.(step.targetSelector)) return;
+    markHandsOn();
+    closeCard();
   }
 
-  function requestDescriptor(input, options = {}) {
-    try {
-      const request = input instanceof Request ? input : null;
-      const url = new URL(request?.url || String(input || ""), window.location.href);
-      return {
-        method: String(options.method || request?.method || "GET").toUpperCase(),
-        pathname: url.pathname,
-      };
-    } catch {
-      return { method: "GET", pathname: "" };
-    }
-  }
-
-  function responseTask(data) {
-    return data?.task && typeof data.task === "object" ? data.task : data;
-  }
-
-  function completionResponseMatches(index, request, data) {
-    const path = request.pathname;
-    if (index === 0) {
-      const endpoint = path === "/api/persona_dashboard/personas"
-        || path === "/api/persona_dashboard/personas/ai_create";
-      return request.method === "POST" && endpoint && Boolean(data?.id || data?.profile?.id);
-    }
-    if (index === 1) {
-      return request.method === "POST"
-        && path === "/api/persona_dashboard/automation/accounts"
-        && Boolean(data?.account?.id);
-    }
-    if (index === 2) {
-      const task = responseTask(data);
-      return request.method === "GET"
-        && /\/api\/persona_dashboard\/personas\/[^/]+\/generate_posts\/tasks\/[^/]+$/.test(path)
-        && String(task?.status || "").toLowerCase() === "success";
-    }
-    if (index === 3) {
-      const publishEndpoint = /\/api\/persona_dashboard\/personas\/[^/]+\/(?:posts|favorites)\/[^/]+\/publish$/.test(path);
-      const automationEndpoint = path === "/api/persona_dashboard/automation/tasks";
-      return request.method === "POST"
-        && (publishEndpoint || automationEndpoint)
-        && Boolean(data?.task?.id);
-    }
-    if (index === 4) {
-      const task = responseTask(data);
-      return request.method === "GET"
-        && /\/api\/persona_dashboard\/refresh\/[^/]+$/.test(path)
-        && String(task?.status || "").toLowerCase() === "success";
-    }
-    return false;
-  }
-
-  function advanceAfterRecognizedAction(index) {
-    if (runtime.advancing) return;
-    const progress = readProgress();
-    if (
-      progress.status !== "active"
-      || resumeStep() !== index
-      || runtime.actionArmedStep !== index
-      || Date.now() - runtime.actionArmedAt > 30 * 60 * 1000
-    ) return;
-    runtime.advancing = true;
-    markStepCompleted(index);
-    resetCompletionArm();
-    removeBeacons();
-    window.setTimeout(() => {
-      runtime.advancing = false;
-      if (index >= steps.length - 1) {
-        completeGuide();
-        return;
-      }
-      navigateToStep(index + 1);
-      syncBeacons();
-    }, 420);
-  }
-
-  function inspectCompletionResponse(request, response) {
-    if (!response.ok || runtime.actionArmedStep < 0) return;
-    response.clone().json().then((data) => {
-      const index = runtime.actionArmedStep;
-      if (!completionResponseMatches(index, request, data)) return;
-      advanceAfterRecognizedAction(index);
-    }).catch(() => {});
-  }
-
-  function installCompletionMonitor() {
-    if (runtime.completionMonitorInstalled) return;
-    runtime.completionMonitorInstalled = true;
-    const originalFetch = window.fetch.bind(window);
-    window.fetch = async (...args) => {
-      const request = requestDescriptor(args[0], args[1] || {});
-      const response = await originalFetch(...args);
-      inspectCompletionResponse(request, response);
-      return response;
-    };
-    document.addEventListener("click", armCurrentStepFromAction, true);
+  function installTargetClickHide() {
+    if (runtime.targetClickHideInstalled) return;
+    runtime.targetClickHideInstalled = true;
+    document.addEventListener("click", hideGuideAfterTargetClick, true);
   }
 
   function exitGuide() {
@@ -716,7 +694,7 @@
       return;
     }
     if (action.hasAttribute("data-onboarding-jump")) {
-      navigateToStep(runtime.currentStep, { render: false });
+      navigateToStep(runtime.currentStep, { render: false, followEntry: true, ignoreHandsOn: true });
       closeCard();
       return;
     }
@@ -725,20 +703,22 @@
       return;
     }
     if (action.hasAttribute("data-onboarding-prev")) {
-      resetCompletionArm();
-      navigateToStep(runtime.currentStep - 1);
+      navigateToStep(runtime.currentStep - 1, { followEntry: !isHandsOn() });
       return;
     }
     if (action.hasAttribute("data-onboarding-next")) {
-      resetCompletionArm();
-      navigateToStep(runtime.currentStep + 1);
+      markStepCompleted(runtime.currentStep);
+      navigateToStep(runtime.currentStep + 1, { followEntry: !isHandsOn() });
       return;
     }
     if (action.hasAttribute("data-onboarding-locate")) {
       locateHomeLauncher();
       return;
     }
-    if (action.hasAttribute("data-onboarding-complete")) completeGuide();
+    if (action.hasAttribute("data-onboarding-complete")) {
+      markStepCompleted(runtime.currentStep);
+      completeGuide();
+    }
   }
 
   function isEligibleUser(user) {
@@ -781,7 +761,7 @@
     runtime.storageKey = storageKey(user.id);
     runtime.eligible = isEligibleUser(user);
     if (!runtime.eligible) return;
-    installCompletionMonitor();
+    installTargetClickHide();
     observeNavigation();
     syncLaunchers();
     syncBeacons();

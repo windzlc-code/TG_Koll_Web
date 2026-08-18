@@ -159,6 +159,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('class="persona-edit-media-card persona-hot-media-item"', self.script)
         self.assertIn('className: "persona-edit-media-preview"', self.script)
         self.assertIn('class="persona-edit-media-order persona-hot-media-index-badge"', self.script)
+        self.assertIn('class="persona-hot-media-kind-icon"', self.script)
+        self.assertIn("function renderMediaKindIcon(type)", self.script)
+        self.assertIn("function collapseHotMediaPosterPairs(items)", self.script)
+        self.assertIn("function isVideoMediaUrl(value)", self.script)
         self.assertIn('interactive: Boolean(previewGroupId) && itemPreviewIndex >= 0,', self.script)
         self.assertIn(".persona-hot-card-actions a {", self.styles)
         self.assertIn("justify-content: center;", self.styles)
@@ -202,6 +206,9 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("width: 20px;", media_index_styles)
         self.assertIn("height: 20px;", media_index_styles)
         self.assertIn("border: 1px solid var(--accent);", media_index_styles)
+        self.assertIn(".persona-hot-media-kind-icon {", self.styles)
+        self.assertIn("top: 6px;", self.styles.split(".persona-hot-media-kind-icon {", 1)[1].split("}", 1)[0])
+        self.assertIn("right: 6px;", self.styles.split(".persona-hot-media-kind-icon {", 1)[1].split("}", 1)[0])
 
         mobile_action_styles = self.styles.split(
             ".console-page .persona-detail .persona-hot-card-actions > a,",

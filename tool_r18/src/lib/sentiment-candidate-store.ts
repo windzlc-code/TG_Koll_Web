@@ -10,6 +10,7 @@ export type SentimentHotMediaType = "image" | "video" | "unknown";
 export interface SentimentHotMedia {
   type: SentimentHotMediaType;
   url: string;
+  thumbnailUrl?: string;
   localPath?: string;
   warning?: string;
 }

@@ -82,7 +82,7 @@ const THREADS_BROWSER_DETAIL_RESCUE_MIN_REMAINING_MS = 5_000;
 const THREADS_BROWSER_EARLY_DETAIL_RESCUE_MIN_REMAINING_MS = 8_000;
 const THREADS_MANUAL_SEARCH_TRIGGER_WAIT_MS = 1_200;
 const SENTIMENT_MODEL_KEYWORD_TARGET = 24;
-const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.3, xai/grok-4.5";
+const SENTIMENT_HOT_KEYWORD_MODEL = "xai/grok-4.5, xai/grok-4.3, google/gemini-3.1-pro-preview";
 export function resolveSentimentHotReaderConcurrency(value: unknown = process.env.SENTIMENT_HOT_READER_CONCURRENCY): number {
   const parsed = Math.floor(Number(value));
   return Number.isFinite(parsed) ? Math.max(1, Math.min(parsed, 24)) : 24;
@@ -1515,25 +1515,44 @@ function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentH
   return rankSearchKeywords(searchable.length ? searchable : normalized).slice(0, sentimentHotKeywordTargetForMode(mode));
 }
 
+const PERSONA_APPEARANCE_PROMPT_NOISE = /(?:[闷悶]骚|网上开车|網上開車|爆奶|性感身材|秃顶|禿頂|黑框眼镜|黑框眼鏡)/u;
+
 function splitPersonaThemeAndVisual(value: unknown): { theme: string; visual: string } {
   const raw = cleanText(value);
   if (!raw) return { theme: "", visual: "" };
-  const parts = raw.split(/视觉倾向|視覺傾向|图片视觉|圖片視覺/u);
-  return {
-    theme: cleanText(parts[0] || ""),
-    visual: cleanText(parts.slice(1).join(" ")),
-  };
+  const parts = raw.split(/视觉倾向|視覺傾向|图片视觉|圖片視覺|核心走向/u);
+  let theme = cleanText(parts[0] || "");
+  let visual = cleanText(parts.slice(1).join(" "));
+  if (PERSONA_APPEARANCE_PROMPT_NOISE.test(theme)) {
+    visual = [theme, visual].filter(Boolean).join("；");
+    theme = "";
+  }
+  return { theme, visual };
+}
+
+export function personaHotStrategyDisplayName(value: unknown): string {
+  const name = cleanText(value);
+  if (!name) return "";
+  // Slang nicknames are kept on the persona card, but sending them to the
+  // keyword model often yields an empty candidate list (safety / gateway).
+  if (/老司机|老司機|老濕|老湿|色女|[闷悶]骚/u.test(name)) {
+    return "按下方职业与内容领域理解的人设";
+  }
+  return name;
 }
 
 function personaHotStrategySourceText(archive: Partial<Pick<PersonaArchive, "name" | "content" | "setup">> | undefined): string {
   const setup = (archive?.setup || {}) as Record<string, any>;
-  const list = (value: unknown) => Array.isArray(value) ? value.map(cleanText).filter(Boolean) : [];
+  const list = (value: unknown) => Array.isArray(value)
+    ? value.map(cleanText).filter((item) => item && !PERSONA_APPEARANCE_PROMPT_NOISE.test(item))
+    : [];
   const theme = splitPersonaThemeAndVisual(setup.contentTheme);
   const custom = splitPersonaThemeAndVisual(setup.customTopic);
   const description = splitPersonaThemeAndVisual(setup.personaDescription);
   const content = splitPersonaThemeAndVisual(archive?.content);
+  const displayName = personaHotStrategyDisplayName(archive?.name);
   return [
-    archive?.name ? `人设名称：${archive.name}` : "",
+    displayName ? `人设名称：${displayName}` : "",
     list(setup.genres).length ? `内容领域：${list(setup.genres).join("、")}` : "",
     list(setup.interests).length ? `兴趣标签：${list(setup.interests).join("、")}` : "",
     theme.theme ? `内容主题：${theme.theme}` : "",
@@ -1541,9 +1560,6 @@ function personaHotStrategySourceText(archive: Partial<Pick<PersonaArchive, "nam
     description.theme ? `人设简介：${description.theme.slice(0, 400)}` : "",
     content.theme ? `人设说明：${content.theme.slice(0, 400)}` : "",
     list(setup.trendTopics).length ? `平台标签关键词：${list(setup.trendTopics).join("、")}` : "",
-    [theme.visual, custom.visual, description.visual, content.visual].filter(Boolean).length
-      ? `形象描写（只帮助理解人设，禁止提取为搜索词）：${[theme.visual, custom.visual, description.visual, content.visual].filter(Boolean).join("；").slice(0, 240)}`
-      : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -1593,8 +1609,61 @@ function isGenericPersonaContentTopic(value: unknown): boolean {
 
 function filterModelQueriesByDomainAnchors(queries: string[], anchors: string[]): string[] {
   const domainAnchors = anchors.map(cleanText).filter((anchor) => anchor && !isGenericPersonaContentTopic(anchor));
-  if (domainAnchors.length === 0) return [];
-  return queries.filter((query) => domainAnchors.some((anchor) => query.includes(anchor)));
+  const cleanQueries = queries.map(cleanText).filter(Boolean);
+  // A brand-new persona often only yields visual/lifestyle anchors, which are
+  // dropped. Keep the model's own object nouns instead of wiping the strategy.
+  if (domainAnchors.length === 0) return cleanQueries;
+  const matched = cleanQueries.filter((query) => domainAnchors.some((anchor) => (
+    query.includes(anchor) || (anchor.length >= 2 && anchor.includes(query))
+  )));
+  if (matched.length >= 5) return matched;
+  // Parent anchors like 汽車維修 would otherwise delete 機油/剎車片 and leave
+  // primaryQueries empty even though the model already stayed in-domain.
+  const objectNouns = cleanQueries.filter((query) => (
+    isPublicSearchableKeywordLength(query)
+    && query.length <= 4
+    && !isGenericPersonaContentTopic(query)
+  ));
+  return [...new Set([...matched, ...objectNouns])];
+}
+
+function modelObjectNounsFromStrategy(strategy: SentimentHotSearchStrategy): string[] {
+  return [...new Set([
+    ...strategy.primaryQueries,
+    ...strategy.broadQueries,
+    ...strategy.ecosystemQueries,
+  ]
+    .map(cleanText)
+    .filter((term) => (
+      isConcreteSearchKeyword(term)
+      && isPublicSearchableKeywordLength(term)
+      && term.length <= 4
+      && !isGenericPersonaContentTopic(term)
+      && !isPersonaVisualArtifactKeyword(term, "")
+    )))];
+}
+
+function retainModelObjectNounsWhenAnchorsVanish(strategy: SentimentHotSearchStrategy) {
+  const objectNouns = modelObjectNounsFromStrategy(strategy);
+  if (!objectNouns.length) return;
+  if (strategy.requiredAnchorTerms.length < 3) {
+    strategy.requiredAnchorTerms = [...new Set([...strategy.requiredAnchorTerms, ...objectNouns])].slice(0, 16);
+  }
+  if (strategy.normalAnchorTerms.length < 3) {
+    strategy.normalAnchorTerms = [...new Set([...strategy.normalAnchorTerms, ...objectNouns])].slice(0, 16);
+  }
+  if (strategy.strictAcceptTerms.length < 5) {
+    strategy.strictAcceptTerms = [...new Set([...strategy.strictAcceptTerms, ...strategy.primaryQueries, ...objectNouns])].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
+  }
+  if (strategy.normalAcceptTerms.length < 5) {
+    strategy.normalAcceptTerms = [...new Set([...strategy.normalAcceptTerms, ...strategy.primaryQueries, ...strategy.broadQueries, ...objectNouns])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
+  }
+  if (strategy.primaryQueries.length < 5) {
+    const refill = [...strategy.requiredAnchorTerms, ...strategy.strictAcceptTerms]
+      .map(cleanText)
+      .filter((term) => isPublicSearchableKeywordLength(term) && term.length <= 5 && !isGenericPersonaContentTopic(term));
+    strategy.primaryQueries = [...new Set([...strategy.primaryQueries, ...objectNouns, ...refill])].slice(0, SENTIMENT_MODEL_KEYWORD_TARGET);
+  }
 }
 
 function parseModelJsonObject(text: string): any {
@@ -1636,6 +1705,7 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
     rejectTerms: normalizeStrategyTermList((parsed as any).rejectTerms || (parsed as any).excludeTerms || (parsed as any).negativeTerms, { ...args, limit: 16 }),
     domainSummary: cleanText((parsed as any).domainSummary || (parsed as any).summary),
   };
+  retainModelObjectNounsWhenAnchorsVanish(strategy);
   return strategy;
 }
 
@@ -1821,6 +1891,7 @@ export function applyPersonaGuardToSentimentHotStrategy(args: {
   args.strategy.strictAcceptTerms = cleanModelTerms(splitAnchorMashupTerms(args.strategy.strictAcceptTerms, domainAnchors));
   args.strategy.normalAcceptTerms = cleanModelTerms(splitAnchorMashupTerms(args.strategy.normalAcceptTerms, domainAnchors));
   args.strategy.rejectTerms = cleanModelTerms(args.strategy.rejectTerms);
+  retainModelObjectNounsWhenAnchorsVanish(args.strategy);
   args.strategy.personaGuardTerms = [...new Set([
     ...args.strategy.normalAnchorTerms,
     ...args.strategy.requiredAnchorTerms,
@@ -2197,10 +2268,15 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     const modelPreference = resolveSentimentHotTextModelPreference();
     const totalTimeoutMs = Math.max(8_000, args.timeoutMs || 38_000);
     const configuredModelCount = Math.max(1, getTextUnderstandingModelFallbacks(modelPreference).length);
+    const keywordStartedAt = Date.now();
     const attemptTimeoutMs = ({ index }: { index: number }) => {
-      if (configuredModelCount <= 1) return totalTimeoutMs - 1_000;
-      if (index === 0) return Math.min(22_000, Math.max(8_000, totalTimeoutMs - 12_000));
-      return Math.min(12_000, Math.max(6_000, totalTimeoutMs - 22_000));
+      const remaining = totalTimeoutMs - (Date.now() - keywordStartedAt);
+      if (configuredModelCount <= 1) return Math.max(8_000, remaining - 500);
+      // Old personas often finish in 10-20s. A 22s first-attempt cap kills the
+      // same model when a new persona needs 25-40s, then the fallback burns
+      // the rest of the budget and the UI only sees a timeout.
+      if (index === 0) return Math.min(50_000, Math.max(20_000, remaining - 16_000));
+      return Math.max(15_000, remaining - 1_000);
     };
     const result = await callTextUnderstandingModelWithFallback(
       modelPreference,
@@ -2208,20 +2284,23 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
         role: "user",
         parts: [{
           text: [
-            "你是 Threads / Instagram 热点搜索策略模型。必须只根据当前人设资料为任意人设生成搜索策略，不得套用固定行业词表，也不得把某类人设的对象词套到其他人设上。",
+            "你是 Threads / Instagram 热点搜索策略模型。必须为当前这个人设生成搜索策略，不得套用其他人设的行业词，也不得因为简介难写就拒写或交空结果。",
+            "人设名称只是对外称呼。必须按内容领域和职业理解；禁止把俚语化名称理解成色情、擦边或开车含义，也不得因此拒写或返回空候选。",
             "只输出 JSON 对象，不要解释，不要 Markdown。",
             "JSON 结构：",
-            "{\"primaryQueries\":[\"...\"],\"broadQueries\":[\"...\"],\"ecosystemQueries\":[\"...\"],\"requiredAnchorTerms\":[\"...\"],\"normalAnchorTerms\":[\"...\"],\"strictAcceptTerms\":[\"...\"],\"normalAcceptTerms\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
+            "{\"domainExpansion\":\"...\",\"primaryQueries\":[\"...\"],\"broadQueries\":[\"...\"],\"ecosystemQueries\":[\"...\"],\"requiredAnchorTerms\":[\"...\"],\"normalAnchorTerms\":[\"...\"],\"strictAcceptTerms\":[\"...\"],\"normalAcceptTerms\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
             "所有列表字段必须是 JSON 数组，不能输出字符串、段落、逗号文本或 Markdown；否则本次抓取会判定为失败。",
             "",
             "字段数量：primaryQueries 12-16，broadQueries 8-12，ecosystemQueries 4-8，requiredAnchorTerms 4-6，normalAnchorTerms 3-6，strictAcceptTerms 10-16，normalAcceptTerms 12-20，rejectTerms 4-8。",
-            "先以人设名称中明确的职业、行业或主题作为严格主领域；简介里的具体对象、品牌、地区和擅长方向只能作为子主题，不能替代或过度收窄主领域。",
-            "搜索词必须偏向人设会持续讨论的内容领域：公众为这个职业/主题去搜的物件、服务、场所、工具、作品或行业事件。",
-            "形象描写、视觉倾向、穿著、面料、体型、姿势、随身道具、室内陈设只用于理解人设，禁止提取为搜索词。",
+            "先看人设名称和主题。若简介清楚写了职业、产品、场所或作品，就按这些扩词。",
+            "若简介很难过关——只有性格、外貌、日常、搞笑、吐槽、段子，没有现成物件名词——你必须先自己扩展：这个人会持续对公众讲什么，把该主题扩成可搜索的具体对象（物、场景、作品、槽点对象、职场物件），写入 domainExpansion，再据此输出全部搜索词。",
+            "扩展必须仍属于这个人设会讲的内容，不能换成无关行业。禁止因为简介空泛、擦边或不好写就拒写、返回空候选或只复述搞笑/日常/大叔。",
+            "搜索词必须是公众会去搜的物件、服务、场所、工具、作品、槽点对象或行业事件。",
+            "形象描写、视觉倾向、穿著、面料、体型、姿势、随身道具、室内陈设禁止提取为搜索词。",
             "生活状态词（慢生活、退休生活、健康生活、家务、居家清洁）除非人设主业本身就是家政、养老或对应行业，否则禁止作为搜索词。",
             "平台标签关键词只是人设背景，不得直接当作独立搜索词。搜索词必须属于当前人设领域，优先写成连续短词；不要用空格把两个主题名拼在一起，也不要把两个锚点词互相拼接。正确写法是「该领域里的具体对象」，需要带锚点时只能是「锚点 + 对象」，不能是「锚点 + 另一个锚点」。",
-            "职场趣事、生活日常、搞笑、故事、经验等通用内容类型必须与当前职业、行业、产品或主题锚点组合后才能输出，禁止单独输出或只与避坑、真实、推荐等意图词组合。",
-            "primaryQueries 必须优先产出近 30 天内更可能出现高互动内容的短搜索词：只从当前人设资料里的具体对象、产品、场所、工具、作品、服务或消费对象扩词；其余再覆盖该人设的细分专长，总计至少 10 类。",
+            "搞笑、吐槽、日常、职场趣事这类空主题不能当搜索词本身；必须先扩成该人设领域里的具体可搜对象后再输出。",
+            "primaryQueries 必须优先产出近 30 天内更可能出现高互动内容的短搜索词。资料里已有具体对象就优先用；没有现成对象时，用你扩展出的对象补满，总计至少 10 类。",
             "primaryQueries 前 12 个必须是 2-4 个汉字的具体物件名词，互不相同。必须由你根据当前人设自己生成；下游不会把长复合词改写成短词，也不会用固定行业词表兜底。",
             "broadQueries 覆盖主领域品牌、产品、事件、受众问题、价格选择、使用经验和行业动态；必须避免只有内部从业者才会搜索的冷门话术。",
             "ecosystemQueries 必须是直接父领域或相邻消费场景里的高热搜索词，但正文仍必须能用 requiredAnchorTerms/strictAcceptTerms 证明属于当前人设主领域，不能漂移到无关行业。",
@@ -2233,8 +2312,8 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "严格模式关键词数量不能少，只用主领域同义词和场景词收口；普通模式可扩展到直接父领域，但不能漂移到无关产业。",
             "每个搜索词脱离上下文后仍应明确属于该领域。细分职业优先覆盖普通受众高频讨论的实体词、场景词、经验词、互动词和真实痛点，避免只有内部从业者才会搜索的低流量长短语。",
             "不要把 3 个以上意图词硬拼成一句搜索词。primaryQueries、requiredAnchorTerms 必须直接写成公众会搜的短物件名词（2-4 个汉字），例如该人设领域里的物、产品、服务、场所、工具或作品名，而不是「对象+避坑/价格/规则/更换」这类复合短语。broadQueries 优先 2-5 个汉字。长复合词在公开搜索里几乎没有帖，且不会被代码拆开。",
-            "扩词步骤对任何人都一样：先从名称和简介归纳 1 个主领域和最多 2 个子主题；再为每个主题列出该领域用户会搜的具体名词（物、产品、服务、场所、工具、作品）；主题名本身最多保留 1 次，其余必须更具体。",
-            "两个主题并存时必须分别扩词，禁止把两个主题名拼成一个搜索词，也禁止引入人设资料里不存在的行业对象。",
+            "扩词步骤：先从名称和简介归纳 1 个主领域和最多 2 个子主题；简介若没有具体名词，先扩展出该领域用户会搜的对象，再列出物、产品、服务、场所、工具、作品；主题名本身最多保留 1 次，其余必须更具体。",
+            "两个主题并存时必须分别扩词，禁止把两个主题名拼成一个搜索词。扩展出的对象必须能从当前人设合理推出，不能换成完全无关的行业。",
             "同一主题词最多保留 3 个与不同对象的组合；primaryQueries、broadQueries、strictAcceptTerms 合计必须给出至少 20 个互不重复、且都属于当前人设领域的具体搜索词。",
             "禁止输出脱离任何领域都没有搜索意义的空洞词：便宜、大叔、烟火气、好物、攻略、经验、爱好者、生活、日常、气氛。",
             "禁止输出「核心词 + 真实体验 / 对比 / 吐槽 / 使用经验 / 前后变化」这类模板句。",
@@ -2255,11 +2334,20 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             archiveName: cleanText(archive.name),
             sourceText: personaText,
           });
-          if (!sentimentHotStrategyHasModelTerms(candidate) || !sentimentHotStrategyUsesThreadsChinese(candidate)) return false;
+          const hasTerms = sentimentHotStrategyHasModelTerms(candidate);
+          const hasChinese = sentimentHotStrategyUsesThreadsChinese(candidate);
+          if (!hasTerms || !hasChinese) {
+            console.info(`[sentiment_hot_model_unusable] reason=${hasTerms ? "not_chinese" : "missing_terms"} primary=${candidate.primaryQueries.length} anchors=${candidate.requiredAnchorTerms.length}/${candidate.normalAnchorTerms.length} accept=${candidate.strictAcceptTerms.length}/${candidate.normalAcceptTerms.length} summary=${JSON.stringify(candidate.domainSummary || "")}`);
+            return false;
+          }
           applyPersonaGuardToSentimentHotStrategy({ strategy: candidate });
           const dispatched = resolveSentimentHotModelStrategyKeywords(candidate, "strict");
           const shortObjectNouns = dispatched.filter((item) => isPublicSearchableKeywordLength(item) && item.length <= 4);
-          return dispatched.length >= 8 && shortObjectNouns.length >= 8;
+          if (dispatched.length < 8 || shortObjectNouns.length < 8) {
+            console.info(`[sentiment_hot_model_unusable] reason=guard_or_short_nouns dispatched=${dispatched.length} short=${shortObjectNouns.length} sample=${JSON.stringify(dispatched.slice(0, 8))}`);
+            return false;
+          }
+          return true;
         },
         isRetryableError: isTextModelFallbackError,
         attemptTimeoutMs,
@@ -2285,11 +2373,14 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     args.warnings.push("模型未返回符合当前人设核心的有效热点关键词。");
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    args.warnings.push(
-      /timeout|timed\s*out|abort|超时|超時/i.test(detail)
-        ? "热点关键词生成超时，请稍后重试。"
-        : "热点关键词服务暂时不可用，请稍后重试。",
-    );
+    console.info(`[sentiment_hot_model_failed] error=${JSON.stringify(detail).slice(0, 400)}`);
+    if (/timeout|timed\s*out|abort|超时|超時/i.test(detail)) {
+      args.warnings.push("热点关键词生成超时，请稍后重试。");
+    } else if (/安全策略|未返回候選|未返回候选|返回空|閘道器截斷|网关截断/i.test(detail)) {
+      args.warnings.push("热点关键词模型未返回可用结果，请稍后重试。");
+    } else {
+      args.warnings.push("热点关键词服务暂时不可用，请稍后重试。");
+    }
   }
   return emptySentimentHotSearchStrategy();
 }
@@ -2321,7 +2412,7 @@ export async function prepareSentimentHotKeywords(args: {
     // Leave enough room for the dedicated primary model plus one configured
     // fallback once per 24-hour strategy cache. Subsequent fetches reuse the
     // cached keyword plan and keep the old-host collection path fast.
-    timeoutMs: 38_000,
+    timeoutMs: 68_000,
     // Candidate refreshes reuse the remaining keyword batch. Only the new-host
     // controller can mark a complete plan exhausted and request regeneration.
     useCache: args.forceRegenerate !== true,
@@ -4556,23 +4647,48 @@ export function replaceThreadsSearchVariables(value: unknown, query: string, aft
 
 function extractThreadsGraphqlPostMedia(post: any): SentimentHotMedia[] {
   const media: SentimentHotMedia[] = [];
-  const add = (urlValue: unknown, type: SentimentHotMedia["type"] = "image") => {
+  const bestVersionUrl = (list: any): string => {
+    if (!Array.isArray(list) || !list.length) return "";
+    const ranked = [...list].sort((left, right) => Number(right?.width || 0) - Number(left?.width || 0));
+    return cleanText(ranked[0]?.url);
+  };
+  const add = (urlValue: unknown, type: SentimentHotMedia["type"] = "image", thumbnailUrl = "") => {
     const url = cleanText(urlValue);
     if (!/^https?:\/\//i.test(url) || isNonPostThreadsMediaUrl(url)) return;
-    if (media.some((item) => item.url === url)) return;
-    media.push({ type, url });
-  };
-  const addVersionList = (list: any, type: SentimentHotMedia["type"]) => {
-    if (!Array.isArray(list) || !list.length) return;
-    const ranked = [...list].sort((left, right) => Number(right?.width || 0) - Number(left?.width || 0));
-    add(ranked[0]?.url, type);
-    for (const item of ranked.slice(1, 3)) add(item?.url, type);
+    const thumb = cleanText(thumbnailUrl);
+    const existingIndex = media.findIndex((item) => (
+      isSameMediaAsset(item.url, url)
+      || (thumb && isSameMediaAsset(item.url, thumb))
+      || (item.thumbnailUrl && (isSameMediaAsset(item.thumbnailUrl, url) || (thumb && isSameMediaAsset(item.thumbnailUrl, thumb))))
+    ));
+    if (existingIndex >= 0) {
+      const current = media[existingIndex];
+      const nextType = type === "video" || current.type === "video" ? "video" : type;
+      const nextUrl = nextType === "video"
+        ? (type === "video" ? url : current.url)
+        : (mediaAssetQuality(url) > mediaAssetQuality(current.url) ? url : current.url);
+      const nextThumb = nextType === "video"
+        ? (type === "video" ? (thumb || current.thumbnailUrl || (current.type === "image" ? current.url : "")) : (thumb || url || current.thumbnailUrl))
+        : (current.thumbnailUrl || thumb);
+      media[existingIndex] = {
+        type: nextType,
+        url: nextUrl,
+        ...(nextThumb && nextThumb !== nextUrl ? { thumbnailUrl: nextThumb } : {}),
+      };
+      return;
+    }
+    media.push({
+      type,
+      url,
+      ...(thumb && thumb !== url ? { thumbnailUrl: thumb } : {}),
+    });
   };
   const addItem = (item: any) => {
-    addVersionList(item?.image_versions2?.candidates, "image");
-    add(item?.display_url || item?.image_url || item?.thumbnail_url || item?.display_uri, "image");
-    addVersionList(item?.video_versions, "video");
-    add(item?.video_url, "video");
+    const imageUrl = bestVersionUrl(item?.image_versions2?.candidates)
+      || cleanText(item?.display_url || item?.image_url || item?.thumbnail_url || item?.display_uri);
+    const videoUrl = bestVersionUrl(item?.video_versions) || cleanText(item?.video_url);
+    if (videoUrl) add(videoUrl, "video", imageUrl);
+    else if (imageUrl) add(imageUrl, "image");
     const nested = item?.text_post_app_info?.linked_inline_media || item?.linked_inline_media;
     if (nested && nested !== item) addItem(nested);
   };
@@ -8744,9 +8860,56 @@ export async function lookupThreadsPublishedPostFromBrowserProfile(args: {
 
 function isNonPostThreadsMediaUrl(url: string): boolean {
   if (/profile_pic|s150x150|\/profile_pic_/i.test(url)) return true;
+  if (/\/v\/t51\.\d+-19\//i.test(url)) return true;
   if (/\/favicon(?:[-_.]|\d|$)|favicon[_-]?\d*/i.test(url)) return true;
   if (/external-[^/]+\.xx\.fbcdn\.net\/emg1\/v\/t13\//i.test(url)) return true;
   return false;
+}
+
+function mediaAssetIdentity(url: string): string {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  if (/^data:/i.test(raw)) return raw;
+  const base = raw.split("#")[0].split("?")[0];
+  if (/^https?:\/\//i.test(raw)) {
+    const file = (base.replace(/\/+$/, "").split("/").pop() || base).toLowerCase();
+    return file.replace(/\.(?:png|jpe?g|webp|gif|mp4|mov|m4v|webm)$/i, "") || base.toLowerCase();
+  }
+  return base.replace(/\\/g, "/").toLowerCase();
+}
+
+function mediaAssetQuality(url: string): number {
+  const text = String(url || "").toLowerCase();
+  let score = 0;
+  if (/\.(?:mp4|mov|webm)(?:$|[?#])|\/video/i.test(text)) score += 10_000;
+  const dims = [...text.matchAll(/(?:^|[^\d])(\d{2,4})x(\d{2,4})(?:[^\d]|$)/g)];
+  if (dims.length) {
+    score += Math.min(Math.max(...dims.map((item) => Number(item[1]) * Number(item[2]))), 16_000_000) / 1000;
+  } else {
+    score += 2500;
+  }
+  if (/e35|s1080|p1080/.test(text)) score += 400;
+  if (/s150x150|s320x320|s640x640|p150x150|p320x320/.test(text)) score -= 600;
+  return score;
+}
+
+function isThreadsVideoMediaUrl(url: string): boolean {
+  const text = String(url || "");
+  if (/\.(?:mp4|mov|m4v|webm)(?:$|[?#])/i.test(text)) return true;
+  if (/\/v\/t(?:50|42)\./i.test(text)) return true;
+  if (/(?:^|\/\/)video[-.]/i.test(text)) return true;
+  if (/\/o1\/v\/t\d+\//i.test(text)) return true;
+  return false;
+}
+
+function isSameMediaAsset(left: string, right: string): boolean {
+  const a = String(left || "").trim();
+  const b = String(right || "").trim();
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const leftId = mediaAssetIdentity(a);
+  const rightId = mediaAssetIdentity(b);
+  return Boolean(leftId && rightId && leftId === rightId);
 }
 
 function extractThreadsMediaFromMarkdown(text: string, limit = 12): SentimentHotMedia[] {
@@ -8761,8 +8924,14 @@ function extractThreadsMediaFromMarkdown(text: string, limit = 12): SentimentHot
     const url = imageMatch[2];
     if (media.length > 0 && /profile picture/i.test(alt)) break;
     if (isNonPostThreadsMediaUrl(url)) continue;
-    if (media.some((item) => item.url === url)) continue;
-    const type = /\.(mp4|mov|webm)(?:$|[?#])/i.test(url) || /video/i.test(url) ? "video" : "image";
+    const existingIndex = media.findIndex((item) => isSameMediaAsset(item.url, url));
+    if (existingIndex >= 0) {
+      if (mediaAssetQuality(url) > mediaAssetQuality(media[existingIndex].url)) {
+        media[existingIndex] = { ...media[existingIndex], url };
+      }
+      continue;
+    }
+    const type = isThreadsVideoMediaUrl(url) ? "video" : "image";
     media.push({ type, url });
     if (media.length >= limit) break;
   }
@@ -8770,20 +8939,47 @@ function extractThreadsMediaFromMarkdown(text: string, limit = 12): SentimentHot
     for (const raw of source.matchAll(/https?:\/\/(?:scontent[^\s)"']+|cdninstagram\.com[^\s)"']+)/gi)) {
       const url = cleanText(raw[0]).replace(/[),.;]+$/, "");
       if (!url || isNonPostThreadsMediaUrl(url)) continue;
-      if (media.some((item) => item.url === url)) continue;
-      media.push({ type: /video|\.mp4/i.test(url) ? "video" : "image", url });
+      const existingIndex = media.findIndex((item) => isSameMediaAsset(item.url, url));
+      if (existingIndex >= 0) {
+        if (mediaAssetQuality(url) > mediaAssetQuality(media[existingIndex].url)) {
+          media[existingIndex] = { ...media[existingIndex], url };
+        }
+        continue;
+      }
+      media.push({ type: isThreadsVideoMediaUrl(url) ? "video" : "image", url });
       if (media.length >= limit) break;
     }
   }
   return media;
 }
 
-function mergeCandidateMedia(base: SentimentHotMedia[], extra: SentimentHotMedia[]): SentimentHotMedia[] {
+export function mergeCandidateMedia(base: SentimentHotMedia[], extra: SentimentHotMedia[]): SentimentHotMedia[] {
   const out: SentimentHotMedia[] = [];
   for (const item of [...base, ...extra]) {
     const url = String(item?.url || item?.localPath || "").trim();
     if (!url || isNonPostThreadsMediaUrl(url)) continue;
-    if (out.some((existing) => existing.url === item.url || (item.localPath && existing.localPath === item.localPath))) continue;
+    const existingIndex = out.findIndex((existing) => (
+      isSameMediaAsset(existing.url, item.url || url)
+      || Boolean(item.localPath && existing.localPath && existing.localPath === item.localPath)
+    ));
+    if (existingIndex >= 0) {
+      const current = out[existingIndex];
+      const nextType = item.type === "video" || current.type === "video" || isThreadsVideoMediaUrl(url) ? "video" : (item.type || current.type);
+      const nextUrl = nextType === "video" && current.type !== "video"
+        ? url
+        : (mediaAssetQuality(url) > mediaAssetQuality(current.url || current.localPath || "") ? url : current.url);
+      const nextThumb = nextType === "video"
+        ? (item.thumbnailUrl || current.thumbnailUrl || (current.type === "image" ? current.url : "") || (item.type === "image" ? url : ""))
+        : (current.thumbnailUrl || item.thumbnailUrl);
+      out[existingIndex] = {
+        ...current,
+        ...item,
+        type: nextType,
+        url: nextUrl,
+        ...(nextThumb && nextThumb !== nextUrl ? { thumbnailUrl: nextThumb } : {}),
+      };
+      continue;
+    }
     out.push(item);
     if (out.length >= 12) break;
   }

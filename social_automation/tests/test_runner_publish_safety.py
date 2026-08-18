@@ -197,6 +197,7 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         source = Path(runner.__file__).read_text(encoding="utf-8")
         self.assertIn("def _offer_manual_threads_publish_takeover(", source)
         threads_publish = source.split("def _run_threads_publish_post(", 1)[1].split("def _run_publish_post(", 1)[0]
+        self.assertIn('title="正在校验发布结果"', threads_publish)
         self.assertGreaterEqual(threads_publish.count("_offer_manual_threads_publish_takeover("), 4)
         self.assertIn("自动打开发布页失败", threads_publish)
         self.assertIn("自动填写正文失败", threads_publish)
@@ -3270,6 +3271,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page = mock.Mock()
         page.url = "https://www.threads.net/@user/post/OTHER"
         page.locator.return_value.inner_text.return_value = "Published headline"
+        page.evaluate.return_value = False
 
         self.assertFalse(
             runner._threads_publish_evidence_page_ready(
@@ -3277,7 +3279,19 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 "https://www.threads.net/@user/post/ABC",
             )
         )
-        page.locator.assert_not_called()
+
+    def test_threads_publish_evidence_rejects_home_feed(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        page.locator.return_value.inner_text.return_value = "為你推薦 sherryjim68 1分鐘"
+        page.evaluate.return_value = False
+
+        self.assertFalse(
+            runner._threads_publish_evidence_page_ready(
+                page,
+                "https://www.threads.net/@sherryjim68/post/DcK6DmzkevJ",
+            )
+        )
 
     def test_threads_publish_evidence_rejects_login_redirect_shell(self):
         page = mock.Mock()
@@ -3307,7 +3321,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result, "final.png")
-        goto.assert_called_once()
+        goto.assert_not_called()
         dismiss_cookie.assert_called_once()
         evidence_ready.assert_called_once_with(
             page,
@@ -3341,6 +3355,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_click_threads_confirmed_post", return_value=False),
             mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=False),
             mock.patch.object(runner, "_screenshot") as screenshot,
         ):
@@ -3356,6 +3371,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_click_threads_confirmed_post", return_value=False),
             mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True),
             mock.patch.object(runner, "_threads_publish_evidence_page_ready", return_value=False),
             mock.patch.object(runner, "_screenshot") as screenshot,
@@ -3367,12 +3383,155 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result, "")
         screenshot.assert_not_called()
 
+    def test_threads_final_screenshot_opens_confirmed_post_from_profile(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.net/@alice"
+
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_click_threads_confirmed_post", return_value=True) as open_post,
+            mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True),
+            mock.patch.object(runner, "_threads_publish_evidence_page_ready", side_effect=[False, True]),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_screenshot", return_value="final.png") as screenshot,
+        ):
+            result = runner._capture_threads_publish_evidence(
+                page,
+                "https://www.threads.net/@alice/post/NEW",
+                "published body",
+                Path("."),
+                {"id": "task"},
+                _Logger(),
+            )
+
+        self.assertEqual(result, "final.png")
+        open_post.assert_called_once()
+        goto.assert_not_called()
+        screenshot.assert_called_once()
+
+    def test_threads_closed_loop_returns_permalink_and_post_screenshot_without_retry_loop(self):
+        permalink = "https://www.threads.net/@alice/post/NEW"
+        page = _PageWithBackground("https://www.threads.net/")
+        control = {"task": {"id": "publish-task", "payload": {"caption": "hello threads"}}}
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_ensure_threads_home_for_publish"),
+            mock.patch.object(runner, "_ensure_threads_compose_ready", return_value=_Locator()),
+            mock.patch.object(runner, "_focus_threads_compose", return_value=_Locator()),
+            mock.patch.object(runner, "_human_click"),
+            mock.patch.object(runner, "_clear_and_type"),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_threads_active_dialog_text", return_value="hello threads"),
+            mock.patch.object(runner, "_click_threads_active_dialog_post", return_value=True),
+            mock.patch.object(runner, "_capture_threads_profile_baseline", return_value=set()),
+            mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
+            mock.patch.object(runner, "_persist_publish_confirmation_context"),
+            mock.patch.object(
+                runner,
+                "_wait_for_threads_publish_success",
+                return_value={"confirmed": False, "submitted": True, "url": ""},
+            ),
+            mock.patch.object(
+                runner,
+                "_wait_for_threads_own_post",
+                return_value={"confirmed": True, "url": permalink, "reason": "profile"},
+            ),
+            mock.patch.object(runner, "_click_threads_confirmed_post", return_value=True),
+            mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True),
+            mock.patch.object(runner, "_threads_publish_evidence_page_ready", side_effect=[False, True]),
+            mock.patch.object(runner, "_screenshot", return_value="final.png"),
+        ):
+            result = runner._run_threads_publish_post(
+                page,
+                {"id": "publish-task"},
+                {"caption": "hello threads"},
+                Path("."),
+                _Logger(),
+                {"username": "alice"},
+                control,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["url"], permalink)
+        self.assertEqual(result["screenshot_path"], "final.png")
+        self.assertTrue(result["published"]["profile_confirmed"])
+        self.assertLessEqual(goto.call_count, 1)
+
+    def test_threads_media_only_closed_loop_recognizes_new_permalink_without_caption(self):
+        permalink = "https://www.threads.net/@alice/post/NEW"
+        page = _PageWithBackground("https://www.threads.net/")
+        media_input = mock.Mock()
+        media_input.count.return_value = 1
+        media_input.wait_for.return_value = None
+        media_path = Path(__file__).resolve()
+        control = {"task": {"id": "publish-task", "payload": {"caption": "", "media_paths": [str(media_path)]}}}
+        captured_caption = {}
+
+        def capture_own_post(_page, caption, *_args, **_kwargs):
+            captured_caption["caption"] = caption
+            return {"confirmed": True, "url": permalink, "reason": "profile"}
+
+        patches = {
+            "_dismiss_threads_compose_dialogs": {},
+            "_goto": {},
+            "_ensure_threads_home_for_publish": {},
+            "_ensure_threads_compose_ready": {"return_value": _Locator()},
+            "_focus_threads_compose": {"return_value": _Locator()},
+            "_human_click": {},
+            "_clear_and_type": {},
+            "_sleep_between": {},
+            "_threads_active_dialog_text": {},
+            "_threads_media_input": {"return_value": media_input},
+            "_threads_attachment_snapshot": {
+                "return_value": {"preview_count": 0, "remove_control_count": 0, "selected_file_count": 0},
+            },
+            "_wait_for_threads_media_ready": {"return_value": {"preview_count": 1}},
+            "_click_threads_active_dialog_post": {"return_value": True},
+            "_capture_threads_profile_baseline": {"return_value": {"https://www.threads.net/@alice/post/OLD"}},
+            "_resolve_threads_profile_url": {"return_value": "https://www.threads.net/@alice"},
+            "_persist_publish_confirmation_context": {},
+            "_wait_for_threads_publish_success": {
+                "return_value": {"confirmed": False, "submitted": True, "url": ""},
+            },
+            "_wait_for_threads_own_post": {"side_effect": capture_own_post},
+            "_click_threads_confirmed_post": {"return_value": True},
+            "_dismiss_threads_cookie_consent": {"return_value": True},
+            "_threads_publish_evidence_page_ready": {"side_effect": [False, True]},
+            "_screenshot": {"return_value": "final.png"},
+        }
+        with contextlib.ExitStack() as stack:
+            mocks = {
+                name: stack.enter_context(mock.patch.object(runner, name, **kwargs))
+                for name, kwargs in patches.items()
+            }
+            result = runner._run_threads_publish_post(
+                page,
+                {"id": "publish-task"},
+                {"caption": "", "media_paths": [str(media_path)]},
+                Path("."),
+                _Logger(),
+                {"username": "alice"},
+                control,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["url"], permalink)
+        self.assertEqual(result["screenshot_path"], "final.png")
+        self.assertTrue(result["published"]["profile_confirmed"])
+        self.assertEqual(captured_caption["caption"], "")
+        mocks["_clear_and_type"].assert_not_called()
+        mocks["_threads_active_dialog_text"].assert_not_called()
+        media_input.set_input_files.assert_called_once_with([str(media_path)])
+        self.assertLessEqual(mocks["_goto"].call_count, 1)
+
     def test_threads_final_screenshot_reopens_permalink_after_cookie_failure(self):
         page = mock.Mock()
         logger = _RecordingLogger()
 
         with (
             mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_click_threads_confirmed_post", return_value=False),
             mock.patch.object(runner, "_dismiss_threads_cookie_consent", side_effect=[False, True]) as dismiss_cookie,
             mock.patch.object(runner, "_threads_publish_evidence_page_ready", return_value=True),
             mock.patch.object(runner, "_sleep_between"),
@@ -3383,16 +3542,15 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result, "final.png")
-        self.assertEqual(goto.call_count, 2)
-        self.assertEqual(dismiss_cookie.call_count, 2)
+        self.assertEqual(goto.call_count, 1)
         screenshot.assert_called_once()
-        self.assertTrue(any(args[1] == "publish_evidence_retry" for args, _kwargs in logger.entries))
 
     def test_threads_final_screenshot_retries_when_saving_fails(self):
         page = mock.Mock()
 
         with (
             mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_click_threads_confirmed_post", return_value=False),
             mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True),
             mock.patch.object(runner, "_threads_publish_evidence_page_ready", return_value=True),
             mock.patch.object(runner, "_sleep_between"),
@@ -3403,7 +3561,6 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result, "final.png")
-        self.assertEqual(goto.call_count, 2)
         self.assertEqual(screenshot.call_count, 2)
 
     def test_threads_final_screenshot_stops_after_retry_limit(self):
@@ -3412,7 +3569,9 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_click_threads_confirmed_post", return_value=False),
             mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=False) as dismiss_cookie,
+            mock.patch.object(runner, "_threads_publish_evidence_page_ready", return_value=False),
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_screenshot") as screenshot,
         ):
@@ -3421,12 +3580,11 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result, "")
-        self.assertEqual(goto.call_count, 3)
-        self.assertEqual(dismiss_cookie.call_count, 3)
+        self.assertEqual(goto.call_count, 1)
         screenshot.assert_not_called()
         retry_entries = [args for args, _kwargs in logger.entries if args[1] == "publish_evidence_retry"]
         final_entries = [args for args, _kwargs in logger.entries if args[1] == "publish_evidence_not_ready"]
-        self.assertEqual(len(retry_entries), 2)
+        self.assertEqual(len(retry_entries), 0)
         self.assertEqual(len(final_entries), 1)
 
     def test_requested_threads_publish_takeover_stops_automation_and_waits_for_manual_completion(self):
@@ -3573,6 +3731,23 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             runner._normalize_threads_post_permalink("https://threads.com/@alice/post/ABC123"),
             "https://www.threads.net/@alice/post/ABC123",
         )
+        self.assertEqual(
+            runner._normalize_threads_post_permalink("https://www.threads.com/t/ABC123?hl=en"),
+            "https://www.threads.net/t/ABC123",
+        )
+        self.assertEqual(
+            runner._threads_post_identity("https://www.threads.net/t/ABC123"),
+            runner._threads_post_identity("https://www.threads.net/@alice/post/ABC123"),
+        )
+        self.assertEqual(
+            runner._dedupe_threads_permalinks(
+                [
+                    "https://www.threads.net/t/ABC123",
+                    "https://www.threads.net/@alice/post/ABC123",
+                ]
+            ),
+            ["https://www.threads.net/@alice/post/ABC123"],
+        )
 
         page = _Page("https://www.threads.net/@alice")
         page.evaluate = mock.Mock(return_value="/@alice/post/ABC123")
@@ -3625,6 +3800,36 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertTrue(result["confirmed"])
         self.assertEqual(result["url"], new_permalink)
+
+    def test_threads_media_only_confirmation_clicks_new_card_without_caption(self):
+        old_permalink = "https://www.threads.net/@alice/post/OLD"
+        new_permalink = "https://www.threads.net/@alice/post/NEW"
+        page = mock.Mock(url="https://www.threads.net/@alice")
+
+        def after_click(*_args, **_kwargs):
+            page.url = new_permalink
+            return True
+
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[old_permalink]),
+            mock.patch.object(runner, "_click_newest_unconfirmed_profile_post", side_effect=after_click) as click_card,
+            mock.patch.object(runner, "_find_threads_post_permalink") as caption_match,
+            mock.patch.object(runner, "_wait_for_cancellation"),
+        ):
+            result = runner._wait_for_threads_own_post(
+                page,
+                "",
+                _Logger(),
+                {"username": "alice"},
+                previous_permalinks={old_permalink},
+            )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["url"], new_permalink)
+        click_card.assert_called_once()
+        caption_match.assert_not_called()
 
     def test_threads_caption_confirmation_rejects_existing_matching_permalink(self):
         old_permalink = "https://www.threads.net/@alice/post/OLD"
@@ -3693,7 +3898,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertFalse(result["confirmed"])
 
-    def test_threads_caption_confirmation_rejects_unique_new_permalink_without_caption_match(self):
+    def test_threads_caption_confirmation_accepts_single_unique_permalink_after_submit(self):
         old_permalink = "https://www.threads.net/@alice/post/OLD"
         new_permalink = "https://www.threads.net/@alice/post/NEW"
         page = _Page("https://www.threads.net/@alice")
@@ -3706,7 +3911,79 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 "_find_threads_post_permalinks",
                 return_value=[new_permalink, old_permalink],
             ),
-            mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 151]),
+        ):
+            result = runner._wait_for_threads_own_post(
+                page,
+                "new post body split across nested nodes",
+                _Logger(),
+                {"username": "alice"},
+                previous_permalinks={old_permalink},
+            )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["url"], new_permalink)
+
+    def test_threads_confirmation_accepts_two_new_links_when_caption_cannot_match(self):
+        page = _Page("https://www.threads.net/@alice")
+        first = "https://www.threads.net/@alice/post/NEW1"
+        second = "https://www.threads.net/@alice/post/NEW2"
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalink", return_value=""),
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[first, second]),
+        ):
+            result = runner._wait_for_threads_own_post(
+                page,
+                "超派！剛剛去市場買菜",
+                _Logger(),
+                {"username": "alice"},
+                previous_permalinks=set(),
+            )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["url"], first)
+
+    def test_threads_confirmation_dedupes_short_and_canonical_permalinks(self):
+        old_permalink = "https://www.threads.net/@alice/post/OLD"
+        short_new = "https://www.threads.net/t/NEWCODE"
+        canonical_new = "https://www.threads.net/@alice/post/NEWCODE"
+        page = _Page("https://www.threads.net/@alice")
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalink", return_value=""),
+            mock.patch.object(
+                runner,
+                "_find_threads_post_permalinks",
+                return_value=[short_new, canonical_new, old_permalink],
+            ),
+        ):
+            result = runner._wait_for_threads_own_post(
+                page,
+                "new post body",
+                _Logger(),
+                {"username": "alice"},
+                previous_permalinks={old_permalink},
+            )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["url"], canonical_new)
+
+    def test_threads_caption_confirmation_accepts_repeated_unique_new_permalink(self):
+        old_permalink = "https://www.threads.net/@alice/post/OLD"
+        new_permalink = "https://www.threads.net/@alice/post/NEW"
+        page = _Page("https://www.threads.net/@alice")
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalink", return_value=""),
+            mock.patch.object(
+                runner,
+                "_find_threads_post_permalinks",
+                return_value=[new_permalink, old_permalink],
+            ),
+            mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 2, 3]),
             mock.patch.object(runner, "_wait_for_cancellation"),
         ):
             result = runner._wait_for_threads_own_post(
@@ -3717,7 +3994,36 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 previous_permalinks={old_permalink},
             )
 
-        self.assertFalse(result["confirmed"])
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["url"], new_permalink)
+
+    def test_threads_profile_short_link_is_treated_as_own_post(self):
+        old_permalink = "https://www.threads.net/@alice/post/OLD"
+        short_permalink = "https://www.threads.net/t/NEWSHORT"
+        page = _Page("https://www.threads.net/@alice")
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalink", return_value=""),
+            mock.patch.object(
+                runner,
+                "_find_threads_post_permalinks",
+                return_value=[short_permalink, old_permalink],
+            ),
+            mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 2, 3]),
+            mock.patch.object(runner, "_wait_for_cancellation"),
+        ):
+            result = runner._wait_for_threads_own_post(
+                page,
+                "new post body split across nested nodes",
+                _Logger(),
+                {"username": "alice"},
+                profile_url="https://www.threads.net/@alice",
+                previous_permalinks={old_permalink},
+            )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["url"], short_permalink)
 
     def test_threads_profile_baseline_unions_repeated_nonempty_reads(self):
         latest = "https://www.threads.net/@alice/post/LATEST"
@@ -3837,7 +4143,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(
                 runner,
                 "_capture_threads_profile_baseline",
-                side_effect=[{old_permalink}, None, None, None],
+                side_effect=[{old_permalink}, None, None, None, None, None, None],
             ),
             mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
             mock.patch.object(runner, "_capture_threads_publish_evidence", return_value="done.png"),
@@ -3931,28 +4237,144 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 previous_permalinks={old_permalink},
             )
 
-        self.assertFalse(result["confirmed"])
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["url"], new_one)
 
     def test_editor_closing_is_not_publish_confirmation(self):
         page = _Page("https://www.threads.net/")
+        clock = {"now": 100.0}
+
+        def fake_wait(seconds, _event=None):
+            clock["now"] += max(float(seconds or 0), 1.0)
+
         with (
-            mock.patch.object(runner, "_threads_dialog_compose_box", side_effect=[_Locator(), None]),
+            mock.patch.object(runner, "_threads_dialog_compose_box", side_effect=lambda *_args, **_kwargs: _Locator() if clock["now"] < 101 else None),
             mock.patch.object(runner, "_threads_dialog_post_button", return_value=None),
-            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner.time, "time", side_effect=lambda: clock["now"]),
+            mock.patch.object(runner, "_wait_for_cancellation", side_effect=fake_wait),
         ):
             result = runner._wait_for_threads_publish_success(page, _Logger())
 
         self.assertFalse(result["confirmed"])
         self.assertTrue(result["submitted"])
         self.assertEqual(result["url"], "")
+        self.assertGreaterEqual(clock["now"], 100 + runner.THREADS_POST_SUBMIT_WATCH_SECONDS)
+
+    def test_threads_confirms_permalink_seconds_after_dialog_closes(self):
+        permalink = "https://www.threads.net/@alice/post/NEW"
+        page = _Page("https://www.threads.net/")
+        clock = {"now": 100.0, "loops": 0}
+
+        def fake_wait(seconds, _event=None):
+            clock["now"] += 1.0
+            clock["loops"] += 1
+            page.url = permalink
+
+        with (
+            mock.patch.object(
+                runner,
+                "_threads_dialog_compose_box",
+                side_effect=lambda *_args, **_kwargs: _Locator() if clock["loops"] == 0 else None,
+            ),
+            mock.patch.object(runner, "_threads_dialog_post_button", return_value=None),
+            mock.patch.object(runner.time, "time", side_effect=lambda: clock["now"]),
+            mock.patch.object(runner, "_wait_for_cancellation", side_effect=fake_wait),
+            mock.patch.object(runner, "_wait_for_threads_own_post") as profile_confirm,
+        ):
+            result = runner._wait_for_threads_publish_success(
+                page,
+                _Logger(),
+                caption="hello threads",
+                profile_url="https://www.threads.net/@alice",
+                previous_permalinks=set(),
+            )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["url"], permalink)
+        self.assertLess(clock["now"] - 100.0, runner.THREADS_POST_SUBMIT_WATCH_SECONDS)
+        profile_confirm.assert_not_called()
+
+    def test_threads_publish_closed_loop_returns_screenshot_and_permalink(self):
+        permalink = "https://www.threads.net/@alice/post/NEW"
+        page = _PageWithBackground("https://www.threads.net/")
+        clock = {"now": 100.0, "loops": 0}
+        control = {"task": {"id": "publish-task", "payload": {"caption": "hello threads"}}}
+
+        def fake_wait(seconds, _event=None):
+            clock["now"] += 1.0
+            clock["loops"] += 1
+            page.url = permalink
+
+        def fake_time():
+            return clock["now"]
+
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_ensure_threads_home_for_publish"),
+            mock.patch.object(runner, "_ensure_threads_compose_ready", return_value=_Locator()),
+            mock.patch.object(runner, "_focus_threads_compose", return_value=_Locator()),
+            mock.patch.object(runner, "_human_click"),
+            mock.patch.object(runner, "_clear_and_type"),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_threads_active_dialog_text", return_value="hello threads"),
+            mock.patch.object(runner, "_click_threads_active_dialog_post", return_value=True),
+            mock.patch.object(
+                runner,
+                "_threads_dialog_compose_box",
+                side_effect=lambda *_args, **_kwargs: _Locator() if clock["loops"] == 0 else None,
+            ),
+            mock.patch.object(runner, "_threads_dialog_post_button", return_value=None),
+            mock.patch.object(runner.time, "time", side_effect=fake_time),
+            mock.patch.object(runner, "_wait_for_cancellation", side_effect=fake_wait),
+            mock.patch.object(runner, "_wait_for_threads_own_post") as profile_confirm,
+            mock.patch.object(runner, "_capture_threads_profile_baseline", return_value=set()),
+            mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@alice"),
+            mock.patch.object(runner, "_dismiss_threads_cookie_consent", return_value=True),
+            mock.patch.object(runner, "_threads_publish_evidence_page_ready", return_value=True),
+            mock.patch.object(runner, "_screenshot", return_value="final.png"),
+            mock.patch.object(runner, "_persist_publish_confirmation_context"),
+        ):
+            result = runner._run_threads_publish_post(
+                page,
+                {"id": "publish-task"},
+                {"caption": "hello threads"},
+                Path("."),
+                _Logger(),
+                {"username": "alice"},
+                control,
+            )
+            if result.get("ok"):
+                runner._set_task_assistance(
+                    control,
+                    phase="success",
+                    kind="success",
+                    title="发布成功",
+                    message="帖子已发布，可在助手中查看截图和链接。",
+                    permalink=str(result.get("url") or ""),
+                    screenshot_path=str(result.get("screenshot_path") or ""),
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["url"], permalink)
+        self.assertEqual(result["screenshot_path"], "final.png")
+        profile_confirm.assert_not_called()
+        self.assertFalse(
+            any(
+                len(call.args) > 3 and call.args[3] == "threads_publish_profile"
+                for call in goto.call_args_list
+            )
+        )
+        assistance = control["login_assistance_state"]
+        self.assertEqual(assistance["phase"], "success")
+        self.assertEqual(assistance["permalink"], permalink)
+        self.assertEqual(assistance["screenshot_path"], "final.png")
+        self.assertLess(clock["now"] - 100.0, runner.THREADS_POST_SUBMIT_WATCH_SECONDS)
 
     def test_threads_feed_confirms_first_post_for_empty_readable_baseline(self):
         new_permalink = "https://www.threads.net/@alice/post/NEW"
-        page = _Page("https://www.threads.net/")
-        with (
-            mock.patch.object(runner, "_find_threads_post_permalink", return_value=new_permalink),
-            mock.patch.object(runner.time, "time", side_effect=[0, 1]),
-        ):
+        page = _Page(new_permalink)
+        with mock.patch.object(runner.time, "time", side_effect=[0, 1]):
             result = runner._wait_for_threads_publish_success(
                 page,
                 _Logger(),
@@ -3963,6 +4385,36 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertTrue(result["confirmed"])
         self.assertEqual(result["url"], new_permalink)
+
+    def test_threads_confirmation_clicks_new_profile_card_without_language(self):
+        old_permalink = "https://www.threads.net/@alice/post/OLD"
+        new_permalink = "https://www.threads.net/@alice/post/NEW"
+        page = mock.Mock(url="https://www.threads.net/@alice")
+
+        def after_click(*_args, **_kwargs):
+            page.url = new_permalink
+            return True
+
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[old_permalink]),
+            mock.patch.object(runner, "_click_newest_unconfirmed_profile_post", side_effect=after_click) as click_card,
+            mock.patch.object(runner, "_find_threads_post_permalink") as caption_match,
+            mock.patch.object(runner, "_wait_for_cancellation"),
+        ):
+            result = runner._wait_for_threads_own_post(
+                page,
+                "这段文字不应该被用来识别",
+                _Logger(),
+                {"username": "alice"},
+                previous_permalinks={old_permalink},
+            )
+
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["url"], new_permalink)
+        click_card.assert_called_once()
+        caption_match.assert_not_called()
 
     def test_threads_caption_confirmation_accepts_new_post_below_pinned_post(self):
         pinned = "https://www.threads.net/@alice/post/PINNED"
@@ -4058,7 +4510,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                     {"username": "alice"},
                 )
 
-        self.assertTrue(background_page.call_args.kwargs["block_heavy_assets"])
+        self.assertTrue(any(call.kwargs.get("block_heavy_assets") for call in background_page.call_args_list))
+        self.assertTrue(any(call.kwargs.get("block_heavy_assets") is False for call in background_page.call_args_list))
         self.assertNotIn("force_primary", background_page.call_args.kwargs)
         start_barrier.assert_not_called()
 
@@ -4176,14 +4629,14 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page.body.text = "No threads yet"
         self.assertTrue(runner._threads_profile_is_stably_empty(page, "https://www.threads.net/@alice"))
 
-    def test_threads_profile_empty_baseline_accepts_loaded_handle_without_empty_copy(self):
+    def test_threads_profile_loaded_handle_without_empty_copy_is_not_empty_baseline(self):
         page = _ThreadsShellPage(
             [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
             "Alice @alice Followers Following",
         )
         page.url = "https://www.threads.com/@alice"
 
-        self.assertTrue(runner._threads_profile_is_stably_empty(page, "https://www.threads.net/@alice"))
+        self.assertFalse(runner._threads_profile_is_stably_empty(page, "https://www.threads.net/@alice"))
 
     def test_threads_compose_ready_prefers_direct_new_opener_once(self):
         opener = _Locator()

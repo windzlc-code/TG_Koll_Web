@@ -4570,16 +4570,50 @@ function personaHotImportMetaFromCandidate(candidate) {
 
 function personaHotCandidateMediaItems(candidate) {
   const rows = Array.isArray(candidate?.media_items) ? candidate.media_items : [];
-  return rows.map((item) => {
-    const previewUrl = String(item?.previewUrl || item?.preview_url || item?.url || "").trim();
-    if (!previewUrl) return null;
+  const mapped = rows.map((item) => {
+    const url = String(item?.url || item?.previewUrl || item?.preview_url || "").trim();
+    if (!url) return null;
+    const type = guessMediaType(url, item?.type || "");
+    const thumbnailUrl = String(item?.thumbnailUrl || item?.thumbnail_url || "").trim();
+    const previewUrl = type === "video" ? (thumbnailUrl || url) : (String(item?.previewUrl || item?.preview_url || "").trim() || url);
     return {
       previewUrl,
-      url: previewUrl,
-      type: guessMediaType(previewUrl, item?.type || ""),
-      label: String(item?.label || item?.type || "热点媒体").trim() || "热点媒体",
+      url,
+      originalUrl: url,
+      thumbnailUrl,
+      type,
+      label: String(item?.label || mediaKindLabel(type) || "热点媒体").trim() || mediaKindLabel(type),
     };
   }).filter(Boolean);
+  return collapseHotMediaPosterPairs(mapped);
+}
+
+function collapseHotMediaPosterPairs(items) {
+  const rows = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const current = items[index];
+    const next = items[index + 1];
+    if (next && current.type === "image" && next.type === "video") {
+      rows.push({
+        ...next,
+        thumbnailUrl: current.previewUrl || current.url,
+        previewUrl: current.previewUrl || current.url,
+      });
+      index += 1;
+      continue;
+    }
+    if (next && current.type === "video" && next.type === "image") {
+      rows.push({
+        ...current,
+        thumbnailUrl: next.previewUrl || next.url,
+        previewUrl: next.previewUrl || next.url,
+      });
+      index += 1;
+      continue;
+    }
+    rows.push(current);
+  }
+  return rows;
 }
 
 function personaHotCandidateMediaSignature(candidate) {
@@ -5228,6 +5262,7 @@ function renderPersonaHotMediaPreview(persona, candidate) {
                    showCaption: false,
                    interactive: Boolean(previewGroupId) && itemPreviewIndex >= 0,
                  })}
+            <span class="persona-hot-media-kind-icon" title="${esc(mediaKindLabel(item.type))}" aria-label="${esc(mediaKindLabel(item.type))}">${renderMediaKindIcon(item.type)}</span>
             <span class="persona-edit-media-order persona-hot-media-index-badge" aria-hidden="true">${index + 1}</span>
           </div>
         `;
@@ -5790,9 +5825,15 @@ function mobilePublishingTask() {
   ].map((value) => String(value || "").trim()).filter(Boolean)));
   if (!taskIds.length) return null;
   const tasksById = new Map((state.socialTasks || []).map((item) => [String(item?.id || "").trim(), item]));
+  const sessions = Array.isArray(state.socialBrowserSessions) ? state.socialBrowserSessions : [];
   const activeTask = taskIds
     .map((taskId) => tasksById.get(taskId) || null)
-    .find((task) => ["preparing", "queued", "running", "need_manual"].includes(String(task?.status || "").trim()));
+    .find((task) => {
+      if (!["preparing", "queued", "running", "need_manual"].includes(String(task?.status || "").trim())) return false;
+      const session = sessions.find((item) => String(item?.task_id || "").trim() === String(task?.id || "").trim());
+      const phase = String(session?.login_assistance?.phase || "");
+      return phase !== "success" && phase !== "error";
+    });
   const startedAt = Number(state.mobilePublishingTaskStartedAt || 0);
   if (activeTask) {
     state.mobilePublishingTaskId = String(activeTask.id || taskIds[0]);
@@ -5811,6 +5852,42 @@ function mobilePublishingTask() {
   state.mobilePublishingTaskIds = [];
   state.mobilePublishingTaskStartedAt = 0;
   return null;
+}
+
+function publishAssistanceLooksSettled(task = {}, session = null) {
+  const status = loginAssistanceTaskStatus(task);
+  if (["success", "failed", "cancelled"].includes(status)) return true;
+  const phase = String(session?.login_assistance?.phase || "");
+  return phase === "success" || phase === "error";
+}
+
+function releaseMobilePublishingTask(taskId = "") {
+  const cleanId = String(taskId || "").trim();
+  if (!cleanId) return false;
+  const tracked = [
+    ...(Array.isArray(state.mobilePublishingTaskIds) ? state.mobilePublishingTaskIds : []),
+    state.mobilePublishingTaskId,
+  ].map((id) => String(id || "").trim()).filter(Boolean);
+  if (!tracked.includes(cleanId)) return false;
+  state.mobilePublishingTaskIds = (Array.isArray(state.mobilePublishingTaskIds) ? state.mobilePublishingTaskIds : [])
+    .filter((id) => String(id || "").trim() && String(id).trim() !== cleanId);
+  if (String(state.mobilePublishingTaskId || "").trim() === cleanId) {
+    state.mobilePublishingTaskId = state.mobilePublishingTaskIds[0] || "";
+  }
+  if (!mobilePublishingTask()) {
+    state.mobilePublishingTaskId = "";
+    state.mobilePublishingTaskIds = [];
+    state.mobilePublishingTaskStartedAt = 0;
+  }
+  return true;
+}
+
+function refreshPublishingDockAfterAssistanceSettle(taskId = "") {
+  if (!releaseMobilePublishingTask(taskId)) return;
+  if (state.activeModule !== "publishing") return;
+  const trigger = $("executeSimpleFlow");
+  if (!trigger || trigger.getAttribute("aria-busy") !== "true") return;
+  renderSimpleFlowModule("publishing");
 }
 
 function toastKindForTaskStatus(status) {
@@ -8164,12 +8241,22 @@ function legacyMediaPreviewReason(value) {
   return "";
 }
 
+function isVideoMediaUrl(value) {
+  const text = String(value || "");
+  if (/\.(?:mp4|mov|m4v|webm|avi|mkv)(?:$|[?#])/i.test(text)) return true;
+  if (/\/v\/t(?:50|42)\./i.test(text)) return true;
+  if (/(?:^|\/\/)video[-.]/i.test(text)) return true;
+  if (/\/o1\/v\/t\d+\//i.test(text)) return true;
+  return false;
+}
+
 function guessMediaType(value, fallback = "") {
-  const text = String(value || "").trim().toLowerCase();
+  const text = String(value || "").trim();
   const typ = String(fallback || "").trim().toLowerCase();
-  if (typ === "video" || /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(text)) return "video";
-  if (typ === "audio" || /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(text)) return "audio";
-  return "image";
+  if (typ === "video" || isVideoMediaUrl(text)) return "video";
+  if (typ === "audio" || /\.(mp3|wav|m4a|aac|ogg|flac)(?:$|[?#])/i.test(text)) return "audio";
+  if (typ === "image" || /\.(?:png|jpe?g|webp|gif)(?:$|[?#])/i.test(text)) return "image";
+  return typ || "image";
 }
 
 function mediaKindLabel(type) {
@@ -8246,13 +8333,16 @@ function registerMediaPreviewGroup(items) {
     }
   }
   const id = `media-group-${++state.mediaPreviewSeq}`;
-  state.mediaPreviewGroups[id] = rows.map((item) => ({
-    id: String(item.id || item.imageId || "").trim(),
-    previewUrl: adminWorkspaceUrl(item.previewUrl),
-    originalUrl: adminWorkspaceUrl(item.originalUrl || item.original_url || item.previewUrl),
-    type: String(item.type || "image").trim() || "image",
-    label: mediaPreviewLabel(item.label, mediaKindLabel(item.type)),
-  }));
+  state.mediaPreviewGroups[id] = rows.map((item) => {
+    const type = guessMediaType(item.originalUrl || item.url || item.previewUrl, item.type || "image");
+    return {
+      id: String(item.id || item.imageId || "").trim(),
+      previewUrl: adminWorkspaceUrl(item.previewUrl),
+      originalUrl: adminWorkspaceUrl(item.originalUrl || item.original_url || item.url || item.previewUrl),
+      type,
+      label: mediaPreviewLabel(item.label, mediaKindLabel(type)),
+    };
+  });
   return id;
 }
 
@@ -8269,7 +8359,10 @@ function renderMediaPreviewButton(item, groupId, index, {
   const label = mediaPreviewLabel(item?.label, mediaKindLabel(item?.type));
   const type = String(item?.type || "image").trim() || "image";
   const text = caption || mediaKindLabel(type);
-  const displayUrl = adminWorkspaceUrl(item?.thumbnailUrl || item?.thumbnail_url || item?.previewUrl);
+  const posterUrl = String(item?.thumbnailUrl || item?.thumbnail_url || "").trim();
+  const displayUrl = adminWorkspaceUrl(
+    type === "video" ? (posterUrl || item?.previewUrl) : (posterUrl || item?.previewUrl),
+  );
   const unavailable = Boolean(item?.unavailable || (displayUrl && state.failedMediaPreviewUrls.has(displayUrl)));
   const canInteract = interactive && !unavailable;
   const canShowZoomHint = zoomHint && canInteract && type === "image";
@@ -8281,12 +8374,12 @@ function renderMediaPreviewButton(item, groupId, index, {
       ${canInteract ? `data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" data-media-preview-type="${esc(type)}" data-media-preview-label="${esc(label || text)}"` : ""}
       ${canShowZoomHint ? `title="点击放大查看" aria-label="点击放大查看 ${esc(label || text)}"` : ""}>
       ${unavailable
-        ? `<div class="${esc(frameClass)} persona-media-frame--empty"><strong>媒体已失效</strong><small>源文件无法加载</small></div>`
-        : type === "video"
+        ? `<div class="${esc(frameClass)} persona-media-frame--empty"><strong>${type === "video" ? "视频无法预览" : "媒体已失效"}</strong><small>${type === "video" ? "封面或源文件无法加载" : "源文件无法加载"}</small></div>`
+        : type === "video" && isVideoMediaUrl(displayUrl)
         ? `<video class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" muted playsinline preload="${deferLoad ? "none" : "metadata"}" draggable="false" onerror="handlePersonaMediaFrameError(this)"></video>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
-          : `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
+          : `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
       ${canShowZoomHint ? `<span class="persona-image-library-zoom-hint" aria-hidden="true">${renderZoomInIcon()}</span>` : ""}
       ${showCaption ? `<span>${esc(text)}</span>` : ""}
     </${rootTag}>
@@ -8809,8 +8902,11 @@ function handlePersonaMediaFrameError(node) {
     }
   }
   const placeholder = document.createElement("div");
+  const hostType = String(node.closest("[data-media-preview-type]")?.dataset?.mediaPreviewType || guessMediaType(sourceUrl)).trim();
   placeholder.className = `${String(node.className || "persona-media-frame")} persona-media-frame--empty`;
-  placeholder.innerHTML = "<strong>媒体已失效</strong><small>源文件无法加载</small>";
+  placeholder.innerHTML = hostType === "video"
+    ? "<strong>视频无法预览</strong><small>封面或源文件无法加载</small>"
+    : "<strong>媒体已失效</strong><small>源文件无法加载</small>";
   node.replaceWith(placeholder);
   const host = placeholder.closest("[data-media-preview-group], .persona-media-card, .persona-image-library-preview");
   if (host) {
@@ -11111,6 +11207,20 @@ function renderModuleEmptyState({
     </div>
     ${action ? `<div class="empty-state-action">${action}</div>` : ""}
   </div>`;
+}
+
+function renderMediaKindIcon(type) {
+  if (type === "video") {
+    return `<svg class="persona-hot-media-kind-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <rect x="3.5" y="5.5" width="17" height="13" rx="2.5"></rect>
+      <path d="M10 9.2v5.6L15.2 12z"></path>
+    </svg>`;
+  }
+  return `<svg class="persona-hot-media-kind-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="3.5" y="5.5" width="17" height="13" rx="2.5"></rect>
+    <circle cx="8.5" cy="9.4" r="1.3"></circle>
+    <path d="m7.2 16.2 3.4-3.7 2.4 2.5 2.2-2.6 3.1 3.8z"></path>
+  </svg>`;
 }
 
 function renderZoomInIcon() {
@@ -21181,12 +21291,19 @@ async function preparePersonaHotKeywords(refresh = false) {
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
+  const existingKeywords = parsePersonaHotKeywordText(personaHotKeywordText(form, state.personaHotCandidateResults[String(persona.id)] || {}));
+  const firstGenerate = existingKeywords.length < 8;
   setPersonaGenerateRunState(persona.id, {
     kind: "hot",
     status: "running",
-    message: "正在准备热点抓取",
+    message: firstGenerate
+      ? "首次生成搜索词，大约需要 30–60 秒，请稍候"
+      : "正在复用已缓存的搜索词",
     error: "",
   });
+  if (firstGenerate) {
+    showMsg("commandMsg", "此人人设还没有搜索词。第一次会现场生成，大约 30–60 秒，请不要离开或重复点击。", true);
+  }
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
@@ -21214,7 +21331,9 @@ async function preparePersonaHotKeywords(refresh = false) {
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
       status: keywords.length ? "success" : "error",
-      message: keywords.length ? "热点抓取准备完成" : "热点抓取准备失败",
+      message: keywords.length
+        ? (firstGenerate ? `搜索词已生成 ${keywords.length} 个` : `已复用缓存搜索词 ${keywords.length} 个`)
+        : "热点抓取准备失败",
       error: keywords.length ? "" : ((Array.isArray(result.warnings) && result.warnings[0]) || "未能生成有效的抓取策略"),
     });
     return keywords;
@@ -21271,14 +21390,17 @@ async function fetchPersonaHotCandidates(refresh = false) {
     renderPersonaDetail();
     return;
   }
-  try {
-    const preparedKeywords = await preparePersonaHotKeywords(false);
-    if (preparedKeywords.length) keywords = parsePersonaHotKeywordText(formatPersonaHotKeywordText(preparedKeywords));
-  } catch (error) {
-    if (!keywords.length) throw error;
+  if (keywords.length < 8) {
+    try {
+      const preparedKeywords = await preparePersonaHotKeywords(false);
+      if (preparedKeywords.length) keywords = parsePersonaHotKeywordText(formatPersonaHotKeywordText(preparedKeywords));
+    } catch (error) {
+      if (!keywords.length) throw error;
+    }
   }
   if (!keywords.length) {
-    showMsg("commandMsg", "热点抓取准备失败，请稍后重试。", false);
+    const prepareError = String(personaGenerateRunState(persona.id)?.error || "").trim();
+    showMsg("commandMsg", prepareError || "热点抓取准备失败，请稍后重试。", false);
     return;
   }
   const controller = new AbortController();
@@ -21288,7 +21410,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
   setPersonaGenerateRunState(persona.id, {
     kind: "hot",
     status: "running",
-    message: refresh ? "热点候选刷新中" : "热点候选抓取中",
+    message: refresh ? "搜索词已就绪，正在抓取帖子" : "搜索词已就绪，正在抓取帖子",
     error: "",
   });
   clearMsg("commandMsg");
@@ -24030,6 +24152,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
   const keywordBusy = isActionLocked("persona", persona?.id || "", "hot_keywords");
   const hotBusyStartedAt = actionLockStartedAt("persona", persona?.id || "", "hot_candidates");
+  const keywordBusyStartedAt = actionLockStartedAt("persona", persona?.id || "", "hot_keywords");
   const cooldown = hotState.cooldown && typeof hotState.cooldown === "object" ? hotState.cooldown : {};
   const cooldownUntil = Number(cooldown.next_allowed_at || 0);
   const cooldownRemaining = Math.max(0, Math.ceil(cooldownUntil - (Date.now() / 1000)));
@@ -24053,10 +24176,17 @@ function renderPersonaHotCandidatePicker(persona, form) {
       </div>
       <div class="row-actions persona-hot-fetch-toolbar">
         <button type="button" class="primary persona-hot-fetch-action" data-persona-hot-solo="${hotBusy ? "false" : "true"}" data-persona-fetch-hot ${cooling ? `data-hot-cooldown-until="${esc(cooldownUntil)}"` : ""} ${controlsBusy ? "disabled" : ""}>${keywordBusy
-          ? renderBusyButtonContent("正在准备热点抓取", true)
-          : (hotBusy ? renderBusyButtonContent("正在抓取热点", true, hotBusyStartedAt) : (cooling ? `冷却中 ${Math.floor(cooldownRemaining / 60)}:${String(cooldownRemaining % 60).padStart(2, "0")}` : "抓取热点"))}</button>
+          ? renderBusyButtonContent(keywords.length >= 8 ? "正在复用搜索词" : "首次生成搜索词", true, keywordBusyStartedAt)
+          : (hotBusy ? renderBusyButtonContent("正在抓取帖子", true, hotBusyStartedAt) : (cooling ? `冷却中 ${Math.floor(cooldownRemaining / 60)}:${String(cooldownRemaining % 60).padStart(2, "0")}` : "抓取热点"))}</button>
         ${hotBusy ? `<button type="button" class="persona-hot-fetch-action" data-persona-cancel-hot>取消抓取</button>` : ""}
       </div>
+      <small class="persona-hot-wait-hint">${keywordBusy
+        ? (keywords.length >= 8 ? "搜索词已缓存，正在确认后去抓帖。" : "第一次要等模型写出搜索词，大约 30–60 秒，请不要离开或重复点击。")
+        : (hotBusy
+          ? "搜索词已经就绪。现在等的是抓帖，不是生成关键词。"
+          : (keywords.length >= 8
+            ? `搜索词已缓存 ${esc(keywords.length)} 个。再次点击会直接抓帖，不再重新生成。`
+            : "此人人设还没有搜索词。第一次会现场生成，大约 30–60 秒；成功后会缓存。"))}</small>
     </div>
     ${keywords.length ? `
       <details class="persona-hot-keyword-disclosure">
@@ -27003,8 +27133,18 @@ function renderTaskAssistanceDetails(model = {}) {
     ? adminWorkspaceUrl(screenshotUrl)
     : screenshotUrl;
   const linkHref = permalink ? adminWorkspacePageUrl(permalink) : "";
+  const shotGroupId = screenshotUrl
+    ? registerMediaPreviewGroup([{
+      previewUrl: shotHref,
+      originalUrl: shotHref,
+      type: "image",
+      label: "任务截图",
+    }])
+    : "";
   return `<div class="login-assistance-details">
-    ${screenshotUrl ? `<img class="login-assistance-shot" src="${esc(shotHref)}" alt="任务截图" />` : ""}
+    ${screenshotUrl ? `<button type="button" class="login-assistance-shot-button" data-media-preview-group="${esc(shotGroupId)}" data-media-preview-index="0" data-media-preview-type="image" data-media-preview-label="任务截图" title="查看截图" aria-label="查看截图">
+      <img class="login-assistance-shot" src="${esc(shotHref)}" alt="任务截图" />
+    </button>` : ""}
     ${linkHref ? `<a class="login-assistance-permalink" href="${esc(linkHref)}" target="_blank" rel="noopener">查看发布链接</a>` : ""}
   </div>`;
 }
@@ -27150,6 +27290,9 @@ function openTaskAssistanceView(taskId = "", options) {
       || null;
     const currentTask = task || (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId) || { id: cleanTaskId, status: "queued" };
     updateLoginAssistanceModal(modal, currentTask, currentSession);
+    if (publishAssistanceLooksSettled(currentTask, currentSession)) {
+      refreshPublishingDockAfterAssistanceSettle(cleanTaskId);
+    }
     if (!stopped && modal.isConnected && !["success", "failed", "cancelled"].includes(loginAssistanceTaskStatus(currentTask))) {
       timer = window.setTimeout(poll, 1000);
     }
@@ -27169,6 +27312,15 @@ function openTaskAssistanceView(taskId = "", options) {
     }, 0);
   };
   modal.addEventListener("click", async (event) => {
+    const previewButton = event.target.closest("[data-media-preview-group]");
+    if (previewButton) {
+      event.preventDefault();
+      openPersonaMediaLightbox(
+        previewButton.dataset.mediaPreviewGroup || "",
+        Number(previewButton.dataset.mediaPreviewIndex || 0),
+      );
+      return;
+    }
     const stopButton = event.target.closest("[data-login-assistance-stop]");
     if (stopButton) {
       stopButton.disabled = true;

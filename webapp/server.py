@@ -14908,17 +14908,21 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
             and _to_int(existing.get("strategy_version"), 0) == PERSONA_HOT_KEYWORD_STRATEGY_VERSION
             and bool(_persona_hot_payload_keywords(existing.get("keywords")))
         )
+        archive_snapshot = _remote_fetch_archive_snapshot(clean_id)
+        prepare_payload: dict[str, Any] = {
+            "action": "prepare-hot-keywords",
+            "archiveId": clean_id,
+            "prompt": str(payload.prompt or "").strip(),
+            "refresh": bool(payload.refresh),
+            "forceRegenerate": force_regenerate,
+            "searchMode": search_mode,
+            "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
+        }
+        if archive_snapshot is not None:
+            prepare_payload["archiveSnapshot"] = archive_snapshot
         result = _run_persona_hot_workflow_cli(
-            {
-                "action": "prepare-hot-keywords",
-                "archiveId": clean_id,
-                "prompt": str(payload.prompt or "").strip(),
-                "refresh": bool(payload.refresh),
-                "forceRegenerate": force_regenerate,
-                "searchMode": search_mode,
-                "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
-            },
-            timeout_seconds=75,
+            prepare_payload,
+            timeout_seconds=90,
         )
         result = result if isinstance(result, dict) else {}
         warnings = [
@@ -19438,8 +19442,27 @@ def _looks_like_media_url(value: Any) -> bool:
     return bool(re.search(r"(?:^https?://|^/|^data:|^content://).+\.(?:png|jpe?g|webp|gif|mp4|mov|m4v|webm)(?:[?#].*)?$", text, re.I))
 
 
+def _is_video_media_url(value: Any) -> bool:
+    text = str(value or "")
+    if re.search(r"\.(?:mp4|mov|m4v|webm)(?:$|[?#])", text, re.I):
+        return True
+    if re.search(r"/v/t(?:50|42)\.", text, re.I):
+        return True
+    if re.search(r"(?:^|//)video[-.]", text, re.I):
+        return True
+    if re.search(r"/o1/v/t\d+/", text, re.I):
+        return True
+    return False
+
+
 def _guess_media_type(value: Any, fallback: Any = "") -> str:
-    text = f"{value or ''} {fallback or ''}".lower()
+    url = str(value or "").strip()
+    typ = str(fallback or "").strip().lower()
+    if typ == "video" or _is_video_media_url(url):
+        return "video"
+    if typ == "image" or re.search(r"\.(?:png|jpe?g|webp|gif)(?:$|[?#])", url, re.I):
+        return "image"
+    text = f"{url} {typ}".lower()
     if re.search(r"(?:video|mp4|mov|m4v|webm)", text):
         return "video"
     if re.search(r"(?:image|photo|png|jpe?g|webp|gif)", text):
@@ -19447,9 +19470,43 @@ def _guess_media_type(value: Any, fallback: Any = "") -> str:
     return "unknown"
 
 
+def _media_asset_identity(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if re.match(r"^data:", text, re.I):
+        return text
+    base = text.split("#", 1)[0].split("?", 1)[0]
+    if re.match(r"^https?://", text, re.I):
+        name = base.rstrip("/").rsplit("/", 1)[-1].lower()
+        name = re.sub(r"\.(?:png|jpe?g|webp|gif|mp4|mov|m4v|webm)$", "", name, flags=re.I)
+        return name or base.lower()
+    return base.replace("\\", "/").lower()
+
+
+def _media_asset_quality(value: Any) -> int:
+    text = str(value or "").lower()
+    score = 0
+    if re.search(r"(?:\.mp4|\.mov|\.webm|/video)", text, re.I):
+        score += 10_000
+    dims = [int(width) * int(height) for width, height in re.findall(r"(?:^|[^\d])(\d{2,4})x(\d{2,4})(?:[^\d]|$)", text)]
+    if dims:
+        score += min(max(dims), 16_000_000) // 1000
+    else:
+        score += 2500
+    if re.search(r"(?:e35|s1080|p1080)", text):
+        score += 400
+    if re.search(r"(?:s150x150|s320x320|s640x640|p150x150|p320x320)", text):
+        score -= 600
+    return score
+
+
 def _compact_dashboard_media_items(*sources: Any, limit: int | None = 12) -> list[dict[str, str]]:
     media: list[dict[str, str]] = []
     seen: set[str] = set()
+    seen_ids: dict[str, int] = {}
+    primary_url_keys = ("url", "mediaUrl", "media_url", "imageUrl", "image_url", "videoUrl", "video_url", "localPath", "path")
+    thumbnail_url_keys = ("thumbnailUrl", "thumbnail_url")
 
     def display_label(value: Any, fallback: Any = "") -> str:
         raw = str(value or "").strip()
@@ -19472,8 +19529,9 @@ def _compact_dashboard_media_items(*sources: Any, limit: int | None = 12) -> lis
         }.get(key, "")
         return translated or raw or str(fallback or "").strip()
 
-    def add(url: Any, typ: Any = "", label: Any = "") -> None:
+    def add(url: Any, typ: Any = "", label: Any = "", thumbnail: Any = "") -> None:
         text = str(url or "").strip()
+        thumb = str(thumbnail or "").strip()
         if not text or text in seen:
             return
         if re.search(r"(?:profile_pic|s150x150|/v/t51\.\d+-19/)", text, re.I):
@@ -19481,18 +19539,57 @@ def _compact_dashboard_media_items(*sources: Any, limit: int | None = 12) -> lis
         trusted_media_field = bool(re.search(r"(?:media|image|photo|video|thumb|attachment)", str(label or typ or ""), re.I))
         if not (_looks_like_media_url(text) or trusted_media_field):
             return
+        guessed = _guess_media_type(text, typ)
+        identity = _media_asset_identity(text) or _media_asset_identity(thumb)
+        if identity and identity in seen_ids:
+            index = seen_ids[identity]
+            current = media[index]
+            current_url = str(current.get("url") or "")
+            current_type = str(current.get("type") or "")
+            next_type = "video" if guessed == "video" or current_type == "video" else guessed
+            if next_type == "video" and current_type != "video":
+                seen.discard(current_url)
+                seen.add(text)
+                current["thumbnail_url"] = current.get("thumbnail_url") or current_url
+                current["url"] = text
+                current["type"] = "video"
+                current["label"] = display_label(label, "video")[:80]
+            elif next_type == "video" and guessed != "video":
+                if not current.get("thumbnail_url"):
+                    current["thumbnail_url"] = text
+            elif _media_asset_quality(text) > _media_asset_quality(current_url):
+                seen.discard(current_url)
+                seen.add(text)
+                current["url"] = text
+                current["type"] = next_type or _guess_media_type(text, typ)
+                current["label"] = display_label(label, typ)[:80]
+            if thumb and thumb != current.get("url") and not current.get("thumbnail_url"):
+                current["thumbnail_url"] = thumb
+            return
         seen.add(text)
-        media.append({
+        if identity:
+            seen_ids[identity] = len(media)
+        row = {
             "url": text,
-            "type": _guess_media_type(text, typ),
-            "label": display_label(label, typ)[:80],
-        })
+            "type": guessed,
+            "label": display_label(label, typ or guessed)[:80],
+        }
+        if thumb and thumb != text:
+            row["thumbnail_url"] = thumb
+        media.append(row)
 
     def walk(value: Any, label: str = "") -> None:
         if isinstance(value, dict):
-            for key in ("url", "mediaUrl", "media_url", "imageUrl", "image_url", "videoUrl", "video_url", "thumbnailUrl", "thumbnail_url", "localPath", "path"):
-                if key in value:
-                    add(value.get(key), value.get("type") or value.get("mediaType") or value.get("media_type"), label or key)
+            raw_type = value.get("type") or value.get("mediaType") or value.get("media_type") or ""
+            video_url = next((str(value.get(key) or "").strip() for key in ("videoUrl", "video_url") if str(value.get(key) or "").strip()), "")
+            image_url = next((str(value.get(key) or "").strip() for key in ("imageUrl", "image_url") if str(value.get(key) or "").strip()), "")
+            main_url = next((str(value.get(key) or "").strip() for key in ("url", "mediaUrl", "media_url", "localPath", "path") if str(value.get(key) or "").strip()), "")
+            thumb = next((str(value.get(key) or "").strip() for key in thumbnail_url_keys if str(value.get(key) or "").strip()), "")
+            if video_url or image_url or main_url or thumb:
+                resolved = video_url or main_url or image_url or thumb
+                resolved_type = _guess_media_type(resolved, raw_type or ("video" if video_url else "image" if image_url or thumb else ""))
+                poster = thumb or (image_url if resolved_type == "video" else "")
+                add(resolved, resolved_type, label or raw_type, poster)
             for key in ("mediaItems", "media", "attachments", "images", "videos", "imageUrls", "image_urls", "originalMediaUrls"):
                 nested = value.get(key)
                 if nested is not None:

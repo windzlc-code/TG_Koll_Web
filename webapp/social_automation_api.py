@@ -6113,6 +6113,13 @@ def check_social_proxy(proxy_id: str) -> dict[str, Any]:
     detected_region = str(response.get("region") or "").strip() if status == "active" else ""
     detected_city = str(response.get("city") or "").strip() if status == "active" else ""
     detected_isp = str(connection.get("isp") or connection.get("org") or "").strip() if status == "active" else ""
+    keep_selected_city = (
+        str(stored_proxy.get("source") or "") == "provider_purchase"
+        and bool(str(stored_proxy.get("city") or "").strip())
+    )
+    if keep_selected_city:
+        detected_region = str(stored_proxy.get("region") or "")
+        detected_city = str(stored_proxy.get("city") or "")
     with db() as conn:
         checked_at = _now()
         cursor = conn.execute(
@@ -12236,6 +12243,8 @@ def _normalize_threads_post_url(value: Any) -> str:
     if host not in {"threads.net", "www.threads.net", "threads.com", "www.threads.com"}:
         return ""
     path = re.sub(r"/+", "/", str(parsed.path or "")).rstrip("/")
+    if re.fullmatch(r"/t/[^/\s]+", path, flags=re.IGNORECASE):
+        return f"https://www.threads.net{path}"
     if not re.fullmatch(r"/@[^/\s]+/(?:post|thread)/[^/\s]+", path, flags=re.IGNORECASE):
         return ""
     return f"https://www.threads.net{path.replace('/thread/', '/post/')}"

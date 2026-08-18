@@ -1348,6 +1348,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("state.publishAssistanceDismissed = true", self._function_source("openTaskAssistanceView"))
         self.assertIn("is-publish-assistance", self._function_source("openTaskAssistanceView"))
         self.assertNotIn("login-assistance-content", self._function_source("renderTaskAssistanceDetails"))
+        self.assertIn("data-media-preview-group", self._function_source("renderTaskAssistanceDetails"))
+        self.assertIn("openPersonaMediaLightbox", self._function_source("openTaskAssistanceView"))
+        self.assertIn("refreshPublishingDockAfterAssistanceSettle", self._function_source("openTaskAssistanceView"))
         self.assertIn(".login-assistance-modal.is-publish-assistance .login-assistance-dialog", self.styles)
         self.assertIn("min-height: 0", self.styles)
         self.assertIn("function loginAssistanceMappedInputAllowed", self.source)
@@ -1365,6 +1368,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function adminWorkspacePageUrl(value) {{ return String(value || ""); }}
             function directMediaPreviewUrl(value) {{ return String(value || "").trim(); }}
             function esc(value) {{ return String(value || ""); }}
+            function registerMediaPreviewGroup() {{ return "media-group-test"; }}
             {self._function_source("liveBrowserSessionId")}
             {self._function_source("automationScreenshotUrlFromPath")}
             {self._function_source("latestSocialTaskScreenshot")}
@@ -1457,7 +1461,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.ok(!details.includes(caption));
             assert.ok(!details.includes("login-assistance-content"));
             assert.ok(details.includes("login-assistance-shot"));
+            assert.ok(details.includes("data-media-preview-group"));
             assert.ok(details.includes("查看发布链接"));
+            assert.ok(details.includes(permalink));
 
             const timeout = publishAssistanceViewModel(
               {{ task_type: "publish_post", status: "failed", error: "人工发布接管已超过 10 分钟", payload: {{ caption }} }},

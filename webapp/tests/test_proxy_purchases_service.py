@@ -58,6 +58,14 @@ class _TerminalBeforeDeliveryProvider(MockProxyProvider):
         return {"data": []}
 
 
+class _MislabeledCityProvider(MockProxyProvider):
+    def get_order_proxies(self, order_id):
+        payload = super().get_order_proxies(order_id)
+        payload["data"][0]["city"] = "Taichung"
+        payload["data"][0]["region"] = "Taichung"
+        return payload
+
+
 class ProxyPurchaseServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -207,6 +215,84 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
         self.assertEqual(owned[0]["exit_ip"], "198.51.100.10")
         self.assertEqual(tuple(synchronized)[:4], ("Portugal", "Distrito de Lisboa", "Lisbon", "Mock ISP"))
         self.assertTrue(json.loads(str(synchronized["last_check_result"]))["ok"])
+
+    def test_owned_proxy_keeps_selected_city_when_provider_and_geo_differ(self):
+        provider = _MislabeledCityProvider(unit_price_usd="4.00")
+        with app_db.db() as conn:
+            quote = create_quote(
+                conn,
+                user_id=self.user_id,
+                country="US",
+                city="New York",
+                auto_renew=False,
+                provider=provider,
+                now=1_700_000_200,
+            )
+        with app_db.db() as conn:
+            order = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=quote["id"],
+                idempotency_key="buy-selected-city",
+                provider=provider,
+                now=1_700_000_201,
+            )
+            item = conn.execute(
+                "SELECT city,region FROM proxy_market_items WHERE provider_purchase_order_id=?",
+                (order["id"],),
+            ).fetchone()
+            social = conn.execute(
+                "SELECT id,city,region,source FROM social_proxies WHERE market_item_id IN "
+                "(SELECT id FROM proxy_market_items WHERE provider_purchase_order_id=?)",
+                (order["id"],),
+            ).fetchone()
+            request = json.loads(
+                conn.execute(
+                    "SELECT request_json FROM proxy_purchase_orders WHERE id=?",
+                    (order["id"],),
+                ).fetchone()[0]
+            )
+        self.assertEqual(request["city"], "New York")
+        self.assertEqual(request["cityName"], "New York")
+        self.assertEqual(tuple(item), ("New York", "New York"))
+        self.assertEqual(tuple(social)[1:4], ("New York", "New York", "provider_purchase"))
+        self.assertEqual(provider.orders[next(iter(provider.orders))]["configuration"]["city"], "New York")
+
+        health_result = {
+            "ok": True,
+            "exit_ip": "198.51.100.10",
+            "latency_ms": 18,
+            "response": {
+                "country": "Taiwan",
+                "country_code": "TW",
+                "region": "Taichung",
+                "city": "Taichung",
+                "connection": {"isp": "Lumina broadband UAB"},
+            },
+        }
+        with app_db.db() as conn:
+            conn.execute(
+                "UPDATE proxy_market_items SET last_check_at=0 WHERE provider_purchase_order_id=?",
+                (order["id"],),
+            )
+        with mock.patch.object(proxy_ip_admin, "_run_proxy_connection_check", return_value=health_result):
+            maintenance = proxy_ip_admin.run_proxy_market_health_maintenance_once(now=1_700_000_202)
+        self.assertEqual(maintenance["healthy"], 1)
+        with app_db.db() as conn:
+            after_item = conn.execute(
+                "SELECT city,region FROM proxy_market_items WHERE provider_purchase_order_id=?",
+                (order["id"],),
+            ).fetchone()
+            after_social = conn.execute(
+                "SELECT city,region FROM social_proxies WHERE id=?",
+                (social["id"],),
+            ).fetchone()
+            selectable = list_system_proxy_pool_options(conn, owner_user_id=self.user_id)
+        owned = [row for row in selectable if row["ownership_type"] == "owned"]
+        self.assertEqual(tuple(after_item), ("New York", "New York"))
+        self.assertEqual(tuple(after_social), ("New York", "New York"))
+        self.assertEqual(owned[0]["city"], "New York")
+        self.assertEqual(owned[0]["region"], "New York")
 
     def test_admin_order_executes_without_user_point_balance(self):
         provider = MockProxyProvider(unit_price_usd="4.00")

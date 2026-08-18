@@ -8,6 +8,7 @@ describe("isTextModelFallbackError", () => {
     expect(isTextModelFallbackError(new Error("insufficient balance"))).toBe(true);
     expect(isTextModelFallbackError(new Error("quota exceeded"))).toBe(true);
     expect(isTextModelFallbackError(new Error("餘額不足"))).toBe(true);
+    expect(isTextModelFallbackError(new Error("xai/grok-4.5 返回了内容，但未通过当前人设关键词校验"))).toBe(true);
   });
 });
 

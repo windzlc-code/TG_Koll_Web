@@ -3594,6 +3594,58 @@ class PersonaDashboardApiTests(unittest.TestCase):
         })
         self.assertEqual(rows, [])
 
+    def test_compact_dashboard_media_items_dedupes_cdn_variants_and_thumbnails(self):
+        from webapp import server
+
+        rows = server._compact_dashboard_media_items({
+            "media": [
+                {
+                    "url": "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg?stp=dst-jpg_s640x640",
+                    "thumbnailUrl": "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg?stp=dst-jpg_s320x320",
+                    "type": "image",
+                },
+                {
+                    "url": "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg?stp=dst-jpg_s640x640",
+                    "thumbnailUrl": "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg?stp=dst-jpg_s320x320",
+                    "type": "image",
+                },
+            ],
+            "mediaItems": [
+                {"url": "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg?stp=dst-jpg_e35_s1080x1080"},
+                {"url": "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg?stp=dst-jpg_e35_s1080x1080"},
+            ],
+            "originalMediaUrls": [
+                "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg",
+                "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg",
+                "https://scontent.cdninstagram.com/v/t51.2885-15/333333333_n.jpg",
+            ],
+        })
+
+        self.assertEqual(
+            [item["url"] for item in rows],
+            [
+                "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg",
+                "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg",
+                "https://scontent.cdninstagram.com/v/t51.2885-15/333333333_n.jpg",
+            ],
+        )
+
+    def test_compact_dashboard_media_keeps_video_type_and_poster(self):
+        from webapp import server
+
+        rows = server._compact_dashboard_media_items({
+            "media": [{
+                "type": "video",
+                "url": "https://scontent.cdninstagram.com/v/t50.2886-16/clip1.mp4",
+                "thumbnailUrl": "https://scontent.cdninstagram.com/v/t51.2885-15/poster1.jpg",
+            }],
+        })
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["type"], "video")
+        self.assertEqual(rows[0]["url"], "https://scontent.cdninstagram.com/v/t50.2886-16/clip1.mp4")
+        self.assertEqual(rows[0]["thumbnail_url"], "https://scontent.cdninstagram.com/v/t51.2885-15/poster1.jpg")
+
     def test_publish_history_excludes_automation_screenshots(self):
         from webapp import server
 
@@ -4366,6 +4418,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("keywords,", fetch_source)
         self.assertIn("/hot_candidates/cooldown", fetch_source)
         self.assertIn("热点抓取准备失败，请稍后重试。", fetch_source)
+        self.assertIn("if (keywords.length < 8)", fetch_source)
+        self.assertIn("搜索词已就绪，正在抓取帖子", fetch_source)
+        self.assertIn("首次生成搜索词", source)
+        self.assertIn("第一次会现场生成，大约 30–60 秒", source)
 
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()
@@ -4485,6 +4541,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["searchMode"], "normal")
         self.assertEqual(payload["writingLocale"], "zh-CN")
         self.assertNotIn("memorySummaries", payload)
+        self.assertEqual(payload["archiveSnapshot"]["id"], "persona-1")
+        self.assertEqual(payload["archiveSnapshot"]["name"], "History Teacher")
 
     def test_persona_hot_keywords_consume_remaining_batches_then_regenerate(self):
         self._write_archives()
@@ -4692,6 +4750,96 @@ class PersonaDashboardApiTests(unittest.TestCase):
             [item["url"] for item in candidate["media_items"]],
             [item["url"] for item in media],
         )
+
+    def test_hot_candidate_normalization_dedupes_repeated_cdn_variants(self):
+        media = []
+        for index in (1, 2, 3, 4):
+            name = f"{index}11111111_n.jpg"
+            media.extend([
+                {"url": f"https://scontent.cdninstagram.com/v/t51.2885-15/{name}?stp=dst-jpg_s640x640", "type": "image"},
+                {"url": f"https://scontent.cdninstagram.com/v/t51.2885-15/{name}?stp=dst-jpg_e35_s1080x1080", "type": "image"},
+                {"url": f"https://scontent.cdninstagram.com/v/t51.2885-15/{name}", "type": "image"},
+            ])
+
+        candidate = server._normalize_persona_hot_candidate({
+            "id": "hot-dup-media",
+            "platform": "threads",
+            "author": "vito50410",
+            "content": "热点媒体去重",
+            "media": media,
+        })
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(len(candidate["media_items"]), 4)
+        self.assertEqual(
+            [item["url"] for item in candidate["media_items"]],
+            [
+                "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg",
+                "https://scontent.cdninstagram.com/v/t51.2885-15/211111111_n.jpg",
+                "https://scontent.cdninstagram.com/v/t51.2885-15/311111111_n.jpg",
+                "https://scontent.cdninstagram.com/v/t51.2885-15/411111111_n.jpg",
+            ],
+        )
+        identities = [server._media_asset_identity(item["url"]) for item in candidate["media_items"]]
+        self.assertEqual(len(identities), len(set(identities)))
+        self.assertTrue(all("stp=" not in item["url"] for item in candidate["media_items"]))
+
+    def test_hot_candidates_api_returns_only_original_unique_post_media(self):
+        self._write_archives()
+        originals = [
+            "https://scontent.cdninstagram.com/v/t51.2885-15/111111111_n.jpg",
+            "https://scontent.cdninstagram.com/v/t51.2885-15/222222222_n.jpg",
+            "https://scontent.cdninstagram.com/v/t51.2885-15/333333333_n.jpg",
+            "https://scontent.cdninstagram.com/v/t51.2885-15/444444444_n.jpg",
+        ]
+        duplicated = []
+        for url in originals:
+            duplicated.extend([
+                {"url": f"{url}?stp=dst-jpg_s640x640", "thumbnailUrl": f"{url}?stp=dst-jpg_s320x320", "type": "image"},
+                {"url": f"{url}?stp=dst-jpg_e35_s1080x1080", "type": "image"},
+                {"url": url, "type": "image"},
+            ])
+
+        fake_result = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": ["笑话"],
+            "cookieStatuses": [],
+            "warnings": [],
+            "candidates": [{
+                "id": "hot-original-only",
+                "platform": "threads",
+                "sourceUrl": "https://www.threads.net/@vito50410/post/OriginalOnly",
+                "author": "vito50410",
+                "authorAvatar": "https://scontent.cdninstagram.com/v/t51.2885-19/profile_pic.jpg",
+                "content": "今天这则笑话现场同事听完直接笑到不行",
+                "hotScore": 900,
+                "metrics": {"viewCount": 900, "likeCount": 88, "commentCount": 3},
+                "publishedAt": "2026-08-18T01:00:00Z",
+                "capturedAt": "2026-08-18T02:00:00Z",
+                "media": duplicated,
+                "mediaItems": duplicated,
+                "originalMediaUrls": originals,
+                "warnings": [],
+            }],
+        }
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result):
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates",
+                json={"refresh": True, "limit": 6, "keywords": ["笑话"]},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        media_items = resp.json()["candidates"][0]["media_items"]
+        urls = [item["url"] for item in media_items]
+        identities = [server._media_asset_identity(url) for url in urls]
+        self.assertEqual(urls, originals)
+        self.assertEqual(len(urls), 4)
+        self.assertEqual(len(identities), len(set(identities)))
+        self.assertNotIn(fake_result["candidates"][0]["authorAvatar"], urls)
+        self.assertTrue(all("stp=" not in url for url in urls))
+        self.assertTrue(all("profile_pic" not in url for url in urls))
 
     def test_fetch_persona_hot_candidates_does_not_inject_memories(self):
         self._write_archives()

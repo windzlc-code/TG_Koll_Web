@@ -320,6 +320,12 @@ def run_proxy_market_health_maintenance_once(*, now: int | None = None, limit: i
         is_healthy = bool(result.get("ok"))
         response = result.get("response") if isinstance(result.get("response"), dict) else {}
         connection = response.get("connection") if isinstance(response.get("connection"), dict) else {}
+        keep_selected_city = (
+            str(item.get("ownership_type") or "").strip().lower() == "owned"
+            and bool(str(item.get("city") or "").strip())
+        )
+        detected_region = "" if keep_selected_city else str(response.get("region") or "")
+        detected_city = "" if keep_selected_city else str(response.get("city") or "")
         result_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
         next_status = str(item.get("status") or "active")
         if is_healthy and next_status == "maintenance":
@@ -350,10 +356,10 @@ def run_proxy_market_health_maintenance_once(*, now: int | None = None, limit: i
                     result_json,
                     str(response.get("country") or ""),
                     str(response.get("country") or ""),
-                    str(response.get("region") or ""),
-                    str(response.get("region") or ""),
-                    str(response.get("city") or ""),
-                    str(response.get("city") or ""),
+                    detected_region,
+                    detected_region,
+                    detected_city,
+                    detected_city,
                     str(connection.get("isp") or connection.get("org") or ""),
                     str(connection.get("isp") or connection.get("org") or ""),
                     checked_at,
@@ -375,10 +381,10 @@ def run_proxy_market_health_maintenance_once(*, now: int | None = None, limit: i
                     (
                         str(response.get("country") or ""),
                         str(response.get("country") or ""),
-                        str(response.get("region") or ""),
-                        str(response.get("region") or ""),
-                        str(response.get("city") or ""),
-                        str(response.get("city") or ""),
+                        detected_region,
+                        detected_region,
+                        detected_city,
+                        detected_city,
                         str(connection.get("isp") or connection.get("org") or ""),
                         str(connection.get("isp") or connection.get("org") or ""),
                         checked_at,
@@ -1725,6 +1731,12 @@ def register_proxy_ip_admin_routes(app: FastAPI) -> None:
         )
         now = _now()
         response = result.get("response") if isinstance(result.get("response"), dict) else {}
+        keep_selected_city = (
+            str(current.get("ownership_type") or "").strip().lower() == "owned"
+            and bool(str(current.get("city") or "").strip())
+        )
+        detected_region = "" if keep_selected_city else str(response.get("region") or "")
+        detected_city = "" if keep_selected_city else str(response.get("city") or "")
         detected_ip_type = str(result.get("network_type") or "").strip().lower()
         if detected_ip_type not in {"static_residential", "datacenter"}:
             detected_ip_type = str(current.get("ip_type") or "static_residential").strip().lower()
@@ -1796,10 +1808,10 @@ def register_proxy_ip_admin_routes(app: FastAPI) -> None:
                     password_ciphertext,
                     str(response.get("country") or ""),
                     str(response.get("country") or ""),
-                    str(response.get("region") or ""),
-                    str(response.get("region") or ""),
-                    str(response.get("city") or ""),
-                    str(response.get("city") or ""),
+                    detected_region,
+                    detected_region,
+                    detected_city,
+                    detected_city,
                     str((response.get("connection") or {}).get("isp") or ""),
                     str((response.get("connection") or {}).get("isp") or ""),
                     next_status,
@@ -1833,8 +1845,8 @@ def register_proxy_ip_admin_routes(app: FastAPI) -> None:
                     candidate["port"],
                     detected_ip_type,
                     str(response.get("country") or current.get("country") or ""),
-                    str(response.get("region") or current.get("region") or ""),
-                    str(response.get("city") or current.get("city") or ""),
+                    str(current.get("region") or "") if keep_selected_city else str(response.get("region") or current.get("region") or ""),
+                    str(current.get("city") or "") if keep_selected_city else str(response.get("city") or current.get("city") or ""),
                     str((response.get("connection") or {}).get("isp") or current.get("isp") or ""),
                     expires_at,
                     now,

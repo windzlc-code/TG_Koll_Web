@@ -240,6 +240,13 @@ class DailyPublishLimitTests(unittest.TestCase):
         )
         self.assertEqual(
             social_automation_api._confirmed_published_url(
+                {"published_url": "https://www.threads.com/t/abc123?hl=en"},
+                "threads",
+            ),
+            "https://www.threads.net/t/abc123",
+        )
+        self.assertEqual(
+            social_automation_api._confirmed_published_url(
                 {"published_url": "https://www.instagram.com/reel/abc123/?utm_source=test"},
                 "instagram",
             ),
