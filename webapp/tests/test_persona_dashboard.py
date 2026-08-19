@@ -4419,10 +4419,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("keywords,", fetch_source)
         self.assertIn("/hot_candidates/cooldown", fetch_source)
         self.assertIn("热点抓取准备失败，请稍后重试。", fetch_source)
-        self.assertIn("if (keywords.length < 8)", fetch_source)
+        self.assertIn("if (keywords.length < 6)", fetch_source)
+        self.assertIn("platform: personaContentPlatform(persona)", fetch_source)
         self.assertIn("搜索词已就绪，正在抓取帖子", fetch_source)
         self.assertIn("首次生成搜索词", source)
-        self.assertIn("第一次会现场生成，大约 30–60 秒", source)
+        self.assertIn("第一次会现场生成，大约 10–20 秒", source)
 
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()
@@ -4499,11 +4500,83 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["searchMode"], "strict")
         self.assertEqual(payload["freshnessDays"], 30)
         self.assertEqual(payload["keywords"], ["history", "teacher"])
+        self.assertEqual(payload["platform"], "threads")
         self.assertNotIn("memorySummaries", payload)
         self.assertIs(payload["userInitiated"], True)
         self.assertIs(payload["recordShown"], False)
         self.assertNotIn("forceLive", payload)
         self.assertNotIn("deferBackgroundRefresh", payload)
+
+    def test_fetch_persona_hot_candidates_keeps_only_requested_platform(self):
+        self._write_archives()
+        fake_result = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": ["历史"],
+            "candidates": [
+                {
+                    "id": "hot-threads",
+                    "platform": "threads",
+                    "content": "Threads 热点正文，课堂讲解历史事件。",
+                    "hotScore": 80,
+                    "publishedAt": "2026-08-19T09:00:00Z",
+                },
+                {
+                    "id": "hot-instagram",
+                    "platform": "instagram",
+                    "content": "Instagram 热点正文，课堂讲解历史事件。",
+                    "hotScore": 90,
+                    "publishedAt": "2026-08-19T09:05:00Z",
+                },
+            ],
+        }
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result) as mocked:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates",
+                json={"keywords": ["历史"], "platform": "threads"},
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([item["id"] for item in resp.json()["candidates"]], ["hot-threads"])
+        self.assertEqual(mocked.call_args.args[0]["platform"], "threads")
+
+    def test_hot_keyword_strategy_version_matches_old_host_worker(self):
+        from webapp import worker_server
+        self.assertEqual(
+            server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
+            worker_server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
+        )
+
+    def test_hot_keyword_prompt_keeps_full_generation_spec(self):
+        importer = (
+            Path(server.ROOT_DIR) / "tool_r18" / "src" / "lib" / "sentiment-hot-importer.ts"
+        ).read_text(encoding="utf-8")
+        self.assertIn("人设名称只是对外称呼", importer)
+        self.assertIn("禁止把俚语化名称理解成色情、擦边或开车含义", importer)
+        self.assertIn("primaryQueries 恰好 12 个", importer)
+        self.assertIn("下游会原样使用这 12 个词去搜索", importer)
+        self.assertIn("2-4 个汉字的具体物件、服务、场所、工具或作品名为主", importer)
+        self.assertIn("在此基础上适当混入 3-5 个「领域对象 + 风格意图」词", importer)
+        self.assertIn("攻略、教程、分享、心得", importer)
+        self.assertIn("domainSummary", importer)
+        self.assertIn("maxOutputTokens: 500", importer)
+        self.assertIn("人设名称只是对外称呼", importer)
+        self.assertNotIn("maxOutputTokens: 360", importer)
+
+    def test_hot_live_fetch_targets_never_enable_both_platforms(self):
+        importer = (
+            Path(server.ROOT_DIR) / "tool_r18" / "src" / "lib" / "sentiment-hot-importer.ts"
+        ).read_text(encoding="utf-8")
+        workflow = (
+            Path(server.ROOT_DIR) / "tool_r18" / "scripts" / "skills" / "persona-hot-workflow.ts"
+        ).read_text(encoding="utf-8")
+        self.assertIn("export function resolveHotLiveFetchTargets", importer)
+        self.assertIn("threads: requested === \"threads\"", importer)
+        self.assertIn("instagram: requested === \"instagram\"", importer)
+        self.assertIn("const liveFetchTargets = resolveHotLiveFetchTargets(requestedPlatform);", importer)
+        self.assertIn("const fetchThreadsLive = liveFetchTargets.threads;", importer)
+        self.assertIn("const fetchInstagramLive = liveFetchTargets.instagram;", importer)
+        self.assertIn("proxy_${viaProxy.status || \"empty\"}_direct_fallback", importer)
+        self.assertIn("platform: String(input.platform || \"\").trim() || undefined", workflow)
 
     def test_prepare_persona_hot_keywords_calls_hot_workflow_cli(self):
         self._write_archives()
@@ -4570,6 +4643,37 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("SUZUKI 小編", captured["user"])
         self.assertIn("禁止照抄", captured["user"])
         self.assertIn("必须用人设的身份", captured["system"])
+        self.assertIn("1% 到 5%", captured["system"])
+        self.assertIn("热点原文约", captured["user"])
+        self.assertIn("1% 到 5%", captured["user"])
+
+    def test_hot_rewrite_length_bounds_stay_within_five_percent(self):
+        self.assertEqual(server._persona_hot_rewrite_length_bounds(100), (95, 105))
+        self.assertEqual(server._persona_hot_rewrite_char_count("改 写 后 正文"), 5)
+
+    def test_hot_rewrite_retries_when_length_drifts_too_far(self):
+        self._write_archives()
+        calls = []
+
+        def fake_llm(**kwargs):
+            calls.append(kwargs.get("user_input") or "")
+            if len(calls) == 1:
+                return {"ok": True, "raw_text": "太短了。"}, {}, []
+            return {"ok": True, "raw_text": "前煞車手感偏軟，建議先檢查煞車油和來令片再判斷。"}, {}, []
+
+        with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
+            body = server._rewrite_persona_hot_candidate_content(
+                "persona-1",
+                server.PersonaDashboardHotRewritePayload(
+                    source_content="前煞車手感偏軟，建議先檢查煞車油和來令片。我是 SUZUKI 小編。",
+                    writing_locale="zh-TW",
+                    platform="threads",
+                ),
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("已超出", calls[1])
+        self.assertIn("煞車油", body["content"])
 
     def test_hot_rewrite_requires_source_content(self):
         self._write_archives()
@@ -4582,8 +4686,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_persona_hot_keywords_consume_remaining_batches_then_regenerate(self):
         self._write_archives()
-        initial_keywords = [f"keyword-{index}" for index in range(30)]
-        regenerated_keywords = [f"fresh-{index}" for index in range(26)]
+        initial_keywords = [f"keyword-{index}" for index in range(24)]
+        regenerated_keywords = [f"fresh-{index}" for index in range(16)]
         payload = server.PersonaDashboardHotCandidatesFetchPayload(
             search_mode="strict",
             writing_locale="zh-CN",
@@ -4608,20 +4712,19 @@ class PersonaDashboardApiTests(unittest.TestCase):
         with mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=fake_results) as mocked:
             first = server._prepare_persona_hot_keywords("persona-1", payload)
             repeated_before_success = server._prepare_persona_hot_keywords("persona-1", payload)
-            self.assertEqual(first["keywords"], initial_keywords[:24])
-            self.assertEqual(repeated_before_success["keywords"], initial_keywords[:24])
+            self.assertEqual(first["keywords"], initial_keywords[:12])
+            self.assertEqual(repeated_before_success["keywords"], initial_keywords[:12])
             self.assertEqual(mocked.call_count, 1)
 
             self.assertTrue(server._consume_persona_hot_keyword_batch("persona-1", payload, first["keywords"]))
             remaining = server._prepare_persona_hot_keywords("persona-1", payload)
-            self.assertEqual(remaining["keywords"], initial_keywords[24:])
+            self.assertEqual(remaining["keywords"], initial_keywords[12:])
             self.assertEqual(mocked.call_count, 1)
 
             self.assertTrue(server._consume_persona_hot_keyword_batch("persona-1", payload, remaining["keywords"]))
-            regenerated = server._prepare_persona_hot_keywords("persona-1", payload)
-            self.assertEqual(regenerated["keywords"], regenerated_keywords[:24])
-            self.assertEqual(mocked.call_count, 2)
-            self.assertTrue(mocked.call_args_list[1].args[0]["forceRegenerate"])
+            recycled = server._prepare_persona_hot_keywords("persona-1", payload)
+            self.assertEqual(recycled["keywords"], initial_keywords[:12])
+            self.assertEqual(mocked.call_count, 1)
 
     def test_persona_hot_keyword_version_change_reuses_model_strategy_cache(self):
         self._write_archives()
@@ -4656,7 +4759,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self._write_archives()
         keywords = [f"keyword-{index}" for index in range(30)]
         payload = server.PersonaDashboardHotCandidatesFetchPayload(
-            keywords=keywords[:24],
+            keywords=keywords[:12],
             search_mode="strict",
             writing_locale="zh-CN",
         )
@@ -4670,7 +4773,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=prepared_result):
             prepared = server._prepare_persona_hot_keywords("persona-1", payload)
-        self.assertEqual(prepared["keywords"], keywords[:24])
+        self.assertEqual(prepared["keywords"], keywords[:12])
 
         with mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=RuntimeError("capture failed")):
             with self.assertRaisesRegex(RuntimeError, "capture failed"):
@@ -4678,7 +4781,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         with mock.patch.object(server, "_run_persona_hot_workflow_cli") as mocked:
             repeated = server._prepare_persona_hot_keywords("persona-1", payload)
-        self.assertEqual(repeated["keywords"], keywords[:24])
+        self.assertEqual(repeated["keywords"], keywords[:12])
         mocked.assert_not_called()
 
     def test_fetch_persona_hot_candidates_prepares_missing_keywords_on_new_host(self):

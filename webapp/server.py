@@ -12401,6 +12401,7 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     freshness_days: int = 30
     freshness_policy: str = "strict"
     keywords: list[str] = Field(default_factory=list)
+    platform: str = "threads"
 
 
 class PersonaDashboardHotRewritePayload(BaseModel):
@@ -14313,6 +14314,7 @@ _REMOTE_PERSONA_HOT_REQUEST_FIELDS = frozenset({
     "liveOnly",
     "keywordStrategyVersion",
     "keywordDigest",
+    "platform",
 })
 
 
@@ -14886,8 +14888,8 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     return keywords
 
 
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 59
-PERSONA_HOT_KEYWORD_BATCH_SIZE = 24
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 60
+PERSONA_HOT_KEYWORD_BATCH_SIZE = 12
 _HOT_PUBLIC_PROBE_FLAG = Path("/data/hot-public-probe")
 
 
@@ -14976,14 +14978,25 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
                 "warnings": [],
             }
 
-        # Once every keyword in the previous strategy has been dispatched
-        # successfully, explicitly bypass the strategy cache. A normal refresh
-        # still reuses the current unconsumed batch and never spends model quota.
-        force_regenerate = (
+        existing_keywords = _persona_hot_payload_keywords((existing or {}).get("keywords")) if isinstance(existing, dict) else []
+        if (
             isinstance(existing, dict)
             and _to_int(existing.get("strategy_version"), 0) == PERSONA_HOT_KEYWORD_STRATEGY_VERSION
-            and bool(_persona_hot_payload_keywords(existing.get("keywords")))
-        )
+            and existing_keywords
+        ):
+            existing["cursor"] = 0
+            existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+            state[key] = existing
+            _write_persona_hot_keyword_batch_state(state)
+            return {
+                "ok": True,
+                "archive_name": str(existing.get("archive_name") or "").strip(),
+                "keywords": existing_keywords[:PERSONA_HOT_KEYWORD_BATCH_SIZE],
+                "search_mode": search_mode,
+                "warnings": [],
+            }
+
+        force_regenerate = False
         archive_snapshot = _remote_fetch_archive_snapshot(clean_id)
         prepare_payload: dict[str, Any] = {
             "action": "prepare-hot-keywords",
@@ -15048,6 +15061,16 @@ def _persona_llm_runtime_source() -> dict[str, Any]:
     return source
 
 
+def _persona_hot_rewrite_char_count(text: str) -> int:
+    return len("".join(str(text or "").split()))
+
+
+def _persona_hot_rewrite_length_bounds(source_length: int) -> tuple[int, int]:
+    clean = max(1, int(source_length or 0))
+    delta = max(1, int(round(clean * 0.05)))
+    return max(1, clean - delta), clean + delta
+
+
 def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDashboardHotRewritePayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     source_content = str(payload.source_content or "").strip()
@@ -15076,34 +15099,52 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
     style_sample = str(setup.get("tweetStyleSample") or "").strip()
     if style_sample:
         persona_lines.append(f"推文风格样本：{style_sample[:280]}")
+    source_length = _persona_hot_rewrite_char_count(source_content)
+    min_length, max_length = _persona_hot_rewrite_length_bounds(source_length)
     system_prompt = "\n".join([
         "你是社交媒体文案写手。只输出一篇可直接发布的推文正文，不要标题、解释、引号或 Markdown。",
         f"目标平台：{platform}。",
         f"写作语言：{writing_locale}（{writing_language}）。{writing_convention}",
         "必须用人设的身份、语气和领域来写；热点原文只提供话题、事实和讨论点。",
         "保留热点里可核验的具体对象、场景或问题，但禁止复述原句、原口头禅或原账号自称。",
-        "不要写成客服回复，不要出现原帖作者身份。篇幅接近原文，可略短，不要注水解说。",
+        "不要写成客服回复，不要出现原帖作者身份。不要注水解说。",
+        "改写后的字数必须接近原文，字数差只能在原文的 1% 到 5% 之间浮动，不要明显变短或变长。",
     ])
     user_input = "\n".join([
         "当前人设：",
         *[line for line in persona_lines if not line.endswith("：")],
         "",
+        f"热点原文约 {source_length} 字。改写后请控制在 {min_length} 到 {max_length} 字之间（与原文相差约 1% 到 5%）。",
         "热点原文（只作素材，禁止照抄）：",
         source_content[:4000],
     ])
-    try:
-        llm_result, _selected, _attempts = _request_llm_text_with_fallback(
-            source=_persona_llm_runtime_source(),
-            user_input=user_input,
-            system_prompt=system_prompt,
-            retry_count=2,
-            request_label="热点按人设改写",
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="热点改写暂时不可用，请稍后重试。") from exc
-    content = _strip_prompt_response_wrappers(str((llm_result or {}).get("raw_text") or "")).strip()
+
+    def request_rewrite(prompt_user: str, label: str) -> str:
+        try:
+            llm_result, _selected, _attempts = _request_llm_text_with_fallback(
+                source=_persona_llm_runtime_source(),
+                user_input=prompt_user,
+                system_prompt=system_prompt,
+                retry_count=2,
+                request_label=label,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="热点改写暂时不可用，请稍后重试。") from exc
+        return _strip_prompt_response_wrappers(str((llm_result or {}).get("raw_text") or "")).strip()
+
+    content = request_rewrite(user_input, "热点按人设改写")
     if not content:
         raise HTTPException(status_code=502, detail="模型没有返回可用正文，请稍后重试。")
+    rewritten_length = _persona_hot_rewrite_char_count(content)
+    if rewritten_length < min_length or rewritten_length > max_length:
+        correction = "\n".join([
+            user_input,
+            "",
+            f"上次改写约 {rewritten_length} 字，已超出 {min_length}-{max_length} 字范围。请按同一要求重写，严格落在该字数区间内。",
+        ])
+        corrected = request_rewrite(correction, "热点按人设改写校准")
+        if corrected:
+            content = corrected
     return {"ok": True, "content": content[:5000]}
 
 
@@ -15115,6 +15156,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
     limit = min(max(_to_int(payload.limit, 10), 1), 20)
     search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
     freshness_days = min(max(_to_int(payload.freshness_days, 30), 0), 30)
+    target_platform = _normalize_persona_content_platform(payload.platform)
     keywords = _persona_hot_payload_keywords(payload.keywords)
     if not keywords:
         prepared = _prepare_persona_hot_keywords(clean_id, payload)
@@ -15149,6 +15191,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "keywords": keywords,
             "keywordStrategyVersion": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
             "keywordDigest": _persona_hot_keyword_digest(keywords),
+            "platform": target_platform,
             # Only this billable, user-facing route may activate scheduled
             # low-watermark refill on the old collector host.
             "userInitiated": True,
@@ -15177,7 +15220,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             _normalize_persona_hot_candidate(item)
             for item in (result.get("candidates") if isinstance(result.get("candidates"), list) else [])
         )
-        if normalized
+        if normalized and _normalize_persona_content_platform(normalized.get("platform")) == target_platform
     ]
     def candidate_display_priority(item: dict[str, Any]) -> tuple[float, float]:
         try:

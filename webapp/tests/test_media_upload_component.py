@@ -267,6 +267,13 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("personaHotRewriteActionLabel", modal_renderer)
         self.assertIn("persona-hot-editor-exit", self.script)
         self.assertIn("保存当前改写？", self.script)
+        self.assertIn('modalKey: "persona-hot-editor-exit"', self.script)
+        exit_modal = self.script[
+            self.script.index('title: "保存当前改写？"'):
+            self.script.index('modalKey: "persona-hot-editor-exit"')
+        ]
+        self.assertNotIn('cancelText: "继续编辑"', exit_modal)
+        self.assertIn("showCancel: false", exit_modal)
         self.assertIn("rewritePersonaHotEditorContent", self.script)
         self.assertIn("/hot_rewrite", self.script)
         self.assertIn("resizePersonaHotEditorContent", modal_renderer)
