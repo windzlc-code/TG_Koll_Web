@@ -26419,10 +26419,17 @@ function renderPersonaContentPanel(persona, account, profile, step) {
   generateForm.count = currentGenerateCount;
   generateForm.targetWords = Math.min(Math.max(Number(generateForm.targetWords || generateDefaults.targetWords), 10), 2000);
   const selectedPostBase = selectedPersonaPost(persona, { requireExplicit: panel === "generate" && composeMode === "tweet_media" });
-  const selectedPost = isEditingDraft ? editingDraft : selectedPostBase;
+  const focusedOrdinaryPostId = String(form.media?.focusPostId || "").trim();
+  const selectedPost = isEditingDraft
+    ? editingDraft
+    : (panel === "generate" && composeMode === "tweet"
+      ? (focusedOrdinaryPostId
+        ? personaSourcePosts(persona).find((item) => String(item.id) === focusedOrdinaryPostId) || null
+        : null)
+      : selectedPostBase);
   const ordinaryMediaTarget = composeMode === "tweet"
-    && Boolean(String(form.media?.focusPostId || "").trim())
-    && String(form.media.focusPostId || "").trim() === String(selectedPost?.id || "").trim();
+    && Boolean(focusedOrdinaryPostId)
+    && String(selectedPost?.id || "").trim() === focusedOrdinaryPostId;
   const selectedMediaSource = isEditingDraft ? editingSource : postSource;
   const selectedSourceLabel = selectedMediaSource === "favorites" ? "收藏" : "草稿";
   const selectedPostMediaItems = selectedPost ? personaDraftMediaPreviewItems(persona, selectedMediaSource, selectedPost) : [];

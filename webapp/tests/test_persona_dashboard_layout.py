@@ -998,6 +998,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("const generationLocked = isActionLocked", content_panel)
         self.assertIn("const generateBusy = generationLocked && activeGenerateComposeMode === composeMode;", content_panel)
         self.assertIn("const ordinaryMediaTarget", content_panel)
+        self.assertIn("const focusedOrdinaryPostId = String(form.media?.focusPostId || \"\").trim();", content_panel)
+        self.assertIn("panel === \"generate\" && composeMode === \"tweet\"", content_panel)
         self.assertIn("isEditingDraft || isBatchCompose || ordinaryMediaTarget || composeMode === \"tweet\"", content_panel)
         self.assertIn("renderPersonaInlineMediaComposer(persona, profile, generateForm, form.media, selectedPost", content_panel)
         self.assertIn("renderPersonaMediaComposerPlaceholder(persona, form.media)", content_panel)
