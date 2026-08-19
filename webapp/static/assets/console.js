@@ -21510,12 +21510,12 @@ async function preparePersonaHotKeywords(refresh = false) {
     kind: "hot",
     status: "running",
     message: firstGenerate
-      ? "首次生成搜索词，大约需要 30–60 秒，请稍候"
+      ? "首次生成搜索词，大约需要 10–20 秒，请稍候"
       : "正在复用已缓存的搜索词",
     error: "",
   });
   if (firstGenerate) {
-    showMsg("commandMsg", "此人人设还没有搜索词。第一次会现场生成，大约 30–60 秒，请不要离开或重复点击。", true);
+    showMsg("commandMsg", "此人人设还没有搜索词。第一次会现场生成，大约 10–20 秒，请不要离开或重复点击。", true);
   }
   setActionLocked(lockParts, true);
   renderPersonaDetail();
@@ -21532,7 +21532,7 @@ async function preparePersonaHotKeywords(refresh = false) {
           : PERSONA_DEFAULT_WRITING_LOCALE,
         platform: personaContentPlatform(persona),
       }),
-    }, 90000);
+    }, 35000);
     const keywords = Array.isArray(result.keywords) ? result.keywords.map((item) => String(item || "").trim()).filter(Boolean) : [];
     form.hotKeywordText = formatPersonaHotKeywordText(keywords);
     state.personaHotCandidateResults[String(persona.id)] = {
@@ -24408,12 +24408,12 @@ function renderPersonaHotCandidatePicker(persona, form) {
         ${hotBusy ? `<button type="button" class="persona-hot-fetch-action" data-persona-cancel-hot>取消抓取</button>` : ""}
       </div>
       <small class="persona-hot-wait-hint">${keywordBusy
-        ? (keywords.length >= 8 ? "搜索词已缓存，正在确认后去抓帖。" : "第一次要等模型写出搜索词，大约 30–60 秒，请不要离开或重复点击。")
+        ? (keywords.length >= 8 ? "搜索词已缓存，正在确认后去抓帖。" : "第一次要等模型写出搜索词，大约 10–20 秒，请不要离开或重复点击。")
         : (hotBusy
           ? "搜索词已经就绪。现在等的是抓帖，不是生成关键词。"
           : (keywords.length >= 8
             ? `搜索词已缓存 ${esc(keywords.length)} 个。再次点击会直接抓帖，不再重新生成。`
-            : "此人人设还没有搜索词。第一次会现场生成，大约 30–60 秒；成功后会缓存。"))}</small>
+            : "此人人设还没有搜索词。第一次会现场生成，大约 10–20 秒；成功后会缓存。"))}</small>
     </div>
     ${keywords.length ? `
       <details class="persona-hot-keyword-disclosure">
@@ -24628,7 +24628,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
   const mediaModifyItem = personaTaskMediaModifyItem(mediaTaskState);
   const mediaModifyActive = Boolean(mediaModifyItem);
   const mediaEditSourceUploadActive = mediaModifyActive && mediaModifyItem?.inputId === "personaMediaEditSourceFile";
-  const aiUploadSelectsModify = Boolean(post) && personaDraftMediaTargetIsEditing(persona);
+  const hasDraftMediaPreview = Boolean(postMediaItems.length);
   const mediaUploadInputId = mediaEditSourceUploadActive ? "personaMediaEditSourceFile" : "personaMediaTaskFiles";
   if (isFavoriteMedia) {
     return `
@@ -24684,7 +24684,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
             ${renderPersonaMediaPromptField(mediaForm, mediaTaskState)}
             <div class="persona-inline-panel persona-inline-panel--nested persona-media-preview-surface" data-persona-media-preview-surface>
               <strong>任务结果预览</strong>
-              ${postMediaItems.length || aiUploadSelectsModify
+              ${hasDraftMediaPreview
                 ? renderPersonaCurrentDraftMediaPreview(postMediaItems, {
                   postId: post.id,
                   modifyIndex: mediaModifyItem?.customSource
@@ -24701,11 +24701,11 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                 imageEditSource: true,
                 publicMediaCards: true,
                 embeddedPreview: true,
-              }) : (postMediaItems.length || aiUploadSelectsModify ? "" : renderUploadDropzone("personaMediaTaskFiles", {
+              }) : (hasDraftMediaPreview ? "" : renderUploadDropzone("personaMediaTaskFiles", {
                 label: "添加媒体",
                 accept: "image/*",
                 hint: "仅支持图片；可作为 AI 生成的参考素材。",
-                multiple: !aiUploadSelectsModify,
+                multiple: true,
                 publicMediaCards: true,
                 embeddedPreview: true,
               }))}
@@ -24713,7 +24713,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                 mediaBusy,
                 mediaBusyStartedAt,
                 addMediaInputId: mediaUploadInputId,
-                hideEmpty: Boolean(postMediaItems.length || aiUploadSelectsModify),
+                hideEmpty: hasDraftMediaPreview,
               })}
             </div>
           </div>
