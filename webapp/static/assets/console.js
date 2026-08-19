@@ -5454,12 +5454,10 @@ function renderPersonaHotInfo(meta, postId = "") {
 
 function renderPersonaHotDetail(meta) {
   if (!meta) return "";
-  const warnings = Array.isArray(meta.warnings) ? meta.warnings.filter(Boolean) : [];
   return `
     <div class="persona-hot-detail">
       ${renderPersonaHotOrigin(meta, { showMetricSummary: false })}
       ${meta.original_content ? `<div class="persona-hot-detail-block"><strong>热点原文</strong><p>${esc(meta.original_content)}</p></div>` : ""}
-      ${warnings.length ? `<div class="persona-hot-detail-block"><strong>抓取提示</strong><p>${esc(warnings.join("\n"))}</p></div>` : ""}
     </div>`;
 }
 
@@ -8336,6 +8334,19 @@ function renderPersonaHistoryRows(rows, { hiddenCount = 0 } = {}) {
   }).join("")}</div>`;
 }
 
+function isBrowserMediaUrl(value) {
+  const text = String(value || "").trim();
+  return /^(?:https?:)?\/\/|^\/api\/|^(?:data|blob):/i.test(text);
+}
+
+function browserMediaUrl(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (isBrowserMediaUrl(text)) return adminWorkspaceUrl(text);
+  }
+  return "";
+}
+
 function directMediaPreviewUrl(value) {
   const text = String(value || "").trim();
   if (!text) return "";
@@ -8453,11 +8464,11 @@ function registerMediaPreviewGroup(items) {
   }
   const id = `media-group-${++state.mediaPreviewSeq}`;
   state.mediaPreviewGroups[id] = rows.map((item) => {
-    const type = guessMediaType(item.originalUrl || item.url || item.previewUrl, item.type || "image");
+    const type = guessMediaType(item.previewUrl || item.originalUrl, item.type || "image");
     return {
       id: String(item.id || item.imageId || "").trim(),
-      previewUrl: adminWorkspaceUrl(item.previewUrl),
-      originalUrl: adminWorkspaceUrl(item.originalUrl || item.original_url || item.url || item.previewUrl),
+      previewUrl: browserMediaUrl(item.previewUrl, item.originalUrl),
+      originalUrl: browserMediaUrl(item.originalUrl, item.original_url, item.previewUrl),
       type,
       label: mediaPreviewLabel(item.label, mediaKindLabel(type)),
     };
@@ -8999,7 +9010,7 @@ function renderPersonaMediaLightboxCurrent() {
   const body = $("personaMediaLightboxBody");
   if (!body) return;
   if (title) title.textContent = item.label || `${mediaKindLabel(item.type)}预览`;
-  const sourceUrl = String(item.originalUrl || item.previewUrl || "").trim();
+  const sourceUrl = browserMediaUrl(item.previewUrl, item.originalUrl);
   resetPersonaMediaLightboxTransform();
   body.innerHTML = item.type === "video"
     ? `<video class="persona-media-lightbox-frame" src="${esc(sourceUrl)}" controls autoplay playsinline preload="metadata" onerror="handlePersonaMediaLightboxError(this, '视频加载失败，原始文件可能已失效。')"></video>`
@@ -22933,7 +22944,7 @@ function setPersonaTaskMediaModifySource(mediaKey) {
 
 async function personaCustomMediaFile(item, fallbackName = "custom-media-image") {
   if (item?.file instanceof File && fileKind(item.file) === "image") return item.file;
-  const sourceUrl = adminWorkspaceUrl(item?.originalUrl || item?.previewUrl || item?.url || "");
+  const sourceUrl = browserMediaUrl(item?.previewUrl, item?.originalUrl, item?.url);
   if (!sourceUrl) throw new Error("当前图片源已失效，无法进入媒体修改。");
   const response = await fetch(sourceUrl, { credentials: "same-origin" });
   if (!response.ok) throw new Error("当前图片加载失败，无法进入媒体修改。");

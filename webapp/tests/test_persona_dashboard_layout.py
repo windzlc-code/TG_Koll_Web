@@ -3386,7 +3386,24 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("showSummary: false", story)
         self.assertNotIn("热点原文", story)
         self.assertNotIn("抓取提示", story)
+        self.assertNotIn("抓取提示", self.console_script[
+            self.console_script.index("function renderPersonaHotDetail"):
+            self.console_script.index("function personaPostFavoriteMatchId")
+        ])
+        self.assertNotIn(".persona-draft-detail-modal .persona-draft-detail-meta-row {", self.styles)
         self.assertIn("${renderPersonaHotMetricStrip(hotMeta)}", story)
+        lightbox = self.console_script[
+            self.console_script.index("function renderPersonaMediaLightboxCurrent"):
+            self.console_script.index("function openPersonaMediaLightbox")
+        ]
+        self.assertIn("browserMediaUrl(item.previewUrl, item.originalUrl)", lightbox)
+        self.assertNotIn("item.originalUrl || item.previewUrl", lightbox)
+        grouper = self.console_script[
+            self.console_script.index("function registerMediaPreviewGroup"):
+            self.console_script.index("function renderMediaPreviewButton")
+        ]
+        self.assertIn("browserMediaUrl(item.previewUrl, item.originalUrl)", grouper)
+        self.assertNotIn("item.url || item.previewUrl", grouper)
         preview = self.console_script[
             self.console_script.index("function renderMediaPreviewButton"):
             self.console_script.index("function cancelDeferredMediaHydration")

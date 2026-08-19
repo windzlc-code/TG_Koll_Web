@@ -13011,25 +13011,6 @@ body.persona-touch-dragging .persona-list-card:active {
   line-height: 1.6;
 }
 
-.persona-draft-detail-modal .persona-draft-detail-meta-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-.persona-draft-detail-modal .persona-draft-detail-meta-row > div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--soft);
-}
-
 .persona-draft-detail-hot {
   display: grid;
   gap: 8px;
