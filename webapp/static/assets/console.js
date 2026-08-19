@@ -5147,7 +5147,7 @@ async function rewritePersonaHotEditorContent(persona, candidate) {
           : PERSONA_DEFAULT_WRITING_LOCALE,
         platform: normalizePersonaContentPlatform(candidate.platform || "threads"),
       }),
-    }, 90000);
+    }, 180000);
     const content = String(result?.content || "").trim();
     if (!content) throw { detail: "模型没有返回可用正文。" };
     if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {

@@ -4552,15 +4552,18 @@ class PersonaDashboardApiTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("人设名称只是对外称呼", importer)
         self.assertIn("禁止把俚语化名称理解成色情、擦边或开车含义", importer)
-        self.assertIn("primaryQueries 恰好 12 个", importer)
-        self.assertIn("下游会原样使用这 12 个词去搜索", importer)
-        self.assertIn("2-4 个汉字的具体物件、服务、场所、工具或作品名为主", importer)
-        self.assertIn("在此基础上适当混入 3-5 个「领域对象 + 风格意图」词", importer)
-        self.assertIn("攻略、教程、分享、心得", importer)
+        self.assertIn("字段数量：primaryQueries 12-16", importer)
+        self.assertIn("domainExpansion", importer)
+        self.assertIn("合计必须给出至少 20 个互不重复", importer)
+        self.assertIn("2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主", importer)
+        self.assertIn("禁止输出带这些后缀或整词的合成搜索词", importer)
+        self.assertIn("存股、融資、配息、當沖、槓桿、信用交易", importer)
         self.assertIn("domainSummary", importer)
-        self.assertIn("maxOutputTokens: 500", importer)
+        self.assertIn("maxOutputTokens: 1400", importer)
         self.assertIn("人设名称只是对外称呼", importer)
+        self.assertNotIn("primaryQueries 恰好 12 个", importer)
         self.assertNotIn("maxOutputTokens: 360", importer)
+        self.assertNotIn("茶具攻略、收纳教程、贷款分享", importer)
 
     def test_hot_live_fetch_targets_never_enable_both_platforms(self):
         importer = (
@@ -4618,20 +4621,28 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["archiveSnapshot"]["id"], "persona-1")
         self.assertEqual(payload["archiveSnapshot"]["name"], "History Teacher")
 
+    def _hot_rewrite_text_of_length(self, length, seed="煞車油先排空氣，手感通常就回來了，再确认來令片。"):
+        compact = "".join(str(seed or "").split()) or "改写正文"
+        while len(compact) < length:
+            compact += compact
+        return compact[:length]
+
     def test_hot_rewrite_uses_persona_and_source_content(self):
         self._write_archives()
         captured = {}
+        source = "前煞車手感偏軟，建議先檢查煞車油和來令片。我是 SUZUKI 小編。"
+        source_length = server._persona_hot_rewrite_char_count(source)
 
         def fake_llm(**kwargs):
             captured["system"] = kwargs.get("system_prompt") or ""
             captured["user"] = kwargs.get("user_input") or ""
-            return {"ok": True, "raw_text": "煞車油先排空氣，手感通常就回來了。"}, {}, []
+            return {"ok": True, "raw_text": self._hot_rewrite_text_of_length(source_length)}, {}, []
 
         with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
             body = server._rewrite_persona_hot_candidate_content(
                 "persona-1",
                 server.PersonaDashboardHotRewritePayload(
-                    source_content="前煞車手感偏軟，建議先檢查煞車油和來令片。我是 SUZUKI 小編。",
+                    source_content=source,
                     writing_locale="zh-TW",
                     platform="threads",
                 ),
@@ -4639,33 +4650,39 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         self.assertEqual(body["ok"], True)
         self.assertIn("煞車油", body["content"])
+        self.assertEqual(body["source_length"], source_length)
+        self.assertEqual(body["rewritten_length"], source_length)
         self.assertIn("History Teacher", captured["user"])
         self.assertIn("SUZUKI 小編", captured["user"])
         self.assertIn("禁止照抄", captured["user"])
         self.assertIn("必须用人设的身份", captured["system"])
-        self.assertIn("1% 到 5%", captured["system"])
+        self.assertIn("上下 5%", captured["system"])
         self.assertIn("热点原文约", captured["user"])
-        self.assertIn("1% 到 5%", captured["user"])
+        self.assertIn("不超过 5%", captured["user"])
+        self.assertIn("不是平台字数上限", captured["user"])
 
     def test_hot_rewrite_length_bounds_stay_within_five_percent(self):
         self.assertEqual(server._persona_hot_rewrite_length_bounds(100), (95, 105))
+        self.assertEqual(server._persona_hot_rewrite_length_bounds(500), (475, 525))
         self.assertEqual(server._persona_hot_rewrite_char_count("改 写 后 正文"), 5)
 
     def test_hot_rewrite_retries_when_length_drifts_too_far(self):
         self._write_archives()
         calls = []
+        source = "前煞車手感偏軟，建議先檢查煞車油和來令片。我是 SUZUKI 小編。"
+        source_length = server._persona_hot_rewrite_char_count(source)
 
         def fake_llm(**kwargs):
             calls.append(kwargs.get("user_input") or "")
             if len(calls) == 1:
                 return {"ok": True, "raw_text": "太短了。"}, {}, []
-            return {"ok": True, "raw_text": "前煞車手感偏軟，建議先檢查煞車油和來令片再判斷。"}, {}, []
+            return {"ok": True, "raw_text": self._hot_rewrite_text_of_length(source_length)}, {}, []
 
         with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
             body = server._rewrite_persona_hot_candidate_content(
                 "persona-1",
                 server.PersonaDashboardHotRewritePayload(
-                    source_content="前煞車手感偏軟，建議先檢查煞車油和來令片。我是 SUZUKI 小編。",
+                    source_content=source,
                     writing_locale="zh-TW",
                     platform="threads",
                 ),
@@ -4674,6 +4691,31 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertIn("已超出", calls[1])
         self.assertIn("煞車油", body["content"])
+        self.assertEqual(body["rewritten_length"], source_length)
+
+    def test_hot_rewrite_rejects_when_length_still_drifts(self):
+        self._write_archives()
+        calls = []
+
+        def fake_llm(**kwargs):
+            calls.append(kwargs.get("user_input") or "")
+            return {"ok": True, "raw_text": "太短了。"}, {}, []
+
+        with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
+            with self.assertRaises(server.HTTPException) as raised:
+                server._rewrite_persona_hot_candidate_content(
+                    "persona-1",
+                    server.PersonaDashboardHotRewritePayload(
+                        source_content="前煞車手感偏軟，建議先檢查煞車油和來令片。我是 SUZUKI 小編。",
+                        writing_locale="zh-TW",
+                        platform="threads",
+                    ),
+                )
+
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertIn("改写字数偏离过大", raised.exception.detail)
+        self.assertIn("原文 32 字", raised.exception.detail)
 
     def test_hot_rewrite_requires_source_content(self):
         self._write_archives()

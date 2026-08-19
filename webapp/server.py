@@ -14888,7 +14888,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     return keywords
 
 
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 60
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 61
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 12
 _HOT_PUBLIC_PROBE_FLAG = Path("/data/hot-public-probe")
 
@@ -15071,6 +15071,9 @@ def _persona_hot_rewrite_length_bounds(source_length: int) -> tuple[int, int]:
     return max(1, clean - delta), clean + delta
 
 
+PERSONA_HOT_REWRITE_MAX_ATTEMPTS = 3
+
+
 def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDashboardHotRewritePayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     source_content = str(payload.source_content or "").strip()
@@ -15102,19 +15105,20 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
     source_length = _persona_hot_rewrite_char_count(source_content)
     min_length, max_length = _persona_hot_rewrite_length_bounds(source_length)
     system_prompt = "\n".join([
-        "你是社交媒体文案写手。只输出一篇可直接发布的推文正文，不要标题、解释、引号或 Markdown。",
+        "你是社交媒体文案写手。只输出一篇可直接发布的正文，不要标题、解释、引号或 Markdown。",
         f"目标平台：{platform}。",
         f"写作语言：{writing_locale}（{writing_language}）。{writing_convention}",
         "必须用人设的身份、语气和领域来写；热点原文只提供话题、事实和讨论点。",
         "保留热点里可核验的具体对象、场景或问题，但禁止复述原句、原口头禅或原账号自称。",
         "不要写成客服回复，不要出现原帖作者身份。不要注水解说。",
-        "改写后的字数必须接近原文，字数差只能在原文的 1% 到 5% 之间浮动，不要明显变短或变长。",
+        "改写后的字数必须接近原文：按去掉空白后的字数计算，只能在原文上下 5% 以内。",
+        "不要按微博、推特或 Threads 的发布字数上限压缩，也不要把长文擅自改成短帖。",
     ])
     user_input = "\n".join([
         "当前人设：",
         *[line for line in persona_lines if not line.endswith("：")],
         "",
-        f"热点原文约 {source_length} 字。改写后请控制在 {min_length} 到 {max_length} 字之间（与原文相差约 1% 到 5%）。",
+        f"热点原文约 {source_length} 字。改写后必须落在 {min_length} 到 {max_length} 字之间，上下浮动不超过 5%。这不是平台字数上限。",
         "热点原文（只作素材，禁止照抄）：",
         source_content[:4000],
     ])
@@ -15132,20 +15136,42 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
             raise HTTPException(status_code=502, detail="热点改写暂时不可用，请稍后重试。") from exc
         return _strip_prompt_response_wrappers(str((llm_result or {}).get("raw_text") or "")).strip()
 
-    content = request_rewrite(user_input, "热点按人设改写")
-    if not content:
-        raise HTTPException(status_code=502, detail="模型没有返回可用正文，请稍后重试。")
-    rewritten_length = _persona_hot_rewrite_char_count(content)
-    if rewritten_length < min_length or rewritten_length > max_length:
-        correction = "\n".join([
+    last_content = ""
+    last_length = 0
+    prompt_user = user_input
+    for attempt in range(1, PERSONA_HOT_REWRITE_MAX_ATTEMPTS + 1):
+        label = "热点按人设改写" if attempt == 1 else "热点按人设改写校准"
+        content = request_rewrite(prompt_user, label)
+        if not content:
+            continue
+        last_content = content
+        last_length = _persona_hot_rewrite_char_count(content)
+        if min_length <= last_length <= max_length:
+            return {
+                "ok": True,
+                "content": last_content[:5000],
+                "source_length": source_length,
+                "rewritten_length": last_length,
+                "min_length": min_length,
+                "max_length": max_length,
+            }
+        gap = (min_length - last_length) if last_length < min_length else (last_length - max_length)
+        direction = "少了" if last_length < min_length else "多了"
+        prompt_user = "\n".join([
             user_input,
             "",
-            f"上次改写约 {rewritten_length} 字，已超出 {min_length}-{max_length} 字范围。请按同一要求重写，严格落在该字数区间内。",
+            f"上次改写约 {last_length} 字，{direction} {gap} 字，已超出 {min_length}-{max_length} 字范围。",
+            "请按同一事实和人设重写，不要压缩成短帖，必须严格落在该字数区间内。",
         ])
-        corrected = request_rewrite(correction, "热点按人设改写校准")
-        if corrected:
-            content = corrected
-    return {"ok": True, "content": content[:5000]}
+    if not last_content:
+        raise HTTPException(status_code=502, detail="模型没有返回可用正文，请稍后重试。")
+    raise HTTPException(
+        status_code=502,
+        detail=(
+            f"改写字数偏离过大（原文 {source_length} 字，结果 {last_length} 字，"
+            f"要求 {min_length}-{max_length} 字），请再试一次。"
+        ),
+    )
 
 
 def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
@@ -27691,7 +27717,7 @@ def create_app() -> FastAPI:
         _invalidate_admin_dashboard_cache()
         return {"ok": True, "email_delivery": overview}
 
-    def _hot_dataset_worker_request(method: str, path: str) -> dict[str, Any]:
+    def _hot_dataset_worker_request(method: str, path: str, *, query: str = "", body: bytes = b"") -> dict[str, Any]:
         try:
             keys_path = Path(os.getenv("TG_FETCH_WORKER_KEYS_FILE", "/data/internal/remote-fetch-keys.json"))
             keys = json.loads(keys_path.read_text(encoding="utf-8"))
@@ -27702,12 +27728,15 @@ def create_app() -> FastAPI:
                 key_id=key_id,
                 method=method,
                 path=path,
-                body=b"",
+                body=body,
                 timestamp=int(time.time()),
                 nonce=secrets.token_urlsafe(24),
             )
             base_url = os.getenv("TG_FETCH_WORKER_INTERNAL_URL", "http://tg-koll-capture-worker:8092").rstrip("/")
-            response = requests.request(method, base_url + path, headers=headers, timeout=(3, 12))
+            url = base_url + path
+            if query:
+                url = f"{url}?{query.lstrip('?')}"
+            response = requests.request(method, url, headers=headers, data=body or None, timeout=(3, 12))
             response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, dict):
@@ -27742,10 +27771,39 @@ def create_app() -> FastAPI:
         return {"ok": True, **api_admin_hot_datasets(user)}
 
     @app.get("/api/admin/hot-datasets/events")
-    def api_admin_hot_dataset_events(_user: dict[str, Any] = Depends(require_admin)):
-        payload = _hot_dataset_worker_request("GET", "/internal/worker/v1/hot-datasets/events")
+    def api_admin_hot_dataset_events(
+        page: int = 1,
+        page_size: int = 0,
+        scope: str = "all",
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        query = f"page={max(1, int(page or 1))}&scope={str(scope or 'all').strip() or 'all'}"
+        if int(page_size or 0) > 0:
+            query += f"&page_size={max(5, min(int(page_size), 100))}"
+        payload = _hot_dataset_worker_request("GET", "/internal/worker/v1/hot-datasets/events", query=query)
         events = payload.get("events")
-        return {"ok": True, "events": events if isinstance(events, list) else []}
+        return {
+            "ok": True,
+            "events": events if isinstance(events, list) else [],
+            "total": int(payload.get("total") or 0),
+            "page": int(payload.get("page") or 1),
+            "page_size": int(payload.get("page_size") or 20),
+            "pages": int(payload.get("pages") or 1),
+            "scope": str(payload.get("scope") or "all"),
+            "max_events": int(payload.get("max_events") or 200),
+            "persona_page_size": int(payload.get("persona_page_size") or 10),
+        }
+
+    @app.get("/api/admin/hot-datasets/settings")
+    def api_admin_hot_dataset_settings(_user: dict[str, Any] = Depends(require_admin)):
+        payload = _hot_dataset_worker_request("GET", "/internal/worker/v1/hot-datasets/settings")
+        return {"ok": True, **{key: payload.get(key) for key in ("event_page_size", "event_max", "persona_page_size")}}
+
+    @app.post("/api/admin/hot-datasets/settings")
+    def api_admin_save_hot_dataset_settings(payload: dict[str, Any], _user: dict[str, Any] = Depends(require_admin)):
+        body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+        result = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/settings", body=body)
+        return {"ok": True, **{key: result.get(key) for key in ("event_page_size", "event_max", "persona_page_size", "pruned")}}
 
     @app.delete("/api/admin/hot-datasets/events/{event_id}")
     def api_admin_delete_hot_dataset_event(event_id: str, _user: dict[str, Any] = Depends(require_admin)):
