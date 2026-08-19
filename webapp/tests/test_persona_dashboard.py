@@ -3910,6 +3910,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "refresh-hot-post"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "pool-stats"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "import-hot-candidates"}))
+        self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "finalize-hot-import"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "warm-hot-strategy"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "prepare-hot-keywords"}))
 
@@ -4544,6 +4545,41 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["archiveSnapshot"]["id"], "persona-1")
         self.assertEqual(payload["archiveSnapshot"]["name"], "History Teacher")
 
+    def test_hot_rewrite_uses_persona_and_source_content(self):
+        self._write_archives()
+        captured = {}
+
+        def fake_llm(**kwargs):
+            captured["system"] = kwargs.get("system_prompt") or ""
+            captured["user"] = kwargs.get("user_input") or ""
+            return {"ok": True, "raw_text": "煞車油先排空氣，手感通常就回來了。"}, {}, []
+
+        with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
+            body = server._rewrite_persona_hot_candidate_content(
+                "persona-1",
+                server.PersonaDashboardHotRewritePayload(
+                    source_content="前煞車手感偏軟，建議先檢查煞車油和來令片。我是 SUZUKI 小編。",
+                    writing_locale="zh-TW",
+                    platform="threads",
+                ),
+            )
+
+        self.assertEqual(body["ok"], True)
+        self.assertIn("煞車油", body["content"])
+        self.assertIn("History Teacher", captured["user"])
+        self.assertIn("SUZUKI 小編", captured["user"])
+        self.assertIn("禁止照抄", captured["user"])
+        self.assertIn("必须用人设的身份", captured["system"])
+
+    def test_hot_rewrite_requires_source_content(self):
+        self._write_archives()
+        with self.assertRaises(server.HTTPException) as raised:
+            server._rewrite_persona_hot_candidate_content(
+                "persona-1",
+                server.PersonaDashboardHotRewritePayload(source_content="  "),
+            )
+        self.assertEqual(raised.exception.status_code, 400)
+
     def test_persona_hot_keywords_consume_remaining_batches_then_regenerate(self):
         self._write_archives()
         initial_keywords = [f"keyword-{index}" for index in range(30)]
@@ -4876,43 +4912,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
     def test_import_persona_hot_candidates_returns_hot_source_meta(self):
         self._write_archives()
 
-        def fake_hot_import(payload, timeout_seconds=180):
-            archives_path = self.tool_runtime_dir / "persona_archives.json"
-            archives = json.loads(archives_path.read_text(encoding="utf-8"))
-            archives[0]["posts"].append({
-                "id": "hot-post-1",
-                "title": "热点 #1",
-                "content": "导入的热点正文",
-                "wordCount": 6,
-                "orderIndex": 2,
-                "createdAt": "2026-07-06T11:00:00Z",
-                "updatedAt": "2026-07-06T11:00:00Z",
-                "mediaItems": [{"url": str(self.draft_media_path), "type": "image", "localPath": str(self.draft_media_path)}],
-                "mediaUrl": str(self.draft_media_path),
-                "mediaType": "image",
-                "sourceMeta": {
-                    "source": "sentiment_hot_import",
-                    "platform": "threads",
-                    "sourceUrl": "https://www.threads.com/@history/post/hot-1",
-                    "metrics": {"viewCount": 888},
-                    "engagement": {"likeCount": 66, "commentCount": 7},
-                    "originalContent": "导入的热点正文",
-                    "media": [{"url": "https://example.com/hot.png", "localPath": str(self.draft_media_path), "type": "image"}],
-                    "mediaItems": [{"url": str(self.draft_media_path), "type": "image", "localPath": str(self.draft_media_path)}],
-                    "originalMediaUrl": "https://example.com/hot.png",
-                    "originalMediaUrls": ["https://example.com/hot.png"],
-                    "warnings": [],
-                },
-            })
-            archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
-            return {
-                "ok": True,
-                "archiveId": payload["archiveId"],
-                "importedCount": 1,
-                "posts": [{"id": "hot-post-1", "title": "热点 #1", "content": "导入的热点正文"}],
-            }
-
-        with mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=fake_hot_import):
+        with mock.patch.object(server, "_enqueue_persona_hot_import_finalize") as enqueue:
             resp = self.client.post(
                 "/api/persona_dashboard/personas/persona-1/hot_candidates/import",
                 json={
@@ -4923,7 +4923,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                             "platform": "threads",
                             "sourceUrl": "https://www.threads.com/@history/post/hot-1",
                             "content": "导入的热点正文",
-                            "media": [{"url": "https://example.com/hot.png", "type": "image"}],
+                            "media": [{"url": "https://scontent.cdninstagram.com/v/t51.2885-15/hot.png", "type": "image"}],
                         }
                     ]
                 },
@@ -4932,12 +4932,50 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["imported_count"], 1)
-        self.assertEqual(body["posts"][0]["id"], "hot-post-1")
+        self.assertEqual(body["media_cache"], "pending")
+        self.assertTrue(body["posts"][0]["id"])
         self.assertTrue(body["posts"][0]["is_hot_imported"])
         self.assertEqual(body["posts"][0]["source_meta"]["source"], "sentiment_hot_import")
         self.assertEqual(body["posts"][0]["source_meta"]["source_url"], "https://www.threads.com/@history/post/hot-1")
+        self.assertEqual(body["posts"][0]["source_meta"]["media_cache"]["status"], "pending")
         self.assertTrue(body["posts"][0]["source_meta"]["media_items"])
         self.assertEqual(body["posts"][0]["platform"], "threads")
+        preview_url = body["posts"][0]["media_items"][0]["preview_url"]
+        self.assertTrue(preview_url.startswith("/api/persona_dashboard/personas/persona-1/posts/"))
+        self.assertIn("/media/0", preview_url)
+        enqueue.assert_called_once()
+        self.assertEqual(enqueue.call_args.args[0], "persona-1")
+        self.assertEqual(enqueue.call_args.args[1][0]["candidate"]["id"], "hot-1")
+
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        imported = next(post for post in archives[0]["posts"] if post["id"] == body["posts"][0]["id"])
+        self.assertEqual(imported["mediaItems"][0]["url"], "https://scontent.cdninstagram.com/v/t51.2885-15/hot.png")
+        self.assertEqual(imported["sourceMeta"]["mediaCache"]["status"], "pending")
+
+    def test_import_plain_text_hot_candidate_is_ready_without_waiting_for_media(self):
+        self._write_archives()
+
+        with mock.patch.object(server, "_enqueue_persona_hot_import_finalize") as enqueue:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates/import",
+                json={
+                    "platform": "threads",
+                    "candidates": [{
+                        "id": "hot-text-1",
+                        "platform": "threads",
+                        "sourceUrl": "https://www.threads.com/@history/post/hot-text-1",
+                        "content": "纯文本热点正文",
+                    }],
+                },
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["imported_count"], 1)
+        self.assertEqual(body["media_cache"], "ready")
+        self.assertEqual(body["posts"][0]["source_meta"]["media_cache"]["status"], "ready")
+        self.assertEqual(body["posts"][0]["media_items"], [])
+        enqueue.assert_called_once()
 
     def test_import_persona_hot_candidates_rejects_cross_platform_candidates(self):
         self._write_archives()

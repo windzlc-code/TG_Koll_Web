@@ -4342,6 +4342,55 @@ function syncPersonaHotImportPosts(personaId, posts = []) {
   if (changed) persistPersonaHotImports();
 }
 
+function personaHotImportMediaCacheStatus(post) {
+  const cache = post?.source_meta?.media_cache;
+  return String(cache?.status || "").trim().toLowerCase();
+}
+
+function personaHotImportPostsPendingMedia(posts = []) {
+  return (Array.isArray(posts) ? posts : []).filter((item) => personaHotImportMediaCacheStatus(item) === "pending");
+}
+
+const personaHotImportMediaWatchers = {};
+
+function watchPersonaHotImportMedia(personaId, postIds = []) {
+  const key = String(personaId || "").trim();
+  const wanted = new Set((Array.isArray(postIds) ? postIds : []).map((item) => String(item || "").trim()).filter(Boolean));
+  if (!key || !wanted.size) return;
+  if (personaHotImportMediaWatchers[key]) return;
+  personaHotImportMediaWatchers[key] = true;
+  const deadline = Date.now() + 90000;
+  const poll = async () => {
+    try {
+      while (Date.now() < deadline) {
+        await sleep(1500);
+        const posts = await loadPersonaDraftPosts(key, { force: true }).catch(() => []);
+        const pending = personaHotImportPostsPendingMedia(posts).filter((item) => wanted.has(String(item.id || "").trim()));
+        if (!pending.length) break;
+      }
+    } finally {
+      delete personaHotImportMediaWatchers[key];
+    }
+  };
+  poll().catch(() => {
+    delete personaHotImportMediaWatchers[key];
+  });
+}
+
+async function ensurePersonaHotImportMediaReady(persona, post) {
+  if (personaHotImportMediaCacheStatus(post) !== "pending") return post;
+  showMsg("commandMsg", "正在缓存热点媒体，请稍候再发布…", true);
+  const deadline = Date.now() + 45000;
+  let latest = post;
+  while (Date.now() < deadline) {
+    const posts = await loadPersonaDraftPosts(persona.id, { force: true }).catch(() => []);
+    latest = posts.find((item) => String(item?.id || "") === String(post.id || "")) || latest;
+    if (personaHotImportMediaCacheStatus(latest) !== "pending") return latest;
+    await sleep(1000);
+  }
+  return latest;
+}
+
 function normalizedTextSnippet(value, maxLength = 120) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
@@ -5009,6 +5058,11 @@ function renderPersonaHotCandidateEditorModal(persona, candidate) {
           <small>${esc(personaHotMetricSummary(candidate))}</small>
         </div>
         <textarea rows="9" class="persona-hot-editor-content--full" data-persona-hot-content-editor="${esc(candidateId)}">${esc(personaHotEditedContent(persona.id, candidate))}</textarea>
+        <button type="button" class="persona-hot-rewrite-action" data-persona-hot-rewrite="${esc(candidateId)}" ${isActionLocked("persona", persona.id, "hot_rewrite") ? "disabled" : ""} aria-label="根据当前人设和这篇热点生成不雷同的正文">
+          ${isActionLocked("persona", persona.id, "hot_rewrite")
+            ? renderBusyButtonContent("正在按人设改写", true, actionLockStartedAt("persona", persona.id, "hot_rewrite"))
+            : "按人设改写"}
+        </button>
       </section>
       <section class="persona-hot-editor-media">
         <div class="persona-hot-editor-section-head">
@@ -5027,6 +5081,65 @@ function renderPersonaHotCandidateEditorModal(persona, candidate) {
     </div>`;
   translateConsoleLanguage(content, currentLanguage());
   queueMicrotask(() => resizePersonaHotEditorContent(content.querySelector("[data-persona-hot-content-editor]")));
+}
+
+async function rewritePersonaHotEditorContent(persona, candidate) {
+  if (!persona || !candidate) return;
+  const candidateId = personaHotCandidateKey(candidate);
+  const lockParts = ["persona", persona.id, "hot_rewrite"];
+  if (isActionLocked(...lockParts)) {
+    showMsg("commandMsg", "正在按人设改写，请稍候。", false);
+    return;
+  }
+  snapshotPersonaHotPreviewContent();
+  const source = String(personaHotEditedContent(persona.id, candidate) || "").trim();
+  if (!source) {
+    showMsg("commandMsg", "没有可改写的热点正文。", false);
+    return;
+  }
+  const form = personaFormState(persona.id).generate;
+  setActionLocked(lockParts, true);
+  const button = document.querySelector("[data-persona-hot-rewrite]");
+  if (button) {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.innerHTML = renderBusyButtonContent("正在按人设改写", true, actionLockStartedAt(...lockParts));
+  }
+  try {
+    const result = await apiWithTimeout(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_rewrite`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_content: source,
+        writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
+          ? String(form.writingLocale)
+          : PERSONA_DEFAULT_WRITING_LOCALE,
+        platform: normalizePersonaContentPlatform(candidate.platform || "threads"),
+      }),
+    }, 90000);
+    const content = String(result?.content || "").trim();
+    if (!content) throw { detail: "模型没有返回可用正文。" };
+    if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
+      form.hotEditedContentByCandidate = {};
+    }
+    form.hotEditedContentByCandidate[candidateId] = content;
+    const textarea = document.querySelector(`[data-persona-hot-content-editor="${CSS.escape(candidateId)}"]`);
+    if (textarea) {
+      textarea.value = content;
+      resizePersonaHotEditorContent(textarea);
+    }
+    showMsg("commandMsg", "已按当前人设改写这篇热点，可再编辑后导入。", true);
+  } catch (error) {
+    showMsg("commandMsg", error?.detail || error?.message || "按人设改写失败，请稍后重试。", false);
+  } finally {
+    setActionLocked(lockParts, false);
+    const current = document.querySelector("[data-persona-hot-rewrite]");
+    if (current) {
+      current.disabled = false;
+      current.removeAttribute("aria-busy");
+      current.textContent = "按人设改写";
+    }
+  }
 }
 
 function resizePersonaHotEditorContent(textarea) {
@@ -5146,6 +5259,12 @@ function startPersonaHotCandidateEdit(persona, candidateId) {
       const selected = personaMediaBulkSelection(context.personaId, context.source, context.postId, context.cards.length);
       setPersonaMediaBulkSelection(context.personaId, context.source, context.postId, selected.size === context.cards.length ? [] : context.cards.map((_, index) => index));
       syncPersonaMediaBulkSelectionState(context.editor);
+      return;
+    }
+    if (event.target.closest("[data-persona-hot-rewrite]")) {
+      rewritePersonaHotEditorContent(persona, candidate).catch((error) => {
+        showMsg("commandMsg", error?.detail || error?.message || "按人设改写失败，请稍后重试。", false);
+      });
       return;
     }
     if (event.target.closest("[data-persona-hot-media-delete-selected]")) {
@@ -5271,7 +5390,7 @@ function renderPersonaHotMediaPreview(persona, candidate) {
   `;
 }
 
-function renderPersonaHotOrigin(meta, { compact = false, showMetricSummary = true } = {}) {
+function renderPersonaHotOrigin(meta, { compact = false, showMetricSummary = true, showSummary = true } = {}) {
   if (!meta) return "";
   const mediaItems = personaHotCandidateMediaItems(meta);
   if (compact) {
@@ -5284,7 +5403,7 @@ function renderPersonaHotOrigin(meta, { compact = false, showMetricSummary = tru
         ${renderMediaTypeBadge(mediaItems)}
         <small>${esc((meta.platform || "threads").toUpperCase())}${meta.captured_at ? ` · ${esc(formatTime(meta.captured_at))}` : ""}</small>
       </div>
-      <p>${esc(meta.source_summary || "该草稿来自已抓取热点内容。")}</p>
+      ${showSummary ? `<p>${esc(meta.source_summary || "该草稿来自已抓取热点内容。")}</p>` : ""}
       <div class="persona-hot-origin-meta">
         ${showMetricSummary ? `<small>${esc(personaHotMetricSummary(meta))}</small>` : ""}
         ${meta.source_url ? `<a href="${esc(meta.source_url)}" target="_blank" rel="noopener">查看原帖</a>` : ""}
@@ -8618,6 +8737,26 @@ function renderPersonaMediaPreview(items, { compact = false } = {}) {
   `).join("")}</div>`;
 }
 
+function renderPersonaDraftDetailStory(post, hotMeta) {
+  const draftText = String(post?.content || "").trim();
+  const original = String(hotMeta?.original_content || "").trim();
+  const body = draftText || original || "暂无正文";
+  const warnings = Array.isArray(hotMeta?.warnings) ? hotMeta.warnings.filter(Boolean) : [];
+  if (!hotMeta) {
+    return `<div class="persona-draft-detail-content">
+      <span>推文正文</span>
+      <p>${esc(body)}</p>
+    </div>`;
+  }
+  return `<div class="persona-draft-detail-hot persona-draft-detail-content">
+    <span>热点内容</span>
+    ${renderPersonaHotOrigin(hotMeta, { showMetricSummary: false, showSummary: false })}
+    ${renderPersonaHotMetricStrip(hotMeta)}
+    <p>${esc(body)}</p>
+    ${warnings.length ? `<div class="persona-hot-detail-block"><strong>抓取提示</strong><p>${esc(warnings.join("\n"))}</p></div>` : ""}
+  </div>`;
+}
+
 function renderPersonaDraftDetailMedia(items = []) {
   const rows = (Array.isArray(items) ? items : []).filter(Boolean);
   if (!rows.length) return "";
@@ -9418,15 +9557,12 @@ async function viewPersonaDraftPost(postId = "") {
     contentHtml: `
       <div class="console-modal-detail persona-draft-detail-modal">
         <div><span>${source === "favorites" ? "收藏标题" : "草稿标题"}</span><strong>${esc(personaDraftDisplayTitleForPost(post, posts))}</strong></div>
-        <div><span>所属人设</span><strong>${esc(persona.name || "未命名人设")}</strong></div>
-        <div><span>时间信息</span><strong>${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</strong></div>
-        <div><span>当前状态</span><strong>${esc(String(post.id) === String(state.selectedPersonaPostId || "") ? "当前选中" : "待选择")}</strong></div>
-        ${hotMeta ? `<div class="persona-draft-detail-hot"><span>热点数据</span>${renderPersonaHotDetail(hotMeta)}${renderPersonaHotMetricStrip(hotMeta)}</div>` : ""}
-        <div class="persona-draft-detail-content">
-          <span>推文正文</span>
-          <p>${esc(String(post.content || "暂无正文"))}</p>
-          ${renderPersonaDraftDetailMedia(mediaItems)}
+        <div class="persona-draft-detail-meta-row">
+          <div><span>所属人设</span><strong>${esc(persona.name || "未命名人设")}</strong></div>
+          <div><span>时间</span><strong>${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</strong></div>
         </div>
+        ${renderPersonaDraftDetailStory(post, hotMeta)}
+        ${renderPersonaDraftDetailMedia(mediaItems)}
       </div>
     `,
     modalKey: "persona-draft-detail",
@@ -15837,7 +15973,8 @@ async function submitPersonaPublishTask() {
   const platform = String(account.platform || "instagram").trim().toLowerCase() || "instagram";
   const publishUploadState = captureUploadDropzoneState("personaPublishFiles");
   const publishFiles = publishUploadState.files;
-  const postMediaItems = personaPublishPostMediaItems(String(persona.id || ""), post);
+  const readyPost = await ensurePersonaHotImportMediaReady(persona, post);
+  const postMediaItems = personaPublishPostMediaItems(String(persona.id || ""), readyPost);
   if (platform === "instagram" && !publishFiles.length && !postMediaItems.length) {
     await requestInstagramPublishMediaResolution({ persona, source, post });
     return;
@@ -21677,6 +21814,7 @@ async function submitPersonaHotDraftImport(persona, selected, {
   });
   state.transientWorkspaceLeaveAcknowledgement = "";
   await loadPersonaDraftPosts(persona.id, { force: true });
+  watchPersonaHotImportMedia(persona.id, createdIds);
   setPersonaContentPlatform(resolvedTargetPlatform, persona);
   const importedCount = result.imported_count || createdIds.length || 0;
   setPersonaGenerateRunState(persona.id, {

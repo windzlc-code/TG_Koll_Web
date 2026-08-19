@@ -521,6 +521,17 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertTrue(external[0]["unavailable"])
         self.assertEqual(external[0]["reason"], "媒体未缓存到本地")
 
+        pending = server._previewable_persona_media_items(
+            [{"url": "https://scontent.cdninstagram.com/v/t51.2885-15/hot.jpg", "type": "image"}],
+            archive_id="persona-1",
+            post_id="post-hot-1",
+        )
+        self.assertFalse(pending[0]["unavailable"])
+        self.assertEqual(
+            pending[0]["preview_url"],
+            "/api/persona_dashboard/personas/persona-1/posts/post-hot-1/media/0",
+        )
+
     def test_dashboard_does_not_render_device_or_bot_fields(self):
         self.assertNotIn("绑定设备", self.dashboard_script)
         self.assertNotIn("设备：", self.dashboard_script)
@@ -3352,10 +3363,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index("async function viewPersonaDraftPost"):
             self.console_script.index("\nasync function refreshPersonaHotPost")
         ]
-        self.assertIn("${renderPersonaHotMetricStrip(hotMeta)}", detail)
+        self.assertIn("${renderPersonaDraftDetailStory(post, hotMeta)}", detail)
         self.assertIn('modalKey: "persona-draft-detail"', detail)
         self.assertIn('cancelText: "关闭"', detail)
         self.assertIn("if (shouldEdit) openPersonaDraftEditor(post.id);", detail)
+        self.assertNotIn("<span>当前状态</span>", detail)
+        self.assertNotIn("renderPersonaHotDetail(hotMeta)", detail)
+        self.assertIn('class="persona-draft-detail-meta-row"', detail)
         self.assertIn(
             '.console-modal[data-modal-key="persona-draft-detail"] .console-modal-actions {',
             self.styles,
@@ -3364,6 +3378,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             '.console-modal[data-modal-key="persona-draft-detail"] .console-modal-actions > [data-console-modal-confirm] {',
             self.styles,
         )
+        self.assertIn(".persona-draft-detail-modal .persona-draft-detail-meta-row {", self.styles)
+        story = self.console_script[
+            self.console_script.index("function renderPersonaDraftDetailStory"):
+            self.console_script.index("function renderPersonaDraftDetailMedia")
+        ]
+        self.assertIn("热点内容", story)
+        self.assertIn("showSummary: false", story)
+        self.assertNotIn("热点原文", story)
+        self.assertIn("${renderPersonaHotMetricStrip(hotMeta)}", story)
 
     def test_draft_more_menu_flips_above_the_mobile_dock(self):
         self.assertIn("function positionPersonaDraftMenu(menu)", self.console_script)

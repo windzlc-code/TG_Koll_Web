@@ -12403,6 +12403,12 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     keywords: list[str] = Field(default_factory=list)
 
 
+class PersonaDashboardHotRewritePayload(BaseModel):
+    source_content: str = ""
+    writing_locale: str = "zh-TW"
+    platform: str = "threads"
+
+
 class PersonaDashboardHotCandidatesImportPayload(BaseModel):
     candidates: list[dict[str, Any]] = Field(default_factory=list)
     recycle_candidates: list[dict[str, Any]] = Field(default_factory=list)
@@ -13043,6 +13049,21 @@ def _compact_persona_source_meta(source_meta: dict[str, Any]) -> dict[str, Any]:
         ],
         "media_items": _compact_dashboard_media_items(source_meta),
         "source_summary": str(source_meta.get("sourceSummary") or "").strip()[:220],
+        "candidate_id": str(source_meta.get("candidateId") or source_meta.get("candidate_id") or "").strip(),
+        "media_cache": _compact_persona_hot_media_cache(source_meta.get("mediaCache") or source_meta.get("media_cache")),
+    }
+
+
+def _compact_persona_hot_media_cache(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    status = str(raw.get("status") or "").strip().lower()
+    if status not in {"pending", "ready", "failed"}:
+        return {}
+    return {
+        "status": status,
+        "started_at": str(raw.get("startedAt") or raw.get("started_at") or "").strip(),
+        "finished_at": str(raw.get("finishedAt") or raw.get("finished_at") or "").strip(),
     }
 
 
@@ -14569,7 +14590,62 @@ def _run_remote_persona_hot_workflow(
                     _PERSONA_HOT_REMOTE_JOB_IDS.pop(remote_job_key, None)
 
 
-def _run_persona_hot_workflow_cli(payload: dict[str, Any], timeout_seconds: int = 180, *, background: bool = False) -> dict[str, Any]:
+def _run_persona_hot_workflow_subprocess(payload: dict[str, Any], timeout_seconds: int = 180) -> dict[str, Any]:
+    _sync_tool_r18_api_config_for_persona_workflow()
+    timeout = min(max(30, int(timeout_seconds)), 180)
+    command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
+    process: subprocess.Popen[str] | None = None
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(ROOT_DIR / "tool_r18"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        )
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_persona_hot_process(process)
+        raise HTTPException(status_code=504, detail=f"热点任务超过 {timeout} 秒，已终止本次任务。") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail="未找到 Node.js 或 tsx，无法执行热点任务。") from exc
+    finally:
+        if process is not None and process.poll() is None:
+            _terminate_persona_hot_process(process)
+    stdout = str(stdout or "").strip()
+    stderr = str(stderr or "").strip()
+    data = _parse_tool_r18_json_output(stdout)
+    if process is None or process.returncode != 0:
+        detail = _normalize_persona_hot_workflow_error_detail(
+            (data or {}).get("error") or stderr or stdout,
+            action=str(payload.get("action") or ""),
+        )
+        raise HTTPException(status_code=500, detail=detail)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=500, detail="热点任务返回格式无效。")
+    if data.get("ok") is False:
+        raise HTTPException(
+            status_code=500,
+            detail=_normalize_persona_hot_workflow_error_detail(
+                data.get("error"),
+                action=str(payload.get("action") or ""),
+            ),
+        )
+    return data
+
+
+def _run_persona_hot_workflow_cli(
+    payload: dict[str, Any],
+    timeout_seconds: int = 180,
+    *,
+    background: bool = False,
+    isolated: bool = False,
+) -> dict[str, Any]:
+    if isolated:
+        return _run_persona_hot_workflow_subprocess(payload, timeout_seconds=timeout_seconds)
     global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_INTERACTIVE_PROCESS, _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID, _PERSONA_HOT_LAST_INTERACTIVE_AT
     _sync_tool_r18_api_config_for_persona_workflow()
     timeout = min(max(30, int(timeout_seconds)), 120)
@@ -14951,6 +15027,86 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
         }
 
 
+def _persona_llm_runtime_source() -> dict[str, Any]:
+    source: dict[str, Any] = {}
+    try:
+        with db() as conn:
+            runtime = _get_runtime_config(conn)
+        for key in (
+            "llm_base_url",
+            "llm_api_key",
+            "llm_api_key_gemini",
+            "llm_api_key_gpt",
+            "llm_default_model",
+            "llm_default_model_gemini",
+            "llm_default_model_gpt",
+            "llm_model_priority_order",
+        ):
+            source[key] = runtime.get(key)
+    except Exception:
+        pass
+    return source
+
+
+def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDashboardHotRewritePayload) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    source_content = str(payload.source_content or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    if not source_content:
+        raise HTTPException(status_code=400, detail="没有可改写的热点正文。")
+    _, _, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    writing_locale = _normalize_persona_writing_locale(payload.writing_locale)
+    writing_language, writing_convention = _PERSONA_WRITING_LOCALE_INSTRUCTIONS[writing_locale]
+    platform = _normalize_persona_content_platform(payload.platform)
+    persona_name = str(archive.get("name") or setup.get("personaName") or "").strip() or "当前人设"
+    persona_lines = [
+        f"人设名称：{persona_name}",
+        f"人设说明：{str(archive.get('content') or setup.get('personaDescription') or '').strip()[:500]}",
+        f"内容主题：{str(setup.get('contentTheme') or '').split('视觉倾向')[0].split('視覺傾向')[0].split('核心走向')[0].strip()[:240]}",
+        f"性格语气：{str(setup.get('personaPersonality') or setup.get('personaStyle') or '').strip()[:160]}",
+    ]
+    interests = [str(item or "").strip() for item in (setup.get("interests") or []) if str(item or "").strip()][:8]
+    if interests:
+        persona_lines.append(f"兴趣标签：{'、'.join(interests)}")
+    style_sample = str(setup.get("tweetStyleSample") or "").strip()
+    if style_sample:
+        persona_lines.append(f"推文风格样本：{style_sample[:280]}")
+    system_prompt = "\n".join([
+        "你是社交媒体文案写手。只输出一篇可直接发布的推文正文，不要标题、解释、引号或 Markdown。",
+        f"目标平台：{platform}。",
+        f"写作语言：{writing_locale}（{writing_language}）。{writing_convention}",
+        "必须用人设的身份、语气和领域来写；热点原文只提供话题、事实和讨论点。",
+        "保留热点里可核验的具体对象、场景或问题，但禁止复述原句、原口头禅或原账号自称。",
+        "不要写成客服回复，不要出现原帖作者身份。篇幅接近原文，可略短，不要注水解说。",
+    ])
+    user_input = "\n".join([
+        "当前人设：",
+        *[line for line in persona_lines if not line.endswith("：")],
+        "",
+        "热点原文（只作素材，禁止照抄）：",
+        source_content[:4000],
+    ])
+    try:
+        llm_result, _selected, _attempts = _request_llm_text_with_fallback(
+            source=_persona_llm_runtime_source(),
+            user_input=user_input,
+            system_prompt=system_prompt,
+            retry_count=2,
+            request_label="热点按人设改写",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="热点改写暂时不可用，请稍后重试。") from exc
+    content = _strip_prompt_response_wrappers(str((llm_result or {}).get("raw_text") or "")).strip()
+    if not content:
+        raise HTTPException(status_code=502, detail="模型没有返回可用正文，请稍后重试。")
+    return {"ok": True, "content": content[:5000]}
+
+
 def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
@@ -15260,17 +15416,223 @@ def _cancel_persona_hot_candidate_tasks(archive_id: str, user_id: int) -> bool:
     return cancelled
 
 
+def _persona_hot_import_media_items(candidate: dict[str, Any]) -> list[dict[str, str]]:
+    raw_items = candidate.get("media") if isinstance(candidate.get("media"), list) else candidate.get("media_items")
+    items: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw in raw_items if isinstance(raw_items, list) else []:
+        if not isinstance(raw, dict):
+            continue
+        url = str(raw.get("url") or raw.get("localPath") or raw.get("preview_url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        item = {
+            "url": url,
+            "type": _guess_media_type(url, raw.get("type") or ""),
+        }
+        thumb = str(raw.get("thumbnailUrl") or raw.get("thumbnail_url") or "").strip()
+        if thumb and thumb != url:
+            item["thumbnailUrl"] = thumb
+        local_path = str(raw.get("localPath") or "").strip()
+        if local_path:
+            item["localPath"] = local_path
+        items.append(item)
+    return items
+
+
+def _persona_hot_import_has_remote_media(items: list[dict[str, Any]]) -> bool:
+    return any(re.match(r"^https?://", str((item or {}).get("url") or ""), re.I) for item in items)
+
+
+def _compact_imported_persona_hot_post(archive_id: str, record: dict[str, Any]) -> dict[str, Any]:
+    compact = _compact_persona_archive_post(record)
+    compact["source"] = "posts"
+    compact["media_items"] = _previewable_persona_media_items(
+        compact.get("media_items") if isinstance(compact.get("media_items"), list) else [],
+        archive_id=archive_id,
+        post_id=str(compact.get("id") or "").strip(),
+        source="posts",
+    )
+    return compact
+
+
+@_persona_archive_write_locked
+def _write_persona_hot_import_drafts(
+    archive_id: str,
+    candidates: list[dict[str, Any]],
+    platform: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    path, raw, archives = _persona_archive_source_for_write(archive_id)
+    archive = _find_persona_archive(archives, archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    next_order = max((int(_number(post.get("orderIndex"), -1)) for post in posts if isinstance(post, dict)), default=-1) + 1
+    now = _persona_dashboard_iso_now()
+    created: list[dict[str, Any]] = []
+    hydrate_items: list[dict[str, Any]] = []
+    for index, candidate in enumerate(candidates):
+        content = str(candidate.get("content") or "").strip()
+        media_items = _persona_hot_import_media_items(candidate)
+        if not content and not media_items:
+            continue
+        post_id = _new_persona_post_id()
+        first = media_items[0] if media_items else None
+        has_remote = _persona_hot_import_has_remote_media(media_items)
+        record = {
+            "id": post_id,
+            "title": f"热点 #{index + 1}",
+            "content": content,
+            "platform": platform,
+            "wordCount": len(content),
+            "orderIndex": next_order + index,
+            "createdAt": now,
+            "updatedAt": now,
+            "sourceMeta": {
+                "source": "sentiment_hot_import",
+                "platform": _normalize_persona_content_platform(candidate.get("platform") or platform),
+                "sourceUrl": str(candidate.get("sourceUrl") or candidate.get("source_url") or "").strip(),
+                "candidateId": str(candidate.get("id") or candidate.get("candidate_id") or "").strip(),
+                "hotScore": _number(candidate.get("hotScore"), _number(candidate.get("hot_score"), 0)),
+                "metrics": candidate.get("metrics") if isinstance(candidate.get("metrics"), dict) else {},
+                "engagement": candidate.get("engagement") if isinstance(candidate.get("engagement"), dict) else {},
+                "publishedAt": candidate.get("publishedAt") or candidate.get("published_at") or "",
+                "capturedAt": candidate.get("capturedAt") or candidate.get("captured_at") or now,
+                "originalContent": content,
+                "originalMediaUrl": str((first or {}).get("url") or "").strip(),
+                "originalMediaUrls": [str(item.get("url") or "").strip() for item in media_items if str(item.get("url") or "").strip()],
+                "mediaItems": copy.deepcopy(media_items),
+                "warnings": [
+                    str(item or "").strip()
+                    for item in (candidate.get("warnings") if isinstance(candidate.get("warnings"), list) else [])
+                    if str(item or "").strip()
+                ],
+                "mediaCache": {
+                    "status": "pending" if has_remote else "ready",
+                    "startedAt": now,
+                    **({} if has_remote else {"finishedAt": now}),
+                },
+            },
+        }
+        if first:
+            record["mediaItems"] = copy.deepcopy(media_items)
+            record["mediaUrl"] = first.get("url")
+            record["mediaType"] = first.get("type") or _guess_media_type(first.get("url"))
+        posts = [*posts, record]
+        created.append(record)
+        hydrate_items.append({"postId": post_id, "candidate": candidate})
+    if not created:
+        raise HTTPException(status_code=400, detail="请先选择至少一条热点候选。")
+    archive["posts"] = posts
+    archive["updatedAt"] = now
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    return created, hydrate_items
+
+
+@_persona_archive_write_locked
+def _mark_persona_hot_import_media_failed(archive_id: str, post_ids: list[str]) -> None:
+    clean_ids = {str(item or "").strip() for item in post_ids if str(item or "").strip()}
+    if not clean_ids:
+        return
+    path, raw, archives = _persona_archive_source_for_write(archive_id)
+    archive = _find_persona_archive(archives, archive_id)
+    if not archive:
+        return
+    changed = False
+    now = _persona_dashboard_iso_now()
+    for post in archive.get("posts") if isinstance(archive.get("posts"), list) else []:
+        if not isinstance(post, dict) or str(post.get("id") or "").strip() not in clean_ids:
+            continue
+        source_meta = post.get("sourceMeta") if isinstance(post.get("sourceMeta"), dict) else {}
+        cache = source_meta.get("mediaCache") if isinstance(source_meta.get("mediaCache"), dict) else {}
+        if str(cache.get("status") or "").strip() != "pending":
+            continue
+        post["sourceMeta"] = {
+            **source_meta,
+            "mediaCache": {
+                **cache,
+                "status": "failed",
+                "finishedAt": now,
+            },
+        }
+        post["updatedAt"] = now
+        changed = True
+    if changed:
+        archive["updatedAt"] = now
+        _write_persona_archives_preserving_shape(path, raw, archives)
+
+
+def _persona_hot_import_finalize_worker(
+    archive_id: str,
+    items: list[dict[str, Any]],
+    leftover_candidates: list[dict[str, Any]],
+) -> None:
+    try:
+        if items:
+            _run_persona_hot_workflow_cli(
+                {
+                    "action": "finalize-hot-import",
+                    "archiveId": archive_id,
+                    "searchMode": "strict",
+                    "items": items,
+                    "recycleCandidates": leftover_candidates,
+                },
+                timeout_seconds=180,
+                isolated=True,
+            )
+            return
+        if leftover_candidates:
+            _run_persona_hot_workflow_cli(
+                {
+                    "action": "recycle-hot-candidates",
+                    "archiveId": archive_id,
+                    "searchMode": "strict",
+                    "candidates": leftover_candidates,
+                },
+                timeout_seconds=30,
+            )
+    except Exception:
+        _mark_persona_hot_import_media_failed(
+            archive_id,
+            [str(item.get("postId") or "").strip() for item in items if isinstance(item, dict)],
+        )
+        if leftover_candidates:
+            with contextlib.suppress(Exception):
+                _run_persona_hot_workflow_cli(
+                    {
+                        "action": "recycle-hot-candidates",
+                        "archiveId": archive_id,
+                        "searchMode": "strict",
+                        "candidates": leftover_candidates,
+                    },
+                    timeout_seconds=30,
+                )
+
+
+def _enqueue_persona_hot_import_finalize(
+    archive_id: str,
+    items: list[dict[str, Any]],
+    leftover_candidates: list[dict[str, Any]],
+) -> threading.Thread | None:
+    if not items and not leftover_candidates:
+        return None
+    thread = threading.Thread(
+        target=_persona_hot_import_finalize_worker,
+        args=(archive_id, copy.deepcopy(items), copy.deepcopy(leftover_candidates)),
+        name=f"persona-hot-import-finalize-{archive_id}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
 def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
     candidates = payload.candidates if isinstance(payload.candidates, list) else []
     cleaned_candidates = [item for item in candidates if isinstance(item, dict)]
-    existing_post_ids = {
-        str(post.get("id") or "").strip()
-        for post in _list_persona_archive_posts(clean_id)
-        if str(post.get("id") or "").strip()
-    }
     if not cleaned_candidates:
         raise HTTPException(status_code=400, detail="请先选择至少一条热点候选。")
     target_platform = _normalize_persona_content_platform(payload.platform)
@@ -15286,51 +15648,19 @@ def _import_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHot
         for item in (payload.recycle_candidates if isinstance(getattr(payload, "recycle_candidates", None), list) else [])
         if isinstance(item, dict)
     ]
-    result = _run_persona_hot_workflow_cli(
-        {
-            "action": "import-hot-candidates",
-            "archiveId": clean_id,
-            "candidates": cleaned_candidates,
-        },
-        timeout_seconds=180,
+    created, hydrate_items = _write_persona_hot_import_drafts(clean_id, cleaned_candidates, target_platform)
+    _enqueue_persona_hot_import_finalize(clean_id, hydrate_items, leftover_candidates)
+    imported_posts = [_compact_imported_persona_hot_post(clean_id, record) for record in created]
+    pending = any(
+        str(((post.get("source_meta") or {}).get("media_cache") or {}).get("status") or "") == "pending"
+        for post in imported_posts
     )
-    if leftover_candidates:
-        with contextlib.suppress(Exception):
-            _run_persona_hot_workflow_cli(
-                {
-                    "action": "recycle-hot-candidates",
-                    "archiveId": clean_id,
-                    "searchMode": "strict",
-                    "candidates": leftover_candidates,
-                },
-                timeout_seconds=30,
-            )
-    result_post_ids = {
-        str(item.get("id") or "").strip()
-        for item in (result.get("posts") if isinstance(result.get("posts"), list) else [])
-        if isinstance(item, dict) and str(item.get("id") or "").strip()
-    }
-    if not result_post_ids:
-        result_post_ids = {
-            str(post.get("id") or "").strip()
-            for post in _list_persona_archive_posts(clean_id)
-            if str(post.get("id") or "").strip() not in existing_post_ids
-        }
-    _set_persona_archive_posts_platform(clean_id, result_post_ids, target_platform)
-    posts = _list_persona_archive_posts(clean_id)
-    post_by_id = {str(post.get("id") or "").strip(): post for post in posts if str(post.get("id") or "").strip()}
-    imported_posts = []
-    for item in result.get("posts") if isinstance(result.get("posts"), list) else []:
-        if not isinstance(item, dict):
-            continue
-        post_id = str(item.get("id") or "").strip()
-        if post_id and post_id in post_by_id:
-            imported_posts.append(post_by_id[post_id])
     return {
         "ok": True,
-        "archive_id": str(result.get("archiveId") or clean_id).strip(),
-        "imported_count": _to_int(result.get("importedCount"), len(imported_posts)),
+        "archive_id": clean_id,
+        "imported_count": len(imported_posts),
         "posts": imported_posts,
+        "media_cache": "pending" if pending else "ready",
     }
 
 
@@ -16098,7 +16428,12 @@ def _list_persona_archive_posts(
     return rows
 
 
-def _persona_archive_post_media_path(archive_id: str, post_id: str, index: int, source: str = "posts") -> Path:
+def _persona_archive_post_media_source(
+    archive_id: str,
+    post_id: str,
+    index: int,
+    source: str = "posts",
+) -> tuple[Path | None, str]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
@@ -16122,10 +16457,56 @@ def _persona_archive_post_media_path(archive_id: str, post_id: str, index: int, 
     raw_url = str((media_items[index] or {}).get("url") or "").strip()
     if not raw_url:
         raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    if re.match(r"^https?://", raw_url, re.I):
+        return None, raw_url
     path = Path(raw_url).expanduser().resolve()
     if not path.is_file() or not _is_allowed_dashboard_media_path(path):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
-    return path
+    return path, ""
+
+
+def _persona_archive_post_media_path(archive_id: str, post_id: str, index: int, source: str = "posts") -> Path:
+    local_path, remote_url = _persona_archive_post_media_source(archive_id, post_id, index, source)
+    if local_path:
+        return local_path
+    raise HTTPException(status_code=404, detail="媒体尚未缓存到本地。")
+
+
+def _proxy_remote_persona_media(url: str) -> Response:
+    clean = str(url or "").strip()
+    if not re.match(r"^https?://", clean, re.I):
+        raise HTTPException(status_code=404, detail="媒体源文件不存在。")
+    try:
+        upstream = requests.get(
+            clean,
+            timeout=15,
+            stream=True,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "image/avif,image/webp,image/*,video/*,*/*;q=0.8",
+                "Referer": "https://www.threads.net/",
+            },
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=404, detail="媒体源文件不存在。") from exc
+    if int(getattr(upstream, "status_code", 0) or 0) >= 400:
+        upstream.close()
+        raise HTTPException(status_code=404, detail="媒体源文件不存在。")
+    content_type = str(upstream.headers.get("Content-Type") or "application/octet-stream").split(";", 1)[0].strip() or "application/octet-stream"
+
+    def chunks():
+        try:
+            for chunk in upstream.iter_content(64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    return StreamingResponse(
+        chunks(),
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=60"},
+    )
 
 
 def _persona_media_cache_token(path: Path) -> str:
@@ -16176,8 +16557,18 @@ def _serve_persona_media_thumbnail(path: Path) -> FileResponse:
     )
 
 
-def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int, source: str = "posts") -> FileResponse:
-    return _serve_persona_media_file(_persona_archive_post_media_path(archive_id, post_id, index, source))
+def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int, source: str = "posts") -> Response:
+    local_path, remote_url = _persona_archive_post_media_source(archive_id, post_id, index, source)
+    if local_path:
+        return _serve_persona_media_file(local_path)
+    return _proxy_remote_persona_media(remote_url)
+
+
+def _serve_persona_archive_post_media_thumbnail(archive_id: str, post_id: str, index: int, source: str = "posts") -> Response:
+    local_path, remote_url = _persona_archive_post_media_source(archive_id, post_id, index, source)
+    if local_path:
+        return _serve_persona_media_thumbnail(local_path)
+    return _proxy_remote_persona_media(remote_url)
 
 
 def _persona_archive_publish_history_media_path(archive_id: str, history_id: str, index: int) -> Path:
@@ -17376,6 +17767,7 @@ def _publish_persona_archive_post(
     post = next((item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == clean_post_id), None)
     if not post or (source_name == "posts" and _is_published_persona_draft(post)):
         raise HTTPException(status_code=404, detail="推文草稿不存在。")
+    post = _ensure_persona_hot_import_media_ready(clean_archive_id, post)
     content = str(payload.content_override if payload.content_override is not None else post.get("content") or "").strip()
     if not media_paths:
         media_paths = _post_media_paths_for_publish(post)
@@ -17467,6 +17859,83 @@ def _post_media_paths_for_publish(post: dict[str, Any]) -> list[str]:
         if path.is_file() and _is_allowed_dashboard_media_path(path):
             paths.append(str(path.resolve()))
     return paths
+
+
+def _persona_hot_import_media_pending(post: dict[str, Any] | None) -> bool:
+    if not isinstance(post, dict):
+        return False
+    source_meta = post.get("sourceMeta") if isinstance(post.get("sourceMeta"), dict) else {}
+    cache = source_meta.get("mediaCache") if isinstance(source_meta.get("mediaCache"), dict) else {}
+    if str(cache.get("status") or "").strip().lower() != "pending":
+        return False
+    return _persona_hot_import_has_remote_media(_compact_dashboard_media_items(post))
+
+
+def _find_persona_archive_post_record(archive_id: str, post_id: str, source: str = "posts") -> dict[str, Any] | None:
+    _, _, archives = _persona_archive_source_for_write(archive_id)
+    archive = _find_persona_archive(archives, archive_id)
+    if not archive:
+        return None
+    source_key = _persona_post_source_key(source)
+    posts = archive.get(source_key) if isinstance(archive.get(source_key), list) else []
+    return next(
+        (item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == str(post_id or "").strip()),
+        None,
+    )
+
+
+def _wait_persona_hot_import_media(archive_id: str, post_id: str, timeout_seconds: float = 20.0) -> dict[str, Any] | None:
+    deadline = time.time() + max(0.5, float(timeout_seconds))
+    latest = _find_persona_archive_post_record(archive_id, post_id)
+    while time.time() < deadline:
+        if not _persona_hot_import_media_pending(latest):
+            return latest
+        time.sleep(0.4)
+        latest = _find_persona_archive_post_record(archive_id, post_id)
+    return latest
+
+
+def _ensure_persona_hot_import_media_ready(archive_id: str, post: dict[str, Any], source: str = "posts") -> dict[str, Any]:
+    if not _persona_hot_import_media_pending(post):
+        return post
+    post_id = str(post.get("id") or "").strip()
+    if not post_id:
+        return post
+    waited = _wait_persona_hot_import_media(archive_id, post_id, timeout_seconds=20.0)
+    if waited is not None:
+        post = waited
+    if not _persona_hot_import_media_pending(post):
+        return post
+    source_meta = post.get("sourceMeta") if isinstance(post.get("sourceMeta"), dict) else {}
+    remote_media = [
+        item
+        for item in _compact_dashboard_media_items(post)
+        if re.match(r"^https?://", str((item or {}).get("url") or ""), re.I)
+    ]
+    if not remote_media:
+        return post
+    try:
+        _run_persona_hot_workflow_cli(
+            {
+                "action": "finalize-hot-import",
+                "archiveId": archive_id,
+                "items": [{
+                    "postId": post_id,
+                    "candidate": {
+                        "id": str(source_meta.get("candidateId") or post_id).strip(),
+                        "platform": source_meta.get("platform") or post.get("platform") or "",
+                        "sourceUrl": source_meta.get("sourceUrl") or "",
+                        "content": post.get("content") or "",
+                        "media": remote_media,
+                    },
+                }],
+            },
+            timeout_seconds=90,
+            isolated=True,
+        )
+    except Exception:
+        return _find_persona_archive_post_record(archive_id, post_id, source) or post
+    return _find_persona_archive_post_record(archive_id, post_id, source) or post
 
 
 def _active_publish_task_for_post(*, persona_id: str, account_id: str, post_id: str) -> dict[str, Any] | None:
@@ -17578,6 +18047,7 @@ def _publish_persona_matrix(
                 continue
             selected_posts = candidates[:per_count]
             for post in selected_posts:
+                post = _ensure_persona_hot_import_media_ready(persona_id, post, source)
                 post_id = str(post.get("id") or "").strip()
                 media_paths = _post_media_paths_for_publish(post)
                 content = str(post.get("content") or "").strip()
@@ -19614,7 +20084,7 @@ def _is_direct_preview_media_url(value: Any) -> bool:
         return False
     if re.match(r"^/api/persona_dashboard/automation/screenshots/screenshot\?", text, re.I):
         return False
-    if re.search(r"//scontent-[^/]*\.cdninstagram\.com/", text, re.I):
+    if re.search(r"//scontent[^/]*\.cdninstagram\.com/", text, re.I):
         return False
     return bool(re.match(r"^(?:https?:)?//", text, re.I) or re.match(r"^(?:data:|blob:|/api/)", text, re.I))
 
@@ -19643,14 +20113,23 @@ def _previewable_persona_media_items(
         elif _is_direct_preview_media_url(url):
             reason = "媒体未缓存到本地"
         elif archive_id and post_id:
-            path = Path(url).expanduser().resolve()
-            if path.is_file():
+            is_remote = bool(re.match(r"^https?://", url, re.I))
+            path = None if is_remote else Path(url).expanduser().resolve()
+            if is_remote or (path is not None and path.is_file()):
                 source_path = "favorites" if _persona_post_source_name(source) == "favorites" else "posts"
                 base_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/{source_path}/{quote(str(post_id).strip(), safe='')}/media/{index}"
-                version = _persona_media_cache_token(path)
-                preview_url = f"{base_url}?v={version}"
-                if path.suffix.lower() in IMAGE_EXTS:
-                    thumbnail_url = f"{base_url}/thumbnail?v={version}"
+                if path is not None and path.is_file():
+                    version = _persona_media_cache_token(path)
+                    preview_url = f"{base_url}?v={version}"
+                    if path.suffix.lower() in IMAGE_EXTS:
+                        thumbnail_url = f"{base_url}/thumbnail?v={version}"
+                else:
+                    preview_url = base_url
+                    incoming_thumb = str((item or {}).get("thumbnail_url") or (item or {}).get("thumbnailUrl") or "").strip()
+                    if incoming_thumb and incoming_thumb != url:
+                        thumbnail_url = f"{base_url}/thumbnail"
+                    elif _guess_media_type(url, (item or {}).get("type") or "") != "video":
+                        thumbnail_url = f"{base_url}/thumbnail"
             else:
                 reason = "原始媒体文件不存在"
         elif archive_id and history_id:
@@ -25115,7 +25594,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}/thumbnail")
     def api_persona_dashboard_persona_post_media_thumbnail(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _serve_persona_media_thumbnail(_persona_archive_post_media_path(archive_id, post_id, index))
+        return _serve_persona_archive_post_media_thumbnail(archive_id, post_id, index)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}")
     def api_persona_dashboard_persona_favorite_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
@@ -25123,7 +25602,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}/thumbnail")
     def api_persona_dashboard_persona_favorite_media_thumbnail(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _serve_persona_media_thumbnail(_persona_archive_post_media_path(archive_id, post_id, index, source="favorites"))
+        return _serve_persona_archive_post_media_thumbnail(archive_id, post_id, index, source="favorites")
 
     @app.get("/api/persona_dashboard/media/{token}")
     def api_persona_dashboard_media_proxy(token: str, _user: dict[str, Any] = Depends(require_admin)):
@@ -25336,6 +25815,20 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_keywords")
     def api_persona_dashboard_prepare_hot_keywords(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _prepare_persona_hot_keywords(archive_id, payload)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/hot_rewrite")
+    def api_persona_dashboard_rewrite_hot_content(
+        archive_id: str,
+        payload: PersonaDashboardHotRewritePayload,
+        user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        return _run_billable_operation(
+            user,
+            ref_type="persona_hot_rewrite",
+            sku="basic_text_post",
+            quantity=1,
+            operation=lambda: _rewrite_persona_hot_candidate_content(archive_id, payload),
+        )
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/tasks")
     def api_persona_dashboard_start_hot_candidates_task(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, user: dict[str, Any] = Depends(require_persona_owner)):

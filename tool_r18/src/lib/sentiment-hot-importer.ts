@@ -10779,42 +10779,60 @@ export async function downloadCandidatePrimaryMedia(candidate: SentimentHotCandi
   }
 }
 
-export async function downloadCandidateMedia(candidate: SentimentHotCandidate, limit = Number.POSITIVE_INFINITY): Promise<SentimentHotMedia[]> {
-  const media = (candidate.media || []).slice(0, limit);
-  const downloaded: SentimentHotMedia[] = [];
-  for (let index = 0; index < media.length; index += 1) {
-    const item = media[index];
-    if (item.localPath && fs.existsSync(item.localPath)) {
-      downloaded.push(item);
-      continue;
-    }
-    if (!/^https?:\/\//i.test(item.url)) {
-      downloaded.push(item);
-      continue;
-    }
-    try {
-      const response = await fetch(item.url, { signal: buildAbortSignalTimeout(15_000) });
-      if (!response.ok) {
-        downloaded.push(item);
-        continue;
-      }
-      const contentType = response.headers.get("content-type") || "";
-      if (!/^image\/|^video\//i.test(contentType)) {
-        downloaded.push(item);
-        continue;
-      }
-      const ext = extensionFromContentType(contentType, item.type);
-      const mediaDir = path.dirname(resolveRuntimeFile(`sentiment-hot-media/${candidate.id}-${index + 1}${ext}`));
-      fs.mkdirSync(mediaDir, { recursive: true });
-      const localPath = path.join(mediaDir, `${candidate.id}-${index + 1}${ext}`);
-      const buffer = Buffer.from(await response.arrayBuffer());
-      fs.writeFileSync(localPath, buffer);
-      downloaded.push({ ...item, localPath, warning: undefined });
-    } catch {
-      downloaded.push(item);
-    }
+async function downloadOneCandidateMediaItem(
+  candidateId: string,
+  item: SentimentHotMedia,
+  index: number,
+): Promise<SentimentHotMedia> {
+  if (item.localPath && fs.existsSync(item.localPath)) return item;
+  if (!/^https?:\/\//i.test(item.url)) return item;
+  try {
+    const response = await fetch(item.url, { signal: buildAbortSignalTimeout(15_000) });
+    if (!response.ok) return item;
+    const contentType = response.headers.get("content-type") || "";
+    if (!/^image\/|^video\//i.test(contentType)) return item;
+    const ext = extensionFromContentType(contentType, item.type);
+    const mediaDir = path.dirname(resolveRuntimeFile(`sentiment-hot-media/${candidateId}-${index + 1}${ext}`));
+    fs.mkdirSync(mediaDir, { recursive: true });
+    const localPath = path.join(mediaDir, `${candidateId}-${index + 1}${ext}`);
+    const buffer = Buffer.from(await response.arrayBuffer());
+    fs.writeFileSync(localPath, buffer);
+    return { ...item, localPath, warning: undefined };
+  } catch {
+    return item;
   }
-  return downloaded;
+}
+
+async function mapLimit<T, R>(items: T[], limit: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workerCount = Math.max(1, Math.min(Math.max(1, limit), items.length || 1));
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }));
+  return results;
+}
+
+export async function downloadCandidateMedia(
+  candidate: SentimentHotCandidate,
+  limit = Number.POSITIVE_INFINITY,
+  concurrency = 1,
+): Promise<SentimentHotMedia[]> {
+  const media = (candidate.media || []).slice(0, limit);
+  if (!media.length) return [];
+  const workerLimit = Math.max(1, Math.min(8, Number(concurrency) || 1));
+  if (workerLimit <= 1) {
+    const downloaded: SentimentHotMedia[] = [];
+    for (let index = 0; index < media.length; index += 1) {
+      downloaded.push(await downloadOneCandidateMediaItem(candidate.id, media[index], index));
+    }
+    return downloaded;
+  }
+  return mapLimit(media, workerLimit, (item, index) => downloadOneCandidateMediaItem(candidate.id, item, index));
 }
 
 function extensionFromContentType(contentType: string, type: string): string {

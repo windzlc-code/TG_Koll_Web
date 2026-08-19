@@ -7470,6 +7470,55 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--muted);
 }
 
+.persona-hot-rewrite-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 38px;
+  margin-top: 10px;
+  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: 10px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.persona-hot-rewrite-action:hover,
+.persona-hot-rewrite-action:focus-visible {
+  border-color: var(--accent);
+}
+
+.persona-hot-rewrite-action[disabled] {
+  opacity: .72;
+  cursor: wait;
+}
+
+.console-modal[data-modal-key="persona-hot-editor"] .persona-unified-media-editor:not(.has-files) {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  min-height: 132px;
+}
+
+.console-modal[data-modal-key="persona-hot-editor"] label.persona-media-empty-picker {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: center;
+  justify-self: center;
+  width: auto;
+  gap: 8px;
+}
+
+.console-modal[data-modal-key="persona-hot-editor"] .persona-media-empty-picker .ui-action-icon {
+  margin-top: 1px;
+  fill: none;
+  stroke: currentColor;
+}
+
 .persona-hot-unified-media-editor {
   margin-top: 0;
 }
@@ -12962,6 +13011,25 @@ body.persona-touch-dragging .persona-list-card:active {
   line-height: 1.6;
 }
 
+.persona-draft-detail-modal .persona-draft-detail-meta-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.persona-draft-detail-modal .persona-draft-detail-meta-row > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
 .persona-draft-detail-hot {
   display: grid;
   gap: 8px;
@@ -13319,7 +13387,7 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .console-modal-dialog label.persona-media-empty-picker {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   justify-self: center;
   gap: 7px;

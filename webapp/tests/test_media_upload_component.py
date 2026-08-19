@@ -238,6 +238,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn('mode: "hot"', modal_renderer)
         self.assertIn("data-persona-hot-content-editor", modal_renderer)
         self.assertIn("persona-hot-editor-content--full", modal_renderer)
+        self.assertIn('data-persona-hot-rewrite="${esc(candidateId)}"', modal_renderer)
+        self.assertIn("按人设改写", modal_renderer)
+        self.assertIn("rewritePersonaHotEditorContent", self.script)
+        self.assertIn("/hot_rewrite", self.script)
         self.assertIn("resizePersonaHotEditorContent", modal_renderer)
         self.assertIn('class="persona-hot-editor-source"', modal_renderer)
         self.assertIn("overflow: hidden;", self.styles[self.styles.index(".persona-hot-editor-copy textarea {"):].split("}", 1)[0])
@@ -322,7 +326,25 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("personaContentPlatform(persona)", importer)
         self.assertIn("candidate.platform", importer)
         self.assertIn("resolvedTargetPlatform", importer)
+        self.assertIn("watchPersonaHotImportMedia(persona.id, createdIds)", submitter)
         self.assertNotIn("choosePlatform", handler)
+
+    def test_hotspot_import_and_publish_wait_for_background_media_cache(self):
+        submitter = self.script[
+            self.script.index("async function submitPersonaHotDraftImport"):
+            self.script.index("\nasync function importPersonaHotDrafts")
+        ]
+        watcher = self.script[
+            self.script.index("function watchPersonaHotImportMedia"):
+            self.script.index("\nasync function ensurePersonaHotImportMediaReady")
+        ]
+        publisher = self.script[
+            self.script.index("async function submitPersonaPublishTask"):
+            self.script.index("\nasync function submitPublishContentTasks")
+        ]
+        self.assertIn("watchPersonaHotImportMedia(persona.id, createdIds)", submitter)
+        self.assertIn("loadPersonaDraftPosts(key, { force: true })", watcher)
+        self.assertIn("ensurePersonaHotImportMediaReady(persona, post)", publisher)
 
     def test_hotspot_results_are_filtered_by_platform_with_click_to_clear_badges(self):
         candidates = self.script[
@@ -808,8 +830,18 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             ".console-modal-dialog label.persona-media-empty-picker {", 1
         )[1].split("}", 1)[0]
         self.assertIn("display: inline-flex;", empty_picker_layout)
-        self.assertIn("align-items: center;", empty_picker_layout)
-        empty_picker_icon = self.styles.split(".persona-media-empty-picker .ui-action-icon {", 1)[1].split("}", 1)[0]
+        self.assertIn("align-items: flex-start;", empty_picker_layout)
+        self.assertIn("justify-self: center;", empty_picker_layout)
+        hot_empty_zone = self.styles.split(
+            ".console-modal[data-modal-key=\"persona-hot-editor\"] .persona-unified-media-editor:not(.has-files) {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("justify-items: center;", hot_empty_zone)
+        self.assertIn("align-content: center;", hot_empty_zone)
+        empty_picker_icon = self.styles.split(
+            ".console-modal[data-modal-key=\"persona-hot-editor\"] .persona-media-empty-picker .ui-action-icon {",
+            1,
+        )[1].split("}", 1)[0]
         self.assertIn("fill: none;", empty_picker_icon)
         self.assertIn("stroke: currentColor;", empty_picker_icon)
 

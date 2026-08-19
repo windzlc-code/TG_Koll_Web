@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   fetchSentimentHotCandidates: vi.fn(),
   prepareSentimentHotKeywords: vi.fn(),
   refreshSentimentSourceMetrics: vi.fn(),
+  downloadCandidateMedia: vi.fn(),
+  recycleUnusedSentimentHotCandidates: vi.fn(),
+  rememberSentimentHotImported: vi.fn(),
 }));
 
 vi.mock("@/runtime/node/browser-shim", () => ({}));
@@ -20,18 +23,21 @@ vi.mock("@/lib/persona-archives", () => ({
 }));
 vi.mock("@/lib/sentiment-hot-importer", () => ({
   cleanSentimentCandidateContent: (value: unknown) => String(value || "").trim(),
-  downloadCandidateMedia: vi.fn(),
+  downloadCandidateMedia: mocks.downloadCandidateMedia,
   fetchSentimentHotCandidates: mocks.fetchSentimentHotCandidates,
   listSentimentHotCandidatePoolStats: vi.fn(),
   prepareSentimentHotKeywords: mocks.prepareSentimentHotKeywords,
   refreshSentimentSourceMetrics: mocks.refreshSentimentSourceMetrics,
+  recycleUnusedSentimentHotCandidates: mocks.recycleUnusedSentimentHotCandidates,
   warmSentimentHotSearchStrategy: vi.fn(),
 }));
 vi.mock("@/lib/sentiment-runtime-manager", () => ({ stopSentimentRuntime: vi.fn() }));
-vi.mock("@/lib/sentiment-candidate-store", () => ({ rememberSentimentHotImported: vi.fn() }));
+vi.mock("@/lib/sentiment-candidate-store", () => ({ rememberSentimentHotImported: mocks.rememberSentimentHotImported }));
 
 import {
   fetchHotCandidates,
+  finalizeHotImport,
+  hydrateHotImportMedia,
   prepareHotKeywords,
   refreshHotPost,
 } from "../../scripts/skills/persona-hot-workflow";
@@ -206,5 +212,76 @@ describe("persona hot workflow remote worker snapshots", () => {
 
     expect(mocks.loadPersonaArchive).not.toHaveBeenCalled();
     expect(mocks.fetchSentimentHotCandidates).not.toHaveBeenCalled();
+  });
+
+  it("hydrates an already imported draft with downloaded local media and does not recreate the post", async () => {
+    const post = {
+      ...hotPostSnapshot(),
+      mediaItems: [{ url: "https://cdn.example/hot.png", type: "image" }],
+      sourceMeta: {
+        ...hotPostSnapshot().sourceMeta,
+        mediaCache: { status: "pending", startedAt: "2026-08-18T00:00:00.000Z" },
+      },
+    };
+    mocks.loadPersonaArchive.mockResolvedValue(archiveSnapshot({ posts: [post] }));
+    mocks.downloadCandidateMedia.mockResolvedValue([
+      { url: "https://cdn.example/hot.png", type: "image", localPath: "/data/sentiment-hot-media/hot-1-1.png" },
+    ]);
+    mocks.updatePersonaArchivePostDraft.mockResolvedValue({
+      ...post,
+      mediaUrl: "/data/sentiment-hot-media/hot-1-1.png",
+      mediaItems: [{ url: "/data/sentiment-hot-media/hot-1-1.png", type: "image" }],
+    });
+
+    const result = await hydrateHotImportMedia({
+      action: "finalize-hot-import",
+      archiveId: "persona-1",
+      items: [{
+        postId: "post-1",
+        candidate: {
+          id: "hot-1",
+          platform: "threads",
+          sourceUrl: "https://www.threads.net/@tester/post/abc",
+          content: "body",
+          media: [{ url: "https://cdn.example/hot.png", type: "image" }],
+        },
+      }],
+    });
+
+    expect(mocks.downloadCandidateMedia).toHaveBeenCalled();
+    expect(mocks.updatePersonaArchivePostDraft).toHaveBeenCalledWith(
+      "persona-1",
+      "post-1",
+      expect.objectContaining({
+        mediaUrl: "/data/sentiment-hot-media/hot-1-1.png",
+        sourceMetaPatch: expect.objectContaining({
+          mediaCache: expect.objectContaining({ status: "ready" }),
+        }),
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, archiveId: "persona-1", posts: [{ postId: "post-1", status: "ready" }] });
+    expect(mocks.rememberSentimentHotImported).toHaveBeenCalledWith("persona-1", "hot-1");
+  });
+
+  it("recycles leftover candidates after hydrating imported drafts", async () => {
+    mocks.loadPersonaArchive.mockResolvedValue(archiveSnapshot({ posts: [hotPostSnapshot()] }));
+    mocks.recycleUnusedSentimentHotCandidates.mockReturnValue({ recycled: 1 });
+
+    const result = await finalizeHotImport({
+      action: "finalize-hot-import",
+      archiveId: "persona-1",
+      items: [],
+      recycleCandidates: [{
+        id: "leftover-1",
+        platform: "threads",
+        sourceUrl: "https://www.threads.net/@tester/post/leftover",
+        content: "unused candidate",
+      }],
+    });
+
+    expect(mocks.recycleUnusedSentimentHotCandidates).toHaveBeenCalledWith(expect.objectContaining({
+      archiveId: "persona-1",
+    }));
+    expect(result.recycle).toEqual({ recycled: 1 });
   });
 });

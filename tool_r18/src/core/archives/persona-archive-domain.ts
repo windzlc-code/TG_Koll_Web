@@ -115,6 +115,12 @@ export interface PersonaArchivePost {
       localPath?: string;
     }>;
     edited?: boolean;
+    candidateId?: string;
+    mediaCache?: {
+      status?: "pending" | "ready" | "failed";
+      startedAt?: string;
+      finishedAt?: string;
+    };
   };
   imageHistory?: EpisodeScript["imageHistory"];
   history?: EpisodeScript["history"];

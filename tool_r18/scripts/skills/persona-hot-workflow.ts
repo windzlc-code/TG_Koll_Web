@@ -71,6 +71,17 @@ type RecycleHotCandidatesInput = {
   candidates?: Array<Partial<SentimentHotCandidate>>;
 };
 
+type FinalizeHotImportInput = {
+  action: "finalize-hot-import";
+  archiveId: string;
+  searchMode?: "normal" | "strict";
+  items?: Array<{
+    postId?: string;
+    candidate?: Partial<SentimentHotCandidate>;
+  }>;
+  recycleCandidates?: Array<Partial<SentimentHotCandidate>>;
+};
+
 type RefreshHotPostInput = {
   action: "refresh-hot-post";
   archiveId: string;
@@ -93,7 +104,7 @@ type PoolStatsInput = {
   archiveIds?: string[];
 };
 
-type PersonaHotWorkflowInput = FetchHotCandidatesInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RecycleHotCandidatesInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput;
+type PersonaHotWorkflowInput = FetchHotCandidatesInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RecycleHotCandidatesInput | FinalizeHotImportInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput;
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -318,6 +329,108 @@ async function importHotCandidates(input: ImportHotCandidatesInput) {
   };
 }
 
+function isRemoteMediaUrl(value: unknown): boolean {
+  return /^https?:\/\//i.test(String(value || "").trim());
+}
+
+export async function hydrateHotImportMedia(input: FinalizeHotImportInput) {
+  const archiveId = String(input.archiveId || "").trim();
+  const archive = await loadPersonaArchive(archiveId);
+  if (!archive) throw new Error("人设不存在。");
+  const rawItems = Array.isArray(input.items) ? input.items : [];
+  const results: Array<{ postId: string; status: string }> = [];
+  for (const [index, raw] of rawItems.entries()) {
+    const postId = String(raw?.postId || "").trim();
+    const candidate = normalizeCandidate(raw?.candidate || {}, index);
+    if (candidate.id) rememberSentimentHotImported(archiveId, candidate.id);
+    if (!postId) {
+      results.push({ postId, status: "skipped" });
+      continue;
+    }
+    const currentArchive = await loadPersonaArchive(archiveId);
+    const current = currentArchive?.posts?.find((post) => String(post.id || "") === postId);
+    if (!current) {
+      results.push({ postId, status: "missing" });
+      continue;
+    }
+    const currentItems = Array.isArray(current.mediaItems) ? current.mediaItems : [];
+    const stillRemote = currentItems.some((item) => isRemoteMediaUrl(item?.url));
+    const cacheStatus = String(current.sourceMeta?.mediaCache?.status || "").trim();
+    if (!stillRemote) {
+      if (cacheStatus === "pending") {
+        await updatePersonaArchivePostDraft(archiveId, postId, {
+          sourceMetaPatch: {
+            mediaCache: {
+              ...(current.sourceMeta?.mediaCache || {}),
+              status: "ready",
+              finishedAt: new Date().toISOString(),
+            },
+          },
+        });
+      }
+      results.push({ postId, status: "ready" });
+      continue;
+    }
+    const downloaded = await downloadCandidateMedia(candidate, Number.POSITIVE_INFINITY, 4).catch(() => candidate.media || []);
+    const downloadedByUrl = new Map(downloaded.map((item) => [String(item.url || "").trim(), item]));
+    const nextItems = currentItems.map((item) => {
+      const url = String(item?.url || "").trim();
+      if (!isRemoteMediaUrl(url)) return item;
+      const hit = downloadedByUrl.get(url);
+      if (!hit) return item;
+      const localPath = String(hit.localPath || "").trim();
+      return {
+        url: localPath || hit.url || url,
+        type: hit.type || item.type || "unknown",
+        localPath: localPath || undefined,
+        warning: hit.warning,
+      };
+    });
+    const pendingRemote = nextItems.some((item) => isRemoteMediaUrl(item?.url));
+    const primary = nextItems[0];
+    await updatePersonaArchivePostDraft(archiveId, postId, {
+      mediaUrl: primary?.url,
+      mediaType: primary?.type || undefined,
+      mediaItems: nextItems,
+      sourceMetaPatch: {
+        mediaItems: nextItems,
+        originalMediaUrl: candidate.media[0]?.localPath || candidate.media[0]?.url,
+        originalMediaUrls: candidate.media.map((item) => item.localPath || item.url).filter(Boolean),
+        mediaCache: {
+          ...(current.sourceMeta?.mediaCache || {}),
+          status: pendingRemote ? "failed" : "ready",
+          finishedAt: new Date().toISOString(),
+        },
+        warnings: [
+          ...(candidate.warnings || []),
+          ...nextItems.map((item) => String((item as { warning?: string }).warning || "").trim()).filter(Boolean),
+        ],
+      },
+    });
+    results.push({ postId, status: pendingRemote ? "failed" : "ready" });
+  }
+  return { ok: true, archiveId, posts: results };
+}
+
+export async function finalizeHotImport(input: FinalizeHotImportInput) {
+  const hydrated = await hydrateHotImportMedia(input);
+  const leftover = Array.isArray(input.recycleCandidates) ? input.recycleCandidates : [];
+  const candidates = leftover.map((item, index) => normalizeCandidate(item, index)).filter((item) => item.id && (item.sourceUrl || item.content));
+  const recycled = candidates.length
+    ? recycleUnusedSentimentHotCandidates({
+      archiveId: String(input.archiveId || "").trim(),
+      candidates,
+      searchMode: input.searchMode,
+    })
+    : { recycledCount: 0 };
+  return {
+    ok: true,
+    archiveId: hydrated.archiveId,
+    posts: hydrated.posts,
+    recycle: recycled,
+  };
+}
+
 function resolvePostSnapshot(input: RefreshHotPostInput, archive: PersonaArchive | null): PersonaArchivePost | undefined {
   if (input.postSnapshot !== undefined && input.postSnapshot !== null) {
     if (typeof input.postSnapshot !== "object" || Array.isArray(input.postSnapshot)) {
@@ -403,6 +516,9 @@ async function main() {
   }
   if (input.action === "recycle-hot-candidates") {
     await printJsonAndExit(await recycleHotCandidates(input));
+  }
+  if (input.action === "finalize-hot-import") {
+    await printJsonAndExit(await finalizeHotImport(input));
   }
   if (input.action === "refresh-hot-post") {
     await printJsonAndExit(await refreshHotPost(input));
