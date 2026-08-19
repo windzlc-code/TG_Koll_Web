@@ -706,6 +706,14 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("function personaMediaTaskCanRun", self.script)
         self.assertIn("function ensurePersonaDraftForMediaTask", self.script)
         self.assertIn("PERSONA_PENDING_MEDIA_POST_ID", self.script)
+        creator = self.script[
+            self.script.index("async function createPersonaDraftPost"):
+            self.script.index("async function stashPersonaDraftEdit")
+        ]
+        self.assertIn('captureUploadDropzoneState("personaMediaTaskFiles")', creator)
+        self.assertIn("!editingPostId ? pendingTaskUploadState.files", creator)
+        self.assertIn('clearUploadDropzoneState("personaMediaTaskFiles"', creator)
+        self.assertIn("persona-compose-save-dock", self.script)
         self.assertIn("personaNewComposeAllowsMediaModify()", modify_gate)
         self.assertIn("personaMediaTaskCanRun({ content: generationContent, prompt, modifyItem })", submitter)
         self.assertIn("请先输入推文正文或补充提示词后再生成。", submitter)

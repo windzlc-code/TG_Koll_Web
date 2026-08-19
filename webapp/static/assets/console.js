@@ -21445,7 +21445,18 @@ async function createPersonaDraftPost() {
   const editingSource = form.editingSource === "favorites" ? "favorites" : "posts";
   const queuedMediaOps = editingPostId && Array.isArray(form.mediaOps) ? [...form.mediaOps] : [];
   const pendingUploadState = captureUploadDropzoneState("personaPostMediaUploadFiles");
-  const pendingMediaFiles = pendingUploadState.files;
+  const pendingTaskUploadState = captureUploadDropzoneState("personaMediaTaskFiles");
+  const pendingMediaFiles = [];
+  const seenPendingMedia = new Set();
+  for (const file of [
+    ...pendingUploadState.files,
+    ...(!editingPostId ? pendingTaskUploadState.files : []),
+  ]) {
+    const signature = uploadFileSignature(file);
+    if (!file || (signature && seenPendingMedia.has(signature))) continue;
+    if (signature) seenPendingMedia.add(signature);
+    pendingMediaFiles.push(file);
+  }
   const currentMediaItems = editingPostId && Array.isArray(form.mediaItems) ? form.mediaItems : [];
   const hasExistingMedia = Boolean(editingPostId && currentMediaItems.length);
   const hasMediaContent = pendingMediaFiles.length > 0 || hasExistingMedia;
@@ -21524,6 +21535,7 @@ async function createPersonaDraftPost() {
   }
   const savedPostId = result.id || editingPostId || "";
   clearUploadDropzoneState("personaPostMediaUploadFiles", pendingUploadState.stateKey);
+  if (!editingPostId) clearUploadDropzoneState("personaMediaTaskFiles", pendingTaskUploadState.stateKey);
   setSelectedPersonaPostId(savedPostId);
   setPersonaPostSource(editingPostId && !recreatedMissingEdit ? editingSource : "posts", persona);
   state.personaPanels.content = "posts";
@@ -26128,7 +26140,8 @@ function activePersonaDraftComposerTransientState(persona = selectedPersona()) {
   const hasComposeText = Object.values(composeDraftInputs).some((input) => (
     Boolean(String(input?.title || "").trim()) || Boolean(String(input?.content || "").trim())
   ));
-  const fileCount = filesFromInput("personaPostMediaUploadFiles").length;
+  const fileCount = filesFromInput("personaPostMediaUploadFiles").length
+    + filesFromInput("personaMediaTaskFiles").length;
   if (!hasComposeText && !fileCount) return null;
   const platform = personaContentPlatform(persona);
   return {
@@ -26665,7 +26678,6 @@ function renderPersonaContentPanel(persona, account, profile, step) {
               ${renderPersonaWritingLocaleSelect(generateForm.writingLocale, generationLocked)}
               <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="使用 AI 重新生成当前推文" ${preflight.ready && !generationLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在重新生成", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : "AI 重新生成"}</button>
             ` : `
-              <button type="button" class="primary" data-persona-create-post>保存草稿</button>
               <button type="button" data-persona-route-step="content:posts">查看草稿</button>
             `}
           </div>
@@ -26686,7 +26698,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           ${renderPersonaMemoryOptions(persona, generateForm.selectedMemoryIds || [])}
           ${renderPersonaPostDirectionPicker(persona, generateForm, generationControlsLocked)}
           <div class="row-actions persona-generate-actions">
-            <button type="button" data-persona-create-post>${isEditingDraft ? "保存修改" : "保存草稿"}</button>
+            ${isEditingDraft ? `<button type="button" data-persona-create-post>保存修改</button>` : ""}
             <button type="button" data-persona-route-step="content:posts">查看草稿</button>
             ${renderPersonaWritingLocaleSelect(generateForm.writingLocale, generationControlsLocked)}
             <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="${directionState.selectedKeywords.length ? "按已选方向生成推文" : (directionState.keywords.length ? "重新生成一批推文方向关键词" : "生成推文方向关键词")}" ${preflight.ready && !generationControlsLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (postDirectionsLocked ? renderBusyButtonContent("正在生成方向", true, actionLockStartedAt("persona", persona.id, "post_directions")) : directionButtonContent)}</button>
@@ -26703,6 +26715,11 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             </div>
           ` : ""}
         </div>
+        ${!isEditingDraft && generateMode !== "hot" ? `
+          <div class="persona-draft-global-save-dock persona-compose-save-dock">
+            <button type="button" class="primary persona-draft-global-save-button persona-gradient-outline-action" data-persona-create-post>保存草稿</button>
+          </div>
+        ` : ""}
         ${isEditingDraft ? `
           <div class="persona-draft-global-save-dock" data-persona-draft-save-dock>
             <div class="persona-draft-save-floating-actions" aria-hidden="true" aria-label="编辑操作">

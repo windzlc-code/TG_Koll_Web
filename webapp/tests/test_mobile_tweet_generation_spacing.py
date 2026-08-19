@@ -73,8 +73,8 @@ def test_draft_edit_stash_only_updates_the_media_reference_without_saving():
     assert 'event.target.closest("[data-persona-stash-draft-edit]")' in script
     assert "stagedReferenceContent: null" in script
     assert "function personaDraftReferenceContent(persona, post, source = \"posts\")" in script
-    assert "const draftSourceText = personaDraftReferenceContent(persona, post, source).trim();" in script
-    assert "const referenceContent = personaDraftReferenceContent(persona, post, isFavoriteMedia ? \"favorites\" : \"posts\").trim();" in script
+    assert "const draftSourceText = personaMediaTaskGenerationContent(persona, post, source);" in script
+    assert "personaDraftReferenceContent(persona, post, isFavoriteMedia ? \"favorites\" : \"posts\").trim()" in script
 
 
 def test_draft_exit_confirmation_uses_a_compact_left_right_action_layout():
