@@ -926,6 +926,23 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         )[1].split("}", 1)[0]
         self.assertIn("fill: none;", empty_picker_icon)
         self.assertIn("stroke: currentColor;", empty_picker_icon)
+        hot_empty_picker = self.styles.split(
+            ".console-modal[data-modal-key=\"persona-hot-editor\"] label.persona-media-empty-picker {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("justify-content: center;", hot_empty_picker)
+        self.assertIn("align-items: center;", hot_empty_picker)
+        self.assertIn("flex-wrap: wrap;", hot_empty_picker)
+        hot_empty_copy = self.styles.split(
+            ".console-modal[data-modal-key=\"persona-hot-editor\"] .persona-media-empty-picker-copy {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("display: contents;", hot_empty_copy)
+        hot_empty_hint = self.styles.split(
+            ".console-modal[data-modal-key=\"persona-hot-editor\"] .persona-media-empty-picker-copy small {",
+            1,
+        )[1].split("}", 1)[0]
+        self.assertIn("text-align: center;", hot_empty_hint)
 
     def test_hot_editor_restores_the_existing_media_sort_handlers(self):
         starter = self.script.split("function startPersonaHotCandidateEdit", 1)[1].split(

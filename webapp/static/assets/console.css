@@ -7508,16 +7508,26 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .console-modal[data-modal-key="persona-hot-editor"] label.persona-media-empty-picker {
-  display: inline-flex;
-  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: center;
-  justify-self: center;
-  width: auto;
-  gap: 8px;
+  justify-self: stretch;
+  width: 100%;
+  gap: 6px 8px;
+}
+
+.console-modal[data-modal-key="persona-hot-editor"] .persona-media-empty-picker-copy {
+  display: contents;
+}
+
+.console-modal[data-modal-key="persona-hot-editor"] .persona-media-empty-picker-copy small {
+  flex: 1 0 100%;
+  text-align: center;
 }
 
 .console-modal[data-modal-key="persona-hot-editor"] .persona-media-empty-picker .ui-action-icon {
-  margin-top: 1px;
+  margin-top: 0;
   fill: none;
   stroke: currentColor;
 }
