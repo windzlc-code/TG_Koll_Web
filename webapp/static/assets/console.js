@@ -24514,60 +24514,59 @@ function renderPersonaMediaComposerPlaceholder(persona, mediaForm) {
 
 function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaForm, post, postMediaItems, sourceLabel, isFavoriteMedia) {
   const operationMode = isFavoriteMedia ? "replace" : (mediaForm.operationMode === "generate" ? "generate" : "replace");
-  if (!post) {
-    return `
-      <section class="persona-compose-media-side persona-production-section">
-        <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
-          <div class="persona-media-operation-pane">
-            ${renderPersonaCompactMediaUpload(persona, null)}
-          </div>
-        </div>
-      </section>`;
-  }
   const mediaTaskOptions = personaMediaTaskOptions(profile, generateForm);
   const currentTaskType = mediaTaskOptions.some(([value]) => value === String(mediaForm.taskType || ""))
     ? String(mediaForm.taskType || "")
     : String(mediaTaskOptions[0]?.[0] || "persona_post_image");
   mediaForm.taskType = currentTaskType;
   normalizePersonaMediaGenerationForm(mediaForm);
-  const referenceContent = personaDraftReferenceContent(persona, post, isFavoriteMedia ? "favorites" : "posts").trim();
+  const referenceContent = post
+    ? personaDraftReferenceContent(persona, post, isFavoriteMedia ? "favorites" : "posts").trim()
+    : "";
   const showAspectRatio = currentTaskType === "persona_post_image";
   const showVideoOptions = false;
-  const mediaBusy = !isFavoriteMedia && post && (isActionLocked("media_task", persona.id, post.id, currentTaskType) || personaMediaTaskIsActive(persona.id, post.id, currentTaskType));
-  const mediaBusyStartedAt = personaMediaTaskStartedAt(persona.id, post?.id || "", currentTaskType);
-  const mediaTaskState = personaMediaTaskState(persona.id, post.id);
+  const mediaBusy = Boolean(post) && !isFavoriteMedia && (isActionLocked("media_task", persona.id, post.id, currentTaskType) || personaMediaTaskIsActive(persona.id, post.id, currentTaskType));
+  const mediaBusyStartedAt = post ? personaMediaTaskStartedAt(persona.id, post.id, currentTaskType) : 0;
+  const mediaTaskState = post ? personaMediaTaskState(persona.id, post.id) : null;
   const mediaModifyItem = personaTaskMediaModifyItem(mediaTaskState);
   const mediaModifyActive = Boolean(mediaModifyItem);
   const mediaEditSourceUploadActive = mediaModifyActive && mediaModifyItem?.inputId === "personaMediaEditSourceFile";
-  const aiUploadSelectsModify = personaDraftMediaTargetIsEditing(persona);
+  const aiUploadSelectsModify = Boolean(post) && personaDraftMediaTargetIsEditing(persona);
   const mediaUploadInputId = mediaEditSourceUploadActive ? "personaMediaEditSourceFile" : "personaMediaTaskFiles";
-  return `
+  if (isFavoriteMedia) {
+    return `
     <section class="persona-compose-media-side persona-production-section">
-      <div class="persona-inline-panel persona-inline-panel--nested">
+      ${post ? `<div class="persona-inline-panel persona-inline-panel--nested">
         <strong>当前${esc(sourceLabel)}正文</strong>
         ${renderPersonaHotOrigin(personaHotImportMeta(persona.id, post.id), { compact: true })}
         <p>${esc(referenceContent || `当前${sourceLabel}没有正文。`)}</p>
-      </div>
+      </div>` : ""}
       <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
-        ${isFavoriteMedia ? `<strong>收藏媒体</strong>
-          <div class="persona-media-operation-pane">
-            ${postMediaItems.length
+        <strong>收藏媒体</strong>
+        <div class="persona-media-operation-pane">
+          ${post
+            ? (postMediaItems.length
               ? renderPersonaEditableMediaGrid(postMediaItems, {
                 personaId: persona.id,
                 source: "favorites",
                 postId: post.id,
                 sourceLabel,
               })
-              : renderPersonaCompactMediaUpload(persona, post)}
-          </div>
-        ` : `
-          <div class="persona-media-operation-pane">
-            ${renderPersonaEditableMediaGrid(postMediaItems, {
-              personaId: persona.id,
-              source: "posts",
-              postId: post.id,
-              sourceLabel,
-            })}
+              : renderPersonaCompactMediaUpload(persona, post))
+            : renderPersonaCompactMediaUpload(persona, null)}
+        </div>
+      </div>
+    </section>`;
+  }
+  return `
+    <section class="persona-compose-media-side persona-production-section">
+      ${post ? `<div class="persona-inline-panel persona-inline-panel--nested">
+        <strong>当前${esc(sourceLabel)}正文</strong>
+        ${renderPersonaHotOrigin(personaHotImportMeta(persona.id, post.id), { compact: true })}
+        <p>${esc(referenceContent || `当前${sourceLabel}没有正文。`)}</p>
+      </div>` : ""}
+      <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
+        <div class="persona-media-operation-pane">
             <div class="form-grid persona-detail-controls persona-media-generation-controls">
               <label>生成张数
                 <select id="personaMediaImageCount" ${mediaModifyActive ? "disabled title=\"局部修改每次只生成 1 张图片\"" : ""}>
@@ -24613,7 +24612,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
                 publicMediaCards: true,
                 embeddedPreview: true,
               }))}
-              ${renderPersonaMediaTaskResult(persona.id, post.id, {
+              ${renderPersonaMediaTaskResult(persona.id, post?.id || "", {
                 mediaBusy,
                 mediaBusyStartedAt,
                 addMediaInputId: mediaUploadInputId,
@@ -24621,7 +24620,6 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
               })}
             </div>
           </div>
-        `}
       </div>
     </section>`;
 }
