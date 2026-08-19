@@ -163,6 +163,25 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("function renderMediaKindIcon(type)", self.script)
         self.assertIn("function collapseHotMediaPosterPairs(items)", self.script)
         self.assertIn("function isVideoMediaUrl(value)", self.script)
+        mapper = self.script[
+            self.script.index("function personaHotCandidateMediaItems"):
+            self.script.index("function collapseHotMediaPosterPairs")
+        ]
+        collapse = self.script[
+            self.script.index("function collapseHotMediaPosterPairs"):
+            self.script.index("function personaHotCandidateMediaSignature")
+        ]
+        preview = self.script[
+            self.script.index("function renderMediaPreviewButton"):
+            self.script.index("function cancelDeferredMediaHydration")
+        ]
+        self.assertIn("previewUrl: url", mapper)
+        self.assertNotIn("type === \"video\" ? (thumbnailUrl || url)", mapper)
+        self.assertIn("thumbnailUrl: current.previewUrl || current.url || next.thumbnailUrl", collapse)
+        self.assertNotIn("previewUrl: current.previewUrl || current.url", collapse)
+        self.assertIn("const videoSrc = isVideo && isVideoMediaUrl(sourceUrl)", preview)
+        self.assertIn("isVideo && posterSrc", preview)
+        self.assertNotIn("adminWorkspaceUrl(isVideo ? previewUrl : (posterUrl || previewUrl))", preview)
         self.assertIn('interactive: Boolean(previewGroupId) && itemPreviewIndex >= 0,', self.script)
         self.assertIn(".persona-hot-card-actions a {", self.styles)
         self.assertIn("justify-content: center;", self.styles)
@@ -178,7 +197,11 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn("persona-hot-source-platform-field", source_identity)
         self.assertNotIn("platform.toUpperCase()", source_identity)
         byline = source_identity.split('class="persona-hot-source-byline"', 1)[1]
+        context = source_identity.split('class="persona-hot-source-context"', 1)[1].split('class="persona-hot-source-byline"', 1)[0]
         self.assertNotIn("persona-hot-source-platform", byline)
+        self.assertIn("formatTime", context)
+        self.assertIn("@${author.replace(/^@/, \"\")}", byline)
+        self.assertNotIn("formatTime", byline)
 
         action_styles = self.styles.split(".persona-hot-card-actions button,", 1)[1].split("}", 1)[0]
         self.assertIn("width: auto;", action_styles)
@@ -240,6 +263,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("persona-hot-editor-content--full", modal_renderer)
         self.assertIn('data-persona-hot-rewrite="${esc(candidateId)}"', modal_renderer)
         self.assertIn("按人设改写", modal_renderer)
+        self.assertIn("再次按人设改写", self.script)
+        self.assertIn("personaHotRewriteActionLabel", modal_renderer)
+        self.assertIn("persona-hot-editor-exit", self.script)
+        self.assertIn("保存当前改写？", self.script)
         self.assertIn("rewritePersonaHotEditorContent", self.script)
         self.assertIn("/hot_rewrite", self.script)
         self.assertIn("resizePersonaHotEditorContent", modal_renderer)
@@ -296,6 +323,12 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn("persona-hot-source-avatar", source_identity)
         self.assertIn("persona-hot-source-byline", source_identity)
         self.assertIn("persona-hot-source-context", source_identity)
+        self.assertLess(
+            source_identity.index("persona-hot-source-context"),
+            source_identity.index("persona-hot-source-byline"),
+        )
+        identity_styles = self.styles.split(".persona-hot-source-meta {", 1)[1].split("}", 1)[0]
+        self.assertIn("flex-direction: column;", identity_styles)
         self.assertIn("account-pool-card-platform persona-hot-source-platform", source_identity)
         self.assertIn("renderAccountPoolPlatformIcon(platform)", source_identity)
         self.assertIn("platformLabel(platform)", source_identity)
@@ -328,6 +361,16 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("resolvedTargetPlatform", importer)
         self.assertIn("watchPersonaHotImportMedia(persona.id, createdIds)", submitter)
         self.assertNotIn("choosePlatform", handler)
+
+    def test_hotspot_fetch_keeps_current_platform_results_separate(self):
+        fetcher = self.script[
+            self.script.index("async function fetchPersonaHotCandidates"):
+            self.script.index("\nasync function cancelPersonaHotCandidates")
+        ]
+        self.assertIn("platform: personaContentPlatform(persona)", fetcher)
+        self.assertIn("previousOther", fetcher)
+        self.assertIn("platformCandidates", fetcher)
+        self.assertIn("mergedCandidates", fetcher)
 
     def test_hotspot_import_and_publish_wait_for_background_media_cache(self):
         submitter = self.script[
@@ -630,8 +673,9 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertNotIn("自定义上传", inline)
         self.assertNotIn('source: "posts"', inline)
         self.assertIn("renderPersonaMediaTaskResult(persona.id, post?.id || \"\"", inline)
-        self.assertNotIn("先准备一条草稿", inline)
-        self.assertNotIn("先选择一条草稿", inline)
+        self.assertIn("先准备一条草稿", inline)
+        self.assertIn('const isBatchCompose = composeMode === "tweet_media"', inline)
+        self.assertIn("!post && isBatchCompose && !isFavoriteMedia", inline)
         self.assertLess(inline.index("任务结果预览"), inline.index('renderUploadDropzone("personaMediaTaskFiles"'))
         self.assertIn("function autoAttachPersonaGeneratedMedia", self.script)
         self.assertIn("function clearPersonaMediaTransientSelection", self.script)

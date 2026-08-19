@@ -998,8 +998,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("const generationLocked = isActionLocked", content_panel)
         self.assertIn("const generateBusy = generationLocked && activeGenerateComposeMode === composeMode;", content_panel)
         self.assertIn("const ordinaryMediaTarget", content_panel)
+        self.assertIn("isEditingDraft || isBatchCompose || ordinaryMediaTarget || composeMode === \"tweet\"", content_panel)
         self.assertIn("renderPersonaInlineMediaComposer(persona, profile, generateForm, form.media, selectedPost", content_panel)
-        self.assertNotIn("renderPersonaMediaComposerPlaceholder(persona, form.media)", content_panel)
+        self.assertIn("renderPersonaMediaComposerPlaceholder(persona, form.media)", content_panel)
 
         chooser = self.console_script[
             self.console_script.index("async function openPersonaGeneratedSelectionModal"):

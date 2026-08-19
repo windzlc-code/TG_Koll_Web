@@ -3797,7 +3797,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, postDirectionsByMode: { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, postDirectionsByMode: { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotRewrittenByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1", selectedImageId: "" },
@@ -3830,6 +3830,7 @@ function personaFormState(personaId) {
         hotSearchMode: "strict",
         hotDeletedMediaByCandidate: {},
         hotEditedContentByCandidate: {},
+        hotRewrittenByCandidate: {},
         hotSelectedMediaIndexByCandidate: {},
         hotReplacementFilesByCandidate: {},
         hotReplacementPoolByCandidate: {},
@@ -4480,9 +4481,9 @@ function renderPersonaHotSourceIdentity(candidate) {
           <span class="persona-hot-source-context">
             <span class="account-pool-card-platform persona-hot-source-platform" data-account-platform="${esc(platform)}" title="${esc(platformName)}" aria-label="${esc(platformName)}">${renderAccountPoolPlatformIcon(platform)}<span>${esc(platformName)}</span></span>
             ${renderMediaTypeBadge(mediaItems)}
+            <small>${esc(formatTime(candidate?.captured_at || candidate?.published_at || ""))}</small>
         </span>
         <span class="persona-hot-source-byline">
-          <small>${esc(formatTime(candidate?.captured_at || candidate?.published_at || ""))}</small>
           <strong>${esc(author ? `@${author.replace(/^@/, "")}` : displayAuthor)}</strong>
         </span>
       </span>
@@ -4624,12 +4625,11 @@ function personaHotCandidateMediaItems(candidate) {
     if (!url) return null;
     const type = guessMediaType(url, item?.type || "");
     const thumbnailUrl = String(item?.thumbnailUrl || item?.thumbnail_url || "").trim();
-    const previewUrl = type === "video" ? (thumbnailUrl || url) : (String(item?.previewUrl || item?.preview_url || "").trim() || url);
     return {
-      previewUrl,
+      previewUrl: url,
       url,
       originalUrl: url,
-      thumbnailUrl,
+      thumbnailUrl: thumbnailUrl && thumbnailUrl !== url ? thumbnailUrl : "",
       type,
       label: String(item?.label || mediaKindLabel(type) || "热点媒体").trim() || mediaKindLabel(type),
     };
@@ -4645,8 +4645,7 @@ function collapseHotMediaPosterPairs(items) {
     if (next && current.type === "image" && next.type === "video") {
       rows.push({
         ...next,
-        thumbnailUrl: current.previewUrl || current.url,
-        previewUrl: current.previewUrl || current.url,
+        thumbnailUrl: current.previewUrl || current.url || next.thumbnailUrl,
       });
       index += 1;
       continue;
@@ -4654,8 +4653,7 @@ function collapseHotMediaPosterPairs(items) {
     if (next && current.type === "video" && next.type === "image") {
       rows.push({
         ...current,
-        thumbnailUrl: next.previewUrl || next.url,
-        previewUrl: next.previewUrl || next.url,
+        thumbnailUrl: next.previewUrl || next.url || current.thumbnailUrl,
       });
       index += 1;
       continue;
@@ -4910,6 +4908,39 @@ function discardPersonaHotMediaEdits(personaId) {
   form.hotSelectedReplacementPoolIdByCandidate = {};
 }
 
+function personaHotOriginalContent(candidate) {
+  return String(candidate?.full_content || candidate?.content || "").trim();
+}
+
+function personaHotContentWasRewritten(personaId, candidate) {
+  const form = personaFormState(personaId).generate;
+  if (!form.hotRewrittenByCandidate || typeof form.hotRewrittenByCandidate !== "object") {
+    form.hotRewrittenByCandidate = {};
+  }
+  return Boolean(form.hotRewrittenByCandidate[personaHotCandidateKey(candidate)]);
+}
+
+function personaHotRewriteActionLabel(persona, candidate) {
+  if (!persona || isActionLocked("persona", persona.id, "hot_rewrite")) return "正在按人设改写";
+  return personaHotContentWasRewritten(persona.id, candidate) ? "再次按人设改写" : "按人设改写";
+}
+
+function personaHotEditorHasChanges(persona, candidate) {
+  if (!persona || !candidate) return false;
+  const form = personaFormState(persona.id).generate;
+  const key = personaHotCandidateKey(candidate);
+  const original = personaHotOriginalContent(candidate);
+  const edited = Object.prototype.hasOwnProperty.call(form.hotEditedContentByCandidate || {}, key)
+    ? String(form.hotEditedContentByCandidate[key] || "").trim()
+    : original;
+  if (edited !== original) return true;
+  if (personaHotContentWasRewritten(persona.id, candidate)) return true;
+  if ((form.hotMediaOpsByCandidate?.[key] || []).length) return true;
+  if (personaHotDeletedMediaSet(persona.id, key).size) return true;
+  if (personaHotReplacementEntries(persona.id, key).length) return true;
+  return false;
+}
+
 function personaHotEditedContent(personaId, candidate) {
   const form = personaFormState(personaId).generate;
   if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
@@ -5058,10 +5089,10 @@ function renderPersonaHotCandidateEditorModal(persona, candidate) {
           <small>${esc(personaHotMetricSummary(candidate))}</small>
         </div>
         <textarea rows="9" class="persona-hot-editor-content--full" data-persona-hot-content-editor="${esc(candidateId)}">${esc(personaHotEditedContent(persona.id, candidate))}</textarea>
-        <button type="button" class="persona-hot-rewrite-action" data-persona-hot-rewrite="${esc(candidateId)}" ${isActionLocked("persona", persona.id, "hot_rewrite") ? "disabled" : ""} aria-label="根据当前人设和这篇热点生成不雷同的正文">
+        <button type="button" class="persona-hot-rewrite-action" data-persona-hot-rewrite="${esc(candidateId)}" ${isActionLocked("persona", persona.id, "hot_rewrite") ? "disabled" : ""} aria-label="${esc(personaHotRewriteActionLabel(persona, candidate))}">
           ${isActionLocked("persona", persona.id, "hot_rewrite")
             ? renderBusyButtonContent("正在按人设改写", true, actionLockStartedAt("persona", persona.id, "hot_rewrite"))
-            : "按人设改写"}
+            : personaHotRewriteActionLabel(persona, candidate)}
         </button>
       </section>
       <section class="persona-hot-editor-media">
@@ -5122,7 +5153,12 @@ async function rewritePersonaHotEditorContent(persona, candidate) {
     if (!form.hotEditedContentByCandidate || typeof form.hotEditedContentByCandidate !== "object") {
       form.hotEditedContentByCandidate = {};
     }
+    if (!form.hotRewrittenByCandidate || typeof form.hotRewrittenByCandidate !== "object") {
+      form.hotRewrittenByCandidate = {};
+    }
     form.hotEditedContentByCandidate[candidateId] = content;
+    form.hotRewrittenByCandidate[candidateId] = true;
+    state.transientWorkspaceLeaveAcknowledgement = "";
     const textarea = document.querySelector(`[data-persona-hot-content-editor="${CSS.escape(candidateId)}"]`);
     if (textarea) {
       textarea.value = content;
@@ -5137,7 +5173,9 @@ async function rewritePersonaHotEditorContent(persona, candidate) {
     if (current) {
       current.disabled = false;
       current.removeAttribute("aria-busy");
-      current.textContent = "按人设改写";
+      const label = personaHotRewriteActionLabel(persona, candidate);
+      current.textContent = label;
+      current.setAttribute("aria-label", label);
     }
   }
 }
@@ -5210,15 +5248,39 @@ function startPersonaHotCandidateEdit(persona, candidateId) {
   if (!modal) return request;
   modal.__requestClose = async (result) => {
     if (modal.dataset.closing === "1") return;
-    if (!result) {
-      modal.dataset.closing = "1";
-      cancelPersonaHotCandidateEdit(persona, cleanCandidateId, { render: false });
-      closeConsoleModal(null, modal);
-      renderPersonaDetail();
-      renderConfirmSummary();
-      return;
-    }
     snapshotPersonaHotPreviewContent();
+    if (!result) {
+      if (personaHotEditorHasChanges(persona, candidate)) {
+        const leaveAction = await openConsoleModal({
+          title: "保存当前改写？",
+          message: "这篇热点已按人设改写或有未保存修改。可保存并导入草稿，或放弃本次修改并退出。",
+          confirmText: "保存并导入",
+          cancelText: "继续编辑",
+          showCancel: true,
+          extraActions: [{ text: "放弃修改并退出", value: "discard", danger: true }],
+          modalKey: "persona-hot-editor-exit",
+          stack: true,
+          dismissOnBackdrop: false,
+        });
+        if (leaveAction !== true && leaveAction !== "discard") return;
+        if (leaveAction === "discard") {
+          modal.dataset.closing = "1";
+          cancelPersonaHotCandidateEdit(persona, cleanCandidateId, { render: false });
+          closeConsoleModal(null, modal);
+          renderPersonaDetail();
+          renderConfirmSummary();
+          return;
+        }
+        result = true;
+      } else {
+        modal.dataset.closing = "1";
+        cancelPersonaHotCandidateEdit(persona, cleanCandidateId, { render: false });
+        closeConsoleModal(null, modal);
+        renderPersonaDetail();
+        renderConfirmSummary();
+        return;
+      }
+    }
     if (!personaHotEditedContent(persona.id, candidate).trim()) {
       showMsg("commandMsg", "热点正文不能为空。", false);
       modal.querySelector(`[data-persona-hot-content-editor="${CSS.escape(cleanCandidateId)}"]`)?.focus();
@@ -5317,6 +5379,7 @@ function cancelPersonaHotCandidateEdit(persona, candidateId, { render = true } =
   const form = personaFormState(persona.id).generate;
   if (String(form.hotEditingCandidateId || "").trim() !== cleanCandidateId) return;
   delete form.hotEditedContentByCandidate?.[cleanCandidateId];
+  delete form.hotRewrittenByCandidate?.[cleanCandidateId];
   delete form.hotDeletedMediaByCandidate?.[cleanCandidateId];
   delete form.hotSelectedMediaIndexByCandidate?.[cleanCandidateId];
   clearPersonaHotReplacementFiles(persona.id, cleanCandidateId);
@@ -8490,10 +8553,14 @@ function renderMediaPreviewButton(item, groupId, index, {
   const type = String(item?.type || "image").trim() || "image";
   const text = caption || mediaKindLabel(type);
   const posterUrl = String(item?.thumbnailUrl || item?.thumbnail_url || "").trim();
-  const previewUrl = String(item?.previewUrl || "").trim();
-  const isVideo = type === "video" || isVideoMediaUrl(previewUrl);
+  const sourceUrl = String(item?.url || item?.originalUrl || item?.previewUrl || "").trim();
+  const previewUrl = String(item?.previewUrl || sourceUrl).trim();
+  const isVideo = type === "video" || isVideoMediaUrl(sourceUrl) || isVideoMediaUrl(previewUrl);
   const posterSrc = posterUrl && !isVideoMediaUrl(posterUrl) ? adminWorkspaceUrl(posterUrl) : "";
-  const displayUrl = adminWorkspaceUrl(isVideo ? previewUrl : (posterUrl || previewUrl));
+  const videoSrc = isVideo && isVideoMediaUrl(sourceUrl)
+    ? adminWorkspaceUrl(sourceUrl)
+    : (isVideo && isVideoMediaUrl(previewUrl) ? adminWorkspaceUrl(previewUrl) : "");
+  const displayUrl = adminWorkspaceUrl(isVideo ? (posterSrc || videoSrc) : (posterSrc || previewUrl || sourceUrl));
   const unavailable = Boolean(item?.unavailable || (displayUrl && state.failedMediaPreviewUrls.has(displayUrl)));
   const canInteract = interactive && !unavailable;
   const canShowZoomHint = zoomHint && canInteract && type === "image";
@@ -8506,8 +8573,10 @@ function renderMediaPreviewButton(item, groupId, index, {
       ${canShowZoomHint ? `title="点击放大查看" aria-label="点击放大查看 ${esc(label || text)}"` : ""}>
       ${unavailable
         ? `<div class="${esc(frameClass)} persona-media-frame--empty"><strong>${type === "video" ? "视频无法预览" : "媒体已失效"}</strong><small>${type === "video" ? "封面或源文件无法加载" : "源文件无法加载"}</small></div>`
-        : isVideo
-        ? `<video class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} ${posterSrc ? `poster="${esc(posterSrc)}"` : ""} data-media-source-url="${esc(displayUrl)}" muted playsinline preload="${deferLoad ? "none" : "metadata"}" draggable="false" onerror="handlePersonaMediaFrameError(this)"></video>`
+        : isVideo && posterSrc
+        ? `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(posterSrc)}"` : `src="${esc(posterSrc)}"`} data-media-source-url="${esc(posterSrc)}" alt="${esc(label || "video")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`
+        : isVideo && videoSrc
+        ? `<video class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(videoSrc)}"` : `src="${esc(videoSrc)}"`} ${posterSrc ? `poster="${esc(posterSrc)}"` : ""} data-media-source-url="${esc(videoSrc)}" muted playsinline preload="${deferLoad ? "none" : "metadata"}" draggable="false" onerror="handlePersonaMediaFrameError(this)"></video>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
           : `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
@@ -21436,7 +21505,7 @@ async function preparePersonaHotKeywords(refresh = false) {
   const form = personaFormState(persona.id).generate;
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
   const existingKeywords = parsePersonaHotKeywordText(personaHotKeywordText(form, state.personaHotCandidateResults[String(persona.id)] || {}));
-  const firstGenerate = existingKeywords.length < 8;
+  const firstGenerate = existingKeywords.length < 6;
   setPersonaGenerateRunState(persona.id, {
     kind: "hot",
     status: "running",
@@ -21461,6 +21530,7 @@ async function preparePersonaHotKeywords(refresh = false) {
         writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
           ? String(form.writingLocale)
           : PERSONA_DEFAULT_WRITING_LOCALE,
+        platform: personaContentPlatform(persona),
       }),
     }, 90000);
     const keywords = Array.isArray(result.keywords) ? result.keywords.map((item) => String(item || "").trim()).filter(Boolean) : [];
@@ -21534,7 +21604,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
     renderPersonaDetail();
     return;
   }
-  if (keywords.length < 8) {
+  if (keywords.length < 6) {
     try {
       const preparedKeywords = await preparePersonaHotKeywords(false);
       if (preparedKeywords.length) keywords = parsePersonaHotKeywordText(formatPersonaHotKeywordText(preparedKeywords));
@@ -21577,6 +21647,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
         // accepts posts from the latest 30 days and returns newer posts first.
         freshness_days: 30,
         freshness_policy: "strict",
+        platform: personaContentPlatform(persona),
       }),
     }, 15000);
     const taskId = String(task?.id || "").trim();
@@ -21604,13 +21675,23 @@ async function fetchPersonaHotCandidates(refresh = false) {
     }
     if (!result) throw { detail: "热点抓取超时，请稍后重试。", status: 408 };
     const fetchedCandidates = Array.isArray(result.candidates) ? result.candidates : [];
-    const unreadCounts = Object.fromEntries(accountPoolPlatforms.map(([platform]) => [platform, 0]));
-    fetchedCandidates.forEach((candidate) => {
-      const platform = normalizePersonaContentPlatform(candidate?.platform || "threads");
-      unreadCounts[platform] = Number(unreadCounts[platform] || 0) + 1;
+    const currentPlatform = personaContentPlatform(persona);
+    const previousOther = previousCandidates.filter((candidate) => (
+      normalizePersonaContentPlatform(candidate?.platform) !== currentPlatform
+    ));
+    const platformCandidates = fetchedCandidates.filter((candidate) => (
+      normalizePersonaContentPlatform(candidate?.platform || "threads") === currentPlatform
+    ));
+    const mergedCandidates = [...previousOther, ...platformCandidates];
+    const unreadCounts = {
+      ...(state.personaHotCandidateResults[String(persona.id)]?.unread_counts || {}),
+    };
+    accountPoolPlatforms.forEach(([platform]) => {
+      if (!(platform in unreadCounts)) unreadCounts[platform] = 0;
     });
+    unreadCounts[currentPlatform] = platformCandidates.length;
     state.personaHotCandidateResults[String(persona.id)] = {
-      candidates: fetchedCandidates,
+      candidates: mergedCandidates,
       keywords: Array.isArray(result.keywords) && result.keywords.length ? result.keywords : keywords,
       cookie_statuses: Array.isArray(result.cookie_statuses) ? result.cookie_statuses : [],
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
@@ -21637,7 +21718,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
     Object.keys(form.hotMediaDraftsByCandidate || {}).forEach((candidateId) => {
       if (!candidateIdSet.has(candidateId)) clearPersonaHotMediaDraft(persona.id, candidateId);
     });
-    ["hotDeletedMediaByCandidate", "hotEditedContentByCandidate", "hotSelectedMediaIndexByCandidate", "hotSelectedReplacementPoolIdByCandidate"].forEach((field) => {
+    ["hotDeletedMediaByCandidate", "hotEditedContentByCandidate", "hotRewrittenByCandidate", "hotSelectedMediaIndexByCandidate", "hotSelectedReplacementPoolIdByCandidate"].forEach((field) => {
       const current = form[field] && typeof form[field] === "object" ? form[field] : {};
       form[field] = Object.fromEntries(Object.entries(current).filter(([candidateId]) => candidateIdSet.has(candidateId)));
     });
@@ -21814,6 +21895,7 @@ async function submitPersonaHotDraftImport(persona, selected, {
   importedIds.forEach((candidateId) => {
     delete form.hotDeletedMediaByCandidate?.[candidateId];
     delete form.hotEditedContentByCandidate?.[candidateId];
+    delete form.hotRewrittenByCandidate?.[candidateId];
     delete form.hotSelectedMediaIndexByCandidate?.[candidateId];
     clearPersonaHotReplacementFiles(persona.id, candidateId);
     clearPersonaHotReplacementPool(persona.id, candidateId);
@@ -24512,8 +24594,23 @@ function renderPersonaMediaComposerPlaceholder(persona, mediaForm) {
     </section>`;
 }
 
-function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaForm, post, postMediaItems, sourceLabel, isFavoriteMedia) {
+function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaForm, post, postMediaItems, sourceLabel, isFavoriteMedia, composeMode = "tweet") {
   const operationMode = isFavoriteMedia ? "replace" : (mediaForm.operationMode === "generate" ? "generate" : "replace");
+  const isBatchCompose = composeMode === "tweet_media";
+  if (!post && isBatchCompose && !isFavoriteMedia) {
+    return `
+      <section class="persona-compose-media-side persona-production-section">
+        <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
+          <div class="persona-media-operation-pane">
+            ${renderPersonaPendingMediaInput(persona)}${renderModuleEmptyState({
+              icon: "media",
+              title: "先准备一条草稿",
+              detail: "保存或生成推文后，即可使用 AI 生成配图",
+            })}
+          </div>
+        </div>
+      </section>`;
+  }
   const mediaTaskOptions = personaMediaTaskOptions(profile, generateForm);
   const currentTaskType = mediaTaskOptions.some(([value]) => value === String(mediaForm.taskType || ""))
     ? String(mediaForm.taskType || "")
@@ -26445,7 +26542,9 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             <div class="persona-compose-media-stack">
               ${generatePreviewDock}
               ${renderPublishLinkSettings(persona)}
-              ${canComposeMedia ? renderPersonaInlineMediaComposer(persona, profile, generateForm, form.media, selectedPost, selectedPostMediaItems, selectedSourceLabel, selectedMediaSource === "favorites") : ""}
+              ${canComposeMedia ? ((isEditingDraft || isBatchCompose || ordinaryMediaTarget || composeMode === "tweet")
+                ? renderPersonaInlineMediaComposer(persona, profile, generateForm, form.media, selectedPost, selectedPostMediaItems, selectedSourceLabel, selectedMediaSource === "favorites", composeMode)
+                : renderPersonaMediaComposerPlaceholder(persona, form.media)) : ""}
             </div>
           ` : ""}
         </div>
