@@ -12599,6 +12599,12 @@ body.persona-touch-dragging .persona-list-card:active {
   stroke: currentColor;
 }
 
+.persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger span::before,
+.persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger span::after {
+  content: none;
+  display: none;
+}
+
 .persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger:hover,
 .persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger:focus-visible {
   background: var(--soft);
