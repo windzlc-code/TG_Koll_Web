@@ -26672,15 +26672,11 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <label>自定义正文
             <textarea id="personaDraftContent" class="persona-draft-content--full" rows="6" placeholder="直接输入本次要保存的推文正文。">${esc(draftForm.content || "")}</textarea>
           </label>
-          <div class="row-actions ${isEditingDraft ? "persona-generate-actions persona-generate-actions--editing" : ""}">
-            ${isEditingDraft ? `
+          ${isEditingDraft ? `<div class="row-actions persona-generate-actions persona-generate-actions--editing">
               <button type="button" data-persona-stash-draft-edit>暂存草稿</button>
               ${renderPersonaWritingLocaleSelect(generateForm.writingLocale, generationLocked)}
               <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="使用 AI 重新生成当前推文" ${preflight.ready && !generationLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在重新生成", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : "AI 重新生成"}</button>
-            ` : `
-              <button type="button" data-persona-route-step="content:posts">查看草稿</button>
-            `}
-          </div>
+          </div>` : ""}
         ` : generateMode === "hot" ? `
           ${renderPersonaHotCandidatePicker(persona, generateForm)}
           ${personaHotCandidates(persona).length ? `<div class="persona-draft-global-save-dock persona-hot-import-dock">
@@ -26699,7 +26695,6 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           ${renderPersonaPostDirectionPicker(persona, generateForm, generationControlsLocked)}
           <div class="row-actions persona-generate-actions">
             ${isEditingDraft ? `<button type="button" data-persona-create-post>保存修改</button>` : ""}
-            <button type="button" data-persona-route-step="content:posts">查看草稿</button>
             ${renderPersonaWritingLocaleSelect(generateForm.writingLocale, generationControlsLocked)}
             <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="${directionState.selectedKeywords.length ? "按已选方向生成推文" : (directionState.keywords.length ? "重新生成一批推文方向关键词" : "生成推文方向关键词")}" ${preflight.ready && !generationControlsLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (postDirectionsLocked ? renderBusyButtonContent("正在生成方向", true, actionLockStartedAt("persona", persona.id, "post_directions")) : directionButtonContent)}</button>
           </div>

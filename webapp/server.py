@@ -14888,8 +14888,10 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     return keywords
 
 
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 61
-PERSONA_HOT_KEYWORD_BATCH_SIZE = 12
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 62
+PERSONA_HOT_KEYWORD_BATCH_SIZE = 10
+PERSONA_HOT_KEYWORD_BATCH_MAX_USES = 1
+PERSONA_HOT_KEYWORD_PLAN_MAX_CYCLES = 2
 _HOT_PUBLIC_PROBE_FLAG = Path("/data/hot-public-probe")
 
 
@@ -14926,14 +14928,50 @@ def _write_persona_hot_keyword_batch_state(state: dict[str, Any]) -> None:
     )
 
 
-def _persona_hot_keyword_batch_from_row(row: Any) -> list[str]:
-    if not isinstance(row, dict):
+def _persona_hot_keyword_plan_keywords(row: Any) -> list[str]:
+    if not isinstance(row, dict) or row.get("must_regenerate"):
         return []
     if _to_int(row.get("strategy_version"), 0) != PERSONA_HOT_KEYWORD_STRATEGY_VERSION:
         return []
-    keywords = _persona_hot_payload_keywords(row.get("keywords"))
+    return _persona_hot_payload_keywords(row.get("keywords"))
+
+
+def _persona_hot_keyword_batch_from_row(row: Any) -> list[str]:
+    keywords = _persona_hot_keyword_plan_keywords(row)
+    if not keywords:
+        return []
     cursor = min(max(_to_int(row.get("cursor"), 0), 0), len(keywords))
+    if cursor >= len(keywords):
+        return []
     return keywords[cursor:cursor + PERSONA_HOT_KEYWORD_BATCH_SIZE]
+
+
+def _persona_hot_keyword_prepare_payload(
+    row: dict[str, Any] | None,
+    search_mode: str,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    source = row if isinstance(row, dict) else {}
+    all_keywords = _persona_hot_payload_keywords(source.get("keywords"))
+    batch = _persona_hot_keyword_batch_from_row(source)
+    cursor = min(max(_to_int(source.get("cursor"), 0), 0), len(all_keywords) or 0)
+    batch_count = max(1, (len(all_keywords) + PERSONA_HOT_KEYWORD_BATCH_SIZE - 1) // PERSONA_HOT_KEYWORD_BATCH_SIZE) if all_keywords else 1
+    batch_index = min(batch_count, (cursor // PERSONA_HOT_KEYWORD_BATCH_SIZE) + 1) if all_keywords else 1
+    return {
+        "ok": True,
+        "archive_name": str(source.get("archive_name") or "").strip(),
+        "keywords": batch,
+        "all_keywords": all_keywords,
+        "search_mode": search_mode,
+        "batch_size": PERSONA_HOT_KEYWORD_BATCH_SIZE,
+        "batch_index": batch_index,
+        "batch_count": batch_count,
+        "batch_uses": _to_int(source.get("batch_uses"), 0),
+        "batch_max_uses": PERSONA_HOT_KEYWORD_BATCH_MAX_USES,
+        "cycle": _to_int(source.get("cycles"), 0),
+        "max_cycles": PERSONA_HOT_KEYWORD_PLAN_MAX_CYCLES,
+        "warnings": warnings or [],
+    }
 
 
 def _consume_persona_hot_keyword_batch(
@@ -14952,7 +14990,22 @@ def _consume_persona_hot_keyword_batch(
             return False
         all_keywords = _persona_hot_payload_keywords(row.get("keywords"))
         cursor = min(max(_to_int(row.get("cursor"), 0), 0), len(all_keywords))
-        row["cursor"] = min(len(all_keywords), cursor + len(consumed))
+        uses = _to_int(row.get("batch_uses"), 0) + 1
+        if uses < PERSONA_HOT_KEYWORD_BATCH_MAX_USES:
+            row["batch_uses"] = uses
+        else:
+            row["batch_uses"] = 0
+            cursor = min(len(all_keywords), cursor + max(len(consumed), PERSONA_HOT_KEYWORD_BATCH_SIZE))
+            if cursor >= len(all_keywords):
+                cycles = _to_int(row.get("cycles"), 0) + 1
+                row["cycles"] = cycles
+                if cycles >= PERSONA_HOT_KEYWORD_PLAN_MAX_CYCLES:
+                    row["must_regenerate"] = True
+                    row["cursor"] = len(all_keywords)
+                else:
+                    row["cursor"] = 0
+            else:
+                row["cursor"] = cursor
         row["updated_at"] = datetime.now(timezone.utc).isoformat()
         state[key] = row
         _write_persona_hot_keyword_batch_state(state)
@@ -14970,33 +15023,24 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
         existing = state.get(key)
         remaining_batch = _persona_hot_keyword_batch_from_row(existing)
         if remaining_batch:
-            return {
-                "ok": True,
-                "archive_name": str(existing.get("archive_name") or "").strip(),
-                "keywords": remaining_batch,
-                "search_mode": search_mode,
-                "warnings": [],
-            }
+            return _persona_hot_keyword_prepare_payload(existing if isinstance(existing, dict) else {}, search_mode)
 
         existing_keywords = _persona_hot_payload_keywords((existing or {}).get("keywords")) if isinstance(existing, dict) else []
+        must_regenerate = bool(isinstance(existing, dict) and existing.get("must_regenerate"))
         if (
             isinstance(existing, dict)
+            and not must_regenerate
             and _to_int(existing.get("strategy_version"), 0) == PERSONA_HOT_KEYWORD_STRATEGY_VERSION
             and existing_keywords
         ):
             existing["cursor"] = 0
+            existing["batch_uses"] = 0
             existing["updated_at"] = datetime.now(timezone.utc).isoformat()
             state[key] = existing
             _write_persona_hot_keyword_batch_state(state)
-            return {
-                "ok": True,
-                "archive_name": str(existing.get("archive_name") or "").strip(),
-                "keywords": existing_keywords[:PERSONA_HOT_KEYWORD_BATCH_SIZE],
-                "search_mode": search_mode,
-                "warnings": [],
-            }
+            return _persona_hot_keyword_prepare_payload(existing, search_mode)
 
-        force_regenerate = False
+        force_regenerate = must_regenerate
         archive_snapshot = _remote_fetch_archive_snapshot(clean_id)
         prepare_payload: dict[str, Any] = {
             "action": "prepare-hot-keywords",
@@ -15025,19 +15069,20 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
             "keywords": all_keywords,
             "strategy_version": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
             "cursor": 0,
+            "batch_uses": 0,
+            "cycles": 0,
+            "must_regenerate": False,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         if all_keywords:
             state[key] = row
             _write_persona_hot_keyword_batch_state(state)
-        return {
-            "ok": True,
-            "archive_name": row["archive_name"],
-            "keywords": all_keywords[:PERSONA_HOT_KEYWORD_BATCH_SIZE],
-            "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
-            "warnings": warnings,
-        }
+        return _persona_hot_keyword_prepare_payload(
+            row,
+            "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
+            warnings,
+        )
 
 
 def _persona_llm_runtime_source() -> dict[str, Any]:
@@ -15840,6 +15885,7 @@ def _build_persona_generate_instruction(payload: PersonaDashboardGeneratePostsPa
         "Compose natively for the selected locale; do not write in another language and then translate it.",
         f"Locale writing convention: {writing_convention}",
         "Apply the selected locale to the title and body. Keep unavoidable proper names in their established form.",
+        "Every generated post in this batch must stay in the same selected locale. Do not mix in Traditional Chinese, Simplified Chinese, or any other language unless that is the selected locale.",
     ]
     if rewrite_source_post_id or rewrite_source_content:
         lines.extend([

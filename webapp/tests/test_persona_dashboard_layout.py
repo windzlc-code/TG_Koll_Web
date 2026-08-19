@@ -852,10 +852,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('id="personaMemorySearch"', content_panel)
         self.assertNotIn("筛选记忆内容", content_panel)
         self.assertIn("persona-compose-save-dock", content_panel)
-        self.assertLess(
-            content_panel.index("data-persona-route-step=\"content:posts\""),
-            content_panel.index("persona-compose-save-dock"),
-        )
+        self.assertNotIn("查看草稿", content_panel)
+        self.assertIn('data-persona-route-step="content:posts"', content_panel)
         self.assertIn('aria-label="使用 AI 重新生成当前推文"', content_panel)
         self.assertIn('data-persona-draft-save-dock', content_panel)
         self.assertIn('const generateMode = isEditingDraft\n    ? "custom"', content_panel)

@@ -197,6 +197,37 @@ describe("persona generation memory", () => {
     expect(retryPrompt).not.toContain("必须继续自然结合");
   });
 
+  it("does not force Traditional Chinese when another writing locale is selected", async () => {
+    const created = await runPersonaWorkflow({
+      action: "create",
+      name: "日文輸出人設",
+      content: "一個會用當地口吻分享日常的人設。",
+      setup: {
+        genres: ["生活觀察"],
+        personaPersonality: "輕鬆",
+        personaGender: "女性",
+        personaStyle: "短評",
+        totalEpisodes: 50,
+        targetMarket: "cn",
+        chineseScript: "traditional",
+      },
+    } as any);
+
+    await runPersonaWorkflow({
+      action: "generate-posts",
+      archiveId: created.archiveId,
+      count: 3,
+      customInstruction: "Target writing locale: ja-JP (日本語).",
+      trendTopicContext: { writingLocale: "ja-JP" },
+    } as any);
+
+    const generatePrompt = prompts.find((prompt) => prompt.includes("Target writing locale: ja-JP")) || prompts.join("\n");
+    expect(generatePrompt).toContain("Selected locale output rule");
+    expect(generatePrompt).toContain("ja-JP");
+    expect(generatePrompt).not.toContain("Traditional Chinese output rule");
+    expect(generatePrompt).toContain("Every post in this batch must use the same selected locale");
+  });
+
   it("injects saved tweet style profile as a fixed generation constraint", async () => {
     const created = await runPersonaWorkflow({
       action: "create",

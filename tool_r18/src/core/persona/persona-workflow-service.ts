@@ -93,13 +93,33 @@ function buildLinkEndingInstruction(setup: any): string {
   ].filter(Boolean).join("\n");
 }
 
-function buildChineseScriptInstruction(archive: { id?: string; setup?: any }): string {
+function buildChineseScriptInstruction(archive: { id?: string; setup?: any }, writingLocale = ""): string {
   void archive;
+  const locale = String(writingLocale || "").trim() || "zh-TW";
+  if (locale === "zh-TW") {
+    return [
+      "【Traditional Chinese output rule】",
+      "1. Final post body must be generated directly in Traditional Chinese.",
+      "2. Use natural Taiwan social-media wording; do not output Simplified Chinese.",
+      "3. If persona data, memories, trends, or user input contain Simplified Chinese, only use them for meaning and rewrite the final post in Traditional Chinese.",
+      "4. Every post in this batch must stay in Traditional Chinese.",
+    ].join("\n");
+  }
+  if (locale === "zh-CN") {
+    return [
+      "【Simplified Chinese output rule】",
+      "1. Final post body must be generated directly in Simplified Chinese.",
+      "2. Use natural Mainland China social-media wording; do not output Traditional Chinese.",
+      "3. If persona data, memories, trends, or user input contain Traditional Chinese, only use them for meaning and rewrite the final post in Simplified Chinese.",
+      "4. Every post in this batch must stay in Simplified Chinese.",
+    ].join("\n");
+  }
   return [
-    "【Traditional Chinese output rule】",
-    "1. Final post body must be generated directly in Traditional Chinese.",
-    "2. Use natural Taiwan social-media wording; do not output Simplified Chinese.",
-    "3. If persona data, memories, trends, or user input contain Simplified Chinese, only use them for meaning and rewrite the final post in Traditional Chinese.",
+    "【Selected locale output rule】",
+    `1. Final post body must be generated directly in the selected writing locale: ${locale}.`,
+    "2. Do not fall back to Traditional Chinese, Simplified Chinese, or any other language unless that is the selected locale.",
+    "3. If persona data, memories, trends, or user input are in another language, only use them for meaning and rewrite the final post in the selected locale.",
+    "4. Every post in this batch must use the same selected locale. Do not mix languages.",
   ].join("\n");
 }
 
@@ -459,15 +479,18 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
           .filter((entry) => entry.summary),
       ];
       const selectedMemoryInstruction = buildSelectedMemoryInstruction(selectedEntries);
+      const writingLocale = String(input.trendTopicContext?.writingLocale || "").trim();
       const effectiveSetup = {
         ...(archive.setup || {}),
         targetMarket: (archive.setup as any)?.targetMarket || "cn",
-        chineseScript: "traditional",
-        _writingLocale: input.trendTopicContext?.writingLocale || "",
+        chineseScript: writingLocale === "zh-CN"
+          ? "simplified"
+          : (writingLocale === "zh-TW" || !writingLocale ? "traditional" : (archive.setup as any)?.chineseScript),
+        _writingLocale: writingLocale,
       };
       const tweetStyleInstruction = buildTweetStyleInstruction(effectiveSetup);
       const linkEndingInstruction = buildLinkEndingInstruction(effectiveSetup);
-      const chineseScriptInstruction = buildChineseScriptInstruction(archive);
+      const chineseScriptInstruction = buildChineseScriptInstruction(archive, writingLocale);
       const titleSequenceInstruction = buildTitleSequenceInstruction(memoryContext, targetCount);
       const customInstruction = [
         input.customInstruction || "",
@@ -514,6 +537,9 @@ export async function runPersonaWorkflow(input: PersonaWorkflowInput) {
           customInstruction,
           `现在只补充剩余 ${missing} 篇推文。`,
           `前面已经成功生成 ${posts.length} 篇，不要重复前面的内容。`,
+          writingLocale
+            ? `补充的每一篇也必须继续使用所选语言 ${writingLocale}，不要改回繁体中文或其他语言。`
+            : "",
           "必须直接输出缺少的推文正文，每篇之间只能用 --- 分隔。",
           trendIntel ? [
             "以下新闻只作为可选参考，不是必须使用的创作任务。",
