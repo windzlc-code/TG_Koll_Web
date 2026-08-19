@@ -24469,13 +24469,16 @@ function renderPersonaCompactMediaUpload(persona, post = null) {
         ${directUpload ? "data-persona-direct-media-input" : `data-upload-state-key="${esc(pendingStateKey)}"`}
       />
       <label
-        class="account-pool-add-button persona-compose-media-upload-trigger"
+        class="account-pool-add-button persona-compose-media-upload-trigger persona-media-empty-picker"
         for="${esc(inputId)}"
         title="上传图片或视频"
         aria-label="上传图片或视频"
       >
-        <span aria-hidden="true"></span>
-        <strong>添加媒体</strong>
+        ${renderPlusIcon()}
+        <span class="persona-media-empty-picker-copy">
+          <strong>添加媒体</strong>
+          <small>拖动图片或视频到这里，或点击选择</small>
+        </span>
       </label>
       <div class="file-strip" data-upload-file-list="${esc(inputId)}" hidden></div>
     </div>`;
@@ -24516,11 +24519,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
       <section class="persona-compose-media-side persona-production-section">
         <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
           <div class="persona-media-operation-pane">
-            ${renderPersonaPendingMediaInput(persona)}${renderModuleEmptyState({
-              icon: "media",
-              title: "先准备一条草稿",
-              detail: "保存或生成推文后，即可使用 AI 生成配图",
-            })}
+            ${renderPersonaCompactMediaUpload(persona, null)}
           </div>
         </div>
       </section>`;
@@ -24563,6 +24562,12 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
           </div>
         ` : `
           <div class="persona-media-operation-pane">
+            ${renderPersonaEditableMediaGrid(postMediaItems, {
+              personaId: persona.id,
+              source: "posts",
+              postId: post.id,
+              sourceLabel,
+            })}
             <div class="form-grid persona-detail-controls persona-media-generation-controls">
               <label>生成张数
                 <select id="personaMediaImageCount" ${mediaModifyActive ? "disabled title=\"局部修改每次只生成 1 张图片\"" : ""}>
@@ -26442,9 +26447,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
             <div class="persona-compose-media-stack">
               ${generatePreviewDock}
               ${renderPublishLinkSettings(persona)}
-              ${canComposeMedia ? ((isEditingDraft || isBatchCompose || ordinaryMediaTarget)
-                ? renderPersonaInlineMediaComposer(persona, profile, generateForm, form.media, selectedPost, selectedPostMediaItems, selectedSourceLabel, selectedMediaSource === "favorites")
-                : renderPersonaMediaComposerPlaceholder(persona, form.media)) : ""}
+              ${canComposeMedia ? renderPersonaInlineMediaComposer(persona, profile, generateForm, form.media, selectedPost, selectedPostMediaItems, selectedSourceLabel, selectedMediaSource === "favorites") : ""}
             </div>
           ` : ""}
         </div>

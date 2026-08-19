@@ -460,13 +460,13 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         )
         renderer = self.script[renderer_start:renderer_end]
         self.assertIn('accept="image/*,video/*"', renderer)
-        self.assertIn('class="account-pool-add-button persona-compose-media-upload-trigger"', renderer)
-        self.assertIn('<span aria-hidden="true"></span>', renderer)
+        self.assertIn('class="account-pool-add-button persona-compose-media-upload-trigger persona-media-empty-picker"', renderer)
+        self.assertIn("${renderPlusIcon()}", renderer)
         self.assertIn("<strong>添加媒体</strong>", renderer)
+        self.assertIn("拖动图片或视频到这里，或点击选择", renderer)
         self.assertIn('title="上传图片或视频"', renderer)
         self.assertIn('directUpload ? "data-persona-direct-media-input"', renderer)
         self.assertNotIn("选择媒体文件", renderer)
-        self.assertNotIn("拖动图片或视频", renderer)
         self.assertIn(
             ".persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger {",
             self.styles,
@@ -477,6 +477,7 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         )[1].split("}", 1)[0]
         self.assertIn("justify-content: center;", upload_trigger_styles)
         self.assertIn("width: 100%;", upload_trigger_styles)
+        self.assertIn("min-height: 56px;", upload_trigger_styles)
 
     def test_persona_media_bulk_selection_keeps_actions_visible_and_count_centered(self):
         self.assertIn("function renderPersonaPublicMediaSelectionToolbar", self.script)
@@ -627,6 +628,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("hideEmpty: Boolean(postMediaItems.length || aiUploadSelectsModify)", inline)
         self.assertNotIn("renderPersonaMediaOperationTabs(", inline)
         self.assertNotIn("自定义上传", inline)
+        self.assertIn("renderPersonaEditableMediaGrid(postMediaItems", inline)
+        self.assertIn("renderPersonaCompactMediaUpload(persona, null)", inline)
+        self.assertNotIn("先准备一条草稿", inline)
+        self.assertNotIn("先选择一条草稿", inline)
         self.assertLess(inline.index("任务结果预览"), inline.index('renderUploadDropzone("personaMediaTaskFiles"'))
         self.assertIn("function autoAttachPersonaGeneratedMedia", self.script)
         self.assertIn("function clearPersonaMediaTransientSelection", self.script)

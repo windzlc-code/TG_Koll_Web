@@ -12579,16 +12579,24 @@ body.persona-touch-dragging .persona-list-card:active {
   justify-content: center;
   width: 100%;
   min-width: 0;
-  height: 42px;
-  min-height: 42px;
-  gap: 7px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
+  height: auto;
+  min-height: 56px;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px dashed color-mix(in srgb, var(--line) 86%, var(--ink));
+  border-radius: 10px;
+  background: var(--soft);
   color: var(--ink);
   cursor: pointer;
   transition: border-color var(--motion-fast), background var(--motion-fast), color var(--motion-fast), transform var(--motion-fast);
+}
+
+.persona-compose-media-upload .persona-compose-media-upload-trigger .ui-action-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  fill: none;
+  stroke: currentColor;
 }
 
 .persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger:hover,
@@ -13366,6 +13374,7 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+label.persona-media-empty-picker,
 .console-modal-dialog label.persona-media-empty-picker {
   display: inline-flex;
   align-items: flex-start;
@@ -13376,6 +13385,29 @@ body.persona-touch-dragging .persona-list-card:active {
   padding: 7px 14px;
   color: var(--ink);
   cursor: pointer;
+}
+
+.persona-compose-media-side .persona-unified-media-editor:not(.has-files) {
+  display: grid;
+  justify-items: stretch;
+  min-height: 88px;
+  padding: 10px;
+}
+
+.persona-compose-media-side label.persona-media-empty-picker {
+  align-items: center;
+  width: 100%;
+  min-height: 56px;
+  padding: 12px 14px;
+  border: 1px dashed color-mix(in srgb, var(--line) 86%, var(--ink));
+  border-radius: 10px;
+  background: var(--soft);
+}
+
+.persona-compose-media-side .persona-media-empty-picker .ui-action-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
 }
 
 .persona-media-empty-picker strong {
