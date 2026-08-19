@@ -396,6 +396,27 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("loadPersonaDraftPosts(key, { force: true })", watcher)
         self.assertIn("ensurePersonaHotImportMediaReady(persona, post)", publisher)
 
+    def test_hotspot_import_stops_busy_timer_before_completion_modal(self):
+        importer = self.script[
+            self.script.index("async function importPersonaHotDrafts"):
+            self.script.index("\nfunction resetPersonaDraftEditor", self.script.index("async function importPersonaHotDrafts"))
+        ]
+        submitter = self.script[
+            self.script.index("async function submitPersonaHotDraftImport"):
+            self.script.index("\nasync function importPersonaHotDrafts")
+        ]
+        self.assertNotIn("openConsoleModal", submitter)
+        self.assertIn("setActionLocked(lockParts, false)", importer)
+        self.assertIn("openConsoleModal", importer)
+        self.assertLess(
+            importer.rindex("setActionLocked(lockParts, false)"),
+            importer.index("openConsoleModal"),
+        )
+        self.assertLess(
+            importer.index("} finally {"),
+            importer.index("openConsoleModal"),
+        )
+
     def test_hotspot_results_are_filtered_by_platform_with_click_to_clear_badges(self):
         candidates = self.script[
             self.script.index("function personaHotAllCandidates"):

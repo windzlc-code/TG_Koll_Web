@@ -21773,7 +21773,6 @@ async function submitPersonaHotDraftImport(persona, selected, {
   replacementOpsByCandidate = {},
   preparedMediaOpsByCandidate = {},
   leftoverCandidates = [],
-  showCompletionModal = true,
   targetPlatform = personaContentPlatform(persona),
 } = {}) {
   const leftover = Array.isArray(leftoverCandidates) ? leftoverCandidates : [];
@@ -21915,14 +21914,6 @@ async function submitPersonaHotDraftImport(persona, selected, {
   });
   renderPersonaDetail();
   renderConfirmSummary();
-  if (showCompletionModal) {
-    await openConsoleModal({
-      title: "热点草稿已导入",
-      message: `已将 ${importedCount} 条热点推文保存到当前人设草稿库${replacementCount ? `，并替换 ${replacementCount} 个媒体文件` : ""}${editedMediaCount ? `，完成 ${editedMediaCount} 项媒体编辑` : ""}。页面会保持在热点处理区，你可以继续选择或编辑热点。`,
-      confirmText: "继续处理热点",
-      showCancel: false,
-    });
-  }
   return { ...result, createdIds, replacementCount, editedMediaCount };
 }
 
@@ -22008,14 +21999,14 @@ async function importPersonaHotDrafts(candidateIds = null, {
   clearMsg("commandMsg");
   setActionLocked(lockParts, true);
   renderPersonaDetail();
+  let importResult = null;
   try {
     const selectedKeys = new Set(prepared.map((item) => personaHotCandidateKey(item)));
     const leftoverCandidates = personaHotCandidates(persona).filter((item) => !selectedKeys.has(personaHotCandidateKey(item)));
-    return await submitPersonaHotDraftImport(persona, prepared, {
+    importResult = await submitPersonaHotDraftImport(persona, prepared, {
       replacementOpsByCandidate,
       preparedMediaOpsByCandidate,
       leftoverCandidates,
-      showCompletionModal,
       targetPlatform: resolvedTargetPlatform,
     });
   } catch (error) {
@@ -22030,6 +22021,18 @@ async function importPersonaHotDrafts(candidateIds = null, {
     setActionLocked(lockParts, false);
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
   }
+  if (importResult && showCompletionModal) {
+    const importedCount = Number(importResult.imported_count || 0) || (importResult.createdIds || []).length || 0;
+    const replacementCount = Number(importResult.replacementCount || 0);
+    const editedMediaCount = Number(importResult.editedMediaCount || 0);
+    await openConsoleModal({
+      title: "热点草稿已导入",
+      message: `已将 ${importedCount} 条热点推文保存到当前人设草稿库${replacementCount ? `，并替换 ${replacementCount} 个媒体文件` : ""}${editedMediaCount ? `，完成 ${editedMediaCount} 项媒体编辑` : ""}。页面会保持在热点处理区，你可以继续选择或编辑热点。`,
+      confirmText: "继续处理热点",
+      showCancel: false,
+    });
+  }
+  return importResult;
 }
 
 function resetPersonaDraftEditor(personaId) {
