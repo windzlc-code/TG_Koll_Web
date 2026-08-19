@@ -12605,6 +12605,16 @@ body.persona-touch-dragging .persona-list-card:active {
   display: none;
 }
 
+.persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger span.persona-media-empty-picker-copy {
+  position: static;
+  flex: 0 1 auto;
+  display: grid;
+  width: auto;
+  height: auto;
+  place-items: start;
+  gap: 2px;
+}
+
 .persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger:hover,
 .persona-compose-media-upload .account-pool-add-button.persona-compose-media-upload-trigger:focus-visible {
   background: var(--soft);
