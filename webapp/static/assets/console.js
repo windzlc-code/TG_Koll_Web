@@ -3674,6 +3674,16 @@ function personaMediaTargetPost(persona = selectedPersona()) {
     return { source, post };
   }
   const source = personaPostSource(persona);
+  const form = personaFormState(persona.id);
+  const composeMode = String(form.generate?.composeMode || "tweet");
+  const panel = String(state.personaPanels?.content || "generate");
+  if (panel === "generate" && composeMode === "tweet") {
+    const focusedOrdinaryPostId = String(form.media?.focusPostId || "").trim();
+    const post = focusedOrdinaryPostId
+      ? personaSourcePosts(persona, source).find((item) => String(item.id) === focusedOrdinaryPostId) || null
+      : null;
+    return { source, post };
+  }
   return { source, post: selectedPersonaPost(persona) };
 }
 
@@ -3685,11 +3695,9 @@ function personaNewComposeAllowsMediaModify(persona = selectedPersona()) {
 }
 
 function personaMediaTaskGenerationContent(persona, post, source = "posts") {
-  if (post) {
-    const stored = personaDraftReferenceContent(persona, post, source).trim();
-    if (stored) return stored;
-  }
-  return String($("personaDraftContent")?.value || (persona ? personaFormState(persona.id).draft?.content : "") || "").trim();
+  if (post) return personaDraftReferenceContent(persona, post, source).trim();
+  if ($("personaDraftContent")) return String($("personaDraftContent").value || "").trim();
+  return String(persona ? personaFormState(persona.id).draft?.content || "" : "").trim();
 }
 
 function personaMediaTaskCanRun({ content = "", prompt = "", modifyItem = null } = {}) {
@@ -4570,10 +4578,11 @@ function personaHotKeywordText(form, hotState = {}) {
   return existing || formatPersonaHotKeywordText(hotState.keywords);
 }
 
-function personaHotKeywordChips(keywords = []) {
+function personaHotKeywordChips(keywords = [], current = []) {
   const rows = parsePersonaHotKeywordText(formatPersonaHotKeywordText(keywords));
+  const currentSet = new Set(parsePersonaHotKeywordText(formatPersonaHotKeywordText(current)));
   return rows.length
-    ? rows.map((keyword) => `<span>${esc(keyword)}</span>`).join("")
+    ? rows.map((keyword) => `<span class="${currentSet.has(keyword) ? "is-current" : ""}">${esc(keyword)}</span>`).join("")
     : `<small>本次没有生成有效关键词</small>`;
 }
 
@@ -21588,10 +21597,18 @@ async function preparePersonaHotKeywords(refresh = false) {
       }),
     }, 35000);
     const keywords = Array.isArray(result.keywords) ? result.keywords.map((item) => String(item || "").trim()).filter(Boolean) : [];
+    const allKeywords = Array.isArray(result.all_keywords) ? result.all_keywords.map((item) => String(item || "").trim()).filter(Boolean) : keywords;
     form.hotKeywordText = formatPersonaHotKeywordText(keywords);
     state.personaHotCandidateResults[String(persona.id)] = {
       ...(state.personaHotCandidateResults[String(persona.id)] || {}),
       keywords,
+      all_keywords: allKeywords,
+      batch_index: Number(result.batch_index || 1),
+      batch_count: Number(result.batch_count || 1),
+      batch_uses: Number(result.batch_uses || 0),
+      batch_max_uses: Number(result.batch_max_uses || 1),
+      cycle: Number(result.cycle || 0),
+      max_cycles: Number(result.max_cycles || 2),
       search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
       keyword_prepared_at: new Date().toISOString(),
@@ -21658,13 +21675,11 @@ async function fetchPersonaHotCandidates(refresh = false) {
     renderPersonaDetail();
     return;
   }
-  if (keywords.length < 6) {
-    try {
-      const preparedKeywords = await preparePersonaHotKeywords(false);
-      if (preparedKeywords.length) keywords = parsePersonaHotKeywordText(formatPersonaHotKeywordText(preparedKeywords));
-    } catch (error) {
-      if (!keywords.length) throw error;
-    }
+  try {
+    const preparedKeywords = await preparePersonaHotKeywords(false);
+    if (preparedKeywords.length) keywords = parsePersonaHotKeywordText(formatPersonaHotKeywordText(preparedKeywords));
+  } catch (error) {
+    if (!keywords.length) throw error;
   }
   if (!keywords.length) {
     const prepareError = String(personaGenerateRunState(persona.id)?.error || "").trim();
@@ -21744,9 +21759,12 @@ async function fetchPersonaHotCandidates(refresh = false) {
       if (!(platform in unreadCounts)) unreadCounts[platform] = 0;
     });
     unreadCounts[currentPlatform] = platformCandidates.length;
+    const previousHot = state.personaHotCandidateResults[String(persona.id)] || {};
     state.personaHotCandidateResults[String(persona.id)] = {
+      ...previousHot,
       candidates: mergedCandidates,
-      keywords: Array.isArray(result.keywords) && result.keywords.length ? result.keywords : keywords,
+      keywords,
+      all_keywords: Array.isArray(previousHot.all_keywords) && previousHot.all_keywords.length ? previousHot.all_keywords : keywords,
       cookie_statuses: Array.isArray(result.cookie_statuses) ? result.cookie_statuses : [],
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
       search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
@@ -21754,7 +21772,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
       unread_counts: unreadCounts,
       fetched_at: new Date().toISOString(),
     };
-    form.hotKeywordText = formatPersonaHotKeywordText(state.personaHotCandidateResults[String(persona.id)].keywords);
+    form.hotKeywordText = formatPersonaHotKeywordText(keywords);
     const nextCandidates = personaHotAllCandidates(persona);
     reconcilePersonaHotMediaStateAfterRefresh(persona.id, previousCandidates, nextCandidates);
     state.transientWorkspaceLeaveAcknowledgement = "";
@@ -24492,6 +24510,11 @@ function renderPersonaHotCandidatePicker(persona, form) {
     && candidates.every((candidate) => selectedIds.has(personaHotCandidateKey(candidate)));
   const preview = personaHotPreviewCandidate(persona);
   const keywords = Array.isArray(hotState.keywords) ? hotState.keywords : [];
+  const allKeywords = Array.isArray(hotState.all_keywords) && hotState.all_keywords.length ? hotState.all_keywords : keywords;
+  const batchIndex = Math.max(1, Number(hotState.batch_index || 1));
+  const batchCount = Math.max(1, Number(hotState.batch_count || 1));
+  const cycle = Math.max(0, Number(hotState.cycle || 0));
+  const maxCycles = Math.max(1, Number(hotState.max_cycles || 2));
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
   const keywordBusy = isActionLocked("persona", persona?.id || "", "hot_keywords");
   const hotBusyStartedAt = actionLockStartedAt("persona", persona?.id || "", "hot_candidates");
@@ -24524,17 +24547,17 @@ function renderPersonaHotCandidatePicker(persona, form) {
         ${hotBusy ? `<button type="button" class="persona-hot-fetch-action" data-persona-cancel-hot>取消抓取</button>` : ""}
       </div>
       <small class="persona-hot-wait-hint">${keywordBusy
-        ? (keywords.length >= 8 ? "搜索词已缓存，正在确认后去抓帖。" : "第一次要等模型写出搜索词，大约 10–20 秒，请不要离开或重复点击。")
+        ? (allKeywords.length >= 8 ? "正在取出本轮 10 个搜索词，随后去抓帖。" : "第一次要等模型写出搜索词，大约 10–20 秒，请不要离开或重复点击。")
         : (hotBusy
-          ? "搜索词已经就绪。现在等的是抓帖，不是生成关键词。"
-          : (keywords.length >= 8
-            ? `搜索词已缓存 ${esc(keywords.length)} 个。再次点击会直接抓帖，不再重新生成。`
-            : "此人人设还没有搜索词。第一次会现场生成，大约 10–20 秒；成功后会缓存。"))}</small>
+          ? "本轮搜索词已经就绪。现在等的是抓帖，不是生成关键词。"
+          : (allKeywords.length >= 8
+            ? `词表 ${esc(allKeywords.length)} 个，本轮 ${esc(keywords.length)} 个（第 ${esc(batchIndex)}/${esc(batchCount)} 批，第 ${esc(cycle + 1)}/${esc(maxCycles)} 轮）。抓取成功后换下一批；两轮用完会重新生成。`
+            : "此人人设还没有搜索词。第一次会现场生成，大约 10–20 秒；成功后按 10 个一批轮换。"))}</small>
     </div>
-    ${keywords.length ? `
-      <details class="persona-hot-keyword-disclosure">
-        <summary><span>生成关键词</span><small>${esc(keywords.length)} 个</small>${renderExpandIcon(false)}</summary>
-        <div class="persona-hot-keyword-chips">${personaHotKeywordChips(keywords)}</div>
+    ${allKeywords.length ? `
+      <details class="persona-hot-keyword-disclosure" open>
+        <summary><span>生成关键词</span><small>本轮 ${esc(keywords.length)} / 词表 ${esc(allKeywords.length)}</small>${renderExpandIcon(false)}</summary>
+        <div class="persona-hot-keyword-chips">${personaHotKeywordChips(allKeywords, keywords)}</div>
       </details>
     ` : ""}
     ${candidates.length ? `<div class="persona-hot-layout">

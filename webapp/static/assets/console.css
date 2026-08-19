@@ -6885,6 +6885,12 @@ body.persona-touch-dragging .persona-list-card:active {
   line-height: 1.2;
 }
 
+.persona-hot-keyword-chips > span.is-current {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--line));
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-solid));
+  font-weight: 700;
+}
+
 .persona-hot-list,
 .persona-hot-preview {
   display: grid;
@@ -10364,6 +10370,12 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-media-task-actions > button {
   width: 100%;
   min-width: 0;
+}
+
+.persona-media-task-actions > button:disabled,
+.persona-media-task-actions > button:disabled:hover {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .persona-public-media-card,

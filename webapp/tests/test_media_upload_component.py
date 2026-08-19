@@ -713,6 +713,17 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("personaMediaTaskRunBlockedReason", renderer)
         self.assertIn("runDisabled ? \"disabled\"", renderer)
         self.assertIn("请先输入推文正文或补充提示词", self.script)
+        targeter = self.script[
+            self.script.index("function personaMediaTargetPost"):
+            self.script.index("function personaNewComposeAllowsMediaModify")
+        ]
+        self.assertIn('panel === "generate" && composeMode === "tweet"', targeter)
+        self.assertIn("focusedOrdinaryPostId", targeter)
+        content_reader = self.script[
+            self.script.index("function personaMediaTaskGenerationContent"):
+            self.script.index("function personaMediaTaskCanRun")
+        ]
+        self.assertIn('if ($("personaDraftContent")) return String($("personaDraftContent").value || "").trim();', content_reader)
 
     def test_ai_upload_lives_inside_task_preview_and_appends_generated_images(self):
         inline = self.script.split("function renderPersonaInlineMediaComposer", 1)[1].split(
