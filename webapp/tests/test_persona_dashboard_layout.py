@@ -3766,7 +3766,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertGreaterEqual(self.console_script.count('renderUploadDropzone("personaMediaTaskFiles"'), 2)
         self.assertGreaterEqual(self.console_script.count('label: "添加媒体"'), 2)
         self.assertGreaterEqual(self.console_script.count('accept: "image/*"'), 4)
-        self.assertIn('class="account-pool-add-button upload-zone-mobile-picker"', self.console_script)
+        self.assertIn('class="account-pool-add-button upload-zone-mobile-picker upload-add-chip"', self.console_script)
         self.assertGreaterEqual(self.console_script.count("publicMediaCards: true"), 4)
         self.assertIn('class="persona-public-media-card persona-upload-media-card', self.console_script)
         self.assertIn('input.matches("[data-public-media-cards]")', self.console_script)

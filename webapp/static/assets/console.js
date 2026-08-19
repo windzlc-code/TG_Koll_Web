@@ -12153,7 +12153,7 @@ function renderUnifiedAutomationModule(options = null) {
 function renderUploadAddMediaButton(id) {
   const inputId = String(id || "").trim();
   if (!inputId) return "";
-  return `<label class="account-pool-add-button upload-zone-mobile-picker" for="${esc(inputId)}" title="添加媒体" aria-label="添加媒体">
+  return `<label class="account-pool-add-button upload-zone-mobile-picker upload-add-chip" for="${esc(inputId)}" title="添加媒体" aria-label="添加媒体">
     <span aria-hidden="true"></span>
     <strong>添加媒体</strong>
   </label>`;
