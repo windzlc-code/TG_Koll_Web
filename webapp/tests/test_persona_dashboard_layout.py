@@ -3368,8 +3368,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('cancelText: "关闭"', detail)
         self.assertIn("if (shouldEdit) openPersonaDraftEditor(post.id);", detail)
         self.assertNotIn("<span>当前状态</span>", detail)
+        self.assertNotIn("<span>所属人设</span>", detail)
         self.assertNotIn("renderPersonaHotDetail(hotMeta)", detail)
-        self.assertIn('class="persona-draft-detail-meta-row"', detail)
         self.assertIn(
             '.console-modal[data-modal-key="persona-draft-detail"] .console-modal-actions {',
             self.styles,
@@ -3378,7 +3378,6 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             '.console-modal[data-modal-key="persona-draft-detail"] .console-modal-actions > [data-console-modal-confirm] {',
             self.styles,
         )
-        self.assertIn(".persona-draft-detail-modal .persona-draft-detail-meta-row {", self.styles)
         story = self.console_script[
             self.console_script.index("function renderPersonaDraftDetailStory"):
             self.console_script.index("function renderPersonaDraftDetailMedia")
@@ -3386,7 +3385,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("热点内容", story)
         self.assertIn("showSummary: false", story)
         self.assertNotIn("热点原文", story)
+        self.assertNotIn("抓取提示", story)
         self.assertIn("${renderPersonaHotMetricStrip(hotMeta)}", story)
+        preview = self.console_script[
+            self.console_script.index("function renderMediaPreviewButton"):
+            self.console_script.index("function cancelDeferredMediaHydration")
+        ]
+        self.assertIn("const isVideo = type === \"video\" || isVideoMediaUrl(previewUrl);", preview)
+        self.assertIn(": isVideo", preview)
+        self.assertNotIn("type === \"video\" && isVideoMediaUrl(displayUrl)", preview)
 
     def test_draft_more_menu_flips_above_the_mobile_dock(self):
         self.assertIn("function positionPersonaDraftMenu(menu)", self.console_script)

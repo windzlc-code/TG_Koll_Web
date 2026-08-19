@@ -8479,9 +8479,10 @@ function renderMediaPreviewButton(item, groupId, index, {
   const type = String(item?.type || "image").trim() || "image";
   const text = caption || mediaKindLabel(type);
   const posterUrl = String(item?.thumbnailUrl || item?.thumbnail_url || "").trim();
-  const displayUrl = adminWorkspaceUrl(
-    type === "video" ? (posterUrl || item?.previewUrl) : (posterUrl || item?.previewUrl),
-  );
+  const previewUrl = String(item?.previewUrl || "").trim();
+  const isVideo = type === "video" || isVideoMediaUrl(previewUrl);
+  const posterSrc = posterUrl && !isVideoMediaUrl(posterUrl) ? adminWorkspaceUrl(posterUrl) : "";
+  const displayUrl = adminWorkspaceUrl(isVideo ? previewUrl : (posterUrl || previewUrl));
   const unavailable = Boolean(item?.unavailable || (displayUrl && state.failedMediaPreviewUrls.has(displayUrl)));
   const canInteract = interactive && !unavailable;
   const canShowZoomHint = zoomHint && canInteract && type === "image";
@@ -8494,8 +8495,8 @@ function renderMediaPreviewButton(item, groupId, index, {
       ${canShowZoomHint ? `title="点击放大查看" aria-label="点击放大查看 ${esc(label || text)}"` : ""}>
       ${unavailable
         ? `<div class="${esc(frameClass)} persona-media-frame--empty"><strong>${type === "video" ? "视频无法预览" : "媒体已失效"}</strong><small>${type === "video" ? "封面或源文件无法加载" : "源文件无法加载"}</small></div>`
-        : type === "video" && isVideoMediaUrl(displayUrl)
-        ? `<video class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" muted playsinline preload="${deferLoad ? "none" : "metadata"}" draggable="false" onerror="handlePersonaMediaFrameError(this)"></video>`
+        : isVideo
+        ? `<video class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} ${posterSrc ? `poster="${esc(posterSrc)}"` : ""} data-media-source-url="${esc(displayUrl)}" muted playsinline preload="${deferLoad ? "none" : "metadata"}" draggable="false" onerror="handlePersonaMediaFrameError(this)"></video>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
           : `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
@@ -8741,7 +8742,6 @@ function renderPersonaDraftDetailStory(post, hotMeta) {
   const draftText = String(post?.content || "").trim();
   const original = String(hotMeta?.original_content || "").trim();
   const body = draftText || original || "暂无正文";
-  const warnings = Array.isArray(hotMeta?.warnings) ? hotMeta.warnings.filter(Boolean) : [];
   if (!hotMeta) {
     return `<div class="persona-draft-detail-content">
       <span>推文正文</span>
@@ -8753,7 +8753,6 @@ function renderPersonaDraftDetailStory(post, hotMeta) {
     ${renderPersonaHotOrigin(hotMeta, { showMetricSummary: false, showSummary: false })}
     ${renderPersonaHotMetricStrip(hotMeta)}
     <p>${esc(body)}</p>
-    ${warnings.length ? `<div class="persona-hot-detail-block"><strong>抓取提示</strong><p>${esc(warnings.join("\n"))}</p></div>` : ""}
   </div>`;
 }
 
@@ -9557,10 +9556,7 @@ async function viewPersonaDraftPost(postId = "") {
     contentHtml: `
       <div class="console-modal-detail persona-draft-detail-modal">
         <div><span>${source === "favorites" ? "收藏标题" : "草稿标题"}</span><strong>${esc(personaDraftDisplayTitleForPost(post, posts))}</strong></div>
-        <div class="persona-draft-detail-meta-row">
-          <div><span>所属人设</span><strong>${esc(persona.name || "未命名人设")}</strong></div>
-          <div><span>时间</span><strong>${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</strong></div>
-        </div>
+        <div><span>时间</span><strong>${esc(formatTime(post.published_at || post.updated_at || post.created_at))}</strong></div>
         ${renderPersonaDraftDetailStory(post, hotMeta)}
         ${renderPersonaDraftDetailMedia(mediaItems)}
       </div>
