@@ -3662,6 +3662,8 @@ function selectedPersonaPost(persona = selectedPersona(), options = {}) {
   return posts[0] || null;
 }
 
+const PERSONA_PENDING_MEDIA_POST_ID = "pending-new";
+
 function personaMediaTargetPost(persona = selectedPersona()) {
   if (!persona) return { source: "posts", post: null };
   const draft = personaFormState(persona.id).draft || {};
@@ -3673,6 +3675,59 @@ function personaMediaTargetPost(persona = selectedPersona()) {
   }
   const source = personaPostSource(persona);
   return { source, post: selectedPersonaPost(persona) };
+}
+
+function personaNewComposeAllowsMediaModify(persona = selectedPersona()) {
+  if (!persona) return false;
+  const form = personaFormState(persona.id);
+  if (String(form.draft?.editingPostId || "").trim()) return false;
+  return String(form.generate?.composeMode || "tweet") === "tweet";
+}
+
+function personaMediaTaskGenerationContent(persona, post, source = "posts") {
+  if (post) {
+    const stored = personaDraftReferenceContent(persona, post, source).trim();
+    if (stored) return stored;
+  }
+  return String($("personaDraftContent")?.value || (persona ? personaFormState(persona.id).draft?.content : "") || "").trim();
+}
+
+function personaMediaTaskCanRun({ content = "", prompt = "", modifyItem = null } = {}) {
+  const hasPrompt = Boolean(String(prompt || "").trim());
+  const hasContent = Boolean(String(content || "").trim());
+  if (modifyItem) return hasPrompt;
+  return hasContent || hasPrompt;
+}
+
+function personaMediaTaskRunBlockedReason({ content = "", prompt = "", modifyItem = null, videoSelected = false } = {}) {
+  if (videoSelected) return "视频文件不支持重生成图片";
+  if (modifyItem && !String(prompt || "").trim()) return "请输入对选中图片的局部修改要求";
+  if (!personaMediaTaskCanRun({ content, prompt, modifyItem })) return "请先输入推文正文或补充提示词";
+  return "";
+}
+
+function syncPersonaMediaTaskRunButton(options = {}) {
+  const button = document.querySelector("[data-persona-run-media-task]");
+  if (!button || button.getAttribute("aria-busy") === "true") return;
+  const persona = selectedPersona();
+  const { source, post } = personaMediaTargetPost(persona);
+  const taskState = persona && post ? personaMediaTaskState(persona.id, post.id) : null;
+  const modifyItem = options.modifyItem !== undefined ? options.modifyItem : personaTaskMediaModifyItem(taskState);
+  const videoSelected = Boolean(
+    modifyItem?.customSource
+    && personaDraftItemMediaKind(modifyItem.pendingItem || modifyItem) === "video"
+  );
+  const prompt = String(
+    options.prompt
+    ?? $("personaMediaTaskPrompt")?.value
+    ?? (persona ? personaFormState(persona.id).media?.prompt : "")
+    ?? ""
+  ).trim();
+  const content = personaMediaTaskGenerationContent(persona, post, source);
+  const blocked = personaMediaTaskRunBlockedReason({ content, prompt, modifyItem, videoSelected });
+  button.disabled = Boolean(blocked);
+  if (blocked) button.title = blocked;
+  else button.removeAttribute("title");
 }
 
 function personaDraftReferenceContent(persona, post, source = "posts") {
@@ -12421,7 +12476,7 @@ function personaAiUploadSelectionControlsModify(input) {
   return Boolean(
     input?.id === "personaMediaTaskFiles"
     && input.matches?.("[data-public-media-cards]")
-    && personaDraftMediaTargetIsEditing()
+    && (personaDraftMediaTargetIsEditing() || personaNewComposeAllowsMediaModify())
   );
 }
 
@@ -22753,16 +22808,65 @@ async function restorePersonaMediaTasksFromTaskList(tasks = state.tasks) {
   });
 }
 
+async function ensurePersonaDraftForMediaTask({ content = "", prompt = "", modifyItem = null } = {}) {
+  const persona = selectedPersona();
+  const { post } = personaMediaTargetPost(persona);
+  if (post) return post;
+  if (!persona) throw { detail: "请先选择一个人设。" };
+  const sourceFile = modifyItem?.replacementFile
+    || (modifyItem?.pendingItem
+      ? await personaCustomMediaFile(modifyItem.pendingItem, `media-${Number(modifyItem.sourceIndex) + 1}`)
+      : null);
+  const mediaFiles = sourceFile && fileKind(sourceFile) === "image" ? [sourceFile] : [];
+  const savedContent = String(content || "").trim() || (!mediaFiles.length ? String(prompt || "").trim() : "");
+  if (!savedContent && !mediaFiles.length) {
+    throw { detail: "请先输入推文正文、补充提示词，或添加要修改的媒体。" };
+  }
+  const mediaPaths = mediaFiles.length ? await uploadAutomationMedia(mediaFiles, "commandMsg") : [];
+  if (mediaFiles.length && !mediaPaths.length) {
+    throw { detail: "媒体上传失败，请重新选择文件后再生成。" };
+  }
+  const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: String(personaFormState(persona.id).draft?.title || "").trim(),
+      content: savedContent,
+      platform: personaContentPlatform(persona),
+      media_paths: mediaPaths,
+      media_ops: [],
+    }),
+  });
+  const savedPostId = String(result.id || "").trim();
+  if (!savedPostId) throw { detail: "媒体草稿创建失败，请稍后重试。" };
+  personaFormState(persona.id).media.focusPostId = savedPostId;
+  if (modifyItem) {
+    const mediaForm = personaFormState(persona.id).media;
+    if (mediaForm.customModifySource) {
+      mediaForm.customModifySource = {
+        ...mediaForm.customModifySource,
+        postId: savedPostId,
+        source: "posts",
+        file: sourceFile || mediaForm.customModifySource.file,
+      };
+    }
+  }
+  setSelectedPersonaPostId(savedPostId);
+  await loadPersonaDraftPosts(persona.id, { force: true });
+  return personaDraftPosts(persona).find((item) => String(item.id) === savedPostId) || result;
+}
+
 async function submitPersonaMediaTask() {
   const persona = selectedPersona();
   const profile = selectedPersonaProfile();
-  const { source, post } = personaMediaTargetPost(persona);
-  if (!persona || !profile || !post) {
-    showMsg("commandMsg", "请先选中一条草稿。", false);
+  if (!persona || !profile) {
+    showMsg("commandMsg", "请先选择一个人设。", false);
     return;
   }
+  snapshotPersonaCurrentForm();
+  let { source, post } = personaMediaTargetPost(persona);
   const form = personaFormState(persona.id).media;
-  const currentTaskState = personaMediaTaskState(persona.id, post.id);
+  const currentTaskState = post ? personaMediaTaskState(persona.id, post.id) : null;
   const currentTaskItems = currentTaskState ? personaTaskMediaItems(currentTaskState) : [];
   let modifyItem = personaTaskMediaModifyItem(currentTaskState, currentTaskItems);
   const allowedTaskTypes = personaMediaTaskOptions(profile, personaFormState(persona.id).generate).map(([value]) => value);
@@ -22773,6 +22877,26 @@ async function submitPersonaMediaTask() {
   if (modifyItem && personaDraftItemMediaKind(modifyItem.pendingItem || modifyItem) === "video") {
     showMsg("commandMsg", "视频文件不支持重生成图片。", false);
     return;
+  }
+  const generationContent = personaMediaTaskGenerationContent(persona, post, source);
+  const prompt = String(form.prompt || "").trim();
+  if (!personaMediaTaskCanRun({ content: generationContent, prompt, modifyItem })) {
+    showMsg(
+      "commandMsg",
+      modifyItem ? "请输入对选中图片的局部修改要求。" : "请先输入推文正文或补充提示词后再生成。",
+      false,
+    );
+    return;
+  }
+  if (!post) {
+    try {
+      post = await ensurePersonaDraftForMediaTask({ content: generationContent, prompt, modifyItem });
+    } catch (error) {
+      showMsg("commandMsg", error.detail || error.message || "无法创建媒体草稿。", false);
+      return;
+    }
+    source = "posts";
+    modifyItem = personaTaskMediaModifyItem(personaMediaTaskState(persona.id, post.id));
   }
   const lockParts = ["media_task", persona.id, post.id, taskType];
   if (isActionLocked(...lockParts) || personaMediaTaskIsActive(persona.id, post.id, taskType)) {
@@ -22791,7 +22915,6 @@ async function submitPersonaMediaTask() {
   }
   try {
     if (!modifyItem && !(await ensurePersonaReferenceImageForMediaTask(persona))) return;
-    snapshotPersonaCurrentForm();
     const mediaUploadState = captureUploadDropzoneState("personaMediaTaskFiles");
     const editSourceUploadState = captureUploadDropzoneState("personaMediaEditSourceFile");
     const uploadedEditSource = modifyItem
@@ -22811,22 +22934,12 @@ async function submitPersonaMediaTask() {
       showMsg("commandMsg", `当前任务至少需要 ${minImages} 张图片素材。`, false);
       return;
     }
-    const draftSourceText = personaDraftReferenceContent(persona, post, source).trim();
+    const draftSourceText = personaMediaTaskGenerationContent(persona, post, source);
     normalizePersonaMediaGenerationForm(form);
-    const generationContent = draftSourceText;
-    const prompt = String(form.prompt || "").trim();
-    if (modifyItem && !prompt) {
-      showMsg("commandMsg", "请输入对选中图片的局部修改要求。", false);
-      return;
-    }
     const desiredImageCount = modifyItem
       ? 1
       : Math.min(Math.max(Number(form.imageCount || state.personaMediaImageCountDefault || storedPersonaMediaImageCount() || 1), 1), 4);
     form.imageCount = desiredImageCount;
-    if (taskType === "persona_post_image" && !generationContent && !prompt) {
-      showMsg("commandMsg", "当前草稿没有正文，请补充提示词后再生成。", false);
-      return;
-    }
     const params = compactPayload({
       prompt,
       prompt_text: prompt,
@@ -23043,7 +23156,8 @@ async function personaCustomMediaFile(item, fallbackName = "custom-media-image")
 async function setPersonaCustomMediaModifySource({ item = null, input = null, index = 0, scrollToComposer = true } = {}) {
   const persona = selectedPersona();
   const { source, post } = personaMediaTargetPost(persona);
-  if (!persona || !post) {
+  const targetPostId = String(post?.id || (personaNewComposeAllowsMediaModify(persona) ? PERSONA_PENDING_MEDIA_POST_ID : "")).trim();
+  if (!persona || !targetPostId) {
     showMsg("commandMsg", "请先选中一条草稿。", false);
     return;
   }
@@ -23052,7 +23166,7 @@ async function setPersonaCustomMediaModifySource({ item = null, input = null, in
   const sameDraft = Boolean(
     !input
     && current
-    && String(current.postId || "") === String(post.id || "")
+    && String(current.postId || "") === targetPostId
     && String(current.source || "posts") === (source === "favorites" ? "favorites" : "posts")
     && Number(current.index) === Number(index)
   );
@@ -23068,7 +23182,7 @@ async function setPersonaCustomMediaModifySource({ item = null, input = null, in
         pendingItem: item,
         inputId: "",
         source: source === "favorites" ? "favorites" : "posts",
-        postId: String(post.id || ""),
+        postId: targetPostId,
         index: Number(index),
       };
       if (itemKind !== "video") {
@@ -23079,12 +23193,12 @@ async function setPersonaCustomMediaModifySource({ item = null, input = null, in
           if (
             latest
             && Number(latest.index) === Number(index)
-            && String(latest.postId || "") === String(post.id || "")
+            && String(latest.postId || "") === targetPostId
           ) latest.file = readyFile;
         }).catch((error) => showMsg("commandMsg", error.detail || error.message || "图片无法进入媒体修改", false));
       }
     }
-    const taskState = personaMediaTaskState(persona.id, post.id);
+    const taskState = post ? personaMediaTaskState(persona.id, post.id) : null;
     if (taskState) taskState.modifyMediaKey = "";
     syncPersonaCurrentMediaModifyUi(sameDraft ? -1 : Number(index));
     renderConfirmSummary();
@@ -23107,13 +23221,13 @@ async function setPersonaCustomMediaModifySource({ item = null, input = null, in
       previewUrl,
       inputId: String(input?.id || ""),
       source: source === "favorites" ? "favorites" : "posts",
-      postId: String(post.id || ""),
+      postId: targetPostId,
       index: Number(index),
     };
     form.imageCount = 1;
     form.prompt = "";
   }
-  const taskState = personaMediaTaskState(persona.id, post.id);
+  const taskState = post ? personaMediaTaskState(persona.id, post.id) : null;
   if (taskState) taskState.modifyMediaKey = "";
   const editSourceStateKey = uploadDropzoneStateKey("personaMediaEditSourceFile");
   if (editSourceStateKey) {
@@ -24819,11 +24933,12 @@ function personaCustomMediaModifyItem(taskState = null) {
   const persona = selectedPersona();
   const { source, post } = personaMediaTargetPost(persona);
   const customSource = persona ? personaFormState(persona.id).media?.customModifySource : null;
+  const expectedPostId = String(post?.id || (personaNewComposeAllowsMediaModify(persona) ? PERSONA_PENDING_MEDIA_POST_ID : "")).trim();
   if (
     !persona
-    || !post
-    || String(customSource?.postId || "") !== String(post.id || "")
-    || String(customSource?.source || "posts") !== String(source || "posts")
+    || !expectedPostId
+    || String(customSource?.postId || "") !== expectedPostId
+    || (post && String(customSource?.source || "posts") !== String(source || "posts"))
   ) return null;
   const hasFile = Boolean(customSource?.file && fileKind(customSource.file) === "image");
   const hasPending = Boolean(customSource?.pendingItem);
@@ -24981,9 +25096,11 @@ function syncPersonaCurrentMediaModifyUi(activeIndex = -1) {
   if (runButton && runButton.getAttribute("aria-busy") !== "true") {
     const hasTask = Boolean(runButton.dataset.personaMediaAction === "regenerate");
     runButton.textContent = imageModifying ? "重生成图片" : (hasTask ? "重新生成" : "生成预览");
-    runButton.disabled = videoSelected;
-    if (videoSelected) runButton.title = "视频文件不支持重生成图片";
-    else runButton.removeAttribute("title");
+    syncPersonaMediaTaskRunButton({
+      modifyItem: imageModifying || videoSelected
+        ? { customSource: true, pendingItem: videoSelected ? { type: "video" } : { type: "image" } }
+        : null,
+    });
   }
 }
 
@@ -25306,7 +25423,13 @@ function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, me
   );
   const imageModifying = modifying && !videoSelected;
   const actionKind = taskState?.taskId ? "regenerate" : "generate";
-  const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${mediaBusy || videoSelected ? "disabled" : ""} ${videoSelected ? "title=\"视频文件不支持重生成图片\"" : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (imageModifying ? "重生成图片" : (taskState?.taskId ? "重新生成" : "生成预览"))}</button>`;
+  const persona = selectedPersona();
+  const { source, post } = personaMediaTargetPost(persona);
+  const prompt = String(persona ? personaFormState(persona.id).media?.prompt || "" : "").trim();
+  const content = personaMediaTaskGenerationContent(persona, post, source);
+  const blockedReason = personaMediaTaskRunBlockedReason({ content, prompt, modifyItem, videoSelected });
+  const runDisabled = Boolean(mediaBusy || blockedReason);
+  const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${runDisabled ? "disabled" : ""} ${blockedReason ? `title="${esc(blockedReason)}"` : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (imageModifying ? "重生成图片" : (taskState?.taskId ? "重新生成" : "生成预览"))}</button>`;
   if (!taskState?.taskId) return `
     <div class="persona-media-task-result-preview">
       ${hideEmpty ? "" : renderModuleEmptyState({
@@ -35532,6 +35655,7 @@ function bindEvents() {
     }
     if (event.target?.id === "personaMediaTaskPrompt") {
       snapshotPersonaCurrentForm();
+      syncPersonaMediaTaskRunButton();
       renderConfirmSummary();
       return;
     }
@@ -35551,6 +35675,7 @@ function bindEvents() {
       if (personaId) invalidatePersonaPostDirectionsForCurrentInput(personaId);
       updatePersonaDraftEditVisualState();
       syncPersonaGenerateActionState();
+      syncPersonaMediaTaskRunButton();
       renderConfirmSummary();
     }
   });

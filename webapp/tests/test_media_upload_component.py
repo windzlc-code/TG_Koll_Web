@@ -690,6 +690,30 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("files = imageFiles.slice(-1);", self.script)
         self.assertIn("const files = modifyItem ? [] : mediaUploadState.files;", self.script)
 
+    def test_media_preview_requires_content_or_prompt_and_allows_pending_image_edit(self):
+        submitter = self.script[
+            self.script.index("async function submitPersonaMediaTask"):
+            self.script.index("async function attachPersonaTaskMediaToPost")
+        ]
+        renderer = self.script[
+            self.script.index("function renderPersonaMediaTaskResult"):
+            self.script.index("function renderPersonaCreateWorkbench")
+        ]
+        modify_gate = self.script[
+            self.script.index("function personaAiUploadSelectionControlsModify"):
+            self.script.index("function clearUploadPreviewResources")
+        ]
+        self.assertIn("function personaMediaTaskCanRun", self.script)
+        self.assertIn("function ensurePersonaDraftForMediaTask", self.script)
+        self.assertIn("PERSONA_PENDING_MEDIA_POST_ID", self.script)
+        self.assertIn("personaNewComposeAllowsMediaModify()", modify_gate)
+        self.assertIn("personaMediaTaskCanRun({ content: generationContent, prompt, modifyItem })", submitter)
+        self.assertIn("请先输入推文正文或补充提示词后再生成。", submitter)
+        self.assertIn("ensurePersonaDraftForMediaTask({ content: generationContent, prompt, modifyItem })", submitter)
+        self.assertIn("personaMediaTaskRunBlockedReason", renderer)
+        self.assertIn("runDisabled ? \"disabled\"", renderer)
+        self.assertIn("请先输入推文正文或补充提示词", self.script)
+
     def test_ai_upload_lives_inside_task_preview_and_appends_generated_images(self):
         inline = self.script.split("function renderPersonaInlineMediaComposer", 1)[1].split(
             "function taskOutputMediaItems", 1
