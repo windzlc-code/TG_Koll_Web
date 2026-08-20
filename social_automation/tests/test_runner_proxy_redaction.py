@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import threading
@@ -66,6 +67,44 @@ class RunnerProxyRedactionTests(unittest.TestCase):
         self.assertEqual(masked["server"], "socks5://proxy.example.test:1080")
         self.assertEqual(masked["username"], "***")
         self.assertEqual(masked["password"], "***")
+
+    def test_proxy_locale_prefers_detected_exit_country(self):
+        proxy = {
+            **self.proxy,
+            "country": "UA",
+            "last_check_result_json": json.dumps(
+                {"response": {"country": "Taiwan", "country_code": "TW"}}
+            ),
+        }
+
+        self.assertEqual(runner._proxy_locale(proxy), "TW")
+
+    def test_camoufox_launch_locale_follows_current_proxy(self):
+        observed = []
+        logger = _RecordingLogger()
+
+        for country_code in ("TW", "JP"):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                manager = runner._BrowserContextManager(
+                    {"id": f"account-{country_code}", "profile_dir": str(Path(temp_dir) / "profile")},
+                    {**self.proxy, "country": country_code},
+                    logger,
+                )
+
+                def record_launch(_camoufox, kwargs):
+                    observed.append(kwargs.get("locale"))
+
+                with (
+                    mock.patch(
+                        "social_automation.browser_runtime.verify_pinned_browser_runtime",
+                        return_value={"camoufox": "0.4.11"},
+                    ),
+                    mock.patch.object(manager, "_start_live_browser_session", return_value=None),
+                    mock.patch.object(manager, "_enter_camoufox", side_effect=record_launch),
+                ):
+                    manager.__enter__()
+
+        self.assertEqual(observed, ["TW", "JP"])
 
     def test_camoufox_launch_error_and_log_redact_proxy_credentials(self):
         username = self.proxy["username"]

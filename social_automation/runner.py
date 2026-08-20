@@ -1149,6 +1149,7 @@ class _BrowserContextManager:
         profile_dir.mkdir(parents=True, exist_ok=True)
         _cleanup_stale_profile_locks(profile_dir, self.logger)
         proxy_config = _proxy_config(self.proxy)
+        proxy_locale = _proxy_locale(self.proxy)
         self.live_session = self._start_live_browser_session()
         try:
             self._raise_if_cancelled_before_launch()
@@ -1199,6 +1200,8 @@ class _BrowserContextManager:
         if proxy_config:
             kwargs["proxy"] = proxy_config
             kwargs["geoip"] = True
+            if proxy_locale:
+                kwargs["locale"] = proxy_locale
         try:
             self._raise_if_cancelled_before_launch()
         except Exception:
@@ -1211,6 +1214,7 @@ class _BrowserContextManager:
             {
                 "profile_dir": str(profile_dir),
                 "proxy": _masked_proxy(proxy_config),
+                "locale": proxy_locale or "",
                 "headless": headless,
                 "runtime_versions": runtime_versions,
             },
@@ -1623,6 +1627,38 @@ def _proxy_config(proxy: dict[str, Any] | None) -> dict[str, str] | None:
         config["username"] = username
         config["password"] = password
     return config
+
+
+def _proxy_locale(proxy: dict[str, Any] | None) -> str | None:
+    """Return the current proxy territory so Camoufox refreshes its locale."""
+    if not proxy:
+        return None
+
+    candidates: list[Any] = []
+    last_check = proxy.get("last_check_result_json")
+    if isinstance(last_check, str) and last_check.strip():
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            last_check = json.loads(last_check)
+    if isinstance(last_check, dict):
+        for section in (last_check.get("response"), last_check.get("detected"), last_check):
+            if isinstance(section, dict):
+                candidates.extend((section.get("country_code"), section.get("countryCode")))
+    candidates.extend((proxy.get("country_code"), proxy.get("countryCode"), proxy.get("country")))
+
+    aliases = {
+        "TAIWAN": "TW",
+        "中国台湾": "TW",
+        "中國台灣": "TW",
+        "台灣": "TW",
+    }
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if not value:
+            continue
+        normalized = aliases.get(value.upper(), value.upper())
+        if len(normalized) == 2 and normalized.isalpha():
+            return normalized
+    return None
 
 
 def _masked_proxy(proxy_config: dict[str, str] | None) -> dict[str, str]:
