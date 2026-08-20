@@ -198,6 +198,11 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
                 "connection": {"isp": "Mock ISP"},
             },
         }
+        with app_db.db() as conn:
+            conn.execute(
+                "UPDATE proxy_market_items SET last_check_at=0 WHERE provider_purchase_order_id=?",
+                (order["id"],),
+            )
         with mock.patch.object(proxy_ip_admin, "_run_proxy_connection_check", return_value=health_result):
             maintenance = proxy_ip_admin.run_proxy_market_health_maintenance_once(now=1_700_000_103)
         self.assertEqual(maintenance["healthy"], 1)
@@ -389,6 +394,47 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
         self.assertEqual(tuple(after_social), ("New York", "New York"))
         self.assertEqual(owned[0]["city"], "New York")
         self.assertEqual(owned[0]["region"], "New York")
+
+    def test_order_list_distinguishes_legacy_actual_city_from_selected_city(self):
+        provider = _MislabeledCityProvider(unit_price_usd="4.00")
+        with app_db.db() as conn:
+            quote = create_quote(
+                conn,
+                user_id=self.user_id,
+                country="GB",
+                city="London",
+                auto_renew=False,
+                provider=provider,
+                now=1_700_000_210,
+            )
+        with app_db.db() as conn:
+            order = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=quote["id"],
+                idempotency_key="legacy-city-backfill",
+                provider=provider,
+                now=1_700_000_211,
+            )
+            conn.execute(
+                "UPDATE proxy_market_items SET city='Taichung',region='Taichung' "
+                "WHERE provider_purchase_order_id=?",
+                (order["id"],),
+            )
+            conn.execute(
+                "UPDATE social_proxies SET city='Taichung',region='Taichung' "
+                "WHERE market_item_id IN (SELECT id FROM proxy_market_items WHERE provider_purchase_order_id=?)",
+                (order["id"],),
+            )
+
+        with app_db.db() as conn:
+            listed = proxy_purchases.list_orders(conn, limit=20)
+        listed_order = next(item for item in listed if item["id"] == order["id"])
+        self.assertEqual(listed_order["city"], "Taichung")
+        self.assertEqual(listed_order["city_name"], "Taichung")
+        self.assertEqual(listed_order["selected_city"], "London")
+        self.assertEqual(listed_order["selected_city_name"], "London")
+        self.assertTrue(listed_order["city_mismatch"])
 
     def test_admin_order_executes_without_user_point_balance(self):
         provider = MockProxyProvider(unit_price_usd="4.00")

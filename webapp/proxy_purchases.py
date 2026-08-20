@@ -2214,23 +2214,61 @@ def list_orders(
             "SELECT * FROM proxy_purchase_orders WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
             (int(user_id), min(max(limit, 1), 100)),
         ).fetchall()
+    order_ids = [str(row["id"] or "") for row in rows if str(row["id"] or "")]
+    assets_by_order: dict[str, dict[str, Any]] = {}
+    if order_ids:
+        placeholders = ",".join("?" for _ in order_ids)
+        asset_rows = conn.execute(
+            f"SELECT provider_purchase_order_id,country,region,city,last_check_result_json "
+            f"FROM proxy_market_items WHERE ownership_type='owned' "
+            f"AND provider_purchase_order_id IN ({placeholders})",
+            tuple(order_ids),
+        ).fetchall()
+        assets_by_order = {
+            str(asset["provider_purchase_order_id"] or ""): dict(asset)
+            for asset in asset_rows
+        }
     result: list[dict[str, Any]] = []
     for row in rows:
         item = _public_order(row)
+        request = _loads(row["request_json"], {})
+        selected_country = str(request.get("country") or "")
+        selected_country_name = str(request.get("countryName") or selected_country)
+        selected_city = str(request.get("city") or "")
+        selected_city_name = str(request.get("cityName") or selected_city)
+        asset = assets_by_order.get(str(row["id"] or ""), {})
+        check = _loads(asset.get("last_check_result_json"), {})
+        response = check.get("response") if isinstance(check.get("response"), Mapping) else {}
+        actual_country = str(response.get("country") or response.get("country_code") or asset.get("country") or selected_country)
+        actual_region = str(response.get("region") or asset.get("region") or "")
+        actual_city = str(response.get("city") or asset.get("city") or selected_city_name)
+        item.update(
+            {
+                "country": actual_country,
+                "country_name": actual_country,
+                "region": actual_region,
+                "city": actual_city,
+                "city_name": actual_city,
+                "selected_country": selected_country,
+                "selected_country_name": selected_country_name,
+                "selected_city": selected_city,
+                "selected_city_name": selected_city_name,
+                "city_mismatch": bool(
+                    actual_city
+                    and selected_city_name
+                    and actual_city.casefold() != selected_city_name.casefold()
+                ),
+            }
+        )
         renewal = conn.execute(
             "SELECT status,last_error FROM proxy_renewal_schedules WHERE order_id=?", (str(row["id"]),)
         ).fetchone()
         item["renewal_status"] = str(renewal["status"] or "") if renewal else ""
         item["renewal_last_error"] = str(renewal["last_error"] or "") if renewal else ""
         if user_id is None:
-            request = _loads(row["request_json"], {})
             item.update(
                 {
                     "user_id": int(row["user_id"]),
-                    "country": str(request.get("country") or ""),
-                    "country_name": str(request.get("countryName") or request.get("country") or ""),
-                    "city": str(request.get("city") or ""),
-                    "city_name": str(request.get("cityName") or request.get("city") or ""),
                     "vendor_price": str(Decimal(int(row["provider_cost_minor"] or 0)) / 100),
                     "currency": str(row["provider_currency"] or "USD"),
                 }

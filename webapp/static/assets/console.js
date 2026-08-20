@@ -8590,9 +8590,7 @@ function renderMediaPreviewButton(item, groupId, index, {
   const previewUrl = String(item?.previewUrl || sourceUrl).trim();
   const isVideo = type === "video" || isVideoMediaUrl(sourceUrl) || isVideoMediaUrl(previewUrl);
   const posterSrc = posterUrl && !isVideoMediaUrl(posterUrl) ? adminWorkspaceUrl(posterUrl) : "";
-  const videoSrc = isVideo && isVideoMediaUrl(sourceUrl)
-    ? adminWorkspaceUrl(sourceUrl)
-    : (isVideo && isVideoMediaUrl(previewUrl) ? adminWorkspaceUrl(previewUrl) : "");
+  const videoSrc = isVideo ? adminWorkspaceUrl(previewUrl) : "";
   const displayUrl = adminWorkspaceUrl(isVideo ? (posterSrc || videoSrc) : (posterSrc || previewUrl || sourceUrl));
   const unavailable = Boolean(item?.unavailable || (displayUrl && state.failedMediaPreviewUrls.has(displayUrl)));
   const canInteract = interactive && !unavailable;
@@ -13741,7 +13739,13 @@ function renderAutomationPlanRows(draft, platform) {
           </div>
           <div class="automation-plan-task-cell">
             <div class="automation-plan-task-control ${selectedTask ? "" : "is-empty"}">
-              <strong class="automation-plan-task-value">${esc(selectedTask ? automationPlanTaskLabel(selectedTask) : "未添加")}</strong>
+              <button
+                type="button"
+                class="automation-plan-task-value"
+                data-automation-plan-task-picker="${index}"
+                title="${selectedTask ? "更换任务" : "添加任务"}"
+                aria-label="${selectedTask ? "更换任务" : "添加任务"}"
+              >${esc(selectedTask ? automationPlanTaskLabel(selectedTask) : "未添加")}</button>
               ${selectedTask ? `<button
                 type="button"
                 class="automation-plan-task-detail unified-action-icon-button"
@@ -21588,9 +21592,9 @@ async function preparePersonaHotKeywords(refresh = false) {
       batch_index: Number(result.batch_index || 1),
       batch_count: Number(result.batch_count || 1),
       batch_uses: Number(result.batch_uses || 0),
-      batch_max_uses: Number(result.batch_max_uses || 1),
+      batch_max_uses: Number(result.batch_max_uses || 2),
       cycle: Number(result.cycle || 0),
-      max_cycles: Number(result.max_cycles || 2),
+      max_cycles: Number(result.max_cycles || 1),
       search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
       keyword_prepared_at: new Date().toISOString(),
@@ -21821,6 +21825,21 @@ async function cancelPersonaHotCandidates() {
     method: "POST",
   }, 10000);
   controller?.abort?.(new DOMException("Request cancelled", "AbortError"));
+  if (state.personaHotFetchControllers[personaKey] === controller) {
+    delete state.personaHotFetchControllers[personaKey];
+  }
+  setPersonaGenerateRunState(persona.id, {
+    kind: "hot",
+    status: "idle",
+    message: "热点抓取已取消",
+    error: "",
+  });
+  setActionLocked(["persona", persona.id, "hot_candidates"], false);
+  if (isPersonaWorkspaceModule()) {
+    renderPersonaDetail();
+    renderConfirmSummary();
+  }
+  showMsg("commandMsg", "热点抓取已取消。", true);
   await cancellation;
 }
 
@@ -23135,8 +23154,10 @@ function setPersonaTaskMediaModifySource(mediaKey) {
   const form = personaFormState(persona.id).media;
   form.imageCount = 1;
   if (nextKey) form.prompt = "";
+  pendingPersonaMediaScrollId = String(persona.id || "");
   renderPersonaDetail();
   renderConfirmSummary();
+  scrollPersonaMediaComposerIntoView(persona.id, { focusEditPrompt: true });
 }
 
 async function personaCustomMediaFile(item, fallbackName = "custom-media-image") {
@@ -24495,8 +24516,8 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const allKeywords = Array.isArray(hotState.all_keywords) && hotState.all_keywords.length ? hotState.all_keywords : keywords;
   const batchIndex = Math.max(1, Number(hotState.batch_index || 1));
   const batchCount = Math.max(1, Number(hotState.batch_count || 1));
-  const cycle = Math.max(0, Number(hotState.cycle || 0));
-  const maxCycles = Math.max(1, Number(hotState.max_cycles || 2));
+  const batchUses = Math.max(0, Number(hotState.batch_uses || 0));
+  const batchMaxUses = Math.max(1, Number(hotState.batch_max_uses || 2));
   const hotBusy = isActionLocked("persona", persona?.id || "", "hot_candidates");
   const keywordBusy = isActionLocked("persona", persona?.id || "", "hot_keywords");
   const hotBusyStartedAt = actionLockStartedAt("persona", persona?.id || "", "hot_candidates");
@@ -24533,11 +24554,11 @@ function renderPersonaHotCandidatePicker(persona, form) {
         : (hotBusy
           ? "本轮搜索词已经就绪。现在等的是抓帖，不是生成关键词。"
           : (allKeywords.length >= 8
-            ? `词表 ${esc(allKeywords.length)} 个，本轮 ${esc(keywords.length)} 个（第 ${esc(batchIndex)}/${esc(batchCount)} 批，第 ${esc(cycle + 1)}/${esc(maxCycles)} 轮）。抓取成功后换下一批；两轮用完会重新生成。`
+            ? `词表 ${esc(allKeywords.length)} 个，本轮 ${esc(keywords.length)} 个（第 ${esc(batchIndex)}/${esc(batchCount)} 批，第 ${esc(batchUses + 1)}/${esc(batchMaxUses)} 遍）。每批抓取两遍，第二遍会打乱关键词顺序；两批共四遍后重新生成。`
             : "此人人设还没有搜索词。第一次会现场生成，大约 10–20 秒；成功后按 10 个一批轮换。"))}</small>
     </div>
     ${allKeywords.length ? `
-      <details class="persona-hot-keyword-disclosure" open>
+      <details class="persona-hot-keyword-disclosure">
         <summary><span>生成关键词</span><small>本轮 ${esc(keywords.length)} / 词表 ${esc(allKeywords.length)}</small>${renderExpandIcon(false)}</summary>
         <div class="persona-hot-keyword-chips">${personaHotKeywordChips(allKeywords, keywords)}</div>
       </details>
@@ -31343,6 +31364,17 @@ function proxyProtocol(proxy = {}) {
   return String(proxy?.protocol || proxy?.proxy_type || "-").trim().toUpperCase();
 }
 
+function proxyProtocolLabel(proxy = {}) {
+  const clean = proxyProtocol(proxy).toLowerCase();
+  return {
+    http: "网页代理",
+    https: "加密网页代理",
+    socks: "通用代理",
+    socks5: "通用代理",
+    auto: "自动识别",
+  }[clean] || "其他协议";
+}
+
 function proxyExitIp(proxy = {}) {
   return String(proxy.exit_ip || proxy.last_check_result?.response?.ip || proxy.last_check_result?.ip || "-").trim() || "-";
 }
@@ -31361,7 +31393,14 @@ function proxyStatusLabel(value = "") {
 
 function proxySourceLabel(value = "") {
   const clean = String(value || "").trim().toLowerCase();
-  return { manual: "手动添加", marketplace: "系统导入", owlproxy: "OwlProxy", provider: "其他购买代理", self_owned: "自有代理" }[clean] || (value || "-");
+  return {
+    manual: "手动添加",
+    marketplace: "平台选择",
+    provider_purchase: "平台选择",
+    provider: "平台选择",
+    owlproxy: "平台导入",
+    self_owned: "自有代理",
+  }[clean] || "其他来源";
 }
 
 function proxyPurchaseStatusLabel(value = "") {
@@ -31369,7 +31408,21 @@ function proxyPurchaseStatusLabel(value = "") {
 }
 
 function proxyIpTypeLabel(value = "") {
-  return String(value || "static_residential").trim().toLowerCase() === "static_residential" ? "静态住宅" : String(value || "-");
+  const clean = String(value || "static_residential").trim().toLowerCase();
+  return {
+    static_residential: "静态住宅",
+    residential: "住宅代理",
+    rotating_residential: "动态住宅",
+    datacenter: "数据中心",
+    mobile: "移动网络",
+  }[clean] || "其他类型";
+}
+
+function proxyDisplayName(proxy = {}, endpoint = "") {
+  const country = accountProxyCountry(proxy).label;
+  const ipType = proxyIpTypeLabel(proxy.ip_type);
+  if (country && country !== "待识别") return `${country}${ipType}代理 IP`;
+  return endpoint && endpoint !== "-" ? "专属代理 IP" : "代理 IP";
 }
 
 function proxyAutomaticValidityLabel(proxy = null) {
@@ -31400,40 +31453,6 @@ function renderLiveBrowserEnterIcon() {
   </svg>`;
 }
 
-function openProxyDetailModal(proxyId = "") {
-  const proxy = socialProxyById(proxyId);
-  if (!proxy) {
-    showMsg("socialMsg", "代理不存在，请刷新后重试。", false);
-    return;
-  }
-  const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
-  const country = String(proxy.country || "").trim() || "待识别";
-  const authLabel = proxy.username_configured || proxy.password_configured ? "需要账号认证" : "无需账号认证";
-  const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
-  void openConsoleModal({
-    title: "代理 IP 详情",
-    contentHtml: `
-      <div class="console-modal-detail proxy-detail-modal">
-        <div><span>代理名称</span><strong>${esc(proxy.name || endpoint)}</strong></div>
-        <div><span>代理状态</span><strong>${esc(proxyStatusLabel(proxy.status))}</strong></div>
-        <div><span>连接地址</span><strong>${esc(endpoint)}</strong><p>${esc(authLabel)}</p></div>
-        <div><span>代理协议</span><strong>${esc(proxyProtocol(proxy))}</strong></div>
-        <div><span>IP 类型</span><strong>${esc(proxyIpTypeLabel(proxy.ip_type))}</strong></div>
-        <div><span>代理归属</span><strong>${esc(country)}</strong></div>
-        <div><span>出口 IP</span><strong>${esc(proxyExitIp(proxy))}</strong></div>
-        <div><span>已绑账号</span><strong>${proxyBoundAccountCount(proxy)}</strong></div>
-        <div><span>来源</span><strong>${esc(proxySourceLabel(proxy.source))}</strong></div>
-        <div><span>购买状态</span><strong>${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</strong></div>
-        <div><span>系统有效性</span><strong>${esc(proxyAutomaticValidityLabel(proxy))}</strong></div>
-        <div><span>最近检测</span><strong>${proxy.last_check_at ? esc(formatTime(proxy.last_check_at)) : "尚未检测"}</strong></div>
-        <div class="proxy-detail-modal-note"><span>备注</span><p>${esc(proxy.note || (isMarketplace ? "历史导入代理" : "暂无备注"))}</p></div>
-      </div>`,
-    modalKey: "proxy-details",
-    cancelText: "关闭",
-    showConfirm: false,
-  });
-}
-
 function renderProxyPool() {
   const root = $("proxyPool");
   if (!root) return;
@@ -31447,18 +31466,6 @@ function renderProxyPool() {
   const pageRows = rows.slice(offset, offset + pageSize);
   const visibleRows = mobileStream.mobile ? mobileStream.items : pageRows;
   const columns = ["序号", "分组", "IP 类型", "来源", "购买状态", "节点名称", "代理资讯", "备注", "代理状态", "出口归属", "出口 IP", "已绑账号", "代理协议", "系统有效性", "操作"];
-  const renderProxyMobileActions = (proxy) => {
-    const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
-    const boundCount = proxyBoundAccountCount(proxy);
-    const deleteTitle = boundCount ? "代理已绑定账号，不能删除" : "删除代理";
-    const deleteLabel = "删除代理";
-    const editAction = isMarketplace ? "" : `<button type="button" data-proxy-edit="${esc(proxy.id)}" title="编辑代理" aria-label="编辑代理">${renderEditIcon()}</button>`;
-    return `
-      <button type="button" data-proxy-view="${esc(proxy.id)}" title="查看详情" aria-label="查看代理详情">${renderEyeIcon()}</button>
-      <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderNetworkIcon()}</button>
-      ${editAction}
-      <button type="button" class="danger" data-proxy-delete="${esc(proxy.id)}" title="${deleteTitle}" aria-label="${deleteLabel}" ${boundCount ? "disabled" : ""}>${renderTrashIcon()}</button>`;
-  };
   root.innerHTML = `
     <section class="proxy-pool-panel">
       <div class="proxy-pool-head">
@@ -31469,7 +31476,7 @@ function renderProxyPool() {
           <div class="proxy-table-row proxy-table-row--head" role="row">${columns.map((column) => `<span role="columnheader">${column}</span>`).join("")}</div>
           ${visibleRows.length ? visibleRows.map((proxy, index) => {
             const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
-            const country = String(proxy.country || "").trim() || "待识别";
+            const country = accountProxyCountry(proxy).label;
             const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
             const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
             const sourceClass = isMarketplace ? "marketplace" : "custom";
@@ -31479,14 +31486,14 @@ function renderProxyPool() {
               <span role="cell" class="proxy-detail-cell" data-mobile-label="IP 类型">${esc(proxyIpTypeLabel(proxy.ip_type))}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="来源"><span class="proxy-source-badge is-${sourceClass}">${esc(proxySourceLabel(proxy.source))}</span></span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="购买状态">${esc(proxyPurchaseStatusLabel(proxy.purchase_status))}</span>
-              <span role="cell" class="proxy-detail-cell" data-mobile-label="节点名称"><strong>${esc(proxy.name || endpoint)}</strong></span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="节点名称"><strong>${esc(proxyDisplayName(proxy, endpoint))}</strong></span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="代理资讯"><strong>${esc(endpoint)}</strong><small>${esc(authLabel)}</small></span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="备注">${esc(proxy.note || "-")}</span>
               <span role="cell" class="proxy-detail-cell proxy-status-stack" data-mobile-label="代理状态"><span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span><small>${proxy.last_check_at ? esc(formatTime(proxy.last_check_at)) : "未检测"}</small></span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="出口归属">${esc(country)}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="出口 IP">${esc(proxyExitIp(proxy))}</span>
               <span role="cell" class="proxy-detail-cell proxy-numeric" data-mobile-label="已绑账号">${proxyBoundAccountCount(proxy)}</span>
-              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理协议">${esc(proxyProtocol(proxy))}</span>
+              <span role="cell" class="proxy-detail-cell" data-mobile-label="代理协议">${esc(proxyProtocolLabel(proxy))}</span>
               <span role="cell" class="proxy-detail-cell" data-mobile-label="系统有效性">${esc(proxyAutomaticValidityLabel(proxy))}</span>
               <span role="cell" class="proxy-table-actions" data-mobile-label="操作">
                 <button type="button" data-proxy-check="${esc(proxy.id)}" title="检测代理" aria-label="检测代理">${renderNetworkIcon()}</button>
@@ -31506,7 +31513,7 @@ function renderProxyPool() {
       <div class="proxy-card-grid" data-proxy-mobile-cards role="list" aria-label="代理 IP 列表">
           ${visibleRows.length ? visibleRows.map((proxy, index) => {
             const endpoint = [String(proxy.host || "").trim(), String(proxy.port || "").trim()].filter(Boolean).join(":") || "-";
-            const country = String(proxy.country || "").trim() || "待识别";
+            const country = accountProxyCountry(proxy).label;
             const authLabel = proxy.username_configured || proxy.password_configured ? "需认证" : "无认证";
             const isMarketplace = String(proxy.source || "").trim().toLowerCase() === "marketplace";
             const sourceClass = isMarketplace ? "marketplace" : "custom";
@@ -31515,13 +31522,13 @@ function renderProxyPool() {
               <div class="proxy-pool-card-head">
                 <div class="proxy-pool-card-identity">
                   <span class="proxy-pool-card-kicker"><span>代理 ${offset + index + 1}</span><span class="proxy-source-badge is-${sourceClass}">${esc(proxySourceLabel(proxy.source))}</span></span>
-                  <strong title="${esc(proxy.name || endpoint)}">${esc(proxy.name || endpoint)}</strong>
+                  <strong title="${esc(proxyDisplayName(proxy, endpoint))}">${esc(proxyDisplayName(proxy, endpoint))}</strong>
                 </div>
                 <span class="status ${esc(proxy.status || "")}">${esc(proxyStatusLabel(proxy.status))}</span>
               </div>
               <div class="proxy-pool-card-endpoint">
                 ${renderNetworkIcon()}
-                <span><strong title="${esc(endpoint)}">${esc(endpoint)}</strong><small>${esc(proxyProtocol(proxy))} · ${esc(authLabel)}</small></span>
+                <span><strong title="${esc(endpoint)}">${esc(endpoint)}</strong><small>${esc(proxyProtocolLabel(proxy))} · ${esc(authLabel)}</small></span>
               </div>
               <div class="proxy-pool-card-meta" aria-label="代理摘要">
                 <span><small>归属</small><strong>${esc(country)}</strong></span>
@@ -31530,7 +31537,6 @@ function renderProxyPool() {
               </div>
               <div class="proxy-pool-card-footer">
                 <small>${esc(proxyAutomaticValidityLabel(proxy))}</small>
-                <div class="proxy-card-actions" role="group" aria-label="代理操作">${renderProxyMobileActions(proxy)}</div>
               </div>
             </article>`;
           }).join("") : renderModuleEmptyState({
@@ -34588,11 +34594,6 @@ function bindEvents() {
         .catch((error) => showMsg("commandMsg", error.detail || error.message || "图片无法进入媒体修改", false));
       return;
     }
-    const taskMediaModify = event.target.closest("[data-persona-task-media-modify]");
-    if (taskMediaModify) {
-      setPersonaTaskMediaModifySource(taskMediaModify.dataset.personaTaskMediaModify || "");
-      return;
-    }
     const taskMediaReplace = event.target.closest("[data-persona-task-media-replace]");
     if (taskMediaReplace) {
       choosePersonaTaskMediaReplacement(taskMediaReplace.dataset.personaTaskMediaReplace || "");
@@ -35897,11 +35898,6 @@ function bindEvents() {
       event.stopPropagation();
       toggleAccountPasswordVisibility(accountPasswordToggle)
         .catch((error) => showMsg("socialMsg", error.detail || error.message || "读取登录密码失败", false));
-      return;
-    }
-    const proxyView = event.target.closest("[data-proxy-view]");
-    if (proxyView) {
-      openProxyDetailModal(proxyView.dataset.proxyView || "");
       return;
     }
     const proxyCheck = event.target.closest("[data-proxy-check]");

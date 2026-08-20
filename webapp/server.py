@@ -14890,8 +14890,8 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
 
 PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 62
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 10
-PERSONA_HOT_KEYWORD_BATCH_MAX_USES = 1
-PERSONA_HOT_KEYWORD_PLAN_MAX_CYCLES = 2
+PERSONA_HOT_KEYWORD_BATCH_MAX_USES = 2
+PERSONA_HOT_KEYWORD_PLAN_MAX_CYCLES = 1
 _HOT_PUBLIC_PROBE_FLAG = Path("/data/hot-public-probe")
 
 
@@ -14943,7 +14943,18 @@ def _persona_hot_keyword_batch_from_row(row: Any) -> list[str]:
     cursor = min(max(_to_int(row.get("cursor"), 0), 0), len(keywords))
     if cursor >= len(keywords):
         return []
-    return keywords[cursor:cursor + PERSONA_HOT_KEYWORD_BATCH_SIZE]
+    batch = keywords[cursor:cursor + PERSONA_HOT_KEYWORD_BATCH_SIZE]
+    if _to_int(row.get("batch_uses"), 0) < 1 or len(batch) < 2:
+        return batch
+    seed = f"{_persona_hot_keyword_digest(keywords)}:{cursor}"
+    shuffled = [
+        item
+        for _index, item in sorted(
+            enumerate(batch),
+            key=lambda pair: hashlib.sha256(f"{seed}:{pair[0]}:{pair[1]}".encode("utf-8")).digest(),
+        )
+    ]
+    return shuffled if shuffled != batch else batch[1:] + batch[:1]
 
 
 def _persona_hot_keyword_prepare_payload(
@@ -15110,10 +15121,10 @@ def _persona_hot_rewrite_char_count(text: str) -> int:
     return len("".join(str(text or "").split()))
 
 
-def _persona_hot_rewrite_length_bounds(source_length: int) -> tuple[int, int]:
+def _persona_hot_rewrite_length_bounds(source_length: int) -> tuple[int, int | None]:
     clean = max(1, int(source_length or 0))
     delta = max(1, int(round(clean * 0.05)))
-    return max(1, clean - delta), clean + delta
+    return max(1, clean - delta), None
 
 
 PERSONA_HOT_REWRITE_MAX_ATTEMPTS = 2
@@ -15151,11 +15162,11 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
     min_length, max_length = _persona_hot_rewrite_length_bounds(source_length)
     length_contract = "\n".join([
         "【字数硬性合同，必须一次写对】",
-        f"原文去掉空白后是 {source_length} 字。改写后必须落在 {min_length} 到 {max_length} 字，目标就是 {source_length} 字。",
+        f"原文去掉空白后是 {source_length} 字。改写后不得少于 {min_length} 字，可以超过原文字数。",
         "字数按去掉所有空白后的字符计算。这是改写，不是摘要，也不是压缩。",
         "人设只改口吻和身份，不缩短篇幅。原文里的数字、金额、产品、比例、年龄、问题和结论都要留下。",
         "不要按微博、推特或 Threads 的发布字数上限压缩。即使接近平台上限，也不许擅自删减。",
-        "写完后先在心里核对字数；不够就补同等细节，多了就删空话，但不要整段砍事实。",
+        "写完后先在心里核对字数；不够就补同等细节，超过原文字数可以直接保留。",
     ])
     system_prompt = "\n".join([
         length_contract,
@@ -15172,7 +15183,7 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         "当前人设：",
         *[line for line in persona_lines if not line.endswith("：")],
         "",
-        f"热点原文约 {source_length} 字。改写后必须一次写到 {min_length}-{max_length} 字，上下浮动不超过 5%。",
+        f"热点原文约 {source_length} 字。改写后不得少于 {min_length} 字，超过原文字数允许直接输出。",
         "热点原文（只作素材，禁止照抄）：",
         source_content[:4000],
     ])
@@ -15200,7 +15211,7 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
             continue
         last_content = content
         last_length = _persona_hot_rewrite_char_count(content)
-        if min_length <= last_length <= max_length:
+        if last_length >= min_length:
             return {
                 "ok": True,
                 "content": last_content[:5000],
@@ -15209,13 +15220,12 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
                 "min_length": min_length,
                 "max_length": max_length,
             }
-        gap = (min_length - last_length) if last_length < min_length else (last_length - max_length)
-        direction = "少了" if last_length < min_length else "多了"
+        gap = min_length - last_length
         prompt_user = "\n".join([
             user_input,
             "",
-            f"上次改写只有 {last_length} 字，{direction} {gap} 字，不合格。",
-            f"请按同一事实和人设重写一整篇，目标 {source_length} 字，必须落在 {min_length}-{max_length} 字。",
+            f"上次改写只有 {last_length} 字，低于最低要求 {gap} 字，不合格。",
+            f"请按同一事实和人设重写一整篇，至少写到 {min_length} 字，超过原文字数可以保留。",
             "禁止继续摘要。把原文里的数字、金额、产品和问题都写回去，用同等信息量补足字数。",
         ])
     if not last_content:
@@ -15223,8 +15233,8 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
     raise HTTPException(
         status_code=502,
         detail=(
-            f"改写字数偏离过大（原文 {source_length} 字，结果 {last_length} 字，"
-            f"要求 {min_length}-{max_length} 字），请再试一次。"
+            f"改写字数不足（原文 {source_length} 字，结果 {last_length} 字，"
+            f"至少需要 {min_length} 字），请再试一次。"
         ),
     )
 
@@ -15592,6 +15602,13 @@ def _write_persona_hot_import_drafts(
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+    platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else None
+    target_platform = _normalize_persona_content_platform(platform)
+    target_platform_posts = (
+        platform_posts.get(target_platform)
+        if isinstance(platform_posts, dict) and isinstance(platform_posts.get(target_platform), list)
+        else []
+    )
     next_order = max((int(_number(post.get("orderIndex"), -1)) for post in posts if isinstance(post, dict)), default=-1) + 1
     now = _persona_dashboard_iso_now()
     created: list[dict[str, Any]] = []
@@ -15644,11 +15661,16 @@ def _write_persona_hot_import_drafts(
             record["mediaUrl"] = first.get("url")
             record["mediaType"] = first.get("type") or _guess_media_type(first.get("url"))
         posts = [*posts, record]
+        if platform_posts is not None:
+            target_platform_posts = [*target_platform_posts, copy.deepcopy(record)]
         created.append(record)
         hydrate_items.append({"postId": post_id, "candidate": candidate})
     if not created:
         raise HTTPException(status_code=400, detail="请先选择至少一条热点候选。")
     archive["posts"] = posts
+    if platform_posts is not None:
+        platform_posts[target_platform] = target_platform_posts
+        archive["platformPosts"] = platform_posts
     archive["updatedAt"] = now
     _write_persona_archives_preserving_shape(path, raw, archives)
     return created, hydrate_items
@@ -16597,20 +16619,24 @@ def _persona_archive_post_media_path(archive_id: str, post_id: str, index: int, 
     raise HTTPException(status_code=404, detail="媒体尚未缓存到本地。")
 
 
-def _proxy_remote_persona_media(url: str) -> Response:
+def _proxy_remote_persona_media(url: str, *, range_header: str = "") -> Response:
     clean = str(url or "").strip()
     if not re.match(r"^https?://", clean, re.I):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
     try:
+        request_headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "image/avif,image/webp,image/*,video/*,*/*;q=0.8",
+            "Referer": "https://www.threads.net/",
+        }
+        clean_range = str(range_header or "").strip()
+        if clean_range.lower().startswith("bytes=") and "\r" not in clean_range and "\n" not in clean_range:
+            request_headers["Range"] = clean_range
         upstream = requests.get(
             clean,
             timeout=15,
             stream=True,
-            headers={
-                "User-Agent": "Mozilla/5.0",
-                "Accept": "image/avif,image/webp,image/*,video/*,*/*;q=0.8",
-                "Referer": "https://www.threads.net/",
-            },
+            headers=request_headers,
         )
     except requests.RequestException as exc:
         raise HTTPException(status_code=404, detail="媒体源文件不存在。") from exc
@@ -16627,10 +16653,16 @@ def _proxy_remote_persona_media(url: str) -> Response:
         finally:
             upstream.close()
 
+    response_headers = {"Cache-Control": "private, max-age=60"}
+    for header in ("Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"):
+        value = str(upstream.headers.get(header) or "").strip()
+        if value:
+            response_headers[header] = value
     return StreamingResponse(
         chunks(),
         media_type=content_type,
-        headers={"Cache-Control": "private, max-age=60"},
+        status_code=int(getattr(upstream, "status_code", 200) or 200),
+        headers=response_headers,
     )
 
 
@@ -16682,11 +16714,18 @@ def _serve_persona_media_thumbnail(path: Path) -> FileResponse:
     )
 
 
-def _serve_persona_archive_post_media(archive_id: str, post_id: str, index: int, source: str = "posts") -> Response:
+def _serve_persona_archive_post_media(
+    archive_id: str,
+    post_id: str,
+    index: int,
+    source: str = "posts",
+    *,
+    range_header: str = "",
+) -> Response:
     local_path, remote_url = _persona_archive_post_media_source(archive_id, post_id, index, source)
     if local_path:
         return _serve_persona_media_file(local_path)
-    return _proxy_remote_persona_media(remote_url)
+    return _proxy_remote_persona_media(remote_url, range_header=range_header)
 
 
 def _serve_persona_archive_post_media_thumbnail(archive_id: str, post_id: str, index: int, source: str = "posts") -> Response:
@@ -25714,16 +25753,22 @@ def create_app() -> FastAPI:
         return _delete_persona_favorite_post(archive_id, post_id)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}")
-    def api_persona_dashboard_persona_post_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _serve_persona_archive_post_media(archive_id, post_id, index)
+    def api_persona_dashboard_persona_post_media(archive_id: str, post_id: str, index: int, request: Request, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _serve_persona_archive_post_media(archive_id, post_id, index, range_header=request.headers.get("range", ""))
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/posts/{post_id}/media/{index}/thumbnail")
     def api_persona_dashboard_persona_post_media_thumbnail(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _serve_persona_archive_post_media_thumbnail(archive_id, post_id, index)
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}")
-    def api_persona_dashboard_persona_favorite_media(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _serve_persona_archive_post_media(archive_id, post_id, index, source="favorites")
+    def api_persona_dashboard_persona_favorite_media(archive_id: str, post_id: str, index: int, request: Request, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _serve_persona_archive_post_media(
+            archive_id,
+            post_id,
+            index,
+            source="favorites",
+            range_header=request.headers.get("range", ""),
+        )
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/favorites/{post_id}/media/{index}/thumbnail")
     def api_persona_dashboard_persona_favorite_media_thumbnail(archive_id: str, post_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):

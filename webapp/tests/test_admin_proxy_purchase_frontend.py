@@ -202,6 +202,7 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertIn('return "中国台湾"', country_label)
         self.assertIn("proxyPurchaseCountryLabel(item.country)", purchased_assets)
         self.assertIn("proxyPurchaseCountryLabel({ name: order.country_name, code: order.country })", purchase_orders)
+        self.assertIn("选择城市：${order.selected_city_name || order.selected_city}", purchase_orders)
 
 
 if __name__ == "__main__":

@@ -652,7 +652,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn(">开始生成</button>", self.console_script)
         self.assertNotIn('"自动生成草稿"', self.console_script)
         self.assertNotIn('"AI 润色预览"', self.console_script)
-        self.assertIn('modifying ? "重生成图片"', self.console_script)
+        self.assertIn('imageModifying ? "重生成图片"', self.console_script)
         self.assertIn('taskState?.taskId ? "重新生成" : "生成预览"', self.console_script)
         self.assertIn(">添加至草稿</button>", self.console_script)
         self.assertIn(">替换</button>", self.console_script)
@@ -677,7 +677,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("function renderPersonaTaskMediaPreview(taskState, items = personaTaskMediaItems(taskState))", self.console_script)
         self.assertIn('data-persona-task-media-select="${esc(mediaKey)}"', self.console_script)
         self.assertIn("media_indexes: [Number(item.sourceIndex)]", self.console_script)
-        self.assertIn('data-persona-task-media-modify="${esc(mediaKey)}"', self.console_script)
+        self.assertNotIn('data-persona-task-media-modify="${esc(mediaKey)}"', self.console_script)
         self.assertIn('data-persona-task-media-replace="${esc(mediaKey)}"', self.console_script)
         self.assertIn('data-persona-task-media-delete="${esc(mediaKey)}"', self.console_script)
         self.assertNotIn("data-persona-generated-media", self.console_script)
@@ -3411,7 +3411,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index("function renderMediaPreviewButton"):
             self.console_script.index("function cancelDeferredMediaHydration")
         ]
-        self.assertIn("const isVideo = type === \"video\" || isVideoMediaUrl(previewUrl);", preview)
+        self.assertIn(
+            "const isVideo = type === \"video\" || isVideoMediaUrl(sourceUrl) || isVideoMediaUrl(previewUrl);",
+            preview,
+        )
         self.assertIn(": isVideo", preview)
         self.assertNotIn("type === \"video\" && isVideoMediaUrl(displayUrl)", preview)
 
@@ -3498,8 +3501,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
                 self.assertIn(action, self.console_script)
         self.assertIn('${renderTrashIcon()}</button>', self.console_script)
         self.assertNotIn("account-pool-delete-icon", self.console_script)
-        self.assertIn(".persona-link-actions button.danger,", self.styles)
-        self.assertIn(".proxy-card-actions button.danger {", self.styles)
+        self.assertIn(".persona-link-actions button.danger {", self.styles)
 
     def test_persona_account_settings_precedes_history_and_uses_inline_change_actions(self):
         overview_start = self.console_script.index("function renderPersonaContentOverview")
@@ -3527,15 +3529,6 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.console_script.index("function renderProxyPool()"):
             self.console_script.index("\nfunction proxyFormPayload", self.console_script.index("function renderProxyPool()"))
         ]
-        detail_modal = self.console_script[
-            self.console_script.index("function openProxyDetailModal("):
-            self.console_script.index("\nfunction renderProxyPool()", self.console_script.index("function openProxyDetailModal("))
-        ]
-        event_handler = self.console_script[
-            self.console_script.index('const proxyView = event.target.closest("[data-proxy-view]")'):
-            self.console_script.index('const proxyPage = event.target.closest("[data-proxy-page]")')
-        ]
-
         self.assertIn('class="proxy-card-grid" data-proxy-mobile-cards role="list"', proxy_pool)
         self.assertIn('class="proxy-pool-card ', proxy_pool)
         self.assertIn('class="proxy-table-wrap" data-proxy-desktop-list', proxy_pool)
@@ -3549,10 +3542,6 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             proxy_pool.index('class="proxy-table-wrap" data-proxy-desktop-list'):
             proxy_pool.index('class="proxy-card-grid" data-proxy-mobile-cards')
         ]
-        mobile_actions = proxy_pool[
-            proxy_pool.index("const renderProxyMobileActions"):
-            proxy_pool.index("root.innerHTML = `")
-        ]
         mobile_cards = proxy_pool[proxy_pool.index('class="proxy-card-grid" data-proxy-mobile-cards'):]
         self.assertNotIn('data-proxy-view=', desktop_list)
         self.assertIn('${renderNetworkIcon()}</button>', desktop_list)
@@ -3560,29 +3549,30 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('${renderTrashIcon()}</button>', desktop_list)
         self.assertNotIn('${renderRefreshIcon()}</button>', desktop_list)
         self.assertNotIn('${isMarketplace ? "释放" : "删除"}', desktop_list)
-        self.assertIn('data-proxy-view="${esc(proxy.id)}"', mobile_actions)
-        self.assertIn('${renderEyeIcon()}</button>', mobile_actions)
-        self.assertIn('${renderNetworkIcon()}</button>', mobile_actions)
-        self.assertIn('${renderEditIcon()}</button>', mobile_actions)
-        self.assertIn('${renderTrashIcon()}</button>', mobile_actions)
-        self.assertIn('${renderProxyMobileActions(proxy)}', mobile_cards)
+        self.assertNotIn("const renderProxyMobileActions", proxy_pool)
+        self.assertNotIn("proxy-card-actions", mobile_cards)
+        self.assertNotIn("data-proxy-view", mobile_cards)
         self.assertIn('const mobileStream = mobileTweetStreamInfo(rows, "proxy-pool", pageSize);', proxy_pool)
         self.assertIn('const visibleRows = mobileStream.mobile ? mobileStream.items : pageRows;', proxy_pool)
         self.assertIn('${mobileStream.mobile ? renderMobileTweetStreamFooter(mobileStream, "proxy-pool") : `<div class="proxy-pager">', proxy_pool)
         self.assertIn('else if (target === "proxy-pool") renderProxyPool();', self.console_script)
         self.assertIn('bindMobileTweetStreamObservers();', proxy_pool)
 
-        self.assertIn('modalKey: "proxy-details"', detail_modal)
-        self.assertIn('class="console-modal-detail proxy-detail-modal"', detail_modal)
-        self.assertIn('showConfirm: false', detail_modal)
-        self.assertIn('openProxyDetailModal(proxyView.dataset.proxyView || "")', event_handler)
-        self.assertLess(
-            event_handler.index('const proxyView = event.target.closest("[data-proxy-view]")'),
-            event_handler.index('const proxyCheck = event.target.closest("[data-proxy-check]")'),
-        )
+        self.assertNotIn("function openProxyDetailModal", self.console_script)
+        self.assertNotIn('event.target.closest("[data-proxy-view]")', self.console_script)
+        self.assertIn('provider_purchase: "平台选择"', self.console_script)
+        self.assertIn('http: "网页代理"', self.console_script)
+        self.assertIn('return `${country}${ipType}代理 IP`;', self.console_script)
+        self.assertIn('const country = accountProxyCountry(proxy).label;', proxy_pool)
+        self.assertIn('${esc(proxyDisplayName(proxy, endpoint))}', proxy_pool)
+        self.assertIn('${esc(proxyProtocolLabel(proxy))}', proxy_pool)
+        self.assertNotIn('${esc(proxy.name || endpoint)}', proxy_pool)
+        self.assertNotIn('${esc(proxyProtocol(proxy))}', proxy_pool)
 
         self.assertIn(".proxy-card-grid {", self.styles)
         self.assertIn(".proxy-pool-card {", self.styles)
+        self.assertIn("--proxy-ip-card-gradient:", self.styles)
+        self.assertIn("background: var(--proxy-ip-card-gradient);", self.styles)
         self.assertIn("max-width: 420px;", self.styles)
         self.assertIn(".proxy-table-wrap {", self.styles)
         self.assertIn(".proxy-table-row {", self.styles)
@@ -3624,7 +3614,6 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         body = submit.group("body")
         guard = "if (!modifyItem && !(await ensurePersonaReferenceImageForMediaTask(persona))) return;"
         self.assertIn(guard, body)
-        self.assertLess(body.index(guard), body.index("snapshotPersonaCurrentForm();"))
         self.assertLess(body.index(guard), body.index('api("/api/tasks/submit"'))
 
     def test_media_generation_uses_a_single_optional_prompt_and_four_image_limit(self):
@@ -3634,7 +3623,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("<select id=\"personaMediaImageCount\"", self.console_script)
         self.assertIn("[1, 2, 3, 4]", self.console_script)
         self.assertNotIn('"AI 润色预览"', self.console_script)
-        self.assertIn('modifying ? "重生成图片"', self.console_script)
+        self.assertIn('imageModifying ? "重生成图片"', self.console_script)
         self.assertIn("content_source_mode: \"draft\"", self.console_script)
         self.assertNotIn("contentMode === \"manual\"", self.console_script)
         self.assertNotIn("manual_content:", self.console_script)
@@ -3777,12 +3766,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("persona-task-media-add-tile", self.console_script)
         self.assertNotIn(".persona-task-media-add-tile", self.styles)
         self.assertNotIn("renderPersonaTaskMediaPreview(null, [])", self.console_script)
-        task_modify_line = next(
-            line for line in self.console_script.splitlines()
-            if "data-persona-task-media-modify" in line and "<button" in line
-        )
-        self.assertIn("${renderPlusIcon()}</button>", task_modify_line)
-        self.assertNotIn("${renderReplaceIcon()}</button>", task_modify_line)
+        self.assertNotIn("data-persona-task-media-modify", self.console_script)
         self.assertIn('renderUploadDropzone("personaMediaEditSourceFile"', self.console_script)
         self.assertIn('accept: "image/*"', self.console_script)
         self.assertIn("imageEditSource: true", self.console_script)

@@ -253,6 +253,7 @@ class ProxyCheapProvider:
             "planId",
             "country",
             "region",
+            "city",
             "ispId",
             "package",
             "protocol",

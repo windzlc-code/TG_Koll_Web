@@ -276,6 +276,48 @@ describe("persona hot workflow remote worker snapshots", () => {
     expect(mocks.rememberSentimentHotImported).toHaveBeenCalledWith("persona-1", "hot-1");
   });
 
+  it("hydrates an imported draft from its matching platform queue", async () => {
+    const post = {
+      ...hotPostSnapshot(),
+      mediaItems: [{ url: "https://cdn.example/hot.png", type: "image" }],
+      sourceMeta: {
+        ...hotPostSnapshot().sourceMeta,
+        platform: "instagram",
+        mediaCache: { status: "pending", startedAt: "2026-08-20T00:00:00.000Z" },
+      },
+    };
+    mocks.loadPersonaArchive.mockResolvedValue(archiveSnapshot({
+      posts: [],
+      platformPosts: { threads: [], instagram: [post], telegram: [] },
+    }));
+    mocks.downloadCandidateMedia.mockResolvedValue([
+      { url: "https://cdn.example/hot.png", type: "image", localPath: "/data/sentiment-hot-media/hot-1-1.png" },
+    ]);
+
+    const result = await hydrateHotImportMedia({
+      action: "finalize-hot-import",
+      archiveId: "persona-1",
+      items: [{
+        postId: "post-1",
+        candidate: {
+          id: "hot-1",
+          platform: "instagram",
+          sourceUrl: "https://www.instagram.com/p/abc",
+          content: "body",
+          media: [{ url: "https://cdn.example/hot.png", type: "image" }],
+        },
+      }],
+    });
+
+    expect(mocks.downloadCandidateMedia).toHaveBeenCalled();
+    expect(mocks.updatePersonaArchivePostDraft).toHaveBeenCalledWith(
+      "persona-1",
+      "post-1",
+      expect.objectContaining({ mediaUrl: "/data/sentiment-hot-media/hot-1-1.png" }),
+    );
+    expect(result.posts).toEqual([{ postId: "post-1", status: "ready" }]);
+  });
+
   it("recycles leftover candidates after hydrating imported drafts", async () => {
     mocks.loadPersonaArchive.mockResolvedValue(archiveSnapshot({ posts: [hotPostSnapshot()] }));
     mocks.recycleUnusedSentimentHotCandidates.mockReturnValue({ recycled: 1 });

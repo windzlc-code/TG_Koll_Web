@@ -101,6 +101,7 @@ class ProxyCheapProviderTests(unittest.TestCase):
                 {
                     "planId": "standard",
                     "country": "US",
+                    "city": "New York",
                     "quantity": 99,
                     "period": {"unit": "months", "value": 1},
                 },
@@ -111,6 +112,7 @@ class ProxyCheapProviderTests(unittest.TestCase):
         self.assertEqual((method, url), ("POST", f"{API_BASE_URL}/v2/order/static-residential-ipv4/execute"))
         self.assertEqual(kwargs["json"]["quantity"], 1)
         self.assertEqual(kwargs["json"]["country"], "US")
+        self.assertEqual(kwargs["json"]["city"], "New York")
         self.assertEqual(kwargs["json"]["autoExtend"], {"isEnabled": False})
 
     def test_price_without_currency_fails_closed(self):

@@ -171,11 +171,16 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         self.assertIn('data-automation-plan-view-details="${index}"', rows)
         self.assertIn("renderEyeIcon()", rows)
         self.assertIn("renderPlusIcon()", rows)
+        self.assertIn('class="automation-plan-task-value"', rows)
+        self.assertIn('data-automation-plan-task-picker="${index}"', rows)
+        self.assertNotIn('<strong class="automation-plan-task-value">', rows)
         self.assertIn('aria-label="${selectedTask ? "更换任务" : "添加任务"}"', rows)
         self.assertIn('aria-label="查看任务明细"', rows)
         self.assertIn("unified-action-icon-button", rows)
         self.assertIn("border: 0", CONSOLE_CSS)
         self.assertGreaterEqual(CONSOLE_CSS.count("grid-template-columns: repeat(2, minmax(0, 1fr));"), 2)
+        self.assertIn("justify-self: center;", CONSOLE_CSS)
+        self.assertIn("width: min(100%, 240px);", CONSOLE_CSS)
         self.assertNotIn("grid-template-columns: 28px minmax(0, 1fr) 38px", CONSOLE_CSS)
 
     def test_every_selected_plan_task_has_a_working_details_route(self):

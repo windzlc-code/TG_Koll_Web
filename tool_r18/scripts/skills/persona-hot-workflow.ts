@@ -350,7 +350,11 @@ export async function hydrateHotImportMedia(input: FinalizeHotImportInput) {
       continue;
     }
     const currentArchive = await loadPersonaArchive(archiveId);
-    const current = currentArchive?.posts?.find((post) => String(post.id || "") === postId);
+    const platformPosts = currentArchive?.platformPosts?.[candidate.platform];
+    const current = [
+      ...(Array.isArray(platformPosts) ? platformPosts : []),
+      ...(Array.isArray(currentArchive?.posts) ? currentArchive.posts : []),
+    ].find((post) => String(post.id || "") === postId);
     if (!current) {
       results.push({ postId, status: "missing" });
       continue;

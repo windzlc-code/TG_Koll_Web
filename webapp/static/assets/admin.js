@@ -9660,6 +9660,9 @@ function renderProxyPurchaseOrders(payload = {}) {
       order.user_id ? `#${order.user_id}` : "-",
       proxyPurchaseCountryLabel({ name: order.country_name, code: order.country }),
       order.city_name || order.city || "",
+      order.city_mismatch && (order.selected_city_name || order.selected_city)
+        ? `选择城市：${order.selected_city_name || order.selected_city}`
+        : "",
     ].filter(Boolean).join(" · ")));
     row.appendChild(createBillingCell(order.vendor_price === undefined ? "-" : `${order.vendor_price} ${order.currency || "USD"}`));
     row.appendChild(createBillingCell(order.charge_points === undefined ? "-" : `${Number(order.charge_points).toLocaleString("zh-CN", { maximumFractionDigits: 2 })} 点`));

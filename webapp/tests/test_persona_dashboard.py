@@ -4419,11 +4419,27 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("keywords,", fetch_source)
         self.assertIn("/hot_candidates/cooldown", fetch_source)
         self.assertIn("热点抓取准备失败，请稍后重试。", fetch_source)
-        self.assertIn("if (keywords.length < 6)", fetch_source)
+        self.assertIn("if (!keywords.length)", fetch_source)
         self.assertIn("platform: personaContentPlatform(persona)", fetch_source)
         self.assertIn("搜索词已就绪，正在抓取帖子", fetch_source)
         self.assertIn("首次生成搜索词", source)
         self.assertIn("第一次会现场生成，大约 10–20 秒", source)
+
+    def test_console_hot_cancel_updates_ui_before_waiting_for_backend(self):
+        source = (Path(server.__file__).parent / "static" / "assets" / "console.js").read_text(encoding="utf-8")
+        start = source.index("async function cancelPersonaHotCandidates")
+        end = source.index("async function submitPersonaHotDraftImport", start)
+        cancel_source = source[start:end]
+
+        abort_at = cancel_source.index("controller?.abort?.")
+        unlock_at = cancel_source.index('setActionLocked(["persona", persona.id, "hot_candidates"], false)')
+        render_at = cancel_source.index("renderPersonaDetail()")
+        await_at = cancel_source.index("await cancellation")
+        self.assertLess(abort_at, unlock_at)
+        self.assertLess(unlock_at, render_at)
+        self.assertLess(render_at, await_at)
+        self.assertIn('status: "idle"', cancel_source)
+        self.assertIn('message: "热点抓取已取消"', cancel_source)
 
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()
@@ -4660,13 +4676,63 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("不是摘要", captured["system"])
         self.assertIn("一次写对", captured["system"])
         self.assertIn("热点原文约", captured["user"])
-        self.assertIn("不超过 5%", captured["user"])
+        self.assertIn("不得少于", captured["user"])
+        self.assertIn("超过原文字数允许", captured["user"])
         self.assertIn("发布字数上限压缩", captured["user"])
 
-    def test_hot_rewrite_length_bounds_stay_within_five_percent(self):
-        self.assertEqual(server._persona_hot_rewrite_length_bounds(100), (95, 105))
-        self.assertEqual(server._persona_hot_rewrite_length_bounds(500), (475, 525))
+    def test_hot_rewrite_length_bounds_allow_five_percent_shorter_without_an_upper_limit(self):
+        self.assertEqual(server._persona_hot_rewrite_length_bounds(100), (95, None))
+        self.assertEqual(server._persona_hot_rewrite_length_bounds(500), (475, None))
         self.assertEqual(server._persona_hot_rewrite_char_count("改 写 后 正文"), 5)
+
+    def test_hot_rewrite_accepts_result_within_five_percent_below_source(self):
+        self._write_archives()
+        calls = []
+        source = self._hot_rewrite_text_of_length(100)
+
+        def fake_llm(**kwargs):
+            calls.append(kwargs.get("user_input") or "")
+            return {"ok": True, "raw_text": self._hot_rewrite_text_of_length(95)}, {}, []
+
+        with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
+            body = server._rewrite_persona_hot_candidate_content(
+                "persona-1",
+                server.PersonaDashboardHotRewritePayload(
+                    source_content=source,
+                    writing_locale="zh-TW",
+                    platform="threads",
+                ),
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(body["rewritten_length"], 95)
+        self.assertEqual(body["min_length"], 95)
+        self.assertIsNone(body["max_length"])
+
+    def test_hot_rewrite_accepts_overlong_result_without_retry(self):
+        self._write_archives()
+        calls = []
+        source = "前煞車手感偏軟，建議先檢查煞車油和來令片。我是 SUZUKI 小編。"
+        source_length = server._persona_hot_rewrite_char_count(source)
+
+        def fake_llm(**kwargs):
+            calls.append(kwargs.get("user_input") or "")
+            return {"ok": True, "raw_text": self._hot_rewrite_text_of_length(source_length + 30)}, {}, []
+
+        with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
+            body = server._rewrite_persona_hot_candidate_content(
+                "persona-1",
+                server.PersonaDashboardHotRewritePayload(
+                    source_content=source,
+                    writing_locale="zh-TW",
+                    platform="threads",
+                ),
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(body["rewritten_length"], source_length + 30)
+        self.assertEqual(body["min_length"], source_length - max(1, int(round(source_length * 0.05))))
+        self.assertIsNone(body["max_length"])
 
     def test_hot_rewrite_retries_when_length_drifts_too_far(self):
         self._write_archives()
@@ -4696,7 +4762,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("煞車油", body["content"])
         self.assertEqual(body["rewritten_length"], source_length)
 
-    def test_hot_rewrite_rejects_when_length_still_drifts(self):
+    def test_hot_rewrite_rejects_when_result_is_still_too_short(self):
         self._write_archives()
         calls = []
 
@@ -4717,7 +4783,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 2)
         self.assertEqual(raised.exception.status_code, 502)
-        self.assertIn("改写字数偏离过大", raised.exception.detail)
+        self.assertIn("改写字数不足", raised.exception.detail)
         self.assertIn("原文 32 字", raised.exception.detail)
 
     def test_hot_rewrite_requires_source_content(self):
@@ -4760,24 +4826,32 @@ class PersonaDashboardApiTests(unittest.TestCase):
             self.assertEqual(first["keywords"], initial_keywords[:10])
             self.assertEqual(first["all_keywords"], initial_keywords)
             self.assertEqual(first["batch_count"], 2)
+            self.assertEqual(first["batch_max_uses"], 2)
             self.assertEqual(repeated_before_success["keywords"], initial_keywords[:10])
             self.assertEqual(mocked.call_count, 1)
 
             self.assertTrue(server._consume_persona_hot_keyword_batch("persona-1", payload, first["keywords"]))
+            first_shuffled = server._prepare_persona_hot_keywords("persona-1", payload)
+            self.assertCountEqual(first_shuffled["keywords"], initial_keywords[:10])
+            self.assertNotEqual(first_shuffled["keywords"], initial_keywords[:10])
+            self.assertEqual(first_shuffled["batch_index"], 1)
+            self.assertEqual(first_shuffled["batch_uses"], 1)
+            self.assertEqual(mocked.call_count, 1)
+
+            self.assertTrue(server._consume_persona_hot_keyword_batch("persona-1", payload, first_shuffled["keywords"]))
             second = server._prepare_persona_hot_keywords("persona-1", payload)
             self.assertEqual(second["keywords"], initial_keywords[10:20])
+            self.assertEqual(second["batch_index"], 2)
+            self.assertEqual(second["batch_uses"], 0)
             self.assertEqual(mocked.call_count, 1)
 
             self.assertTrue(server._consume_persona_hot_keyword_batch("persona-1", payload, second["keywords"]))
-            recycled = server._prepare_persona_hot_keywords("persona-1", payload)
-            self.assertEqual(recycled["keywords"], initial_keywords[:10])
-            self.assertEqual(recycled["cycle"], 1)
-            self.assertEqual(mocked.call_count, 1)
-
-            self.assertTrue(server._consume_persona_hot_keyword_batch("persona-1", payload, recycled["keywords"]))
-            last = server._prepare_persona_hot_keywords("persona-1", payload)
-            self.assertEqual(last["keywords"], initial_keywords[10:20])
-            self.assertTrue(server._consume_persona_hot_keyword_batch("persona-1", payload, last["keywords"]))
+            second_shuffled = server._prepare_persona_hot_keywords("persona-1", payload)
+            self.assertCountEqual(second_shuffled["keywords"], initial_keywords[10:20])
+            self.assertNotEqual(second_shuffled["keywords"], initial_keywords[10:20])
+            self.assertEqual(second_shuffled["batch_index"], 2)
+            self.assertEqual(second_shuffled["batch_uses"], 1)
+            self.assertTrue(server._consume_persona_hot_keyword_batch("persona-1", payload, second_shuffled["keywords"]))
             regenerated = server._prepare_persona_hot_keywords("persona-1", payload)
             self.assertEqual(regenerated["keywords"], regenerated_keywords[:10])
             self.assertEqual(mocked.call_count, 2)
@@ -5111,6 +5185,40 @@ class PersonaDashboardApiTests(unittest.TestCase):
         imported = next(post for post in archives[0]["posts"] if post["id"] == body["posts"][0]["id"])
         self.assertEqual(imported["mediaItems"][0]["url"], "https://scontent.cdninstagram.com/v/t51.2885-15/hot.png")
         self.assertEqual(imported["sourceMeta"]["mediaCache"]["status"], "pending")
+        platform_imported = next(
+            post
+            for post in archives[0]["platformPosts"]["threads"]
+            if post["id"] == body["posts"][0]["id"]
+        )
+        self.assertEqual(platform_imported["sourceMeta"]["mediaCache"]["status"], "pending")
+
+    def test_remote_persona_video_proxy_forwards_range_response_headers(self):
+        class FakeUpstream:
+            status_code = 206
+            headers = {
+                "Content-Type": "video/mp4",
+                "Content-Length": "1024",
+                "Content-Range": "bytes 0-1023/4096",
+                "Accept-Ranges": "bytes",
+            }
+
+            def iter_content(self, _size):
+                yield b"video"
+
+            def close(self):
+                return None
+
+        with mock.patch.object(server.requests, "get", return_value=FakeUpstream()) as get:
+            response = server._proxy_remote_persona_media(
+                "https://cdn.example/video.mp4",
+                range_header="bytes=0-1023",
+            )
+
+        self.assertEqual(get.call_args.kwargs["headers"]["Range"], "bytes=0-1023")
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.headers["content-length"], "1024")
+        self.assertEqual(response.headers["content-range"], "bytes 0-1023/4096")
+        self.assertEqual(response.headers["accept-ranges"], "bytes")
 
     def test_import_plain_text_hot_candidate_is_ready_without_waiting_for_media(self):
         self._write_archives()
