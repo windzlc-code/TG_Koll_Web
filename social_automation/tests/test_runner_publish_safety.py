@@ -408,6 +408,39 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(control["login_assistance_state"]["kind"], "progress")
         self.assertEqual(control["login_assistance_state"]["title"], "正在验证")
 
+    def test_credentials_resubmission_waits_before_reusing_an_existing_error(self):
+        control = {
+            "login_assistance_state": {
+                "phase": "running",
+                "kind": "progress",
+                "title": "正在验证",
+            },
+            "login_assistance_submitted_kind": "credentials",
+            "login_assistance_submitted_challenge": "",
+            "login_assistance_credentials_submitted_at": 100.0,
+        }
+
+        with mock.patch.object(runner.time, "monotonic", return_value=101.0):
+            runner._publish_login_assistance_state(
+                mock.Mock(),
+                control,
+                {"status": "invalid_credentials", "reason": "账号或密码不正确"},
+                handoff=True,
+            )
+
+        self.assertEqual(control["login_assistance_state"]["kind"], "progress")
+        self.assertEqual(control["login_assistance_state"]["title"], "正在验证")
+
+        with mock.patch.object(runner.time, "monotonic", return_value=113.0):
+            runner._publish_login_assistance_state(
+                mock.Mock(),
+                control,
+                {"status": "invalid_credentials", "reason": "账号或密码不正确"},
+                handoff=True,
+            )
+
+        self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
+
     def test_credentials_follow_the_visible_login_page_when_context_switched_tabs(self):
         actions = queue.Queue(maxsize=2)
         actions.put_nowait({"kind": "credentials", "login_username": "name", "login_password": "secret"})
@@ -437,6 +470,7 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             mock.patch.object(runner, "_visible_first", side_effect=locate),
             mock.patch.object(runner, "_clear_and_type") as fill,
             mock.patch.object(runner, "_click_text_button", return_value=True),
+            mock.patch.object(runner.time, "monotonic", return_value=321.0),
         ):
             consumed = runner._process_login_assistance_action(
                 stale_page, "instagram", mock.Mock(), control
@@ -445,6 +479,7 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertTrue(consumed)
         self.assertEqual(fill.call_args_list[0].args[1:3], (username_input, "name"))
         self.assertEqual(fill.call_args_list[1].args[1:3], (password_input, "secret"))
+        self.assertEqual(control["login_assistance_credentials_submitted_at"], 321.0)
 
 
 class _BackgroundPage:

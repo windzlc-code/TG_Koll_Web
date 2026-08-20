@@ -22,6 +22,7 @@ THREADS_HOME = "https://www.threads.net/"
 THREADS_POST_SUBMIT_WATCH_SECONDS = 2
 DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS = 4
 LOGIN_FORM_WAIT_SECONDS = 12
+LOGIN_ASSISTANCE_CREDENTIAL_SUBMIT_SETTLE_SECONDS = LOGIN_FORM_WAIT_SECONDS
 DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MIN_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MAX_MANUAL_LOGIN_TIMEOUT_SECONDS = 1800
@@ -4030,6 +4031,16 @@ def _login_assistance_submission_rejected(page: Any, submitted_kind: str, status
     return False
 
 
+def _login_assistance_credentials_submission_waiting(context_control: dict[str, Any] | None) -> bool:
+    if not isinstance(context_control, dict):
+        return False
+    try:
+        submitted_at = float(context_control.get("login_assistance_credentials_submitted_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    return submitted_at > 0 and (time.monotonic() - submitted_at) < LOGIN_ASSISTANCE_CREDENTIAL_SUBMIT_SETTLE_SECONDS
+
+
 def _login_assistance_same_prompt_after_submit(
     submitted_kind: str,
     submitted_challenge: str,
@@ -4092,10 +4103,13 @@ def _publish_login_assistance_state(
     submitted_kind = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
     submitted_challenge = str(context_control.get("login_assistance_submitted_challenge") or "").strip().lower()
     if submitted_kind and _login_assistance_same_prompt_after_submit(submitted_kind, submitted_challenge, presentation):
+        if submitted_kind == "credentials" and _login_assistance_credentials_submission_waiting(context_control):
+            return
         if not _login_assistance_submission_rejected(page, submitted_kind, current):
             return
         context_control.pop("login_assistance_submitted_kind", None)
         context_control.pop("login_assistance_submitted_challenge", None)
+        context_control.pop("login_assistance_credentials_submitted_at", None)
         if submitted_kind == "verification_code" and not str(current.get("reason") or "").strip():
             current["reason"] = "验证码不正确，请重新输入。"
             presentation = _login_assistance_presentation(current)
@@ -4109,6 +4123,7 @@ def _publish_login_assistance_state(
     elif submitted_kind and str(presentation.get("kind") or "") not in {submitted_kind, "progress"}:
         context_control.pop("login_assistance_submitted_kind", None)
         context_control.pop("login_assistance_submitted_challenge", None)
+        context_control.pop("login_assistance_credentials_submitted_at", None)
     if not _login_assistance_is_milestone(presentation):
         return
     expires_at = context_control.get("login_assistance_expires_at")
@@ -4337,6 +4352,7 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
     except Exception as exc:
         context_control.pop("login_assistance_submitted_kind", None)
         context_control.pop("login_assistance_submitted_challenge", None)
+        context_control.pop("login_assistance_credentials_submitted_at", None)
         context_control["login_assistance_state"] = {"phase": "attention", "kind": kind or "browser_interaction", "prompt_kind": kind, "action_error": True, "title": "暂时无法提交", "message": str(exc)[:240], "submit_label": "重试", "updated_at": int(time.time()), **({"expires_at": int(expires_at)} if expires_at else {})}
         _set_login_assistance_pending(context_control, False)
         logger.log("warn", "login_assistance_submit_failed", "登录映射页提交失败。", {"kind": kind, "error": str(exc)[:240]})
@@ -4344,6 +4360,8 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
     previous = context_control.get("login_assistance_state") if isinstance(context_control.get("login_assistance_state"), dict) else {}
     context_control["login_assistance_submitted_kind"] = kind
     context_control["login_assistance_submitted_challenge"] = str(previous.get("challenge_type") or "")
+    if kind == "credentials":
+        context_control["login_assistance_credentials_submitted_at"] = time.monotonic()
     progress = {
         "phase": "running",
         "kind": "progress",
