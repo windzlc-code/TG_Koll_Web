@@ -3036,7 +3036,15 @@ def _run_open_login(
     _goto(page, _platform_home(platform), logger, "open_login")
     wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
-    max_login_attempts = _int_payload_or_env(payload, "max_login_attempts", "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS", 2, 1, 8)
+    default_login_attempts = 1 if platform == "threads" else 2
+    max_login_attempts = _int_payload_or_env(
+        payload,
+        "max_login_attempts",
+        "SOCIAL_AUTOMATION_LOGIN_MAX_ATTEMPTS",
+        default_login_attempts,
+        1,
+        8,
+    )
     max_self_heal_attempts = _int_payload_or_env(
         payload,
         "max_self_heal_attempts",
@@ -3045,7 +3053,15 @@ def _run_open_login(
         0,
         12,
     )
-    submit_grace_seconds = _int_payload_or_env(payload, "submit_grace_seconds", "SOCIAL_AUTOMATION_LOGIN_SUBMIT_GRACE_SECONDS", 30, 5, 120)
+    default_submit_grace_seconds = 6 if platform == "threads" else 30
+    submit_grace_seconds = _int_payload_or_env(
+        payload,
+        "submit_grace_seconds",
+        "SOCIAL_AUTOMATION_LOGIN_SUBMIT_GRACE_SECONDS",
+        default_submit_grace_seconds,
+        5,
+        120,
+    )
     wait_for_manual = bool(payload.get("wait_for_manual", True))
     manual_only_on_verification = bool(payload.get("manual_only_on_verification", False))
     if platform == "threads" and not auto_submit:
@@ -3296,6 +3312,13 @@ def _run_open_login(
                 if _auto_submit_login_form(page, platform, payload, logger, task, screenshot_dir, context_control):
                     login_attempts += 1
                     last_submit_monotonic = time.monotonic()
+                    if isinstance(context_control, dict):
+                        try:
+                            submitted_at = float(context_control.pop("login_submission_monotonic", 0) or 0)
+                        except (TypeError, ValueError):
+                            submitted_at = 0
+                        if submitted_at > 0:
+                            last_submit_monotonic = submitted_at
                     _publish_login_assistance_state(
                         page,
                         context_control,
@@ -11425,9 +11448,13 @@ def _auto_submit_login_form(
         page.keyboard.press("Enter")
     if isinstance(context_control, dict):
         context_control["login_submission_started"] = True
+        context_control["login_submission_monotonic"] = time.monotonic()
     submit_shot = _screenshot(page, screenshot_dir, task, "auto_login_submitted", logger)
     logger.log("info", "auto_login_submit", "登录表单已提交，正在等待账号就绪或验证提示。", {"clicked_submit_button": clicked, "url": _safe_navigation_url(page.url)}, submit_shot)
-    _sleep_between(4.0, 7.0)
+    if platform == "threads":
+        _sleep_between(6.0, 6.0)
+    else:
+        _sleep_between(4.0, 7.0)
     return True
 
 

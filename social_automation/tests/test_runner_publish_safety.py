@@ -2909,6 +2909,66 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(page.url, "https://www.threads.com/login")
         self.assertTrue(context_control["manual_takeover_event"].is_set())
 
+    def test_threads_first_failed_submit_uses_short_default_grace_without_retry(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/login"
+        context_control = {
+            "manual_takeover_event": threading.Event(),
+            "manual_takeover_ack_event": threading.Event(),
+        }
+
+        def submit_with_click_timestamp(*args):
+            args[-1]["login_submission_monotonic"] = 100.0
+            return True
+
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                return_value={"status": "cookie_expired", "url": page.url},
+            ),
+            mock.patch.object(runner, "_auto_submit_login_form", side_effect=submit_with_click_timestamp) as submit,
+            mock.patch.object(runner, "_verification_visible", return_value=False),
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+            mock.patch.object(runner, "_screenshot", return_value="failed-login.png"),
+            mock.patch.object(
+                runner,
+                "_wait_for_manual_login_completion",
+                return_value={"status": "need_manual"},
+            ) as wait_manual,
+            mock.patch.object(runner.time, "time", return_value=0),
+            mock.patch.object(runner.time, "monotonic", side_effect=[106, 107]),
+            mock.patch.object(
+                runner.time,
+                "sleep",
+                side_effect=AssertionError("Threads first failed submit must not wait or retry"),
+            ),
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "threads-first-failed-submit"},
+                {},
+                {
+                    "login_wait_seconds": 30,
+                    "auto_submit": True,
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                    "max_self_heal_attempts": 0,
+                },
+                Path("."),
+                _Logger(),
+                "threads",
+                context_control=context_control,
+            )
+
+        self.assertEqual(result["status"], "need_manual")
+        submit.assert_called_once()
+        self_heal.assert_not_called()
+        wait_manual.assert_called_once()
+        self.assertEqual(wait_manual.call_args.args[7], "cookie_expired")
+        self.assertTrue(context_control["manual_takeover_event"].is_set())
+
     def test_delayed_verification_is_detected_before_invalid_credentials_self_heal(self):
         page = mock.Mock()
         page.url = "https://www.instagram.com/challenge/"
@@ -3393,6 +3453,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page = _Page(url="https://www.threads.com/login")
         username_input = _Locator()
         password_input = _Locator()
+        context_control = {}
         with (
             mock.patch.object(
                 runner,
@@ -3406,8 +3467,9 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             ),
             mock.patch.object(runner, "_clear_and_type") as type_text,
             mock.patch.object(runner, "_click_text_button", return_value=True) as click,
-            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_sleep_between") as sleep_between,
             mock.patch.object(runner.time, "sleep"),
+            mock.patch.object(runner.time, "monotonic", return_value=100.0),
             mock.patch.object(runner, "_screenshot", return_value="native-login.png"),
         ):
             submitted = runner._auto_submit_login_form(
@@ -3417,6 +3479,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 _Logger(),
                 {"id": "threads-visible-native-form"},
                 Path("."),
+                context_control,
             )
 
         self.assertTrue(submitted)
@@ -3425,6 +3488,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             ["saved-user", "saved-password"],
         )
         self.assertEqual([call.args[3] for call in click.call_args_list], ["auto_login_submit"])
+        self.assertEqual(sleep_between.call_args.args, (6.0, 6.0))
+        self.assertEqual(context_control["login_submission_monotonic"], 100.0)
 
     def test_threads_auto_login_stays_on_threads_when_native_form_is_missing(self):
         page = _Page(url="https://www.threads.com/login")
