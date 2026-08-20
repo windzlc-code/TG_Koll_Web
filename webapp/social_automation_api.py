@@ -5406,7 +5406,7 @@ def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLog
         }
         choice_label = str(payload.action_label or "").strip()
         accepts_choice = kind == "choice" and choice_label in allowed_actions
-        if kind not in {"verification_code", "credentials", "confirm", "choice"} or (
+        if kind not in {"verification_code", "credentials", "choice"} or (
             expected_kind != kind and not accepts_choice
         ):
             raise HTTPException(status_code=409, detail="登录页面状态已变化，请按页面最新提示重新操作")

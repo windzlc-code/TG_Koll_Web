@@ -389,7 +389,6 @@ def _wait_for_publish_login_transition(
     )
     deadline = time.monotonic() + timeout_seconds
     current = dict(initial_status or {})
-    confirmation_clicked = False
     while time.monotonic() < deadline:
         _raise_if_cancelled(cancel_event)
         if _manual_takeover_requested(context_control):
@@ -397,17 +396,6 @@ def _wait_for_publish_login_transition(
                 "status": "need_verification",
                 "reason": "用户已切换为人工接管，自动验证确认已停止。",
             }
-        if (
-            str(current.get("status") or "") == "account_confirmation_required"
-            and not confirmation_clicked
-        ):
-            confirmation_clicked = _click_text_button(
-                page,
-                logger,
-                ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
-                "threads_account_confirmation",
-                abort_if=lambda: _manual_takeover_requested(context_control),
-            )
         current = _detect_platform_login_state(page, platform)
         if platform == "threads":
             current = _restore_threads_after_instagram_login(page, current, logger)
@@ -489,10 +477,7 @@ def _attempt_publish_login_repair(
             return totp_result or initial_status
         if str(totp_result.get("status") or "") == "ready":
             return totp_result
-        if str(totp_result.get("status") or "") in {
-            "account_confirmation_required",
-            "totp_submitted",
-        }:
+        if str(totp_result.get("status") or "") == "totp_submitted":
             return totp_result
     if initial_code == "post_login_interstitial":
         _resolve_instagram_post_login_interstitial(page, logger)
@@ -641,10 +626,7 @@ def run_social_task(
                 login,
                 context_control,
             )
-        if login.get("status") in {
-            "totp_submitted",
-            "account_confirmation_required",
-        }:
+        if login.get("status") == "totp_submitted":
             login = _wait_for_publish_login_transition(
                 page,
                 task,
@@ -1002,7 +984,7 @@ def _run_publish_task_in_context(
                 login,
                 context_control,
             )
-        if login.get("status") in {"totp_submitted", "account_confirmation_required"}:
+        if login.get("status") == "totp_submitted":
             login = _wait_for_publish_login_transition(
                 page,
                 task,
@@ -2474,32 +2456,10 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
             "reason": "Threads login cannot be confirmed outside the Threads domain.",
             "url": url,
         }
-    if any(marker in body_text for marker in ("say more with threads", "continue with instagram")):
-        return {
-            "status": "account_confirmation_required",
-            "reason": "Threads 已识别关联账号，等待确认继续使用该账号。",
-            "url": url,
-        }
+    if _page_shows_invalid_credentials(page, body_text=body_text):
+        return {"status": "invalid_credentials", "reason": "平台提示账号或密码不正确，请重新输入。", "url": url}
     if "/login" in url:
         return {"status": "cookie_expired", "reason": "检测到 Threads 登录页面。", "url": url}
-    account_confirmation_selectors = [
-        'text="Continue with Instagram"',
-        'text="Say more with Threads"',
-        '[role="dialog"] >> text="Continue with Instagram"',
-        'button:has-text("Continue with Instagram")',
-        'a:has-text("Continue with Instagram")',
-    ]
-    for selector in account_confirmation_selectors:
-        try:
-            loc = page.locator(selector).first
-            if loc.count() and loc.is_visible(timeout=1500):
-                return {
-                    "status": "account_confirmation_required",
-                    "reason": "Threads 已识别关联账号，等待确认继续使用该账号。",
-                    "url": url,
-                }
-        except Exception:
-            continue
     login_prompt_selectors = [
         'text="Log in or sign up for Threads"',
         'text="Log in with username instead"',
@@ -2521,13 +2481,6 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
             return {"status": "cookie_expired", "reason": "检测到 Threads 登录表单。"}
     except Exception:
         pass
-    body_text = ""
-    try:
-        body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
-    except Exception:
-        pass
-    if _page_shows_invalid_credentials(page, body_text=body_text):
-        return {"status": "invalid_credentials", "reason": "平台提示账号或密码不正确，请重新输入。", "url": url}
     login_markers = ["log in", "login", "continue with instagram", "forgot password", "sign up"]
     if any(marker in body_text for marker in login_markers) and any(marker in body_text for marker in ["threads", "instagram"]):
         return {"status": "cookie_expired", "reason": "检测到 Threads 登录页面文案。", "url": url}
@@ -2716,7 +2669,7 @@ def _enrich_login_state_with_visible_challenge(page, status: dict[str, Any] | No
                 demoted.pop("challenge_type", None)
                 return demoted
         return current
-    if current_code in {"ready", "need_verification", "invalid_credentials", "account_confirmation_required"}:
+    if current_code in {"ready", "need_verification", "invalid_credentials"}:
         return current
     challenge = {}
     with contextlib.suppress(Exception):
@@ -2864,7 +2817,7 @@ def _self_heal_login_page(
 
 
 def _prepare_manual_threads_login_page(page, logger: AutomationLogger) -> None:
-    """Handle only the official Threads-to-Instagram handoff shown by Threads."""
+    """Open the Threads username/password form used by the login assistant."""
     status = _detect_threads_login_state(page)
     if status.get("status") == "ready":
         return
@@ -2885,24 +2838,33 @@ def _prepare_manual_threads_login_page(page, logger: AutomationLogger) -> None:
 
     if status.get("status") == "ready":
         return
-    continued = _click_text_button(
+    opened = _click_text_button(
         page,
         logger,
-        ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
-        "manual_login_continue_instagram",
+        [
+            "Log in with username instead",
+            "Log in with username",
+            "Use username instead",
+            "改用用户名登录",
+            "使用用户名登录",
+            "改用用戶名稱登入",
+            "使用用戶名稱登入",
+        ],
+        "manual_threads_username_login",
     )
+    if not opened:
+        opened = _click_threads_username_entry_by_structure(page, logger)
     logger.log(
-        "info" if continued else "warn",
-        "manual_login_continue_instagram",
-        "Threads manual login handoff was handled.",
-        {"clicked": continued, "url": _safe_navigation_url(page.url)},
+        "info" if opened else "warn",
+        "manual_threads_username_login",
+        "Threads username/password login form was opened." if opened else "Threads username/password login entry is not available yet.",
+        {"clicked": opened, "url": _safe_navigation_url(page.url)},
     )
-    if continued:
+    if opened:
         _sleep_between(2.0, 4.0)
         with contextlib.suppress(Exception):
             page.wait_for_load_state("domcontentloaded", timeout=15000)
-    # Do not force-open an Instagram page when Threads did not present its
-    # official handoff. Keep the current Threads page open for recovery.
+    # Keep the current Threads page open when its native form is unavailable.
 
 
 def _restore_threads_after_instagram_login(page, status: dict[str, Any], logger: AutomationLogger) -> dict[str, Any]:
@@ -2946,7 +2908,7 @@ def _handoff_status_for_open_login(
     if detected:
         current = detected
     code = str(current.get("status") or "").strip().lower()
-    if code in {"banned", "disabled", "need_verification", "account_confirmation_required"}:
+    if code in {"banned", "disabled", "need_verification"}:
         if reason and not str(current.get("reason") or "").strip():
             current["reason"] = reason
         return current
@@ -3069,9 +3031,8 @@ def _run_open_login(
     has_credentials = bool(login_username and login_password)
     requested_auto_submit = payload.get("auto_submit")
     auto_submit = has_credentials if requested_auto_submit is None else bool(requested_auto_submit) and has_credentials
-    # Detect the persistent Threads/Instagram session before navigating to any
-    # login URL. This preserves a valid session and lets account-confirmation
-    # prompts continue without clearing or retyping credentials.
+    # Detect the persistent platform session before navigating to any login URL.
+    # This preserves a valid session without clearing or retyping credentials.
     _goto(page, _platform_home(platform), logger, "open_login")
     wait_seconds = int(payload.get("login_wait_seconds") or os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600"))
     wait_seconds = max(30, min(wait_seconds, 3600))
@@ -3187,35 +3148,6 @@ def _run_open_login(
                     )
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 last_status = stable_status
-            if platform == "threads" and last_status.get("status") == "account_confirmation_required":
-                if auto_submit and has_credentials:
-                    logger.log(
-                        "info",
-                        "threads_account_confirmation",
-                        "Threads account confirmation detected; trying the saved username/password login path first.",
-                        {"url": _safe_navigation_url(page.url)},
-                    )
-                else:
-                    continued = _click_text_button(
-                        page,
-                        logger,
-                        ["Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续"],
-                        "threads_account_confirmation",
-                        abort_if=lambda: _manual_takeover_requested(context_control),
-                    )
-                    logger.log(
-                        "info" if continued else "warn",
-                        "threads_account_confirmation",
-                        "Threads 关联账号确认流程已处理。" if continued else "Threads 关联账号确认按钮尚不可用，页面保持原状。",
-                        {
-                            "clicked": continued,
-                            "url": _safe_navigation_url(page.url),
-                            "screen_sample": "threads_account_confirmation",
-                        },
-                    )
-                    if continued:
-                        _sleep_between(1.5, 3.0)
-                        continue
             if _verification_visible(page):
                 _publish_login_assistance_state(
                     page,
@@ -3239,11 +3171,7 @@ def _run_open_login(
                     last_status = totp_result
                     if str(totp_result.get("status") or "") == "totp_submitted":
                         _mark_totp_verification_pending(context_control)
-                    if str(totp_result.get("status") or "") in {
-                        "ready",
-                        "account_confirmation_required",
-                        "totp_submitted",
-                    }:
+                    if str(totp_result.get("status") or "") in {"ready", "totp_submitted"}:
                         continue
                 verification_hits += 1
                 _report_account_login_status(context_control, "need_verification", logger)
@@ -3715,16 +3643,6 @@ def _login_assistance_presentation(status: dict[str, Any] | None) -> dict[str, A
             "challenge_type": challenge_type,
             "actions": actions,
         }
-    if status_code == "account_confirmation_required":
-        return {
-            "phase": "attention",
-            "kind": "confirm",
-            "title": "需要确认账号",
-            "message": _login_assistance_message(reason, "平台正在等待确认继续使用当前账号。"),
-            "submit_label": "确认并继续",
-            "challenge_type": challenge_type,
-            "actions": actions,
-        }
     if status_code == "need_verification":
         code_labels = {
             "sms_code": ("输入短信验证码", "短信验证码", "numeric"),
@@ -3852,10 +3770,6 @@ LOGIN_ASSISTANCE_CHOICE_GROUPS = {
         "WhatsApp",
         "Try another way", "尝试其他方式", "试试其他方法", "選擇其他方式",
     ],
-    "account_confirmation": [
-        "Continue with Instagram", "Log in with Instagram", "继续使用 Instagram", "使用 Instagram 继续",
-        "Continue", "继续", "确认", "Confirm",
-    ],
     "post_login_interstitial": [
         "Not now", "以后再说", "暫時不要", "稍后",
         "Save info", "Save", "保存信息", "储存资讯", "保存",
@@ -3895,8 +3809,6 @@ def _login_assistance_normalize_actions(raw: Any) -> list[dict[str, str]]:
 def _login_assistance_choice_labels(status: dict[str, Any]) -> list[str]:
     status_code = str(status.get("status") or "").strip().lower()
     challenge_type = str(status.get("challenge_type") or "").strip().lower()
-    if status_code == "account_confirmation_required":
-        return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["account_confirmation"])
     if status_code == "post_login_interstitial":
         return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["post_login_interstitial"])
     if challenge_type == "method_selection":
@@ -3987,7 +3899,7 @@ def _login_assistance_is_milestone(presentation: dict[str, Any] | None) -> bool:
     kind = str(current.get("kind") or "").strip().lower()
     if phase in {"success", "error", "attention"}:
         return True
-    return kind in {"credentials", "verification_code", "confirm", "choice", "browser_interaction", "success", "error"}
+    return kind in {"credentials", "verification_code", "choice", "browser_interaction", "success", "error"}
 
 
 def _login_assistance_code_rejected(page: Any) -> bool:
@@ -4055,7 +3967,7 @@ def _login_assistance_same_prompt_after_submit(
             return False
         previous = str(submitted_challenge or "").strip().lower()
         return not previous or not next_challenge or previous == next_challenge
-    return kind == next_kind and kind in {"credentials", "confirm", "choice"}
+    return kind == next_kind and kind in {"credentials", "choice"}
 
 
 def _login_assistance_signature(presentation: dict[str, Any] | None) -> tuple[str, ...]:
@@ -4271,14 +4183,6 @@ def _mapped_login_verification_code(page: Any) -> tuple[Any, Any, Any] | None:
     return None
 
 
-def _mapped_login_confirmation_page(page: Any, logger: AutomationLogger) -> Any | None:
-    labels = ["Continue", "Confirm", "Yes", "Continue with Instagram", "继续", "确认", "是", "使用 Instagram 继续"]
-    for action_page, surface in _login_assistance_surfaces(page):
-        if _click_text_button(surface, logger, labels, "mapped_login_confirm"):
-            return action_page
-    return None
-
-
 def _set_login_assistance_pending(context_control: dict[str, Any], pending: bool) -> None:
     submission_lock = context_control.get("login_assistance_lock")
     if submission_lock is not None and hasattr(submission_lock, "__enter__"):
@@ -4330,11 +4234,6 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
             if not clicked:
                 action_page.keyboard.press("Enter")
             message = "登录信息已提交，正在检查账号状态。"
-        elif kind == "confirm":
-            action_page = _mapped_login_confirmation_page(page, logger)
-            if action_page is None:
-                raise RuntimeError("当前页面没有可确认的按钮")
-            message = "确认操作已提交，正在继续登录。"
         elif kind == "choice":
             label = str(action.get("action_label") or action.get("label") or "").strip()
             if not label:
@@ -10362,12 +10261,12 @@ def _visible_first(page, selectors: list[str], timeout_ms: int = 1200):
     return None
 
 
-def _find_threads_instagram_entry_by_structure(
+def _find_threads_login_card_anchor(
     page,
     *,
     abort_if: Callable[[], bool] | None = None,
 ):
-    """Return the visible Instagram-branded control anchoring a Threads login card."""
+    """Return the visible primary control anchoring a Threads login card."""
     try:
         candidates = page.locator('button:has(svg), a:has(svg), [role="button"]:has(svg), button:has(img), a:has(img), [role="button"]:has(img)')
         best = None
@@ -10401,44 +10300,16 @@ def _find_threads_instagram_entry_by_structure(
         return None
 
 
-def _click_threads_instagram_entry_by_structure(
-    page,
-    logger: AutomationLogger,
-    *,
-    abort_if: Callable[[], bool] | None = None,
-) -> bool:
-    """Fallback for localized Threads login cards: wide control with an image/SVG."""
-    try:
-        entry = _find_threads_instagram_entry_by_structure(page, abort_if=abort_if)
-        if entry is not None and _human_click(
-            page,
-            entry,
-            logger,
-            "threads_continue_instagram_structure",
-            abort_if=abort_if,
-        ):
-            logger.log(
-                "info",
-                "threads_continue_instagram_structure",
-                "Threads Instagram 登录入口已通过页面结构和图标特征识别。",
-                {"evidence": "visual_structure", "url": _safe_navigation_url(page.url)},
-            )
-            return True
-    except Exception:
-        pass
-    return False
-
-
 def _click_threads_username_entry_by_structure(
     page,
     logger: AutomationLogger,
     *,
     abort_if: Callable[[], bool] | None = None,
 ) -> bool:
-    """Click the secondary login control below the Instagram-branded card anchor."""
+    """Click the secondary username login control within the Threads login card."""
     if abort_if is not None and abort_if():
         return False
-    anchor = _find_threads_instagram_entry_by_structure(page, abort_if=abort_if)
+    anchor = _find_threads_login_card_anchor(page, abort_if=abort_if)
     if anchor is None:
         return False
     try:
@@ -10512,36 +10383,6 @@ def _click_threads_username_entry_by_structure(
         return True
     except Exception:
         return False
-
-
-def _click_threads_instagram_login_entry(
-    page,
-    logger: AutomationLogger,
-    *,
-    abort_if: Callable[[], bool] | None = None,
-) -> bool:
-    if _click_threads_instagram_entry_by_structure(page, logger, abort_if=abort_if):
-        return True
-    if _click_text_button(
-        page,
-        logger,
-        [
-            "Continue with Instagram",
-            "Log in with Instagram",
-            "Instagramでログイン",
-            "Instagram にログイン",
-            "使用 Instagram 登录",
-            "通过 Instagram 登录",
-            "继续使用 Instagram",
-            "使用 Instagram 登入",
-            "透過 Instagram 登入",
-            "繼續使用 Instagram",
-        ],
-        "threads_continue_instagram",
-        abort_if=abort_if,
-    ):
-        return True
-    return False
 
 
 def _visible_last(page, selectors: list[str], timeout_ms: int = 1200):
@@ -11041,9 +10882,6 @@ def _try_auto_totp_challenge(
                     "url": _safe_navigation_url(page.url),
                 }
             current_status = str(current.get("status") or "")
-            if current_status == "account_confirmation_required":
-                _report_totp_outcome(context_control, "verified")
-                return {**_safe_login_status(current), "challenge_type": challenge_type}
             if challenge_type != "none" or current_status in {"need_verification", "invalid_credentials"}:
                 _report_totp_outcome(context_control, "failed")
                 return {
@@ -11256,9 +11094,6 @@ def _try_auto_totp_challenge(
                         "challenge_type": current_type,
                     }
                 current_status = str(current.get("status") or "")
-                if current_status == "account_confirmation_required":
-                    _report_totp_outcome(context_control, "verified")
-                    return {**_safe_login_status(current), "challenge_type": current_type}
                 if current_status == "need_verification" and current_type == "none":
                     # Meta can replace the TOTP form before its login-state text
                     # settles. Keep polling instead of treating that brief
@@ -11499,16 +11334,6 @@ def _auto_submit_login_form(
         if not continue_clicked:
             if _manual_takeover_requested(context_control):
                 return False
-            if not payload.get("_threads_official_handoff_attempted"):
-                official_handoff = _click_threads_instagram_login_entry(
-                    page,
-                    logger,
-                    abort_if=takeover_requested,
-                )
-                if official_handoff:
-                    payload["_threads_official_handoff_attempted"] = True
-                    _sleep_between(1.5, 3.0)
-                    return True
             logger.log(
                 "warn",
                 "threads_login_native_form_missing",

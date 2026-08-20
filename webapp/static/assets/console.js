@@ -2933,7 +2933,7 @@ function statusLabel(status) {
     cancelled: "已取消",
     need_manual: "需人工",
     pending_login: "待登录",
-    account_confirmation_required: "需确认关联账号",
+    account_confirmation_required: "需登录",
     need_verification: "需验证",
     risk_control: "封控验证",
     cookie_expired: "登录已过期",
@@ -5862,7 +5862,7 @@ function publishAccountBlockMessage(account) {
   const status = String(account?.status || "").trim().toLowerCase();
   if (status === "cookie_expired") return "当前发布账号登录已过期，提交发布后系统会自动打开浏览器执行登录流程。";
   if (status === "pending_login") return "当前发布账号还未完成登录，提交发布后系统会自动打开浏览器执行登录流程。";
-  if (status === "account_confirmation_required") return "当前发布账号已识别登录资料，但仍需确认关联账号后才能继续。";
+  if (status === "account_confirmation_required") return "当前发布账号尚未完成登录，请重新登录后再继续。";
   if (status === "need_verification") return "当前发布账号需要验证，提交发布后系统会自动打开浏览器并等待处理。";
   if (status === "disabled") return "当前发布账号已停用，请到账号管理启用或更换账号后再发布。";
   return "当前发布账号将由系统在发布流程中自动检测登录状态。";
@@ -27319,7 +27319,7 @@ function publishAssistanceViewModel(task = {}, session = null) {
     ? Math.max(0, Math.ceil(expiresAt - (Date.now() / 1000)))
     : 0;
   const loginLike = loginAssistanceViewModel(task, session);
-  if (["verification_code", "credentials", "confirm", "choice", "browser_interaction"].includes(String(assistance.kind || ""))) {
+  if (["verification_code", "credentials", "choice", "browser_interaction"].includes(String(assistance.kind || ""))) {
     return { ...loginLike, permalink, screenshotUrl };
   }
   if (taskStatus === "success" || assistance.phase === "success") {
@@ -27496,9 +27496,6 @@ function renderLoginAssistanceAction(model = {}, session = null) {
       <button type="submit" class="primary" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在连接浏览器")}</button>
     </form>${choices}`;
   }
-  if (model.kind === "confirm") {
-    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-submit="confirm" ${inputAllowed ? "" : "disabled"}>${esc(inputAllowed ? model.submitLabel : "正在连接浏览器")}</button>${choices}`;
-  }
   if (model.kind === "choice") {
     return `${choices || `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-accept>${esc(model.submitLabel || "接受并接管")}</button>`}`;
   }
@@ -27626,7 +27623,7 @@ async function submitLoginAssistance(modal, session, payload = {}) {
     : {};
   modal.dataset.loginAssistancePendingKind = String(payload.kind || "").trim();
   modal.dataset.loginAssistancePendingUpdatedAt = String(Number(previousAssistance.updated_at || 0));
-  const submitButton = modal.querySelector("[data-login-assistance-form] button[type='submit'], [data-login-assistance-submit]");
+  const submitButton = modal.querySelector("[data-login-assistance-form] button[type='submit']");
   if (submitButton) {
     submitButton.disabled = true;
     submitButton.textContent = "提交中...";
@@ -27787,10 +27784,6 @@ function openTaskAssistanceView(taskId = "", options) {
           closeConsoleModal(null, modal);
           openLiveBrowserTaskView(cleanTaskId);
         });
-      return;
-    }
-    if (event.target.closest("[data-login-assistance-submit='confirm']") && currentSession) {
-      void submitLoginAssistance(modal, currentSession, { kind: "confirm" });
       return;
     }
     const choice = event.target.closest("[data-login-assistance-choice]");

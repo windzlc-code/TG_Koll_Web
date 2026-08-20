@@ -54,7 +54,6 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             "ready": ("success", "success", "登录成功"),
             "invalid_credentials": ("attention", "credentials", "账号或密码不正确"),
             "cookie_expired": ("attention", "credentials", "需要登录信息"),
-            "account_confirmation_required": ("attention", "confirm", "需要确认账号"),
             "post_login_interstitial": ("running", "progress", "正在处理登录后提示"),
             "transient_error": ("running", "progress", "正在执行登录"),
             "totp_submitted": ("running", "progress", "正在验证"),
@@ -88,8 +87,6 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             control,
             {"status": "need_verification", "challenge_type": "authenticator_totp"},
         )
-        self.assertNotIn("login_assistance_state", control)
-        runner._publish_login_assistance_state(mock.Mock(), control, {"status": "account_confirmation_required"})
         self.assertNotIn("login_assistance_state", control)
         runner._publish_login_assistance_state(mock.Mock(), control, {"status": "invalid_credentials", "reason": "密码错误"})
         self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
@@ -1381,7 +1378,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(status["status"], "ready")
 
-    def test_threads_authenticated_session_with_say_more_prompt_is_not_expired(self):
+    def test_threads_say_more_prompt_routes_to_login_even_with_a_stale_cookie(self):
         page = _ThreadsShellPage(
             [{"name": "sessionid", "value": "active-session", "domain": ".threads.net"}],
             body_text="Say more with Threads Continue with Instagram mysticshadowxp214",
@@ -1389,7 +1386,35 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         status = runner._detect_threads_login_state(page)
 
-        self.assertNotEqual(status["status"], "cookie_expired")
+        self.assertEqual(status["status"], "cookie_expired")
+
+    def test_threads_login_page_never_becomes_an_account_confirmation_step(self):
+        page = _ThreadsShellPage(
+            [],
+            body_text="Log in to Threads Continue with Instagram Log in with username instead",
+        )
+        page.url = "https://www.threads.com/login"
+
+        status = runner._detect_threads_login_state(page)
+
+        self.assertEqual(status["status"], "cookie_expired")
+
+    def test_threads_invalid_credentials_win_over_instagram_login_card_copy(self):
+        page = _ThreadsShellPage(
+            [],
+            body_text="Continue with Instagram Sorry, your password was incorrect. Please double-check your password.",
+        )
+        page.url = "https://www.threads.com/login"
+
+        status = runner._detect_threads_login_state(page)
+
+        self.assertEqual(status["status"], "invalid_credentials")
+
+    def test_removed_account_confirmation_state_has_no_interactive_prompt(self):
+        prompt = runner._login_assistance_presentation({"status": "account_confirmation_required"})
+
+        self.assertEqual(prompt["kind"], "progress")
+        self.assertNotIn("关联账号", prompt["title"] + prompt["message"])
 
     def test_instagram_verification_selfie_requires_manual_verification(self):
         page = _ThreadsShellPage(
@@ -1724,7 +1749,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         detect.assert_called()
         self.assertNotIn(runner.INSTAGRAM_LOGIN, [call.args[1] for call in goto.call_args_list])
 
-    def test_threads_auto_login_prefers_saved_credentials_before_official_handoff(self):
+    def test_threads_auto_login_uses_saved_credentials_on_threads_login_page(self):
         page = mock.Mock()
         page.url = "https://www.threads.com/login"
         logger = _Logger()
@@ -1734,10 +1759,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 runner,
                 "_detect_platform_login_state",
                 side_effect=[
-                    {
-                        "status": "account_confirmation_required",
-                        "url": page.url,
-                    },
+                    {"status": "cookie_expired", "url": page.url},
                     {"status": "ready", "url": runner.THREADS_HOME},
                 ],
             ),
@@ -1749,7 +1771,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         ):
             result = runner._run_open_login(
                 page,
-                {"id": "threads-official-account-confirmation"},
+                {"id": "threads-native-login"},
                 {},
                 {
                     "login_wait_seconds": 30,
@@ -2468,7 +2490,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         wait_manual.assert_called_once()
 
     def test_publish_totp_transition_does_not_trigger_self_heal_or_reload(self):
-        for status in ("totp_submitted", "account_confirmation_required"):
+        for status in ("totp_submitted",):
             with self.subTest(status=status):
                 page = mock.Mock()
                 page.url = "https://www.instagram.com/challenge/"
@@ -3299,7 +3321,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         wait_manual.assert_called_once()
         self.assertEqual(wait_manual.call_args.args[7], "cookie_expired")
 
-    def test_manual_threads_login_retries_once_then_opens_instagram_handoff(self):
+    def test_manual_threads_login_retries_once_then_opens_username_form(self):
         page = mock.Mock()
         page.url = "https://www.threads.com/"
         logger = _Logger()
@@ -3319,7 +3341,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(click.call_count, 2)
         self.assertEqual(click.call_args_list[0].args[3], "manual_login_retry")
-        self.assertEqual(click.call_args_list[1].args[3], "manual_login_continue_instagram")
+        self.assertEqual(click.call_args_list[1].args[3], "manual_threads_username_login")
         self.assertEqual(page.wait_for_load_state.call_count, 2)
 
     def test_manual_threads_login_does_not_redirect_an_authenticated_session(self):
@@ -3404,7 +3426,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         )
         self.assertEqual([call.args[3] for call in click.call_args_list], ["auto_login_submit"])
 
-    def test_threads_auto_login_uses_official_handoff_only_after_native_form_is_missing(self):
+    def test_threads_auto_login_stays_on_threads_when_native_form_is_missing(self):
         page = _Page(url="https://www.threads.com/login")
         payload = {"login_username": "saved-user", "login_password": "saved-password"}
         with (
@@ -3414,7 +3436,6 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 "_click_text_button",
                 side_effect=[False, False, False],
             ) as click,
-            mock.patch.object(runner, "_click_threads_instagram_login_entry", return_value=True) as handoff,
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_screenshot", return_value="handoff.png"),
             mock.patch.object(runner, "_goto") as goto,
@@ -3424,14 +3445,13 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 "threads",
                 payload,
                 _Logger(),
-                {"id": "threads-official-handoff-fallback"},
+                {"id": "threads-native-form-missing"},
                 Path("."),
         )
 
-        self.assertTrue(submitted)
+        self.assertFalse(submitted)
         self.assertEqual(click.call_count, 3)
-        handoff.assert_called_once()
-        self.assertTrue(payload["_threads_official_handoff_attempted"])
+        self.assertNotIn("_threads_official_handoff_attempted", payload)
         goto.assert_not_called()
 
     def test_manual_threads_login_returns_from_instagram_for_final_confirmation(self):

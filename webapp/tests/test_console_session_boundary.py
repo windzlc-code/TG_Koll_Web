@@ -1561,6 +1561,28 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_login_assistant_does_not_render_removed_account_confirmation_buttons(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            function esc(value) {{ return String(value || ""); }}
+            function liveBrowserSessionId() {{ return "live-session"; }}
+            {self._function_source("loginAssistanceMappedInputAllowed")}
+            {self._function_source("renderLoginAssistanceChoices")}
+            {self._function_source("renderLoginAssistanceAction")}
+
+            const html = renderLoginAssistanceAction({{
+              kind: "confirm",
+              submitLabel: "确认并继续",
+              actions: [{{ label: "Continue with Instagram", title: "Continue with Instagram" }}],
+            }}, {{ id: "live-session" }});
+            assert.ok(!html.includes("确认并继续"));
+            assert.ok(!html.includes("Continue with Instagram"));
+            assert.ok(!html.includes('data-login-assistance-submit="confirm"'));
+            """
+        )
+        self._run_node(harness)
+
     def test_live_browser_polling_preserves_unchanged_placeholder_nodes(self):
         browser_render = self._function_source("renderLiveBrowserSessions")
         placeholder_sync = self._function_source("syncLiveBrowserPlaceholders")
@@ -2417,7 +2439,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(statusTone("login_wait_timeout"), "error");
             assert.strictEqual(statusTone("disabled"), "muted");
             assert.strictEqual(statusLabel("need_verification"), "需验证");
-            assert.strictEqual(statusLabel("account_confirmation_required"), "需确认关联账号");
+            assert.strictEqual(statusLabel("account_confirmation_required"), "需登录");
             assert.strictEqual(accountStatusDisplayLabel("ready_unverified"), "已登录");
             assert.strictEqual(accountStatusDisplayLabel("cookie_expired"), "未登录");
             assert.strictEqual(accountStatusDisplayLabel("invalid_credentials"), "未登录");
