@@ -386,6 +386,28 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         )
         self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
 
+    def test_credentials_submission_keeps_progress_while_login_page_is_transitioning(self):
+        control = {
+            "login_assistance_state": {
+                "phase": "running",
+                "kind": "progress",
+                "title": "正在验证",
+                "message": "登录信息已提交，正在检查账号状态。",
+            },
+            "login_assistance_submitted_kind": "credentials",
+            "login_assistance_submitted_challenge": "",
+        }
+
+        runner._publish_login_assistance_state(
+            mock.Mock(),
+            control,
+            {"status": "cookie_expired", "reason": "检测到 Threads 登录页面。"},
+            handoff=True,
+        )
+
+        self.assertEqual(control["login_assistance_state"]["kind"], "progress")
+        self.assertEqual(control["login_assistance_state"]["title"], "正在验证")
+
     def test_credentials_follow_the_visible_login_page_when_context_switched_tabs(self):
         actions = queue.Queue(maxsize=2)
         actions.put_nowait({"kind": "credentials", "login_username": "name", "login_password": "secret"})

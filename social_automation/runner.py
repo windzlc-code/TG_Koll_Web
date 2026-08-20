@@ -4023,7 +4023,10 @@ def _login_assistance_submission_rejected(page: Any, submitted_kind: str, status
         code = str(current.get("status") or "").strip().lower()
         if code == "invalid_credentials" or _page_shows_invalid_credentials(page):
             return True
-        return code == "cookie_expired"
+        # Threads/Instagram can retain the login form briefly after the mapped
+        # submit succeeds.  That transient page must remain "正在验证" rather
+        # than being rendered as a fresh credentials prompt.
+        return False
     return False
 
 
