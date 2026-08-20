@@ -1635,7 +1635,7 @@ def _proxy_locale(proxy: dict[str, Any] | None) -> str | None:
         return None
 
     candidates: list[Any] = []
-    last_check = proxy.get("last_check_result_json")
+    last_check = proxy.get("last_check_result") or proxy.get("last_check_result_json")
     if isinstance(last_check, str) and last_check.strip():
         with contextlib.suppress(json.JSONDecodeError, TypeError):
             last_check = json.loads(last_check)

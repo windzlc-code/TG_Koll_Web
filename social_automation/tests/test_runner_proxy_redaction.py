@@ -72,12 +72,23 @@ class RunnerProxyRedactionTests(unittest.TestCase):
         proxy = {
             **self.proxy,
             "country": "UA",
-            "last_check_result_json": json.dumps(
+            "last_check_result": json.dumps(
                 {"response": {"country": "Taiwan", "country_code": "TW"}}
             ),
         }
 
         self.assertEqual(runner._proxy_locale(proxy), "TW")
+
+    def test_proxy_locale_supports_country_name_from_live_check(self):
+        proxy = {
+            **self.proxy,
+            "country": "Portugal",
+            "last_check_result": json.dumps(
+                {"response": {"country": "Portugal", "country_code": "PT"}}
+            ),
+        }
+
+        self.assertEqual(runner._proxy_locale(proxy), "PT")
 
     def test_camoufox_launch_locale_follows_current_proxy(self):
         observed = []
