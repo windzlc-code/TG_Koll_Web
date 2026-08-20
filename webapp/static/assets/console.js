@@ -3012,7 +3012,7 @@ function accountDisplayedStatus(account = null) {
 function accountStatusDisplayLabel(status = "") {
   const key = String(status || "").trim().toLowerCase();
   if (["ready", "ready_unverified", "success", "standby"].includes(key)) return "已登录";
-  if (["pending_login", "cookie_expired"].includes(key)) return "未登录";
+  if (["pending_login", "cookie_expired", "invalid_credentials"].includes(key)) return "未登录";
   if (key === "risk_control") return "封控验证";
   if (["need_verification", "account_confirmation_required"].includes(key)) return "需验证";
   if (["checking", "running", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "检测中";
@@ -3026,7 +3026,7 @@ function accountStatusDisplayTone(status = "") {
   const key = String(status || "").trim().toLowerCase();
   if (["ready", "ready_unverified", "success", "standby"].includes(key)) return "success";
   if (["checking", "running", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "active";
-  if (["pending_login", "cookie_expired", "need_verification", "account_confirmation_required"].includes(key)) return "manual";
+  if (["pending_login", "cookie_expired", "invalid_credentials", "need_verification", "account_confirmation_required"].includes(key)) return "manual";
   if (["transient_error", "check_failed", "failed", "error", "login_wait_timeout", "abnormal", "risk_control", "banned", "disabled"].includes(key)) return "error";
   return "muted";
 }
@@ -3046,7 +3046,7 @@ function accountLastLoginCheckLabel(account) {
 function accountStatusClassNames(status) {
   const key = String(status || "unknown").trim().toLowerCase();
   if (["ready", "ready_unverified", "success", "standby"].includes(key)) return "ready";
-  if (["pending_login", "cookie_expired"].includes(key)) return "pending_login";
+  if (["pending_login", "cookie_expired", "invalid_credentials"].includes(key)) return "pending_login";
   if (["need_verification", "account_confirmation_required"].includes(key)) return "need_verification";
   if (key === "risk_control") return "abnormal";
   if (["checking", "running", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "checking";

@@ -2336,15 +2336,8 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
             "challenge_type": challenge_type,
             **({"health_status": "abnormal"} if risk_control else {}),
         }
-    invalid_markers = [
-        "login information you entered is incorrect",
-        "your password was incorrect",
-        "incorrect password",
-        "wrong password",
-        "we couldn't find an account",
-    ]
-    if any(marker in body_text for marker in invalid_markers):
-        return {"status": "invalid_credentials", "reason": "Instagram 提示保存的登录信息不正确。", "url": url}
+    if _page_shows_invalid_credentials(page, body_text=body_text):
+        return {"status": "invalid_credentials", "reason": "平台提示账号或密码不正确，请重新输入。", "url": url}
     challenge_markers = _verification_text_markers()
     if any(marker in body_text for marker in challenge_markers):
         challenge = _classify_verification_challenge(page)
@@ -2532,15 +2525,8 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
     except Exception:
         pass
-    invalid_markers = [
-        "login information you entered is incorrect",
-        "your password was incorrect",
-        "incorrect password",
-        "wrong password",
-        "we couldn't find an account",
-    ]
-    if any(marker in body_text for marker in invalid_markers):
-        return {"status": "invalid_credentials", "reason": "Instagram/Threads 提示保存的登录信息不正确。", "url": url}
+    if _page_shows_invalid_credentials(page, body_text=body_text):
+        return {"status": "invalid_credentials", "reason": "平台提示账号或密码不正确，请重新输入。", "url": url}
     login_markers = ["log in", "login", "continue with instagram", "forgot password", "sign up"]
     if any(marker in body_text for marker in login_markers) and any(marker in body_text for marker in ["threads", "instagram"]):
         return {"status": "cookie_expired", "reason": "检测到 Threads 登录页面文案。", "url": url}
@@ -2620,6 +2606,44 @@ def _is_verification_url(url: str) -> bool:
             "/accounts/update_risky_contactpoint",
         )
     )
+
+
+def _invalid_credential_text_markers() -> list[str]:
+    return [
+        "login information you entered is incorrect",
+        "your password was incorrect",
+        "incorrect password",
+        "wrong password",
+        "we couldn't find an account",
+        "sorry, your password was incorrect",
+        "the username you entered doesn't belong",
+        "couldn't find your account",
+        "invalid username",
+        "invalid password",
+        "password is incorrect",
+        "please check your password",
+        "密码不正确",
+        "密码错误",
+        "你输入的密码不正确",
+        "你輸入的密碼不正確",
+        "密碼不正確",
+        "密碼錯誤",
+        "找不到与该用户名",
+        "找不到該用戶名",
+        "找不到你的帐户",
+        "找不到你的帳戶",
+        "用户名无效",
+        "用戶名無效",
+        "请检查你的密码",
+        "請檢查你的密碼",
+    ]
+
+
+def _page_shows_invalid_credentials(page, body_text: str | None = None) -> bool:
+    text = str(body_text or "").strip().lower()
+    if not text:
+        text = _page_body_text_lower(page)
+    return any(marker in text for marker in _invalid_credential_text_markers())
 
 
 def _verification_text_markers() -> list[str]:
@@ -2896,6 +2920,89 @@ def _restore_threads_after_instagram_login(page, status: dict[str, Any], logger:
     return _detect_threads_login_state(page)
 
 
+def _account_status_for_login_handoff(status: dict[str, Any] | None) -> str:
+    code = str((status or {}).get("status") or "").strip().lower()
+    health = str((status or {}).get("health_status") or "").strip().lower()
+    if health == "banned" or code == "banned":
+        return "banned"
+    if code == "disabled":
+        return "disabled"
+    if code == "need_verification":
+        return "need_verification"
+    return "cookie_expired"
+
+
+def _handoff_status_for_open_login(
+    page,
+    platform: str,
+    last_status: dict[str, Any] | None,
+    reason: str,
+) -> dict[str, Any]:
+    current = dict(last_status or {})
+    detected: dict[str, Any] = {}
+    with contextlib.suppress(Exception):
+        detected = _detect_platform_login_state(page, platform)
+    if detected:
+        current = detected
+    code = str(current.get("status") or "").strip().lower()
+    if code in {"banned", "disabled", "need_verification", "account_confirmation_required"}:
+        if reason and not str(current.get("reason") or "").strip():
+            current["reason"] = reason
+        return current
+    if code == "invalid_credentials" or _page_shows_invalid_credentials(page):
+        return {
+            **current,
+            "status": "invalid_credentials",
+            "reason": str(current.get("reason") or reason or "平台提示账号或密码不正确，请重新输入。"),
+        }
+    return {
+        **current,
+        "status": "cookie_expired",
+        "reason": reason or "自动登录未成功，请人工输入账号和密码。",
+        "url": str(current.get("url") or getattr(page, "url", "") or ""),
+    }
+
+
+def _handoff_open_login_to_manual(
+    page,
+    task,
+    screenshot_dir: Path,
+    logger: AutomationLogger,
+    platform: str,
+    cancel_event: Any | None,
+    context_control: dict[str, Any] | None,
+    last_status: dict[str, Any] | None,
+    reason: str,
+    stage: str = "login_auto_retry_exhausted",
+    screenshot_path: str = "",
+) -> dict[str, Any]:
+    _request_manual_takeover(context_control)
+    current = _handoff_status_for_open_login(page, platform, last_status, reason)
+    account_status = _account_status_for_login_handoff(current)
+    _report_account_login_status(context_control, account_status, logger)
+    shot = screenshot_path or _screenshot(page, screenshot_dir, task, stage, logger)
+    logger.log(
+        "warn",
+        stage,
+        str(current.get("reason") or reason),
+        {"status": str(current.get("status") or "cookie_expired"), "account_status": account_status, "details": _safe_login_status(current)},
+        shot,
+    )
+    return _wait_for_manual_login_completion(
+        page,
+        task,
+        screenshot_dir,
+        logger,
+        platform,
+        cancel_event,
+        str(current.get("reason") or reason),
+        str(current.get("status") or "cookie_expired"),
+        shot,
+        current,
+        context_control,
+    )
+
+
 def _wait_or_raise_manual(
     page,
     task,
@@ -2986,19 +3093,17 @@ def _run_open_login(
         current_status = _detect_platform_login_state(page, platform)
         if platform == "threads":
             current_status = _restore_threads_after_instagram_login(page, current_status, logger)
-        _request_manual_takeover(context_control)
-        return _wait_for_manual_login_completion(
+        return _handoff_open_login_to_manual(
             page,
             task,
             screenshot_dir,
             logger,
             platform,
             cancel_event,
-            str(current_status.get("reason") or "请在登录助手中填写账号和密码。"),
-            str(current_status.get("status") or "cookie_expired"),
-            "",
-            current_status,
             context_control,
+            current_status,
+            str(current_status.get("reason") or "请在登录助手中填写账号和密码。"),
+            stage="login_manual_credentials_required",
         )
     deadline = time.time() + wait_seconds
     last_status: dict[str, Any] = {}
@@ -3168,20 +3273,17 @@ def _run_open_login(
                     context_control,
                 )
             if last_status.get("status") == "invalid_credentials":
-                _request_manual_takeover(context_control)
-                shot = _screenshot(page, screenshot_dir, task, "login_invalid_credentials", logger)
-                return _wait_for_manual_login_completion(
+                return _handoff_open_login_to_manual(
                     page,
                     task,
                     screenshot_dir,
                     logger,
                     platform,
                     cancel_event,
-                    f"{_platform_name(platform)} 保存的账号密码被拒绝，请在打开的浏览器中手动修正并继续。",
-                    "invalid_credentials",
-                    shot,
-                    last_status,
                     context_control,
+                    last_status,
+                    str(last_status.get("reason") or "平台提示账号或密码不正确，请重新输入后再提交。"),
+                    stage="login_invalid_credentials",
                 )
             if last_status.get("status") == "need_verification":
                 shot = _screenshot(page, screenshot_dir, task, "login_verification_required", logger)
@@ -3215,18 +3317,30 @@ def _run_open_login(
                 logger.log(
                     "warn",
                     "login_transient_error",
-                    f"{_platform_name(platform)} returned a temporary error page; leaving the browser untouched.",
+                    f"{_platform_name(platform)} 页面暂时异常，正在决定是否继续自动恢复。",
                     {"url": _safe_navigation_url(page.url), "screenshot_path": shot, "details": _safe_login_status(last_status)},
                     shot,
                 )
                 if auto_submit and post_submit_waiting:
                     time.sleep(3)
                     continue
+                if auto_submit and self_heal_attempts < max_self_heal_attempts:
+                    self_heal_attempts += 1
+                    _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_transient_error", self_heal_attempts, cancel_event, context_control)
+                    continue
                 if auto_submit:
-                    raise AutoLoginFailedError(
-                        f"{_platform_name(platform)} returned a temporary error page; open a manual login session and try again.",
-                        "transient_error",
-                        shot,
+                    return _handoff_open_login_to_manual(
+                        page,
+                        task,
+                        screenshot_dir,
+                        logger,
+                        platform,
+                        cancel_event,
+                        context_control,
+                        last_status,
+                        f"{_platform_name(platform)} 页面暂时异常，自动登录已停止，请人工继续。",
+                        stage="login_transient_error_manual",
+                        screenshot_path=shot,
                     )
                 return _wait_or_raise_manual(
                     page,
@@ -3235,7 +3349,7 @@ def _run_open_login(
                     logger,
                     platform,
                     cancel_event,
-                    f"{_platform_name(platform)} returned a temporary error page. The manual login browser remains open without reloads.",
+                    f"{_platform_name(platform)} 页面暂时异常，请在已打开的浏览器中继续。",
                     "transient_error",
                     shot,
                     last_status,
@@ -3328,77 +3442,64 @@ def _run_open_login(
             continue
         if post_submit_grace_expired:
             last_submit_monotonic = None
-        if auto_submit:
-            if self_heal_attempts < max_self_heal_attempts:
-                self_heal_attempts += 1
-                _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_state_not_ready", self_heal_attempts, cancel_event, context_control)
-                continue
-            if str(last_status.get("status") or "") == "transient_error":
-                shot = _screenshot(page, screenshot_dir, task, "login_recovery_transient_failed", logger)
-                reason = str(
-                    last_status.get("reason")
-                    or f"{_platform_name(platform)} login could not continue because the platform page is temporarily unreachable."
-                )
-                logger.log(
-                    "warn",
-                    "login_recovery_transient_failed",
-                    reason,
-                    {"status": "transient_error", "details": _safe_login_status(last_status)},
-                    shot,
-                )
-                _request_manual_takeover(context_control)
-                return _wait_for_manual_login_completion(
+            if auto_submit and login_attempts > 0:
+                if login_attempts < max_login_attempts and str(last_status.get("status") or "") == "cookie_expired":
+                    time.sleep(1)
+                    continue
+                return _handoff_open_login_to_manual(
                     page,
                     task,
                     screenshot_dir,
                     logger,
                     platform,
                     cancel_event,
-                    reason,
-                    "transient_error",
-                    shot,
-                    last_status,
                     context_control,
+                    last_status,
+                    f"{_platform_name(platform)} 自动登录提交后仍未成功，已转为人工接手。",
+                    stage="login_auto_submit_unsuccessful",
                 )
-            _request_manual_takeover(context_control)
-            shot = _screenshot(page, screenshot_dir, task, "login_recovery_exhausted", logger)
-            reason = f"{_platform_name(platform)} 自动恢复已达到上限，请在已打开的浏览器中人工继续。"
-            logger.log(
-                "warn",
-                "login_recovery_exhausted",
-                reason,
-                {"status": str(last_status.get("status") or "need_manual"), "details": last_status},
-                shot,
-            )
-            return _wait_for_manual_login_completion(
+        if auto_submit:
+            if login_attempts > 0:
+                return _handoff_open_login_to_manual(
+                    page,
+                    task,
+                    screenshot_dir,
+                    logger,
+                    platform,
+                    cancel_event,
+                    context_control,
+                    last_status,
+                    f"{_platform_name(platform)} 自动登录未成功，已转为人工接手。",
+                    stage="login_auto_submit_unsuccessful",
+                )
+            if self_heal_attempts < max_self_heal_attempts:
+                self_heal_attempts += 1
+                _self_heal_login_page(page, platform, logger, task, screenshot_dir, "login_state_not_ready", self_heal_attempts, cancel_event, context_control)
+                continue
+            return _handoff_open_login_to_manual(
                 page,
                 task,
                 screenshot_dir,
                 logger,
                 platform,
                 cancel_event,
-                reason,
-                str(last_status.get("status") or "need_manual"),
-                shot,
-                last_status,
                 context_control,
+                last_status,
+                f"{_platform_name(platform)} 自动登录已重试结束，仍未登录，请人工输入账号和密码。",
+                stage="login_recovery_exhausted",
             )
         time.sleep(3 if auto_submit else 10)
-    shot = _screenshot(page, screenshot_dir, task, "login_wait_timeout", logger)
-    return _wait_or_raise_manual(
+    return _handoff_open_login_to_manual(
         page,
         task,
         screenshot_dir,
         logger,
         platform,
         cancel_event,
-        f"自动登录流程暂未确认完成：{last_status.get('reason') or '账号未就绪'}。浏览器会保持打开，等待人工处理或取消任务。",
-        str(last_status.get("status") or "need_verification"),
-        shot,
-        last_status,
-        wait_for_manual,
-        manual_only_on_verification,
         context_control,
+        last_status,
+        f"自动登录等待超时：{last_status.get('reason') or '账号未就绪'}。已转为人工接手。",
+        stage="login_wait_timeout",
     )
 
 
@@ -3597,11 +3698,17 @@ def _login_assistance_presentation(status: dict[str, Any] | None) -> dict[str, A
             "challenge_type": challenge_type,
         }
     if status_code in {"invalid_credentials", "cookie_expired"}:
+        if status_code == "invalid_credentials":
+            title = "账号或密码不正确"
+            fallback = "平台提示账号或密码错误，请重新输入后再提交。"
+        else:
+            title = "需要登录信息"
+            fallback = "自动登录未成功，请对照当前页面填写账号和密码。"
         return {
             "phase": "attention",
             "kind": "credentials",
-            "title": "重新输入登录信息" if status_code == "invalid_credentials" else "需要登录信息",
-            "message": _login_assistance_message(reason, "当前页面需要账号和密码。"),
+            "title": title,
+            "message": _login_assistance_message(reason, fallback),
             "field_label": "账号、邮箱或手机号",
             "submit_label": "提交并继续",
             "challenge_type": challenge_type,
@@ -3913,7 +4020,10 @@ def _login_assistance_submission_rejected(page: Any, submitted_kind: str, status
     if kind == "verification_code":
         return _login_assistance_code_rejected(page)
     if kind == "credentials":
-        return str(current.get("status") or "").strip().lower() == "invalid_credentials"
+        code = str(current.get("status") or "").strip().lower()
+        if code == "invalid_credentials" or _page_shows_invalid_credentials(page):
+            return True
+        return code == "cookie_expired"
     return False
 
 
@@ -3967,6 +4077,15 @@ def _publish_login_assistance_state(
         with contextlib.suppress(Exception):
             current["actions"] = _login_assistance_collect_choices(page, current)
     presentation = _login_assistance_presentation(current)
+    if handoff and not _login_assistance_is_milestone(presentation):
+        current = {
+            **current,
+            "status": "cookie_expired",
+            "reason": str(current.get("reason") or "自动登录未成功，请人工输入账号和密码。"),
+        }
+        if not _login_assistance_has_cjk(str(current.get("reason") or "")):
+            current["reason"] = "自动登录未成功，请人工输入账号和密码。"
+        presentation = _login_assistance_presentation(current)
     submitted_kind = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
     submitted_challenge = str(context_control.get("login_assistance_submitted_challenge") or "").strip().lower()
     if submitted_kind and _login_assistance_same_prompt_after_submit(submitted_kind, submitted_challenge, presentation):
@@ -3976,6 +4095,13 @@ def _publish_login_assistance_state(
         context_control.pop("login_assistance_submitted_challenge", None)
         if submitted_kind == "verification_code" and not str(current.get("reason") or "").strip():
             current["reason"] = "验证码不正确，请重新输入。"
+            presentation = _login_assistance_presentation(current)
+        elif submitted_kind == "credentials":
+            if str(current.get("status") or "").strip().lower() == "invalid_credentials" or _page_shows_invalid_credentials(page):
+                current["status"] = "invalid_credentials"
+                current["reason"] = str(current.get("reason") or "平台提示账号或密码不正确，请重新输入。")
+            elif not str(current.get("reason") or "").strip() or not _login_assistance_has_cjk(str(current.get("reason") or "")):
+                current["reason"] = "登录未成功，请检查账号和密码后重新提交。"
             presentation = _login_assistance_presentation(current)
     elif submitted_kind and str(presentation.get("kind") or "") not in {submitted_kind, "progress"}:
         context_control.pop("login_assistance_submitted_kind", None)

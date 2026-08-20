@@ -2390,6 +2390,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(statusLabel("account_confirmation_required"), "需确认关联账号");
             assert.strictEqual(accountStatusDisplayLabel("ready_unverified"), "已登录");
             assert.strictEqual(accountStatusDisplayLabel("cookie_expired"), "未登录");
+            assert.strictEqual(accountStatusDisplayLabel("invalid_credentials"), "未登录");
+            assert.strictEqual(accountStatusDisplayTone("invalid_credentials"), "manual");
+            assert.strictEqual(accountStatusClassNames("invalid_credentials"), "pending_login");
             assert.strictEqual(accountStatusDisplayLabel("account_confirmation_required"), "需验证");
             assert.strictEqual(accountStatusDisplayLabel("check_failed"), "登录异常");
             assert.strictEqual(accountStatusDisplayLabel("disabled"), "账号不可用");

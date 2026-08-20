@@ -52,7 +52,7 @@ class LoginAssistancePresentationTests(unittest.TestCase):
     def test_all_login_states_and_exceptions_have_distinct_live_prompts(self):
         cases = {
             "ready": ("success", "success", "登录成功"),
-            "invalid_credentials": ("attention", "credentials", "重新输入登录信息"),
+            "invalid_credentials": ("attention", "credentials", "账号或密码不正确"),
             "cookie_expired": ("attention", "credentials", "需要登录信息"),
             "account_confirmation_required": ("attention", "confirm", "需要确认账号"),
             "post_login_interstitial": ("running", "progress", "正在处理登录后提示"),
@@ -1387,6 +1387,15 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         status = runner._detect_instagram_login_state(page)
 
         self.assertEqual(status["status"], "invalid_credentials")
+
+    def test_instagram_chinese_password_error_is_invalid_credentials(self):
+        page = _ThreadsShellPage([], body_text="密码不正确。请再试一次。")
+        page.url = "https://www.instagram.com/accounts/login/"
+
+        status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["status"], "invalid_credentials")
+        self.assertIn("账号或密码", status["reason"])
 
     def test_temporary_background_page_keeps_primary_page_available(self):
         page = _PageWithBackground()
@@ -2892,6 +2901,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         wait_manual.assert_called_once()
         submit.assert_not_called()
         self_heal.assert_not_called()
+        self.assertEqual(wait_manual.call_args.args[7], "invalid_credentials")
 
     def test_exhausted_automatic_recovery_switches_to_manual(self):
         page = mock.Mock()
@@ -2932,6 +2942,77 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(ack_event.is_set())
         self_heal.assert_not_called()
         wait_manual.assert_called_once()
+        self.assertEqual(wait_manual.call_args.args[7], "cookie_expired")
+
+    def test_auto_login_does_not_self_heal_after_failed_submit(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/accounts/login/"
+        event = threading.Event()
+        ack_event = threading.Event()
+        reported = []
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                return_value={"status": "cookie_expired", "url": page.url},
+            ),
+            mock.patch.object(runner, "_auto_submit_login_form", return_value=True) as submit,
+            mock.patch.object(runner, "_verification_visible", return_value=False),
+            mock.patch.object(runner, "_self_heal_login_page") as self_heal,
+            mock.patch.object(runner, "_screenshot", return_value="handoff.png"),
+            mock.patch.object(
+                runner,
+                "_wait_for_manual_login_completion",
+                return_value={"status": "cookie_expired"},
+            ) as wait_manual,
+            mock.patch.object(runner, "_report_account_login_status", side_effect=lambda _control, status, _logger: reported.append(status)),
+            mock.patch.object(runner.time, "time", return_value=0),
+            mock.patch.object(runner.time, "monotonic", side_effect=[100, 131]),
+        ):
+            result = runner._run_open_login(
+                page,
+                {"id": "no-self-heal-after-submit"},
+                {},
+                {
+                    "login_wait_seconds": 30,
+                    "auto_submit": True,
+                    "login_username": "saved-user",
+                    "login_password": "saved-password",
+                    "max_login_attempts": 1,
+                    "max_self_heal_attempts": 4,
+                    "submit_grace_seconds": 30,
+                },
+                Path("."),
+                _Logger(),
+                "instagram",
+                context_control={
+                    "manual_takeover_event": event,
+                    "manual_takeover_ack_event": ack_event,
+                },
+            )
+
+        self.assertEqual(result["status"], "cookie_expired")
+        submit.assert_called_once()
+        self_heal.assert_not_called()
+        wait_manual.assert_called_once()
+        self.assertEqual(wait_manual.call_args.args[7], "cookie_expired")
+        self.assertIn("cookie_expired", reported)
+        self.assertTrue(event.is_set())
+
+    def test_handoff_publishes_credentials_instead_of_progress(self):
+        control = {}
+        runner._publish_login_assistance_state(
+            mock.Mock(),
+            control,
+            {"status": "transient_error", "reason": "页面暂时打不开"},
+            handoff=True,
+        )
+        self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
+        self.assertEqual(control["login_assistance_state"]["title"], "需要登录信息")
+        prompt = runner._login_assistance_presentation({"status": "invalid_credentials", "reason": "平台提示账号或密码不正确，请重新输入。"})
+        self.assertEqual(prompt["title"], "账号或密码不正确")
+        self.assertIn("账号或密码", prompt["message"])
 
     def test_manual_takeover_during_submit_lookup_never_falls_back_to_enter(self):
         page = _Page(url="https://www.instagram.com/accounts/login/")
@@ -3140,7 +3221,11 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "transient_error", "reason": "error page"}),
             mock.patch.object(runner, "_self_heal_login_page") as self_heal,
             mock.patch.object(runner, "_screenshot", return_value="error.png"),
-            mock.patch.object(runner, "_wait_or_raise_manual", return_value={"status": "transient_error"}),
+            mock.patch.object(
+                runner,
+                "_wait_for_manual_login_completion",
+                return_value={"status": "cookie_expired"},
+            ) as wait_manual,
         ):
             result = runner._run_open_login(
                 page,
@@ -3152,8 +3237,10 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 "threads",
             )
 
-        self.assertEqual(result["status"], "transient_error")
+        self.assertEqual(result["status"], "cookie_expired")
         self_heal.assert_not_called()
+        wait_manual.assert_called_once()
+        self.assertEqual(wait_manual.call_args.args[7], "cookie_expired")
 
     def test_manual_threads_login_retries_once_then_opens_instagram_handoff(self):
         page = mock.Mock()
