@@ -1355,10 +1355,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("renderSocialTasks()", account_refresh)
         self.assertNotIn("renderSocialAccounts()", account_status)
         self.assertNotIn("renderConfirmSummary()", account_status)
-        self.assertEqual(account_status.count('document.querySelectorAll("[data-account-totp-for]")'), 1)
-        self.assertNotIn("updateAccountTotpBadgeViews(", account_status)
-        self.assertIn("accountById.get(String(node.dataset.accountTotpFor", account_status)
-        self.assertIn("updateAccountTotpBadgeNode(node, account)", account_status)
+        self.assertNotIn('document.querySelectorAll("[data-account-totp-for]")', account_status)
         self.assertIn('document.querySelectorAll("[data-account-status-for]")', account_status)
         self.assertNotIn("data-social-check-status", account_status)
         self.assertIn('loadAutomationTasksShared().catch', task_refresh)
@@ -3685,7 +3682,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".account-pool-create-modal-head-actions", self.styles)
         self.assertIn(".account-pool-paste-card-button", self.styles)
         self.assertIn(".account-pool-card .account-pool-card-flags .status", self.styles)
-        self.assertIn(".account-pool-card .account-totp-badge", self.styles)
+        self.assertNotIn(".account-pool-card .account-totp-badge", self.styles)
         self.assertIn("font-size: 10px;", self.styles)
 
     def test_account_clipboard_write_falls_back_when_permission_is_denied(self):

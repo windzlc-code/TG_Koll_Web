@@ -3946,12 +3946,12 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("renderAccountPoolCardFields(account, { includeContinueLogin: false })", picker)
         self.assertIn("includeContinueLogin = true", helper)
         self.assertIn('"platform status"', self.styles)
-        self.assertIn('"username totp"', self.styles)
+        self.assertIn('"username username"', self.styles)
         self.assertLess(helper.index("account-pool-card-platform"), helper.index("account-pool-card-copy"))
         self.assertLess(helper.index("account-pool-card-copy"), helper.index("account-pool-card-flags"))
 
     def test_persona_account_picker_reuses_compact_account_pool_status_styles(self):
-        selector = ".persona-account-picker-card .account-pool-card-flags .status,\n.persona-account-picker-card .account-totp-badge {"
+        selector = ".persona-account-picker-card .account-pool-card-flags .status {"
         start = self.styles.index(selector)
         rule = self.styles[start:self.styles.index("}", start) + 1]
 
@@ -3960,7 +3960,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("font-size: 10px;", rule)
         self.assertIn("line-height: 1.15;", rule)
 
-    def test_persona_account_picker_places_totp_on_the_account_pool_second_row(self):
+    def test_persona_account_picker_keeps_username_on_the_second_row(self):
         main_selector = ".persona-account-picker-card .account-pool-card-main {"
         main_start = self.styles.index(main_selector)
         main_rule = self.styles[main_start:self.styles.index("}", main_start) + 1]
@@ -3969,10 +3969,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         flags_rule = self.styles[flags_start:self.styles.index("}", flags_start) + 1]
 
         self.assertIn('"platform status"', main_rule)
-        self.assertIn('"username totp"', main_rule)
+        self.assertIn('"username username"', main_rule)
         self.assertIn("display: contents;", flags_rule)
         self.assertIn("grid-area: status;", self.styles)
-        self.assertIn("grid-area: totp;", self.styles)
+        self.assertNotIn("grid-area: totp;", self.styles)
 
     def test_homepage_no_longer_owns_a_mobile_post_stream(self):
         self.assertNotIn("PD_MOBILE_TWEET_STREAM_QUERY", self.dashboard_script)

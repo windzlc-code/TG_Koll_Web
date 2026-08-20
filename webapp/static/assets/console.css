@@ -9901,7 +9901,7 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     "platform status"
-    "username totp";
+    "username username";
   align-items: center;
   gap: 4px 7px;
   min-width: 0;
@@ -9935,26 +9935,12 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-area: status;
   align-self: center;
   justify-self: end;
-}
-
-.persona-account-picker-card .account-totp-badge {
-  grid-area: totp;
-  align-self: center;
-  justify-self: end;
-}
-
-/* Keep picker status chips identical to the compact account-pool card. */
-.persona-account-picker-card .account-pool-card-flags .status,
-.persona-account-picker-card .account-totp-badge {
+  align-items: center;
+  gap: 3px;
   min-height: 20px;
   padding: 2px 6px;
   font-size: 10px;
   line-height: 1.15;
-}
-
-.persona-account-picker-card .account-pool-card-flags .status {
-  align-items: center;
-  gap: 3px;
 }
 
 .persona-account-picker-card-meta {
@@ -16900,25 +16886,6 @@ body.persona-media-sorting {
   height: 18px;
 }
 
-.account-totp-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 2px 7px;
-  border: 1px solid #86b99a;
-  border-radius: 6px;
-  background: #edf8f1;
-  color: #17613a;
-  font-size: 11px;
-  font-weight: 850;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.account-totp-badge[hidden] {
-  display: none;
-}
-
 .account-totp-section {
   display: grid;
   gap: 8px;
@@ -16975,15 +16942,12 @@ body.persona-media-sorting {
   color: #17613a;
 }
 
-.account-totp-badge[data-totp-status="pending"],
 .account-totp-state[data-totp-status="pending"] {
   border-color: #d4a564;
   background: #fff7e8;
   color: #8a4b0f;
 }
 
-.account-totp-badge[data-totp-status="error"],
-.account-totp-badge[data-totp-status="invalid"],
 .account-totp-state[data-totp-status="error"],
 .account-totp-state[data-totp-status="invalid"] {
   border-color: #db8e91;
@@ -19794,7 +19758,7 @@ body.persona-media-sorting {
   grid-template-columns: 22px auto auto minmax(0, 1fr) auto;
   grid-template-areas:
     "check platform copy resume status"
-    "username username username username totp";
+    "username username username username username";
   align-items: center;
   gap: 4px 7px;
   grid-column: 1;
@@ -19826,11 +19790,6 @@ body.persona-media-sorting {
 
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-flags .status {
   grid-area: status;
-  justify-self: end;
-}
-
-.account-pool-card:not(.persona-account-pool-card) .account-totp-badge {
-  grid-area: totp;
   justify-self: end;
 }
 
@@ -19888,8 +19847,7 @@ body.persona-media-sorting {
   line-height: 1.35;
 }
 
-.account-pool-card .account-pool-card-flags .status,
-.account-pool-card .account-totp-badge {
+.account-pool-card .account-pool-card-flags .status {
   min-height: 20px;
   padding: 2px 6px;
   font-size: 10px;

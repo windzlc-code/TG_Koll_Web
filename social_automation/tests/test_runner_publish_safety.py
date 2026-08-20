@@ -438,6 +438,40 @@ class LoginAssistancePresentationTests(unittest.TestCase):
 
         self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
 
+    def test_credentials_resubmission_returns_after_transient_error_copy_disappears(self):
+        control = {
+            "login_assistance_state": {
+                "phase": "running",
+                "kind": "progress",
+                "title": "正在验证",
+            },
+            "login_assistance_submitted_kind": "credentials",
+            "login_assistance_submitted_challenge": "",
+            "login_assistance_credentials_submitted_at": 100.0,
+        }
+        page = mock.Mock()
+
+        with mock.patch.object(runner.time, "monotonic", return_value=102.0):
+            runner._publish_login_assistance_state(
+                page,
+                control,
+                {"status": "invalid_credentials", "reason": "账号或密码不正确"},
+                handoff=True,
+            )
+
+        self.assertEqual(control["login_assistance_state"]["kind"], "progress")
+
+        with mock.patch.object(runner.time, "monotonic", return_value=107.0):
+            runner._publish_login_assistance_state(
+                page,
+                control,
+                {"status": "cookie_expired", "reason": "检测到 Threads 登录页面。"},
+                handoff=True,
+            )
+
+        self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
+        self.assertIn("重新提交", control["login_assistance_state"]["message"])
+
     def test_credentials_follow_the_visible_login_page_when_context_switched_tabs(self):
         actions = queue.Queue(maxsize=2)
         actions.put_nowait({"kind": "credentials", "login_username": "name", "login_password": "secret"})

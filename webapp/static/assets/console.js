@@ -3105,35 +3105,6 @@ function accountTotpStatusLabel(status = "", configured = false) {
   return "2FA 已配置";
 }
 
-function renderAccountTotpBadge(account) {
-  const accountId = String(account?.id || "");
-  const configured = Boolean(account?.totp_configured);
-  const status = String(account?.totp_status || "").trim().toLowerCase();
-  const label = accountTotpStatusLabel(status, configured);
-  return `<span class="account-totp-badge" data-account-totp-for="${esc(accountId)}" data-totp-status="${esc(status)}" ${configured ? "" : "hidden"} title="${esc(label)}">${esc(label)}</span>`;
-}
-
-function updateAccountTotpBadgeNode(node, account) {
-  if (!node || !account) return;
-  const configured = Boolean(account.totp_configured ?? account.configured);
-  const status = String(account.totp_status ?? account.status ?? "");
-  const label = accountTotpStatusLabel(status, configured);
-  node.hidden = !configured;
-  node.dataset.totpStatus = status.trim().toLowerCase();
-  node.textContent = label;
-  node.title = label;
-}
-
-function updateAccountTotpBadgeViews(accountId = "", totp = null) {
-  const cleanId = String(accountId || "").trim();
-  const account = totp || accountById(cleanId);
-  if (!cleanId || !account) return;
-  document.querySelectorAll("[data-account-totp-for]").forEach((node) => {
-    if (String(node.dataset.accountTotpFor || "") !== cleanId) return;
-    updateAccountTotpBadgeNode(node, account);
-  });
-}
-
 function applyAccountTotpState(accountId = "", totp = {}) {
   const cleanId = String(accountId || "").trim();
   if (!cleanId) return null;
@@ -3143,7 +3114,6 @@ function applyAccountTotpState(accountId = "", totp = {}) {
   if (Object.prototype.hasOwnProperty.call(totp, "status")) account.totp_status = String(totp.status || "");
   if (Object.prototype.hasOwnProperty.call(totp, "updated_at")) account.totp_updated_at = totp.updated_at;
   if (Object.prototype.hasOwnProperty.call(totp, "last_verified_at")) account.totp_last_verified_at = totp.last_verified_at;
-  updateAccountTotpBadgeViews(cleanId, account);
   return account;
 }
 
@@ -27898,10 +27868,6 @@ function updateAccountStatusViews() {
     const label = button.querySelector("[data-account-proxy-label]");
     if (account && label) label.textContent = String(account.proxy_id || "").trim() ? "切换代理" : "选择代理";
   });
-  document.querySelectorAll("[data-account-totp-for]").forEach((node) => {
-    const account = accountById.get(String(node.dataset.accountTotpFor || ""));
-    if (account) updateAccountTotpBadgeNode(node, account);
-  });
   document.querySelectorAll("[data-social-open-login], [data-persona-account-open-login]").forEach((button) => {
     const accountId = String(button.dataset.socialOpenLogin || button.dataset.personaAccountOpenLogin || "");
     if (button.matches("[data-account-login-resume]")) updateAccountLoginResumeButton(button, accountId);
@@ -28493,7 +28459,6 @@ function renderAccountPoolCardFields(account, { selectionControl = "", includeCo
     <span class="account-pool-card-flags">
       ${platform === "threads" && account?.api_connected ? `<span class="status ok" title="Threads 官方 API 已授权${account.api_last_sync_at ? `，最近同步：${formatTime(account.api_last_sync_at)}` : ""}">API 已接入</span>` : ""}
       <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${renderAccountStatusContent(account)}</span>
-      ${renderAccountTotpBadge(account)}
     </span>
   </span>`;
 }

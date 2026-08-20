@@ -4038,9 +4038,13 @@ def _publish_login_assistance_state(
     submitted_kind = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
     submitted_challenge = str(context_control.get("login_assistance_submitted_challenge") or "").strip().lower()
     if submitted_kind and _login_assistance_same_prompt_after_submit(submitted_kind, submitted_challenge, presentation):
-        if submitted_kind == "credentials" and _login_assistance_credentials_submission_waiting(context_control):
-            return
-        if not _login_assistance_submission_rejected(page, submitted_kind, current):
+        rejected = _login_assistance_submission_rejected(page, submitted_kind, current)
+        if submitted_kind == "credentials":
+            if _login_assistance_credentials_submission_waiting(context_control):
+                return
+            if not rejected and not context_control.get("login_assistance_credentials_submitted_at"):
+                return
+        elif not rejected:
             return
         context_control.pop("login_assistance_submitted_kind", None)
         context_control.pop("login_assistance_submitted_challenge", None)
@@ -4052,7 +4056,7 @@ def _publish_login_assistance_state(
             if str(current.get("status") or "").strip().lower() == "invalid_credentials" or _page_shows_invalid_credentials(page):
                 current["status"] = "invalid_credentials"
                 current["reason"] = str(current.get("reason") or "平台提示账号或密码不正确，请重新输入。")
-            elif not str(current.get("reason") or "").strip() or not _login_assistance_has_cjk(str(current.get("reason") or "")):
+            else:
                 current["reason"] = "登录未成功，请检查账号和密码后重新提交。"
             presentation = _login_assistance_presentation(current)
     elif submitted_kind and str(presentation.get("kind") or "") not in {submitted_kind, "progress"}:
