@@ -27513,7 +27513,8 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
   if (!modal?.isConnected) return;
   const model = taskAssistanceViewModel(task, session);
   const taskStatus = loginAssistanceTaskStatus(task);
-  const canStop = !["success", "failed", "cancelled"].includes(taskStatus);
+  const canStop = !["success", "failed", "cancelled"].includes(taskStatus)
+    && !["success", "error"].includes(String(model.phase || ""));
   const renderKey = JSON.stringify([
     model.phase,
     model.kind,

@@ -256,6 +256,43 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertIn("平台尚未确认", control["login_assistance_state"]["message"])
         self.assertNotIn("login_assistance_submitted_kind", control)
 
+    def test_transitional_credentials_after_verification_require_a_stable_form(self):
+        control = {
+            "login_assistance_submitted_kind": "verification_code",
+            "login_assistance_submitted_challenge": "sms_code",
+            "login_assistance_verification_submitted_at": 100.0,
+            "login_assistance_state": {"phase": "running", "kind": "progress", "title": "正在验证"},
+        }
+        page = mock.Mock()
+        credentials = (page, page, mock.Mock(), mock.Mock())
+
+        with (
+            mock.patch.object(runner, "_login_assistance_code_rejected", return_value=False),
+            mock.patch.object(runner, "_page_shows_invalid_credentials", return_value=False),
+            mock.patch.object(runner, "_mapped_login_credentials", return_value=credentials),
+            mock.patch.object(runner.time, "monotonic", return_value=107.0),
+        ):
+            runner._publish_login_assistance_state(page, control, {"status": "cookie_expired"}, handoff=True)
+        self.assertEqual(control["login_assistance_state"]["kind"], "progress")
+
+        with (
+            mock.patch.object(runner, "_login_assistance_code_rejected", return_value=False),
+            mock.patch.object(runner, "_page_shows_invalid_credentials", return_value=False),
+            mock.patch.object(runner, "_mapped_login_credentials", return_value=credentials),
+            mock.patch.object(runner.time, "monotonic", return_value=112.0),
+        ):
+            runner._publish_login_assistance_state(page, control, {"status": "cookie_expired"}, handoff=True)
+        self.assertEqual(control["login_assistance_state"]["kind"], "progress")
+
+        with (
+            mock.patch.object(runner, "_login_assistance_code_rejected", return_value=False),
+            mock.patch.object(runner, "_page_shows_invalid_credentials", return_value=False),
+            mock.patch.object(runner, "_mapped_login_credentials", return_value=credentials),
+            mock.patch.object(runner.time, "monotonic", return_value=113.0),
+        ):
+            runner._publish_login_assistance_state(page, control, {"status": "cookie_expired"}, handoff=True)
+        self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
+
     def test_choice_clicks_are_sent_to_the_visible_page_button(self):
         actions = queue.Queue(maxsize=2)
         actions.put_nowait({"kind": "choice", "action_label": "Text message"})

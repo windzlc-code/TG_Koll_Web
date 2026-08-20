@@ -599,6 +599,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_login_assistance_success_hides_stop_action_immediately(self):
+        update_source = self._function_source("updateLoginAssistanceModal")
+        self.assertIn('!["success", "error"].includes(String(model.phase || ""))', update_source)
+
     def test_open_login_account_actions_preserve_running_task_navigation(self):
         actions = self._section("function renderAccountPoolCardActions", "function renderAccountPoolCard(")
         content = self._javascript_function_source(self.source, "renderAccountOpenLoginButtonContent")

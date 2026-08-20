@@ -24,6 +24,7 @@ DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS = 4
 LOGIN_FORM_WAIT_SECONDS = 12
 LOGIN_ASSISTANCE_CREDENTIAL_SUBMIT_SETTLE_SECONDS = 6
 LOGIN_ASSISTANCE_VERIFICATION_SUBMIT_SETTLE_SECONDS = 6
+LOGIN_ASSISTANCE_VERIFICATION_CREDENTIAL_STABLE_SECONDS = 6
 DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MIN_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MAX_MANUAL_LOGIN_TIMEOUT_SECONDS = 1800
@@ -4005,6 +4006,41 @@ def _login_assistance_verification_submission_waiting(context_control: dict[str,
     return submitted_at > 0 and (time.monotonic() - submitted_at) < LOGIN_ASSISTANCE_VERIFICATION_SUBMIT_SETTLE_SECONDS
 
 
+def _login_assistance_verification_credentials_waiting(
+    page: Any,
+    context_control: dict[str, Any] | None,
+    status: dict[str, Any] | None,
+    presentation: dict[str, Any] | None,
+) -> bool:
+    if not isinstance(context_control, dict):
+        return False
+    candidate_key = "login_assistance_verification_credentials_candidate_at"
+    if (
+        str(context_control.get("login_assistance_submitted_kind") or "").strip().lower() != "verification_code"
+        or str((presentation or {}).get("kind") or "").strip().lower() != "credentials"
+    ):
+        context_control.pop(candidate_key, None)
+        return False
+    if str((status or {}).get("status") or "").strip().lower() == "invalid_credentials" or _page_shows_invalid_credentials(page):
+        context_control.pop(candidate_key, None)
+        return False
+    if _mapped_login_credentials(page) is None:
+        context_control.pop(candidate_key, None)
+        return True
+    now = time.monotonic()
+    try:
+        candidate_at = float(context_control.get(candidate_key) or 0)
+    except (TypeError, ValueError):
+        candidate_at = 0
+    if candidate_at <= 0:
+        context_control[candidate_key] = now
+        return True
+    if (now - candidate_at) < LOGIN_ASSISTANCE_VERIFICATION_CREDENTIAL_STABLE_SECONDS:
+        return True
+    context_control.pop(candidate_key, None)
+    return False
+
+
 def _login_assistance_same_prompt_after_submit(
     submitted_kind: str,
     submitted_challenge: str,
@@ -4066,6 +4102,8 @@ def _publish_login_assistance_state(
         presentation = _login_assistance_presentation(current)
     submitted_kind = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
     submitted_challenge = str(context_control.get("login_assistance_submitted_challenge") or "").strip().lower()
+    if _login_assistance_verification_credentials_waiting(page, context_control, current, presentation):
+        return
     if submitted_kind and _login_assistance_same_prompt_after_submit(submitted_kind, submitted_challenge, presentation):
         rejected = _login_assistance_submission_rejected(page, submitted_kind, current)
         if submitted_kind == "credentials":
