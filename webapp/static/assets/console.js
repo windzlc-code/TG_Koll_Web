@@ -27593,9 +27593,39 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
   translateConsoleLanguage(body, currentLanguage());
 }
 
+function clearLoginAssistancePendingSubmission(modal) {
+  if (!modal?.dataset) return;
+  delete modal.dataset.loginAssistancePendingKind;
+  delete modal.dataset.loginAssistancePendingUpdatedAt;
+}
+
+function loginAssistancePollShouldPreserveSubmission(modal, task = {}, session = null) {
+  const pendingKind = String(modal?.dataset?.loginAssistancePendingKind || "").trim();
+  if (!pendingKind) return false;
+  if (["success", "failed", "cancelled"].includes(loginAssistanceTaskStatus(task))) {
+    clearLoginAssistancePendingSubmission(modal);
+    return false;
+  }
+  const assistance = session?.login_assistance && typeof session.login_assistance === "object"
+    ? session.login_assistance
+    : null;
+  if (!assistance) return true;
+  const pendingUpdatedAt = Number(modal.dataset.loginAssistancePendingUpdatedAt || 0);
+  const nextKind = String(assistance.kind || "").trim();
+  const nextUpdatedAt = Number(assistance.updated_at || 0);
+  if (nextKind === pendingKind && nextUpdatedAt <= pendingUpdatedAt) return true;
+  clearLoginAssistancePendingSubmission(modal);
+  return false;
+}
+
 async function submitLoginAssistance(modal, session, payload = {}) {
   const sessionId = liveBrowserSessionId(session);
   if (!sessionId) return;
+  const previousAssistance = session?.login_assistance && typeof session.login_assistance === "object"
+    ? session.login_assistance
+    : {};
+  modal.dataset.loginAssistancePendingKind = String(payload.kind || "").trim();
+  modal.dataset.loginAssistancePendingUpdatedAt = String(Number(previousAssistance.updated_at || 0));
   const submitButton = modal.querySelector("[data-login-assistance-form] button[type='submit'], [data-login-assistance-submit]");
   if (submitButton) {
     submitButton.disabled = true;
@@ -27618,6 +27648,7 @@ async function submitLoginAssistance(modal, session, payload = {}) {
       },
     });
   } catch (error) {
+    clearLoginAssistancePendingSubmission(modal);
     showToast(error?.detail || error?.message || "登录信息提交失败", false);
     modal.dataset.loginAssistanceRenderKey = "";
   }
@@ -27682,7 +27713,9 @@ function openTaskAssistanceView(taskId = "", options) {
         : null)
       || null;
     const currentTask = task || (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId) || { id: cleanTaskId, status: "queued" };
-    updateLoginAssistanceModal(modal, currentTask, currentSession);
+    if (!loginAssistancePollShouldPreserveSubmission(modal, currentTask, currentSession)) {
+      updateLoginAssistanceModal(modal, currentTask, currentSession);
+    }
     if (publishAssistanceLooksSettled(currentTask, currentSession)) {
       refreshPublishingDockAfterAssistanceSettle(cleanTaskId);
     }

@@ -569,6 +569,36 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_login_assistance_submission_ignores_only_the_stale_pre_submit_prompt(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            {self._function_source("loginAssistanceTaskStatus")}
+            {self._function_source("clearLoginAssistancePendingSubmission")}
+            {self._function_source("loginAssistancePollShouldPreserveSubmission")}
+
+            const modal = {{ dataset: {{
+              loginAssistancePendingKind: "credentials",
+              loginAssistancePendingUpdatedAt: "100",
+            }} }};
+            const task = {{ status: "running" }};
+            const stale = {{ login_assistance: {{ kind: "credentials", updated_at: 100 }} }};
+            assert.strictEqual(loginAssistancePollShouldPreserveSubmission(modal, task, stale), true);
+            assert.strictEqual(modal.dataset.loginAssistancePendingKind, "credentials");
+
+            const acknowledged = {{ login_assistance: {{ kind: "progress", updated_at: 101 }} }};
+            assert.strictEqual(loginAssistancePollShouldPreserveSubmission(modal, task, acknowledged), false);
+            assert.strictEqual(modal.dataset.loginAssistancePendingKind, undefined);
+
+            modal.dataset.loginAssistancePendingKind = "credentials";
+            modal.dataset.loginAssistancePendingUpdatedAt = "100";
+            const rejected = {{ login_assistance: {{ kind: "credentials", updated_at: 106 }} }};
+            assert.strictEqual(loginAssistancePollShouldPreserveSubmission(modal, task, rejected), false);
+            assert.strictEqual(modal.dataset.loginAssistancePendingKind, undefined);
+            """
+        )
+        self._run_node(harness)
+
     def test_open_login_account_actions_preserve_running_task_navigation(self):
         actions = self._section("function renderAccountPoolCardActions", "function renderAccountPoolCard(")
         content = self._javascript_function_source(self.source, "renderAccountOpenLoginButtonContent")
