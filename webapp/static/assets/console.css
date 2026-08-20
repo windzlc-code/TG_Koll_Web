@@ -19584,14 +19584,13 @@ body.persona-media-sorting {
   gap: 4px;
   min-height: 24px;
   padding: 2px 7px;
-  border: 0;
+  border: 1px solid var(--line);
   border-radius: 7px;
   overflow: hidden;
   isolation: isolate;
-  background-color: #071112;
-  background-image: var(--vecto-action-static-gradient);
-  background-size: 100% 100%;
-  color: var(--vecto-action-ink);
+  background-color: transparent;
+  background-image: none;
+  color: var(--ink);
   font-size: 11px;
   font-weight: 800;
   line-height: 1;
@@ -19603,15 +19602,25 @@ body.persona-media-sorting {
   position: absolute;
   z-index: 0;
   inset: 0;
+  padding: 1px;
   border-radius: inherit;
   background: linear-gradient(
     100deg,
-    transparent 34%,
-    rgba(255, 255, 255, .12) 43%,
-    rgba(255, 255, 255, .82) 50%,
-    rgba(255, 255, 255, .12) 57%,
-    transparent 66%
+    transparent 32%,
+    rgba(31, 102, 95, .38) 42%,
+    rgba(34, 171, 189, .82) 49%,
+    rgba(155, 241, 246, .96) 54%,
+    rgba(34, 171, 189, .82) 59%,
+    transparent 70%
   );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
   content: "";
   pointer-events: none;
   animation: accountPoolContentRefreshSweep 1.8s ease-in-out infinite;
@@ -19628,9 +19637,9 @@ body.persona-media-sorting {
 
 .account-pool-card-continue-login:hover,
 .account-pool-card-continue-login:focus-visible {
-  background-color: #071112;
-  background-image: var(--vecto-action-static-gradient);
-  color: var(--vecto-action-ink);
+  background-color: transparent;
+  background-image: none;
+  color: var(--ink);
 }
 
 .account-pool-card-continue-login .ui-action-icon {

@@ -3014,7 +3014,7 @@ function accountStatusDisplayLabel(status = "") {
   if (["ready", "ready_unverified", "success", "standby"].includes(key)) return "已登录";
   if (["pending_login", "cookie_expired", "invalid_credentials"].includes(key)) return "未登录";
   if (key === "risk_control") return "封控验证";
-  if (["need_verification", "account_confirmation_required"].includes(key)) return "需验证";
+  if (["need_verification", "account_confirmation_required"].includes(key)) return "未登录";
   if (["checking", "running", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "检测中";
   if (["transient_error", "check_failed", "failed", "error", "login_wait_timeout"].includes(key)) return "登录异常";
   if (["disabled", "banned"].includes(key)) return "账号不可用";

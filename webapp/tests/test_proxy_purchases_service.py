@@ -32,7 +32,10 @@ from webapp.proxy_purchases import (
     purchase_options,
     sync_active_assets,
 )
-from webapp.proxy_market_credentials import resolve_market_proxy_credentials
+from webapp.proxy_market_credentials import (
+    ProxyMarketCredentialAuthorizationError,
+    resolve_market_proxy_credentials,
+)
 from webapp.system_proxy_pool import list_system_proxy_pool_options
 
 
@@ -215,6 +218,99 @@ class ProxyPurchaseServiceTests(unittest.TestCase):
         self.assertEqual(owned[0]["exit_ip"], "198.51.100.10")
         self.assertEqual(tuple(synchronized)[:4], ("Portugal", "Distrito de Lisboa", "Lisbon", "Mock ISP"))
         self.assertTrue(json.loads(str(synchronized["last_check_result"]))["ok"])
+
+    def test_admin_shared_purchased_proxy_credentials_require_active_share(self):
+        provider = MockProxyProvider(unit_price_usd="4.00")
+        quote = self._quote(provider)
+        with app_db.db() as conn:
+            order = create_order(
+                conn,
+                user_id=self.user_id,
+                quote_id=quote["id"],
+                idempotency_key="admin-share-credentials",
+                provider=provider,
+                now=1_700_000_101,
+            )
+            conn.execute(
+                "INSERT INTO users(username,password_hash,is_admin,created_at,updated_at) "
+                "VALUES ('share-admin','x',1,?,?)",
+                (1_700_000_102, 1_700_000_102),
+            )
+            admin_id = int(
+                conn.execute("SELECT id FROM users WHERE username='share-admin'").fetchone()[0]
+            )
+            conn.execute(
+                "INSERT INTO users(username,password_hash,created_at,updated_at) "
+                "VALUES ('share-recipient','x',?,?)",
+                (1_700_000_102, 1_700_000_102),
+            )
+            recipient_id = int(
+                conn.execute("SELECT id FROM users WHERE username='share-recipient'").fetchone()[0]
+            )
+            item = conn.execute(
+                "SELECT * FROM proxy_market_items WHERE provider_purchase_order_id=?",
+                (order["id"],),
+            ).fetchone()
+            shared_proxy_id = "social_proxy_admin_shared"
+            conn.execute(
+                "INSERT INTO social_proxies("
+                "id,user_id,name,proxy_type,host,port,source,purchase_status,status,"
+                "market_item_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    shared_proxy_id,
+                    recipient_id,
+                    "管理员共享代理",
+                    str(item["proxy_type"]),
+                    str(item["host"]),
+                    int(item["port"]),
+                    "provider_purchase",
+                    "shared",
+                    "active",
+                    str(item["id"]),
+                    1_700_000_102,
+                    1_700_000_102,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO proxy_market_shares("
+                "id,item_id,user_id,social_proxy_id,status,created_by,created_at,updated_at) "
+                "VALUES ('proxy_share_test',?,?,?,'active',?,?,?)",
+                (
+                    str(item["id"]),
+                    recipient_id,
+                    shared_proxy_id,
+                    admin_id,
+                    1_700_000_102,
+                    1_700_000_102,
+                ),
+            )
+            shared_proxy = conn.execute(
+                "SELECT * FROM social_proxies WHERE id=?", (shared_proxy_id,)
+            ).fetchone()
+
+            resolved = resolve_market_proxy_credentials(
+                conn, shared_proxy, owner_user_id=recipient_id
+            )
+            self.assertEqual(resolved["username"], "mock-user")
+            self.assertEqual(resolved["password"], "mock-password")
+
+            conn.execute(
+                "UPDATE proxy_market_shares SET status='revoked' WHERE id='proxy_share_test'"
+            )
+            with self.assertRaises(ProxyMarketCredentialAuthorizationError):
+                resolve_market_proxy_credentials(
+                    conn, shared_proxy, owner_user_id=recipient_id
+                )
+
+            conn.execute(
+                "UPDATE proxy_market_shares SET status='active',created_by=? "
+                "WHERE id='proxy_share_test'",
+                (recipient_id,),
+            )
+            with self.assertRaises(ProxyMarketCredentialAuthorizationError):
+                resolve_market_proxy_credentials(
+                    conn, shared_proxy, owner_user_id=recipient_id
+                )
 
     def test_owned_proxy_keeps_selected_city_when_provider_and_geo_differ(self):
         provider = _MislabeledCityProvider(unit_price_usd="4.00")

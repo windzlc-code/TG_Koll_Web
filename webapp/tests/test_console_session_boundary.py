@@ -638,8 +638,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         continue_login_styles = self.styles.split(".account-pool-card-continue-login {", 1)[1].split(
             ".account-pool-card-continue-login[hidden]", 1
         )[0]
-        self.assertIn("background-image: var(--vecto-action-static-gradient);", continue_login_styles)
+        self.assertIn("background-color: transparent;", continue_login_styles)
+        self.assertIn("border: 1px solid var(--line);", continue_login_styles)
+        self.assertNotIn("background-image: var(--vecto-action-static-gradient);", continue_login_styles)
         self.assertIn(".account-pool-card-continue-login::after", continue_login_styles)
+        self.assertIn("padding: 1px;", continue_login_styles)
+        self.assertIn("mask-composite: exclude;", continue_login_styles)
         self.assertIn("animation: accountPoolContentRefreshSweep 1.8s ease-in-out infinite;", continue_login_styles)
 
     def test_account_card_actions_keep_icons_and_single_row_login_width(self):
@@ -2448,10 +2452,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(accountStatusDisplayLabel("invalid_credentials"), "未登录");
             assert.strictEqual(accountStatusDisplayTone("invalid_credentials"), "manual");
             assert.strictEqual(accountStatusClassNames("invalid_credentials"), "pending_login");
-            assert.strictEqual(accountStatusDisplayLabel("account_confirmation_required"), "需验证");
+            assert.strictEqual(accountStatusDisplayLabel("need_verification"), "未登录");
+            assert.strictEqual(accountStatusDisplayLabel("account_confirmation_required"), "未登录");
+            assert.strictEqual(accountStatusDisplayLabel("risk_control"), "封控验证");
             assert.strictEqual(accountStatusDisplayLabel("check_failed"), "登录异常");
             assert.strictEqual(accountStatusDisplayLabel("disabled"), "账号不可用");
             assert.strictEqual(accountStatusDisplayLabel("banned"), "账号不可用");
+            assert.strictEqual(accountStatusDisplayLabel("abnormal"), "账号异常");
+            assert.strictEqual(accountStatusDisplayLabel("unknown"), "未知");
             assert.strictEqual(accountStatusDisplayTone("ready_unverified"), "success");
             assert.strictEqual(accountStatusDisplayTone("disabled"), "error");
             assert.strictEqual(accountStatusClassNames("account_confirmation_required"), "need_verification");

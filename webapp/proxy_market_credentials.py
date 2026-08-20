@@ -97,8 +97,10 @@ def resolve_market_proxy_credentials(
         ).fetchone()
     elif source == "provider_purchase" and not allocation_id:
         # Purchased assets are owned by the customer and deliberately have no
-        # shared-pool allocation. Authorize against both ownership columns and
-        # the immutable purchase/order linkage before decrypting credentials.
+        # shared-pool allocation. The owner may use the asset directly, while
+        # another user may use only the exact proxy copy covered by an active
+        # administrator-created share. Keep the immutable purchase ownership
+        # chain intact before decrypting the original owner's credentials.
         item = conn.execute(
             """
             SELECT item.*
@@ -107,14 +109,29 @@ def resolve_market_proxy_credentials(
               ON purchase.id = item.provider_purchase_order_id
             WHERE item.id = ?
               AND item.ownership_type = 'owned'
-              AND item.owner_user_id = ?
-              AND item.credential_owner_user_id = ?
+              AND item.owner_user_id > 0
+              AND item.credential_owner_user_id = item.owner_user_id
               AND item.provider_proxy_id <> ''
-              AND purchase.user_id = ?
+              AND purchase.user_id = item.owner_user_id
               AND purchase.provider_proxy_id = item.provider_proxy_id
               AND purchase.status IN ('active', 'succeeded', 'delivered')
+              AND (
+                item.owner_user_id = ?
+                OR EXISTS (
+                  SELECT 1
+                  FROM proxy_market_shares share
+                  JOIN users share_admin ON share_admin.id = share.created_by
+                  WHERE share.item_id = item.id
+                    AND share.user_id = ?
+                    AND share.social_proxy_id = ?
+                    AND share.status = 'active'
+                    AND share_admin.is_admin = 1
+                    AND share_admin.is_disabled = 0
+                    AND share_admin.deleted_at = 0
+                )
+              )
             """,
-            (item_id, expected_owner_id, expected_owner_id, expected_owner_id),
+            (item_id, expected_owner_id, expected_owner_id, proxy_id),
         ).fetchone()
     else:
         item = None
