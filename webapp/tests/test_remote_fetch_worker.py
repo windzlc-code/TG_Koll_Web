@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from webapp.worker_server import (
     PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
     WorkerRuntime,
     WorkerSettings,
+    _apply_hot_reader_execution_profile,
     _validate_envelope,
     create_worker_app,
     run_tool_r18_job,
@@ -263,6 +265,44 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertFalse(self.store.delete_hot_dataset_event(events[0]["id"]))
         with self.assertRaises(ValueError):
             self.store.delete_hot_dataset_event("invalid")
+
+    def test_hot_dataset_events_paginate_and_prune_to_max(self) -> None:
+        os.environ["TG_HOT_DATASET_OVERVIEW_PATH"] = str(self.runtime_dir / "hot-dataset-overview.json")
+        archive_id = "12345678-1234-4234-8234-123456789abc"
+        snapshot = {
+            "generated_at": 1_700_000_000,
+            "global": {"name": "全局数据集", "count": 1, "capacity": 100000},
+            "personas": [{"archive_id": archive_id, "name": "理发师", "count": 1, "capacity": 100}],
+        }
+        self.store._record_dataset_overview_changes(snapshot, reason="worker_sync", source="worker")
+        for index in range(12):
+            snapshot = {
+                **snapshot,
+                "generated_at": 1_700_000_010 + index,
+                "global": {**snapshot["global"], "count": index + 2},
+            }
+            self.store._record_dataset_overview_changes(snapshot, reason="worker_sync", source="worker")
+        page = self.store.page_hot_dataset_events(page=1, page_size=5, scope="global")
+        self.assertEqual(page["page_size"], 5)
+        self.assertEqual(len(page["events"]), 5)
+        self.assertGreaterEqual(page["total"], 5)
+        self.assertEqual(page["scope"], "global")
+        persona_page = self.store.page_hot_dataset_events(page=1, page_size=5, scope="persona")
+        self.assertTrue(all(event["dataset_id"] != "global" for event in persona_page["events"]))
+        saved = self.store.save_hot_dataset_ui_settings({"event_max": 50, "event_page_size": 5, "persona_page_size": 5})
+        self.assertEqual(saved["event_max"], 50)
+        self.assertEqual(saved["event_page_size"], 5)
+        for index in range(60):
+            snapshot = {
+                **snapshot,
+                "generated_at": 1_700_000_100 + index,
+                "global": {**snapshot["global"], "count": 20 + index},
+            }
+            self.store._record_dataset_overview_changes(snapshot, reason="worker_sync", source="worker")
+        pruned = self.store.page_hot_dataset_events(page=1, page_size=5, scope="all")
+        self.assertLessEqual(pruned["total"], 50)
+        self.assertEqual(len(pruned["events"]), 5)
+        self.assertGreaterEqual(pruned["pages"], 1)
 
     def test_clear_hot_dataset_removes_candidates_but_preserves_persona_refill_target(self) -> None:
         now = int(time.time())
@@ -696,6 +736,18 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertIn("clean_profile[key] = clean_cookies", script)
         self.assertNotIn("filtered.append({key: profile[key]", script)
 
+    def test_hot_reader_profile_enables_only_the_requested_platform(self) -> None:
+        threads_env: dict[str, str] = {}
+        instagram_env: dict[str, str] = {}
+        _apply_hot_reader_execution_profile(threads_env, background_refill=False, platform="threads")
+        _apply_hot_reader_execution_profile(instagram_env, background_refill=False, platform="instagram")
+        self.assertEqual(threads_env["TG_HOT_READER_INCLUDE_INSTAGRAM"], "0")
+        self.assertEqual(instagram_env["TG_HOT_READER_INCLUDE_INSTAGRAM"], "1")
+        self.assertNotEqual(
+            threads_env["TG_HOT_READER_INCLUDE_INSTAGRAM"],
+            instagram_env["TG_HOT_READER_INCLUDE_INSTAGRAM"],
+        )
+
     def test_worker_import_does_not_import_full_server(self) -> None:
         code = (
             "import os,sys;"
@@ -718,6 +770,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
             self.assertIn("/internal/worker/v1/jobs", paths)
             self.assertIn("/internal/worker/v1/hot-datasets/refresh", paths)
             self.assertIn("/internal/worker/v1/hot-datasets/events", paths)
+            self.assertIn("/internal/worker/v1/hot-datasets/settings", paths)
             self.assertIn("/internal/worker/v1/hot-datasets/events/{event_id}", paths)
             self.assertIn("/internal/worker/v1/hot-datasets/{dataset_id}", paths)
             self.assertNotIn("/api/auth/login", paths)
@@ -937,7 +990,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "55000")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_JITTER_MAX_MS"], "5000")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_MAX_ATTEMPTS"], "2")
-        self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "1")
+        self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "0")
 
     def test_interactive_hot_fetch_uses_reader_without_leasing_account(self) -> None:
         class FakePool:
@@ -1001,6 +1054,36 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "45000")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_JITTER_MAX_MS"], "200")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_MAX_ATTEMPTS"], "1")
+        self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "0")
+
+    def test_interactive_instagram_hot_fetch_does_not_enable_threads_companion(self) -> None:
+        class FakeProcess:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def communicate(self):
+                return json.dumps({"ok": True, "candidates": [{"id": "ig-1", "platform": "instagram", "hotScore": 700}]}), ""
+
+        with (
+            patch("webapp.worker_server._configured_collector_pool", return_value=None),
+            patch("webapp.worker_server.subprocess.Popen", return_value=FakeProcess()) as popen,
+        ):
+            result = run_tool_r18_job(
+                {
+                    "_workerCapability": "persona.hot_candidates.v1",
+                    "action": "fetch-hot-candidates",
+                    "platform": "instagram",
+                    **current_keyword_strategy(["理发师", "理发店趣事"]),
+                    "limit": 10,
+                },
+                threading.Event(),
+            )
+
+        self.assertEqual([item["id"] for item in result["candidates"]], ["ig-1"])
+        sent = json.loads(popen.call_args.args[0][-1])
+        self.assertEqual(sent["platform"], "instagram")
         self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "1")
 
     def test_crm_live_search_rotates_account_after_sparse_result(self) -> None:

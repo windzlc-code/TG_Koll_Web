@@ -22,6 +22,7 @@ import {
   buildSentimentHotSearchStrategyCacheKey,
   buildThreadsReaderSearchUrl,
   buildThreadsReaderSearchTargets,
+  buildThreadsSearchDateWindow,
   buildThreadsSearchUrl,
   candidateMatchesRequestedFreshness,
   candidateMatchesSentimentHotStrategyAnchors,
@@ -30,6 +31,8 @@ import {
   enrichThreadsCandidateDetails,
   ensureSentimentHotPlatformContributions,
   finalizeSentimentHotCandidatesForDisplay,
+  normalizeRequestedHotPlatform,
+  resolveHotLiveFetchTargets,
   isObviouslyLowQualitySentimentHotCandidate,
   isCacheableSentimentReaderResponse,
   isRetryableAnonymousReaderError,
@@ -125,7 +128,7 @@ describe("sentiment hot importer", () => {
     expect(isRetryableAnonymousReaderError(new Error("request timed out"))).toBe(true);
     expect(isRetryableAnonymousReaderError(new Error("invalid proxy configuration"))).toBe(false);
   });
-  it("prioritizes dedicated hot keyword models before global defaults", () => {
+  it("follows the configured runtime model order for hot keywords", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-config-"));
     const configPath = path.join(dir, "api_config.json");
     fs.writeFileSync(configPath, JSON.stringify({
@@ -134,9 +137,9 @@ describe("sentiment hot importer", () => {
     vi.stubEnv("AUTO_TWEET_API_CONFIG_PATH", configPath);
 
     expect(resolveSentimentHotTextModelPreference().split(",").map((model) => model.trim()).slice(0, 3)).toEqual([
-      "xai/grok-4.5",
-      "xai/grok-4.3",
       "google/gemini-3.1-pro-preview",
+      "xai/grok-4.3",
+      "xai/grok-4.5",
     ]);
   });
 
@@ -245,6 +248,26 @@ describe("sentiment hot importer", () => {
     expect(targets.some((item) => /jina/i.test(item.targetUrl))).toBe(false);
     expect(targets[0].targetUrl).toBe("https://www.threads.com/search?q=%E5%A5%B3%E6%80%A7%E5%8A%9B%E9%87%8F");
     expect(targets[1].targetUrl).toBe("https://www.threads.com/search?q=%E5%A5%B3%E6%80%A7%E5%8A%9B%E9%87%8F&serp_type=default");
+  });
+
+  it("adds a dated ranked Threads branch without changing the original two URLs", () => {
+    const now = new Date("2026-08-20T16:02:33.000Z");
+    expect(buildThreadsSearchDateWindow(0, now)).toBeUndefined();
+    expect(buildThreadsSearchDateWindow(19, now)).toEqual({
+      afterDate: "2026-08-01",
+      beforeDate: "2026-08-20",
+    });
+    const undated = buildThreadsReaderSearchTargets("台股");
+    expect(undated.map((item) => item.ranking)).toEqual(["spider-default", "spider-ranked"]);
+    const dated = buildThreadsReaderSearchTargets("台股", false, 19, now);
+    expect(dated.map((item) => item.ranking)).toEqual(["spider-default", "spider-ranked", "spider-dated"]);
+    expect(dated[0].targetUrl).toBe(undated[0].targetUrl);
+    expect(dated[1].targetUrl).toBe(undated[1].targetUrl);
+    expect(dated[2].targetUrl).toBe(
+      "https://www.threads.com/search?after_date=2026-08-01&before_date=2026-08-20&q=%E5%8F%B0%E8%82%A1&serp_type=default",
+    );
+    expect(dated[2].targetUrl).toContain("serp_type=default");
+    expect(dated.some((item) => /jina/i.test(item.targetUrl))).toBe(false);
   });
 
   it("distinguishes live Spider rows from pool and cache backfill", () => {
@@ -461,7 +484,8 @@ describe("sentiment hot importer", () => {
     } as any;
 
     const keywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
-    expect(keywords).toContain("\u4fee\u8f66");
+    expect(keywords[0]).toBe("\u6c7d\u8f66\u4fee\u7406\u7ffb\u8f66");
+    expect(keywords).toEqual(expect.arrayContaining(strategy.primaryQueries));
     expect(keywords).not.toContain("\u95ee\u9898");
     expect(keywords).not.toContain("\u7cfb\u7edf");
     expect(keywords).not.toContain("\u771f\u5b9e");
@@ -489,6 +513,40 @@ describe("sentiment hot importer", () => {
     } as any;
     expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).not.toContain("染发烫发价格踩雷");
     expect(resolveSentimentHotModelQueryKeywords(strategy, "strict")).toContain("染发烫发价格踩雷");
+  });
+
+  it("appends short domain-expansion objects after primary queries", () => {
+    const strategy = {
+      primaryQueries: ["台股", "融資", "存股", "配息", "當沖", "槓桿", "股票", "貸款", "鋼琴", "琴譜", "資產", "信用交易"],
+      ecosystemQueries: [],
+      broadQueries: ["除權息", "融資券", "台股分享", "融資攻略", "染发烫发价格踩雷"],
+      requiredAnchorTerms: ["台股", "融資", "存股"],
+      normalAnchorTerms: ["理財", "投資", "鋼琴"],
+      strictAcceptTerms: ["台股", "融資", "存股", "配息", "當沖"],
+      normalAcceptTerms: ["台股", "融資", "存股", "配息", "當沖"],
+      rejectTerms: [],
+      personaGuardTerms: [],
+      domainSummary: "台股融資與鋼琴教學",
+    } as any;
+    const keywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
+    expect(keywords.slice(0, 12)).toEqual(strategy.primaryQueries);
+    expect(keywords).toEqual(expect.arrayContaining(["除權息", "融資券"]));
+    expect(keywords).not.toContain("台股分享");
+    expect(keywords).not.toContain("融資攻略");
+    expect(keywords).not.toContain("染发烫发价格踩雷");
+  });
+
+  it("keeps more specific object nouns that only share a short prefix", () => {
+    const keywords = resolveSentimentHotManualQueryKeywords([
+      "融資",
+      "融資券",
+      "配息",
+      "融資攻略",
+      "台股分享",
+    ], null, "strict");
+    expect(keywords).toEqual(expect.arrayContaining(["融資", "融資券", "配息"]));
+    expect(keywords).not.toContain("融資攻略");
+    expect(keywords).not.toContain("台股分享");
   });
 
   it("derives core search terms from model generated concrete keywords", () => {
@@ -751,9 +809,19 @@ describe("sentiment hot importer", () => {
     expect(resolveSentimentHotStrategyTimeoutMs(true, 5_000)).toBe(5_000);
   });
 
-  it("uses dedicated hot-topic text models before the configured global models", () => {
-    const models = resolveSentimentHotTextModelPreference().split(",");
-    expect(models.slice(0, 2)).toEqual(["xai/grok-4.5", "xai/grok-4.3"]);
+  it("uses the configured runtime model order for hot-topic text models", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-config-"));
+    const configPath = path.join(dir, "api_config.json");
+    fs.writeFileSync(configPath, JSON.stringify({
+      llmModelPriorityOrder: "google/gemini-3.1-pro-preview, xai/grok-4.3, xai/grok-4.5",
+    }));
+    vi.stubEnv("AUTO_TWEET_API_CONFIG_PATH", configPath);
+    const models = resolveSentimentHotTextModelPreference().split(",").map((model) => model.trim());
+    expect(models.slice(0, 3)).toEqual([
+      "google/gemini-3.1-pro-preview",
+      "xai/grok-4.3",
+      "xai/grok-4.5",
+    ]);
   });
 
   it("never manufactures fallback keywords when the model strategy is unavailable", () => {
@@ -991,7 +1059,7 @@ describe("sentiment hot importer", () => {
       "大叔",
       "煙火氣",
     ], null, "strict");
-    expect(keywords.length).toBeGreaterThanOrEqual(16);
+    expect(keywords.length).toBeGreaterThanOrEqual(12);
     expect(keywords).toContain("二次元手辦");
     expect(keywords).toContain("痛包");
     expect(keywords).toContain("立牌");
@@ -2988,6 +3056,60 @@ Title: Instagram
       },
     });
     expect(candidates).toEqual([]);
+  });
+
+  it("normalizes an explicit hotspot fetch platform", () => {
+    expect(normalizeRequestedHotPlatform("threads")).toBe("threads");
+    expect(normalizeRequestedHotPlatform("instagram")).toBe("instagram");
+    expect(normalizeRequestedHotPlatform("both")).toBeUndefined();
+  });
+
+  it("keeps the full hotspot keyword-generation specification", () => {
+    const source = fs.readFileSync(path.resolve("src/lib/sentiment-hot-importer.ts"), "utf8");
+    expect(source).toContain("你是 Threads / Instagram 热点搜索策略模型");
+    expect(source).toContain("人设名称只是对外称呼");
+    expect(source).toContain("禁止把俚语化名称理解成色情、擦边或开车含义");
+    expect(source).toContain("JSON 结构：");
+    expect(source).toContain("primaryQueries");
+    expect(source).toContain("rejectTerms");
+    expect(source).toContain("domainSummary");
+    expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个");
+    expect(source).toContain("domainExpansion");
+    expect(source).toContain("合计必须给出 20 个互不重复");
+    expect(source).toContain("2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主");
+    expect(source).toContain("禁止输出带这些后缀或整词的合成搜索词");
+    expect(source).toContain("存股、融資、配息、當沖、槓桿、信用交易");
+    expect(source).toContain("禁止单独输出空词");
+    expect(source).toContain("生活状态词（慢生活、退休生活、健康生活、家务、居家清洁）");
+    expect(source).toContain("maxOutputTokens: 1400");
+    expect(source).toContain("const SENTIMENT_MODEL_KEYWORD_TARGET = 24");
+    expect(source).toContain("人设名称只是对外称呼");
+    expect(source).not.toContain("primaryQueries 恰好 12 个");
+    expect(source).not.toContain("maxOutputTokens: 360");
+    expect(source).not.toContain("茶具攻略、收纳教程、贷款分享");
+  });
+
+  it("indexes and reads the global hotspot pool by platform", () => {
+    const source = fs.readFileSync(path.resolve("src/lib/sentiment-hot-importer.ts"), "utf8");
+    expect(source).toContain("platform TEXT NOT NULL DEFAULT 'threads'");
+    expect(source).toContain("idx_sentiment_hot_global_platform");
+    expect(source).toContain("AND platform = ?");
+    expect(source).toContain("platform: normalizeRequestedHotPlatform(candidate.platform) ?? \"threads\"");
+    expect(source).toContain("if (platform && !candidateMatchesRequestedPlatform(candidate, platform)) continue");
+  });
+
+  it("never starts Threads and Instagram live search in the same request", () => {
+    const missing = resolveHotLiveFetchTargets(undefined);
+    const threads = resolveHotLiveFetchTargets("threads");
+    const instagram = resolveHotLiveFetchTargets("instagram");
+    const mixed = resolveHotLiveFetchTargets("both");
+    expect(threads).toEqual({ threads: true, instagram: false });
+    expect(instagram).toEqual({ threads: false, instagram: true });
+    expect(missing).toEqual({ threads: true, instagram: false });
+    expect(mixed).toEqual({ threads: true, instagram: false });
+    for (const target of [missing, threads, instagram, mixed]) {
+      expect(Number(target.threads) + Number(target.instagram)).toBe(1);
+    }
   });
 
   it("does not force a platform contribution from low-heat candidates", () => {

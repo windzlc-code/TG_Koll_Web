@@ -114,6 +114,19 @@ describe("persona hot workflow remote worker snapshots", () => {
     expect(result.archiveName).toBe("Control-plane persona");
   });
 
+  it("forwards the requested platform so the collector does not search both networks", async () => {
+    const snapshot = archiveSnapshot();
+    await fetchHotCandidates({
+      action: "fetch-hot-candidates",
+      archiveId: "persona-1",
+      archiveSnapshot: snapshot,
+      platform: "instagram",
+    });
+    expect(mocks.fetchSentimentHotCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({ archive: snapshot, platform: "instagram" }),
+    );
+  });
+
   it("uses archiveSnapshot for keyword preparation without reading the worker archive", async () => {
     const snapshot = archiveSnapshot();
 

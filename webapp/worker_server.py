@@ -44,7 +44,7 @@ ALLOWED_CAPABILITIES = {
     "persona.hot_post_metrics.v1": "refresh-hot-post",
 }
 TERMINAL_STATES = {"success", "failed", "cancelled"}
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 59
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 62
 _SAFE_JOB_ID = re.compile(r"job_[0-9a-f]{24}")
 _PERSONA_ARCHIVE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 
@@ -974,30 +974,117 @@ class JobStore:
                     """,
                     (dataset_id, dataset_name, candidate_count, observed_at),
                 )
-            connection.execute(
-                """
-                DELETE FROM hot_dataset_change_events
-                WHERE id NOT IN (
-                  SELECT id FROM hot_dataset_change_events
-                  ORDER BY created_at DESC, id DESC
-                  LIMIT 2000
-                )
-                """
-            )
+            self.prune_hot_dataset_events(connection=connection)
 
-    def list_hot_dataset_events(self, *, limit: int = 200) -> list[dict[str, Any]]:
-        safe_limit = max(1, min(int(limit or 200), 500))
+    def _hot_dataset_ui_settings_path(self) -> Path:
+        overview = Path(os.getenv("TG_HOT_DATASET_OVERVIEW_PATH", "/collector-proxy/hot-dataset-overview.json"))
+        return overview.with_name("hot-dataset-ui.json")
+
+    def hot_dataset_ui_settings(self) -> dict[str, Any]:
+        defaults = {
+            "event_page_size": 20,
+            "event_max": 200,
+            "persona_page_size": 10,
+        }
+        path = self._hot_dataset_ui_settings_path()
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        page_size = max(5, min(int(raw.get("event_page_size") or defaults["event_page_size"]), 100))
+        event_max = max(50, min(int(raw.get("event_max") or defaults["event_max"]), 2000))
+        persona_page_size = max(5, min(int(raw.get("persona_page_size") or defaults["persona_page_size"]), 50))
+        return {
+            "event_page_size": page_size,
+            "event_max": event_max,
+            "persona_page_size": persona_page_size,
+        }
+
+    def save_hot_dataset_ui_settings(self, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        current = self.hot_dataset_ui_settings()
+        source = payload if isinstance(payload, Mapping) else {}
+        if "event_page_size" in source:
+            current["event_page_size"] = max(5, min(int(source.get("event_page_size") or current["event_page_size"]), 100))
+        if "event_max" in source:
+            current["event_max"] = max(50, min(int(source.get("event_max") or current["event_max"]), 2000))
+        if "persona_page_size" in source:
+            current["persona_page_size"] = max(5, min(int(source.get("persona_page_size") or current["persona_page_size"]), 50))
+        path = self._hot_dataset_ui_settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(current, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        deleted = self.prune_hot_dataset_events()
+        current["pruned"] = deleted
+        return current
+
+    def prune_hot_dataset_events(self, *, connection: sqlite3.Connection | None = None, max_events: int | None = None) -> int:
+        limit = max(50, min(int(max_events or self.hot_dataset_ui_settings()["event_max"]), 2000))
+        sql = """
+            DELETE FROM hot_dataset_change_events
+            WHERE id NOT IN (
+              SELECT id FROM hot_dataset_change_events
+              ORDER BY created_at DESC, id DESC
+              LIMIT ?
+            )
+        """
+        if connection is not None:
+            cursor = connection.execute(sql, (limit,))
+            return int(cursor.rowcount or 0)
+        with self._connection() as owned:
+            cursor = owned.execute(sql, (limit,))
+            return int(cursor.rowcount or 0)
+
+    def list_hot_dataset_events(self, *, limit: int = 200, scope: str = "all") -> list[dict[str, Any]]:
+        page = self.page_hot_dataset_events(page=1, page_size=limit, scope=scope)
+        return list(page.get("events") or [])
+
+    def page_hot_dataset_events(
+        self,
+        *,
+        page: int = 1,
+        page_size: int | None = None,
+        scope: str = "all",
+    ) -> dict[str, Any]:
+        settings = self.hot_dataset_ui_settings()
+        self.prune_hot_dataset_events(max_events=settings["event_max"])
+        safe_page_size = max(5, min(int(page_size or settings["event_page_size"]), 100))
+        safe_page = max(1, int(page or 1))
+        clean_scope = str(scope or "all").strip().lower()
+        if clean_scope not in {"all", "global", "persona"}:
+            clean_scope = "all"
+        where = ""
+        params: list[Any] = []
+        if clean_scope == "global":
+            where = "WHERE dataset_id = 'global'"
+        elif clean_scope == "persona":
+            where = "WHERE dataset_id <> 'global'"
         with self._connection() as connection:
+            total = int(connection.execute(f"SELECT COUNT(*) AS n FROM hot_dataset_change_events {where}", params).fetchone()["n"] or 0)
+            pages = max(1, (total + safe_page_size - 1) // safe_page_size)
+            if safe_page > pages:
+                safe_page = pages
+            offset = (safe_page - 1) * safe_page_size
             rows = connection.execute(
-                """
+                f"""
                 SELECT id,dataset_id,dataset_name,delta,count_before,count_after,reason,source,created_at
                 FROM hot_dataset_change_events
+                {where}
                 ORDER BY created_at DESC, id DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (safe_limit,),
+                [*params, safe_page_size, offset],
             ).fetchall()
-        return [dict(row) for row in rows]
+        return {
+            "events": [dict(row) for row in rows],
+            "total": total,
+            "page": safe_page,
+            "page_size": safe_page_size,
+            "pages": pages,
+            "scope": clean_scope,
+            "max_events": settings["event_max"],
+            "persona_page_size": settings["persona_page_size"],
+        }
 
     def delete_hot_dataset_event(self, event_id: str) -> bool:
         clean_id = str(event_id or "").strip().lower()
@@ -1126,15 +1213,15 @@ def _apply_hot_reader_execution_profile(
     runtime_environment: dict[str, str],
     *,
     background_refill: bool,
+    platform: str = "threads",
 ) -> None:
     runtime_environment["SENTIMENT_HOT_READER_CONCURRENCY"] = "4" if background_refill else "24"
     runtime_environment["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"] = "1" if background_refill else "0"
-    # Interactive public search must cover Threads and Instagram in one click.
-    # Background refill may wait longer for the shared anonymous window.
     runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "55000" if background_refill else "45000"
     runtime_environment["SENTIMENT_HOT_READER_JITTER_MAX_MS"] = "5000" if background_refill else "200"
     runtime_environment["SENTIMENT_HOT_READER_MAX_ATTEMPTS"] = "2" if background_refill else "1"
-    runtime_environment["TG_HOT_READER_INCLUDE_INSTAGRAM"] = "1"
+    requested = str(platform or "").strip().lower()
+    runtime_environment["TG_HOT_READER_INCLUDE_INSTAGRAM"] = "1" if requested == "instagram" else "0"
 
 
 def _run_tool_r18_job_once(
@@ -1169,6 +1256,7 @@ def _run_tool_r18_job_once(
         _apply_hot_reader_execution_profile(
             runtime_environment,
             background_refill=background_refill,
+            platform=_collector_platform(runtime_payload),
         )
     if collector_pool is not None and use_collector_profile:
         if not capability:
@@ -1592,7 +1680,33 @@ def create_worker_app(
     async def get_hot_dataset_events(request: Request) -> dict[str, Any]:
         body = await request.body()
         await authenticate(request, body)
-        return {"ok": True, "events": store.list_hot_dataset_events()}
+        page = int(request.query_params.get("page") or 1)
+        page_size = request.query_params.get("page_size")
+        scope = str(request.query_params.get("scope") or "all")
+        payload = store.page_hot_dataset_events(
+            page=page,
+            page_size=int(page_size) if str(page_size or "").isdigit() else None,
+            scope=scope,
+        )
+        return {"ok": True, **payload}
+
+    @app.get("/internal/worker/v1/hot-datasets/settings")
+    async def get_hot_dataset_settings(request: Request) -> dict[str, Any]:
+        body = await request.body()
+        await authenticate(request, body)
+        return {"ok": True, **store.hot_dataset_ui_settings()}
+
+    @app.post("/internal/worker/v1/hot-datasets/settings")
+    async def save_hot_dataset_settings(request: Request) -> dict[str, Any]:
+        body = await request.body()
+        await authenticate(request, body)
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        return {"ok": True, **store.save_hot_dataset_ui_settings(payload)}
 
     @app.delete("/internal/worker/v1/hot-datasets/events/{event_id}")
     async def delete_hot_dataset_event(event_id: str, request: Request) -> dict[str, Any]:

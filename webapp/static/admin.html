@@ -516,7 +516,17 @@
     .hot-dataset-overview-actions { display: flex; align-items: center; gap: 10px; }
     .hot-dataset-refresh { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 6px 10px; }
     .hot-dataset-refresh svg, .hot-dataset-delete svg, .hot-dataset-event-delete svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .hot-dataset-split { display: grid; gap: 16px; }
+    .hot-dataset-group { display: grid; gap: 10px; }
+    .hot-dataset-group > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+    .hot-dataset-group > header strong { color: #1f3442; font-size: 13px; }
+    .hot-dataset-group > header span { color: #738493; font-size: 11px; }
     .hot-dataset-list { display: grid; gap: 10px; }
+    .hot-dataset-pager { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .hot-dataset-pager button { min-height: 32px; padding: 4px 10px; }
+    .hot-dataset-pager label, .hot-dataset-events-controls label { display: inline-flex; align-items: center; gap: 6px; color: #526579; font-size: 12px; }
+    .hot-dataset-pager select, .hot-dataset-events-controls select { min-height: 32px; }
+    .hot-dataset-events-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
     .hot-dataset-row {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(150px, 22%) 34px;
@@ -541,7 +551,7 @@
     .hot-dataset-delete { display: inline-grid; width: 34px; min-width: 34px; height: 34px; min-height: 34px; place-items: center; padding: 0; color: #a93f3f; border: 1px solid #ebcaca; border-radius: 8px; background: #fff8f8; }
     .hot-dataset-delete:hover, .hot-dataset-delete:focus-visible { color: #842d2d; border-color: #dca5a5; background: #fff0f0; }
     .hot-dataset-events { margin-top: 18px; padding-top: 16px; border-top: 1px solid #d9e2e8; }
-    .hot-dataset-events > header { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .hot-dataset-events > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
     .hot-dataset-events > header strong { display: block; color: #1f3442; font-size: 14px; }
     .hot-dataset-events > header span { color: #738493; font-size: 11px; }
     .hot-dataset-events-table-wrap { overflow-x: auto; border: 1px solid #d8e1e7; border-radius: 10px; background: #fff; }
@@ -733,7 +743,7 @@
 
         <article class="hot-dataset-overview" aria-labelledby="hotDatasetOverviewTitle">
           <header>
-            <div><strong id="hotDatasetOverviewTitle">热点候选数据集</strong><span>全局池置顶；人设池按独立容量显示可用候选</span></div>
+            <div><strong id="hotDatasetOverviewTitle">热点候选数据集</strong><span>全局数据集与人设数据集分开显示，人设列表和补充记录均可翻页</span></div>
             <div class="hot-dataset-overview-actions">
               <span id="hotDatasetOverviewTime" class="hot-dataset-overview-time">正在读取旧机数据…</span>
               <button id="btnRefreshHotDatasets" type="button" class="ghost hot-dataset-refresh" aria-label="立即刷新热点候选数据集">
@@ -742,17 +752,79 @@
               </button>
             </div>
           </header>
-          <div id="hotDatasetOverviewList" class="hot-dataset-list" aria-live="polite"></div>
+          <div id="hotDatasetOverviewList" class="hot-dataset-split" aria-live="polite">
+            <section class="hot-dataset-group" aria-labelledby="hotDatasetGlobalTitle">
+              <header>
+                <strong id="hotDatasetGlobalTitle">全局数据集</strong>
+                <span>全站公共候选池</span>
+              </header>
+              <div id="hotDatasetGlobalList" class="hot-dataset-list"></div>
+            </section>
+            <section class="hot-dataset-group" aria-labelledby="hotDatasetPersonaTitle">
+              <header>
+                <strong id="hotDatasetPersonaTitle">人设数据集</strong>
+                <span id="hotDatasetPersonaMeta">按页查看独立人设池</span>
+              </header>
+              <div id="hotDatasetPersonaList" class="hot-dataset-list"></div>
+              <div class="hot-dataset-pager" id="hotDatasetPersonaPager">
+                <button id="btnHotDatasetPersonaPrev" type="button" class="ghost">上一页</button>
+                <span id="hotDatasetPersonaPageLabel">第 1 / 1 页</span>
+                <button id="btnHotDatasetPersonaNext" type="button" class="ghost">下一页</button>
+                <label>每页
+                  <select id="hotDatasetPersonaPageSize" aria-label="人设数据集每页条数">
+                    <option value="5">5</option>
+                    <option value="10" selected>10</option>
+                    <option value="20">20</option>
+                    <option value="30">30</option>
+                    <option value="50">50</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+          </div>
           <section class="hot-dataset-events" aria-labelledby="hotDatasetEventsTitle">
             <header>
-              <div><strong id="hotDatasetEventsTitle">补充记录</strong><span>查看热点候选的增加与减少，30 秒自动更新</span></div>
-              <span id="hotDatasetEventsTime">正在读取记录…</span>
+              <div><strong id="hotDatasetEventsTitle">补充记录</strong><span>可翻页；超出上限的旧记录会自动删除</span></div>
+              <div class="hot-dataset-events-controls">
+                <label>范围
+                  <select id="hotDatasetEventScope" aria-label="补充记录范围">
+                    <option value="all" selected>全部</option>
+                    <option value="global">仅全局</option>
+                    <option value="persona">仅人设</option>
+                  </select>
+                </label>
+                <label>每页
+                  <select id="hotDatasetEventPageSize" aria-label="补充记录每页条数">
+                    <option value="10">10</option>
+                    <option value="20" selected>20</option>
+                    <option value="30">30</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                  </select>
+                </label>
+                <label>保留上限
+                  <select id="hotDatasetEventMax" aria-label="补充记录保留上限">
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="200" selected>200</option>
+                    <option value="500">500</option>
+                    <option value="1000">1000</option>
+                  </select>
+                </label>
+                <button id="btnSaveHotDatasetSettings" type="button" class="ghost">保存上限</button>
+                <span id="hotDatasetEventsTime">正在读取记录…</span>
+              </div>
             </header>
             <div class="hot-dataset-events-table-wrap">
               <table class="hot-dataset-events-table">
                 <thead><tr><th>时间</th><th>数据集</th><th>变化</th><th>变化前 → 变化后</th><th>原因</th><th>操作</th></tr></thead>
                 <tbody id="hotDatasetEventsBody" aria-live="polite"><tr><td colspan="6" class="hot-dataset-event-empty">正在读取记录…</td></tr></tbody>
               </table>
+            </div>
+            <div class="hot-dataset-pager" id="hotDatasetEventPager">
+              <button id="btnHotDatasetEventPrev" type="button" class="ghost">上一页</button>
+              <span id="hotDatasetEventPageLabel">第 1 / 1 页 · 共 0 条</span>
+              <button id="btnHotDatasetEventNext" type="button" class="ghost">下一页</button>
             </div>
           </section>
         </article>

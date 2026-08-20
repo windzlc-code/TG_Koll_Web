@@ -41,6 +41,7 @@ type FetchHotCandidatesInput = {
   sourcePolicy?: "reader_first" | "reader_only" | "authenticated_only";
   memorySummaries?: string[];
   keywords?: string[];
+  platform?: "threads" | "instagram" | string;
   /** Authoritative control-plane snapshot. When present, never read the worker's archive copy. */
   archiveSnapshot?: PersonaArchive;
 };
@@ -201,6 +202,7 @@ export async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     recordShown: input.recordShown !== false,
     liveOnly: input.liveOnly === true,
     sourcePolicy: input.sourcePolicy,
+    platform: String(input.platform || "").trim() || undefined,
   } as Parameters<typeof fetchSentimentHotCandidates>[0]);
   return {
     ok: true,

@@ -2220,6 +2220,12 @@ const adminState = {
   governanceRequestId: 0,
   governanceLastPayload: null,
   governanceCharts: new Map(),
+  hotDatasetOverview: null,
+  hotDatasetPersonas: [],
+  hotDatasetPersonaPage: 1,
+  hotDatasetEventPage: 1,
+  hotDatasetEventScope: "all",
+  hotDatasetSettings: { event_page_size: 20, event_max: 200, persona_page_size: 10 },
   emailDeliveryOverview: null,
   emailDeliveryPolicySaving: false,
   emailDeliveryPolicySaveController: null,
@@ -6953,6 +6959,59 @@ function hotDatasetColor(index, globalRow = false) {
   };
 }
 
+function defaultHotDatasetSettings() {
+  return { event_page_size: 20, event_max: 200, persona_page_size: 10 };
+}
+
+function applyHotDatasetSettings(payload = {}) {
+  const current = adminState.hotDatasetSettings || defaultHotDatasetSettings();
+  const pageSize = Number(payload.event_page_size || current.event_page_size || 20);
+  const eventMax = Number(payload.max_events || payload.event_max || current.event_max || 200);
+  const personaPageSize = Number(payload.persona_page_size || current.persona_page_size || 10);
+  adminState.hotDatasetSettings = {
+    event_page_size: Math.max(5, Math.min(pageSize, 100)),
+    event_max: Math.max(50, Math.min(eventMax, 2000)),
+    persona_page_size: Math.max(5, Math.min(personaPageSize, 50)),
+  };
+  const eventPageSizeEl = el("hotDatasetEventPageSize");
+  const eventMaxEl = el("hotDatasetEventMax");
+  const personaPageSizeEl = el("hotDatasetPersonaPageSize");
+  if (eventPageSizeEl) eventPageSizeEl.value = String(adminState.hotDatasetSettings.event_page_size);
+  if (eventMaxEl && [...eventMaxEl.options].some((option) => option.value === String(adminState.hotDatasetSettings.event_max))) {
+    eventMaxEl.value = String(adminState.hotDatasetSettings.event_max);
+  }
+  if (personaPageSizeEl) personaPageSizeEl.value = String(adminState.hotDatasetSettings.persona_page_size);
+}
+
+function paginateHotDatasetEvents(payload = {}) {
+  const events = Array.isArray(payload.events) ? payload.events : [];
+  const pageSize = Math.max(5, Math.min(Number(payload.page_size || el("hotDatasetEventPageSize")?.value || adminState.hotDatasetSettings?.event_page_size || 20), 100));
+  if (Number(payload.pages || 0) > 0) {
+    adminState.hotDatasetEventPage = Math.max(1, Number(payload.page || 1));
+    return payload;
+  }
+  const scope = String(payload.scope || el("hotDatasetEventScope")?.value || adminState.hotDatasetEventScope || "all");
+  const filtered = events.filter((event) => {
+    if (scope === "global") return event.dataset_id === "global";
+    if (scope === "persona") return event.dataset_id !== "global";
+    return true;
+  });
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize) || 1);
+  let page = Math.max(1, Number(adminState.hotDatasetEventPage || 1));
+  if (page > pages) page = pages;
+  adminState.hotDatasetEventPage = page;
+  const start = (page - 1) * pageSize;
+  return {
+    ...payload,
+    events: filtered.slice(start, start + pageSize),
+    total: filtered.length,
+    page,
+    page_size: pageSize,
+    pages,
+    scope,
+  };
+}
+
 async function refreshHotDatasets({ force = true } = {}) {
   const button = el("btnRefreshHotDatasets");
   if (button) button.disabled = true;
@@ -6984,8 +7043,10 @@ function hotDatasetEventReason(event = {}) {
 function renderHotDatasetEvents(payload = {}) {
   const body = el("hotDatasetEventsBody");
   if (!body) return;
+  const paged = paginateHotDatasetEvents(payload || {});
+  applyHotDatasetSettings(paged);
   body.replaceChildren();
-  const events = Array.isArray(payload.events) ? payload.events : [];
+  const events = Array.isArray(paged.events) ? paged.events : [];
   if (!events.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
@@ -7023,16 +7084,68 @@ function renderHotDatasetEvents(payload = {}) {
       body.appendChild(row);
     });
   }
+  const page = Math.max(1, Number(paged.page || 1));
+  const pages = Math.max(1, Number(paged.pages || 1));
+  const total = Math.max(0, Number(paged.total || events.length));
+  setText("hotDatasetEventPageLabel", `第 ${page} / ${pages} 页 · 共 ${total} 条`);
+  const prev = el("btnHotDatasetEventPrev");
+  const next = el("btnHotDatasetEventNext");
+  if (prev) prev.disabled = page <= 1;
+  if (next) next.disabled = page >= pages;
   setText("hotDatasetEventsTime", `更新于 ${formatTime(Math.floor(Date.now() / 1000))}`);
 }
 
 async function refreshHotDatasetEvents() {
+  const settings = adminState.hotDatasetSettings || defaultHotDatasetSettings();
+  const page = Math.max(1, Number(adminState.hotDatasetEventPage || 1));
+  const pageSize = Number(el("hotDatasetEventPageSize")?.value || settings.event_page_size || 20);
+  const scope = String(el("hotDatasetEventScope")?.value || adminState.hotDatasetEventScope || "all");
+  adminState.hotDatasetEventScope = scope;
   try {
-    const payload = await api("/api/admin/hot-datasets/events");
+    const payload = await api(`/api/admin/hot-datasets/events?page=${page}&page_size=${pageSize}&scope=${encodeURIComponent(scope)}`);
     renderHotDatasetEvents(payload || {});
     return payload;
   } catch (error) {
     setText("hotDatasetEventsTime", `记录读取失败：${getErrorMessage(error)}`);
+    return null;
+  }
+}
+
+async function saveHotDatasetSettings({ persistMax = true } = {}) {
+  const payload = {
+    event_page_size: Number(el("hotDatasetEventPageSize")?.value || adminState.hotDatasetSettings?.event_page_size || 20),
+    persona_page_size: Number(el("hotDatasetPersonaPageSize")?.value || adminState.hotDatasetSettings?.persona_page_size || 10),
+  };
+  if (persistMax) {
+    payload.event_max = Number(el("hotDatasetEventMax")?.value || adminState.hotDatasetSettings?.event_max || 200);
+  }
+  try {
+    const result = await api("/api/admin/hot-datasets/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    applyHotDatasetSettings(result || payload);
+    adminState.hotDatasetEventPage = 1;
+    adminState.hotDatasetPersonaPage = 1;
+    renderHotDatasetOverview(adminState.hotDatasetOverview || {});
+    await refreshHotDatasetEvents();
+    if (persistMax && Number(result?.pruned || 0) > 0) {
+      showAdminPublicPrompt({
+        title: "记录上限已生效",
+        message: `已删除 ${Number(result.pruned).toLocaleString("zh-CN")} 条超出上限的旧补充记录。`,
+        ok: true,
+      });
+    }
+    return result;
+  } catch (error) {
+    applyHotDatasetSettings(payload);
+    adminState.hotDatasetEventPage = 1;
+    adminState.hotDatasetPersonaPage = 1;
+    renderHotDatasetOverview(adminState.hotDatasetOverview || {});
+    if (persistMax) {
+      showAdminPublicPrompt({ title: "保存设置失败", message: getErrorMessage(error), ok: false });
+    }
     return null;
   }
 }
@@ -7084,62 +7197,91 @@ async function deleteHotDataset(item = {}) {
   }
 }
 
+function renderHotDatasetRow(item, index) {
+  const count = Math.max(0, Number(item.count || 0));
+  const capacity = Math.max(1, Number(item.capacity || (item.global ? 100000 : 100)));
+  const percent = Math.min(100, count / capacity * 100);
+  const color = hotDatasetColor(index, Boolean(item.global));
+  const row = document.createElement("div");
+  row.className = `hot-dataset-row${item.global ? " is-global" : ""}`;
+  row.style.setProperty("--dataset-color", color.solid);
+  const meter = document.createElement("div");
+  const copy = document.createElement("div");
+  copy.className = "hot-dataset-meter-copy";
+  const value = document.createElement("strong");
+  value.textContent = `${count.toLocaleString("zh-CN")} 条可用`;
+  const ratio = document.createElement("span");
+  ratio.textContent = `${percent < 1 && count ? percent.toFixed(2) : percent.toFixed(0)}% · 上限 ${capacity.toLocaleString("zh-CN")}`;
+  copy.append(value, ratio);
+  const track = document.createElement("div");
+  track.className = "hot-dataset-track";
+  const fill = document.createElement("span");
+  fill.className = "hot-dataset-fill";
+  fill.style.width = `${percent}%`;
+  fill.style.minWidth = count ? "5px" : "0";
+  fill.style.background = color.gradient;
+  track.appendChild(fill);
+  meter.append(copy, track);
+  const identity = document.createElement("div");
+  identity.className = "hot-dataset-name";
+  const dot = document.createElement("i");
+  dot.setAttribute("aria-hidden", "true");
+  const name = document.createElement("strong");
+  name.textContent = String(item.name || (item.global ? "全局数据集" : "未命名人设"));
+  const state = document.createElement("small");
+  state.textContent = item.global ? "全局候选池" : (item.refilling ? "补充中" : (item.active ? "已激活" : "独立人设池"));
+  identity.append(dot, name, state);
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "hot-dataset-delete";
+  remove.setAttribute("aria-label", `删除${name.textContent}数据集`);
+  remove.title = "删除数据集";
+  remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M7 7l1 13h8l1-13"></path><path d="M10 11v5M14 11v5"></path></svg>';
+  remove.addEventListener("click", () => void deleteHotDataset(item));
+  row.append(meter, identity, remove);
+  return row;
+}
+
 function renderHotDatasetOverview(payload = {}) {
-  const container = el("hotDatasetOverviewList");
-  if (!container) return;
-  container.replaceChildren();
+  const globalList = el("hotDatasetGlobalList");
+  const personaList = el("hotDatasetPersonaList");
+  const fallback = el("hotDatasetOverviewList");
+  if (!globalList && !personaList && !fallback) return;
+  adminState.hotDatasetOverview = payload;
+  if (globalList) globalList.replaceChildren();
+  if (personaList) personaList.replaceChildren();
   if (!payload.configured) {
-    container.appendChild(createEmptyState("旧机候选池汇总尚未生成"));
+    const empty = createEmptyState("旧机候选池汇总尚未生成");
+    if (globalList) globalList.appendChild(empty);
+    else if (fallback) {
+      fallback.replaceChildren();
+      fallback.appendChild(empty);
+    }
     setText("hotDatasetOverviewTime", "等待 worker 汇总");
+    setText("hotDatasetPersonaMeta", "等待 worker 汇总");
     return;
   }
   const globalDataset = payload.global && typeof payload.global === "object" ? payload.global : {};
   const personas = Array.isArray(payload.personas) ? payload.personas : [];
-  const rows = [{ ...globalDataset, global: true }, ...personas];
-  rows.forEach((item, index) => {
-    const count = Math.max(0, Number(item.count || 0));
-    const capacity = Math.max(1, Number(item.capacity || (item.global ? 100000 : 100)));
-    const percent = Math.min(100, count / capacity * 100);
-    const color = hotDatasetColor(index, Boolean(item.global));
-    const row = document.createElement("div");
-    row.className = `hot-dataset-row${item.global ? " is-global" : ""}`;
-    row.style.setProperty("--dataset-color", color.solid);
-    const meter = document.createElement("div");
-    const copy = document.createElement("div");
-    copy.className = "hot-dataset-meter-copy";
-    const value = document.createElement("strong");
-    value.textContent = `${count.toLocaleString("zh-CN")} 条可用`;
-    const ratio = document.createElement("span");
-    ratio.textContent = `${percent < 1 && count ? percent.toFixed(2) : percent.toFixed(0)}% · 上限 ${capacity.toLocaleString("zh-CN")}`;
-    copy.append(value, ratio);
-    const track = document.createElement("div");
-    track.className = "hot-dataset-track";
-    const fill = document.createElement("span");
-    fill.className = "hot-dataset-fill";
-    fill.style.width = `${percent}%`;
-    fill.style.minWidth = count ? "5px" : "0";
-    fill.style.background = color.gradient;
-    track.appendChild(fill);
-    meter.append(copy, track);
-    const identity = document.createElement("div");
-    identity.className = "hot-dataset-name";
-    const dot = document.createElement("i");
-    dot.setAttribute("aria-hidden", "true");
-    const name = document.createElement("strong");
-    name.textContent = String(item.name || (item.global ? "全局数据集" : "未命名人设"));
-    const state = document.createElement("small");
-    state.textContent = item.global ? "全局候选池" : (item.refilling ? "补充中" : (item.active ? "已激活" : "独立人设池"));
-    identity.append(dot, name, state);
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "hot-dataset-delete";
-    remove.setAttribute("aria-label", `删除${name.textContent}数据集`);
-    remove.title = "删除数据集";
-    remove.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M7 7l1 13h8l1-13"></path><path d="M10 11v5M14 11v5"></path></svg>';
-    remove.addEventListener("click", () => void deleteHotDataset(item));
-    row.append(meter, identity, remove);
-    container.appendChild(row);
-  });
+  adminState.hotDatasetPersonas = personas;
+  if (globalList) globalList.appendChild(renderHotDatasetRow({ ...globalDataset, global: true }, 0));
+  const pageSize = Math.max(5, Math.min(Number(el("hotDatasetPersonaPageSize")?.value || adminState.hotDatasetSettings?.persona_page_size || 10), 50));
+  const pages = Math.max(1, Math.ceil(personas.length / pageSize) || 1);
+  let page = Math.max(1, Number(adminState.hotDatasetPersonaPage || 1));
+  if (page > pages) page = pages;
+  adminState.hotDatasetPersonaPage = page;
+  const start = (page - 1) * pageSize;
+  const visible = personas.slice(start, start + pageSize);
+  if (personaList) {
+    if (!visible.length) personaList.appendChild(createEmptyState("暂无人设数据集"));
+    else visible.forEach((item, index) => personaList.appendChild(renderHotDatasetRow(item, start + index + 1)));
+  }
+  setText("hotDatasetPersonaMeta", `${personas.length} 个人设 · 第 ${page} / ${pages} 页`);
+  setText("hotDatasetPersonaPageLabel", `第 ${page} / ${pages} 页`);
+  const prev = el("btnHotDatasetPersonaPrev");
+  const next = el("btnHotDatasetPersonaNext");
+  if (prev) prev.disabled = page <= 1;
+  if (next) next.disabled = page >= pages;
   const generatedAt = Number(payload.generated_at || 0);
   setText(
     "hotDatasetOverviewTime",
@@ -10632,6 +10774,35 @@ function bindActions() {
   bindRunningHubSlotTabs();
   el("btnRefreshGovernance")?.addEventListener("click", () => void loadGovernanceDashboard({ force: true }));
   el("btnRefreshHotDatasets")?.addEventListener("click", () => void refreshHotDatasets({ force: true }));
+  el("btnHotDatasetPersonaPrev")?.addEventListener("click", () => {
+    adminState.hotDatasetPersonaPage = Math.max(1, Number(adminState.hotDatasetPersonaPage || 1) - 1);
+    renderHotDatasetOverview(adminState.hotDatasetOverview || {});
+  });
+  el("btnHotDatasetPersonaNext")?.addEventListener("click", () => {
+    adminState.hotDatasetPersonaPage = Number(adminState.hotDatasetPersonaPage || 1) + 1;
+    renderHotDatasetOverview(adminState.hotDatasetOverview || {});
+  });
+  el("hotDatasetPersonaPageSize")?.addEventListener("change", () => {
+    adminState.hotDatasetPersonaPage = 1;
+    void saveHotDatasetSettings({ persistMax: false });
+  });
+  el("btnHotDatasetEventPrev")?.addEventListener("click", () => {
+    adminState.hotDatasetEventPage = Math.max(1, Number(adminState.hotDatasetEventPage || 1) - 1);
+    void refreshHotDatasetEvents();
+  });
+  el("btnHotDatasetEventNext")?.addEventListener("click", () => {
+    adminState.hotDatasetEventPage = Number(adminState.hotDatasetEventPage || 1) + 1;
+    void refreshHotDatasetEvents();
+  });
+  el("hotDatasetEventPageSize")?.addEventListener("change", () => {
+    adminState.hotDatasetEventPage = 1;
+    void saveHotDatasetSettings({ persistMax: false });
+  });
+  el("hotDatasetEventScope")?.addEventListener("change", () => {
+    adminState.hotDatasetEventPage = 1;
+    void refreshHotDatasetEvents();
+  });
+  el("btnSaveHotDatasetSettings")?.addEventListener("click", () => void saveHotDatasetSettings({ persistMax: true }));
   el("governanceRange")?.addEventListener("change", () => { syncGovernanceRangeControls(); void loadGovernanceDashboard({ force: true }); });
   el("governanceStartDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
   el("governanceEndDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));

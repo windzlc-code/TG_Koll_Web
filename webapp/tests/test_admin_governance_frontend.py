@@ -73,19 +73,31 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             "hotDatasetOverviewTitle",
             "hotDatasetOverviewTime",
             "hotDatasetOverviewList",
+            "hotDatasetGlobalList",
+            "hotDatasetPersonaList",
+            "hotDatasetPersonaPageSize",
             "btnRefreshHotDatasets",
             "hotDatasetEventsTitle",
             "hotDatasetEventsTime",
             "hotDatasetEventsBody",
+            "hotDatasetEventPageSize",
+            "hotDatasetEventMax",
+            "btnSaveHotDatasetSettings",
+            "btnHotDatasetEventPrev",
+            "btnHotDatasetEventNext",
         ):
             self.assertIn(f'id="{element_id}"', self.html)
         self.assertIn("grid-template-columns: minmax(0, 1fr) minmax(150px, 22%) 34px", self.html)
         self.assertLess(self.html.index('class="admin-governance-kpis"'), self.html.index('class="hot-dataset-overview"'))
-        self.assertIn("const rows = [{ ...globalDataset, global: true }, ...personas];", self.script)
+        self.assertIn("function renderHotDatasetRow(", self.script)
+        self.assertNotIn("const rows = [{ ...globalDataset, global: true }, ...personas];", self.script)
+        self.assertIn("hotDatasetGlobalList", self.script)
+        self.assertIn("hotDatasetPersonaList", self.script)
         self.assertIn("index * 137.508", self.script)
         self.assertIn('/api/admin/hot-datasets/refresh', self.script)
         self.assertIn('/api/admin/hot-datasets/${encodeURIComponent(datasetId)}', self.script)
         self.assertIn('/api/admin/hot-datasets/events', self.script)
+        self.assertIn('/api/admin/hot-datasets/settings', self.script)
         self.assertIn('/api/admin/hot-datasets/events/${encodeURIComponent(eventId)}', self.script)
         self.assertIn('{ method: "DELETE" }', self.script)
         self.assertIn('requestAdminPublicAction({', self.script)
