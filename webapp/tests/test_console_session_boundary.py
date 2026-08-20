@@ -635,6 +635,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("Boolean(activeLoginTask?.id)", fields)
         self.assertIn("renderBrowserLaunchIcon()", update)
         self.assertIn("continue-login", self.styles)
+        continue_login_styles = self.styles.split(".account-pool-card-continue-login {", 1)[1].split(
+            ".account-pool-card-continue-login[hidden]", 1
+        )[0]
+        self.assertIn("background-image: var(--vecto-action-static-gradient);", continue_login_styles)
+        self.assertIn(".account-pool-card-continue-login::after", continue_login_styles)
+        self.assertIn("animation: accountPoolContentRefreshSweep 1.8s ease-in-out infinite;", continue_login_styles)
 
     def test_account_card_actions_keep_icons_and_single_row_login_width(self):
         update_status = self._javascript_function_source(self.source, "updateAccountStatusViews")

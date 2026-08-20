@@ -405,7 +405,7 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(control["login_assistance_state"]["kind"], "progress")
         self.assertEqual(control["login_assistance_state"]["title"], "正在验证")
 
-    def test_credentials_resubmission_waits_before_reusing_an_existing_error(self):
+    def test_credentials_resubmission_returns_immediately_on_explicit_error(self):
         control = {
             "login_assistance_state": {
                 "phase": "running",
@@ -425,20 +425,10 @@ class LoginAssistancePresentationTests(unittest.TestCase):
                 handoff=True,
             )
 
-        self.assertEqual(control["login_assistance_state"]["kind"], "progress")
-        self.assertEqual(control["login_assistance_state"]["title"], "正在验证")
-
-        with mock.patch.object(runner.time, "monotonic", return_value=107.0):
-            runner._publish_login_assistance_state(
-                mock.Mock(),
-                control,
-                {"status": "invalid_credentials", "reason": "账号或密码不正确"},
-                handoff=True,
-            )
-
         self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
+        self.assertEqual(control["login_assistance_state"]["title"], "账号或密码不正确")
 
-    def test_credentials_resubmission_returns_after_transient_error_copy_disappears(self):
+    def test_credentials_resubmission_keeps_explicit_error_when_transient_copy_disappears(self):
         control = {
             "login_assistance_state": {
                 "phase": "running",
@@ -459,9 +449,10 @@ class LoginAssistancePresentationTests(unittest.TestCase):
                 handoff=True,
             )
 
-        self.assertEqual(control["login_assistance_state"]["kind"], "progress")
+        self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
+        self.assertEqual(control["login_assistance_state"]["title"], "账号或密码不正确")
 
-        with mock.patch.object(runner.time, "monotonic", return_value=107.0):
+        with mock.patch.object(runner.time, "monotonic", return_value=103.0):
             runner._publish_login_assistance_state(
                 page,
                 control,
@@ -470,7 +461,7 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             )
 
         self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
-        self.assertIn("重新提交", control["login_assistance_state"]["message"])
+        self.assertEqual(control["login_assistance_state"]["title"], "账号或密码不正确")
 
     def test_credentials_follow_the_visible_login_page_when_context_switched_tabs(self):
         actions = queue.Queue(maxsize=2)

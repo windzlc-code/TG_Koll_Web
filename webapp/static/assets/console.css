@@ -19576,6 +19576,7 @@ body.persona-media-sorting {
 }
 
 .account-pool-card-continue-login {
+  position: relative;
   display: inline-flex;
   grid-area: resume;
   align-items: center;
@@ -19585,13 +19586,40 @@ body.persona-media-sorting {
   padding: 2px 7px;
   border: 0;
   border-radius: 7px;
-  background: var(--soft);
-  color: var(--ink);
+  overflow: hidden;
+  isolation: isolate;
+  background-color: #071112;
+  background-image: var(--vecto-action-static-gradient);
+  background-size: 100% 100%;
+  color: var(--vecto-action-ink);
   font-size: 11px;
   font-weight: 800;
   line-height: 1;
   white-space: nowrap;
   box-shadow: none;
+}
+
+.account-pool-card-continue-login::after {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    100deg,
+    transparent 34%,
+    rgba(255, 255, 255, .12) 43%,
+    rgba(255, 255, 255, .82) 50%,
+    rgba(255, 255, 255, .12) 57%,
+    transparent 66%
+  );
+  content: "";
+  pointer-events: none;
+  animation: accountPoolContentRefreshSweep 1.8s ease-in-out infinite;
+}
+
+.account-pool-card-continue-login > * {
+  position: relative;
+  z-index: 1;
 }
 
 .account-pool-card-continue-login[hidden] {
@@ -19600,8 +19628,9 @@ body.persona-media-sorting {
 
 .account-pool-card-continue-login:hover,
 .account-pool-card-continue-login:focus-visible {
-  background: var(--ink);
-  color: var(--surface);
+  background-color: #071112;
+  background-image: var(--vecto-action-static-gradient);
+  color: var(--vecto-action-ink);
 }
 
 .account-pool-card-continue-login .ui-action-icon {
@@ -27289,6 +27318,12 @@ body.console-page {
   }
   to {
     transform: translate3d(115%, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-pool-card-continue-login::after {
+    animation: none;
   }
 }
 

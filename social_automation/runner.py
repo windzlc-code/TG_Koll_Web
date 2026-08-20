@@ -4040,7 +4040,7 @@ def _publish_login_assistance_state(
     if submitted_kind and _login_assistance_same_prompt_after_submit(submitted_kind, submitted_challenge, presentation):
         rejected = _login_assistance_submission_rejected(page, submitted_kind, current)
         if submitted_kind == "credentials":
-            if _login_assistance_credentials_submission_waiting(context_control):
+            if _login_assistance_credentials_submission_waiting(context_control) and not rejected:
                 return
             if not rejected and not context_control.get("login_assistance_credentials_submitted_at"):
                 return
@@ -4063,12 +4063,21 @@ def _publish_login_assistance_state(
         context_control.pop("login_assistance_submitted_kind", None)
         context_control.pop("login_assistance_submitted_challenge", None)
         context_control.pop("login_assistance_credentials_submitted_at", None)
+    previous = context_control.get("login_assistance_state")
+    if (
+        not submitted_kind
+        and isinstance(previous, dict)
+        and str(previous.get("kind") or "").strip().lower() == "credentials"
+        and str(previous.get("title") or "").strip() == "账号或密码不正确"
+        and str(presentation.get("kind") or "").strip().lower() == "credentials"
+        and str(current.get("status") or "").strip().lower() == "cookie_expired"
+    ):
+        return
     if not _login_assistance_is_milestone(presentation):
         return
     expires_at = context_control.get("login_assistance_expires_at")
     if expires_at:
         presentation["expires_at"] = int(expires_at)
-    previous = context_control.get("login_assistance_state")
     if isinstance(previous, dict) and previous.get("action_error"):
         previous_kind = str(previous.get("prompt_kind") or previous.get("kind") or "").strip().lower()
         next_kind = str(presentation.get("kind") or "").strip().lower()
