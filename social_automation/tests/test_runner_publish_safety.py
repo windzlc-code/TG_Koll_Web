@@ -431,7 +431,7 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(control["login_assistance_state"]["kind"], "progress")
         self.assertEqual(control["login_assistance_state"]["title"], "正在验证")
 
-        with mock.patch.object(runner.time, "monotonic", return_value=113.0):
+        with mock.patch.object(runner.time, "monotonic", return_value=107.0):
             runner._publish_login_assistance_state(
                 mock.Mock(),
                 control,
