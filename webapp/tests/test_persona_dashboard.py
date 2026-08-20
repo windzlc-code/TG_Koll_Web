@@ -4656,10 +4656,12 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("SUZUKI 小編", captured["user"])
         self.assertIn("禁止照抄", captured["user"])
         self.assertIn("必须用人设的身份", captured["system"])
-        self.assertIn("上下 5%", captured["system"])
+        self.assertIn("字数硬性合同", captured["system"])
+        self.assertIn("不是摘要", captured["system"])
+        self.assertIn("一次写对", captured["system"])
         self.assertIn("热点原文约", captured["user"])
         self.assertIn("不超过 5%", captured["user"])
-        self.assertIn("不是平台字数上限", captured["user"])
+        self.assertIn("发布字数上限压缩", captured["user"])
 
     def test_hot_rewrite_length_bounds_stay_within_five_percent(self):
         self.assertEqual(server._persona_hot_rewrite_length_bounds(100), (95, 105))
@@ -4689,7 +4691,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
             )
 
         self.assertEqual(len(calls), 2)
-        self.assertIn("已超出", calls[1])
+        self.assertIn("不合格", calls[1])
+        self.assertIn("禁止继续摘要", calls[1])
         self.assertIn("煞車油", body["content"])
         self.assertEqual(body["rewritten_length"], source_length)
 
@@ -4712,7 +4715,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     ),
                 )
 
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 2)
         self.assertEqual(raised.exception.status_code, 502)
         self.assertIn("改写字数偏离过大", raised.exception.detail)
         self.assertIn("原文 32 字", raised.exception.detail)

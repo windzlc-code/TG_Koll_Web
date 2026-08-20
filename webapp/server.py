@@ -15116,7 +15116,7 @@ def _persona_hot_rewrite_length_bounds(source_length: int) -> tuple[int, int]:
     return max(1, clean - delta), clean + delta
 
 
-PERSONA_HOT_REWRITE_MAX_ATTEMPTS = 3
+PERSONA_HOT_REWRITE_MAX_ATTEMPTS = 2
 
 
 def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDashboardHotRewritePayload) -> dict[str, Any]:
@@ -15149,21 +15149,30 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         persona_lines.append(f"推文风格样本：{style_sample[:280]}")
     source_length = _persona_hot_rewrite_char_count(source_content)
     min_length, max_length = _persona_hot_rewrite_length_bounds(source_length)
+    length_contract = "\n".join([
+        "【字数硬性合同，必须一次写对】",
+        f"原文去掉空白后是 {source_length} 字。改写后必须落在 {min_length} 到 {max_length} 字，目标就是 {source_length} 字。",
+        "字数按去掉所有空白后的字符计算。这是改写，不是摘要，也不是压缩。",
+        "人设只改口吻和身份，不缩短篇幅。原文里的数字、金额、产品、比例、年龄、问题和结论都要留下。",
+        "不要按微博、推特或 Threads 的发布字数上限压缩。即使接近平台上限，也不许擅自删减。",
+        "写完后先在心里核对字数；不够就补同等细节，多了就删空话，但不要整段砍事实。",
+    ])
     system_prompt = "\n".join([
+        length_contract,
         "你是社交媒体文案写手。只输出一篇可直接发布的正文，不要标题、解释、引号或 Markdown。",
         f"目标平台：{platform}。",
         f"写作语言：{writing_locale}（{writing_language}）。{writing_convention}",
         "必须用人设的身份、语气和领域来写；热点原文只提供话题、事实和讨论点。",
         "保留热点里可核验的具体对象、场景或问题，但禁止复述原句、原口头禅或原账号自称。",
         "不要写成客服回复，不要出现原帖作者身份。不要注水解说。",
-        "改写后的字数必须接近原文：按去掉空白后的字数计算，只能在原文上下 5% 以内。",
-        "不要按微博、推特或 Threads 的发布字数上限压缩，也不要把长文擅自改成短帖。",
     ])
     user_input = "\n".join([
+        length_contract,
+        "",
         "当前人设：",
         *[line for line in persona_lines if not line.endswith("：")],
         "",
-        f"热点原文约 {source_length} 字。改写后必须落在 {min_length} 到 {max_length} 字之间，上下浮动不超过 5%。这不是平台字数上限。",
+        f"热点原文约 {source_length} 字。改写后必须一次写到 {min_length}-{max_length} 字，上下浮动不超过 5%。",
         "热点原文（只作素材，禁止照抄）：",
         source_content[:4000],
     ])
@@ -15174,7 +15183,7 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
                 source=_persona_llm_runtime_source(),
                 user_input=prompt_user,
                 system_prompt=system_prompt,
-                retry_count=2,
+                retry_count=1,
                 request_label=label,
             )
         except Exception as exc:
@@ -15205,8 +15214,9 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         prompt_user = "\n".join([
             user_input,
             "",
-            f"上次改写约 {last_length} 字，{direction} {gap} 字，已超出 {min_length}-{max_length} 字范围。",
-            "请按同一事实和人设重写，不要压缩成短帖，必须严格落在该字数区间内。",
+            f"上次改写只有 {last_length} 字，{direction} {gap} 字，不合格。",
+            f"请按同一事实和人设重写一整篇，目标 {source_length} 字，必须落在 {min_length}-{max_length} 字。",
+            "禁止继续摘要。把原文里的数字、金额、产品和问题都写回去，用同等信息量补足字数。",
         ])
     if not last_content:
         raise HTTPException(status_code=502, detail="模型没有返回可用正文，请稍后重试。")
