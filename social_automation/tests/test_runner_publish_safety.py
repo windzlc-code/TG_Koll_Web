@@ -205,10 +205,14 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         control = {
             "login_assistance_submitted_kind": "verification_code",
             "login_assistance_submitted_challenge": "sms_code",
+            "login_assistance_verification_submitted_at": 100.0,
             "login_assistance_state": {"phase": "running", "kind": "progress", "title": "正在验证"},
         }
         page = mock.Mock()
-        with mock.patch.object(runner, "_login_assistance_code_rejected", return_value=False):
+        with (
+            mock.patch.object(runner, "_login_assistance_code_rejected", return_value=False),
+            mock.patch.object(runner.time, "monotonic", return_value=101.0),
+        ):
             runner._publish_login_assistance_state(
                 page,
                 control,
@@ -217,7 +221,10 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             )
         self.assertEqual(control["login_assistance_state"]["kind"], "progress")
         self.assertEqual(control["login_assistance_state"]["title"], "正在验证")
-        with mock.patch.object(runner, "_login_assistance_code_rejected", return_value=True):
+        with (
+            mock.patch.object(runner, "_login_assistance_code_rejected", return_value=True),
+            mock.patch.object(runner.time, "monotonic", return_value=102.0),
+        ):
             runner._publish_login_assistance_state(
                 page,
                 control,
@@ -226,6 +233,28 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             )
         self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
         self.assertIn("请重新输入", control["login_assistance_state"]["message"])
+
+    def test_submitted_verification_code_returns_to_prompt_after_settle_window(self):
+        control = {
+            "login_assistance_submitted_kind": "verification_code",
+            "login_assistance_submitted_challenge": "sms_code",
+            "login_assistance_verification_submitted_at": 100.0,
+            "login_assistance_state": {"phase": "running", "kind": "progress", "title": "正在验证"},
+        }
+        with (
+            mock.patch.object(runner, "_login_assistance_code_rejected", return_value=False),
+            mock.patch.object(runner.time, "monotonic", return_value=107.0),
+        ):
+            runner._publish_login_assistance_state(
+                mock.Mock(),
+                control,
+                {"status": "need_verification", "challenge_type": "sms_code"},
+                handoff=True,
+            )
+
+        self.assertEqual(control["login_assistance_state"]["kind"], "verification_code")
+        self.assertIn("平台尚未确认", control["login_assistance_state"]["message"])
+        self.assertNotIn("login_assistance_submitted_kind", control)
 
     def test_choice_clicks_are_sent_to_the_visible_page_button(self):
         actions = queue.Queue(maxsize=2)
@@ -333,6 +362,8 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(fill.call_args.args[2], "654321")
         submit.assert_called_once()
         self.assertEqual(control["login_assistance_state"]["phase"], "running")
+        self.assertIs(control["login_assistance_action_page"], page)
+        self.assertGreater(control["login_assistance_verification_submitted_at"], 0)
 
     def test_email_verification_preserves_alphanumeric_code_and_uses_otp_field(self):
         actions = queue.Queue(maxsize=2)
@@ -1916,6 +1947,92 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "ready")
         self.assertEqual(result["screenshot_path"], "complete.png")
+
+    def test_manual_login_final_verification_uses_the_page_that_received_the_code(self):
+        original_page, verification_page = mock.Mock(), mock.Mock()
+        original_page.url = "https://www.threads.com/login"
+        verification_page.url = "https://www.threads.net/"
+        verification_page.is_closed.return_value = False
+        control = {"login_assistance_action_page": verification_page}
+        with (
+            mock.patch.object(runner.time, "monotonic", return_value=1.0),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "ready"}) as detect,
+            mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}) as confirm,
+            mock.patch.object(runner, "_screenshot", return_value="complete.png"),
+        ):
+            result = runner._wait_for_manual_login_completion(
+                original_page,
+                {"id": "verification-page-success", "payload": {"manual_login_timeout_seconds": 300}},
+                Path("."),
+                _Logger(),
+                "threads",
+                None,
+                "verification required",
+                context_control=control,
+            )
+
+        self.assertEqual(result["status"], "ready")
+        detect.assert_called_once_with(verification_page, "threads")
+        confirm.assert_called_once_with(verification_page, "threads", mock.ANY, None)
+
+    def test_verification_submission_reaches_threads_ready_closed_loop(self):
+        actions = queue.Queue(maxsize=2)
+        actions.put_nowait({"kind": "verification_code", "verification_code": "654321"})
+        original_page, verification_page, code_input = mock.Mock(), mock.Mock(), mock.Mock()
+        original_page.url = "https://www.threads.com/login"
+        verification_page.url = "https://www.threads.net/"
+        verification_page.is_closed.return_value = False
+        account_statuses = []
+        control = {
+            "login_assistance_queue": actions,
+            "login_assistance_lock": threading.Lock(),
+            "login_assistance_pending": True,
+            "login_assistance_state": {
+                "phase": "attention",
+                "kind": "verification_code",
+                "challenge_type": "sms_code",
+            },
+            "account_login_status_callback": account_statuses.append,
+        }
+        logger = _Logger()
+
+        with (
+            mock.patch.object(runner, "_mapped_login_verification_code", return_value=(verification_page, verification_page, code_input)),
+            mock.patch.object(runner, "_clear_and_type") as fill,
+            mock.patch.object(runner, "_click_text_button", return_value=True) as submit,
+            mock.patch.object(runner.time, "monotonic", return_value=101.0),
+        ):
+            consumed = runner._process_login_assistance_action(original_page, "threads", logger, control)
+
+        self.assertTrue(consumed)
+        fill.assert_called_once()
+        submit.assert_called_once()
+        self.assertIs(control["login_assistance_action_page"], verification_page)
+
+        with (
+            mock.patch.object(runner.time, "monotonic", return_value=102.0),
+            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "ready"}) as detect,
+            mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}) as confirm,
+            mock.patch.object(runner, "_screenshot", return_value="complete.png"),
+        ):
+            result = runner._wait_for_manual_login_completion(
+                original_page,
+                {"id": "verification-closed-loop", "payload": {"manual_login_timeout_seconds": 300}},
+                Path("."),
+                logger,
+                "threads",
+                None,
+                "verification required",
+                last_status={"status": "need_verification", "challenge_type": "sms_code"},
+                context_control=control,
+            )
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["screenshot_path"], "complete.png")
+        self.assertEqual(account_statuses, ["ready"])
+        self.assertEqual(control["login_assistance_state"]["phase"], "success")
+        detect.assert_called_once_with(verification_page, "threads")
+        confirm.assert_called_once_with(verification_page, "threads", mock.ANY, None)
 
     def test_manual_login_hard_deadline_wins_over_late_ready_result(self):
         page = mock.Mock()

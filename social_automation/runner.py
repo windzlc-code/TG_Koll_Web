@@ -23,6 +23,7 @@ THREADS_POST_SUBMIT_WATCH_SECONDS = 2
 DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS = 4
 LOGIN_FORM_WAIT_SECONDS = 12
 LOGIN_ASSISTANCE_CREDENTIAL_SUBMIT_SETTLE_SECONDS = 6
+LOGIN_ASSISTANCE_VERIFICATION_SUBMIT_SETTLE_SECONDS = 6
 DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MIN_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MAX_MANUAL_LOGIN_TIMEOUT_SECONDS = 1800
@@ -3455,6 +3456,22 @@ def _run_open_login(
     )
 
 
+def _login_assistance_status_page(page: Any, context_control: dict[str, Any] | None) -> Any:
+    if not isinstance(context_control, dict):
+        return page
+    candidate = context_control.get("login_assistance_action_page")
+    if candidate is None:
+        return page
+    try:
+        if bool(getattr(candidate, "is_closed", lambda: False)()):
+            context_control.pop("login_assistance_action_page", None)
+            return page
+    except Exception:
+        context_control.pop("login_assistance_action_page", None)
+        return page
+    return candidate
+
+
 def _wait_for_manual_login_completion(
     page,
     task,
@@ -3525,8 +3542,9 @@ def _wait_for_manual_login_completion(
             _raise_if_cancelled(cancel_event)
             if time.monotonic() >= deadline:
                 raise_manual_login_timeout()
+            status_page = _login_assistance_status_page(page, context_control)
             try:
-                page.title(timeout=1000)
+                status_page.title(timeout=1000)
             except Exception as exc:
                 message = str(exc)
                 if "Target page, context or browser has been closed" in message or "has been closed" in message:
@@ -3542,34 +3560,35 @@ def _wait_for_manual_login_completion(
                 continue
             if time.monotonic() >= deadline:
                 raise_manual_login_timeout()
-            current_status = _detect_platform_login_state(page, platform)
+            status_page = _login_assistance_status_page(page, context_control)
+            current_status = _detect_platform_login_state(status_page, platform)
             if platform == "threads":
-                current_status = _restore_threads_after_instagram_login(page, current_status, logger)
+                current_status = _restore_threads_after_instagram_login(status_page, current_status, logger)
             if time.monotonic() >= deadline:
                 raise_manual_login_timeout()
             current_code = str(current_status.get("status") or "").strip()
-            _publish_login_assistance_state(page, context_control, current_status, handoff=True)
+            _publish_login_assistance_state(status_page, context_control, current_status, handoff=True)
             if current_code == "post_login_interstitial":
-                if _resolve_instagram_post_login_interstitial(page, logger):
+                if _resolve_instagram_post_login_interstitial(status_page, logger):
                     if platform == "threads":
-                        _goto(page, THREADS_HOME, logger, "threads_post_login_notice_return")
+                        _goto(status_page, THREADS_HOME, logger, "threads_post_login_notice_return")
                     continue
             if current_code == "ready":
-                stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
+                stable_status = _confirm_platform_ready(status_page, platform, logger, cancel_event)
                 if time.monotonic() >= deadline:
                     raise_manual_login_timeout()
                 if stable_status.get("status") == "ready":
                     _complete_pending_totp_verification(context_control)
                     _report_account_login_status(context_control, "ready", logger)
-                    shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
+                    shot = _screenshot(status_page, screenshot_dir, task, "login_complete", logger)
                     logger.log(
                         "info",
                         "completion_node",
                         f"{_platform_name(platform)} 登录成功节点已确认。",
-                        {"url": _safe_navigation_url(page.url), "details": _safe_login_status(stable_status), "manual_completion": True},
+                        {"url": _safe_navigation_url(status_page.url), "details": _safe_login_status(stable_status), "manual_completion": True},
                         shot,
                     )
-                    _publish_login_assistance_state(page, context_control, stable_status, handoff=True)
+                    _publish_login_assistance_state(status_page, context_control, stable_status, handoff=True)
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 current_status = stable_status
                 current_code = str(current_status.get("status") or "").strip()
@@ -3976,6 +3995,16 @@ def _login_assistance_credentials_submission_waiting(context_control: dict[str, 
     return submitted_at > 0 and (time.monotonic() - submitted_at) < LOGIN_ASSISTANCE_CREDENTIAL_SUBMIT_SETTLE_SECONDS
 
 
+def _login_assistance_verification_submission_waiting(context_control: dict[str, Any] | None) -> bool:
+    if not isinstance(context_control, dict):
+        return False
+    try:
+        submitted_at = float(context_control.get("login_assistance_verification_submitted_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    return submitted_at > 0 and (time.monotonic() - submitted_at) < LOGIN_ASSISTANCE_VERIFICATION_SUBMIT_SETTLE_SECONDS
+
+
 def _login_assistance_same_prompt_after_submit(
     submitted_kind: str,
     submitted_challenge: str,
@@ -4044,13 +4073,18 @@ def _publish_login_assistance_state(
                 return
             if not rejected and not context_control.get("login_assistance_credentials_submitted_at"):
                 return
-        elif not rejected:
+        elif submitted_kind == "verification_code" and _login_assistance_verification_submission_waiting(context_control) and not rejected:
             return
         context_control.pop("login_assistance_submitted_kind", None)
         context_control.pop("login_assistance_submitted_challenge", None)
         context_control.pop("login_assistance_credentials_submitted_at", None)
-        if submitted_kind == "verification_code" and not str(current.get("reason") or "").strip():
-            current["reason"] = "验证码不正确，请重新输入。"
+        context_control.pop("login_assistance_verification_submitted_at", None)
+        if submitted_kind == "verification_code":
+            current["reason"] = (
+                "验证码未通过，请重新输入。"
+                if rejected
+                else "平台尚未确认当前验证码，请检查实时画面或重新输入。"
+            )
             presentation = _login_assistance_presentation(current)
         elif submitted_kind == "credentials":
             if str(current.get("status") or "").strip().lower() == "invalid_credentials" or _page_shows_invalid_credentials(page):
@@ -4063,6 +4097,7 @@ def _publish_login_assistance_state(
         context_control.pop("login_assistance_submitted_kind", None)
         context_control.pop("login_assistance_submitted_challenge", None)
         context_control.pop("login_assistance_credentials_submitted_at", None)
+        context_control.pop("login_assistance_verification_submitted_at", None)
     previous = context_control.get("login_assistance_state")
     if (
         not submitted_kind
@@ -4254,6 +4289,12 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
             clicked = _click_text_button(action_surface, logger, ["Continue", "Confirm", "Verify", "Submit", "Next", "继续", "确认", "验证", "提交", "下一步"], "mapped_verification_submit")
             if not clicked:
                 action_page.keyboard.press("Enter")
+            logger.log(
+                "info",
+                "mapped_verification_submit",
+                "验证码提交动作已执行。",
+                {"method": "button" if clicked else "enter", "url": _safe_navigation_url(getattr(action_page, "url", ""))},
+            )
             message = "验证码已提交，正在确认登录结果。"
         elif kind == "credentials":
             username = str(action.get("login_username") or "").strip()
@@ -4288,6 +4329,8 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
         context_control.pop("login_assistance_submitted_kind", None)
         context_control.pop("login_assistance_submitted_challenge", None)
         context_control.pop("login_assistance_credentials_submitted_at", None)
+        context_control.pop("login_assistance_verification_submitted_at", None)
+        context_control.pop("login_assistance_action_page", None)
         context_control["login_assistance_state"] = {"phase": "attention", "kind": kind or "browser_interaction", "prompt_kind": kind, "action_error": True, "title": "暂时无法提交", "message": str(exc)[:240], "submit_label": "重试", "updated_at": int(time.time()), **({"expires_at": int(expires_at)} if expires_at else {})}
         _set_login_assistance_pending(context_control, False)
         logger.log("warn", "login_assistance_submit_failed", "登录映射页提交失败。", {"kind": kind, "error": str(exc)[:240]})
@@ -4295,8 +4338,11 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
     previous = context_control.get("login_assistance_state") if isinstance(context_control.get("login_assistance_state"), dict) else {}
     context_control["login_assistance_submitted_kind"] = kind
     context_control["login_assistance_submitted_challenge"] = str(previous.get("challenge_type") or "")
+    context_control["login_assistance_action_page"] = action_page
     if kind == "credentials":
         context_control["login_assistance_credentials_submitted_at"] = time.monotonic()
+    elif kind == "verification_code":
+        context_control["login_assistance_verification_submitted_at"] = time.monotonic()
     progress = {
         "phase": "running",
         "kind": "progress",
