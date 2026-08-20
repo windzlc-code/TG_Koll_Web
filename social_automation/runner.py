@@ -33,7 +33,10 @@ GENERIC_VERIFICATION_CODE_INPUT_SELECTOR = (
     'input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"])'
     ':not([type="submit"]):not([type="button"]):not([type="password"])'
     ':not([type="email"]):not([autocomplete="username"])'
+    ':not([autocomplete="email"]):not([autocomplete="tel"])'
     ':not([autocomplete="current-password"])'
+    ':not([name="username"]):not([name="email"]):not([name="phone"])'
+    ':not([name="password"]):not([name="pass"])'
 )
 MAX_WARMUP_LIKES = 16
 MAX_WARMUP_COMMENTS = 6
@@ -2670,12 +2673,25 @@ def _detect_platform_login_state(page, platform: str) -> dict[str, Any]:
 def _enrich_login_state_with_visible_challenge(page, status: dict[str, Any] | None) -> dict[str, Any]:
     current = dict(status or {})
     current_code = str(current.get("status") or "").strip().lower()
-    if current_code in {"ready", "need_verification", "invalid_credentials", "account_confirmation_required"}:
-        return current
     mapped = None
     with contextlib.suppress(Exception):
         mapped = _mapped_login_verification_code(page)
     if mapped is None:
+        if current_code == "need_verification":
+            credentials = None
+            with contextlib.suppress(Exception):
+                credentials = _mapped_login_credentials(page)
+            if credentials is not None:
+                demoted = {
+                    **current,
+                    "status": "cookie_expired",
+                    "reason": "当前页面显示的是账号密码登录，而不是验证码。",
+                    "url": str(current.get("url") or getattr(page, "url", "") or ""),
+                }
+                demoted.pop("challenge_type", None)
+                return demoted
+        return current
+    if current_code in {"ready", "need_verification", "invalid_credentials", "account_confirmation_required"}:
         return current
     challenge = {}
     with contextlib.suppress(Exception):
@@ -10422,32 +10438,101 @@ def _safe_login_status(status: dict[str, Any] | None) -> dict[str, Any]:
     return result
 
 
-def _verification_code_input(page):
-    return _visible_first(
-        page,
-        [
-            'input[autocomplete="one-time-code"]',
-            'input[name="approvals_code"]',
-            'input[name*="security_code" i]',
-            'input[name*="verification_code" i]',
-            'input[name*="code" i]',
-            'input[name*="otp" i]',
-            'input[id*="otp" i]',
-            'input[aria-label*="otp" i]',
-            'input[placeholder*="otp" i]',
-            'input[aria-label*="code" i]',
-            'input[placeholder*="code" i]',
-            'input[aria-label*="验证码"]',
-            'input[placeholder*="验证码"]',
-            'input[aria-label*="驗證碼"]',
-            'input[placeholder*="驗證碼"]',
-            'input[maxlength="6"]',
-            'input[inputmode="numeric"]',
-            'input[type="tel"]',
-            GENERIC_VERIFICATION_CODE_INPUT_SELECTOR,
-        ],
-        timeout_ms=500,
+def _login_input_attribute(locator, name: str) -> str:
+    with contextlib.suppress(Exception):
+        getter = getattr(locator, "get_attribute", None)
+        if callable(getter):
+            value = getter(name)
+            if isinstance(value, str):
+                return value
+    with contextlib.suppress(Exception):
+        evaluate = getattr(locator, "evaluate", None)
+        if callable(evaluate):
+            value = evaluate("(el, attr) => String(el.getAttribute(attr) || '')", name)
+            if isinstance(value, str):
+                return value
+    return ""
+
+
+def _is_login_identifier_input(locator) -> bool:
+    blob = " ".join(
+        _login_input_attribute(locator, name)
+        for name in ("name", "type", "autocomplete", "aria-label", "placeholder", "id", "inputmode")
+    ).lower()
+    if not blob.strip():
+        return False
+    if any(
+        token in blob
+        for token in (
+            "verification",
+            "security code",
+            "one-time",
+            "otp",
+            "approvals_code",
+            "code",
+            "验证码",
+            "驗證碼",
+            "安全码",
+            "安全碼",
+        )
+    ):
+        return False
+    return any(
+        token in blob
+        for token in (
+            "username",
+            "user name",
+            "password",
+            "passwd",
+            "email",
+            "e-mail",
+            "phone number",
+            "mobile number",
+            "用户名",
+            "用戶名",
+            "帐号",
+            "账号",
+            "帳號",
+            "密码",
+            "密碼",
+            "邮箱",
+            "郵箱",
+            "信箱",
+            "手机号",
+            "手機號",
+            "手机号码",
+            "手機號碼",
+        )
     )
+
+
+def _verification_code_input(page):
+    for selector in (
+        'input[autocomplete="one-time-code"]',
+        'input[name="approvals_code"]',
+        'input[name*="security_code" i]',
+        'input[name*="verification_code" i]',
+        'input[name*="code" i]',
+        'input[name*="otp" i]',
+        'input[id*="otp" i]',
+        'input[aria-label*="otp" i]',
+        'input[placeholder*="otp" i]',
+        'input[aria-label*="code" i]',
+        'input[placeholder*="code" i]',
+        'input[aria-label*="验证码"]',
+        'input[placeholder*="验证码"]',
+        'input[aria-label*="驗證碼"]',
+        'input[placeholder*="驗證碼"]',
+        'input[maxlength="6"]',
+        'input[inputmode="numeric"]',
+        'input[type="tel"]',
+        GENERIC_VERIFICATION_CODE_INPUT_SELECTOR,
+    ):
+        locator = _visible_first(page, [selector], timeout_ms=500)
+        if locator is None or _is_login_identifier_input(locator):
+            continue
+        return locator
+    return None
 
 
 def _has_large_verification_illustration(page) -> bool:
@@ -10518,26 +10603,26 @@ def _classify_verification_challenge(page) -> dict[str, Any]:
         "via sms",
         "sent a code to your phone",
         "code to your phone",
+        "sms code",
+        "短信验证码",
+        "手机短信",
+        "手機簡訊",
         "短信",
         "简讯",
         "簡訊",
-        "手机",
-        "手機",
-        "手机短信",
-        "短信验证码",
     )
     email_markers = (
         "sent a code to your email",
         "code to your email",
+        "sent to your email",
+        "to your email",
         "check your email",
-        "email address",
-        "邮箱",
-        "電子郵件",
-        "电子邮件",
-        "信箱",
+        "your email address",
         "邮箱验证码",
         "电子邮件验证码",
+        "電子郵件驗證碼",
         "检查你的邮箱",
+        "檢查你的郵箱",
     )
     identity_markers = (
         "upload a verification selfie",

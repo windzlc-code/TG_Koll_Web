@@ -43,10 +43,6 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("openLoginAssistanceView(activeTask.id, accountId)", self.source)
         self.assertIn("login-assistance-success", self.styles)
         self.assertIn("login-assistance-spinner", self.styles)
-        self.assertIn("login-assistance-live-frame", self.styles)
-        self.assertIn("function adoptLiveBrowserIframe", self.source)
-        self.assertIn("loginAssistanceCanShowLiveFrame", self.source)
-        self.assertIn("renderLoginAssistanceVisual(model, session)", self.source)
         self.assertIn("login-assistance-draw", self.styles)
         self.assertIn('data-login-assistance-stop', self.source)
         self.assertIn('cancelSocialAutomationTask(cleanTaskId', self.source)
@@ -507,8 +503,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         view_model = self._function_source("loginAssistanceViewModel")
         self.assertIn('String(assistance.title || "") === "正在启动登录"', view_model)
         self.assertIn("session?.browser_ready", view_model)
-        self.assertIn('account?.status || "").trim() === "need_verification"', view_model)
-        self.assertIn('assistance.title || "") !== "正在验证"', view_model)
+        self.assertNotIn('account?.status || "").trim() === "need_verification"', view_model)
         self.assertIn('assistance.phase === "error"', view_model)
         self.assertIn("renderLoginAssistanceChoices", self.source)
         self.assertIn("data-login-assistance-choice", self.source)
@@ -516,6 +511,63 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         poll = self._function_source("openTaskAssistanceView")
         self.assertIn("item?.account_id", poll)
         self.assertIn("refreshLiveBrowserSessionsOnly()", poll)
+
+    def test_login_assistance_follows_live_page_instead_of_stale_account_status(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{ socialAccounts: [{{ id: "acc-1", status: "need_verification" }}] }};
+            function selectedSocialAccount() {{ return state.socialAccounts[0]; }}
+            {self._function_source("loginAssistanceTaskStatus")}
+            {self._function_source("loginAssistanceViewModel")}
+            const progress = loginAssistanceViewModel(
+              {{ id: "task-1", status: "running", account_id: "acc-1" }},
+              {{
+                account_id: "acc-1",
+                browser_ready: true,
+                login_assistance: {{
+                  phase: "running",
+                  kind: "progress",
+                  title: "正在执行登录",
+                  message: "正在同步浏览器登录状态。",
+                }},
+              }},
+            );
+            assert.strictEqual(progress.kind, "progress");
+            assert.strictEqual(progress.title, "正在执行登录");
+            const credentials = loginAssistanceViewModel(
+              {{ id: "task-1", status: "running", account_id: "acc-1" }},
+              {{
+                account_id: "acc-1",
+                login_assistance: {{
+                  phase: "attention",
+                  kind: "credentials",
+                  title: "需要登录信息",
+                  field_label: "账号、邮箱或手机号",
+                  submit_label: "提交并继续",
+                }},
+              }},
+            );
+            assert.strictEqual(credentials.kind, "credentials");
+            assert.strictEqual(credentials.title, "需要登录信息");
+            const code = loginAssistanceViewModel(
+              {{ id: "task-1", status: "running", account_id: "acc-1" }},
+              {{
+                account_id: "acc-1",
+                login_assistance: {{
+                  phase: "attention",
+                  kind: "verification_code",
+                  title: "输入短信验证码",
+                  field_label: "短信验证码",
+                  submit_label: "提交验证码",
+                }},
+              }},
+            );
+            assert.strictEqual(code.kind, "verification_code");
+            assert.strictEqual(code.title, "输入短信验证码");
+            """
+        )
+        self._run_node(harness)
 
     def test_open_login_account_actions_preserve_running_task_navigation(self):
         actions = self._section("function renderAccountPoolCardActions", "function renderAccountPoolCard(")

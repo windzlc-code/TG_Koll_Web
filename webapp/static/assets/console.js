@@ -27395,25 +27395,6 @@ function loginAssistanceViewModel(task = {}, session = null) {
       message: "指纹浏览器已打开，正在检查页面并同步登录状态。",
     };
   }
-  const account = selectedSocialAccount(session?.account_id || task?.account_id)
-    || (state.socialAccounts || []).find((item) => String(item?.id || "") === String(session?.account_id || task?.account_id || ""))
-    || {};
-  if (
-    String(assistance.kind || "progress") === "progress"
-    && String(assistance.title || "") !== "正在验证"
-    && String(account?.status || "").trim() === "need_verification"
-  ) {
-    return {
-      phase: "attention",
-      kind: "verification_code",
-      title: "输入验证码",
-      message: "平台已进入验证码页面，请填写后提交。",
-      fieldLabel: "验证码",
-      inputMode: "text",
-      submitLabel: "提交验证码",
-      remainingSeconds,
-    };
-  }
   const actions = Array.isArray(assistance.actions)
     ? assistance.actions
       .map((item) => ({
@@ -27461,50 +27442,7 @@ function updateLoginAssistanceDeadline(modal, remainingSeconds = 0, phase = "") 
   if (deadline.textContent !== label) deadline.textContent = label;
 }
 
-function loginAssistanceCanShowLiveFrame(session = null, model = {}) {
-  if (!session || ["success", "error"].includes(String(model.phase || ""))) return false;
-  return Boolean(liveBrowserSessionId(session) && liveBrowserIsReady(session) && liveBrowserSessionUrl(session));
-}
-
-function renderLoginAssistanceLiveFrame(session) {
-  const sessionId = liveBrowserSessionId(session);
-  const width = Math.max(1, Number(session?.width || 1280));
-  const height = Math.max(1, Number(session?.height || 720));
-  return `<div class="login-assistance-live-frame ${height > width ? "is-portrait" : "is-landscape"}" data-login-assistance-live-frame="${esc(sessionId)}" style="--live-browser-width: ${width}; --live-browser-height: ${height}; --live-browser-ratio: ${width} / ${height};"></div>`;
-}
-
-function adoptLiveBrowserIframe(session, host) {
-  const sessionId = liveBrowserSessionId(session);
-  const url = liveBrowserSessionUrl(session);
-  if (!sessionId || !url || !host) return null;
-  let iframe = document.querySelector(`iframe[data-live-browser-session="${CSS.escape(sessionId)}"]`);
-  if (!iframe) {
-    iframe = document.createElement("iframe");
-    iframe.dataset.liveBrowserSession = sessionId;
-    iframe.src = url;
-    iframe.loading = liveBrowserIframeLoadingMode();
-    iframe.referrerPolicy = "no-referrer";
-    iframe.allow = "clipboard-read; clipboard-write";
-    iframe.allowFullscreen = true;
-  }
-  const identity = liveBrowserIdentity(session);
-  iframe.title = `账号：${identity.account}`;
-  if (iframe.parentElement !== host) host.appendChild(iframe);
-  return iframe;
-}
-
-function syncLoginAssistanceLiveFrame(session = null) {
-  const host = document.querySelector("[data-login-assistance-live-frame]");
-  if (!host) return;
-  const sessionId = String(host.dataset.loginAssistanceLiveFrame || "").trim();
-  const matched = session && liveBrowserSessionId(session) === sessionId
-    ? session
-    : (state.socialBrowserSessions || []).find((item) => liveBrowserSessionId(item) === sessionId);
-  if (!matched) return;
-  adoptLiveBrowserIframe(matched, host);
-}
-
-function renderLoginAssistanceVisual(model = {}, session = null) {
+function renderLoginAssistanceVisual(model = {}) {
   if (model.phase === "success") {
     return `<span class="login-assistance-success" aria-hidden="true">
       <svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="27"></circle><path d="m19 33 9 9 18-20"></path></svg>
@@ -27515,7 +27453,6 @@ function renderLoginAssistanceVisual(model = {}, session = null) {
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6"></path><path d="M12 17h.01"></path></svg>
     </span>`;
   }
-  if (loginAssistanceCanShowLiveFrame(session, model)) return renderLoginAssistanceLiveFrame(session);
   if (model.phase === "attention") {
     return `<span class="login-assistance-attention" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
@@ -27610,7 +27547,6 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
   const model = taskAssistanceViewModel(task, session);
   const taskStatus = loginAssistanceTaskStatus(task);
   const canStop = !["success", "failed", "cancelled"].includes(taskStatus);
-  const liveReady = loginAssistanceCanShowLiveFrame(session, model);
   const renderKey = JSON.stringify([
     model.phase,
     model.kind,
@@ -27625,23 +27561,17 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     taskStatus,
     Boolean(session?.input_allowed),
     Boolean(loginAssistanceMappedInputAllowed(session)),
-    liveBrowserSessionId(session),
-    liveReady,
-    Math.max(1, Number(session?.width || 0)),
-    Math.max(1, Number(session?.height || 0)),
   ]);
   if (modal.dataset.loginAssistanceRenderKey === renderKey) {
     updateLoginAssistanceDeadline(modal, model.remainingSeconds, model.phase);
-    if (liveReady) syncLoginAssistanceLiveFrame(session);
     return;
   }
   modal.dataset.loginAssistanceRenderKey = renderKey;
   const body = modal.querySelector("[data-login-assistance-body]");
   if (!body) return;
-  const previousIframe = body.querySelector("iframe[data-live-browser-session]");
-  body.className = `login-assistance-body is-${esc(model.phase)}${liveReady ? " has-live-frame" : ""}`;
+  body.className = `login-assistance-body is-${esc(model.phase)}`;
   body.innerHTML = `
-    <div class="login-assistance-visual">${renderLoginAssistanceVisual(model, session)}</div>
+    <div class="login-assistance-visual">${renderLoginAssistanceVisual(model)}</div>
     <div class="login-assistance-copy">
       <strong>${esc(model.title)}</strong>
       <p>${esc(model.message)}</p>
@@ -27652,22 +27582,9 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     ${renderTaskAssistanceDetails(model)}
     <div class="login-assistance-action">${renderLoginAssistanceAction(model, session)}</div>
     ${session && model.kind !== "browser_interaction" && model.phase !== "success"
-      ? `<button type="button" class="login-assistance-live-link" data-login-assistance-live>${liveReady ? "打开完整实时窗口" : "查看实时画面"}</button>`
+      ? `<button type="button" class="login-assistance-live-link" data-login-assistance-live>查看实时画面</button>`
       : ""}
   `;
-  const host = body.querySelector("[data-login-assistance-live-frame]");
-  if (host) {
-    if (previousIframe && previousIframe.dataset.liveBrowserSession === host.dataset.loginAssistanceLiveFrame) {
-      host.appendChild(previousIframe);
-    } else {
-      syncLoginAssistanceLiveFrame(session);
-    }
-  }
-  const ownedSessionId = liveBrowserSessionId(session);
-  const liveCard = ownedSessionId
-    ? document.querySelector(`[data-live-browser-card="${CSS.escape(ownedSessionId)}"]`)
-    : null;
-  if (liveCard && session) updateLiveBrowserSessionCard(liveCard, session);
   const stopButton = modal.querySelector("[data-login-assistance-stop]");
   if (stopButton) {
     stopButton.hidden = !canStop;
@@ -27776,7 +27693,6 @@ function openTaskAssistanceView(taskId = "", options) {
   modal.__cleanup = () => {
     stopped = true;
     if (timer) window.clearTimeout(timer);
-    window.requestAnimationFrame(() => renderLiveBrowserSessions());
     if (mode !== "publish") return;
     window.setTimeout(() => {
       if (document.getElementById("loginAssistanceModal")) return;
@@ -32064,16 +31980,6 @@ function updateLiveBrowserSessionCard(card, session) {
     statusNode.textContent = liveBrowserPresentationLabel(session);
   }
   const frame = card.querySelector(".live-browser-frame");
-  const assistanceOwnsLive = Boolean(document.querySelector(`[data-login-assistance-live-frame="${CSS.escape(sessionId)}"]`));
-  if (assistanceOwnsLive) {
-    frame?.querySelector("iframe")?.remove();
-    if (frame && !frame.querySelector("[data-live-browser-sync-note]")) {
-      frame.insertAdjacentHTML("afterbegin", `<div class="live-browser-sync-note" data-live-browser-sync-note>实时画面已在登录助手中同步显示</div>`);
-    }
-  } else {
-    frame?.querySelector("[data-live-browser-sync-note]")?.remove();
-    if (frame && !frame.querySelector("iframe")) adoptLiveBrowserIframe(session, frame);
-  }
   const existingHandoff = frame?.querySelector("[data-live-browser-manual-handoff]");
   const nextHandoff = renderLiveBrowserManualHandoff(session);
   if (existingHandoff) existingHandoff.remove();
@@ -32615,17 +32521,14 @@ function renderLiveBrowserSession(session) {
         </div>
       </div>
       <div class="live-browser-frame">
-        ${document.querySelector(`[data-login-assistance-live-frame="${esc(sessionId)}"]`)
-          ? `<div class="live-browser-sync-note" data-live-browser-sync-note>实时画面已在登录助手中同步显示</div>`
-          : `<iframe
+        <iframe
           title="${esc(title)}"
-          data-live-browser-session="${esc(sessionId)}"
           src="${esc(url)}"
           loading="${liveBrowserIframeLoadingMode()}"
           referrerpolicy="no-referrer"
           allow="clipboard-read; clipboard-write"
           allowfullscreen
-         ></iframe>`}
+         ></iframe>
          <div class="live-browser-lock" data-live-browser-controls-toggle aria-hidden="true"><span>自动化执行中，等待进入人工处理状态后再操作。</span></div>
          ${renderLiveBrowserManualHandoff(session)}
          <div class="live-browser-manual-input" data-live-browser-manual-input data-expanded="false" ${interactionAllowed ? "" : "hidden"}>

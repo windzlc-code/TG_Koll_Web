@@ -277,6 +277,30 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(status["status"], "need_verification")
         self.assertEqual(status["challenge_type"], "sms_code")
 
+    def test_instagram_login_form_is_not_treated_as_verification_code(self):
+        page = _InstagramLoginFormPage()
+
+        self.assertIsNone(runner._verification_code_input(page))
+        self.assertIsNone(runner._mapped_login_verification_code(page))
+        self.assertIsNotNone(runner._mapped_login_credentials(page))
+        self.assertEqual(runner._classify_verification_challenge(page)["type"], "none")
+        self.assertFalse(runner._verification_visible(page))
+
+        status = runner._detect_platform_login_state(page, "instagram")
+        self.assertEqual(status["status"], "cookie_expired")
+        self.assertNotIn("challenge_type", status)
+
+        demoted = runner._enrich_login_state_with_visible_challenge(
+            page,
+            {"status": "need_verification", "challenge_type": "sms_code", "reason": "检测到验证或安全挑战文案。"},
+        )
+        self.assertEqual(demoted["status"], "cookie_expired")
+        self.assertNotIn("challenge_type", demoted)
+
+        control = {}
+        runner._publish_login_assistance_state(page, control, status, handoff=True)
+        self.assertEqual(control["login_assistance_state"]["kind"], "credentials")
+
     def test_open_login_publishes_assistance_before_waiting_for_totp(self):
         source = Path(runner.__file__).read_text(encoding="utf-8")
         auto_login = source.split("def _run_open_login(", 1)[1].split("def _wait_for_manual_login_completion(", 1)[0]
@@ -526,6 +550,18 @@ class _LoginStateLocator:
     def inner_text(self, **_kwargs):
         return self.text
 
+    def get_attribute(self, _name):
+        return None
+
+
+class _AttrLocator(_LoginStateLocator):
+    def __init__(self, attrs=None, *, text="", visible=True):
+        super().__init__(text=text, visible=visible)
+        self._attrs = {str(key).lower(): str(value) for key, value in (attrs or {}).items()}
+
+    def get_attribute(self, name):
+        return self._attrs.get(str(name or "").lower())
+
 
 class _ThreadsErrorPage:
     url = "https://www.threads.com/"
@@ -580,6 +616,46 @@ class _ThreadsShellPage:
         if selector == "body":
             return self.body
         return _LoginStateLocator(visible=("aria-label" in selector))
+
+
+class _InstagramLoginFormPage:
+    url = "https://www.instagram.com/accounts/login/"
+
+    def __init__(self):
+        self.username = _AttrLocator({
+            "name": "username",
+            "type": "text",
+            "aria-label": "手机号、用户名或邮箱",
+            "placeholder": "手机号、用户名或邮箱",
+        })
+        self.password = _AttrLocator({
+            "name": "password",
+            "type": "password",
+            "aria-label": "密码",
+            "placeholder": "密码",
+        })
+        self.body = _LoginStateLocator(
+            text="手机号、用户名或邮箱 密码 登录 忘记密码？ 创建新帐户",
+            visible=True,
+        )
+        self.context = _CookieContext([])
+        self.context.pages = [self]
+        self.frames = []
+
+    def is_closed(self):
+        return False
+
+    def locator(self, selector):
+        if selector == "body":
+            return self.body
+        lowered = str(selector or "").lower()
+        if "password" in lowered:
+            return self.password
+        if any(token in lowered for token in ("username", "email", "phone", 'type="tel"', "mobile")):
+            return self.username
+        if selector == runner.GENERIC_VERIFICATION_CODE_INPUT_SELECTOR:
+            return self.username
+        return _LoginStateLocator(visible=False)
 
 
 class _Logger:
