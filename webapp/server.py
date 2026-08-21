@@ -4322,6 +4322,8 @@ def _request_llm_text_with_fallback(
     video_paths: list[str] | str | None = None,
     allow_builtin: bool = True,
     retry_count: int = 3,
+    temperature: float | None = None,
+    max_output_tokens: int | None = None,
     single_model: bool = False,
     logger=None,
     request_label: str = "文字模型请求",
@@ -4357,6 +4359,8 @@ def _request_llm_text_with_fallback(
             logger=logger,
             model=model,
             retry_count=max(int(retry_count or 1), 1),
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
         )
         elapsed = time.monotonic() - started_at
         last_result = result if isinstance(result, dict) else {"ok": False, "error": str(result)}
@@ -15127,6 +15131,53 @@ def _persona_hot_rewrite_length_bounds(source_length: int) -> tuple[int, int | N
     return max(1, clean - delta), None
 
 
+def _persona_hot_rewrite_similarity(source: str, rewritten: str) -> float:
+    def normalized(value: str) -> str:
+        without_urls = re.sub(r"\b(?:https?://|www\.)\S+", "", str(value or ""), flags=re.IGNORECASE)
+        return re.sub(r"[^\w]+", "", without_urls, flags=re.UNICODE).replace("_", "").lower()
+
+    original = normalized(source)
+    generated = normalized(rewritten)
+    if not original or not generated:
+        return 0.0
+    if original == generated:
+        return 1.0
+    original_bigrams = {original[index:index + 2] for index in range(len(original) - 1)}
+    generated_bigrams = {generated[index:index + 2] for index in range(len(generated) - 1)}
+    if not original_bigrams or not generated_bigrams:
+        return 0.0
+    return len(original_bigrams & generated_bigrams) / min(len(original_bigrams), len(generated_bigrams))
+
+
+def _persona_hot_rewrite_has_long_shared_fragment(source: str, rewritten: str, min_length: int = 24) -> bool:
+    original = re.sub(r"\s+", "", str(source or ""))
+    generated = re.sub(r"\s+", "", str(rewritten or ""))
+    shorter, longer = (original, generated) if len(original) <= len(generated) else (generated, original)
+    if len(shorter) < min_length:
+        return False
+    return any(shorter[index:index + min_length] in longer for index in range(len(shorter) - min_length + 1))
+
+
+def _persona_hot_rewrite_has_natural_punctuation(text: str) -> bool:
+    compact = re.sub(r"\s+", "", str(text or ""))
+    if len(compact) < 30:
+        return True
+    punctuation_count = len(re.findall(r"[，。！？；：,.!?;:]", compact))
+    sentence_end_count = len(re.findall(r"[。！？.!?]", compact))
+    longest_clause = max((len(item) for item in re.split(r"[，。！？；：,.!?;:]", compact)), default=0)
+    return punctuation_count >= max(2, len(compact) // 80) and sentence_end_count >= 1 and longest_clause <= 80
+
+
+def _persona_hot_rewrite_quality_issues(source: str, rewritten: str) -> tuple[list[str], float]:
+    similarity = _persona_hot_rewrite_similarity(source, rewritten)
+    issues: list[str] = []
+    if similarity >= 0.72 or _persona_hot_rewrite_has_long_shared_fragment(source, rewritten):
+        issues.append(f"与原文表达过于相似（相似度 {similarity:.0%}）")
+    if not _persona_hot_rewrite_has_natural_punctuation(rewritten):
+        issues.append("标点和断句不完整")
+    return issues, similarity
+
+
 PERSONA_HOT_REWRITE_MAX_ATTEMPTS = 2
 
 
@@ -15160,6 +15211,7 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         persona_lines.append(f"推文风格样本：{style_sample[:280]}")
     source_length = _persona_hot_rewrite_char_count(source_content)
     min_length, max_length = _persona_hot_rewrite_length_bounds(source_length)
+    rewrite_max_output_tokens = max(2048, min(8192, source_length * 2 + 512))
     length_contract = "\n".join([
         "【字数硬性合同，必须一次写对】",
         f"原文去掉空白后是 {source_length} 字。改写后不得少于 {min_length} 字，可以超过原文字数。",
@@ -15175,6 +15227,12 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         f"写作语言：{writing_locale}（{writing_language}）。{writing_convention}",
         "必须用人设的身份、语气和领域来写；热点原文只提供话题、事实和讨论点。",
         "保留热点里可核验的具体对象、场景或问题，但禁止复述原句、原口头禅或原账号自称。",
+        "请在内部按以下顺序一次完成，过程不要输出：",
+        "1. 事实清单：先提取必须保留的对象、数字、时间、地点、事件、因果和结论，避免漏掉核心内容。",
+        "2. 表达蓝图：确定符合当前人设的新观察角度，并重新安排开头、信息顺序、句型节奏和收尾方式。",
+        "3. 独立成稿：依据事实清单和表达蓝图从头写作，不逐句替换同义词，不沿用原文口吻或段落结构。",
+        "4. 成稿自检：确认语义通顺、人设鲜明、字数达标、标点完整；不得与原文复用连续 24 个字符，整体表达也不得高度相似。",
+        "每个完整语义单元都要自然使用逗号、句号、问号或感叹号；完成自检后只输出最终正文。",
         "不要写成客服回复，不要出现原帖作者身份。不要注水解说。",
     ])
     user_input = "\n".join([
@@ -15195,6 +15253,8 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
                 user_input=prompt_user,
                 system_prompt=system_prompt,
                 retry_count=1,
+                temperature=0.55,
+                max_output_tokens=rewrite_max_output_tokens,
                 request_label=label,
             )
         except Exception as exc:
@@ -15203,6 +15263,7 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
 
     last_content = ""
     last_length = 0
+    last_quality_issues: list[str] = []
     prompt_user = user_input
     for attempt in range(1, PERSONA_HOT_REWRITE_MAX_ATTEMPTS + 1):
         label = "热点按人设改写" if attempt == 1 else "热点按人设改写校准"
@@ -15211,7 +15272,8 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
             continue
         last_content = content
         last_length = _persona_hot_rewrite_char_count(content)
-        if last_length >= min_length:
+        last_quality_issues, _similarity = _persona_hot_rewrite_quality_issues(source_content, content)
+        if last_length >= min_length and not last_quality_issues:
             return {
                 "ok": True,
                 "content": last_content[:5000],
@@ -15221,22 +15283,26 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
                 "max_length": max_length,
             }
         gap = min_length - last_length
+        retry_reasons = []
+        if last_length < min_length:
+            retry_reasons.append(f"字数只有 {last_length} 字，低于最低要求 {min_length} 字，还差 {gap} 字")
+        retry_reasons.extend(last_quality_issues)
         prompt_user = "\n".join([
             user_input,
             "",
-            f"上次改写只有 {last_length} 字，低于最低要求 {gap} 字，不合格。",
+            f"上次改写不合格：{'；'.join(retry_reasons)}。",
             f"请按同一事实和人设重写一整篇，至少写到 {min_length} 字，超过原文字数可以保留。",
             "禁止继续摘要。把原文里的数字、金额、产品和问题都写回去，用同等信息量补足字数。",
+            "必须从新的观察角度重新组织开头、段落顺序、句型和结尾，不能沿用原文口吻或连续原句。",
+            "补齐自然标点和完整断句，确保读起来连贯、顺口，并明显体现当前人设的表达习惯。",
         ])
     if not last_content:
         raise HTTPException(status_code=502, detail="模型没有返回可用正文，请稍后重试。")
-    raise HTTPException(
-        status_code=502,
-        detail=(
-            f"改写字数不足（原文 {source_length} 字，结果 {last_length} 字，"
-            f"至少需要 {min_length} 字），请再试一次。"
-        ),
-    )
+    if last_length < min_length:
+        detail = f"改写字数不足（原文 {source_length} 字，结果 {last_length} 字，至少需要 {min_length} 字），请再试一次。"
+    else:
+        detail = f"AI 改写质量未达标：{'；'.join(last_quality_issues) or '表达不够自然'}，请再试一次。"
+    raise HTTPException(status_code=502, detail=detail)
 
 
 def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:

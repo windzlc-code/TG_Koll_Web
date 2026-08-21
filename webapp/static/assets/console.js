@@ -4942,8 +4942,8 @@ function personaHotContentWasRewritten(personaId, candidate) {
 }
 
 function personaHotRewriteActionLabel(persona, candidate) {
-  if (!persona || isActionLocked("persona", persona.id, "hot_rewrite")) return "正在按人设改写";
-  return personaHotContentWasRewritten(persona.id, candidate) ? "再次按人设改写" : "按人设改写";
+  if (!persona || isActionLocked("persona", persona.id, "hot_rewrite")) return "AI 改写中";
+  return "AI 改写";
 }
 
 function personaHotEditorHasChanges(persona, candidate) {
@@ -5112,7 +5112,7 @@ function renderPersonaHotCandidateEditorModal(persona, candidate) {
         <textarea rows="9" class="persona-hot-editor-content--full" data-persona-hot-content-editor="${esc(candidateId)}">${esc(personaHotEditedContent(persona.id, candidate))}</textarea>
         <button type="button" class="persona-hot-rewrite-action" data-persona-hot-rewrite="${esc(candidateId)}" ${isActionLocked("persona", persona.id, "hot_rewrite") ? "disabled" : ""} aria-label="${esc(personaHotRewriteActionLabel(persona, candidate))}">
           ${isActionLocked("persona", persona.id, "hot_rewrite")
-            ? renderBusyButtonContent("正在按人设改写", true, actionLockStartedAt("persona", persona.id, "hot_rewrite"))
+            ? renderBusyButtonContent("AI 改写中", true, actionLockStartedAt("persona", persona.id, "hot_rewrite"))
             : personaHotRewriteActionLabel(persona, candidate)}
         </button>
       </section>
@@ -5140,7 +5140,7 @@ async function rewritePersonaHotEditorContent(persona, candidate) {
   const candidateId = personaHotCandidateKey(candidate);
   const lockParts = ["persona", persona.id, "hot_rewrite"];
   if (isActionLocked(...lockParts)) {
-    showMsg("commandMsg", "正在按人设改写，请稍候。", false);
+    showMsg("commandMsg", "AI 改写中，请稍候。", false);
     return;
   }
   snapshotPersonaHotPreviewContent();
@@ -5155,7 +5155,7 @@ async function rewritePersonaHotEditorContent(persona, candidate) {
   if (button) {
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
-    button.innerHTML = renderBusyButtonContent("正在按人设改写", true, actionLockStartedAt(...lockParts));
+    button.innerHTML = renderBusyButtonContent("AI 改写中", true, actionLockStartedAt(...lockParts));
   }
   try {
     const result = await apiWithTimeout(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_rewrite`, {
@@ -5185,9 +5185,9 @@ async function rewritePersonaHotEditorContent(persona, candidate) {
       textarea.value = content;
       resizePersonaHotEditorContent(textarea);
     }
-    showMsg("commandMsg", "已按当前人设改写这篇热点，可再编辑后导入。", true);
+    showMsg("commandMsg", "AI 改写完成，可再编辑后导入。", true);
   } catch (error) {
-    showMsg("commandMsg", error?.detail || error?.message || "按人设改写失败，请稍后重试。", false);
+    showMsg("commandMsg", error?.detail || error?.message || "AI 改写失败，请稍后重试。", false);
   } finally {
     setActionLocked(lockParts, false);
     const current = document.querySelector("[data-persona-hot-rewrite]");
@@ -5274,7 +5274,7 @@ function startPersonaHotCandidateEdit(persona, candidateId) {
       if (personaHotEditorHasChanges(persona, candidate)) {
         const leaveAction = await openConsoleModal({
           title: "保存当前改写？",
-          message: "这篇热点已按人设改写或有未保存修改。可保存并导入草稿，或放弃本次修改并退出。",
+          message: "这篇热点已经 AI 改写或有未保存修改。可保存并导入草稿，或放弃本次修改并退出。",
           confirmText: "保存并导入",
           showCancel: false,
           extraActions: [{ text: "放弃修改并退出", value: "discard", danger: true }],
@@ -5345,7 +5345,7 @@ function startPersonaHotCandidateEdit(persona, candidateId) {
     }
     if (event.target.closest("[data-persona-hot-rewrite]")) {
       rewritePersonaHotEditorContent(persona, candidate).catch((error) => {
-        showMsg("commandMsg", error?.detail || error?.message || "按人设改写失败，请稍后重试。", false);
+        showMsg("commandMsg", error?.detail || error?.message || "AI 改写失败，请稍后重试。", false);
       });
       return;
     }

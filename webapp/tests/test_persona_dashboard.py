@@ -4652,6 +4652,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         def fake_llm(**kwargs):
             captured["system"] = kwargs.get("system_prompt") or ""
             captured["user"] = kwargs.get("user_input") or ""
+            captured["temperature"] = kwargs.get("temperature")
+            captured["max_output_tokens"] = kwargs.get("max_output_tokens")
             return {"ok": True, "raw_text": self._hot_rewrite_text_of_length(source_length)}, {}, []
 
         with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
@@ -4675,15 +4677,78 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("字数硬性合同", captured["system"])
         self.assertIn("不是摘要", captured["system"])
         self.assertIn("一次写对", captured["system"])
+        self.assertIn("事实清单", captured["system"])
+        self.assertIn("表达蓝图", captured["system"])
+        self.assertIn("连续 24 个字符", captured["system"])
+        self.assertIn("只输出最终正文", captured["system"])
         self.assertIn("热点原文约", captured["user"])
         self.assertIn("不得少于", captured["user"])
         self.assertIn("超过原文字数允许", captured["user"])
         self.assertIn("发布字数上限压缩", captured["user"])
+        self.assertEqual(captured["temperature"], 0.55)
+        self.assertGreaterEqual(captured["max_output_tokens"], 2048)
 
     def test_hot_rewrite_length_bounds_allow_five_percent_shorter_without_an_upper_limit(self):
         self.assertEqual(server._persona_hot_rewrite_length_bounds(100), (95, None))
         self.assertEqual(server._persona_hot_rewrite_length_bounds(500), (475, None))
         self.assertEqual(server._persona_hot_rewrite_char_count("改 写 后 正文"), 5)
+
+    def test_hot_rewrite_retries_when_result_is_too_similar(self):
+        self._write_archives()
+        source = "雨天騎車最怕煞車手感變軟，先檢查煞車油、來令片和輪胎狀況，再決定是否繼續上路。"
+        calls = []
+
+        def fake_llm(**kwargs):
+            calls.append(kwargs.get("user_input") or "")
+            if len(calls) == 1:
+                return {"ok": True, "raw_text": source}, {}, []
+            return {
+                "ok": True,
+                "raw_text": "先說結論：雨勢一大，就別急著催油門。以維修老師的經驗，油路、煞車皮與胎紋要逐項看清楚；手感穩定，再安心出發。",
+            }, {}, []
+
+        with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
+            body = server._rewrite_persona_hot_candidate_content(
+                "persona-1",
+                server.PersonaDashboardHotRewritePayload(
+                    source_content=source,
+                    writing_locale="zh-TW",
+                    platform="threads",
+                ),
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("相似", calls[1])
+        self.assertNotEqual(body["content"], source)
+
+    def test_hot_rewrite_retries_when_long_result_has_no_punctuation(self):
+        self._write_archives()
+        source = "雨天騎車最怕煞車手感變軟，先檢查煞車油、來令片和輪胎狀況，再決定是否繼續上路。"
+        calls = []
+        source_length = server._persona_hot_rewrite_char_count(source)
+
+        def fake_llm(**kwargs):
+            calls.append(kwargs.get("user_input") or "")
+            if len(calls) == 1:
+                return {"ok": True, "raw_text": "維修老師提醒雨天出門先確認油路煞車皮胎紋抓地力再依照實際手感決定是否騎車" * 2}, {}, []
+            return {
+                "ok": True,
+                "raw_text": "先說結論：雨勢一大，就別急著催油門。以維修老師的經驗，油路、煞車皮與胎紋要逐項看清楚；手感穩定，再安心出發。",
+            }, {}, []
+
+        with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
+            body = server._rewrite_persona_hot_candidate_content(
+                "persona-1",
+                server.PersonaDashboardHotRewritePayload(
+                    source_content=source,
+                    writing_locale="zh-TW",
+                    platform="threads",
+                ),
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("标点", calls[1])
+        self.assertRegex(body["content"], r"[，。！？；：]")
 
     def test_hot_rewrite_accepts_result_within_five_percent_below_source(self):
         self._write_archives()
@@ -4692,7 +4757,13 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         def fake_llm(**kwargs):
             calls.append(kwargs.get("user_input") or "")
-            return {"ok": True, "raw_text": self._hot_rewrite_text_of_length(95)}, {}, []
+            return {
+                "ok": True,
+                "raw_text": self._hot_rewrite_text_of_length(
+                    95,
+                    seed="換個角度看，安全感來自逐項確認。先看輪胎，再查油路；最後試一下手感，確認穩定才出發。",
+                ),
+            }, {}, []
 
         with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
             body = server._rewrite_persona_hot_candidate_content(
