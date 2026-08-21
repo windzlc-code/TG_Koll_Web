@@ -414,6 +414,110 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(account[0], "ready")
         self.assertGreater(account[1], 0)
 
+    def test_running_ban_detection_updates_terminal_account_state_immediately(self):
+        self._insert_account(status="ready")
+        self._insert_task("publish-running-ban", "running", task_type="publish_post")
+
+        updated = social_automation_api._persist_running_account_login_status(
+            "publish-running-ban",
+            "account-1",
+            "disabled",
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            account = conn.execute(
+                "SELECT status, health_status, health_checked_at FROM social_accounts WHERE id = ?",
+                ("account-1",),
+            ).fetchone()
+        self.assertTrue(updated)
+        self.assertEqual(account[:2], ("disabled", "banned"))
+        self.assertGreater(account[2], 0)
+
+    def test_any_browser_ban_signal_disables_account_and_cancels_queued_work(self):
+        self._insert_account(status="ready")
+        self._insert_task("publish-ban-signal", "running", task_type="publish_post")
+        self._insert_task("publish-after-ban", "queued", task_type="browse_feed")
+
+        completed = social_automation_api._finish_task(
+            "publish-ban-signal",
+            "failed",
+            {
+                "ok": False,
+                "status": "disabled",
+                "health_reason": "平台明确提示账号已被封禁。",
+            },
+            "平台明确提示账号已被封禁。",
+        )
+
+        with sqlite3.connect(self.db_path) as conn:
+            account = conn.execute(
+                "SELECT status, health_status, health_detail FROM social_accounts WHERE id = ?",
+                ("account-1",),
+            ).fetchone()
+            next_task = conn.execute(
+                "SELECT status, error FROM social_automation_tasks WHERE id = ?",
+                ("publish-after-ban",),
+            ).fetchone()
+        self.assertTrue(completed)
+        self.assertEqual(account[:2], ("disabled", "banned"))
+        self.assertIn("封禁", account[2])
+        self.assertEqual(next_task, ("cancelled", "account_banned_by_platform"))
+
+    def test_previously_queued_task_cannot_launch_browser_after_account_ban(self):
+        self._insert_account(status="disabled")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_accounts SET health_status = 'banned' WHERE id = 'account-1'"
+            )
+        self._insert_task("queued-before-ban", "running", task_type="publish_post")
+        task = {
+            "id": "queued-before-ban",
+            "account_id": "account-1",
+            "platform": "threads",
+            "task_type": "publish_post",
+            "payload": {},
+        }
+        control = {"cancel_event": threading.Event(), "task": dict(task)}
+
+        with mock.patch.object(social_automation_api, "_run_social_task_in_clean_thread") as run_task:
+            social_automation_api._execute_claimed_task_with_control(task, control)
+
+        self.assertFalse(run_task.called)
+        self.assertEqual(self._status("queued-before-ban"), "cancelled")
+
+    def test_auto_login_ban_exception_is_persisted_as_terminal_account_state(self):
+        self._insert_account(status="ready")
+        self._insert_task("publish-auto-login-ban", "running", task_type="publish_post")
+        task = {
+            "id": "publish-auto-login-ban",
+            "account_id": "account-1",
+            "platform": "threads",
+            "task_type": "publish_post",
+            "payload": {},
+        }
+        control = {"cancel_event": threading.Event(), "task": dict(task)}
+
+        from social_automation.runner import AutoLoginFailedError
+
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_run_social_task_in_clean_thread",
+                side_effect=AutoLoginFailedError(
+                    "平台明确提示账号已被封禁。",
+                    status="banned",
+                ),
+            ),
+        ):
+            social_automation_api._execute_claimed_task_with_control(task, control)
+
+        with sqlite3.connect(self.db_path) as conn:
+            account = conn.execute(
+                "SELECT status, health_status FROM social_accounts WHERE id = ?",
+                ("account-1",),
+            ).fetchone()
+        self.assertEqual(account, ("disabled", "banned"))
+
     def test_check_login_completes_without_blocking_account_when_session_is_expired(self):
         self._insert_account(status="ready")
         self._insert_task("check-expired", "running", task_type="check_login")

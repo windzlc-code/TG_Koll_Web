@@ -259,10 +259,17 @@ class NeedManualError(RuntimeError):
 
 
 class AutoLoginFailedError(RuntimeError):
-    def __init__(self, message: str, status: str = "cookie_expired", screenshot_path: str = ""):
+    def __init__(
+        self,
+        message: str,
+        status: str = "cookie_expired",
+        screenshot_path: str = "",
+        health_status: str = "",
+    ):
         super().__init__(message)
         self.status = status
         self.screenshot_path = str(screenshot_path or "")
+        self.health_status = str(health_status or "")
 
 
 class ManualTimeoutError(AutoLoginFailedError):
@@ -3050,7 +3057,15 @@ def _wait_or_raise_manual(
         failed_status["status"] = "failed"
         failed_status["reason"] = reason
     _publish_login_assistance_state(page, context_control, failed_status, handoff=True)
-    raise AutoLoginFailedError(reason, status, screenshot_path)
+    health_status = str(failed_status.get("health_status") or "").strip().lower()
+    if str(status or "").strip().lower() in {"banned", "disabled"}:
+        health_status = "banned"
+    raise AutoLoginFailedError(
+        reason,
+        status,
+        screenshot_path,
+        health_status=health_status,
+    )
 
 
 def _run_open_login(

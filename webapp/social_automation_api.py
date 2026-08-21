@@ -10193,6 +10193,24 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                     ) from exc
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
+    if (
+        str(account.get("status") or "").strip().lower() == "disabled"
+        or str(account.get("health_status") or "").strip().lower() == "banned"
+    ):
+        _finish_task(
+            task_id,
+            "cancelled",
+            {
+                "ok": False,
+                "status": "disabled",
+                "health_status": "banned",
+                "account_dead": True,
+                "retryable": False,
+            },
+            "平台账号已被封禁，已阻止启动自动化浏览器。",
+            account_status="disabled",
+        )
+        return
     if proxy is not None and not _account_proxy_type_allowed(proxy):
         raise RuntimeError("账号代理不是静态住宅 IP 或系统导入的机房代理，已阻止浏览器启动")
     if proxy_id and proxy is None:
@@ -10335,10 +10353,21 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         if not _is_task_cancelled(str(task["id"])):
             publish_outcome_unknown = bool(getattr(exc, "publish_outcome_unknown", False))
             action_outcome_unknown = bool(getattr(exc, "action_outcome_unknown", False))
+            detected_status = str(getattr(exc, "status", "") or "cookie_expired").strip().lower()
+            health_status = str(getattr(exc, "health_status", "") or "").strip().lower()
+            if detected_status in {"banned", "disabled"}:
+                health_status = "banned"
             failure_result = {
                 "auto_login_failed": not (publish_outcome_unknown or action_outcome_unknown),
                 "screenshot_path": str(getattr(exc, "screenshot_path", "") or ""),
             }
+            if health_status in SOCIAL_ACCOUNT_HEALTH_STATUSES:
+                failure_result.update({
+                    "health_status": health_status,
+                    "health_reason": str(exc),
+                })
+            if health_status == "banned":
+                failure_result.update({"account_dead": True, "retryable": False})
             timeout_kind = str(getattr(exc, "timeout_kind", "") or "").strip()
             if timeout_kind:
                 failure_result.update({
@@ -10367,7 +10396,7 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                 "failed",
                 failure_result,
                 str(exc),
-                account_status=str(getattr(exc, "status", "") or "cookie_expired"),
+                account_status="disabled" if health_status == "banned" else detected_status,
             )
         return
     except PublishConfirmationPendingError as exc:
@@ -11290,14 +11319,29 @@ def _persist_running_account_login_status(task_id: str, account_id: str, status:
             or str(task["status"] or "") not in {"running", "need_manual"}
         ):
             return False
-        updated = conn.execute(
-            """
-            UPDATE social_accounts
-            SET status = ?, last_login_check_at = ?, last_error = '', updated_at = ?
-            WHERE id = ?
-            """,
-            (clean_status, now, now, clean_account_id),
-        ).rowcount
+        if clean_status == "disabled":
+            # Runner callbacks only carry the status string. In that callback
+            # protocol, disabled is the conclusive platform-ban signal, so
+            # persist both layers immediately instead of waiting for cleanup.
+            updated = conn.execute(
+                """
+                UPDATE social_accounts
+                SET status = 'disabled', health_status = 'banned', health_checked_at = ?,
+                    health_detail = '自动化浏览器检测到平台账号已被封禁。',
+                    last_login_check_at = ?, last_error = '', updated_at = ?
+                WHERE id = ?
+                """,
+                (now, now, now, clean_account_id),
+            ).rowcount
+        else:
+            updated = conn.execute(
+                """
+                UPDATE social_accounts
+                SET status = ?, last_login_check_at = ?, last_error = '', updated_at = ?
+                WHERE id = ?
+                """,
+                (clean_status, now, now, clean_account_id),
+            ).rowcount
     return bool(updated)
 
 
@@ -11481,6 +11525,82 @@ def _persist_crm_relationship_evidence_in_transaction(
     return written
 
 
+def _result_reports_banned_account(result: dict[str, Any] | None) -> bool:
+    """Return whether a browser task conclusively reported a platform ban.
+
+    Browser flows use ``status=disabled`` plus ``health_status=banned`` for a
+    conclusive platform suspension.  A few older flows only return the health
+    signal, so keep this normalization at the task boundary rather than
+    relying on each runner path to update the account independently.
+    """
+    payload = result if isinstance(result, dict) else {}
+    return (
+        str(payload.get("health_status") or "").strip().lower() == "banned"
+        or str(payload.get("status") or "").strip().lower() in {"banned", "disabled"}
+    )
+
+
+def _disable_banned_account_in_transaction(
+    conn: sqlite3.Connection,
+    *,
+    account_id: str,
+    current_task_id: str,
+    reason: str,
+    now: int,
+) -> None:
+    """Persist a terminal platform ban and retire work queued for that account."""
+    clean_account_id = str(account_id or "").strip()
+    if not clean_account_id:
+        return
+    detail = str(reason or "平台检测到账号已被封禁。").strip()[:1000]
+    conn.execute(
+        """
+        UPDATE social_accounts
+        SET status = 'disabled', health_status = 'banned', health_checked_at = ?,
+            health_detail = ?, last_login_check_at = ?, last_run_at = ?,
+            last_error = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (now, detail, now, now, detail, now, clean_account_id),
+    )
+    queued_rows = conn.execute(
+        """
+        SELECT * FROM social_automation_tasks
+        WHERE account_id = ? AND id != ? AND status IN ('preparing', 'queued', 'need_manual')
+        """,
+        (clean_account_id, str(current_task_id or "")),
+    ).fetchall()
+    if not queued_rows:
+        return
+    cancellation_reason = "account_banned_by_platform"
+    conn.execute(
+        """
+        UPDATE social_automation_tasks
+        SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
+        WHERE account_id = ? AND id != ? AND status IN ('preparing', 'queued', 'need_manual')
+        """,
+        (now, cancellation_reason, now, clean_account_id, str(current_task_id or "")),
+    )
+    for queued_task in queued_rows:
+        if str(queued_task["task_type"] or "") == "publish_post":
+            _ensure_daily_publish_slot(conn, queued_task, now=now)
+            _release_daily_publish_slot(
+                conn,
+                str(queued_task["id"] or ""),
+                cancellation_reason,
+                now=now,
+            )
+        _release_task_billing_reservation(conn, queued_task, now=now)
+        _insert_log(
+            conn,
+            str(queued_task["id"] or ""),
+            "warn",
+            "cancelled",
+            "账号已被平台封禁，已取消未执行任务。",
+            {"account_id": clean_account_id, "reason": detail},
+        )
+
+
 def _finish_task(
     task_id: str,
     status: str,
@@ -11620,6 +11740,19 @@ def _finish_task(
                 result = {**(result or {}), "crm_group_persist_failed": True, "retryable": False}
                 status = "failed"
                 error = f"Instagram group result could not be persisted: {str(exc)[:500]}"
+        banned_account_detected = _result_reports_banned_account(result)
+        if banned_account_detected:
+            # A browser has positively identified a platform ban. This must
+            # win over any earlier optimistic "ready" write, regardless of
+            # which automation channel reached the platform page.
+            result = {
+                **(result or {}),
+                "status": "disabled",
+                "health_status": "banned",
+                "account_dead": True,
+                "retryable": False,
+            }
+            account_status = "disabled"
         result_json = json.dumps(result or {}, ensure_ascii=False)
         existing_committed = bool(int(task["daily_publish_committed"] or 0))
         publish_committed = bool(
@@ -11763,7 +11896,20 @@ def _finish_task(
                 now=now,
             )
         normalized_account_status = str(account_status or "").strip().lower()
-        if normalized_account_status in SOCIAL_ACCOUNT_STATUSES:
+        if banned_account_detected:
+            _disable_banned_account_in_transaction(
+                conn,
+                account_id=str(task["account_id"] or ""),
+                current_task_id=task_id,
+                reason=str(
+                    (result or {}).get("health_reason")
+                    or error
+                    or (result or {}).get("reason")
+                    or "平台检测到账号已被封禁。"
+                ),
+                now=now,
+            )
+        elif normalized_account_status in SOCIAL_ACCOUNT_STATUSES:
             account_error = "" if status == "success" else str(error or "")
             conn.execute(
                 "UPDATE social_accounts SET status = ?, last_login_check_at = ?, last_run_at = ?, last_error = ?, updated_at = ? WHERE id = ?",
@@ -11789,7 +11935,11 @@ def _finish_task(
                     str(task["account_id"]),
                 ),
             )
-        if task_type == "check_login" and status != "need_manual":
+        if banned_account_detected:
+            # _disable_banned_account_in_transaction already saved the final
+            # health state, so no later branch can overwrite it as alive.
+            pass
+        elif task_type == "check_login" and status != "need_manual":
             health_status = str((result or {}).get("health_status") or "").strip().lower()
             if health_status not in SOCIAL_ACCOUNT_HEALTH_STATUSES and status == "success":
                 if normalized_account_status == "ready":
