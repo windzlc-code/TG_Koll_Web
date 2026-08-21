@@ -3134,7 +3134,10 @@ def _run_open_login(
         current_status = _detect_platform_login_state(page, platform)
         if platform == "threads":
             current_status = _restore_threads_after_instagram_login(page, current_status, logger)
-        if str(current_status.get("status") or "") not in {"post_login_interstitial", "ready"}:
+        if (
+            str(current_status.get("status") or "") not in {"post_login_interstitial", "ready"}
+            and not _verification_visible(page)
+        ):
             return _handoff_open_login_to_manual(
                 page,
                 task,
