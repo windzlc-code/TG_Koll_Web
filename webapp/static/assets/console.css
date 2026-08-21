@@ -25215,7 +25215,7 @@ body.console-page {
 
   .module-panel.is-publishing-module .publish-command-actions .publish-assistance-restore {
     grid-column: 3;
-    grid-row: 2;
+    grid-row: 1;
     justify-self: start;
     align-self: center;
     min-height: 44px;

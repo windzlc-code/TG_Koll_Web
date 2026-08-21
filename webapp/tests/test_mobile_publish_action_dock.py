@@ -252,7 +252,14 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("function releaseMobilePublishingTask", SCRIPT)
         self.assertIn("function refreshPublishingDockAfterAssistanceSettle", SCRIPT)
         self.assertIn("refreshPublishingDockAfterAssistanceSettle(cleanTaskId)", SCRIPT)
-        self.assertIn('phase !== "success" && phase !== "error"', SCRIPT)
+        self.assertNotIn('phase !== "success" && phase !== "error"', SCRIPT)
+        restore_rule = re.search(
+            r"\.module-panel\.is-publishing-module \.publish-command-actions \.publish-assistance-restore\s*\{([^}]+)\}",
+            STYLES,
+        )
+        self.assertIsNotNone(restore_rule)
+        self.assertIn("grid-column: 3", restore_rule.group(1))
+        self.assertIn("grid-row: 1", restore_rule.group(1))
         action_render = SCRIPT[SCRIPT.index("const actionHtml ="):SCRIPT.index('if ($("executeSimpleFlow"))')]
         self.assertNotIn("mobilePublishingTaskPending) ? \"disabled\"", action_render)
 

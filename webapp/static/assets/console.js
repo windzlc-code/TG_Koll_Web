@@ -6033,15 +6033,9 @@ function mobilePublishingTask() {
   ].map((value) => String(value || "").trim()).filter(Boolean)));
   if (!taskIds.length) return null;
   const tasksById = new Map((state.socialTasks || []).map((item) => [String(item?.id || "").trim(), item]));
-  const sessions = Array.isArray(state.socialBrowserSessions) ? state.socialBrowserSessions : [];
   const activeTask = taskIds
     .map((taskId) => tasksById.get(taskId) || null)
-    .find((task) => {
-      if (!["preparing", "queued", "running", "need_manual"].includes(String(task?.status || "").trim())) return false;
-      const session = sessions.find((item) => String(item?.task_id || "").trim() === String(task?.id || "").trim());
-      const phase = String(session?.login_assistance?.phase || "");
-      return phase !== "success" && phase !== "error";
-    });
+    .find((task) => ["preparing", "queued", "running", "need_manual"].includes(String(task?.status || "").trim()));
   const startedAt = Number(state.mobilePublishingTaskStartedAt || 0);
   if (activeTask) {
     state.mobilePublishingTaskId = String(activeTask.id || taskIds[0]);
@@ -6064,9 +6058,7 @@ function mobilePublishingTask() {
 
 function publishAssistanceLooksSettled(task = {}, session = null) {
   const status = loginAssistanceTaskStatus(task);
-  if (["success", "failed", "cancelled"].includes(status)) return true;
-  const phase = String(session?.login_assistance?.phase || "");
-  return phase === "success" || phase === "error";
+  return ["success", "failed", "cancelled"].includes(status);
 }
 
 function releaseMobilePublishingTask(taskId = "") {
@@ -27905,6 +27897,27 @@ function updateAccountLoginResumeButton(button, accountId = "") {
   delete button.dataset.openPublishTaskId;
 }
 
+function openAccountTaskAssistance(button) {
+  if (!button) return false;
+  const accountId = String(button.dataset.accountTaskAssistance || "").trim();
+  const publishTaskId = String(button.dataset.openPublishTaskId || "").trim();
+  const loginTaskId = String(button.dataset.openLoginTaskId || "").trim();
+  const taskId = publishTaskId || loginTaskId;
+  if (!taskId) return false;
+  if (publishTaskId) {
+    const task = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === publishTaskId);
+    deferMobilePublishingBrowserView(
+      publishTaskId,
+      task?.started_at || task?.created_at || task?.updated_at || 0,
+    );
+    bindPublishAssistanceContext({ accountId, personaId: task?.persona_id || "" });
+    openPublishAssistanceView(taskId, { accountId });
+    return true;
+  }
+  openLoginAssistanceView(taskId, accountId);
+  return true;
+}
+
 function updateAccountStatusViews() {
   const accountById = new Map((state.socialAccounts || []).map((account) => [String(account.id || ""), account]));
   document.querySelectorAll("[data-account-status-for]").forEach((node) => {
@@ -35328,12 +35341,7 @@ function bindEvents() {
     if (accountTaskAssistance) {
       event.preventDefault();
       event.stopPropagation();
-      const accountId = String(accountTaskAssistance.dataset.accountTaskAssistance || "").trim();
-      const publishTaskId = String(accountTaskAssistance.dataset.openPublishTaskId || "").trim();
-      const loginTaskId = String(accountTaskAssistance.dataset.openLoginTaskId || "").trim();
-      const taskId = publishTaskId || loginTaskId;
-      if (publishTaskId) openPublishAssistanceView(taskId, { accountId });
-      else if (loginTaskId) openLoginAssistanceView(taskId, accountId);
+      openAccountTaskAssistance(accountTaskAssistance);
       return;
     }
     if (event.target.closest("[data-persona-publish-submit]")) submitPersonaPublishTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));
@@ -35918,6 +35926,13 @@ function bindEvents() {
   if ($("socialPlatform")) $("socialPlatform").addEventListener("change", syncStandaloneSocialForm);
   if ($("runSocialOnce")) $("runSocialOnce").addEventListener("click", () => api("/api/persona_dashboard/automation/worker/run_once", { method: "POST" }).then(loadSocial).catch((error) => showMsg("socialMsg", error.detail || error.message || "执行失败", false)));
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click", async (event) => {
+    const accountTaskAssistance = event.target.closest("[data-account-task-assistance]");
+    if (accountTaskAssistance) {
+      event.preventDefault();
+      event.stopPropagation();
+      openAccountTaskAssistance(accountTaskAssistance);
+      return;
+    }
     const personaMobileToggle = event.target.closest("[data-persona-mobile-list-toggle]");
     if (personaMobileToggle) {
       const sidebarId = personaMobileToggle.dataset.personaMobileListToggle || "";

@@ -654,6 +654,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         active_publish = self._javascript_function_source(self.source, "activePublishTaskForAccount")
         fields = self._section("function renderAccountPoolCardFields", "function renderAccountPoolCard(")
         update = self._javascript_function_source(self.source, "updateAccountLoginResumeButton")
+        assistance = self._javascript_function_source(self.source, "openAccountTaskAssistance")
+        account_browser_events = self._section(
+            'if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("click"',
+            'if ($("socialTaskList"))',
+        )
 
         self.assertIn('String(task?.task_type || "").trim() === "publish_post"', active_publish)
         self.assertIn('"preparing", "queued", "running", "need_manual"', active_publish)
@@ -665,6 +670,37 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("发布助手", update)
         self.assertIn('event.target.closest("[data-account-task-assistance]")', self.source)
         self.assertIn("openPublishAssistanceView(taskId, { accountId })", self.source)
+        self.assertIn("function openAccountTaskAssistance", self.source)
+        self.assertIn("deferMobilePublishingBrowserView(", assistance)
+        self.assertIn("bindPublishAssistanceContext(", assistance)
+        self.assertNotIn("createSocialTask(", assistance)
+        self.assertIn("openAccountTaskAssistance(accountTaskAssistance)", account_browser_events)
+        self.assertLess(
+            account_browser_events.index("openAccountTaskAssistance(accountTaskAssistance)"),
+            account_browser_events.index('event.target.closest("[data-social-open-login]")'),
+        )
+
+    def test_publish_assistance_error_remains_restorable_until_task_is_terminal(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{
+              mobilePublishingTaskIds: ["publish-1"],
+              mobilePublishingTaskId: "publish-1",
+              mobilePublishingTaskStartedAt: Date.now(),
+              socialTasks: [{{ id: "publish-1", task_type: "publish_post", status: "running" }}],
+              socialBrowserSessions: [{{ task_id: "publish-1", login_assistance: {{ phase: "error" }} }}],
+            }};
+            {self._function_source("loginAssistanceTaskStatus")}
+            {self._function_source("mobilePublishingTask")}
+            {self._function_source("publishAssistanceLooksSettled")}
+            const task = mobilePublishingTask();
+            assert.strictEqual(task.id, "publish-1");
+            assert.strictEqual(publishAssistanceLooksSettled(task, state.socialBrowserSessions[0]), false);
+            assert.strictEqual(publishAssistanceLooksSettled({{ ...task, status: "failed" }}, state.socialBrowserSessions[0]), true);
+            """
+        )
+        self._run_node(harness)
 
     def test_account_card_actions_keep_icons_and_single_row_login_width(self):
         update_status = self._javascript_function_source(self.source, "updateAccountStatusViews")
