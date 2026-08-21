@@ -3129,24 +3129,27 @@ def _run_open_login(
     if platform == "threads" and not auto_submit:
         _prepare_manual_threads_login_page(page, logger)
     logger.log("info", "open_login", "浏览器登录窗口已打开。", {"wait_seconds": wait_seconds, "auto_submit": auto_submit})
+    initial_status: dict[str, Any] | None = None
     if not has_credentials:
         current_status = _detect_platform_login_state(page, platform)
         if platform == "threads":
             current_status = _restore_threads_after_instagram_login(page, current_status, logger)
-        return _handoff_open_login_to_manual(
-            page,
-            task,
-            screenshot_dir,
-            logger,
-            platform,
-            cancel_event,
-            context_control,
-            current_status,
-            str(current_status.get("reason") or "请在登录助手中填写账号和密码。"),
-            stage="login_manual_credentials_required",
-        )
+        if str(current_status.get("status") or "") not in {"post_login_interstitial", "ready"}:
+            return _handoff_open_login_to_manual(
+                page,
+                task,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                context_control,
+                current_status,
+                str(current_status.get("reason") or "请在登录助手中填写账号和密码。"),
+                stage="login_manual_credentials_required",
+            )
+        initial_status = current_status
     deadline = time.time() + wait_seconds
-    last_status: dict[str, Any] = {}
+    last_status: dict[str, Any] = dict(initial_status or {})
     login_attempts = 0
     self_heal_attempts = 0
     verification_hits = 0
@@ -3182,7 +3185,11 @@ def _run_open_login(
         )
         post_submit_grace_expired = bool(last_submit_monotonic is not None and not post_submit_waiting)
         try:
-            last_status = _detect_platform_login_state(page, platform)
+            if initial_status is not None:
+                last_status = initial_status
+                initial_status = None
+            else:
+                last_status = _detect_platform_login_state(page, platform)
             if platform == "threads" and str(last_status.get("status") or "") == "threads_restore_required":
                 if threads_restore_attempted:
                     last_status = {
@@ -4489,6 +4496,8 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
 
 
 def _confirm_platform_ready(page, platform: str, logger: AutomationLogger, cancel_event: Any | None = None) -> dict[str, Any]:
+    if platform == "instagram" and "/accounts/password/reset" in str(page.url or "").lower():
+        _goto(page, INSTAGRAM_HOME, logger, "login_ready_home_confirm")
     last_status: dict[str, Any] = {}
     ready_hits = 0
     for index in range(4):

@@ -3063,6 +3063,28 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         resolve_interstitial.assert_called_once_with(page, mock.ANY)
         goto.assert_called_once()
 
+    def test_instagram_ready_confirmation_returns_to_home_from_password_reset(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/accounts/password/reset/"
+        logger = _Logger()
+
+        def navigate_home(current_page, url, _logger, _stage):
+            current_page.url = url
+
+        with (
+            mock.patch.object(runner, "_goto", side_effect=navigate_home) as goto,
+            mock.patch.object(
+                runner,
+                "_detect_platform_login_state",
+                side_effect=[{"status": "ready"}, {"status": "ready"}],
+            ),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            result = runner._confirm_platform_ready(page, "instagram", logger)
+
+        self.assertEqual(result["status"], "ready")
+        goto.assert_called_once_with(page, runner.INSTAGRAM_HOME, logger, "login_ready_home_confirm")
+
     def test_instagram_onetap_saves_login_info_then_handles_optional_prompt(self):
         page = mock.Mock()
         page.url = "https://www.instagram.com/accounts/onetap/"
