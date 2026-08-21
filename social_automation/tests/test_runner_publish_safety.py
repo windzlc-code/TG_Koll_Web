@@ -5165,6 +5165,31 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page.body.text = "No threads yet"
         self.assertTrue(runner._threads_profile_is_stably_empty(page, "https://www.threads.net/@alice"))
 
+    def test_threads_profile_empty_baseline_accepts_authenticated_first_post_onboarding(self):
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
+            (
+                "個人檔案 陳雅婷 chenyating119 0位粉絲 編輯個人檔案 "
+                "串文 回覆 影音內容 轉發 有什麼新鮮事？ 發佈 "
+                "完成個人檔案 剩2項 建立串文 說說你的想法，或是分享最近發生的精彩事物。 建立"
+            ),
+        )
+        page.url = "https://www.threads.com/@chenyating119"
+
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[]),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            baseline = runner._capture_threads_profile_baseline(
+                page,
+                "https://www.threads.net/@chenyating119",
+                _Logger(),
+            )
+
+        self.assertEqual(baseline, set())
+        self.assertEqual(goto.call_count, 2)
+
     def test_threads_profile_loaded_handle_without_empty_copy_is_not_empty_baseline(self):
         page = _ThreadsShellPage(
             [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],

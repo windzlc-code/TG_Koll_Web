@@ -12999,6 +12999,13 @@ def _threads_profile_is_stably_empty(page, profile_url: str) -> bool:
     )
     if any(marker in body_text for marker in empty_markers):
         return True
+    first_post_onboarding_markers = (
+        "編輯個人檔案",
+        "完成個人檔案",
+        "建立串文",
+    )
+    if all(marker in body_text for marker in first_post_onboarding_markers):
+        return True
     return False
 
 
