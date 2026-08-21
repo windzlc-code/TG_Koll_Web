@@ -27547,8 +27547,8 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
   if (!modal?.isConnected) return;
   const model = taskAssistanceViewModel(task, session);
   const taskStatus = loginAssistanceTaskStatus(task);
-  const canStop = !["success", "failed", "cancelled"].includes(taskStatus)
-    && !["success", "error"].includes(String(model.phase || ""));
+  const taskCanStop = !["success", "failed", "cancelled"].includes(taskStatus);
+  const showFooterStop = taskCanStop && !["success", "error"].includes(String(model.phase || ""));
   const renderKey = JSON.stringify([
     model.phase,
     model.kind,
@@ -27583,16 +27583,17 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     </div>
     ${renderTaskAssistanceDetails(model)}
     <div class="login-assistance-action">${renderLoginAssistanceAction(model, session, {
-      stopTaskOnClose: modal.classList.contains("is-publish-assistance"),
+      stopTaskOnClose: modal.classList.contains("is-publish-assistance") && taskCanStop,
     })}</div>
     ${session && model.kind !== "browser_interaction" && model.phase !== "success"
       ? `<button type="button" class="login-assistance-live-link" data-login-assistance-live>查看实时画面</button>`
       : ""}
   `;
-  const stopButton = modal.querySelector("[data-login-assistance-stop]");
-  if (stopButton) {
-    stopButton.hidden = !canStop;
-    if (!stopButton.dataset.stopPending) stopButton.disabled = !canStop;
+  const footer = modal.querySelector("[data-login-assistance-footer]");
+  const footerStopButton = footer?.querySelector("[data-login-assistance-stop]");
+  if (footer) footer.hidden = !showFooterStop;
+  if (footerStopButton && !footerStopButton.dataset.stopPending) {
+    footerStopButton.disabled = !showFooterStop;
   }
   translateConsoleLanguage(body, currentLanguage());
 }
@@ -27694,7 +27695,7 @@ function openTaskAssistanceView(taskId = "", options) {
         ${renderModalCloseButton("data-login-assistance-close")}
       </div>
       <div class="login-assistance-body is-running" data-login-assistance-body></div>
-      <div class="login-assistance-footer">
+      <div class="login-assistance-footer" data-login-assistance-footer>
         <button type="button" class="danger" data-login-assistance-stop>停止任务</button>
       </div>
     </section>
@@ -27741,6 +27742,10 @@ function openTaskAssistanceView(taskId = "", options) {
     stopped = true;
     if (timer) window.clearTimeout(timer);
     if (mode !== "publish") return;
+    if (modal.dataset.publishAssistanceStopped === "true") {
+      hidePublishAssistanceRestore();
+      return;
+    }
     window.setTimeout(() => {
       if (document.getElementById("loginAssistanceModal")) return;
       const currentTask = (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId)
@@ -27767,18 +27772,28 @@ function openTaskAssistanceView(taskId = "", options) {
       stopButton.disabled = true;
       stopButton.dataset.stopPending = "true";
       stopButton.textContent = "正在停止…";
+      if (closeAfterStop) {
+        modal.dataset.publishAssistanceStopped = "true";
+        closeConsoleModal(null, modal);
+      }
       try {
         const result = await cancelSocialAutomationTask(cleanTaskId, "socialMsg");
         const cancelledTask = result?.task
           || (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId)
           || { id: cleanTaskId, status: "cancelled" };
-        modal.dataset.loginAssistanceRenderKey = "";
-        updateLoginAssistanceModal(modal, { ...cancelledTask, status: "cancelled" }, currentSession);
-        if (closeAfterStop) closeConsoleModal(null, modal);
+        if (modal.isConnected) {
+          modal.dataset.loginAssistanceRenderKey = "";
+          updateLoginAssistanceModal(modal, { ...cancelledTask, status: "cancelled" }, currentSession);
+        }
       } catch (error) {
-        delete stopButton.dataset.stopPending;
-        stopButton.disabled = false;
-        stopButton.textContent = closeAfterStop ? "关闭并停止任务" : "停止任务";
+        if (modal.isConnected) {
+          delete stopButton.dataset.stopPending;
+          stopButton.disabled = false;
+          stopButton.textContent = closeAfterStop ? "关闭并停止任务" : "停止任务";
+        } else if (closeAfterStop) {
+          state.publishAssistanceDismissed = true;
+          syncPublishAssistanceRestore();
+        }
         showToast(error?.detail || error?.message || "停止登录任务失败", false);
       }
       return;

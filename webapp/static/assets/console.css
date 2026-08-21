@@ -29103,6 +29103,10 @@ body.console-page {
   background: #fff;
 }
 
+.login-assistance-footer[hidden] {
+  display: none;
+}
+
 .login-assistance-footer button {
   width: min(100%, 390px);
   min-height: 46px;

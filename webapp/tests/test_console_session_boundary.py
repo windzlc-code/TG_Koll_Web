@@ -1500,7 +1500,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('data-login-assistance-stop', self._function_source("renderLoginAssistanceAction"))
         self.assertIn('data-login-assistance-close-after-stop', self._function_source("renderLoginAssistanceAction"))
         self.assertIn("关闭并停止任务", self._function_source("renderLoginAssistanceAction"))
-        self.assertNotIn("publishAssistanceStopped", self._function_source("openTaskAssistanceView"))
+        self.assertIn('modal.dataset.publishAssistanceStopped = "true"', self._function_source("openTaskAssistanceView"))
+        self.assertIn('modal.dataset.publishAssistanceStopped === "true"', self._function_source("openTaskAssistanceView"))
         self.assertNotIn("data-login-assistance-minimize", self._function_source("openTaskAssistanceView"))
         self.assertNotIn("publishAssistanceMinimized", self._function_source("openTaskAssistanceView"))
         self.assertIn('hasAttribute("data-login-assistance-close-after-stop")', self._function_source("openTaskAssistanceView"))
@@ -1514,6 +1515,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("openPersonaMediaLightbox", self._function_source("openTaskAssistanceView"))
         self.assertIn("refreshPublishingDockAfterAssistanceSettle", self._function_source("openTaskAssistanceView"))
         self.assertIn(".login-assistance-modal.is-publish-assistance .login-assistance-dialog", self.styles)
+        self.assertIn(".login-assistance-footer[hidden]", self.styles)
         self.assertIn("min-height: 0", self.styles)
         self.assertIn("function loginAssistanceMappedInputAllowed", self.source)
         self.assertIn("loginAssistanceMappedInputAllowed(session)", self._function_source("renderLoginAssistanceAction"))
@@ -1633,6 +1635,69 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             );
             assert.strictEqual(timeout.phase, "error");
             assert.ok(String(timeout.message).includes("超过"));
+            """
+        )
+        self._run_node(harness)
+
+    def test_publish_assistance_error_keeps_only_close_and_stop_action_visible(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            function esc(value) {{ return String(value || ""); }}
+            function taskAssistanceViewModel() {{
+              return {{
+                phase: "error",
+                kind: "error",
+                title: "账号已被限制",
+                message: "当前账号疑似被停用或封禁，无法继续自动登录。",
+                actions: [],
+              }};
+            }}
+            function loginAssistanceTaskStatus() {{ return "running"; }}
+            function loginAssistanceMappedInputAllowed() {{ return false; }}
+            function renderLoginAssistanceVisual() {{ return ""; }}
+            function renderTaskAssistanceDetails() {{ return ""; }}
+            function translateConsoleLanguage() {{}}
+            function currentLanguage() {{ return "zh-Hans"; }}
+            function updateLoginAssistanceDeadline() {{}}
+            {self._function_source("renderLoginAssistanceChoices")}
+            {self._function_source("renderLoginAssistanceAction")}
+            {self._function_source("updateLoginAssistanceModal")}
+
+            let bodyStop = null;
+            const body = {{
+              className: "",
+              set innerHTML(value) {{
+                this.html = String(value || "");
+                bodyStop = this.html.includes("data-login-assistance-close-after-stop")
+                  ? {{ hidden: false, disabled: false, dataset: {{}} }}
+                  : null;
+              }},
+            }};
+            const footerStop = {{ hidden: false, disabled: false, dataset: {{}} }};
+            const footer = {{
+              hidden: false,
+              querySelector(selector) {{
+                return selector === "[data-login-assistance-stop]" ? footerStop : null;
+              }},
+            }};
+            const modal = {{
+              isConnected: true,
+              dataset: {{}},
+              classList: {{ contains(name) {{ return name === "is-publish-assistance"; }} }},
+              querySelector(selector) {{
+                if (selector === "[data-login-assistance-body]") return body;
+                if (selector === "[data-login-assistance-footer]") return footer;
+                if (selector === "[data-login-assistance-stop]") return bodyStop || footerStop;
+                return null;
+              }},
+            }};
+
+            updateLoginAssistanceModal(modal, {{ status: "running" }}, {{ id: "live-task-1" }});
+            assert.ok(body.html.includes("关闭并停止任务"));
+            assert.ok(bodyStop);
+            assert.strictEqual(bodyStop.hidden, false, "the close-and-stop action must remain visible");
+            assert.strictEqual(footer.hidden, true, "the legacy running-state footer must be hidden on errors");
             """
         )
         self._run_node(harness)
