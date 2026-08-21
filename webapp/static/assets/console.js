@@ -6440,6 +6440,15 @@ function activeOpenLoginTaskForAccount(accountId = "") {
   )) || null;
 }
 
+function activePublishTaskForAccount(accountId = "") {
+  const cleanAccountId = String(accountId || "").trim();
+  return (state.socialTasks || []).find((task) => (
+    String(task?.account_id || "").trim() === cleanAccountId
+    && String(task?.task_type || "").trim() === "publish_post"
+    && ["preparing", "queued", "running", "need_manual"].includes(String(task?.status || "").trim())
+  )) || null;
+}
+
 function socialTaskLoginDependency(task) {
   const payload = socialTaskPayload(task);
   const loginTaskId = String(payload.login_task_id || "").trim();
@@ -27867,14 +27876,25 @@ function updateAccountOpenLoginButton(button, accountId = "") {
 function updateAccountLoginResumeButton(button, accountId = "") {
   if (!button) return;
   const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
-  const canResume = Boolean(activeLoginTask?.id);
+  const activePublishTask = activeLoginTask?.id ? null : activePublishTaskForAccount(accountId);
+  const canResume = Boolean(activeLoginTask?.id) || Boolean(activePublishTask?.id);
   button.hidden = !canResume;
-  button.innerHTML = `${renderBrowserLaunchIcon()}<span>继续登录</span>`;
+  button.innerHTML = `${renderBrowserLaunchIcon()}<span>${activePublishTask?.id ? "发布助手" : "继续登录"}</span>`;
+  button.dataset.accountTaskAssistance = String(accountId || "");
+  button.setAttribute("aria-label", activePublishTask?.id ? "打开发布助手" : "继续登录");
+  button.setAttribute("title", activePublishTask?.id ? "打开发布助手" : "继续登录");
   if (canResume && activeLoginTask?.id) {
     button.dataset.openLoginTaskId = String(activeLoginTask.id);
+    delete button.dataset.openPublishTaskId;
+    return;
+  }
+  if (canResume && activePublishTask?.id) {
+    button.dataset.openPublishTaskId = String(activePublishTask.id);
+    delete button.dataset.openLoginTaskId;
     return;
   }
   delete button.dataset.openLoginTaskId;
+  delete button.dataset.openPublishTaskId;
 }
 
 function updateAccountStatusViews() {
@@ -28475,7 +28495,10 @@ function renderAccountPoolCardFields(account, { selectionControl = "", includeCo
   const accountId = String(account?.id || "");
   const platform = normalizeAccountPoolPlatform(account?.platform || "threads");
   const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
-  const canResumeLogin = Boolean(activeLoginTask?.id);
+  const activePublishTask = activeLoginTask?.id ? null : activePublishTaskForAccount(accountId);
+  const canResumeLogin = Boolean(activeLoginTask?.id) || Boolean(activePublishTask?.id);
+  const assistanceLabel = activePublishTask?.id ? "发布助手" : "继续登录";
+  const assistanceTitle = activePublishTask?.id ? "打开发布助手" : "继续登录";
   const platformCopy = [
     platformLabel(platform),
     account?.display_name && account.display_name !== account.username ? account.display_name : "",
@@ -28492,7 +28515,7 @@ function renderAccountPoolCardFields(account, { selectionControl = "", includeCo
         ${includeCopyButton ? `<button type="button" class="account-pool-card-copy-button" data-account-pool-copy-card="${esc(accountId)}" title="复制账号字段" aria-label="复制账号字段">${renderClipboardIcon()}</button>` : ""}
       </span>
     </span>
-    ${includeContinueLogin ? `<button type="button" class="account-pool-card-continue-login" ${loginActionAttribute}="${esc(accountId)}" data-account-login-resume="true" ${activeLoginTask?.id ? `data-open-login-task-id="${esc(activeLoginTask.id)}"` : ""} ${canResumeLogin ? "" : "hidden"}>${renderBrowserLaunchIcon()}<span>继续登录</span></button>` : ""}
+    ${includeContinueLogin ? `<button type="button" class="account-pool-card-continue-login" ${loginActionAttribute}="${esc(accountId)}" data-account-login-resume="true" data-account-task-assistance="${esc(accountId)}" ${activeLoginTask?.id ? `data-open-login-task-id="${esc(activeLoginTask.id)}"` : ""} ${activePublishTask?.id ? `data-open-publish-task-id="${esc(activePublishTask.id)}"` : ""} aria-label="${esc(assistanceTitle)}" title="${esc(assistanceTitle)}" ${canResumeLogin ? "" : "hidden"}>${renderBrowserLaunchIcon()}<span>${esc(assistanceLabel)}</span></button>` : ""}
     <span class="account-pool-card-flags">
       ${platform === "threads" && account?.api_connected ? `<span class="status ok" title="Threads 官方 API 已授权${account.api_last_sync_at ? `，最近同步：${formatTime(account.api_last_sync_at)}` : ""}">API 已接入</span>` : ""}
       <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${renderAccountStatusContent(account)}</span>
@@ -35282,6 +35305,18 @@ function bindEvents() {
     }
     if (event.target.closest("[data-restore-publish-assistance]")) {
       restorePublishAssistanceView();
+      return;
+    }
+    const accountTaskAssistance = event.target.closest("[data-account-task-assistance]");
+    if (accountTaskAssistance) {
+      event.preventDefault();
+      event.stopPropagation();
+      const accountId = String(accountTaskAssistance.dataset.accountTaskAssistance || "").trim();
+      const publishTaskId = String(accountTaskAssistance.dataset.openPublishTaskId || "").trim();
+      const loginTaskId = String(accountTaskAssistance.dataset.openLoginTaskId || "").trim();
+      const taskId = publishTaskId || loginTaskId;
+      if (publishTaskId) openPublishAssistanceView(taskId, { accountId });
+      else if (loginTaskId) openLoginAssistanceView(taskId, accountId);
       return;
     }
     if (event.target.closest("[data-persona-publish-submit]")) submitPersonaPublishTask().catch((error) => showMsg("commandMsg", error.detail || error.message || "操作失败", false));

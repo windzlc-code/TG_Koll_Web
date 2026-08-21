@@ -650,6 +650,22 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("mask-composite: exclude;", continue_login_styles)
         self.assertIn("animation: accountPoolContentRefreshSweep 1.8s ease-in-out infinite;", continue_login_styles)
 
+    def test_account_card_reuses_publish_assistant_for_active_publish_task(self):
+        active_publish = self._javascript_function_source(self.source, "activePublishTaskForAccount")
+        fields = self._section("function renderAccountPoolCardFields", "function renderAccountPoolCard(")
+        update = self._javascript_function_source(self.source, "updateAccountLoginResumeButton")
+
+        self.assertIn('String(task?.task_type || "").trim() === "publish_post"', active_publish)
+        self.assertIn('"preparing", "queued", "running", "need_manual"', active_publish)
+        self.assertIn("activePublishTaskForAccount(accountId)", fields)
+        self.assertIn('data-account-task-assistance="${esc(accountId)}"', fields)
+        self.assertIn('data-open-publish-task-id="${esc(activePublishTask.id)}"', fields)
+        self.assertIn("发布助手", fields)
+        self.assertIn("activePublishTaskForAccount(accountId)", update)
+        self.assertIn("发布助手", update)
+        self.assertIn('event.target.closest("[data-account-task-assistance]")', self.source)
+        self.assertIn("openPublishAssistanceView(taskId, { accountId })", self.source)
+
     def test_account_card_actions_keep_icons_and_single_row_login_width(self):
         update_status = self._javascript_function_source(self.source, "updateAccountStatusViews")
         action_styles = self.styles.split(".account-pool-card-actions {", 1)[1].split(".persona-account-summary-actions", 1)[0]
