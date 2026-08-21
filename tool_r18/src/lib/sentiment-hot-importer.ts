@@ -3,6 +3,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { execFile, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
+import { ProxyAgent } from "undici";
 import type { PersonaArchive } from "@/core/archives/persona-archive-domain";
 import { resolveRuntimeFile } from "@/runtime/node/data-dir";
 import { withExclusiveJsonFileLock } from "@/runtime/node/json-file-lock";
@@ -665,7 +666,7 @@ export type ThreadsProfileHotMetrics = {
   viewMissingPosts?: number;
   scannedPosts?: number;
   refreshedAt: string;
-  method: "browser" | "reader" | "failed";
+  method: "http" | "browser" | "reader" | "failed";
   complete?: boolean;
   scope?: "authenticated_full_profile" | "public_partial" | "reader_public_partial" | "profile_visible_light" | "failed";
   lightRefreshedAt?: string;
@@ -687,7 +688,7 @@ export type InstagramProfileHotMetrics = {
   views?: number;
   scannedPosts?: number;
   refreshedAt: string;
-  method: "browser" | "failed";
+  method: "http" | "browser" | "failed";
   complete?: boolean;
   scope?: "authenticated_full_profile" | "authenticated_profile_snapshot" | "failed";
   postMetrics?: ThreadsProfilePostHotMetrics[];
@@ -7781,6 +7782,218 @@ async function buildThreadsProfileAggregateMetricsFromBrowserPage(args: {
   return out;
 }
 
+type SessionHttpResult = {
+  ok: boolean;
+  status: number;
+  url: string;
+  text: string;
+};
+
+function platformProxyUrl(platform: "threads" | "instagram"): string {
+  return cleanText(
+    platform === "threads"
+      ? process.env.PERSONA_DASHBOARD_THREADS_PROXY_URL
+      : process.env.PERSONA_DASHBOARD_INSTAGRAM_PROXY_URL,
+  );
+}
+
+export function buildPlatformCookieHeader(cookies: any[], targetUrl: string): string {
+  let hostname = "";
+  try {
+    hostname = new URL(targetUrl).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+  return (Array.isArray(cookies) ? cookies : [])
+    .filter((cookie: any) => {
+      const name = cleanText(cookie?.name);
+      const value = cleanText(cookie?.value);
+      const domain = cleanText(cookie?.domain).replace(/^\./, "").toLowerCase();
+      if (!name || !value || !domain) return false;
+      return hostname === domain || hostname.endsWith(`.${domain}`);
+    })
+    .map((cookie: any) => `${String(cookie.name).trim()}=${String(cookie.value).trim()}`)
+    .join("; ");
+}
+
+async function requestSessionHttpText(args: {
+  url: string;
+  cookies: any[];
+  headers?: Record<string, string>;
+  proxyUrl?: string;
+  timeoutMs?: number;
+}): Promise<SessionHttpResult> {
+  const proxyUrl = cleanText(args.proxyUrl);
+  if (proxyUrl && !/^https?:\/\//i.test(proxyUrl)) {
+    throw new Error("当前账号代理不是 HTTP/HTTPS 类型，已转入浏览器兼容链路。");
+  }
+  const cookie = buildPlatformCookieHeader(args.cookies, args.url);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), Math.max(1_000, args.timeoutMs || 20_000));
+  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+  try {
+    const response = await fetch(args.url, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        accept: "*/*",
+        "accept-language": "zh-TW,zh;q=0.9,en;q=0.6",
+        ...(cookie ? { cookie } : {}),
+        ...(args.headers || {}),
+      },
+      ...(dispatcher ? { dispatcher } : {}),
+    } as any);
+    return {
+      ok: response.ok,
+      status: response.status,
+      url: response.url || args.url,
+      text: await response.text(),
+    };
+  } finally {
+    clearTimeout(timeoutId);
+    await dispatcher?.close().catch(() => undefined);
+  }
+}
+
+function walkJsonObjects(value: any, visit: (node: any) => void, depth = 0): void {
+  if (!value || typeof value !== "object" || depth > 40) return;
+  visit(value);
+  if (Array.isArray(value)) {
+    for (const item of value) walkJsonObjects(item, visit, depth + 1);
+    return;
+  }
+  for (const child of Object.values(value)) walkJsonObjects(child, visit, depth + 1);
+}
+
+export function extractThreadsProfileHttpPayloads(html: string): any[] {
+  const payloads: any[] = [];
+  const seen = new Set<string>();
+  for (const match of String(html || "").matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const raw = String(match[1] || "").trim();
+    if (!raw || !raw.includes("thread_items")) continue;
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    walkJsonObjects(parsed, (node) => {
+      const edges = Array.isArray(node?.edges) ? node.edges : [];
+      if (!edges.some((edge: any) => Array.isArray(edge?.node?.thread_items))) return;
+      const key = JSON.stringify([
+        node?.page_info?.end_cursor || "",
+        edges.map((edge: any) => edge?.node?.thread_items?.[0]?.post?.pk || ""),
+      ]);
+      if (seen.has(key)) return;
+      seen.add(key);
+      payloads.push({ data: { mediaData: node } });
+    });
+  }
+  return payloads;
+}
+
+async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<ThreadsProfileHotMetrics> {
+  const refreshedAt = new Date().toISOString();
+  const cookies = readSentimentBrowserAuthCookies("threads");
+  const hasSession = hasThreadsProfileLoginSessionCookie(cookies);
+  const profileUrl = buildThreadsProfileUrl(username);
+  try {
+    const response = await requestSessionHttpText({
+      url: profileUrl,
+      cookies,
+      proxyUrl: platformProxyUrl("threads"),
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+      },
+      timeoutMs: 20_000,
+    });
+    const readerText = spiderHtmlToReaderText(response.text, profileUrl);
+    if (!response.ok || /\/login(?:[/?]|$)/i.test(response.url) || detectThreadsProfileLoginWall(readerText)) {
+      throw new Error(`Threads HTTP 登录态不可用（HTTP ${response.status || 0}）。`);
+    }
+    const byKey = new Map<string, ThreadsGraphqlProfilePostAggregate>();
+    let reachedEnd = false;
+    for (const payload of extractThreadsProfileHttpPayloads(response.text)) {
+      const page = parseThreadsGraphqlProfilePagePayload({ username, payload });
+      if (page.pageInfoResolved && page.hasNextPage !== true) reachedEnd = true;
+      for (const post of page.posts) {
+        const key = resolveThreadsProfilePostMergeKey(post);
+        if (key) byKey.set(key, { ...(byKey.get(key) || {}), ...post });
+      }
+    }
+    const parsed = parseThreadsProfileHotMetricsText(readerText);
+    const posts = [...byKey.values()];
+    if (!posts.length) throw new Error("Threads HTTP 页面未返回可识别的账号帖子。");
+    const postMetrics = await Promise.all(posts.map(async (post) => {
+      let viewCount = post.viewCount;
+      if (typeof viewCount !== "number" && post.sourceUrl) {
+        const detail = await requestSessionHttpText({
+          url: post.sourceUrl,
+          cookies,
+          proxyUrl: platformProxyUrl("threads"),
+          headers: {
+            accept: "text/html,application/xhtml+xml",
+            "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+          },
+          timeoutMs: 12_000,
+        }).catch(() => null);
+        if (detail?.ok) viewCount = parseThreadsPostViewCountFromText(spiderHtmlToReaderText(detail.text, post.sourceUrl));
+      }
+      return {
+        pk: post.pk,
+        code: post.code,
+        sourceUrl: post.sourceUrl,
+        ...(post.content ? { content: post.content } : {}),
+        ...(post.publishedAt ? { publishedAt: post.publishedAt } : {}),
+        likeCount: post.likeCount,
+        commentCount: post.commentCount,
+        repostCount: post.repostCount,
+        shareCount: post.shareCount,
+        ...(typeof viewCount === "number" ? { viewCount } : {}),
+        capturedAt: refreshedAt,
+      } satisfies ThreadsProfilePostHotMetrics;
+    }));
+    const resolvedViews = postMetrics.filter((post) => typeof post.viewCount === "number").length;
+    const declaredPosts = typeof parsed.posts === "number" ? parsed.posts : postMetrics.length;
+    const complete = hasSession
+      && reachedEnd
+      && postMetrics.length >= declaredPosts
+      && resolvedViews === postMetrics.length;
+    return {
+      platform: "threads",
+      username,
+      ...parsed,
+      posts: Math.max(declaredPosts, postMetrics.length),
+      likes: postMetrics.reduce((sum, post) => sum + Number(post.likeCount || 0), 0),
+      comments: postMetrics.reduce((sum, post) => sum + Number(post.commentCount || 0), 0),
+      reposts: postMetrics.reduce((sum, post) => sum + Number(post.repostCount || 0), 0),
+      shares: postMetrics.reduce((sum, post) => sum + Number(post.shareCount || 0), 0),
+      views: postMetrics.reduce((sum, post) => sum + Number(post.viewCount || 0), 0),
+      viewResolvedPosts: resolvedViews,
+      viewMissingPosts: Math.max(0, postMetrics.length - resolvedViews),
+      scannedPosts: postMetrics.length,
+      postMetrics,
+      refreshedAt,
+      method: "http",
+      complete,
+      scope: complete ? "authenticated_full_profile" : "public_partial",
+      error: complete ? undefined : "Threads HTTP 已读取账号快照，但游标或浏览量尚未完整，转入浏览器兼容链路。",
+    };
+  } catch (error: any) {
+    return {
+      platform: "threads",
+      username,
+      refreshedAt,
+      method: "failed",
+      complete: false,
+      scope: "failed",
+      error: error instanceof Error ? error.message : String(error || "Threads HTTP 刷新失败。"),
+    };
+  }
+}
+
 export async function fetchThreadsProfileLightMetrics(usernameInput: string): Promise<ThreadsProfileHotMetrics> {
   const username = String(usernameInput || "").replace(/^@+/, "").trim();
   const refreshedAt = new Date().toISOString();
@@ -7875,7 +8088,10 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
   }
   const profileUrl = buildThreadsProfileUrl(username);
   const cookies = readSentimentBrowserAuthCookies("threads");
+  let bestHttpMetrics: ThreadsProfileHotMetrics | null = null;
   if (!process.env.VITEST_WORKER_ID) {
+    bestHttpMetrics = await fetchThreadsProfileHotMetricsHttp(username);
+    if (bestHttpMetrics.complete === true) return bestHttpMetrics;
     const hasLoginSessionCookie = hasThreadsProfileLoginSessionCookie(cookies);
     const cookieAttempts = hasLoginSessionCookie
       ? [cookies, []]
@@ -8110,6 +8326,7 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
     }
     }
     if (bestBrowserMetrics) return bestBrowserMetrics;
+    if (bestHttpMetrics && threadsProfileHotMetricsHasValue(bestHttpMetrics)) return bestHttpMetrics;
   }
   if (process.env.THREADS_PROFILE_ALLOW_PARTIAL_READER === "1") {
   try {
@@ -8303,6 +8520,182 @@ export function parseInstagramProfileHotMetricsPayload(args: {
   };
 }
 
+export function buildInstagramProfileHttpMetrics(args: {
+  profilePayload: any;
+  feedPages: any[];
+  username: string;
+  reachedEnd: boolean;
+  refreshedAt?: string;
+}): InstagramProfileHotMetrics {
+  const refreshedAt = args.refreshedAt || new Date().toISOString();
+  const profile = parseInstagramProfileHotMetricsPayload({
+    payload: args.profilePayload,
+    username: args.username,
+    refreshedAt,
+  });
+  if (profile.method === "failed") return profile;
+  const byKey = new Map<string, ThreadsProfilePostHotMetrics>();
+  const add = (row: ThreadsProfilePostHotMetrics | null) => {
+    if (!row) return;
+    const key = cleanText(row.pk || row.code || row.sourceUrl);
+    if (key) byKey.set(key, { ...(byKey.get(key) || {}), ...row });
+  };
+  for (const row of profile.postMetrics || []) add(row);
+  for (const page of args.feedPages || []) {
+    for (const item of Array.isArray(page?.items) ? page.items : []) {
+      const code = cleanText(item?.code || item?.shortcode);
+      const productType = cleanText(item?.product_type).toLowerCase();
+      const sourceUrl = code
+        ? `https://www.instagram.com/${productType === "clips" ? "reel" : "p"}/${code}/`
+        : cleanText(item?.permalink || item?.url);
+      add(parseInstagramPostHotMetricPayload({
+        payload: { items: [item] },
+        sourceUrl,
+        refreshedAt,
+      }));
+    }
+  }
+  const postMetrics = [...byKey.values()].sort((left, right) => {
+    const rightTime = right.publishedAt ? Date.parse(right.publishedAt) : 0;
+    const leftTime = left.publishedAt ? Date.parse(left.publishedAt) : 0;
+    return rightTime - leftTime;
+  });
+  const posts = typeof profile.posts === "number" ? profile.posts : postMetrics.length;
+  const complete = args.reachedEnd && (posts === 0 || postMetrics.length >= posts);
+  const resolvedViews = postMetrics.filter((row) => typeof row.viewCount === "number");
+  return {
+    ...profile,
+    posts: Math.max(posts, postMetrics.length),
+    likes: postMetrics.length || posts === 0
+      ? postMetrics.reduce((sum, row) => sum + Number(row.likeCount || 0), 0)
+      : profile.likes,
+    comments: postMetrics.length || posts === 0
+      ? postMetrics.reduce((sum, row) => sum + Number(row.commentCount || 0), 0)
+      : profile.comments,
+    views: resolvedViews.length
+      ? resolvedViews.reduce((sum, row) => sum + Number(row.viewCount || 0), 0)
+      : posts === 0 ? 0 : undefined,
+    scannedPosts: postMetrics.length,
+    postMetrics,
+    refreshedAt,
+    method: "http",
+    complete,
+    scope: complete ? "authenticated_full_profile" : "authenticated_profile_snapshot",
+    error: complete ? undefined : `Instagram HTTP 已读取 ${postMetrics.length}/${posts} 条帖子，转入浏览器兼容链路。`,
+  };
+}
+
+async function fetchInstagramProfileHotMetricsHttp(
+  username: string,
+  publishedUrlsInput: string[],
+): Promise<InstagramProfileHotMetrics> {
+  const refreshedAt = new Date().toISOString();
+  const cookies = readSentimentBrowserAuthCookies("instagram");
+  if (!hasValidInstagramSessionCookie(cookies)) {
+    return {
+      platform: "instagram",
+      username,
+      refreshedAt,
+      method: "failed",
+      complete: false,
+      scope: "failed",
+      error: "Instagram HTTP 登录态缺少有效 sessionid。",
+    };
+  }
+  const csrfToken = cleanText(cookies.find((cookie: any) => cleanText(cookie?.name).toLowerCase() === "csrftoken")?.value);
+  const commonHeaders = {
+    accept: "*/*",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "x-ig-app-id": "936619743392459",
+    "x-requested-with": "XMLHttpRequest",
+    ...(csrfToken ? { "x-csrftoken": csrfToken } : {}),
+  };
+  const proxyUrl = platformProxyUrl("instagram");
+  try {
+    const profileResponse = await requestSessionHttpText({
+      url: `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
+      cookies,
+      proxyUrl,
+      headers: commonHeaders,
+      timeoutMs: 20_000,
+    });
+    const profilePayload = safeJson(profileResponse.text);
+    if (!profileResponse.ok || profilePayload?.status === "fail") {
+      throw new Error(`Instagram HTTP 账号资料接口返回 ${profileResponse.status || 0}。`);
+    }
+    const user = profilePayload?.data?.user || profilePayload?.user || profilePayload?.data?.xdt_api__v1__users__web_profile_info?.user;
+    const userId = cleanText(user?.id || user?.pk);
+    if (!userId) throw new Error("Instagram HTTP 账号资料缺少用户标识。");
+    const feedPages: any[] = [];
+    const seenCursors = new Set<string>();
+    let maxId = "";
+    let reachedEnd = false;
+    for (let pageIndex = 0; pageIndex < 120; pageIndex += 1) {
+      const query = new URLSearchParams({ count: "50" });
+      if (maxId) query.set("max_id", maxId);
+      const feedResponse = await requestSessionHttpText({
+        url: `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(userId)}/?${query.toString()}`,
+        cookies,
+        proxyUrl,
+        headers: commonHeaders,
+        timeoutMs: 20_000,
+      });
+      const page = safeJson(feedResponse.text);
+      if (!feedResponse.ok || page?.status === "fail") {
+        throw new Error(`Instagram HTTP 帖子分页返回 ${feedResponse.status || 0}。`);
+      }
+      feedPages.push(page);
+      const nextMaxId = cleanText(page?.next_max_id || page?.next_max_id_str);
+      if (page?.more_available !== true || !nextMaxId) {
+        reachedEnd = true;
+        break;
+      }
+      if (seenCursors.has(nextMaxId)) break;
+      seenCursors.add(nextMaxId);
+      maxId = nextMaxId;
+    }
+    const knownCodes = new Set(feedPages
+      .flatMap((page) => Array.isArray(page?.items) ? page.items : [])
+      .map((item: any) => cleanText(item?.code || item?.shortcode))
+      .filter(Boolean));
+    const detailItems: any[] = [];
+    for (const sourceUrl of [...new Set((publishedUrlsInput || []).map(cleanText).filter(Boolean))]) {
+      const code = instagramPostCodeFromUrl(sourceUrl);
+      if (!code || knownCodes.has(code)) continue;
+      const mediaPk = instagramMediaPkFromShortcode(code);
+      if (!mediaPk) continue;
+      const detailResponse = await requestSessionHttpText({
+        url: `https://www.instagram.com/api/v1/media/${encodeURIComponent(mediaPk)}/info/`,
+        cookies,
+        proxyUrl,
+        headers: commonHeaders,
+        timeoutMs: 12_000,
+      }).catch(() => null);
+      if (!detailResponse?.ok) continue;
+      const item = safeJson(detailResponse.text)?.items?.[0];
+      if (item) detailItems.push(item);
+    }
+    if (detailItems.length) feedPages.push({ items: detailItems });
+    return buildInstagramProfileHttpMetrics({
+      profilePayload,
+      feedPages,
+      username,
+      reachedEnd,
+      refreshedAt,
+    });
+  } catch (error: any) {
+    return {
+      platform: "instagram",
+      username,
+      refreshedAt,
+      method: "failed",
+      complete: false,
+      scope: "failed",
+      error: error instanceof Error ? error.message : String(error || "Instagram HTTP 刷新失败。"),
+    };
+  }
+}
+
 export async function fetchInstagramProfileHotMetrics(
   usernameInput: string,
   publishedUrlsInput: string[] = [],
@@ -8332,6 +8725,10 @@ export async function fetchInstagramProfileHotMetrics(
       error: "Instagram 后台授权账号未登录或 Cookie 已失效。",
     };
   }
+  const bestHttpMetrics = !process.env.VITEST_WORKER_ID
+    ? await fetchInstagramProfileHotMetricsHttp(username, publishedUrlsInput)
+    : null;
+  if (bestHttpMetrics?.complete === true) return bestHttpMetrics;
   let browser: any = null;
   try {
     const playwright = await import("playwright");
@@ -8457,6 +8854,11 @@ export async function fetchInstagramProfileHotMetrics(
           : profileMetrics.error,
     };
   } catch (error: any) {
+    if (bestHttpMetrics && (
+      Number(bestHttpMetrics.scannedPosts || 0) > 0
+      || typeof bestHttpMetrics.followers === "number"
+      || typeof bestHttpMetrics.posts === "number"
+    )) return bestHttpMetrics;
     return {
       platform: "instagram",
       username,

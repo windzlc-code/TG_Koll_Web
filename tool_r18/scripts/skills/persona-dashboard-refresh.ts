@@ -43,9 +43,26 @@ type PersonaThreadsAccountBinding = {
   accountId?: string;
   archiveId?: string;
   profileDir?: string;
+  proxyUrl?: string;
   status?: string;
   source?: "account_pool" | "legacy_binding";
 };
+
+function accountProxyUrl(row: any): string | undefined {
+  const scheme = String(row?.proxy_type || "").trim().toLowerCase();
+  const host = String(row?.proxy_host || "").trim();
+  const port = Number(row?.proxy_port || 0);
+  if (!/^(?:http|https|socks4|socks5)$/.test(scheme) || !host || !Number.isInteger(port) || port < 1 || port > 65535) {
+    return undefined;
+  }
+  const username = String(row?.proxy_username || "");
+  const password = String(row?.proxy_password || "");
+  const auth = username
+    ? `${encodeURIComponent(username)}${password ? `:${encodeURIComponent(password)}` : ""}@`
+    : "";
+  const displayHost = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `${scheme}://${auth}${displayHost}:${port}`;
+}
 
 function argValue(name: string): string {
   const prefix = `--${name}=`;
@@ -86,12 +103,15 @@ function readThreadsAccountPool(): PersonaThreadsAccountBinding[] {
     try {
       appDb = new Database(dbPath, { readonly: true, fileMustExist: true });
       const rows = appDb.prepare(`
-        SELECT id, persona_id, username, profile_dir, status
-        FROM social_accounts
-        WHERE lower(platform) = 'threads'
-          AND lower(status) IN ('ready', 'active')
-          AND trim(username) <> ''
-        ORDER BY last_login_check_at DESC, updated_at DESC, created_at DESC
+        SELECT account.id, account.persona_id, account.username, account.profile_dir, account.status,
+               proxy.proxy_type, proxy.host AS proxy_host, proxy.port AS proxy_port,
+               proxy.username AS proxy_username, proxy.password AS proxy_password
+        FROM social_accounts AS account
+        LEFT JOIN social_proxies AS proxy ON proxy.id = account.proxy_id
+        WHERE lower(account.platform) = 'threads'
+          AND lower(account.status) IN ('ready', 'active')
+          AND trim(account.username) <> ''
+        ORDER BY account.last_login_check_at DESC, account.updated_at DESC, account.created_at DESC
       `).all();
       for (const row of rows) {
         const username = normalizeThreadsUsername(row?.username);
@@ -101,6 +121,7 @@ function readThreadsAccountPool(): PersonaThreadsAccountBinding[] {
           accountId: String(row?.id || "").trim() || undefined,
           archiveId: String(row?.persona_id || "").trim() || undefined,
           profileDir: String(row?.profile_dir || "").trim() || undefined,
+          proxyUrl: accountProxyUrl(row),
           status: String(row?.status || "").trim() || undefined,
           source: "account_pool",
         } as PersonaThreadsAccountBinding & { archiveId?: string });
@@ -139,12 +160,15 @@ function readInstagramAccountPool(): PersonaThreadsAccountBinding[] {
     try {
       appDb = new Database(dbPath, { readonly: true, fileMustExist: true });
       const rows = appDb.prepare(`
-        SELECT id, persona_id, username, profile_dir, status
-        FROM social_accounts
-        WHERE lower(platform) = 'instagram'
-          AND lower(status) IN ('ready', 'active')
-          AND trim(username) <> ''
-        ORDER BY last_login_check_at DESC, updated_at DESC, created_at DESC
+        SELECT account.id, account.persona_id, account.username, account.profile_dir, account.status,
+               proxy.proxy_type, proxy.host AS proxy_host, proxy.port AS proxy_port,
+               proxy.username AS proxy_username, proxy.password AS proxy_password
+        FROM social_accounts AS account
+        LEFT JOIN social_proxies AS proxy ON proxy.id = account.proxy_id
+        WHERE lower(account.platform) = 'instagram'
+          AND lower(account.status) IN ('ready', 'active')
+          AND trim(account.username) <> ''
+        ORDER BY account.last_login_check_at DESC, account.updated_at DESC, account.created_at DESC
       `).all();
       for (const row of rows) {
         const username = normalizeInstagramUsername(row?.username);
@@ -154,6 +178,7 @@ function readInstagramAccountPool(): PersonaThreadsAccountBinding[] {
           accountId: String(row?.id || "").trim() || undefined,
           archiveId: String(row?.persona_id || "").trim() || undefined,
           profileDir: String(row?.profile_dir || "").trim() || undefined,
+          proxyUrl: accountProxyUrl(row),
           status: String(row?.status || "").trim() || undefined,
           source: "account_pool",
         } as PersonaThreadsAccountBinding & { archiveId?: string });
@@ -637,23 +662,21 @@ function sentimentAuthStatusIsUsable(status: any): boolean {
 async function main() {
   const targetId = argValue("archive-id");
   const scopedTargetIds = new Set([targetId, ...archiveIdsFromArgs()].filter(Boolean));
-  const source = (argValue("source") || process.env.PERSONA_DASHBOARD_REFRESH_SOURCE || "browser").toLowerCase();
+  const source = (argValue("source") || process.env.PERSONA_DASHBOARD_REFRESH_SOURCE || "http_first").toLowerCase();
   const archives = await listPersonaArchives();
   const targets = scopedTargetIds.size
     ? archives.filter((archive) => scopedTargetIds.has(String(archive.id || "")))
     : archives;
   const useRssHub = source === "rsshub";
-  const skippedThreadsAccountIds = new Set(
-    String(process.env.PERSONA_DASHBOARD_SKIP_THREADS_ACCOUNT_IDS || "")
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean),
-  );
+  const useHttpFirst = source === "http_first";
   const hasBrowserThreadsTargets = targets.some((archive) =>
-    collectThreadsRefreshTargets(archive).some((target) => !skippedThreadsAccountIds.has(String(target.accountId || ""))),
+    collectThreadsRefreshTargets(archive).length > 0,
   );
-  const threadsBrowserNotNeeded = useRssHub || !hasBrowserThreadsTargets;
-  const refreshAuth = threadsBrowserNotNeeded ? { ok: true, message: "Threads API 已覆盖已授权账号" } : await refreshSentimentBrowserCookiesForPlatform("threads").catch((error: any) => ({
+  const threadsBrowserNotNeeded = useRssHub || useHttpFirst || !hasBrowserThreadsTargets;
+  const refreshAuth = threadsBrowserNotNeeded ? {
+    ok: true,
+    message: useHttpFirst ? "使用账号登录态进行 HTTP 优先刷新。" : "当前范围没有需要校验的 Threads 登录态",
+  } : await refreshSentimentBrowserCookiesForPlatform("threads").catch((error: any) => ({
     ok: false,
     message: error instanceof Error ? error.message : String(error || "unknown"),
   }));
@@ -664,7 +687,7 @@ async function main() {
     message: error instanceof Error ? error.message : String(error || "unknown"),
   }));
   const auth: any = threadsBrowserNotNeeded
-    ? { ok: true, message: refreshAuth.message, profileKey: useRssHub ? "rsshub" : "threads_api" }
+    ? { ok: true, message: refreshAuth.message, profileKey: useRssHub ? "rsshub" : "session_http" }
     : {
         ...liveAuthStatus,
         ok: sentimentAuthStatusIsUsable(liveAuthStatus),
@@ -679,7 +702,6 @@ async function main() {
       results.push({ archiveId: archive.id, name: archive.name, ok: false, skipped: true, message: "未绑定可用 Threads 账号，请先在账号池绑定并确认账号已登录。" });
     }
     for (const target of refreshTargets) {
-      if (skippedThreadsAccountIds.has(String(target.accountId || ""))) continue;
       const username = normalizeThreadsUsername(target.username);
       if (!username) continue;
       if (!auth.ok) {
@@ -688,6 +710,7 @@ async function main() {
       }
       try {
         const previousProfileDir = process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
+        const previousProxyUrl = process.env.PERSONA_DASHBOARD_THREADS_PROXY_URL;
         let metrics: any;
         let refreshAttempt: { metrics: any; attempts: number; complete: boolean };
         try {
@@ -695,6 +718,11 @@ async function main() {
             process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = target.profileDir;
           } else {
             delete process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
+          }
+          if (target.proxyUrl) {
+            process.env.PERSONA_DASHBOARD_THREADS_PROXY_URL = target.proxyUrl;
+          } else {
+            delete process.env.PERSONA_DASHBOARD_THREADS_PROXY_URL;
           }
           refreshAttempt = await retryIncompleteMetricFetch(
             () => useRssHub
@@ -710,6 +738,11 @@ async function main() {
             process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = previousProfileDir;
           } else {
             delete process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
+          }
+          if (previousProxyUrl) {
+            process.env.PERSONA_DASHBOARD_THREADS_PROXY_URL = previousProxyUrl;
+          } else {
+            delete process.env.PERSONA_DASHBOARD_THREADS_PROXY_URL;
           }
         }
         const key = hotMetricKey(username);
@@ -848,6 +881,7 @@ async function main() {
         if (!username) continue;
         try {
           const previousProfileDir = process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR;
+          const previousProxyUrl = process.env.PERSONA_DASHBOARD_INSTAGRAM_PROXY_URL;
           let metrics: any;
           let refreshAttempt: { metrics: any; attempts: number; complete: boolean };
           try {
@@ -855,6 +889,11 @@ async function main() {
               process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR = target.profileDir;
             } else {
               delete process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR;
+            }
+            if (target.proxyUrl) {
+              process.env.PERSONA_DASHBOARD_INSTAGRAM_PROXY_URL = target.proxyUrl;
+            } else {
+              delete process.env.PERSONA_DASHBOARD_INSTAGRAM_PROXY_URL;
             }
             refreshAttempt = await retryIncompleteMetricFetch(
               () => fetchInstagramProfileHotMetrics(
@@ -869,6 +908,11 @@ async function main() {
               process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR = previousProfileDir;
             } else {
               delete process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR;
+            }
+            if (previousProxyUrl) {
+              process.env.PERSONA_DASHBOARD_INSTAGRAM_PROXY_URL = previousProxyUrl;
+            } else {
+              delete process.env.PERSONA_DASHBOARD_INSTAGRAM_PROXY_URL;
             }
           }
           const usable = hasUsableMetrics(metrics);

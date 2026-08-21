@@ -417,6 +417,28 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(created["status"], "queued")
         self.assertEqual(created["task_type"], "publish_post")
 
+    def test_banned_account_can_create_open_login_task(self):
+        self._insert_account(status="disabled")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_accounts SET persona_id = '', health_status = 'banned' WHERE id = 'account-1'"
+            )
+
+        with mock.patch.object(social_automation_api, "wake_social_automation_worker"):
+            created = social_automation_api.create_social_task(
+                social_automation_api.SocialTaskPayload(
+                    persona_id="",
+                    account_id="account-1",
+                    platform="threads",
+                    task_type="open_login",
+                    scheduled_at=10_000_000_000,
+                    payload={"auto_submit": True},
+                )
+            )
+
+        self.assertEqual(created["status"], "queued")
+        self.assertEqual(created["task_type"], "open_login")
+
     def test_running_login_detection_updates_account_immediately(self):
         self._insert_account(status="cookie_expired")
         self._insert_task("publish-running", "running")

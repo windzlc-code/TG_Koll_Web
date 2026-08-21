@@ -17,6 +17,8 @@ import {
   anonymousReaderRetryReason,
   applyPersonaGuardToSentimentHotStrategy,
   boundedBrowserPageConcurrency,
+  buildInstagramProfileHttpMetrics,
+  buildPlatformCookieHeader,
   buildInstagramHotSearchQueries,
   buildModelOrderedThreadsSearchQueries,
   buildSentimentHotSearchStrategyCacheKey,
@@ -65,6 +67,7 @@ import {
   threadsHtmlLooksLikeEmptySearch,
   extractThreadsSearchPrefetchPayload,
   extractThreadsHydrationCandidatesFromHtml,
+  extractThreadsProfileHttpPayloads,
   buildSpiderSearchMarkdownFromHotCandidates,
   parseThreadsDetailEngagementMarkdown,
   parseThreadsDetailMediaMarkdown,
@@ -3720,6 +3723,38 @@ Instagram
     expect(visible.parsed.views).toBeUndefined();
   });
 
+  it("builds a domain-scoped cookie header without leaking cross-platform sessions", () => {
+    const header = buildPlatformCookieHeader([
+      { name: "sessionid", value: "threads-session", domain: ".threads.com" },
+      { name: "csrftoken", value: "threads-csrf", domain: "www.threads.com" },
+      { name: "sessionid", value: "instagram-session", domain: ".instagram.com" },
+    ], "https://www.threads.com/@demo");
+
+    expect(header).toContain("sessionid=threads-session");
+    expect(header).toContain("csrftoken=threads-csrf");
+    expect(header).not.toContain("instagram-session");
+  });
+
+  it("extracts Threads profile pagination payloads from server-rendered JSON", () => {
+    const html = `<html><script type="application/json">${JSON.stringify({
+      require: [{ result: { edges: [{ node: { thread_items: [{ post: {
+        pk: "post-1",
+        code: "CodeOne",
+        user: { username: "demo" },
+        canonical_url: "https://www.threads.com/@demo/post/CodeOne",
+        text_post_app_info: { view_count: 20 },
+      } }] } }], page_info: { end_cursor: "", has_next_page: false } } }],
+    })}</script></html>`;
+
+    const payloads = extractThreadsProfileHttpPayloads(html);
+    expect(payloads).toHaveLength(1);
+    expect(parseThreadsGraphqlProfilePagePayload({ username: "demo", payload: payloads[0] })).toMatchObject({
+      hasNextPage: false,
+      pageInfoResolved: true,
+      posts: [{ pk: "post-1", viewCount: 20 }],
+    });
+  });
+
   it("parses paginated Threads profile GraphQL payload into real post metrics", () => {
     const parsed = parseThreadsGraphqlProfilePagePayload({
       username: "stevie875443",
@@ -4005,5 +4040,42 @@ Thread
       buttonText: ["Sign in", "使用 Instagram 帳號繼續"],
       links: [],
     })).toBe(true);
+    });
   });
-});
+
+  it("merges all Instagram HTTP feed pages and marks only an exhausted cursor complete", () => {
+    const metrics = buildInstagramProfileHttpMetrics({
+      username: "demo.user",
+      reachedEnd: true,
+      refreshedAt: "2026-08-21T00:00:00.000Z",
+      profilePayload: {
+        data: {
+          user: {
+            id: "user-1",
+            username: "demo.user",
+            follower_count: 100,
+            following_count: 20,
+            media_count: 2,
+          },
+        },
+      },
+      feedPages: [{
+        more_available: false,
+        items: [
+          { pk: "1", code: "One", taken_at: 1_786_000_000, like_count: 4, comment_count: 1, play_count: 30 },
+          { pk: "2", code: "Two", taken_at: 1_785_000_000, like_count: 6, comment_count: 2, view_count: 40 },
+        ],
+      }],
+    });
+
+    expect(metrics).toMatchObject({
+      method: "http",
+      complete: true,
+      scope: "authenticated_full_profile",
+      posts: 2,
+      scannedPosts: 2,
+      likes: 10,
+      comments: 3,
+      views: 70,
+    });
+  });

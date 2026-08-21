@@ -130,7 +130,6 @@ from .social_automation_api import (
     stop_social_automation_worker,
     wake_social_automation_worker,
 )
-from .threads_api import sync_accounts as sync_threads_api_accounts
 from .crm import install_crm
 from .crm.service import effective_module_state
 from .crm_integration import (
@@ -20971,7 +20970,7 @@ def _start_persona_dashboard_refresh(
     user_id: int = 0,
 ) -> dict[str, Any]:
     task_id = f"pdr_{uuid.uuid4().hex[:12]}"
-    refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "api_first").strip().lower() or "api_first"
+    refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "http_first").strip().lower() or "http_first"
     scoped_archive_ids = list(dict.fromkeys(
         str(item or "").strip() for item in (archive_ids or []) if str(item or "").strip()
     ))
@@ -21030,30 +21029,6 @@ def _read_text_tail(path: Path, max_chars: int = 1200) -> str:
     return text[-max_chars:]
 
 
-def _persona_dashboard_browser_fallback_required(
-    user_id: int,
-    archive_ids: list[str] | None,
-    api_synced_account_ids: set[str],
-) -> bool:
-    clauses = ["user_id = ?"]
-    params: list[Any] = [max(0, int(user_id or 0))]
-    clean_archive_ids = [str(item or "").strip() for item in (archive_ids or []) if str(item or "").strip()]
-    if clean_archive_ids:
-        clauses.append(f"persona_id IN ({','.join('?' for _ in clean_archive_ids)})")
-        params.extend(clean_archive_ids)
-    with db() as conn:
-        rows = conn.execute(
-            f"SELECT id, platform FROM social_accounts WHERE {' AND '.join(clauses)}",
-            tuple(params),
-        ).fetchall()
-    for row in rows:
-        if str(row["platform"] or "").strip().lower() != "threads":
-            return True
-        if str(row["id"] or "").strip() not in api_synced_account_ids:
-            return True
-    return False
-
-
 def _persona_dashboard_refresh_worker_v2(
     task_id: str,
     archive_id: str = "",
@@ -21066,11 +21041,10 @@ def _persona_dashboard_refresh_worker_v2(
     tmpdir: tempfile.TemporaryDirectory[str] | None = None
     stdout_file: Any | None = None
     stderr_file: Any | None = None
-    refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "api_first").strip().lower() or "api_first"
-    # RSSHub collection also performs an authenticated browser detail backfill
-    # for published Threads URLs, so it must participate in the same browser
-    # admission control as the explicit browser source.
-    needs_browser_lease = refresh_source in {"browser", "rsshub"}
+    refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "http_first").strip().lower() or "http_first"
+    # HTTP-first and RSSHub can enter the existing browser compatibility path
+    # when a session endpoint or pagination contract is unavailable.
+    needs_browser_lease = refresh_source in {"http_first", "browser", "rsshub"}
     scope = "单个人设" if archive_id else (
         f"当前账号的 {len(archive_ids)} 个人设"
         if archive_ids is not None
@@ -21098,40 +21072,6 @@ def _persona_dashboard_refresh_worker_v2(
     env.setdefault("TOOL_R18_RUNTIME_DIR", str(TOOL_R18_RUNTIME_DIR))
     env.setdefault("NODE_PATH", str(ROOT_DIR / "tool_r18" / "node_modules"))
     try:
-        api_sync_result: dict[str, Any] = {"synced": [], "errors": [], "account_ids": []}
-        if refresh_source == "api_first":
-            sync_archive_ids = archive_ids or ([archive_id] if archive_id else None)
-            with PERSONA_DASHBOARD_REFRESH_LOCK:
-                owner_user_id = int(PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {}).get("user_id") or 0)
-                PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
-                    "step": "同步 Threads API",
-                    "progress": 12,
-                    "message": "正在通过 Threads 官方 API 同步账号资料、推文、回复与互动数据…",
-                })
-            api_sync_result = sync_threads_api_accounts(owner_user_id, sync_archive_ids)
-            synced_account_ids = {
-                str(item.get("account_id") or "").strip()
-                for item in api_sync_result.get("synced", [])
-                if str(item.get("account_id") or "").strip()
-            }
-            if synced_account_ids:
-                env["PERSONA_DASHBOARD_SKIP_THREADS_ACCOUNT_IDS"] = ",".join(sorted(synced_account_ids))
-            needs_browser_lease = _persona_dashboard_browser_fallback_required(
-                owner_user_id,
-                sync_archive_ids,
-                synced_account_ids,
-            )
-            if not needs_browser_lease:
-                with PERSONA_DASHBOARD_REFRESH_LOCK:
-                    PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
-                        "status": "success" if api_sync_result.get("synced") else "failed",
-                        "step": "刷新完成",
-                        "progress": 100,
-                        "message": "Threads API 数据同步完成。" if api_sync_result.get("synced") else "没有可同步的 Threads API 授权账号。",
-                        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "result": api_sync_result,
-                    })
-                return
         if needs_browser_lease:
             resource_wait_deadline = time.monotonic() + 300.0
             while time.monotonic() < resource_wait_deadline and not browser_lease:
@@ -21165,7 +21105,7 @@ def _persona_dashboard_refresh_worker_v2(
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
                 "step": "启动采集脚本",
                 "progress": 18,
-                "message": "正在补充 API 暂不覆盖的平台数据…" if refresh_source == "api_first" else "正在启动浏览器授权与热点采集脚本...",
+                "message": "正在通过账号登录态优先刷新数据，必要时自动进入兼容链路...",
             })
         tmpdir = tempfile.TemporaryDirectory(prefix="persona_dashboard_refresh_")
         stdout_path = Path(tmpdir.name) / "stdout.log"
@@ -21313,8 +21253,8 @@ def _persona_dashboard_monitor_enabled() -> bool:
 
 
 def _persona_dashboard_monitor_source() -> str:
-    source = (os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "api_first").strip().lower() or "api_first"
-    return source if source in {"api_first", "rsshub", "browser"} else "api_first"
+    source = (os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "http_first").strip().lower() or "http_first"
+    return source if source in {"http_first", "rsshub", "browser"} else "http_first"
 
 
 def _persona_dashboard_refresh_timestamp(value: Any) -> float:
@@ -21464,42 +21404,6 @@ def _ensure_persona_dashboard_monitor_started() -> None:
     thread.start()
 
 
-def _threads_api_hot_metrics_by_persona(archive_ids: set[str]) -> dict[str, dict[str, Any]]:
-    clean_ids = {str(item or "").strip() for item in archive_ids if str(item or "").strip()}
-    if not clean_ids:
-        return {}
-    with db() as conn:
-        rows = conn.execute(
-            f"""
-            SELECT account.id AS account_id, account.persona_id, snapshot.data_json
-            FROM social_accounts account
-            JOIN social_account_api_snapshots snapshot ON snapshot.account_id = account.id
-            JOIN social_account_api_credentials credential ON credential.account_id = account.id
-            WHERE account.platform = 'threads' AND credential.status = 'active'
-              AND account.persona_id IN ({','.join('?' for _ in clean_ids)})
-            """,
-            tuple(clean_ids),
-        ).fetchall()
-    result: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        try:
-            payload = json.loads(str(row["data_json"] or "{}"))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        metric = payload.get("normalized") if isinstance(payload, dict) else None
-        if not isinstance(metric, dict):
-            continue
-        account_id = str(row["account_id"] or "").strip()
-        persona_id = str(row["persona_id"] or "").strip()
-        if not account_id or not persona_id:
-            continue
-        normalized = dict(metric)
-        normalized["accountId"] = account_id
-        normalized["platform"] = "threads"
-        result.setdefault(persona_id, {})[f"threads:api:{account_id}"] = normalized
-    return result
-
-
 def _build_persona_dashboard_overview(
     *,
     visible_archive_ids: set[str] | None = None,
@@ -21508,9 +21412,6 @@ def _build_persona_dashboard_overview(
     archives, archives_source = _read_tool_r18_persona_archives()
     if visible_archive_ids is not None:
         archives = [item for item in archives if str(item.get("id") or "").strip() in visible_archive_ids]
-    api_hot_metrics_by_persona = _threads_api_hot_metrics_by_persona({
-        str(item.get("id") or "").strip() for item in archives
-    })
     queue_stats = _scope_publish_queue_stats(_read_tool_r18_publish_queue_stats(), visible_archive_ids)
     sentiment_stats = _read_tool_r18_sentiment_hot_stats(visible_archive_ids)
     deleted_posts = _read_persona_dashboard_deleted_posts()
@@ -21592,7 +21493,6 @@ def _build_persona_dashboard_overview(
         platform_published_counts: dict[str, int] = {}
         image_library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
         hot_metrics_raw = dict(setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {})
-        hot_metrics_raw.update(api_hot_metrics_by_persona.get(archive_id, {}))
         deleted_post_keys = deleted_posts.get(archive_id, set())
         visible_posts = [
             post for post in posts
@@ -21982,9 +21882,6 @@ def _build_persona_dashboard_console_overview(
     archives, archives_source = _read_tool_r18_persona_archives()
     if visible_archive_ids is not None:
         archives = [item for item in archives if str(item.get("id") or "").strip() in visible_archive_ids]
-    api_hot_metrics_by_persona = _threads_api_hot_metrics_by_persona({
-        str(item.get("id") or "").strip() for item in archives
-    })
     queue_stats = _scope_publish_queue_stats(_read_tool_r18_publish_queue_stats(), visible_archive_ids)
     deleted_posts = _read_persona_dashboard_deleted_posts()
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -22013,7 +21910,6 @@ def _build_persona_dashboard_console_overview(
             "view_missing_posts": 0,
         }
         hot_metrics_raw = dict(setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {})
-        hot_metrics_raw.update(api_hot_metrics_by_persona.get(archive_id, {}))
         for metric_value in hot_metrics_raw.values():
             if not isinstance(metric_value, dict):
                 continue
@@ -26420,9 +26316,9 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/refresh")
     def api_persona_dashboard_refresh(payload: PersonaDashboardRefreshPayload, user: dict[str, Any] = Depends(get_current_user)):
         archive_ids = _persona_dashboard_refresh_archive_ids(payload.archive_id, user)
-        requested_source = str(payload.source or "api_first").strip().lower() or "api_first"
-        if requested_source not in {"rsshub", "browser", "api_first"}:
-            raise HTTPException(status_code=400, detail="刷新来源仅支持 api_first、rsshub 或 browser。")
+        requested_source = str(payload.source or "http_first").strip().lower() or "http_first"
+        if requested_source not in {"rsshub", "browser", "http_first"}:
+            raise HTTPException(status_code=400, detail="刷新来源仅支持 http_first、rsshub 或 browser。")
         task = _start_persona_dashboard_refresh(
             payload.archive_id,
             source=requested_source,

@@ -332,7 +332,7 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         refresh = function_source("refreshPublishHistoryHotData", "publishGroupSelectionState")
 
         self.assertIn('api("/api/persona_dashboard/refresh"', refresh)
-        self.assertIn('source: "api_first"', refresh)
+        self.assertIn('source: "http_first"', refresh)
         self.assertIn("/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}", refresh)
         self.assertIn("loadPersonaPublishHistory(cleanPersonaId, { force: true })", refresh)
         self.assertIn("publishHistoryRefreshPersonaId = cleanPersonaId", refresh)

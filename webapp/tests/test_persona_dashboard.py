@@ -1687,7 +1687,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["id"], "pdr_test")
 
-    def test_public_full_refresh_defaults_to_api_first_source(self):
+    def test_public_full_refresh_defaults_to_http_first_source(self):
         self._write_archives()
         with mock.patch.object(
             server,
@@ -1697,11 +1697,24 @@ class PersonaDashboardApiTests(unittest.TestCase):
             response = self.client.post("/api/persona_dashboard/refresh", json={"archive_id": ""})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(start.call_args.kwargs["source"], "api_first")
+        self.assertEqual(start.call_args.kwargs["source"], "http_first")
 
-    def test_background_refresh_keeps_api_first_source(self):
-        with mock.patch.dict(os.environ, {"PERSONA_DASHBOARD_REFRESH_SOURCE": "api_first"}):
-            self.assertEqual(server._persona_dashboard_monitor_source(), "api_first")
+    def test_background_refresh_keeps_http_first_source(self):
+        with mock.patch.dict(os.environ, {"PERSONA_DASHBOARD_REFRESH_SOURCE": "http_first"}):
+            self.assertEqual(server._persona_dashboard_monitor_source(), "http_first")
+
+    def test_http_first_refresh_does_not_prelaunch_cookie_browser(self):
+        script = (server.ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(encoding="utf-8")
+
+        self.assertIn('PERSONA_DASHBOARD_REFRESH_SOURCE || "http_first"', script)
+        self.assertIn('const useHttpFirst = source === "http_first";', script)
+        self.assertIn("const threadsBrowserNotNeeded = useRssHub || useHttpFirst || !hasBrowserThreadsTargets;", script)
+
+    def test_removed_platform_oauth_and_sync_routes_stay_unavailable(self):
+        self.assertEqual(self.client.get("/api/threads/oauth/start").status_code, 404)
+        self.assertEqual(self.client.get("/api/instagram/oauth/start").status_code, 404)
+        self.assertEqual(self.client.post("/api/threads/accounts/example/sync").status_code, 404)
+        self.assertEqual(self.client.post("/api/instagram/accounts/example/sync").status_code, 404)
 
     def test_full_refresh_requires_every_target_and_keeps_stale_timestamp_on_partial_data(self):
         script = (server.ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(encoding="utf-8")

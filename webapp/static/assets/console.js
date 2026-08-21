@@ -14748,7 +14748,7 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
     const task = await api("/api/persona_dashboard/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ archive_id: cleanPersonaId, source: "api_first" }),
+      body: JSON.stringify({ archive_id: cleanPersonaId, source: "http_first" }),
     });
     const taskId = String(task?.id || "").trim();
     if (!taskId) throw new Error("刷新任务未返回任务 ID");
@@ -28549,7 +28549,6 @@ function renderAccountPoolCardFields(account, { selectionControl = "", includeCo
     </span>
     ${includeContinueLogin ? `<button type="button" class="account-pool-card-continue-login" ${loginActionAttribute}="${esc(accountId)}" data-account-login-resume="true" data-account-task-assistance="${esc(accountId)}" ${activeLoginTask?.id ? `data-open-login-task-id="${esc(activeLoginTask.id)}"` : ""} ${activePublishTask?.id ? `data-open-publish-task-id="${esc(activePublishTask.id)}"` : ""} aria-label="${esc(assistanceTitle)}" title="${esc(assistanceTitle)}" ${canResumeLogin ? "" : "hidden"}>${renderBrowserLaunchIcon()}<span>${esc(assistanceLabel)}</span></button>` : ""}
     <span class="account-pool-card-flags">
-      ${platform === "threads" && account?.api_connected ? `<span class="status ok" title="Threads 官方 API 已授权${account.api_last_sync_at ? `，最近同步：${formatTime(account.api_last_sync_at)}` : ""}">API 已接入</span>` : ""}
       <span class="status ${esc(accountStatusClassNames(accountDisplayedStatus(account)))}" data-account-status-for="${esc(accountId)}" title="${esc(accountStatusTitle(account))}">${renderAccountStatusContent(account)}</span>
     </span>
   </span>`;
