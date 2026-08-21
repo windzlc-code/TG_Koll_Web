@@ -7411,8 +7411,9 @@ async function scrollThreadsProfileUntilGraphqlEnd(args: {
   username: string;
   maxScrolls?: number;
   afterScroll?: () => Promise<void>;
-}) {
+}): Promise<boolean> {
   let stagnantRounds = 0;
+  let bottomRounds = 0;
   let lastGraphqlCount = args.capturedGraphqlPages.size;
   let lastVisibleKeyCount = 0;
   let lastScrollY = -1;
@@ -7422,7 +7423,7 @@ async function scrollThreadsProfileUntilGraphqlEnd(args: {
       const pageResult = parseThreadsGraphqlProfilePagePayload({ username: args.username, payload });
       return pageResult.pageInfoResolved && pageResult.hasNextPage !== true;
     });
-    if (reachedEnd) return;
+    if (reachedEnd) return true;
     const visibleKeys = await args.page.evaluate((targetUsername: string) => {
       const normalizedUsername = String(targetUsername || "").replace(/^@+/, "").trim().toLowerCase();
       return Array.from(document.querySelectorAll("a[href*='/post/']"))
@@ -7437,12 +7438,20 @@ async function scrollThreadsProfileUntilGraphqlEnd(args: {
     await args.page.mouse.wheel(0, 1800).catch(() => undefined);
     await args.page.waitForTimeout(1200);
     const nextGraphqlCount = args.capturedGraphqlPages.size;
-    const scrollY = await args.page.evaluate(() => Math.round(window.scrollY || document.documentElement?.scrollTop || 0)).catch(() => -1);
+    const scrollState = await args.page.evaluate(() => {
+      const scrollY = Math.round(window.scrollY || document.documentElement?.scrollTop || 0);
+      const viewportHeight = Math.round(window.innerHeight || document.documentElement?.clientHeight || 0);
+      const pageHeight = Math.round(Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0));
+      return { scrollY, atBottom: scrollY + viewportHeight >= pageHeight - 80 };
+    }).catch(() => ({ scrollY: -1, atBottom: false }));
+    const scrollY = scrollState.scrollY;
+    bottomRounds = scrollState.atBottom ? bottomRounds + 1 : 0;
     if (nextGraphqlCount === lastGraphqlCount
       && seenVisiblePostKeys.size <= lastVisibleKeyCount
       && Math.abs(scrollY - lastScrollY) < 40) {
       stagnantRounds += 1;
-      if (stagnantRounds >= 12) return;
+      if (bottomRounds >= 3) return true;
+      if (stagnantRounds >= 12) return false;
     } else {
       stagnantRounds = 0;
       lastGraphqlCount = nextGraphqlCount;
@@ -7450,6 +7459,7 @@ async function scrollThreadsProfileUntilGraphqlEnd(args: {
       lastScrollY = scrollY;
     }
   }
+  return false;
 }
 
 function normalizeThreadsVisibleDate(value: unknown): string | undefined {
@@ -7605,6 +7615,35 @@ export function parseThreadsPostViewCountFromText(text: string): number | undefi
   );
 }
 
+async function readThreadsViewCountFromLoadedPostPage(page: any): Promise<number | undefined> {
+  await page.waitForFunction(() => {
+    const text = String(document.body?.innerText || "");
+    return /(\d+(?:[.,]\d+)?\s*(?:K|M|萬|万)?)\s*(次瀏覽|次浏览|瀏覽|浏览|views?)/i.test(text);
+  }, undefined, { timeout: 8_000 }).catch(() => null);
+  const text = await page.locator("body").innerText({ timeout: 6_000 }).catch(() => "");
+  return parseThreadsPostViewCountFromText(text);
+}
+
+async function readThreadsPublicViewCountFallback(page: any, sourceUrl: string): Promise<number | undefined> {
+  const browser = page.context?.()?.browser?.();
+  if (!browser) return undefined;
+  const context = await browser.newContext({
+    viewport: { width: 900, height: 1400 },
+    locale: "zh-TW",
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+  });
+  const publicPage = await context.newPage();
+  try {
+    await publicPage.goto(sourceUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 25_000,
+    }).catch(() => null);
+    return await readThreadsViewCountFromLoadedPostPage(publicPage);
+  } finally {
+    await context.close().catch(() => null);
+  }
+}
+
 async function readThreadsViewCountFromPostPage(args: {
   page: any;
   sourceUrl: string;
@@ -7613,13 +7652,10 @@ async function readThreadsViewCountFromPostPage(args: {
     waitUntil: "domcontentloaded",
     timeout: 25_000,
   }).catch(() => null);
-  await args.page.waitForFunction(() => {
-    const text = String(document.body?.innerText || "");
-    return /(\d+(?:[.,]\d+)?\s*(?:K|M|萬|万)?)\s*(次瀏覽|次浏览|瀏覽|浏览|views?)/i.test(text)
-      || /回覆|回复|Replies?|尚無回覆|暂无回复/i.test(text);
-  }, undefined, { timeout: 8_000 }).catch(() => null);
-  const text = await args.page.locator("body").innerText({ timeout: 6_000 }).catch(() => "");
-  return parseThreadsPostViewCountFromText(text);
+  const viewCount = await readThreadsViewCountFromLoadedPostPage(args.page);
+  return typeof viewCount === "number"
+    ? viewCount
+    : readThreadsPublicViewCountFallback(args.page, args.sourceUrl);
 }
 
 async function collectThreadsViewCountsFromPostPages(args: {
@@ -7916,7 +7952,7 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
         .map((item: any) => item.href || item.getAttribute?.("href") || "")
         .filter(Boolean)).catch(() => []);
       await seedVisiblePosts();
-      await scrollThreadsProfileUntilGraphqlEnd({
+      const visibleReachedEnd = await scrollThreadsProfileUntilGraphqlEnd({
         page,
         capturedGraphqlPages,
         username,
@@ -8019,6 +8055,7 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
           };
           (parsed as any).profileReachedEnd = capturedReachedEnd
             || collection.reachedEnd
+            || visibleReachedEnd
             || reachedEndByVisibleTotal;
         }
       } else {
@@ -8851,7 +8888,16 @@ async function readThreadsBrowserDetailMetricsFromPage(page: any, sourceUrl: str
   const actionTexts = await page.$$eval("[role=button],button", (items: any[]) => items
     .map((item) => (item.textContent || "").trim())
     .filter(Boolean)).catch(() => []);
-  return parseThreadsBrowserPostDetailMetrics({ text: detailText, actionTexts });
+  const detail = parseThreadsBrowserPostDetailMetrics({ text: detailText, actionTexts });
+  if (typeof detail?.engagement?.viewCount === "number") return detail;
+  const viewCount = await readThreadsPublicViewCountFallback(page, sourceUrl);
+  if (typeof viewCount !== "number") return detail;
+  return {
+    ...(detail || { hotScore: 0, engagement: {}, metrics: {} }),
+    hotScore: Math.max(Number(detail?.hotScore || 0), viewCount),
+    engagement: { ...(detail?.engagement || {}), viewCount },
+    metrics: { ...(detail?.metrics || {}), view_count: viewCount },
+  };
 }
 
 export async function fetchThreadsBrowserDetailMetricsBatch(sourceUrls: string[], concurrency = 2, existingContext?: any) {
