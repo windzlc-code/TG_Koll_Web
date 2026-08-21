@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -48,6 +49,64 @@ class BillingTaskRegressionTests(unittest.TestCase):
             )
 
         self.assertEqual(runner.call_args.kwargs["prompt"], "穿深色西装，办公室暖光，半身构图")
+
+    def test_persona_image_regeneration_keeps_standard_reference_sheet_chain(self):
+        archive = {
+            "id": "persona-1",
+            "name": "测试人设",
+            "content": "测试人设正文",
+            "setup": {"personaImageReferenceUrl": "/existing-reference.jpg"},
+        }
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "referenceSheet": {"ok": True, "url": "/generated-reference.jpg"},
+                    "imageResult": {"ok": True, "url": "/generated-reference.jpg", "mode": "closed-person"},
+                }
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.object(server, "_persona_archive_source_for_write", return_value=(Path("archive.json"), {}, [archive])),
+            mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"),
+            mock.patch.object(server.subprocess, "run", return_value=completed) as run,
+            mock.patch.object(server, "_persona_archive_persist_reference_image", return_value={"saved_item_id": "saved-reference"}),
+        ):
+            result = server._run_persona_image_cli_for_web("persona-1")
+
+        cli_payload = json.loads(run.call_args.args[0][4])
+        self.assertTrue(cli_payload["generateReferenceSheet"])
+        self.assertIsNone(cli_payload["referenceImageUrl"])
+        self.assertIsNone(cli_payload["referenceSheetUrl"])
+        self.assertEqual(result["generation"]["image_url"], "/generated-reference.jpg")
+
+    def test_persona_image_library_downloads_remote_result_before_saving_record(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
+            root = Path(tmpdir)
+            archive_path = root / "persona_archives.json"
+            archives = [{"id": "persona-1", "name": "测试人设", "setup": {}, "personaImageLibrary": []}]
+            archive_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+            def download(_url, target):
+                target.write_bytes(b"persisted-image")
+
+            with (
+                mock.patch.object(server, "_persona_archive_source_for_write", return_value=(archive_path, archives, archives)),
+                mock.patch.object(server, "_persona_media_root", return_value=root / "persona_media"),
+                mock.patch.object(server, "_download_to_file", side_effect=download) as downloader,
+            ):
+                result = server._persona_archive_persist_reference_image(
+                    "persona-1",
+                    image_url="https://provider.example/result.png",
+                )
+
+            stored_url = result["current_reference_url"]
+            stored_path = Path(stored_url).resolve()
+            self.assertTrue(stored_path.is_relative_to((root / "persona_media").resolve()))
+            self.assertEqual(stored_path.read_bytes(), b"persisted-image")
+            self.assertEqual(archives[0]["personaImageLibrary"][0]["imageUrl"], stored_url)
+            downloader.assert_called_once()
 
     def test_startup_releases_only_held_social_reservation_without_task(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:

@@ -1826,10 +1826,12 @@ class PersonaDashboardApiTests(unittest.TestCase):
         image_bytes = base64.b64decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
         )
-        response = self.client.post(
-            "/api/persona_dashboard/personas/persona-1/images/upload",
-            files={"image": ("persona-front-view.png", image_bytes, "image/png")},
-        )
+        durable_root = self.data_dir / "persona_media"
+        with mock.patch.object(server, "_persona_media_root", return_value=durable_root):
+            response = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/images/upload",
+                files={"image": ("persona-front-view.png", image_bytes, "image/png")},
+            )
 
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
@@ -1843,6 +1845,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         uploaded = next(item for item in archive["personaImageLibrary"] if item["id"] == body["saved_item_id"])
         self.assertEqual(uploaded["source"], "manual-upload")
         self.assertIsNone(uploaded.get("mode"))
+        stored_path = Path(uploaded["imageUrl"]).resolve()
+        self.assertTrue(stored_path.is_relative_to(durable_root.resolve()))
+        self.assertTrue(stored_path.is_file())
+        self.assertEqual(stored_path.read_bytes(), image_bytes)
 
     def test_persona_image_upload_rejects_unsupported_format_and_oversize_file(self):
         self._write_archives()
@@ -1862,6 +1868,35 @@ class PersonaDashboardApiTests(unittest.TestCase):
         finally:
             server.MAX_PERSONA_IMAGE_UPLOAD_BYTES = old_limit
         self.assertEqual(oversized.status_code, 413, oversized.text)
+
+    def test_persona_image_replace_keeps_replacement_in_durable_library(self):
+        self._write_archives()
+        durable_root = self.data_dir / "persona_media"
+        first_buffer = BytesIO()
+        Image.new("RGB", (1, 1), color=(1, 2, 3)).save(first_buffer, format="PNG")
+        first_bytes = first_buffer.getvalue()
+        replacement_buffer = BytesIO()
+        Image.new("RGB", (2, 2), color=(18, 52, 86)).save(replacement_buffer, format="PNG")
+        replacement_bytes = replacement_buffer.getvalue()
+
+        with mock.patch.object(server, "_persona_media_root", return_value=durable_root):
+            created = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/images/upload",
+                files={"image": ("first.png", first_bytes, "image/png")},
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+            image_id = created.json()["saved_item_id"]
+            old_path = Path(created.json()["current_reference_url"])
+            replaced = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/images/{image_id}/replace",
+                files={"image": ("replacement.png", replacement_bytes, "image/png")},
+            )
+
+        self.assertEqual(replaced.status_code, 200, replaced.text)
+        new_path = Path(replaced.json()["current_reference_url"]).resolve()
+        self.assertTrue(new_path.is_relative_to(durable_root.resolve()))
+        self.assertEqual(new_path.read_bytes(), replacement_bytes)
+        self.assertFalse(old_path.exists())
 
     def test_persona_ai_keywords_calls_cli_and_returns_keywords(self):
         with mock.patch.object(

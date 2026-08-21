@@ -4,6 +4,7 @@ import {
   buildPersonaImagePrompt,
   buildPersonaCardImageDirection,
   generatePersonaImage,
+  generateReferenceSheet,
   resolvePersonaImageRoute,
 } from "@/lib/persona-image-production";
 import { buildPersonaVisualIdentityCue } from "@/lib/persona-image-search";
@@ -42,6 +43,26 @@ function nonWorkflowSetup(overrides: Partial<DramaSetup> = {}): DramaSetup {
 }
 
 describe("persona image production", () => {
+  it("routes standard persona reference sheets through text-to-image", async () => {
+    const calls: any[] = [];
+    const result = await generateReferenceSheet(
+      {
+        generate: async (payload: any) => {
+          calls.push(payload);
+          return { ok: true, url: "https://example.com/reference-sheet.png" };
+        },
+      },
+      nonWorkflowSetup({ personaImageReferenceUrl: "data:image/png;base64,b2xkLXJlZmVyZW5jZQ==" }),
+      "日常生活观察者",
+      "gemini-3.1-flash-image-preview",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].runningHubNewPersonaMode).toBe("text-to-image");
+    expect(calls[0].prompt).toContain("character reference sheet, three views");
+  });
+
   it("uses the generated post as the main referenced image prompt source", async () => {
     const calls: any[] = [];
     const imageAPI = {

@@ -192,6 +192,13 @@ def _persona_task_media_dir(task_id: str) -> Path:
     return (_persona_media_root() / safe_task_id).resolve()
 
 
+def _persona_library_media_dir(archive_id: str) -> Path:
+    safe_archive_id = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(archive_id or "")).strip("._-")
+    if not safe_archive_id:
+        raise ValueError("invalid persona archive id")
+    return (_persona_media_root() / "library" / safe_archive_id).resolve()
+
+
 def _delete_persona_task_media(task_id: str) -> None:
     try:
         shutil.rmtree(_persona_task_media_dir(task_id), ignore_errors=True)
@@ -10543,13 +10550,15 @@ def _build_agent_task_payload(
         "生产工作流入口已移除",
     )
 
-def _persist_generated_image_for_task(task_id: str, image_url: str, index: int = 1) -> str:
+def _persist_image_media(image_url: str, workdir: Path, stem: str) -> str:
     text = str(image_url or "").strip()
     if not text:
         raise RuntimeError("未返回可保存的图片结果。")
-    workdir = _persona_task_media_dir(task_id)
+    safe_stem = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(stem or "")).strip("._-")
+    if not safe_stem:
+        raise RuntimeError("图片存储标识无效。")
     workdir.mkdir(parents=True, exist_ok=True)
-    stem = "persona_post_preview" if index <= 1 else f"persona_post_preview_{index}"
+    suffix = ".png"
     if text.startswith("data:image/"):
         header, _, base64_data = text.partition(",")
         mime_part = header[5:].split(";", 1)[0].strip().lower()
@@ -10560,20 +10569,33 @@ def _persist_generated_image_for_task(task_id: str, image_url: str, index: int =
             "image/webp": ".webp",
             "image/gif": ".gif",
         }.get(mime_part, ".png")
-        target = workdir / f"{stem}{suffix}"
-        target.write_bytes(base64.b64decode(base64_data))
-        return str(target)
-    if re.match(r"^https?://", text, re.I):
-        suffix = Path(urlsplit(text).path).suffix or ".png"
-        target = workdir / f"{stem}{suffix}"
-        _download_to_file(text, target)
-        return str(target)
-    source = Path(text).expanduser().resolve()
-    if source.is_file():
-        target = workdir / f"{stem}{source.suffix or '.png'}"
-        shutil.copy2(source, target)
-        return str(target)
-    raise RuntimeError("未识别的图片结果地址。")
+    elif re.match(r"^https?://", text, re.I):
+        candidate = Path(urlsplit(text).path).suffix.lower()
+        suffix = candidate if candidate in IMAGE_EXTS else ".png"
+    else:
+        source = Path(text).expanduser().resolve()
+        if not source.is_file():
+            raise RuntimeError("未识别的图片结果地址。")
+        candidate = source.suffix.lower()
+        suffix = candidate if candidate in IMAGE_EXTS else ".png"
+    target = (workdir / f"{safe_stem}{suffix}").resolve()
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        if text.startswith("data:image/"):
+            temporary.write_bytes(base64.b64decode(base64_data))
+        elif re.match(r"^https?://", text, re.I):
+            _download_to_file(text, temporary)
+        else:
+            shutil.copy2(Path(text).expanduser().resolve(), temporary)
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return str(target)
+
+
+def _persist_generated_image_for_task(task_id: str, image_url: str, index: int = 1) -> str:
+    stem = "persona_post_preview" if index <= 1 else f"persona_post_preview_{index}"
+    return _persist_image_media(image_url, _persona_task_media_dir(task_id), stem)
 
 
 _PERSONA_POST_IMAGE_ASPECT_RATIOS = ("1:1", "3:4", "4:3", "9:16", "16:9")
@@ -18850,16 +18872,18 @@ def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str,
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     now = _persona_dashboard_iso_now()
+    entry_id = _new_id("personaimg")
+    persisted_image_url = _persist_image_media(image_url, _persona_library_media_dir(clean_id), entry_id)
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
     next_setup = dict(setup)
     next_setup["personaImageSkipped"] = False
-    next_setup["personaImageReferenceUrl"] = image_url
+    next_setup["personaImageReferenceUrl"] = persisted_image_url
     archive["setup"] = next_setup
-    archive["personaReferenceSheet"] = image_url
+    archive["personaReferenceSheet"] = persisted_image_url
     library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
     entry = {
-        "id": _new_id("personaimg"),
-        "imageUrl": image_url,
+        "id": entry_id,
+        "imageUrl": persisted_image_url,
         "createdAt": now,
         "prompt": prompt,
         "mode": mode,
@@ -18869,7 +18893,11 @@ def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str,
     }
     archive["personaImageLibrary"] = [entry, *library]
     archive["updatedAt"] = now
-    _write_persona_archives_preserving_shape(path, raw, archives)
+    try:
+        _write_persona_archives_preserving_shape(path, raw, archives)
+    except Exception:
+        Path(persisted_image_url).unlink(missing_ok=True)
+        raise
     data = _list_persona_archive_images(clean_id)
     data["saved_item_id"] = entry["id"]
     return data
@@ -18926,18 +18954,15 @@ def _delete_persona_archive_image(archive_id: str, image_id: str) -> dict[str, A
     archive["updatedAt"] = _persona_dashboard_iso_now()
     _write_persona_archives_preserving_shape(path, raw, archives)
 
-    # Only remove files that were explicitly uploaded for this web application.
-    # Generated and remote images may be shared or managed by their own provider.
     if (
-        str(deleted_item.get("source") or "").strip() in {"upload", "manual-upload"}
-        and deleted_url
+        deleted_url
         and not any(str(row.get("imageUrl") or "").strip() == deleted_url for row in remaining if isinstance(row, dict))
     ):
         try:
-            uploaded_path = Path(deleted_url).expanduser().resolve()
-            upload_root = UPLOAD_ROOT.resolve()
-            if uploaded_path.is_relative_to(upload_root) and uploaded_path.is_file():
-                uploaded_path.unlink()
+            stored_path = Path(deleted_url).expanduser().resolve()
+            allowed_roots = (UPLOAD_ROOT.resolve(), (_persona_media_root() / "library").resolve())
+            if any(stored_path.is_relative_to(root) for root in allowed_roots) and stored_path.is_file():
+                stored_path.unlink()
         except Exception:
             pass
     data = _list_persona_archive_images(clean_archive_id)
@@ -18976,7 +19001,7 @@ async def _save_persona_archive_upload(username: str, image: UploadFile | None) 
 async def _upload_persona_archive_image(archive_id: str, username: str, image: UploadFile | None) -> dict[str, Any]:
     uploaded_url = await _save_persona_archive_upload(username, image)
     try:
-        return _persona_archive_persist_reference_image(
+        result = _persona_archive_persist_reference_image(
             archive_id,
             image_url=uploaded_url,
             prompt="自定义上传人设图",
@@ -18985,12 +19010,12 @@ async def _upload_persona_archive_image(archive_id: str, username: str, image: U
             aspect_ratio="1:1",
             notes="custom uploaded persona reference image",
         )
-    except Exception:
+    finally:
         with contextlib.suppress(Exception):
             uploaded_path = Path(uploaded_url).expanduser().resolve()
             if uploaded_path.is_relative_to(UPLOAD_ROOT.resolve()) and uploaded_path.is_file():
                 uploaded_path.unlink()
-        raise
+    return result
 
 
 async def _replace_persona_archive_image(archive_id: str, image_id: str, username: str, image: UploadFile | None) -> dict[str, Any]:
@@ -18999,7 +19024,13 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
     if not clean_archive_id or not clean_image_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID 或图片 ID。")
     uploaded_url = await _save_persona_archive_upload(username, image)
+    persisted_url = ""
     try:
+        persisted_url = _persist_image_media(
+            uploaded_url,
+            _persona_library_media_dir(clean_archive_id),
+            f"{clean_image_id}-{uuid.uuid4().hex[:12]}",
+        )
         with _persona_archive_file_lock():
             path, raw, archives = _persona_archive_source_for_write(clean_archive_id)
             archive = _find_persona_archive(archives, clean_archive_id)
@@ -19022,7 +19053,7 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
             replacement = dict(item)
             replacement.pop("mode", None)
             replacement.update({
-                "imageUrl": uploaded_url,
+                "imageUrl": persisted_url,
                 "createdAt": now,
                 "source": "manual-upload",
                 "notes": "custom uploaded replacement persona reference image",
@@ -19033,27 +19064,31 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
                 setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
                 next_setup = dict(setup)
                 next_setup["personaImageSkipped"] = False
-                next_setup["personaImageReferenceUrl"] = uploaded_url
+                next_setup["personaImageReferenceUrl"] = persisted_url
                 archive["setup"] = next_setup
-                archive["personaReferenceSheet"] = uploaded_url
+                archive["personaReferenceSheet"] = persisted_url
             archive["updatedAt"] = now
             _write_persona_archives_preserving_shape_unlocked(path, raw, archives)
     except Exception:
         with contextlib.suppress(Exception):
+            if persisted_url:
+                Path(persisted_url).unlink(missing_ok=True)
+        raise
+    finally:
+        with contextlib.suppress(Exception):
             uploaded_path = Path(uploaded_url).expanduser().resolve()
             if uploaded_path.is_relative_to(UPLOAD_ROOT.resolve()) and uploaded_path.is_file():
                 uploaded_path.unlink()
-        raise
 
     if (
-        str(item.get("source") or "").strip() in {"upload", "manual-upload"}
-        and old_url
-        and old_url != uploaded_url
+        old_url
+        and old_url != persisted_url
         and not any(str(row.get("imageUrl") or "").strip() == old_url for row in library if isinstance(row, dict))
     ):
         try:
             old_path = Path(old_url).expanduser().resolve()
-            if old_path.is_relative_to(UPLOAD_ROOT.resolve()) and old_path.is_file():
+            allowed_roots = (UPLOAD_ROOT.resolve(), (_persona_media_root() / "library").resolve())
+            if any(old_path.is_relative_to(root) for root in allowed_roots) and old_path.is_file():
                 old_path.unlink()
         except Exception:
             pass
@@ -19071,15 +19106,14 @@ def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-    reference_sheet = _persona_reference_image_input_for_cli(archive)
     payload = {
         "setup": setup,
         "content": str(prompt or archive.get("content") or ""),
         "aspectRatio": str(aspect_ratio or "1:1").strip() or "1:1",
         "mode": str(mode or "person").strip() or "person",
         "referenceImageUrl": None,
-        "referenceSheetUrl": reference_sheet or None,
-        "generateReferenceSheet": not bool(reference_sheet),
+        "referenceSheetUrl": None,
+        "generateReferenceSheet": True,
         "dryRun": False,
     }
     _sync_tool_r18_api_config_for_persona_workflow()
