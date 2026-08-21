@@ -1154,6 +1154,72 @@ class CRMBackendFoundationTests(unittest.TestCase):
         self.assertTrue(live_requests[0]["liveOnly"])
         self.assertFalse(live_requests[0]["recordShown"])
 
+    def test_collection_sample_inspection_uses_tenant_account_and_durable_profile_actions(self):
+        social_requests = []
+        notifications = []
+
+        def social_adapter(conn, request):
+            social_requests.append(dict(request))
+            return {"social_task_id": f"sample-task-{len(social_requests)}"}
+
+        app = FastAPI()
+        app.dependency_overrides[get_current_user] = lambda: {
+            "id": self.admin_id, "is_admin": 1, "username": "crm_admin",
+            "_workspace_user_id": self.user_id,
+            "_workspace_username": "crm_user",
+            "_workspace_admin_user_id": self.admin_id,
+        }
+        app.dependency_overrides[require_admin] = lambda: {"id": self.admin_id, "is_admin": 1}
+        install_crm(app, social_task_adapter=social_adapter, post_commit_callback=notifications.append)
+        with db_module.db() as conn:
+            self._enable(conn)
+            now = 1_700_000_200
+            conn.execute(
+                "INSERT INTO social_accounts(id,user_id,persona_id,platform,username,profile_dir,status,health_status,created_at,updated_at) "
+                "VALUES ('sample-account',?,'persona-sample','threads','Sender.Name','profiles/sample','ready','alive',?,?)",
+                (self.user_id, now, now),
+            )
+            conn.execute(
+                "INSERT INTO social_accounts(id,user_id,persona_id,platform,username,profile_dir,status,health_status,created_at,updated_at) "
+                "VALUES ('other-sample-account',?,'persona-other','threads','Sender.Name','profiles/other','ready','alive',?,?)",
+                (self.other_user_id, now, now),
+            )
+
+        client = TestClient(app)
+        created = client.post(
+            "/api/crm/v1/collections/sample-inspection",
+            json={
+                "channel": "threads",
+                "senderUsername": "@Sender.Name",
+                "usernames": ["@alpha.one", "beta_two", "alpha.one", "not/a/profile"],
+                "idempotencyKey": "sample-inspection-contract",
+            },
+        )
+        self.assertEqual(created.status_code, 202, created.text)
+        self.assertEqual(created.json()["requested"], 2)
+        self.assertEqual(created.json()["usernames"], ["alpha.one", "beta_two"])
+        self.assertEqual(created.json()["status"], "queued")
+        self.assertEqual(notifications[0]["event"], "workflow_created")
+        self.assertEqual(len(social_requests), 1)
+        self.assertEqual(social_requests[0]["action"]["account_id"], "sample-account")
+        self.assertEqual(social_requests[0]["action"]["action_type"], "collect_profile")
+
+        detail = client.get(created.json()["status_url"])
+        self.assertEqual(detail.status_code, 200, detail.text)
+        actions = detail.json()["actions"]
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(actions[0]["target_key"], "https://www.threads.com/@alpha.one")
+        self.assertEqual(actions[1]["target_key"], "https://www.threads.com/@beta_two")
+        self.assertEqual(actions[0]["state"], "planned")
+        self.assertEqual(actions[1]["state"], "planned")
+
+        mismatch = client.post(
+            "/api/crm/v1/collections/sample-inspection",
+            json={"channel": "instagram", "accountId": "sample-account", "usernames": ["alpha.one"]},
+        )
+        self.assertEqual(mismatch.status_code, 404, mismatch.text)
+        self.assertEqual(mismatch.json()["code"], "crm_account_not_found")
+
     def test_media_upload_and_open_login_are_tenant_scoped_native_flows(self):
         notifications = []
         social_requests = []

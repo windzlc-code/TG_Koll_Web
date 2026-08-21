@@ -136,6 +136,15 @@ def _account_needs_login(status_value: Any, health_value: Any) -> bool:
     }
 
 
+def _sample_profile_username(value: Any) -> str:
+    """Normalize a public profile handle without accepting path or query data."""
+
+    username = str(value or "").strip().lstrip("@").casefold()
+    if not username or len(username) > 80 or re.fullmatch(r"[a-z0-9._]+", username) is None:
+        return ""
+    return username
+
+
 def _health_static_checks(static_root: Path, *, current: int) -> dict[str, Any]:
     """Cache immutable build-artifact checks away from the admin health path."""
 
@@ -799,6 +808,123 @@ def create_crm_router(
                 executor=live_search_executor,
                 collector_mode=collector_live_search,
             )
+
+    @router.post("/api/crm/v1/collections/sample-inspection", status_code=202)
+    async def inspect_collection_samples(
+        payload: dict[str, Any] = Body(...),
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        """Schedule tenant-scoped profile samples through the existing CRM worker."""
+
+        channel = str(payload.get("channel") or "threads").strip().lower()
+        if channel not in {"threads", "instagram"}:
+            raise CRMError(
+                "crm_invalid_field_value", "crm.errors.invalidFieldValue", status_code=400,
+                details={"field": "channel"},
+            )
+        raw_usernames = payload.get("usernames")
+        if not isinstance(raw_usernames, list):
+            raise CRMError(
+                "crm_invalid_field_value", "crm.errors.invalidFieldValue", status_code=400,
+                details={"field": "usernames"},
+            )
+        usernames: list[str] = []
+        seen: set[str] = set()
+        for value in raw_usernames:
+            username = _sample_profile_username(value)
+            if username and username not in seen:
+                usernames.append(username)
+                seen.add(username)
+            if len(usernames) >= 10:
+                break
+        if not usernames:
+            raise CRMError(
+                "crm_invalid_field_value", "crm.errors.invalidFieldValue", status_code=400,
+                details={"field": "usernames"},
+            )
+
+        requested_account_id = str(payload.get("account_id") or payload.get("accountId") or "").strip()
+        sender_username = _sample_profile_username(payload.get("sender_username") or payload.get("senderUsername"))
+        if not requested_account_id and not sender_username:
+            raise CRMError(
+                "crm_invalid_field_value", "crm.errors.invalidFieldValue", status_code=400,
+                details={"field": "senderUsername"},
+            )
+
+        with db() as conn:
+            target_id, _ = _require_effective(conn, user)
+            if requested_account_id:
+                account = conn.execute(
+                    "SELECT id,platform,username,status,health_status FROM social_accounts "
+                    "WHERE id=? AND user_id=?",
+                    (requested_account_id, target_id),
+                ).fetchone()
+            else:
+                account = conn.execute(
+                    "SELECT id,platform,username,status,health_status FROM social_accounts "
+                    "WHERE user_id=? AND lower(ltrim(username,'@'))=? AND lower(platform)=? "
+                    "ORDER BY updated_at DESC,id DESC LIMIT 1",
+                    (target_id, sender_username, channel),
+                ).fetchone()
+            if account is None or str(account["platform"] or "").strip().lower() != channel:
+                raise CRMError("crm_account_not_found", "crm.errors.accountNotFound", status_code=404)
+            if _account_needs_login(account["status"], account["health_status"]):
+                raise CRMError(
+                    "crm_account_needs_login", "crm.errors.accountNeedsLogin", status_code=409,
+                    details={"account_id": str(account["id"])},
+                )
+
+            targets = [
+                (
+                    f"https://www.threads.com/@{quote(username, safe='._')}"
+                    if channel == "threads"
+                    else f"https://www.instagram.com/{quote(username, safe='._')}/"
+                )
+                for username in usernames
+            ]
+            digest = hashlib.sha256("\n".join(usernames).encode("utf-8")).hexdigest()[:20]
+            idempotency_key = str(
+                payload.get("idempotency_key")
+                or payload.get("idempotencyKey")
+                or f"collection-samples:{target_id}:{account['id']}:{channel}:{digest}:{now_ts() // 60}"
+            ).strip()
+            workflow = create_workflow_atomic(
+                conn,
+                user_id=target_id,
+                workflow_type="collection_sample_inspection",
+                title=f"Collection samples · {channel} · {len(usernames)}",
+                input_data={
+                    "channel": channel,
+                    "account_id": str(account["id"]),
+                    "sender_username": str(account["username"] or ""),
+                    "usernames": usernames,
+                },
+                idempotency_key=idempotency_key,
+                actions=[
+                    {
+                        "action_type": "collect_profile",
+                        "account_id": str(account["id"]),
+                        "target_key": target,
+                        "write": False,
+                        "payload": {"platform": channel, "username": username, "limit": 20, "scroll_times": 1},
+                    }
+                    for username, target in zip(usernames, targets)
+                ],
+                social_task_adapter=social_task_adapter,
+            )
+        await _notify(
+            post_commit_callback,
+            {"event": "workflow_created", "workflow_id": workflow["id"], "user_id": target_id},
+        )
+        return {
+            "task_id": workflow["id"],
+            "status": workflow["status"],
+            "idempotency_key": workflow["idempotency_key"],
+            "status_url": f"/api/crm/v1/tasks/{workflow['id']}",
+            "channel": channel,
+            "requested": len(usernames),
+            "usernames": usernames,
+        }
 
     @router.post("/api/crm/v1/opc/history/query")
     def opc_history_query(
