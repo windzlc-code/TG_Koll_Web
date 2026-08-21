@@ -14372,9 +14372,9 @@ function setPublishMobileSelectionExpanded(dock, expanded) {
 }
 
 async function preflightSimpleFlowExecution(moduleId = state.activeModule) {
-  if (moduleId !== "publishing") return true;
+  if (moduleId !== "publishing") return {};
   const publishMode = normalizedPublishMode($("simplePublishMode")?.value || state.simpleBranches.publishing);
-  if (publishMode !== "publish_now") return true;
+  if (publishMode !== "publish_now") return {};
   const persona = selectedPersona();
   if (!persona) {
     showMsg("commandMsg", "请先选择一个人设。", false);
@@ -14386,7 +14386,11 @@ async function preflightSimpleFlowExecution(moduleId = state.activeModule) {
     showMsg("commandMsg", publishAccountBlockMessage(account), false);
     return false;
   }
-  return Boolean(account);
+  if (publishAccountRequiresExecutionConfirmation(account)) {
+    if (!(await promptPersonaAccountBinding(persona, account))) return false;
+    return { confirmedPublishAccountId: String(account.id || "").trim() };
+  }
+  return {};
 }
 
 function bindPublishMobileSelectionLongPress() {
@@ -15270,7 +15274,8 @@ function renderSimpleFlowModule(moduleId) {
       return;
     }
     if (state.simpleFlowPending) return;
-    if (!(await preflightSimpleFlowExecution(moduleId))) return;
+    const preflight = await preflightSimpleFlowExecution(moduleId);
+    if (!preflight) return;
     state.simpleFlowPending = true;
     state.simpleFlowPendingModule = moduleId;
     state.simpleFlowPendingStartedAt = Date.now();
@@ -15280,7 +15285,9 @@ function renderSimpleFlowModule(moduleId) {
       trigger.innerHTML = renderBusyButtonContent(moduleId === "publishing" ? "任务执行中" : `${actionLabel}中`, true, state.simpleFlowPendingStartedAt);
     }
     try {
-      await executeSimpleFlow();
+      await executeSimpleFlow({
+        confirmedPublishAccountId: String(preflight.confirmedPublishAccountId || "").trim(),
+      });
     } catch (error) {
       showMsg("commandMsg", error.detail || error.message || "执行失败", false, {
         key: error?.toastKey || undefined,
@@ -16135,7 +16142,7 @@ async function submitPersonaPublishTask() {
   }
 }
 
-async function submitPublishContentTasks(accountId = "", persona = selectedPersona(), messageId = "commandMsg") {
+async function submitPublishContentTasks(accountId = "", persona = selectedPersona(), messageId = "commandMsg", { confirmedPublishAccountId = "" } = {}) {
   const source = normalizePublishContentSource();
   if (source === "custom") {
     return createSocialTask("publish_post", accountId, persona?.id || "", messageId);
@@ -16150,7 +16157,11 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
     await promptPersonaAccountBinding(persona);
     return null;
   }
-  if (publishAccountRequiresExecutionConfirmation(account) && !(await promptPersonaAccountBinding(persona, account))) return null;
+  if (
+    publishAccountRequiresExecutionConfirmation(account)
+    && String(account.id || "").trim() !== String(confirmedPublishAccountId || "").trim()
+    && !(await promptPersonaAccountBinding(persona, account))
+  ) return null;
   const rows = publishSourceRows(persona, source);
   const selectedIds = syncPublishSelectedPostIds(persona, source, rows);
   const selectedInSourceOrder = rows.map((post) => String(post.id || "")).filter((id) => selectedIds.includes(id));
@@ -17247,7 +17258,7 @@ function bindPublishAssistanceRestore(root = document) {
   });
 }
 
-async function executeSimpleFlow() {
+async function executeSimpleFlow({ confirmedPublishAccountId = "" } = {}) {
   if (state.activeModule === "queue") {
     setView("tasks");
     await loadTasks();
@@ -17273,7 +17284,7 @@ async function executeSimpleFlow() {
       const persona = state.personas.find((item) => String(item.id) === String(personaId)) || selectedPersona();
       accountId = selectedPublishAccountForPersona(persona)?.id || "";
       if (normalizePublishContentSource() !== "custom") {
-        const result = await submitPublishContentTasks(accountId, persona, "commandMsg");
+        const result = await submitPublishContentTasks(accountId, persona, "commandMsg", { confirmedPublishAccountId });
         const resultItems = Array.isArray(result) ? result : (result ? [result] : []);
         const resultTasks = resultItems.map((item) => item?.task).filter((task) => task?.id);
         const createdTasks = Array.isArray(result?.created) ? result.created : [];
@@ -17299,7 +17310,7 @@ async function executeSimpleFlow() {
       return;
     }
     const taskType = $("simplePrimary")?.value || selectedBranch(state.activeModule);
-    const result = await createSocialTask(taskType, accountId, personaId, "commandMsg");
+    const result = await createSocialTask(taskType, accountId, personaId, "commandMsg", { confirmedPublishAccountId });
     const taskId = String(result?.task?.id || "").trim();
     if (taskId) {
       appendEvent("queued", `${taskType} 已提交到指纹浏览器任务队列`, {
@@ -33340,7 +33351,7 @@ async function submitMatrixPublishTask(messageId = "commandMsg") {
   }
 }
 
-async function createSocialTask(taskType = $("socialTaskType")?.value, accountId = $("socialAccount")?.value || $("simpleAccount")?.value, personaId = "", messageId = "socialMsg") {
+async function createSocialTask(taskType = $("socialTaskType")?.value, accountId = $("socialAccount")?.value || $("simpleAccount")?.value, personaId = "", messageId = "socialMsg", { confirmedPublishAccountId = "" } = {}) {
   if (!accountId) {
     showMsg(messageId, "请先选择执行账号。", false);
     return;
@@ -33357,6 +33368,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   if (
     taskType === "publish_post"
     && publishAccountRequiresExecutionConfirmation(selected)
+    && String(selected?.id || "").trim() !== String(confirmedPublishAccountId || "").trim()
     && !(await promptPersonaAccountBinding(taskPersona, selected))
   ) return null;
   const lockParts = ["social", accountId, taskType, cleanPersonaId || "standalone"];

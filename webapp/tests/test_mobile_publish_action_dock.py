@@ -9,6 +9,13 @@ STYLES = (ROOT / "webapp" / "static" / "assets" / "console.css").read_text(encod
 
 
 class MobilePublishActionDockTests(unittest.TestCase):
+    def _function_source(self, name):
+        match = re.search(rf"(?:async\s+)?function\s+{re.escape(name)}\s*\(", SCRIPT)
+        self.assertIsNotNone(match, f"missing JavaScript function: {name}")
+        next_match = re.search(r"\n(?:async\s+)?function\s+\w+\s*\(", SCRIPT[match.end():])
+        end = match.end() + next_match.start() if next_match else len(SCRIPT)
+        return SCRIPT[match.start():end]
+
     def test_fixed_publish_action_joins_mobile_page_slide(self):
         start = SCRIPT.index("function animateMobileTaskDockPage(direction)")
         end = SCRIPT.index("\nfunction commitMobileTaskDockNavigation", start)
@@ -217,6 +224,23 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("async function preflightSimpleFlowExecution", SCRIPT)
         self.assertIn("await promptPersonaAccountBinding(persona);", SCRIPT)
 
+    def test_restricted_account_confirmation_finishes_before_busy_timer_starts(self):
+        preflight = self._function_source("preflightSimpleFlowExecution")
+        execute = self._function_source("executeSimpleFlow")
+        submit = self._function_source("submitPublishContentTasks")
+        create = self._function_source("createSocialTask")
+        handler = SCRIPT[
+            SCRIPT.index('if ($("executeSimpleFlow")) $("executeSimpleFlow").addEventListener("click"'):
+            SCRIPT.index("function bindSimpleFlowInputs")
+        ]
+
+        self.assertIn("publishAccountRequiresExecutionConfirmation(account)", preflight)
+        self.assertIn("await promptPersonaAccountBinding(persona, account)", preflight)
+        self.assertLess(handler.index("await preflightSimpleFlowExecution(moduleId)"), handler.index("state.simpleFlowPending = true;"))
+        self.assertIn("confirmedPublishAccountId", execute)
+        self.assertIn("confirmedPublishAccountId", submit)
+        self.assertIn("confirmedPublishAccountId", create)
+
     def test_mobile_publish_task_opens_assistant_and_restores_beside_execute(self):
         self.assertIn('mobilePublishingTaskId: ""', SCRIPT)
         self.assertIn("mobilePublishingTaskIds: []", SCRIPT)
@@ -260,6 +284,11 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIsNotNone(restore_rule)
         self.assertIn("grid-column: 3", restore_rule.group(1))
         self.assertIn("grid-row: 1", restore_rule.group(1))
+        self.assertIn("justify-self: stretch", restore_rule.group(1))
+        self.assertIn("align-self: stretch", restore_rule.group(1))
+        self.assertIn("width: 100%", restore_rule.group(1))
+        self.assertIn("min-height: 50px", restore_rule.group(1))
+        self.assertIn("padding: 9px 12px", restore_rule.group(1))
         action_render = SCRIPT[SCRIPT.index("const actionHtml ="):SCRIPT.index('if ($("executeSimpleFlow"))')]
         self.assertNotIn("mobilePublishingTaskPending) ? \"disabled\"", action_render)
 
