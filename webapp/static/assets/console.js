@@ -29319,8 +29319,8 @@ function accountProxyPoolFiltersHtml(scope = "modal", selectedProxyId = "") {
   return `<div class="account-proxy-picker-filters" data-account-proxy-filters>
     <div class="account-proxy-source-row">
       <div class="account-proxy-type-tabs" role="tablist" aria-label="代理来源">
-        <button type="button" class="is-active" role="tab" aria-selected="true" data-account-proxy-type="supplier">平台 <span class="record-tab-count" data-account-proxy-type-count="supplier">0</span></button>
-        <button type="button" role="tab" aria-selected="false" data-account-proxy-type="selected">已选择 <span class="record-tab-count" data-account-proxy-type-count="selected">0</span></button>
+        <button type="button" class="is-active" role="tab" aria-selected="true" data-account-proxy-type="supplier">可选IP <span class="record-tab-count" data-account-proxy-type-count="supplier">0</span></button>
+        <button type="button" role="tab" aria-selected="false" data-account-proxy-type="selected">已获得IP <span class="record-tab-count" data-account-proxy-type-count="selected">0</span></button>
       </div>
       <button type="button" class="account-proxy-clear" data-account-proxy-choice="" data-account-proxy-choice-scope="${esc(scope)}" aria-pressed="${selectedProxyId ? "false" : "true"}">${renderNoProxyIcon()}<span>不使用代理</span></button>
     </div>
