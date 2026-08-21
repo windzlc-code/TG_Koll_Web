@@ -45,6 +45,44 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(credentials_prompt["kind"], "credentials")
         self.assertIn("账号、邮箱或手机号", credentials_prompt["field_label"])
 
+    def test_verification_prompt_does_not_expose_platform_alternative_actions(self):
+        prompt = runner._login_assistance_presentation({
+            "status": "need_verification",
+            "challenge_type": "authenticator_totp",
+            "actions": [{"label": "Try another way", "title": "Try another way"}],
+        })
+
+        self.assertEqual(prompt["kind"], "verification_code")
+        self.assertNotIn("actions", prompt)
+        self.assertEqual(
+            runner._login_assistance_choice_labels({
+                "status": "need_verification",
+                "challenge_type": "authenticator_totp",
+            }),
+            [],
+        )
+
+    def test_post_login_interstitial_is_not_published_to_the_assistant(self):
+        control = {
+            "login_assistance_state": {
+                "phase": "running",
+                "kind": "progress",
+                "title": "正在验证",
+            },
+        }
+
+        runner._publish_login_assistance_state(
+            mock.Mock(),
+            control,
+            {
+                "status": "post_login_interstitial",
+                "actions": [{"label": "Continue", "title": "Continue"}],
+            },
+            handoff=True,
+        )
+
+        self.assertEqual(control["login_assistance_state"]["title"], "正在验证")
+
     def test_only_ready_state_maps_to_success(self):
         self.assertEqual(runner._login_assistance_presentation({"status": "ready"})["phase"], "success")
         self.assertNotEqual(runner._login_assistance_presentation({"status": "need_verification"})["phase"], "success")

@@ -3806,7 +3806,6 @@ def _login_assistance_presentation(status: dict[str, Any] | None) -> dict[str, A
                 "input_mode": input_mode,
                 "submit_label": "提交验证码",
                 "challenge_type": challenge_type,
-                "actions": actions,
             }
         if challenge_type == "method_selection":
             return {
@@ -3843,16 +3842,6 @@ def _login_assistance_presentation(status: dict[str, Any] | None) -> dict[str, A
             "actions": actions,
         }
     if status_code == "post_login_interstitial":
-        if actions:
-            return {
-                "phase": "attention",
-                "kind": "choice",
-                "title": "需要确认登录提示",
-                "message": _login_assistance_message(reason, "平台正在显示登录后确认页，请选择一个操作。"),
-                "submit_label": "查看实时画面",
-                "challenge_type": challenge_type,
-                "actions": actions,
-            }
         return {
             "phase": "running",
             "kind": "progress",
@@ -3910,17 +3899,8 @@ LOGIN_ASSISTANCE_CHOICE_GROUPS = {
         "WhatsApp",
         "Try another way", "尝试其他方式", "试试其他方法", "選擇其他方式",
     ],
-    "post_login_interstitial": [
-        "Not now", "以后再说", "暫時不要", "稍后",
-        "Save info", "Save", "保存信息", "储存资讯", "保存",
-        "Continue", "继续",
-    ],
     "identity_or_human": [
         "Continue", "Confirm", "Next", "继续", "确认", "下一步",
-        "Try another way", "尝试其他方式",
-    ],
-    "verification_code": [
-        "Get a new code", "Resend code", "获取新验证码", "重新发送",
         "Try another way", "尝试其他方式",
     ],
 }
@@ -3947,16 +3927,11 @@ def _login_assistance_normalize_actions(raw: Any) -> list[dict[str, str]]:
 
 
 def _login_assistance_choice_labels(status: dict[str, Any]) -> list[str]:
-    status_code = str(status.get("status") or "").strip().lower()
     challenge_type = str(status.get("challenge_type") or "").strip().lower()
-    if status_code == "post_login_interstitial":
-        return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["post_login_interstitial"])
     if challenge_type == "method_selection":
         return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["method_selection"])
     if challenge_type in {"identity_challenge", "human_verification", "unknown_challenge"}:
         return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["identity_or_human"])
-    if challenge_type in {"sms_code", "email_code", "authenticator_totp", "unknown_code", "verification", "numeric_image_captcha"}:
-        return list(LOGIN_ASSISTANCE_CHOICE_GROUPS["verification_code"])
     return []
 
 
@@ -4182,6 +4157,8 @@ def _publish_login_assistance_state(
     if str(current.get("status") or "").strip().lower() == "need_verification" and not current.get("challenge_type"):
         with contextlib.suppress(Exception):
             current["challenge_type"] = str(_classify_verification_challenge(page).get("type") or "")
+    if str(current.get("status") or "").strip().lower() == "post_login_interstitial":
+        return
     if not handoff and not _login_assistance_requires_user(current, context_control):
         return
     if "actions" not in current and _login_assistance_choice_labels(current):
