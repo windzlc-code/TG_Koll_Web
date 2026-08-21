@@ -1426,7 +1426,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             let managementOpened = false;
             function selectedPersona() {{ return {{ id: "persona-1" }}; }}
             function publishAccountForPersona() {{ return account; }}
-            function publishAccountBlockMessage() {{ return "账号不可用但可以继续执行"; }}
+            function publishAccountBlockMessage() {{ return "账号封控状态仍可继续执行"; }}
             async function openConsoleModal(options) {{ modalOptions = options; return true; }}
             async function openPersonaAccountBindingPage() {{ managementOpened = true; return true; }}
             async {binding_prompt}
@@ -1449,9 +1449,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "abnormal" }}), "abnormal");
             assert.strictEqual(accountEffectiveStatus({{ status: "need_verification", health_status: "abnormal" }}), "risk_control");
             assert.strictEqual(accountEffectiveStatus({{ status: "need_verification", health_status: "abnormal", effective_status: "need_verification" }}), "risk_control");
-            assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "banned" }}), "banned");
+            assert.strictEqual(accountEffectiveStatus({{ status: "ready", health_status: "banned" }}), "risk_control");
             assert.strictEqual(accountEffectiveStatus({{ status: "cookie_expired", health_status: "alive" }}), "cookie_expired");
-            assert.strictEqual(accountEffectiveStatus({{ status: "disabled", health_status: "banned" }}), "disabled");
+            assert.strictEqual(accountEffectiveStatus({{ status: "disabled", health_status: "banned" }}), "risk_control");
             assert.strictEqual(accountEffectiveStatus({{
               status: "ready",
               health_status: "alive",
@@ -1648,7 +1648,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               return {{
                 phase: "error",
                 kind: "error",
-                title: "账号已被限制",
+                title: "账号封控",
                 message: "当前账号疑似被停用或封禁，无法继续自动登录。",
                 actions: [],
               }};
@@ -2578,7 +2578,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(statusTone("browser_launch"), "active");
             assert.strictEqual(statusTone("preparing"), "active");
             assert.strictEqual(statusTone("login_wait_timeout"), "error");
-            assert.strictEqual(statusTone("disabled"), "muted");
+            assert.strictEqual(statusTone("disabled"), "error");
             assert.strictEqual(statusLabel("need_verification"), "需验证");
             assert.strictEqual(statusLabel("account_confirmation_required"), "需登录");
             assert.strictEqual(accountStatusDisplayLabel("ready_unverified"), "已登录");
@@ -2588,18 +2588,41 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.strictEqual(accountStatusClassNames("invalid_credentials"), "pending_login");
             assert.strictEqual(accountStatusDisplayLabel("need_verification"), "未登录");
             assert.strictEqual(accountStatusDisplayLabel("account_confirmation_required"), "未登录");
-            assert.strictEqual(accountStatusDisplayLabel("risk_control"), "封控验证");
-            assert.strictEqual(accountStatusDisplayLabel("check_failed"), "登录异常");
-            assert.strictEqual(accountStatusDisplayLabel("disabled"), "账号不可用");
-            assert.strictEqual(accountStatusDisplayLabel("banned"), "账号不可用");
-            assert.strictEqual(accountStatusDisplayLabel("abnormal"), "账号异常");
-            assert.strictEqual(accountStatusDisplayLabel("unknown"), "未知");
+            assert.strictEqual(accountStatusDisplayLabel("risk_control"), "账号封控");
+            assert.strictEqual(accountStatusDisplayLabel("check_failed"), "未登录");
+            assert.strictEqual(accountStatusDisplayLabel("disabled"), "账号封控");
+            assert.strictEqual(accountStatusDisplayLabel("banned"), "账号封控");
+            assert.strictEqual(accountStatusDisplayLabel("abnormal"), "未登录");
+            assert.strictEqual(accountStatusDisplayLabel("unknown"), "未登录");
+            assert.strictEqual(accountStatusDisplayLabel("checking"), "未登录");
+            const accountLabels = new Set([
+              "ready", "ready_unverified", "pending_login", "cookie_expired", "invalid_credentials",
+              "need_verification", "account_confirmation_required", "checking", "check_failed", "abnormal",
+              "unknown", "risk_control", "disabled", "banned", "blocked", "suspended",
+            ].map(accountStatusDisplayLabel));
+            assert.deepStrictEqual([...accountLabels].sort(), ["已登录", "未登录", "账号封控"].sort());
             assert.strictEqual(accountStatusDisplayTone("ready_unverified"), "success");
             assert.strictEqual(accountStatusDisplayTone("disabled"), "error");
-            assert.strictEqual(accountStatusClassNames("account_confirmation_required"), "need_verification");
+            assert.strictEqual(accountStatusClassNames("account_confirmation_required"), "pending_login");
             assert.strictEqual(accountStatusClassNames("cookie_expired"), "pending_login");
-            assert.strictEqual(accountStatusClassNames("banned"), "disabled");
+            assert.strictEqual(accountStatusClassNames("disabled"), "abnormal");
+            assert.strictEqual(accountStatusClassNames("banned"), "abnormal");
+            assert.strictEqual(statusLabel("banned"), "账号封控");
             assert.strictEqual(statusLabel("preparing"), "准备执行");
+            """
+        )
+        self._run_node(harness)
+
+    def test_restricted_assistance_reuses_account_danger_icon(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            {self._function_source("renderPersonaAccountHealthIcon")}
+            {self._function_source("renderLoginAssistanceVisual")}
+            const visual = renderLoginAssistanceVisual({{ phase: "error", title: "账号封控" }});
+            assert.ok(visual.includes('m9 9 6 6'));
+            assert.ok(visual.includes('m15 9-6 6'));
+            assert.ok(!visual.includes('M12 7v6'));
             """
         )
         self._run_node(harness)

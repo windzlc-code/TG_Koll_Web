@@ -21186,6 +21186,7 @@ body.live-browser-modal-open {
 .status.transient_error,
 .status.abnormal,
 .status.banned,
+.status.disabled,
 .status.check_failed {
   background: var(--status-error-bg);
   color: var(--status-error-ink);
@@ -21211,7 +21212,6 @@ body.live-browser-modal-open {
   color: var(--status-manual-ink);
 }
 .status.cancelled,
-.status.disabled,
 .status.inactive,
 .status.unknown {
   background: var(--status-muted-bg);

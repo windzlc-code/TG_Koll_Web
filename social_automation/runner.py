@@ -3639,7 +3639,7 @@ def _wait_for_manual_login_completion(
             ):
                 ban_reason = str(
                     current_status.get("reason")
-                    or f"{_platform_name(platform)} 检测到账号已被限制，已停止本次自动化任务。"
+                    or f"{_platform_name(platform)} 检测到账号进入账号封控状态，已停止本次自动化任务。"
                 )
                 _report_account_login_status(context_control, "disabled", logger)
                 shot = _screenshot(status_page, screenshot_dir, task, "account_banned", logger)
@@ -3728,7 +3728,7 @@ def _login_assistance_presentation(status: dict[str, Any] | None) -> dict[str, A
         return {
             "phase": "error",
             "kind": "error",
-            "title": "账号已被限制",
+            "title": "账号封控",
             "message": _login_assistance_message(reason, "当前账号疑似被停用或封禁，无法继续自动登录。"),
             "challenge_type": challenge_type,
         }
@@ -4828,7 +4828,7 @@ def _warmup_risk_state(page, platform: str) -> dict[str, str] | None:
         return {
             "status": str(restriction.get("status") or "cookie_expired"),
             "health_status": str(restriction.get("health_status") or ""),
-            "reason": str(restriction.get("reason") or "账号已被限制。"),
+            "reason": str(restriction.get("reason") or "账号进入账号封控状态。"),
             "force_manual": "true",
         }
     has_verification_input = False

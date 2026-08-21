@@ -13501,10 +13501,10 @@ def _account_effective_status(row: Any) -> str:
     )
     attempted_at = int(item.get("status_attempted_at") or 0)
     attempt_error = str(item.get("status_attempt_error") or "").strip()
+    if health_status == "banned":
+        return "risk_control"
     if raw_status == "disabled":
         return "disabled"
-    if health_status == "banned":
-        return "banned"
     if raw_status == "need_verification" and health_status == "abnormal":
         return "risk_control"
     if raw_status != "ready":

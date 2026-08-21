@@ -104,8 +104,8 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             "manual_login_timeout": ("error", "error", "处理超时"),
             "cancelled": ("error", "error", "登录已停止"),
             "failed": ("error", "error", "登录未完成"),
-            "banned": ("error", "error", "账号已被限制"),
-            "disabled": ("error", "error", "账号已被限制"),
+            "banned": ("error", "error", "账号封控"),
+            "disabled": ("error", "error", "账号封控"),
         }
         for status, (phase, kind, title) in cases.items():
             prompt = runner._login_assistance_presentation({"status": status, "reason": "测试原因"})
@@ -117,7 +117,7 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             "health_status": "banned",
             "reason": "Account disabled",
         })
-        self.assertEqual(banned_via_health["title"], "账号已被限制")
+        self.assertEqual(banned_via_health["title"], "账号封控")
         self.assertEqual(banned_via_health["phase"], "error")
 
     def test_auto_login_does_not_surface_credentials_the_robot_can_submit(self):

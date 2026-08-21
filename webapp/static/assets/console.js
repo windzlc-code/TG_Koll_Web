@@ -2935,11 +2935,11 @@ function statusLabel(status) {
     pending_login: "待登录",
     account_confirmation_required: "需登录",
     need_verification: "需验证",
-    risk_control: "封控验证",
+    risk_control: "账号封控",
     cookie_expired: "登录已过期",
     transient_error: "登录页面异常",
-    disabled: "已禁用",
-    banned: "已封禁",
+    disabled: "账号封控",
+    banned: "账号封控",
     abnormal: "账号异常",
     check_failed: "检测失败",
     ready_unverified: "可用·待核验",
@@ -2970,11 +2970,11 @@ function statusLabel(status) {
 function statusTone(status) {
   const key = String(status || "").trim();
   if (["success", "ready", "standby"].includes(key)) return "success";
-  if (["failed", "error", "cookie_expired", "transient_error", "login_wait_timeout", "abnormal", "risk_control", "banned", "check_failed"].includes(key)) return "error";
+  if (["failed", "error", "cookie_expired", "transient_error", "login_wait_timeout", "abnormal", "risk_control", "banned", "disabled", "check_failed"].includes(key)) return "error";
   if (["queued", "scheduled", "pending"].includes(key)) return "queued";
   if (["need_manual", "pending_login", "account_confirmation_required", "need_verification", "ready_unverified"].includes(key)) return "manual";
   if (["running", "checking", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "active";
-  if (["cancelled", "disabled", "unknown"].includes(key)) return "muted";
+  if (["cancelled", "unknown"].includes(key)) return "muted";
   return "muted";
 }
 
@@ -2990,6 +2990,7 @@ function accountEffectiveStatus(account = null) {
   const healthStatus = String(account.health_status || "unknown").trim().toLowerCase();
   const supplied = String(account.effective_status || "").trim().toLowerCase();
   if (loginStatus === "need_verification" && healthStatus === "abnormal") return "risk_control";
+  if (healthStatus === "banned" || supplied === "banned") return "risk_control";
   if (supplied) return supplied;
   const observedAt = Math.max(Number(account.last_login_check_at || 0), Number(account.health_checked_at || 0));
   const attemptedAt = Number(account.status_attempted_at || 0);
@@ -3012,23 +3013,15 @@ function accountDisplayedStatus(account = null) {
 function accountStatusDisplayLabel(status = "") {
   const key = String(status || "").trim().toLowerCase();
   if (["ready", "ready_unverified", "success", "standby"].includes(key)) return "已登录";
-  if (["pending_login", "cookie_expired", "invalid_credentials"].includes(key)) return "未登录";
-  if (key === "risk_control") return "封控验证";
-  if (["need_verification", "account_confirmation_required"].includes(key)) return "未登录";
-  if (["checking", "running", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "检测中";
-  if (["transient_error", "check_failed", "failed", "error", "login_wait_timeout"].includes(key)) return "登录异常";
-  if (["disabled", "banned"].includes(key)) return "账号不可用";
-  if (key === "abnormal") return "账号异常";
-  return "未知";
+  if (["risk_control", "disabled", "banned", "blocked", "suspended", "platform_restricted", "unavailable"].includes(key)) return "账号封控";
+  return "未登录";
 }
 
 function accountStatusDisplayTone(status = "") {
   const key = String(status || "").trim().toLowerCase();
   if (["ready", "ready_unverified", "success", "standby"].includes(key)) return "success";
-  if (["checking", "running", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "active";
-  if (["pending_login", "cookie_expired", "invalid_credentials", "need_verification", "account_confirmation_required"].includes(key)) return "manual";
-  if (["transient_error", "check_failed", "failed", "error", "login_wait_timeout", "abnormal", "risk_control", "banned", "disabled"].includes(key)) return "error";
-  return "muted";
+  if (["risk_control", "disabled", "banned", "blocked", "suspended", "platform_restricted", "unavailable"].includes(key)) return "error";
+  return "manual";
 }
 
 function accountLastLoginCheckLabel(account) {
@@ -3046,14 +3039,8 @@ function accountLastLoginCheckLabel(account) {
 function accountStatusClassNames(status) {
   const key = String(status || "unknown").trim().toLowerCase();
   if (["ready", "ready_unverified", "success", "standby"].includes(key)) return "ready";
-  if (["pending_login", "cookie_expired", "invalid_credentials"].includes(key)) return "pending_login";
-  if (["need_verification", "account_confirmation_required"].includes(key)) return "need_verification";
-  if (key === "risk_control") return "abnormal";
-  if (["checking", "running", "browser_launch", "prepare", "preparing", "progress"].includes(key)) return "checking";
-  if (["transient_error", "check_failed", "failed", "error", "login_wait_timeout"].includes(key)) return "transient_error";
-  if (["disabled", "banned"].includes(key)) return "disabled";
-  if (key === "abnormal") return "abnormal";
-  return "unknown";
+  if (["risk_control", "disabled", "banned", "blocked", "suspended", "platform_restricted", "unavailable"].includes(key)) return "abnormal";
+  return "pending_login";
 }
 
 function accountStatusTitle(account = null) {
@@ -5842,7 +5829,7 @@ function publishAccountBlockMessage(account) {
   if (status === "pending_login") return "当前发布账号还未完成登录，提交发布后系统会自动打开浏览器执行登录流程。";
   if (status === "account_confirmation_required") return "当前发布账号尚未完成登录，请重新登录后再继续。";
   if (status === "need_verification") return "当前发布账号需要验证，提交发布后系统会自动打开浏览器并等待处理。";
-  if (status === "disabled" || healthStatus === "banned") return "当前发布账号已标记为不可用，仍可继续执行；系统会启动浏览器再次尝试发布。";
+  if (status === "disabled" || healthStatus === "banned") return "当前发布账号处于账号封控状态，仍可继续执行；系统会启动浏览器再次尝试发布。";
   return "当前发布账号将由系统在发布流程中自动检测登录状态。";
 }
 
@@ -27453,6 +27440,9 @@ function renderLoginAssistanceVisual(model = {}) {
     </span>`;
   }
   if (model.phase === "error") {
+    if (String(model.title || "").trim() === "账号封控") {
+      return `<span class="login-assistance-error-icon" aria-hidden="true">${renderPersonaAccountHealthIcon({ tone: "danger" })}</span>`;
+    }
     return `<span class="login-assistance-error-icon" aria-hidden="true">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6"></path><path d="M12 17h.01"></path></svg>
     </span>`;
