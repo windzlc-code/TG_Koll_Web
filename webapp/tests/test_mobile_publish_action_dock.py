@@ -236,6 +236,8 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn("function hidePublishAssistanceRestore", SCRIPT)
         self.assertIn("isPublishAssistanceOpen()", SCRIPT)
         self.assertIn("data-restore-publish-assistance", SCRIPT)
+        self.assertNotIn("publishAssistanceRestoreTaskId", SCRIPT)
+        self.assertNotIn("function publishAssistanceTrackedTask", SCRIPT)
         self.assertIn("body:has(.login-assistance-modal.is-publish-assistance) .publish-assistance-restore", STYLES)
         self.assertIn('renderBusyButtonContent(moduleId === "publishing" ? "任务执行中"', SCRIPT)
         self.assertIn(
@@ -244,13 +246,15 @@ class MobilePublishActionDockTests(unittest.TestCase):
         )
         self.assertIn("!deferMobilePublishingBrowserView(firstImmediateTaskId)", SCRIPT)
         self.assertIn("openPublishAssistanceView(immediateTaskId, { accountId })", SCRIPT)
-        self.assertIn("if (moduleId === \"publishing\" && mobilePublishingTask())", SCRIPT)
+        self.assertIn("if (moduleId === \"publishing\" && mobileTask)", SCRIPT)
+        self.assertIn("openLiveBrowserTaskView(String(mobileTask.id || \"\"));", SCRIPT)
         self.assertIn("function publishAssistanceLooksSettled", SCRIPT)
         self.assertIn("function releaseMobilePublishingTask", SCRIPT)
         self.assertIn("function refreshPublishingDockAfterAssistanceSettle", SCRIPT)
         self.assertIn("refreshPublishingDockAfterAssistanceSettle(cleanTaskId)", SCRIPT)
         self.assertIn('phase !== "success" && phase !== "error"', SCRIPT)
-        self.assertNotIn("openLiveBrowserTaskView(taskId);", SCRIPT[SCRIPT.index("if ($(\"executeSimpleFlow\"))"):SCRIPT.index("async function executeSimpleFlow")])
+        action_render = SCRIPT[SCRIPT.index("const actionHtml ="):SCRIPT.index('if ($("executeSimpleFlow"))')]
+        self.assertNotIn("mobilePublishingTaskPending) ? \"disabled\"", action_render)
 
     def test_mobile_publish_media_defers_decode_and_offscreen_paint(self):
         self.assertIn('loading="lazy" decoding="async"', SCRIPT)

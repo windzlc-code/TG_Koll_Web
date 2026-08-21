@@ -427,7 +427,6 @@ const state = {
   publishAssistanceAccountId: "",
   publishAssistancePersonaId: "",
   publishAssistanceDismissed: false,
-  publishAssistanceRestoreTaskId: "",
   publishMobileSelectionExpanded: false,
   publishFiles: [],
   socialFiles: [],
@@ -15223,7 +15222,7 @@ function renderSimpleFlowModule(moduleId) {
   const publishSelectionA11yAttrs = publishSelectionItems.length
     ? `aria-controls="publishMobileSelectionStrip" aria-expanded="${publishSelectionExpanded ? "true" : "false"}"`
     : "";
-  const actionHtml = moduleId === "automation" || ["automation_tasks", "publish_history"].includes(publishModeForAction) ? "" : `<div class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}">${moduleId === "publishing" ? renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction, publishSelectionExpanded) : ""}${moduleId === "publishing" && publishSelectionItems.length ? `<button id="clearPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-clear" title="清空选择" aria-label="清空选择" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">${renderClearSelectionIcon()}</button>` : ""}<button id="executeSimpleFlow" type="button" class="primary${moduleId === "publishing" ? " persona-gradient-outline-action" : ""}" aria-busy="${actionBusy ? "true" : "false"}" ${publishSelectionA11yAttrs} ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${(state.simpleFlowPending || actionBlocked || mobilePublishingTaskPending) ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(moduleId === "publishing" ? "任务执行中" : `${actionLabel}中`, true, actionBusyStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && !mobilePublishingTaskPending && dailyPublishIsLocked() ? "今日任务已锁定" : esc(actionLabel)))}${publishSelectionBadge}</button>${!publishSelectionExpanded ? renderPublishAssistanceRestoreButton() : ""}${moduleId === "publishing" && publishSelectionItems.length ? `<button id="cancelPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-cancel" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">取消</button>` : ""}</div>`;
+  const actionHtml = moduleId === "automation" || ["automation_tasks", "publish_history"].includes(publishModeForAction) ? "" : `<div class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}">${moduleId === "publishing" ? renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction, publishSelectionExpanded) : ""}${moduleId === "publishing" && publishSelectionItems.length ? `<button id="clearPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-clear" title="清空选择" aria-label="清空选择" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">${renderClearSelectionIcon()}</button>` : ""}<button id="executeSimpleFlow" type="button" class="primary${moduleId === "publishing" ? " persona-gradient-outline-action" : ""}" aria-busy="${actionBusy ? "true" : "false"}" ${publishSelectionA11yAttrs} ${moduleId === "publishing" ? dailyPublishActionAttrs() : ""} ${(state.simpleFlowPending || actionBlocked) ? "disabled" : ""}>${actionBusy ? renderBusyButtonContent(moduleId === "publishing" ? "任务执行中" : `${actionLabel}中`, true, actionBusyStartedAt) : (actionBlocked ? "其他任务执行中" : (moduleId === "publishing" && !mobilePublishingTaskPending && dailyPublishIsLocked() ? "今日任务已锁定" : esc(actionLabel)))}${publishSelectionBadge}</button>${!publishSelectionExpanded ? renderPublishAssistanceRestoreButton() : ""}${moduleId === "publishing" && publishSelectionItems.length ? `<button id="cancelPublishMobileSelectionEdit" type="button" class="publish-mobile-selection-cancel" aria-hidden="${publishSelectionExpanded ? "false" : "true"}">取消</button>` : ""}</div>`;
   $("moduleBody").innerHTML = `
     ${body}
     ${actionHtml}
@@ -15270,7 +15269,8 @@ function renderSimpleFlowModule(moduleId) {
       delete trigger.dataset.publishSelectionLongPress;
       return;
     }
-    if (moduleId === "publishing" && mobilePublishingTask()) {
+    if (moduleId === "publishing" && mobileTask) {
+      openLiveBrowserTaskView(String(mobileTask.id || ""));
       return;
     }
     if (state.simpleFlowPending) return;
@@ -17199,7 +17199,6 @@ function deferMobilePublishingBrowserView(taskIds = "", startedAt = 0) {
   state.mobilePublishingTaskId = state.mobilePublishingTaskIds[0];
   state.mobilePublishingTaskStartedAt = toastTimestampMs(startedAt) || Date.now();
   state.publishAssistanceDismissed = false;
-  state.publishAssistanceRestoreTaskId = "";
   return false;
 }
 
@@ -17214,36 +17213,14 @@ function isPublishAssistanceOpen() {
   return Boolean(document.getElementById("loginAssistanceModal")?.classList.contains("is-publish-assistance"));
 }
 
-function publishAssistanceTrackedTask(includeSettled = false) {
-  const taskIds = Array.from(new Set([
-    ...(Array.isArray(state.mobilePublishingTaskIds) ? state.mobilePublishingTaskIds : []),
-    state.mobilePublishingTaskId,
-    state.publishAssistanceRestoreTaskId,
-  ].map((value) => String(value || "").trim()).filter(Boolean)));
-  if (!taskIds.length) return null;
-  const tasksById = new Map((state.socialTasks || []).map((item) => [String(item?.id || "").trim(), item]));
-  const allowedStatuses = includeSettled
-    ? ["preparing", "queued", "running", "need_manual", "success", "failed", "cancelled"]
-    : ["preparing", "queued", "running", "need_manual"];
-  return taskIds
-    .map((taskId) => tasksById.get(taskId) || null)
-    .find((task) => allowedStatuses.includes(loginAssistanceTaskStatus(task)))
-    || null;
-}
-
 function shouldShowPublishAssistanceRestore() {
   if (!state.publishAssistanceDismissed) return false;
   if (isPublishAssistanceOpen()) return false;
-  // The browser can report a restriction before the worker has finalised the
-  // task.  Keep the compact restore control available for that active task;
-  // ``mobilePublishingTask`` intentionally hides error phases from the main
-  // publishing dock and therefore cannot be used for this decision.
-  return Boolean(publishAssistanceTrackedTask(Boolean(state.publishAssistanceRestoreTaskId)));
+  return Boolean(mobilePublishingTask());
 }
 
 function hidePublishAssistanceRestore() {
   state.publishAssistanceDismissed = false;
-  state.publishAssistanceRestoreTaskId = "";
   document.querySelectorAll("[data-restore-publish-assistance]").forEach((node) => node.remove());
 }
 
@@ -17253,7 +17230,7 @@ function renderPublishAssistanceRestoreButton() {
 }
 
 function restorePublishAssistanceView() {
-  const task = publishAssistanceTrackedTask(Boolean(state.publishAssistanceRestoreTaskId)) || mobilePublishingTask();
+  const task = mobilePublishingTask();
   const taskId = String(task?.id || state.mobilePublishingTaskId || "").trim();
   if (!taskId) return;
   hidePublishAssistanceRestore();
@@ -27524,7 +27501,7 @@ function renderLoginAssistanceAction(model = {}, session = null, options = {}) {
     return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-close>完成</button>`;
   }
   if (model.phase === "error") {
-    return `<button type="button" class="primary login-assistance-wide-action" ${options.stopTaskOnClose ? "data-login-assistance-stop-close" : "data-login-assistance-close"}>${options.stopTaskOnClose ? "关闭并停止任务" : "关闭"}</button>`;
+    return `<button type="button" class="primary login-assistance-wide-action" ${options.stopTaskOnClose ? "data-login-assistance-stop data-login-assistance-close-after-stop" : "data-login-assistance-close"}>${options.stopTaskOnClose ? "关闭并停止任务" : "关闭"}</button>`;
   }
   return `<div class="login-assistance-progress-note"><span></span>页面状态会自动更新，无需刷新</div>`;
 }
@@ -27702,7 +27679,7 @@ function openTaskAssistanceView(taskId = "", options) {
           <strong id="loginAssistanceTitle">${mode === "publish" ? "发布助手" : "登录助手"}</strong>
           <span>${esc(platformLabel(account?.platform || ""))} · ${esc(account?.username || account?.login_username || "当前账号")}</span>
         </div>
-        ${renderModalCloseButton(mode === "publish" ? "data-login-assistance-minimize" : "data-login-assistance-close")}
+        ${renderModalCloseButton("data-login-assistance-close")}
       </div>
       <div class="login-assistance-body is-running" data-login-assistance-body></div>
       <div class="login-assistance-footer">
@@ -27752,16 +27729,6 @@ function openTaskAssistanceView(taskId = "", options) {
     stopped = true;
     if (timer) window.clearTimeout(timer);
     if (mode !== "publish") return;
-    if (modal.dataset.publishAssistanceStopped === "true") {
-      hidePublishAssistanceRestore();
-      return;
-    }
-    if (modal.dataset.publishAssistanceMinimized === "true") {
-      state.publishAssistanceDismissed = true;
-      state.publishAssistanceRestoreTaskId = cleanTaskId;
-      syncPublishAssistanceRestore();
-      return;
-    }
     window.setTimeout(() => {
       if (document.getElementById("loginAssistanceModal")) return;
       const currentTask = (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId)
@@ -27784,6 +27751,7 @@ function openTaskAssistanceView(taskId = "", options) {
     }
     const stopButton = event.target.closest("[data-login-assistance-stop]");
     if (stopButton) {
+      const closeAfterStop = stopButton.hasAttribute("data-login-assistance-close-after-stop");
       stopButton.disabled = true;
       stopButton.dataset.stopPending = "true";
       stopButton.textContent = "正在停止…";
@@ -27794,35 +27762,16 @@ function openTaskAssistanceView(taskId = "", options) {
           || { id: cleanTaskId, status: "cancelled" };
         modal.dataset.loginAssistanceRenderKey = "";
         updateLoginAssistanceModal(modal, { ...cancelledTask, status: "cancelled" }, currentSession);
+        if (closeAfterStop) closeConsoleModal(null, modal);
       } catch (error) {
         delete stopButton.dataset.stopPending;
         stopButton.disabled = false;
-        stopButton.textContent = "停止任务";
+        stopButton.textContent = closeAfterStop ? "关闭并停止任务" : "停止任务";
         showToast(error?.detail || error?.message || "停止登录任务失败", false);
       }
       return;
     }
-    const stopAndCloseButton = event.target.closest("[data-login-assistance-stop-close]");
-    if (stopAndCloseButton) {
-      stopAndCloseButton.disabled = true;
-      stopAndCloseButton.textContent = "正在停止…";
-      try {
-        await cancelSocialAutomationTask(cleanTaskId, "socialMsg");
-        modal.dataset.publishAssistanceStopped = "true";
-        closeConsoleModal(null, modal);
-      } catch (error) {
-        stopAndCloseButton.disabled = false;
-        stopAndCloseButton.textContent = "关闭并停止任务";
-        showToast(error?.detail || error?.message || "停止发布任务失败", false);
-      }
-      return;
-    }
     if (event.target.closest("[data-login-assistance-close]")) {
-      closeConsoleModal(null, modal);
-      return;
-    }
-    if (event.target.closest("[data-login-assistance-minimize]")) {
-      modal.dataset.publishAssistanceMinimized = "true";
       closeConsoleModal(null, modal);
       return;
     }
