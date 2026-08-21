@@ -1088,7 +1088,10 @@ def _report_account_login_status(
     if not callable(callback):
         return
     try:
-        callback(str(status or "").strip())
+        clean_status = str(status or "").strip().lower()
+        # The persistence layer uses disabled + banned health for a platform
+        # ban; never let an out-of-vocabulary banned callback be dropped.
+        callback("disabled" if clean_status == "banned" else clean_status)
     except Exception as exc:
         logger.log(
             "warn",
@@ -2932,7 +2935,11 @@ def _account_status_for_login_handoff(status: dict[str, Any] | None) -> str:
     code = str((status or {}).get("status") or "").strip().lower()
     health = str((status or {}).get("health_status") or "").strip().lower()
     if health == "banned" or code == "banned":
-        return "banned"
+        # ``social_accounts.status`` deliberately uses ``disabled`` as its
+        # terminal value.  Do not send the health-layer ``banned`` marker to
+        # the running-task callback: it is not a valid account status and used
+        # to be silently ignored until the browser task finished.
+        return "disabled"
     if code == "disabled":
         return "disabled"
     if code == "need_verification":
@@ -3058,11 +3065,13 @@ def _wait_or_raise_manual(
         failed_status["reason"] = reason
     _publish_login_assistance_state(page, context_control, failed_status, handoff=True)
     health_status = str(failed_status.get("health_status") or "").strip().lower()
-    if str(status or "").strip().lower() in {"banned", "disabled"}:
+    effective_status = str(failed_status.get("status") or status or "failed").strip().lower()
+    if effective_status in {"banned", "disabled"} or str(status or "").strip().lower() in {"banned", "disabled"}:
         health_status = "banned"
+        effective_status = "disabled"
     raise AutoLoginFailedError(
         reason,
-        status,
+        effective_status,
         screenshot_path,
         health_status=health_status,
     )
@@ -3624,6 +3633,29 @@ def _wait_for_manual_login_completion(
                 raise_manual_login_timeout()
             current_code = str(current_status.get("status") or "").strip()
             _publish_login_assistance_state(status_page, context_control, current_status, handoff=True)
+            if (
+                str(current_status.get("health_status") or "").strip().lower() == "banned"
+                or current_code.lower() in {"banned", "disabled"}
+            ):
+                ban_reason = str(
+                    current_status.get("reason")
+                    or f"{_platform_name(platform)} 检测到账号已被限制，已停止本次自动化任务。"
+                )
+                _report_account_login_status(context_control, "disabled", logger)
+                shot = _screenshot(status_page, screenshot_dir, task, "account_banned", logger)
+                logger.log(
+                    "error",
+                    "account_banned",
+                    ban_reason,
+                    {"status": "disabled", "health_status": "banned", "details": _safe_login_status(current_status)},
+                    shot,
+                )
+                raise AutoLoginFailedError(
+                    ban_reason,
+                    "disabled",
+                    shot,
+                    health_status="banned",
+                )
             if current_code == "post_login_interstitial":
                 if _resolve_instagram_post_login_interstitial(status_page, logger):
                     if platform == "threads":

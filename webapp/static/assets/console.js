@@ -17212,10 +17212,27 @@ function isPublishAssistanceOpen() {
   return Boolean(document.getElementById("loginAssistanceModal")?.classList.contains("is-publish-assistance"));
 }
 
+function publishAssistanceTrackedTask() {
+  const taskIds = Array.from(new Set([
+    ...(Array.isArray(state.mobilePublishingTaskIds) ? state.mobilePublishingTaskIds : []),
+    state.mobilePublishingTaskId,
+  ].map((value) => String(value || "").trim()).filter(Boolean)));
+  if (!taskIds.length) return null;
+  const tasksById = new Map((state.socialTasks || []).map((item) => [String(item?.id || "").trim(), item]));
+  return taskIds
+    .map((taskId) => tasksById.get(taskId) || null)
+    .find((task) => ["preparing", "queued", "running", "need_manual"].includes(loginAssistanceTaskStatus(task)))
+    || null;
+}
+
 function shouldShowPublishAssistanceRestore() {
   if (!state.publishAssistanceDismissed) return false;
   if (isPublishAssistanceOpen()) return false;
-  return Boolean(mobilePublishingTask());
+  // The browser can report a restriction before the worker has finalised the
+  // task.  Keep the compact restore control available for that active task;
+  // ``mobilePublishingTask`` intentionally hides error phases from the main
+  // publishing dock and therefore cannot be used for this decision.
+  return Boolean(publishAssistanceTrackedTask());
 }
 
 function hidePublishAssistanceRestore() {
@@ -17229,7 +17246,7 @@ function renderPublishAssistanceRestoreButton() {
 }
 
 function restorePublishAssistanceView() {
-  const task = mobilePublishingTask();
+  const task = publishAssistanceTrackedTask() || mobilePublishingTask();
   const taskId = String(task?.id || state.mobilePublishingTaskId || "").trim();
   if (!taskId) return;
   hidePublishAssistanceRestore();
@@ -27465,7 +27482,7 @@ function renderLoginAssistanceChoices(model = {}, session = null) {
   </div>`;
 }
 
-function renderLoginAssistanceAction(model = {}, session = null) {
+function renderLoginAssistanceAction(model = {}, session = null, options = {}) {
   const inputAllowed = loginAssistanceMappedInputAllowed(session);
   const choices = renderLoginAssistanceChoices(model, session);
   if (model.kind === "verification_code") {
@@ -27500,7 +27517,7 @@ function renderLoginAssistanceAction(model = {}, session = null) {
     return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-close>完成</button>`;
   }
   if (model.phase === "error") {
-    return `<button type="button" class="primary login-assistance-wide-action" data-login-assistance-close>关闭</button>`;
+    return `<button type="button" class="primary login-assistance-wide-action" ${options.stopTaskOnClose ? "data-login-assistance-stop-close" : "data-login-assistance-close"}>${options.stopTaskOnClose ? "关闭并停止任务" : "关闭"}</button>`;
   }
   return `<div class="login-assistance-progress-note"><span></span>页面状态会自动更新，无需刷新</div>`;
 }
@@ -27569,7 +27586,9 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
         : ""}
     </div>
     ${renderTaskAssistanceDetails(model)}
-    <div class="login-assistance-action">${renderLoginAssistanceAction(model, session)}</div>
+    <div class="login-assistance-action">${renderLoginAssistanceAction(model, session, {
+      stopTaskOnClose: modal.classList.contains("is-publish-assistance"),
+    })}</div>
     ${session && model.kind !== "browser_interaction" && model.phase !== "success"
       ? `<button type="button" class="login-assistance-live-link" data-login-assistance-live>查看实时画面</button>`
       : ""}
@@ -27716,6 +27735,10 @@ function openTaskAssistanceView(taskId = "", options) {
     stopped = true;
     if (timer) window.clearTimeout(timer);
     if (mode !== "publish") return;
+    if (modal.dataset.publishAssistanceStopped === "true") {
+      hidePublishAssistanceRestore();
+      return;
+    }
     window.setTimeout(() => {
       if (document.getElementById("loginAssistanceModal")) return;
       const currentTask = (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId)
@@ -27753,6 +27776,21 @@ function openTaskAssistanceView(taskId = "", options) {
         stopButton.disabled = false;
         stopButton.textContent = "停止任务";
         showToast(error?.detail || error?.message || "停止登录任务失败", false);
+      }
+      return;
+    }
+    const stopAndCloseButton = event.target.closest("[data-login-assistance-stop-close]");
+    if (stopAndCloseButton) {
+      stopAndCloseButton.disabled = true;
+      stopAndCloseButton.textContent = "正在停止…";
+      try {
+        await cancelSocialAutomationTask(cleanTaskId, "socialMsg");
+        modal.dataset.publishAssistanceStopped = "true";
+        closeConsoleModal(null, modal);
+      } catch (error) {
+        stopAndCloseButton.disabled = false;
+        stopAndCloseButton.textContent = "关闭并停止任务";
+        showToast(error?.detail || error?.message || "停止发布任务失败", false);
       }
       return;
     }

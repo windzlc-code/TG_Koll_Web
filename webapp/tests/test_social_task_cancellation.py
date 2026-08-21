@@ -421,7 +421,7 @@ class SocialTaskCancellationTests(unittest.TestCase):
         updated = social_automation_api._persist_running_account_login_status(
             "publish-running-ban",
             "account-1",
-            "disabled",
+            "banned",
         )
 
         with sqlite3.connect(self.db_path) as conn:

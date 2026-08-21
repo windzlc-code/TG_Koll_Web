@@ -49,6 +49,48 @@ class LoginAssistancePresentationTests(unittest.TestCase):
         self.assertEqual(runner._login_assistance_presentation({"status": "ready"})["phase"], "success")
         self.assertNotEqual(runner._login_assistance_presentation({"status": "need_verification"})["phase"], "success")
 
+    def test_banned_handoff_uses_persisted_disabled_status(self):
+        self.assertEqual(
+            runner._account_status_for_login_handoff({"status": "cookie_expired", "health_status": "banned"}),
+            "disabled",
+        )
+
+    def test_manual_login_ban_updates_account_and_stops_the_task(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.net/login"
+        page.title.return_value = "Threads"
+        logger = mock.Mock()
+        control = {"task": {"id": "publish-ban", "payload": {}}}
+        banned = {
+            "status": "cookie_expired",
+            "health_status": "banned",
+            "reason": "平台已限制此账号。",
+        }
+        with (
+            mock.patch.object(runner, "_detect_platform_login_state", return_value=banned),
+            mock.patch.object(runner, "_restore_threads_after_instagram_login", return_value=banned),
+            mock.patch.object(runner, "_publish_login_assistance_state"),
+            mock.patch.object(runner, "_screenshot", return_value="account-banned.png"),
+            mock.patch.object(runner, "_report_account_login_status") as report_status,
+        ):
+            with self.assertRaises(runner.AutoLoginFailedError) as raised:
+                runner._wait_for_manual_login_completion(
+                    page,
+                    {"id": "publish-ban", "payload": {}},
+                    Path("."),
+                    logger,
+                    "threads",
+                    threading.Event(),
+                    "等待人工验证",
+                    "need_verification",
+                    "",
+                    {"status": "need_verification"},
+                    control,
+                )
+        self.assertEqual(raised.exception.status, "disabled")
+        self.assertEqual(raised.exception.health_status, "banned")
+        report_status.assert_called_once_with(control, "disabled", logger)
+
     def test_all_login_states_and_exceptions_have_distinct_live_prompts(self):
         cases = {
             "ready": ("success", "success", "登录成功"),

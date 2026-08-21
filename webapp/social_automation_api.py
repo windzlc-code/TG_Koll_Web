@@ -11305,6 +11305,12 @@ def _persist_running_account_login_status(task_id: str, account_id: str, status:
     clean_task_id = str(task_id or "").strip()
     clean_account_id = str(account_id or "").strip()
     clean_status = str(status or "").strip().lower()
+    # Browser detection historically emitted ``banned`` while the persisted
+    # account-state vocabulary uses ``disabled`` + ``health_status=banned``.
+    # Normalize at the callback boundary so every automation channel updates
+    # the account card immediately, even before task finalisation.
+    if clean_status == "banned":
+        clean_status = "disabled"
     if not clean_task_id or not clean_account_id or clean_status not in SOCIAL_ACCOUNT_STATUSES:
         return False
     now = _now()
