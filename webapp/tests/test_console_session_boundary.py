@@ -1450,6 +1450,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("publishAssistanceStopped", self._function_source("openTaskAssistanceView"))
         self.assertIn("data-login-assistance-minimize", self._function_source("openTaskAssistanceView"))
         self.assertIn("publishAssistanceMinimized", self._function_source("openTaskAssistanceView"))
+        self.assertIn("refreshSocialAccountsOnly({ force: true })", self._function_source("openTaskAssistanceView"))
+        self.assertIn("login_assistance?.phase", self._function_source("openTaskAssistanceView"))
         self.assertIn("state.publishAssistanceDismissed = true", self._function_source("openTaskAssistanceView"))
         self.assertIn("is-publish-assistance", self._function_source("openTaskAssistanceView"))
         self.assertNotIn("login-assistance-content", self._function_source("renderTaskAssistanceDetails"))

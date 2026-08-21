@@ -27728,13 +27728,23 @@ function openTaskAssistanceView(taskId = "", options) {
         : null)
       || null;
     const currentTask = task || (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId) || { id: cleanTaskId, status: "queued" };
+    const taskStatus = loginAssistanceTaskStatus(currentTask);
+    const assistancePhase = String(currentSession?.login_assistance?.phase || "").trim().toLowerCase();
+    const statusAccountId = accountId || String(currentTask?.account_id || "").trim();
+    if (statusAccountId && (["failed", "cancelled"].includes(taskStatus) || assistancePhase === "error")) {
+      const accountSyncKey = `${taskStatus}:${assistancePhase}:${String(currentSession?.login_assistance?.updated_at || "")}`;
+      if (modal.dataset.publishAssistanceAccountSyncKey !== accountSyncKey) {
+        modal.dataset.publishAssistanceAccountSyncKey = accountSyncKey;
+        await refreshSocialAccountsOnly({ force: true }).catch(() => {});
+      }
+    }
     if (!loginAssistancePollShouldPreserveSubmission(modal, currentTask, currentSession)) {
       updateLoginAssistanceModal(modal, currentTask, currentSession);
     }
     if (publishAssistanceLooksSettled(currentTask, currentSession)) {
       refreshPublishingDockAfterAssistanceSettle(cleanTaskId);
     }
-    if (!stopped && modal.isConnected && !["success", "failed", "cancelled"].includes(loginAssistanceTaskStatus(currentTask))) {
+    if (!stopped && modal.isConnected && !["success", "failed", "cancelled"].includes(taskStatus)) {
       timer = window.setTimeout(poll, 1000);
     }
   };
