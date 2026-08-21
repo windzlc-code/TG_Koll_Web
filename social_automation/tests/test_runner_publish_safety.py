@@ -1991,9 +1991,14 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         verification_page.url = "https://www.threads.net/"
         verification_page.is_closed.return_value = False
         control = {"login_assistance_action_page": verification_page}
+        def detect_status(current_page, platform):
+            if current_page is original_page:
+                return {"status": "cookie_expired"}
+            return {"status": "ready"}
+
         with (
             mock.patch.object(runner.time, "monotonic", return_value=1.0),
-            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "ready"}) as detect,
+            mock.patch.object(runner, "_detect_platform_login_state", side_effect=detect_status) as detect,
             mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}) as confirm,
             mock.patch.object(runner, "_screenshot", return_value="complete.png"),
         ):
@@ -2009,8 +2014,47 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "ready")
-        detect.assert_called_once_with(verification_page, "threads")
+        self.assertEqual(
+            detect.call_args_list,
+            [mock.call(original_page, "threads"), mock.call(verification_page, "threads")],
+        )
         confirm.assert_called_once_with(verification_page, "threads", mock.ANY, None)
+
+    def test_manual_login_detects_ready_primary_page_after_secondary_verification_submit(self):
+        original_page, verification_page = mock.Mock(), mock.Mock()
+        original_page.url = "https://www.threads.net/"
+        verification_page.url = "https://www.instagram.com/challenge/"
+        original_page.is_closed.return_value = False
+        verification_page.is_closed.return_value = False
+        original_page.context.pages = [original_page, verification_page]
+        control = {"login_assistance_action_page": verification_page}
+
+        def detect(current_page, platform):
+            self.assertEqual(platform, "threads")
+            if current_page is original_page:
+                return {"status": "ready", "url": original_page.url}
+            raise AssertionError("stale verification page was polled before the ready Threads page")
+
+        with (
+            mock.patch.object(runner.time, "monotonic", return_value=1.0),
+            mock.patch.object(runner, "_detect_platform_login_state", side_effect=detect) as detect_state,
+            mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}) as confirm,
+            mock.patch.object(runner, "_screenshot", return_value="complete.png"),
+        ):
+            result = runner._wait_for_manual_login_completion(
+                original_page,
+                {"id": "verification-primary-ready", "payload": {"manual_login_timeout_seconds": 300}},
+                Path("."),
+                _Logger(),
+                "threads",
+                None,
+                "verification required",
+                context_control=control,
+            )
+
+        self.assertEqual(result["status"], "ready")
+        detect_state.assert_called_once_with(original_page, "threads")
+        confirm.assert_called_once_with(original_page, "threads", mock.ANY, None)
 
     def test_verification_submission_reaches_threads_ready_closed_loop(self):
         actions = queue.Queue(maxsize=2)
@@ -2046,9 +2090,14 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         submit.assert_called_once()
         self.assertIs(control["login_assistance_action_page"], verification_page)
 
+        def detect_status(current_page, platform):
+            if current_page is original_page:
+                return {"status": "cookie_expired"}
+            return {"status": "ready"}
+
         with (
             mock.patch.object(runner.time, "monotonic", return_value=102.0),
-            mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "ready"}) as detect,
+            mock.patch.object(runner, "_detect_platform_login_state", side_effect=detect_status) as detect,
             mock.patch.object(runner, "_confirm_platform_ready", return_value={"status": "ready"}) as confirm,
             mock.patch.object(runner, "_screenshot", return_value="complete.png"),
         ):
@@ -2068,7 +2117,10 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(result["screenshot_path"], "complete.png")
         self.assertEqual(account_statuses, ["ready"])
         self.assertEqual(control["login_assistance_state"]["phase"], "success")
-        detect.assert_called_once_with(verification_page, "threads")
+        self.assertEqual(
+            detect.call_args_list,
+            [mock.call(original_page, "threads"), mock.call(verification_page, "threads")],
+        )
         confirm.assert_called_once_with(verification_page, "threads", mock.ANY, None)
 
     def test_manual_login_hard_deadline_wins_over_late_ready_result(self):

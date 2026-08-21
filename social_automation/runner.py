@@ -3598,7 +3598,11 @@ def _wait_for_manual_login_completion(
             if time.monotonic() >= deadline:
                 raise_manual_login_timeout()
             status_page = _login_assistance_status_page(page, context_control)
-            current_status = _detect_platform_login_state(status_page, platform)
+            current_status = _detect_platform_login_state(page, platform)
+            if status_page is not page and str(current_status.get("status") or "") != "ready":
+                current_status = _detect_platform_login_state(status_page, platform)
+            else:
+                status_page = page
             if platform == "threads":
                 current_status = _restore_threads_after_instagram_login(status_page, current_status, logger)
             if time.monotonic() >= deadline:
