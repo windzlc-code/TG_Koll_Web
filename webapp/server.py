@@ -17576,9 +17576,6 @@ def _persona_publish_account_for_archive(
             if not row:
                 raise HTTPException(status_code=400, detail=f"当前人设还没有可发布的 {platform} 执行账号。")
             account = dict(row)
-    account_status = str(account.get("status") or "").strip().lower()
-    if account_status == "disabled":
-        raise HTTPException(status_code=400, detail="当前执行账号已禁用。")
     if str(account.get("platform") or "").strip().lower() not in {"instagram", "threads"}:
         raise HTTPException(status_code=400, detail="当前 Web 发布链路只支持 Instagram 或 Threads 浏览器发布。")
     return account

@@ -6041,6 +6041,29 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload_obj.payload["caption"], "Publish me")
         self.assertEqual(payload_obj.payload["media_paths"], [str(media_path.resolve())])
 
+    def test_publish_persona_post_allows_explicit_retry_with_disabled_account(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-disabled", platform="threads", status="disabled")
+        create_resp = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/posts",
+            json={"title": "Retry publish", "content": "Try the browser again"},
+        )
+        self.assertEqual(create_resp.status_code, 200)
+        post = create_resp.json()
+
+        with mock.patch.object(
+            server,
+            "create_social_task",
+            return_value={"id": "sat-disabled", "task_type": "publish_post", "status": "queued"},
+        ) as mocked:
+            publish_resp = self.client.post(
+                f"/api/persona_dashboard/personas/persona-1/posts/{post['id']}/publish",
+                json={"account_id": "acct-disabled", "platform": "threads"},
+            )
+
+        self.assertEqual(publish_resp.status_code, 200, publish_resp.text)
+        self.assertEqual(mocked.call_args.args[0].account_id, "acct-disabled")
+
     def test_publish_persona_post_uses_content_override_without_mutating_draft(self):
         self._write_archives()
         self._insert_social_account(account_id="acct-threads", platform="threads", username="threads_user")

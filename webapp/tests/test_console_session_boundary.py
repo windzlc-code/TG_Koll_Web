@@ -1403,6 +1403,41 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("accountStatusTitle(account)", card)
         self.assertIn("updateAccountStatusViews()", task_loader)
 
+    def test_disabled_publish_reuses_existing_confirmation_and_continues(self):
+        submit_guard = self._function_source("canSubmitPublishWithAccount")
+        retry_guard = self._function_source("publishAccountRequiresExecutionConfirmation")
+        binding_prompt = self._function_source("promptPersonaAccountBinding")
+        direct_publish = self._function_source("submitPersonaPublishTask")
+        content_publish = self._function_source("submitPublishContentTasks")
+        custom_publish = self._function_source("createSocialTask")
+
+        self.assertIn("return isPublishPlatformAccount(account)", submit_guard)
+        self.assertIn('status === "disabled"', retry_guard)
+        self.assertIn('healthStatus === "banned"', retry_guard)
+        self.assertIn('confirmText: account ? "继续执行" : "绑定账号"', binding_prompt)
+        self.assertIn("if (account) return account", binding_prompt)
+        self.assertIn("await promptPersonaAccountBinding(persona, account)", direct_publish)
+        self.assertIn("await promptPersonaAccountBinding(persona, account)", content_publish)
+        self.assertIn("await promptPersonaAccountBinding(taskPersona, selected)", custom_publish)
+        self._run_node(textwrap.dedent(f"""
+            const assert = require("node:assert/strict");
+            const account = {{ id: "account-disabled", status: "disabled", platform: "threads" }};
+            let modalOptions = null;
+            let managementOpened = false;
+            function selectedPersona() {{ return {{ id: "persona-1" }}; }}
+            function publishAccountForPersona() {{ return account; }}
+            function publishAccountBlockMessage() {{ return "账号不可用但可以继续执行"; }}
+            async function openConsoleModal(options) {{ modalOptions = options; return true; }}
+            async function openPersonaAccountBindingPage() {{ managementOpened = true; return true; }}
+            async {binding_prompt}
+            (async () => {{
+              const result = await promptPersonaAccountBinding(selectedPersona(), account);
+              assert.equal(result, account);
+              assert.equal(modalOptions.confirmText, "继续执行");
+              assert.equal(managementOpened, false);
+            }})().catch((error) => {{ console.error(error); process.exit(1); }});
+        """))
+
     def test_effective_account_status_has_deterministic_precedence(self):
         effective = self._function_source("accountEffectiveStatus")
         harness = textwrap.dedent(
@@ -3237,6 +3272,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             }}
             async function promptPersonaAccountBinding() {{}}
             function canSubmitPublishWithAccount() {{ return true; }}
+            function publishAccountRequiresExecutionConfirmation() {{ return false; }}
             function publishAccountBlockMessage() {{ return ""; }}
             function publishSourceRows() {{
               return [
@@ -3371,6 +3407,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             }}
             async function promptPersonaAccountBinding() {{}}
             function canSubmitPublishWithAccount() {{ return true; }}
+            function publishAccountRequiresExecutionConfirmation() {{ return false; }}
             function publishAccountBlockMessage() {{ return ""; }}
             function publishSourceRows() {{ return [{{ id: "post-1", content: "one" }}]; }}
             function syncPublishSelectedPostIds() {{ return ["post-1"]; }}
@@ -3452,6 +3489,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             }}
             async function promptPersonaAccountBinding() {{}}
             function canSubmitPublishWithAccount() {{ return true; }}
+            function publishAccountRequiresExecutionConfirmation() {{ return false; }}
             function publishAccountBlockMessage() {{ return ""; }}
             function publishSourceRows() {{ return [{{ id: "post-no-media", content: "pure text", media_items: [] }}]; }}
             function syncPublishSelectedPostIds() {{ return ["post-no-media"]; }}

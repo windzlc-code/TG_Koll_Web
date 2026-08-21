@@ -5701,7 +5701,14 @@ function isReadyPublishAccount(account) {
 }
 
 function canSubmitPublishWithAccount(account) {
-  return isPublishPlatformAccount(account) && String(account?.status || "").trim().toLowerCase() !== "disabled";
+  return isPublishPlatformAccount(account);
+}
+
+function publishAccountRequiresExecutionConfirmation(account) {
+  if (!isPublishPlatformAccount(account)) return false;
+  const status = String(account?.status || "").trim().toLowerCase();
+  const healthStatus = String(account?.health_status || "").trim().toLowerCase();
+  return status === "disabled" || healthStatus === "banned";
 }
 
 function publishPlatformAccountsForPersona(persona) {
@@ -5830,11 +5837,12 @@ function publishPlatformHint(account) {
 
 function publishAccountBlockMessage(account) {
   const status = String(account?.status || "").trim().toLowerCase();
+  const healthStatus = String(account?.health_status || "").trim().toLowerCase();
   if (status === "cookie_expired") return "当前发布账号登录已过期，提交发布后系统会自动打开浏览器执行登录流程。";
   if (status === "pending_login") return "当前发布账号还未完成登录，提交发布后系统会自动打开浏览器执行登录流程。";
   if (status === "account_confirmation_required") return "当前发布账号尚未完成登录，请重新登录后再继续。";
   if (status === "need_verification") return "当前发布账号需要验证，提交发布后系统会自动打开浏览器并等待处理。";
-  if (status === "disabled") return "当前发布账号已停用，请到账号管理启用或更换账号后再发布。";
+  if (status === "disabled" || healthStatus === "banned") return "当前发布账号已标记为不可用，仍可继续执行；系统会启动浏览器再次尝试发布。";
   return "当前发布账号将由系统在发布流程中自动检测登录状态。";
 }
 
@@ -16084,10 +16092,7 @@ async function submitPersonaPublishTask() {
     await promptPersonaAccountBinding(persona);
     return;
   }
-  if (!canSubmitPublishWithAccount(account)) {
-    showMsg("commandMsg", publishAccountBlockMessage(account), false);
-    return;
-  }
+  if (publishAccountRequiresExecutionConfirmation(account) && !(await promptPersonaAccountBinding(persona, account))) return;
   const lockParts = ["publish", source, persona.id, post.id, account.id];
   if (isActionLocked(...lockParts) || activeSocialTaskFor({ accountId: account.id, personaId: persona.id, taskType: "publish_post", postId: post.id, postSource: source })) {
     showMsg("commandMsg", `当前${sourceLabel}已有任务在队列或执行中，请等待完成后再重复提交。`, false);
@@ -16166,10 +16171,7 @@ async function submitPublishContentTasks(accountId = "", persona = selectedPerso
     await promptPersonaAccountBinding(persona);
     return null;
   }
-  if (!canSubmitPublishWithAccount(account)) {
-    showMsg(messageId, publishAccountBlockMessage(account), false);
-    return null;
-  }
+  if (publishAccountRequiresExecutionConfirmation(account) && !(await promptPersonaAccountBinding(persona, account))) return null;
   const rows = publishSourceRows(persona, source);
   const selectedIds = syncPublishSelectedPostIds(persona, source, rows);
   const selectedInSourceOrder = rows.map((post) => String(post.id || "")).filter((id) => selectedIds.includes(id));
@@ -17187,15 +17189,16 @@ async function openPersonaAccountBindingPage(persona = selectedPersona(), accoun
   return true;
 }
 
-async function promptPersonaAccountBinding(persona = selectedPersona()) {
-  const account = publishAccountForPersona(persona);
+async function promptPersonaAccountBinding(persona = selectedPersona(), requestedAccount = null) {
+  const account = requestedAccount || publishAccountForPersona(persona);
   const confirmed = await openConsoleModal({
-    title: account ? "管理发布账号" : "绑定发布账号",
+    title: account ? "确认继续发布" : "绑定发布账号",
     message: account ? publishAccountBlockMessage(account) : "当前人设还没有绑定 Threads 或 Instagram 执行账号。请到账号管理绑定账号后再发布。",
-    confirmText: account ? "继续处理" : "绑定账号",
+    confirmText: account ? "继续执行" : "绑定账号",
     cancelText: "取消",
   });
   if (!confirmed) return false;
+  if (account) return account;
   return openPersonaAccountBindingPage(persona, account);
 }
 
@@ -33107,6 +33110,10 @@ function matrixPublishRequestedCount(rows = matrixPublishAvailabilityRows(), pla
 async function ensureMatrixPublishSubmissionPolicies(rows = [], platform = state.matrixPublish.platform) {
   const perPersonaCount = Math.min(Math.max(Number(state.matrixPublish.perPersonaCount || 1), 1), publishBatchLimit(platform));
   for (const row of rows || []) {
+    if (
+      publishAccountRequiresExecutionConfirmation(row?.account)
+      && !(await promptPersonaAccountBinding(row?.persona || null, row.account))
+    ) return false;
     const accountId = String(row?.account?.id || "").trim();
     const requested = Math.min(perPersonaCount, Number(row?.submitCount || 0));
     if (!accountId || !requested) continue;
@@ -33328,6 +33335,12 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
     return;
   }
   const cleanPersonaId = String(personaId || selected?.persona_id || "").trim();
+  const taskPersona = cleanPersonaId ? state.personas.find((item) => String(item.id || "") === cleanPersonaId) : null;
+  if (
+    taskType === "publish_post"
+    && publishAccountRequiresExecutionConfirmation(selected)
+    && !(await promptPersonaAccountBinding(taskPersona, selected))
+  ) return null;
   const lockParts = ["social", accountId, taskType, cleanPersonaId || "standalone"];
   const existingTask = taskType === "open_login"
     ? activeOpenLoginTaskForAccount(accountId)
@@ -33337,7 +33350,6 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
     return;
   }
   const rawContent = $("socialContent")?.value.trim() || $("simpleContent")?.value.trim() || "";
-  const taskPersona = cleanPersonaId ? state.personas.find((item) => String(item.id || "") === cleanPersonaId) : null;
   const content = taskType === "publish_post"
     ? applyPersonaLinkPresetToContent(rawContent, activePersonaLinkPreset(taskPersona ? state.personaProfiles[cleanPersonaId] : null))
     : rawContent;

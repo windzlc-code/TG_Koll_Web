@@ -395,6 +395,28 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 409)
         self.assertIn("已被封禁", str(raised.exception.detail))
 
+    def test_banned_account_can_create_publish_task_for_explicit_retry(self):
+        self._insert_account(status="disabled")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE social_accounts SET persona_id = '', health_status = 'banned' WHERE id = 'account-1'"
+            )
+
+        with mock.patch.object(social_automation_api, "wake_social_automation_worker"):
+            created = social_automation_api.create_social_task(
+                social_automation_api.SocialTaskPayload(
+                    persona_id="",
+                    account_id="account-1",
+                    platform="threads",
+                    task_type="publish_post",
+                    scheduled_at=10_000_000_000,
+                    payload={"content": "explicit retry"},
+                )
+            )
+
+        self.assertEqual(created["status"], "queued")
+        self.assertEqual(created["task_type"], "publish_post")
+
     def test_running_login_detection_updates_account_immediately(self):
         self._insert_account(status="cookie_expired")
         self._insert_task("publish-running", "running")
@@ -437,6 +459,7 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self._insert_account(status="ready")
         self._insert_task("publish-ban-signal", "running", task_type="publish_post")
         self._insert_task("publish-after-ban", "queued", task_type="browse_feed")
+        self._insert_task("publish-retry-after-ban", "queued", task_type="publish_post")
 
         completed = social_automation_api._finish_task(
             "publish-ban-signal",
@@ -462,8 +485,9 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(account[:2], ("disabled", "banned"))
         self.assertIn("封禁", account[2])
         self.assertEqual(next_task, ("cancelled", "account_banned_by_platform"))
+        self.assertEqual(self._status("publish-retry-after-ban"), "queued")
 
-    def test_previously_queued_task_cannot_launch_browser_after_account_ban(self):
+    def test_explicit_publish_retry_launches_browser_after_account_ban(self):
         self._insert_account(status="disabled")
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -479,11 +503,15 @@ class SocialTaskCancellationTests(unittest.TestCase):
         }
         control = {"cancel_event": threading.Event(), "task": dict(task)}
 
-        with mock.patch.object(social_automation_api, "_run_social_task_in_clean_thread") as run_task:
+        with mock.patch.object(
+            social_automation_api,
+            "_run_social_task_in_clean_thread",
+            return_value={"ok": False, "error": "platform still unavailable"},
+        ) as run_task:
             social_automation_api._execute_claimed_task_with_control(task, control)
 
-        self.assertFalse(run_task.called)
-        self.assertEqual(self._status("queued-before-ban"), "cancelled")
+        self.assertTrue(run_task.called)
+        self.assertEqual(self._status("queued-before-ban"), "failed")
 
     def test_auto_login_ban_exception_is_persisted_as_terminal_account_state(self):
         self._insert_account(status="ready")

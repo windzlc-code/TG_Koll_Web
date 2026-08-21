@@ -6905,11 +6905,11 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
         account = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (payload.account_id,)).fetchone()
         if not account:
             raise HTTPException(status_code=404, detail="账号不存在")
-        if str(account["status"] or "") == "disabled":
+        if str(account["status"] or "") == "disabled" and task_type != "publish_post":
             raise HTTPException(status_code=409, detail="账号已停用，不能创建任务")
         if (
             str(account["health_status"] or "").strip().lower() == "banned"
-            and task_type not in {"check_login", "open_login"}
+            and task_type not in {"check_login", "open_login", "publish_post"}
         ):
             raise HTTPException(status_code=409, detail="平台账号已被封禁，只能重新检测或打开登录处理。")
         account_platform = str(account["platform"] or "").strip().lower()
@@ -10193,7 +10193,7 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                     ) from exc
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
-    if (
+    if task.get("task_type") != "publish_post" and (
         str(account.get("status") or "").strip().lower() == "disabled"
         or str(account.get("health_status") or "").strip().lower() == "banned"
     ):
@@ -11572,7 +11572,8 @@ def _disable_banned_account_in_transaction(
     queued_rows = conn.execute(
         """
         SELECT * FROM social_automation_tasks
-        WHERE account_id = ? AND id != ? AND status IN ('preparing', 'queued', 'need_manual')
+        WHERE account_id = ? AND id != ? AND task_type != 'publish_post'
+          AND status IN ('preparing', 'queued', 'need_manual')
         """,
         (clean_account_id, str(current_task_id or "")),
     ).fetchall()
@@ -11583,7 +11584,8 @@ def _disable_banned_account_in_transaction(
         """
         UPDATE social_automation_tasks
         SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
-        WHERE account_id = ? AND id != ? AND status IN ('preparing', 'queued', 'need_manual')
+        WHERE account_id = ? AND id != ? AND task_type != 'publish_post'
+          AND status IN ('preparing', 'queued', 'need_manual')
         """,
         (now, cancellation_reason, now, clean_account_id, str(current_task_id or "")),
     )
