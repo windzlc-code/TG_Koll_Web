@@ -19,7 +19,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .auth import require_admin
+try:
+    from .auth import require_admin
+except ImportError:  # collector worker runtime does not ship webapp.auth
+    def require_admin(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("admin auth is unavailable on the collector worker")
 
 
 CONFIG_PATH = Path(os.getenv("COLLECTOR_PROXY_CONFIG_PATH", "/collector-proxy/config.json"))
@@ -893,6 +897,134 @@ def _sticky_template_field(config: dict[str, Any]) -> str:
         if _STICKY_SESSION_PATTERN.fullmatch(str(config.get(field) or "")):
             return field
     return ""
+
+
+_STICKY_SESSION_TOKEN = re.compile(
+    r"((?:_session-|-session-))([A-Za-z0-9]+)((?:_(?:ttl|time|lifetime)-[A-Za-z0-9]+)*)",
+    re.IGNORECASE,
+)
+
+
+def _pin_sticky_identity(value: str, account_id: str) -> str:
+    text = str(value or "")
+    account = str(account_id or "").strip()
+    if not text or not account or not _STICKY_SESSION_TOKEN.search(text):
+        return text
+    token = hashlib.sha256(f"collector-sticky:{account}".encode("utf-8")).hexdigest()[:16]
+    return _STICKY_SESSION_TOKEN.sub(lambda match: f"{match.group(1)}{token}{match.group(3)}", text, count=1)
+
+
+def _proxy_profile_for_account(config: dict[str, Any], proxy_id: str) -> dict[str, Any]:
+    clean_id = str(proxy_id or "").strip()
+    if not clean_id:
+        return {}
+    account = _stored_proxy_profile(config, "account")
+    if str(account.get("product_id") or "") == clean_id and account.get("host") and account.get("port"):
+        return dict(account)
+    for item in _normalise_products(config):
+        item_id = str(item.get("proxy_id") or item.get("product_id") or "").strip()
+        if item_id != clean_id:
+            continue
+        if item.get("host") and item.get("port"):
+            return dict(item)
+    if str(config.get("account_product_id") or "") == clean_id and account.get("host") and account.get("port"):
+        return dict(account)
+    return {}
+
+
+def _account_sticky_profile(config: dict[str, Any]) -> dict[str, Any]:
+    profile = _stored_proxy_profile(config, "account")
+    mode = str(profile.get("mode") or config.get("account_proxy_mode") or "sticky").strip().lower()
+    if profile.get("host") and int(profile.get("port") or 0) and mode != "static":
+        return dict(profile)
+    for item in _normalise_products(config):
+        item_mode = str(item.get("mode") or "").strip().lower()
+        if item_mode == "sticky" and item.get("host") and int(item.get("port") or 0):
+            return dict(item)
+    return {}
+
+
+def _record_sticky_session(account_id: str, exit_ip: str, expires_at: int) -> None:
+    path = CONFIG_PATH.with_name("account-sessions.json")
+    with _CONFIG_LOCK:
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            state = {}
+        if not isinstance(state, dict):
+            state = {}
+        accounts = state.get("accounts") if isinstance(state.get("accounts"), dict) else {}
+        now = _now()
+        accounts[str(account_id)] = {
+            "exit_ip": str(exit_ip or ""),
+            "started_at": now,
+            "rotated_at": now,
+            "expires_at": int(expires_at or 0),
+        }
+        state["accounts"] = accounts
+        handle, temp_name = tempfile.mkstemp(prefix=".collector-sticky-sessions-", dir=str(path.parent))
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                json.dump(state, stream, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp_name, path)
+        finally:
+            if os.path.exists(temp_name):
+                os.unlink(temp_name)
+
+
+def allocate_runtime_account_proxy(account_id: str) -> dict[str, Any]:
+    account = str(account_id or "").strip()
+    if not account:
+        raise RuntimeError("collector sticky proxy account_id is required")
+    try:
+        config = _load_config()
+    except Exception as exc:
+        raise RuntimeError("collector sticky proxy configuration is unavailable") from exc
+    profile = _account_sticky_profile(config)
+    if not profile.get("host") or not int(profile.get("port") or 0):
+        raise RuntimeError("collector sticky proxy is not configured")
+    profile = dict(profile)
+    profile["username"] = _pin_sticky_identity(str(profile.get("username") or ""), account)
+    profile["password"] = _pin_sticky_identity(str(profile.get("password") or ""), account)
+    try:
+        check = _test_connection(profile)
+    except HTTPException as exc:
+        raise RuntimeError(str(getattr(exc, "detail", "") or "collector sticky proxy probe failed")) from exc
+    if not check.get("ok"):
+        raise RuntimeError(str(check.get("error") or "collector sticky proxy probe failed"))
+    session_seconds = max(300, min(int(config.get("sticky_session_seconds") or 1800), 3600))
+    expires_at = _now() + session_seconds
+    exit_ip = str(check.get("exit_ip") or "").strip()
+    _record_sticky_session(account, exit_ip, expires_at)
+    protocol = str(profile.get("protocol") or "http").strip().lower() or "http"
+    return {
+        "server": f"{protocol}://{profile.get('host')}:{int(profile.get('port') or 0)}",
+        "username": str(profile.get("username") or ""),
+        "password": str(profile.get("password") or ""),
+        "product_id": str(profile.get("product_id") or profile.get("proxy_id") or ""),
+        "exit_ip": exit_ip,
+        "expires_at": expires_at,
+    }
+
+
+def runtime_account_proxy_url(account_id: str, proxy_id: str) -> str:
+    clean_proxy = str(proxy_id or "").strip()
+    if not clean_proxy:
+        return ""
+    try:
+        config = _load_config()
+    except Exception as exc:
+        raise RuntimeError("collector sticky proxy configuration is unavailable") from exc
+    profile = _proxy_profile_for_account(config, clean_proxy)
+    if not profile.get("host") or not int(profile.get("port") or 0):
+        raise RuntimeError("collector sticky proxy is configured but the matching product is unavailable")
+    mode = str(profile.get("mode") or config.get("account_proxy_mode") or "sticky").strip().lower()
+    if mode != "static":
+        profile["username"] = _pin_sticky_identity(str(profile.get("username") or ""), account_id)
+        profile["password"] = _pin_sticky_identity(str(profile.get("password") or ""), account_id)
+    return _proxy_url(profile)
 
 
 def _sticky_session_stats() -> dict[str, Any]:

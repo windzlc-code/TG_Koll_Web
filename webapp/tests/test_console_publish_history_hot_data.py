@@ -318,6 +318,11 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("archive?.id", targets)
         self.assertIn("if (currentBindings.length) return currentBindings;", targets)
         self.assertIn("threadsAccountPoolBindingIsCurrent", REFRESH_SCRIPT)
+        self.assertIn("PERSONA_DASHBOARD_PREFETCHED_METRICS_B64", REFRESH_SCRIPT)
+        self.assertIn("prefetchedProfileMetrics", REFRESH_SCRIPT)
+        self.assertIn('prefetchedProfileMetrics("threads", username)', REFRESH_SCRIPT)
+        self.assertNotIn("PERSONA_DASHBOARD_COLLECTOR_HTTP_ONLY", REFRESH_SCRIPT)
+        self.assertNotIn("missingCollectorProfileMetrics", REFRESH_SCRIPT)
         self.assertIn('replaceLegacyHandle: target.source === "account_pool"', REFRESH_SCRIPT)
         self.assertNotIn("archive?.publishHistory", targets)
         self.assertNotIn('"publish_history"', targets)
@@ -329,7 +334,7 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("postViewCount > 0 || postInteractions === 0", backfill)
 
     def test_manual_hot_refresh_uses_authenticated_source_and_reloads_history(self):
-        refresh = function_source("refreshPublishHistoryHotData", "publishGroupSelectionState")
+        refresh = function_source("refreshPublishHistoryHotData", "cancelPublishHistoryHotRefresh")
 
         self.assertIn('api("/api/persona_dashboard/refresh"', refresh)
         self.assertIn('source: "http_first"', refresh)
@@ -338,6 +343,14 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("publishHistoryRefreshPersonaId = cleanPersonaId", refresh)
         self.assertIn("syncPublishHistoryRefreshDom", refresh)
         self.assertEqual(refresh.count('renderSimpleFlowModule("publishing")'), 1)
+
+    def test_refresh_progress_shows_a_cancel_button_beside_the_busy_control(self):
+        filters = function_source("renderPersonaHistoryFilters", "renderPersonaHistoryDataContent")
+        cancel = function_source("cancelPublishHistoryHotRefresh", "publishGroupSelectionState")
+        self.assertIn("renderPublishHistoryRefreshCancel(refreshing)", filters)
+        self.assertIn("data-publish-history-refresh-cancel", CONSOLE_JS)
+        self.assertIn("/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}/cancel", cancel)
+        self.assertIn(".persona-history-refresh-cancel {", CONSOLE_CSS)
 
     def test_refresh_progress_is_scoped_to_the_selected_persona(self):
         panel = function_source("renderPublishHistoryPanel", "syncPublishHistoryRefreshDom")

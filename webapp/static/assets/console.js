@@ -39,6 +39,12 @@ const PERSONA_WRITING_LOCALES = [
 const PERSONA_DEFAULT_WRITING_LOCALE = "zh-TW";
 const ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
 const ADMIN_CONSOLE_SESSION = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+const DEPLOYMENT_ROLE = String(
+  document.documentElement.dataset.deploymentRole
+  || document.querySelector('meta[name="deployment-role"]')?.content
+  || "",
+).trim().toLowerCase();
+const COLLECTOR_DEPLOYMENT = DEPLOYMENT_ROLE === "collector";
 
 function pointerReorderNeedsLongPress(event) {
   return ["touch", "pen"].includes(String(event?.pointerType || "").toLowerCase());
@@ -375,11 +381,20 @@ function consumeGoogleAccountSessionResult() {
   openAccountPoolEditorModal({ platform: state.accountPoolPlatform });
 }
 
+const COLLECTOR_CONSOLE_MODULES = new Set(["tweet_generation", "accounts", "browser_list"]);
+function consoleModules() {
+  return COLLECTOR_DEPLOYMENT ? modules.filter((item) => COLLECTOR_CONSOLE_MODULES.has(item.id)) : modules;
+}
+const collectorSafeInitialView = COLLECTOR_DEPLOYMENT && ["persona_dashboard", "billing", "video_workspace"].includes(initialConsoleView)
+  ? "accounts"
+  : initialConsoleView;
 const state = {
-  view: initialConsoleViewIsSupported ? initialConsoleView : "persona_dashboard",
+  view: initialConsoleViewIsSupported
+    ? (collectorSafeInitialView === initialConsoleView ? initialConsoleView : "accounts")
+    : (COLLECTOR_DEPLOYMENT ? "accounts" : "persona_dashboard"),
   personalSettingsSection: "console",
   personalSecurity: { loaded: false, loading: false, mfa: null },
-  activeModule: "personas",
+  activeModule: COLLECTOR_DEPLOYMENT ? "tweet_generation" : "personas",
   transientWorkspaceLeaveAcknowledgement: "",
   transientWorkspaceAllowNextUnload: false,
   accountBrowserPanel: initialAccountBrowserPanelIsSupported ? initialAccountBrowserPanel : "accounts",
@@ -1644,10 +1659,10 @@ function ensureThemeToggle() {
 
 const modules = [
   { id: "personas", label: "我的人设", callback: "后台自动读取" },
-  { id: "tweet_generation", label: "推文生成", callback: "后台自动读取" },
+  { id: "tweet_generation", label: COLLECTOR_DEPLOYMENT ? "热点抓取" : "推文生成", callback: "后台自动读取" },
   { id: "publishing", label: "任务", callback: "后台自动排队" },
-  { id: "accounts", label: "账号管理", view: "accounts", panels: ["accounts", "proxies"] },
-  { id: "browser_list", label: "浏览器列表", view: "accounts", panel: "browsers" },
+  { id: "accounts", label: COLLECTOR_DEPLOYMENT ? "账号与登录" : "账号管理", view: "accounts", panels: COLLECTOR_DEPLOYMENT ? ["accounts", "proxies", "browsers"] : ["accounts", "proxies"] },
+  { id: "browser_list", label: COLLECTOR_DEPLOYMENT ? "登录监控" : "浏览器列表", view: "accounts", panel: "browsers" },
 ];
 
 const taskMeta = {
@@ -8053,16 +8068,18 @@ function syncMobilePageToolbar() {
 function renderMobileTaskDock() {
   const dock = $("mobileTaskDock");
   if (!dock) return;
-  const mobileDockItems = [
-    { id: "persona_dashboard", label: "首页", view: "persona_dashboard" },
-    ...modules.filter((item) => item.id !== "browser_list"),
-  ];
+  const mobileDockItems = COLLECTOR_DEPLOYMENT
+    ? consoleModules().filter((item) => item.id !== "browser_list")
+    : [
+      { id: "persona_dashboard", label: "首页", view: "persona_dashboard" },
+      ...modules.filter((item) => item.id !== "browser_list"),
+    ];
   dock.style.setProperty("--mobile-task-dock-item-count", String(mobileDockItems.length));
   if (!dock.querySelector(".mobile-task-dock-button")) {
     dock.innerHTML = mobileDockItems.map((item) => `
         <button type="button" class="mobile-task-dock-button" ${moduleNavigationAttributes(item)} aria-label="${esc(item.label)}">
           ${renderMobileTaskIcon(item.id)}
-          <span>${esc(item.label === "账号管理" ? "账号池" : item.label.replace("列表", ""))}</span>
+          <span>${esc(item.id === "accounts" || item.label === "账号管理" ? "账号池" : item.label.replace("列表", ""))}</span>
         </button>`).join("");
   }
   syncMobileTaskDockState(dock);
@@ -8212,7 +8229,7 @@ function commitMobileTaskDockNavigation(button, commit) {
 
 function renderModuleMenu() {
   updateWorkspaceFlow();
-  $("moduleMenu").innerHTML = `<div class="module-accordion">${modules.map((item) => {
+  $("moduleMenu").innerHTML = `<div class="module-accordion">${consoleModules().map((item) => {
     const itemPanel = String(item.panel || "");
     const itemPanels = Array.isArray(item.panels) ? item.panels.map((panel) => String(panel || "")) : [];
     const isActive = item.view
@@ -10663,6 +10680,11 @@ function renderPublishHistoryRefreshContent(refreshing = false, refreshStatus = 
   return `${renderRefreshIcon()}<span>${esc(label)}</span>`;
 }
 
+function renderPublishHistoryRefreshCancel(refreshing = false) {
+  if (!refreshing) return "";
+  return `<button type="button" class="persona-history-refresh-cancel" data-publish-history-refresh-cancel aria-label="取消刷新">取消</button>`;
+}
+
 function positionPersonaHistoryFilterMenu(menu) {
   if (!menu?.open) return;
   const trigger = menu.querySelector("summary");
@@ -10729,6 +10751,7 @@ function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
     </div>
     <div class="persona-history-toolbar-actions">
       <button type="button" class="persona-history-refresh" data-publish-history-refresh aria-busy="${refreshing ? "true" : "false"}" ${refreshing ? "disabled" : ""}>${renderPublishHistoryRefreshContent(refreshing, refreshStatus)}</button>
+      ${renderPublishHistoryRefreshCancel(refreshing)}
     </div>
     <span class="persona-history-count">共 ${esc(numberText(rows.length))} 条</span>
   </div>`;
@@ -11171,6 +11194,7 @@ function renderPersonaAccountPoolPickerCard(account, currentPersona = selectedPe
 }
 
 async function bindPoolAccountToPersona(accountId = "", persona = selectedPersona(), platform = "") {
+  if (COLLECTOR_DEPLOYMENT) return false;
   if (state.accountPoolBinding) return false;
   const cleanAccountId = String(accountId || "").trim();
   const personaId = String(persona?.id || "").trim();
@@ -14632,7 +14656,10 @@ function renderPublishHistoryPanel(persona = selectedPersona()) {
       <section class="publish-post-picker publish-history-picker">
         <div class="publish-panel-head">
           <div><strong>任务历史</strong><span>${esc(persona?.name || "当前人设")}</span></div>
-          <button type="button" data-publish-history-refresh class="primary" aria-busy="${refreshing ? "true" : "false"}" ${refreshing || !persona?.id ? "disabled" : ""}>${renderPublishHistoryRefreshContent(refreshing, refreshStatus)}</button>
+          <div class="publish-history-refresh-actions">
+            <button type="button" data-publish-history-refresh class="primary" aria-busy="${refreshing ? "true" : "false"}" ${refreshing || !persona?.id ? "disabled" : ""}>${renderPublishHistoryRefreshContent(refreshing, refreshStatus)}</button>
+            ${renderPublishHistoryRefreshCancel(refreshing)}
+          </div>
         </div>
         <div class="publish-history-note">这里只查看当前人设的已执行记录。系统每天自动同步一次；也可手动刷新真实互动数据。</div>
         <div class="publish-history-refresh-status" data-publish-history-refresh-status ${refreshStatus?.message ? "" : "hidden"}>${esc(refreshStatus?.message || "")}</div>
@@ -14646,12 +14673,19 @@ function syncPublishHistoryRefreshDom(persona = selectedPersona()) {
   const ownsRefresh = Boolean(personaId && state.publishHistoryRefreshPersonaId === personaId);
   const refreshing = Boolean(ownsRefresh && state.publishHistoryRefreshTaskId);
   const refreshStatus = ownsRefresh ? state.publishHistoryRefreshStatus : null;
-  const button = document.querySelector("[data-publish-history-refresh]");
-  if (button) {
+  document.querySelectorAll("[data-publish-history-refresh]").forEach((button) => {
     button.disabled = refreshing || !personaId;
     button.setAttribute("aria-busy", refreshing ? "true" : "false");
     button.innerHTML = renderPublishHistoryRefreshContent(refreshing, refreshStatus);
-  }
+    const actions = button.parentElement;
+    if (!actions) return;
+    let cancel = actions.querySelector("[data-publish-history-refresh-cancel]");
+    if (refreshing && !cancel) {
+      actions.insertAdjacentHTML("beforeend", renderPublishHistoryRefreshCancel(true));
+    } else if (!refreshing && cancel) {
+      cancel.remove();
+    }
+  });
   const status = document.querySelector("[data-publish-history-refresh-status]");
   if (status) {
     status.hidden = !refreshStatus?.message;
@@ -14753,6 +14787,7 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
     const taskId = String(task?.id || "").trim();
     if (!taskId) throw new Error("刷新任务未返回任务 ID");
     state.publishHistoryRefreshTaskId = taskId;
+    let cancelled = false;
     while (state.publishHistoryRefreshTaskId === taskId) {
       const current = await api(`/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}`);
       state.publishHistoryRefreshStatus = {
@@ -14765,17 +14800,26 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
       ) {
         syncPublishHistoryRefreshDom();
       }
-      if (!["queued", "running"].includes(String(current?.status || ""))) {
-        if (current?.status !== "success") throw new Error(current?.message || "热点数据刷新失败");
+      const status = String(current?.status || "");
+      if (!["queued", "running", "cancelling"].includes(status)) {
+        if (status === "cancelled") {
+          cancelled = true;
+          state.publishHistoryRefreshStatus = { progress: 100, message: current?.message || "已取消刷新。" };
+          showMsg("commandMsg", "已取消刷新。", true);
+          break;
+        }
+        if (status !== "success") throw new Error(current?.message || "热点数据刷新失败");
         break;
       }
-      await new Promise((resolve) => window.setTimeout(resolve, 2500));
+      await new Promise((resolve) => window.setTimeout(resolve, status === "cancelling" ? 300 : 2500));
     }
-    await loadPersonas().catch(() => {});
-    await loadPersonaPublishHistory(cleanPersonaId, { force: true });
-    await loadPersonaDashboardOverview({ force: true }).catch(() => null);
-    state.publishHistoryRefreshStatus = { progress: 100, message: "全量热点刷新完成，任务历史已更新。" };
-    showMsg("commandMsg", "全量热点刷新完成，任务历史已更新。", true);
+    if (!cancelled) {
+      await loadPersonas().catch(() => {});
+      await loadPersonaPublishHistory(cleanPersonaId, { force: true });
+      await loadPersonaDashboardOverview({ force: true }).catch(() => null);
+      state.publishHistoryRefreshStatus = { progress: 100, message: "全量热点刷新完成，任务历史已更新。" };
+      showMsg("commandMsg", "全量热点刷新完成，任务历史已更新。", true);
+    }
   } catch (error) {
     state.publishHistoryRefreshStatus = { progress: 100, message: error.detail || error.message || "热点数据刷新失败" };
     showMsg("commandMsg", state.publishHistoryRefreshStatus.message, false);
@@ -14791,6 +14835,28 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
       state.publishHistoryRefreshStatus = null;
       syncPublishHistoryRefreshDom();
     }, 8000);
+  }
+}
+
+async function cancelPublishHistoryHotRefresh() {
+  const taskId = String(state.publishHistoryRefreshTaskId || "").trim();
+  if (!taskId || taskId === "starting") return;
+  try {
+    state.publishHistoryRefreshStatus = {
+      progress: Number(state.publishHistoryRefreshStatus?.progress || 0),
+      message: "正在取消刷新...",
+    };
+    syncPublishHistoryRefreshDom();
+    const current = await api(`/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
+    if (String(current?.status || "") === "cancelled") {
+      state.publishHistoryRefreshStatus = {
+        progress: 100,
+        message: current?.message || "已取消刷新。",
+      };
+      syncPublishHistoryRefreshDom();
+    }
+  } catch (error) {
+    showMsg("commandMsg", error.detail || error.message || "取消刷新失败", false);
   }
 }
 
@@ -15653,6 +15719,12 @@ function bindSimpleFlowInputs(moduleId) {
       node.addEventListener("click", (event) => {
         event.stopPropagation();
         requeuePublishHistoryRecord(node.dataset.publishHistoryRequeue || "").catch(() => {});
+      });
+    });
+    document.querySelectorAll("[data-publish-history-refresh-cancel]").forEach((node) => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
+        cancelPublishHistoryHotRefresh().catch(() => {});
       });
     });
     document.querySelectorAll("[data-publish-history-refresh]").forEach((node) => {
@@ -28574,12 +28646,12 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       includeCopyButton: !isPersonaSettings,
       loginActionAttribute: isPersonaSettings ? "data-persona-account-open-login" : "data-social-open-login",
     })}
-    <strong class="account-pool-bound-persona ${boundPersona ? "is-bound" : "is-unbound"}" title="${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}">${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}</strong>
+    ${COLLECTOR_DEPLOYMENT || isPersonaSettings ? "" : `<strong class="account-pool-bound-persona ${boundPersona ? "is-bound" : "is-unbound"}" title="${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}">${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}</strong>`}
     <div class="account-card-meta">
       <span data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</span>
     </div>
     ${renderAccountPoolCardActions(account, { context: isPersonaSettings ? "persona-settings" : "pool", personaAccountAction })}
-    ${isPersonaSettings ? "" : renderPersonaProfileListToggle("accountPoolPersonaSidebar")}
+    ${isPersonaSettings || COLLECTOR_DEPLOYMENT ? "" : renderPersonaProfileListToggle("accountPoolPersonaSidebar")}
   </article>`;
 }
 
@@ -31181,6 +31253,7 @@ async function saveAccountPoolEditForm(accountId = "") {
 }
 
 function renderAccountPoolPersonaSidebar(selectedAccount) {
+  if (COLLECTOR_DEPLOYMENT) return "";
   const boundPersonaId = String(selectedAccount?.persona_id || "");
   const targetPersonaId = String(state.accountPoolPersonaId || boundPersonaId || "").trim();
   const selectedCount = accountPoolSelectedIds().length;
@@ -34096,6 +34169,11 @@ function bindEvents() {
       if (historyRequeue) {
         event.stopPropagation();
         requeuePublishHistoryRecord(historyRequeue.dataset.publishHistoryRequeue || "").catch(() => {});
+        return;
+      }
+      if (event.target.closest("[data-publish-history-refresh-cancel]")) {
+        event.stopPropagation();
+        cancelPublishHistoryHotRefresh().catch(() => {});
         return;
       }
       if (event.target.closest("[data-publish-history-refresh]")) {

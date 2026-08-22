@@ -224,6 +224,16 @@ class RemoteFetchControlTests(unittest.TestCase):
                 },
                 "crm.threads_live_search.v1",
             ),
+            (
+                {
+                    "action": "refresh-profile-metrics",
+                    "archiveId": "persona-a",
+                    "username": "sherryjim68",
+                    "platform": "threads",
+                    "outputOnly": True,
+                },
+                "persona.profile_metrics.v1",
+            ),
         )
         with patch.object(server, "configured_remote_fetch_client", return_value=client):
             with patch.dict(os.environ, {"TG_REMOTE_FETCH_MODE": "remote_required"}):

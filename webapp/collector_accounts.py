@@ -550,7 +550,7 @@ class CollectorAccountPool:
             if int(lease["expires_at"] or 0) <= timestamp:
                 raise CollectorLeaseExpiredError("collector lease has expired")
             account = conn.execute(
-                "SELECT platform, profile_dir FROM collector_accounts WHERE id = ?",
+                "SELECT id, platform, profile_dir, proxy_id FROM collector_accounts WHERE id = ?",
                 (str(lease["account_id"]),),
             ).fetchone()
             if account is None:
@@ -559,8 +559,10 @@ class CollectorAccountPool:
             if not profile_dir:
                 raise CollectorAccountError("collector browser profile is not configured")
             runtime_profile = {
+                "account_id": str(account["id"]),
                 "platform": str(account["platform"]),
                 "profile_dir": profile_dir,
+                "proxy_id": str(account["proxy_id"] or "").strip(),
             }
         return consumer(runtime_profile)
 

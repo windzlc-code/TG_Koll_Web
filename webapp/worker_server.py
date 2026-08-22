@@ -32,6 +32,7 @@ from .remote_fetch_protocol import (
 )
 from .collector_accounts import CollectorAccountPool, NoCollectorAccountAvailableError
 from .collector_db import get_collector_db_path
+from .collector_proxy_admin import allocate_runtime_account_proxy, runtime_account_proxy_url
 from .collector_vault import CollectorVault
 
 
@@ -42,6 +43,7 @@ ALLOWED_CAPABILITIES = {
     "persona.hot_keywords.v1": "prepare-hot-keywords",
     "persona.hot_recycle.v1": "recycle-hot-candidates",
     "persona.hot_post_metrics.v1": "refresh-hot-post",
+    "persona.profile_metrics.v1": "refresh-profile-metrics",
 }
 TERMINAL_STATES = {"success", "failed", "cancelled"}
 PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 62
@@ -1281,6 +1283,18 @@ def _run_tool_r18_job_once(
                 runtime_environment["PERSONA_DASHBOARD_THREADS_PROFILE_DIR"] = profile_dir
                 runtime_environment["THREADS_AUTH_PROFILE_DIR"] = profile_dir
             runtime_environment["TG_COLLECTOR_PROFILE_REQUIRED"] = "1"
+            proxy_id = str(runtime_profile.get("proxy_id") or "").strip()
+            if proxy_id:
+                proxy_url = runtime_account_proxy_url(
+                    str(runtime_profile.get("account_id") or ""),
+                    proxy_id,
+                )
+                if not proxy_url:
+                    raise RuntimeError("collector sticky proxy is configured but unavailable")
+                if platform == "instagram":
+                    runtime_environment["PERSONA_DASHBOARD_INSTAGRAM_PROXY_URL"] = proxy_url
+                else:
+                    runtime_environment["PERSONA_DASHBOARD_THREADS_PROXY_URL"] = proxy_url
 
         try:
             collector_pool.use_runtime_profile(
@@ -1438,6 +1452,14 @@ def run_tool_r18_job(
     raise RuntimeError("authenticated account-pool fetch failed") from last_error
 
 
+def _worker_job_concurrency() -> int:
+    try:
+        value = int(os.getenv("TG_WORKER_JOB_CONCURRENCY", "4") or 4)
+    except (TypeError, ValueError):
+        value = 4
+    return max(1, min(value, 8))
+
+
 class WorkerRuntime:
     def __init__(
         self,
@@ -1449,38 +1471,45 @@ class WorkerRuntime:
         self.stop_event = threading.Event()
         self.wake_event = threading.Event()
         self.thread: threading.Thread | None = None
+        self.threads: list[threading.Thread] = []
         self._active_lock = threading.Lock()
-        self._active_job_id = ""
-        self._active_cancel_event: threading.Event | None = None
+        self._active_jobs: dict[str, threading.Event] = {}
 
     def start(self) -> None:
-        if self.thread is not None and self.thread.is_alive():
+        if self.threads and any(thread.is_alive() for thread in self.threads):
             return
         self.store.publish_dataset_overview(force=True)
         self.stop_event.clear()
-        self.thread = threading.Thread(
-            target=self._loop,
-            name="tg-fetch-worker",
-            daemon=True,
-        )
-        self.thread.start()
+        self.threads = []
+        for index in range(_worker_job_concurrency()):
+            thread = threading.Thread(
+                target=self._loop,
+                name=f"tg-fetch-worker-{index}",
+                daemon=True,
+            )
+            thread.start()
+            self.threads.append(thread)
+        self.thread = self.threads[0]
 
     def stop(self) -> None:
         self.stop_event.set()
         self.wake_event.set()
         with self._active_lock:
-            if self._active_cancel_event is not None:
-                self._active_cancel_event.set()
-        if self.thread is not None:
-            self.thread.join(timeout=8)
+            for event in self._active_jobs.values():
+                event.set()
+        for thread in self.threads:
+            thread.join(timeout=8)
+        self.threads = []
+        self.thread = None
 
     def wake(self) -> None:
         self.wake_event.set()
 
     def cancel(self, job_id: str) -> None:
         with self._active_lock:
-            if self._active_job_id == job_id and self._active_cancel_event is not None:
-                self._active_cancel_event.set()
+            event = self._active_jobs.get(str(job_id or "").strip())
+            if event is not None:
+                event.set()
         self.wake()
 
     def _loop(self) -> None:
@@ -1497,8 +1526,7 @@ class WorkerRuntime:
             job_id = str(job["id"])
             cancel_event = threading.Event()
             with self._active_lock:
-                self._active_job_id = job_id
-                self._active_cancel_event = cancel_event
+                self._active_jobs[job_id] = cancel_event
             try:
                 result = self.runner(payload, cancel_event)
                 if cancel_event.is_set():
@@ -1518,8 +1546,7 @@ class WorkerRuntime:
                 )
             finally:
                 with self._active_lock:
-                    self._active_job_id = ""
-                    self._active_cancel_event = None
+                    self._active_jobs.pop(job_id, None)
 
 
 def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
@@ -1579,6 +1606,26 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
             raise ProtocolError("post metric refresh must be output-only")
         if not isinstance(post_snapshot, dict) or str(post_snapshot.get("id") or "").strip() != post_id:
             raise ProtocolError("current persona post snapshot is required")
+    if capability == "persona.profile_metrics.v1":
+        archive_id = str(normalized.get("archiveId") or "").strip()
+        username = str(normalized.get("username") or "").strip().lstrip("@")
+        platform = str(normalized.get("platform") or "threads").strip().lower()
+        if not archive_id:
+            raise ProtocolError("persona archive id is required")
+        if not username:
+            raise ProtocolError("profile username is required")
+        if platform not in {"threads", "instagram"}:
+            raise ProtocolError("profile platform must be threads or instagram")
+        if normalized.get("outputOnly") is not True:
+            raise ProtocolError("profile metric refresh must be output-only")
+        normalized["archiveId"] = archive_id
+        normalized["username"] = username
+        normalized["platform"] = platform
+        snapshot = _sanitize_persona_hot_archive_snapshot(normalized.get("archiveSnapshot"), archive_id)
+        if snapshot is not None:
+            normalized["archiveSnapshot"] = snapshot
+        elif "archiveSnapshot" in normalized:
+            raise ProtocolError("archiveSnapshot does not match archiveId")
     for private_field in (
         "accountId",
         "account_id",
@@ -1668,6 +1715,25 @@ def create_worker_app(
             "capabilities": sorted(ALLOWED_CAPABILITIES),
             "concurrency": 1,
         }
+
+    @app.post("/internal/worker/v1/account-proxy/allocate")
+    async def allocate_account_proxy(request: Request) -> dict[str, Any]:
+        body = await request.body()
+        await authenticate(request, body)
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="invalid json") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="invalid json")
+        account_id = str(payload.get("account_id") or "").strip()
+        if not account_id:
+            raise HTTPException(status_code=400, detail="account_id is required")
+        try:
+            proxy = allocate_runtime_account_proxy(account_id)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=str(exc)[:240]) from exc
+        return {"ok": True, "proxy": proxy}
 
     @app.post("/internal/worker/v1/hot-datasets/refresh")
     async def refresh_hot_datasets(request: Request) -> dict[str, Any]:

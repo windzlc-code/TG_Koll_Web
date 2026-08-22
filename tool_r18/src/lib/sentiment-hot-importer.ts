@@ -7250,11 +7250,18 @@ function resolveThreadsProfilePostMergeKey(post: Partial<ThreadsGraphqlProfilePo
     || cleanText(post.pk);
 }
 
+function threadsGraphqlProfileMediaData(payload: any): any {
+  return payload?.data?.mediaData
+    || payload?.data?.xdt_api__v1__text_feed__user_id__profile__connection
+    || payload?.data?.xdt_api__v1__text_feed__username__profile__connection
+    || null;
+}
+
 export function parseThreadsGraphqlProfilePagePayload(args: {
   username: string;
   payload: any;
 }): ThreadsGraphqlProfilePageResult {
-  const mediaData = args.payload?.data?.mediaData;
+  const mediaData = threadsGraphqlProfileMediaData(args.payload);
   const edges = Array.isArray(mediaData?.edges) ? mediaData.edges : [];
   const posts: ThreadsGraphqlProfilePostAggregate[] = [];
   for (const edge of edges) {
@@ -7822,37 +7829,58 @@ async function requestSessionHttpText(args: {
   headers?: Record<string, string>;
   proxyUrl?: string;
   timeoutMs?: number;
+  method?: "GET" | "POST";
+  body?: string;
 }): Promise<SessionHttpResult> {
   const proxyUrl = cleanText(args.proxyUrl);
   if (proxyUrl && !/^https?:\/\//i.test(proxyUrl)) {
     throw new Error("当前账号代理不是 HTTP/HTTPS 类型，已转入浏览器兼容链路。");
   }
   const cookie = buildPlatformCookieHeader(args.cookies, args.url);
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), Math.max(1_000, args.timeoutMs || 20_000));
-  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+  const method = args.method === "POST" ? "POST" : "GET";
+  const headers = {
+    accept: "*/*",
+    "accept-language": "zh-TW,zh;q=0.9,en;q=0.6",
+    ...(cookie ? { cookie } : {}),
+    ...(args.headers || {}),
+  };
+  const run = async (dispatcher?: any): Promise<SessionHttpResult> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), Math.max(1_000, args.timeoutMs || 20_000));
+    try {
+      const response = await fetch(args.url, {
+        method,
+        redirect: "follow",
+        signal: controller.signal,
+        headers,
+        ...(method === "POST" && args.body != null ? { body: args.body } : {}),
+        ...(dispatcher ? { dispatcher } : {}),
+      } as any);
+      return {
+        ok: response.ok,
+        status: response.status,
+        url: response.url || args.url,
+        text: await response.text(),
+      };
+    } finally {
+      clearTimeout(timeoutId);
+      await dispatcher?.close().catch(() => undefined);
+    }
+  };
+  let dispatcher: any;
   try {
-    const response = await fetch(args.url, {
-      method: "GET",
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        accept: "*/*",
-        "accept-language": "zh-TW,zh;q=0.9,en;q=0.6",
-        ...(cookie ? { cookie } : {}),
-        ...(args.headers || {}),
-      },
-      ...(dispatcher ? { dispatcher } : {}),
-    } as any);
-    return {
-      ok: response.ok,
-      status: response.status,
-      url: response.url || args.url,
-      text: await response.text(),
-    };
-  } finally {
-    clearTimeout(timeoutId);
-    await dispatcher?.close().catch(() => undefined);
+    dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+    return await run(dispatcher);
+  } catch (error) {
+    if (!proxyUrl) throw error;
+    const text = [
+      error instanceof Error ? error.message : String(error || ""),
+      error instanceof Error && error.cause ? String((error.cause as any)?.code || (error.cause as any)?.message || error.cause) : "",
+    ].join(" ");
+    if (!/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|timeout|abort|UND_ERR|Invalid URL|proxy/i.test(text)) {
+      throw error;
+    }
+    return await run(undefined);
   }
 }
 
@@ -7893,6 +7921,167 @@ export function extractThreadsProfileHttpPayloads(html: string): any[] {
   return payloads;
 }
 
+const THREADS_PROFILE_TAB_DOC_ID = "27090536597286483";
+const THREADS_PROFILE_TAB_RELAY_FLAGS = [
+  "__relay_internal__pv__BarcelonaIsLoggedInrelayprovider",
+  "__relay_internal__pv__BarcelonaHasProfileSelfReplyContextrelayprovider",
+  "__relay_internal__pv__BarcelonaHasDearAlgoConsumptionrelayprovider",
+  "__relay_internal__pv__BarcelonaHasEventBadgerelayprovider",
+  "__relay_internal__pv__BarcelonaGenAIRepliesEnabledrelayprovider",
+  "__relay_internal__pv__BarcelonaIsSearchDiscoveryEnabledrelayprovider",
+  "__relay_internal__pv__BarcelonaHasCommunitiesrelayprovider",
+  "__relay_internal__pv__BarcelonaHasGameScoreSharerelayprovider",
+  "__relay_internal__pv__BarcelonaHasPublicViewCountCardrelayprovider",
+  "__relay_internal__pv__BarcelonaHasCommunityEmojiUpdateCardrelayprovider",
+  "__relay_internal__pv__BarcelonaHasCommunityEntityCardrelayprovider",
+  "__relay_internal__pv__BarcelonaHasScorecardCommunityrelayprovider",
+  "__relay_internal__pv__BarcelonaHasSportTeamAllegianceCardrelayprovider",
+  "__relay_internal__pv__BarcelonaHasMusicrelayprovider",
+  "__relay_internal__pv__BarcelonaHasNewspaperLinkStylerelayprovider",
+  "__relay_internal__pv__BarcelonaHasMessagingrelayprovider",
+  "__relay_internal__pv__BarcelonaHasPodcastV2Consumptionrelayprovider",
+  "__relay_internal__pv__BarcelonaHasPodcastTranscriptConsumptionrelayprovider",
+  "__relay_internal__pv__BarcelonaShouldFulfillLightboxQueryrelayprovider",
+  "__relay_internal__pv__BarcelonaHasViewerRepliedrelayprovider",
+  "__relay_internal__pv__BarcelonaHasPrivateRepliesDeprecationrelayprovider",
+  "__relay_internal__pv__BarcelonaHasGhostPostEmojiActivationrelayprovider",
+  "__relay_internal__pv__BarcelonaOptionalCookiesEnabledrelayprovider",
+  "__relay_internal__pv__BarcelonaHasDearAlgoWebProductionrelayprovider",
+  "__relay_internal__pv__BarcelonaHasWebFaviconsrelayprovider",
+  "__relay_internal__pv__BarcelonaIsCrawlerrelayprovider",
+  "__relay_internal__pv__BarcelonaHasCommunityTopContributorsrelayprovider",
+  "__relay_internal__pv__BarcelonaCanSeeSponsoredContentrelayprovider",
+  "__relay_internal__pv__BarcelonaShouldShowFediverseM075Featuresrelayprovider",
+  "__relay_internal__pv__BarcelonaIsInternalUserrelayprovider",
+] as const;
+
+function extractThreadsHtmlBootToken(html: string, moduleName: string): string {
+  const escaped = moduleName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = String(html || "").match(new RegExp(`\\["${escaped}",\\[\\],\\{"token":"([^"]+)"\\}`));
+  return match?.[1] || "";
+}
+
+export function extractThreadsProfileUserId(html: string, username: string): string {
+  const escaped = String(username || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const source = String(html || "");
+  const patterns = [
+    new RegExp(`"username"\\s*:\\s*"${escaped}"[\\s\\S]{0,480}?"pk"\\s*:\\s*"(\\d{5,14})"`),
+    new RegExp(`"pk"\\s*:\\s*"(\\d{5,14})"[\\s\\S]{0,480}?"username"\\s*:\\s*"${escaped}"`),
+    new RegExp(`"username"\\s*:\\s*"${escaped}"[\\s\\S]{0,480}?"id"\\s*:\\s*"(\\d{5,14})"`),
+  ];
+  for (const pattern of patterns) {
+    const match = source.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+  return "";
+}
+
+function profileMetricsHttpOnly(): boolean {
+  return /^(?:1|true|yes|on)$/i.test(cleanText(
+    process.env.TG_THREADS_PROFILE_HTTP_ONLY || process.env.TG_COLLECTOR_PROFILE_REQUIRED,
+  ));
+}
+
+function cookieValueByName(cookies: any[], name: string): string {
+  const wanted = String(name || "").trim().toLowerCase();
+  const found = (Array.isArray(cookies) ? cookies : []).find((cookie: any) => (
+    cleanText(cookie?.name).toLowerCase() === wanted
+  ));
+  return cleanText(found?.value);
+}
+
+function threadsProfileTabRelayVariables(args: {
+  userId: string;
+  username: string;
+  after?: string;
+}): Record<string, any> {
+  const variables: Record<string, any> = {
+    id: args.userId,
+    userID: args.userId,
+    username: args.username,
+    after: args.after || null,
+    before: null,
+    first: 50,
+    last: null,
+  };
+  for (const flag of THREADS_PROFILE_TAB_RELAY_FLAGS) {
+    variables[flag] = !/BarcelonaIsCrawler|BarcelonaIsInternalUser|BarcelonaIsLoggedOut/.test(flag);
+  }
+  return variables;
+}
+
+async function paginateThreadsProfileGraphqlPages(args: {
+  username: string;
+  html: string;
+  cookies: any[];
+  proxyUrl?: string;
+  initialCursor?: string;
+  hasNextPage: boolean;
+}): Promise<{ posts: ThreadsGraphqlProfilePostAggregate[]; reachedEnd: boolean }> {
+  const userId = extractThreadsProfileUserId(args.html, args.username);
+  const lsd = extractThreadsHtmlBootToken(args.html, "LSD");
+  const dtsg = extractThreadsHtmlBootToken(args.html, "DTSGInitialData");
+  const csrf = cookieValueByName(args.cookies, "csrftoken");
+  if (!userId || !lsd || !csrf || !args.hasNextPage || !args.initialCursor) {
+    return { posts: [], reachedEnd: false };
+  }
+  const posts: ThreadsGraphqlProfilePostAggregate[] = [];
+  let cursor = args.initialCursor;
+  let reachedEnd = false;
+  const seenCursors = new Set<string>();
+  for (let pageIndex = 0; pageIndex < 120 && cursor; pageIndex += 1) {
+    if (seenCursors.has(cursor)) break;
+    seenCursors.add(cursor);
+    const body = new URLSearchParams({
+      lsd,
+      doc_id: THREADS_PROFILE_TAB_DOC_ID,
+      variables: JSON.stringify(threadsProfileTabRelayVariables({
+        userId,
+        username: args.username,
+        after: cursor,
+      })),
+      fb_api_caller_class: "RelayModern",
+      fb_api_req_friendly_name: "BarcelonaProfileThreadsTabDirectQuery",
+      server_timestamps: "true",
+      ...(dtsg ? { fb_dtsg: dtsg } : {}),
+    }).toString();
+    const response = await requestSessionHttpText({
+      url: "https://www.threads.com/api/graphql",
+      cookies: args.cookies,
+      proxyUrl: args.proxyUrl,
+      method: "POST",
+      body,
+      headers: {
+        accept: "*/*",
+        "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "x-fb-lsd": lsd,
+        "x-csrftoken": csrf,
+        "x-fb-friendly-name": "BarcelonaProfileThreadsTabDirectQuery",
+        "x-ig-app-id": "238260118351668",
+        "x-asbd-id": "359341",
+        origin: "https://www.threads.com",
+        referer: buildThreadsProfileUrl(args.username),
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty",
+      },
+      timeoutMs: 20_000,
+    }).catch(() => null);
+    const payload = safeJson(response?.text || "");
+    if (!response?.ok || !payload || payload?.errors) break;
+    const page = parseThreadsGraphqlProfilePagePayload({ username: args.username, payload });
+    for (const post of page.posts) posts.push(post);
+    if (page.pageInfoResolved && page.hasNextPage !== true) {
+      reachedEnd = true;
+      break;
+    }
+    if (!page.endCursor || page.endCursor === cursor) break;
+    cursor = page.endCursor;
+  }
+  return { posts, reachedEnd };
+}
+
 async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<ThreadsProfileHotMetrics> {
   const refreshedAt = new Date().toISOString();
   const cookies = readSentimentBrowserAuthCookies("threads");
@@ -7915,13 +8104,34 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
     }
     const byKey = new Map<string, ThreadsGraphqlProfilePostAggregate>();
     let reachedEnd = false;
+    let initialCursor = "";
+    let initialHasNext = false;
     for (const payload of extractThreadsProfileHttpPayloads(response.text)) {
       const page = parseThreadsGraphqlProfilePagePayload({ username, payload });
       if (page.pageInfoResolved && page.hasNextPage !== true) reachedEnd = true;
+      if (page.hasNextPage && page.endCursor) {
+        initialHasNext = true;
+        initialCursor = page.endCursor;
+      }
       for (const post of page.posts) {
         const key = resolveThreadsProfilePostMergeKey(post);
         if (key) byKey.set(key, { ...(byKey.get(key) || {}), ...post });
       }
+    }
+    if (!reachedEnd && initialHasNext && initialCursor) {
+      const extra = await paginateThreadsProfileGraphqlPages({
+        username,
+        html: response.text,
+        cookies,
+        proxyUrl: platformProxyUrl("threads"),
+        initialCursor,
+        hasNextPage: true,
+      }).catch(() => ({ posts: [] as ThreadsGraphqlProfilePostAggregate[], reachedEnd: false }));
+      for (const post of extra.posts) {
+        const key = resolveThreadsProfilePostMergeKey(post);
+        if (key) byKey.set(key, { ...(byKey.get(key) || {}), ...post });
+      }
+      if (extra.reachedEnd) reachedEnd = true;
     }
     const parsed = parseThreadsProfileHotMetricsText(readerText);
     const posts = [...byKey.values()];
@@ -7989,7 +8199,9 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       method: "failed",
       complete: false,
       scope: "failed",
-      error: error instanceof Error ? error.message : String(error || "Threads HTTP 刷新失败。"),
+      error: error instanceof Error
+        ? (error.cause ? `${error.message}: ${String((error.cause as any)?.code || (error.cause as any)?.message || error.cause)}` : error.message)
+        : String(error || "Threads HTTP 刷新失败。"),
     };
   }
 }
@@ -8092,6 +8304,7 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
   if (!process.env.VITEST_WORKER_ID) {
     bestHttpMetrics = await fetchThreadsProfileHotMetricsHttp(username);
     if (bestHttpMetrics.complete === true) return bestHttpMetrics;
+    if (profileMetricsHttpOnly()) return bestHttpMetrics;
     const hasLoginSessionCookie = hasThreadsProfileLoginSessionCookie(cookies);
     const cookieAttempts = hasLoginSessionCookie
       ? [cookies, []]
@@ -8729,6 +8942,17 @@ export async function fetchInstagramProfileHotMetrics(
     ? await fetchInstagramProfileHotMetricsHttp(username, publishedUrlsInput)
     : null;
   if (bestHttpMetrics?.complete === true) return bestHttpMetrics;
+  if (profileMetricsHttpOnly()) {
+    return bestHttpMetrics || {
+      platform: "instagram",
+      username,
+      refreshedAt,
+      method: "failed",
+      complete: false,
+      scope: "failed",
+      error: "Instagram HTTP 未返回完整账号资料。",
+    };
+  }
   let browser: any = null;
   try {
     const playwright = await import("playwright");

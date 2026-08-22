@@ -731,6 +731,41 @@ class _TransientThreadsHomePage(_Page):
         self.waited_states.append(state)
 
 
+class _HttpBlankThreadsHomePage(_Page):
+    def __init__(self):
+        super().__init__("about:blank")
+        self.goto_calls = []
+        self.goto_wait_until = []
+        self.waited_states = []
+
+    def goto(self, url, **kwargs):
+        self.goto_calls.append(url)
+        self.goto_wait_until.append(kwargs.get("wait_until"))
+        if "threads.net" in url and "/login" not in url:
+            self.url = "http://www.threads.net/"
+            return
+        self.url = url
+
+    def wait_for_load_state(self, state, **_kwargs):
+        self.waited_states.append(state)
+
+
+class _LoginFormReadyHomePage(_Page):
+    def __init__(self):
+        super().__init__("about:blank")
+        self.goto_calls = []
+        self.goto_wait_until = []
+        self.waited_states = []
+
+    def goto(self, url, **kwargs):
+        self.goto_calls.append(url)
+        self.goto_wait_until.append(kwargs.get("wait_until"))
+        self.url = "https://www.threads.com/login"
+
+    def wait_for_load_state(self, state, **_kwargs):
+        self.waited_states.append(state)
+
+
 class _PageWithBackground(_Page):
     def __init__(self, url="https://www.threads.net/"):
         super().__init__(url)
@@ -1966,11 +2001,13 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page.url = "https://www.threads.com/"
         logger = _Logger()
         with (
+            mock.patch.object(runner, "_goto"),
             mock.patch.object(runner, "_detect_platform_login_state", return_value={"status": "cookie_expired", "reason": "login page"}),
             mock.patch.object(runner, "_prepare_manual_threads_login_page"),
             mock.patch.object(runner, "_self_heal_login_page") as self_heal,
             mock.patch.object(runner, "_screenshot", return_value="timeout.png"),
             mock.patch.object(runner, "_wait_or_raise_manual", return_value={"status": "cookie_expired"}),
+            mock.patch.object(runner, "_wait_for_manual_login_completion", return_value={"status": "cookie_expired"}),
             mock.patch.object(runner.time, "time", side_effect=[0, 1, 31]),
         ):
             result = runner._run_open_login(
@@ -3767,6 +3804,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(runner, "_click_text_button", return_value=False),
             mock.patch.object(runner, "_visible_first", return_value=None),
             mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner.time, "sleep"),
+            mock.patch.object(runner.time, "monotonic", side_effect=[0, 13]),
             mock.patch.object(runner, "_screenshot", return_value="missing.png"),
             mock.patch.object(runner, "_goto") as goto,
         ):
@@ -3835,6 +3874,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                 side_effect=[False, False, False],
             ) as click,
             mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner.time, "sleep"),
+            mock.patch.object(runner.time, "monotonic", side_effect=[0, 13]),
             mock.patch.object(runner, "_screenshot", return_value="handoff.png"),
             mock.patch.object(runner, "_goto") as goto,
         ):
@@ -5613,7 +5654,90 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             [runner.THREADS_HOME, "https://www.threads.com/"],
         )
         self.assertEqual(page.url, "https://www.threads.com/")
-        self.assertEqual(page.waited_states, ["networkidle"])
+        self.assertEqual(page.waited_states, ["domcontentloaded", "networkidle"])
+
+    def test_threads_http_blank_home_failsover_without_waiting_for_domcontentloaded(self):
+        page = _HttpBlankThreadsHomePage()
+
+        runner._goto(
+            page,
+            runner.THREADS_HOME,
+            _Logger(),
+            "open_login",
+            timeout_ms=5000,
+            networkidle_ms=1500,
+        )
+
+        self.assertEqual(
+            page.goto_calls,
+            [runner.THREADS_HOME, "https://www.threads.com/"],
+        )
+        self.assertEqual(page.goto_wait_until, ["commit", "commit"])
+        self.assertEqual(page.url, "https://www.threads.com/")
+        self.assertEqual(page.waited_states, ["domcontentloaded", "networkidle"])
+
+    def test_threads_home_skips_networkidle_when_login_form_already_visible(self):
+        page = _LoginFormReadyHomePage()
+
+        with mock.patch.object(runner, "_visible_first", return_value=mock.Mock()):
+            runner._goto(
+                page,
+                runner.THREADS_HOME,
+                _Logger(),
+                "open_login",
+                timeout_ms=5000,
+                networkidle_ms=15000,
+            )
+
+        self.assertEqual(page.goto_calls, [runner.THREADS_HOME])
+        self.assertNotIn("networkidle", page.waited_states)
+
+    def test_threads_auto_login_fills_after_inputs_appear_during_shared_wait(self):
+        page = _Page(url="https://www.threads.com/login")
+        username_input = _Locator()
+        password_input = _Locator()
+        visible_calls = {"count": 0}
+
+        def visible_first(_page, selectors, _timeout_ms=1200):
+            visible_calls["count"] += 1
+            if visible_calls["count"] <= 4:
+                return None
+            return password_input if any("password" in item for item in selectors) else username_input
+
+        def click_text(_page, _logger, _names, stage, **_kwargs):
+            return stage == "auto_login_submit"
+
+        with (
+            mock.patch.object(runner, "_visible_first", side_effect=visible_first),
+            mock.patch.object(runner, "_click_threads_username_entry_by_structure", return_value=False),
+            mock.patch.object(runner, "_click_text_button", side_effect=click_text) as click,
+            mock.patch.object(runner, "_clear_and_type") as type_text,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner.time, "sleep"),
+            mock.patch.object(runner.time, "monotonic", side_effect=[0, 1, 2, 2, 2, 2, 2]),
+            mock.patch.object(runner, "_screenshot", return_value="delayed-inputs.png"),
+        ):
+            submitted = runner._auto_submit_login_form(
+                page,
+                "threads",
+                {"login_username": "saved-user", "login_password": "saved-password"},
+                _Logger(),
+                {"id": "delayed-login-inputs"},
+                Path("."),
+            )
+
+        self.assertTrue(submitted)
+        self.assertEqual(
+            [call.args[2] for call in type_text.call_args_list],
+            ["saved-user", "saved-password"],
+        )
+        self.assertIn("auto_login_submit", [call.args[3] for call in click.call_args_list])
+
+    def test_open_login_starts_at_platform_home(self):
+        source = Path(runner.__file__).read_text(encoding="utf-8")
+        auto_login = source.split("def _run_open_login(", 1)[1].split("def _wait_for_manual_login_completion(", 1)[0]
+        self.assertIn('_goto(page, _platform_home(platform), logger, "open_login")', auto_login)
+        self.assertNotIn("start_url = THREADS_LOGIN", auto_login)
 
     def test_threads_profile_unconfirmed_never_returns_ok(self):
         page = _Page("https://www.threads.net/@alice")

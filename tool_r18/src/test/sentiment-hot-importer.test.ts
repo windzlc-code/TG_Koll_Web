@@ -68,6 +68,7 @@ import {
   extractThreadsSearchPrefetchPayload,
   extractThreadsHydrationCandidatesFromHtml,
   extractThreadsProfileHttpPayloads,
+  extractThreadsProfileUserId,
   buildSpiderSearchMarkdownFromHotCandidates,
   parseThreadsDetailEngagementMarkdown,
   parseThreadsDetailMediaMarkdown,
@@ -3752,6 +3753,43 @@ Instagram
       hasNextPage: false,
       pageInfoResolved: true,
       posts: [{ pk: "post-1", viewCount: 20 }],
+    });
+  });
+
+  it("extracts a Threads profile user id without using the target account's own login", () => {
+    const html = `{"username":"sherryjim68","pk":"43951714650","full_name":"SherryJim"}`;
+    expect(extractThreadsProfileUserId(html, "sherryjim68")).toBe("43951714650");
+  });
+
+  it("parses Threads text-feed connection GraphQL pages used by collector viewers", () => {
+    const parsed = parseThreadsGraphqlProfilePagePayload({
+      username: "sherryjim68",
+      payload: {
+        data: {
+          xdt_api__v1__text_feed__user_id__profile__connection: {
+            edges: [{
+              node: {
+                thread_items: [{
+                  post: {
+                    pk: "1",
+                    code: "DcExtraPost12",
+                    user: { username: "sherryjim68" },
+                    canonical_url: "https://www.threads.com/@sherryjim68/post/DcExtraPost12",
+                    like_count: 3,
+                    text_post_app_info: { view_count: 88 },
+                  },
+                }],
+              },
+            }],
+            page_info: { end_cursor: "", has_next_page: false },
+          },
+        },
+      },
+    });
+    expect(parsed).toMatchObject({
+      hasNextPage: false,
+      pageInfoResolved: true,
+      posts: [{ code: "DcExtraPost12", viewCount: 88 }],
     });
   });
 

@@ -761,7 +761,7 @@ function pdSetRefreshControlState(status = "idle", progress = 0) {
   const label = pdEl("personaDashboardSyncStatus");
   if (!button) return;
   const normalized = String(status || "idle").trim().toLowerCase();
-  const active = normalized === "queued" || normalized === "running";
+  const active = normalized === "queued" || normalized === "running" || normalized === "cancelling";
   const done = normalized === "done" || normalized === "success" || normalized === "completed";
   const partial = normalized === "partial";
   const failed = normalized === "failed" || normalized === "error";
@@ -778,6 +778,8 @@ function pdSetRefreshControlState(status = "idle", progress = 0) {
   const title = active ? `同步中 ${value}%` : (done ? "同步完成" : (partial ? "部分完成，失败账号已局部重试" : (failed ? "同步失败，点击重试" : "同步全部数据")));
   button.title = title;
   button.setAttribute("aria-label", title);
+  const cancel = pdEl("btnPersonaDashboardSyncCancel");
+  if (cancel) cancel.hidden = !active;
 }
 
 function pdDashboardViewCacheIsFresh() {
@@ -844,6 +846,16 @@ function pdStopAutoPoll() {
   personaDashboardAutoPollTimer = 0;
 }
 
+async function pdCancelRefresh() {
+  const taskId = String(personaDashboardRefreshTask || "").trim();
+  if (!taskId) return;
+  try {
+    await pdApi(`/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
+  } catch (err) {
+    pdSetMsg(String((err && (err.detail || err.message)) || err || "取消刷新失败"), "err");
+  }
+}
+
 async function pdStartRefresh() {
   if (personaDashboardRefreshTask) return;
   pdSetRefreshControlState("queued", 0);
@@ -868,23 +880,23 @@ async function pdPollRefresh(taskId) {
     const task = await pdApi(`/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}`);
     const progress = Number(task.progress || 0);
     pdSetRefreshControlState(task.status, progress);
-    const running = ["queued", "running"].includes(String(task.status));
-    if (task.status === "failed" || task.status === "partial") {
-      const resultType = task.status === "partial" ? "ok" : "err";
-      pdSetMsg(task.status === "partial" ? "部分同步完成" : "同步失败", resultType);
-      if (task.message) pdSetMsg(String(task.message), resultType);
+    const running = ["queued", "running", "cancelling"].includes(String(task.status));
+    if (task.status === "failed" || task.status === "partial" || task.status === "cancelled") {
+      const resultType = task.status === "failed" ? "err" : "ok";
+      const fallback = task.status === "partial" ? "部分同步完成" : (task.status === "cancelled" ? "已取消刷新。" : "同步失败");
+      pdSetMsg(task.message ? String(task.message) : fallback, resultType);
     }
     else pdSetMsg("");
     if (running) {
-      window.setTimeout(() => pdPollRefresh(taskId), 2500);
+      window.setTimeout(() => pdPollRefresh(taskId), String(task.status) === "cancelling" ? 300 : 2500);
       return;
     }
     personaDashboardRefreshTask = "";
     await pdLoadDashboard();
-    if (task.status === "failed" || task.status === "partial") {
-      const resultType = task.status === "partial" ? "ok" : "err";
-      pdSetMsg(task.status === "partial" ? "部分同步完成" : "同步失败，请稍后重试。", resultType);
-      if (task.message) pdSetMsg(String(task.message), resultType);
+    if (task.status === "failed" || task.status === "partial" || task.status === "cancelled") {
+      const resultType = task.status === "failed" ? "err" : "ok";
+      const fallback = task.status === "partial" ? "部分同步完成" : (task.status === "cancelled" ? "已取消刷新。" : "同步失败，请稍后重试。");
+      pdSetMsg(task.message ? String(task.message) : fallback, resultType);
     } else {
       pdSetMsg("");
     }
@@ -900,6 +912,8 @@ function pdBindDashboard(root) {
   personaDashboardBoundRoot = root;
   const refresh = pdEl("btnPersonaDashboardSync");
   if (refresh) refresh.addEventListener("click", pdStartRefresh);
+  const cancel = pdEl("btnPersonaDashboardSyncCancel");
+  if (cancel) cancel.addEventListener("click", pdCancelRefresh);
 }
 
 function pdMountDashboard(root) {

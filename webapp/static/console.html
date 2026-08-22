@@ -1,10 +1,11 @@
 ﻿<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-deployment-role="__DEPLOYMENT_ROLE__">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="admin-workspace-user-id" content="__ADMIN_WORKSPACE_USER_ID__" />
   <meta name="admin-console-session" content="__ADMIN_CONSOLE_SESSION__" />
+  <meta name="deployment-role" content="__DEPLOYMENT_ROLE__" />
   <title>Web 任务控制台</title>
   <link rel="preload" as="style" href="/assets/style.css?v=__STYLE_VERSION__" />
   <link id="personaDashboardStyles" rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" media="not all" />
@@ -192,6 +193,13 @@
           </svg>
           <span id="personaDashboardSyncStatus" aria-live="polite">同步</span>
         </button>
+        <button
+          id="btnPersonaDashboardSyncCancel"
+          class="persona-dashboard-toolbar-cancel"
+          type="button"
+          hidden
+          aria-label="取消刷新"
+        >取消</button>
       </div>
     </div>
 
@@ -368,5 +376,6 @@
   <script src="/assets/console.js?v=__CONSOLE_JS_VERSION__"></script>
   <script src="/assets/persona-dashboard.js?v=__PERSONA_DASHBOARD_JS_VERSION__"></script>
   <script src="/assets/console-onboarding.js?v=20260818-3"></script>
+  __COLLECTOR_BOUNDARY_ASSETS__
 </body>
 </html>

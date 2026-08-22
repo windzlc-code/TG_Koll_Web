@@ -171,6 +171,57 @@ class CollectorProxyTrafficSwitchTests(unittest.TestCase):
         public = admin._public_config(config)
         self.assertEqual(public["traffic_warning"]["message"], "动态 IP 流量已耗尽")
 
+    def test_runtime_account_proxy_url_pins_sticky_session_to_collector_account(self):
+        config = self._config()
+        config["account_proxy"]["password"] = "secret_session-OLDTOKEN_ttl-30m"
+        config["account_proxy_mode"] = "sticky"
+        with patch.object(admin, "_load_config", return_value=config):
+            first = admin.runtime_account_proxy_url("colacct_liliac", "2301582")
+            again = admin.runtime_account_proxy_url("colacct_liliac", "2301582")
+            other = admin.runtime_account_proxy_url("colacct_other", "2301582")
+        self.assertTrue(first.startswith("http://account-user:"))
+        self.assertIn("thehub.proxy-cheap.com:8080", first)
+        self.assertNotIn("OLDTOKEN", first)
+        self.assertIn("_ttl-30m", first)
+        self.assertEqual(first, again)
+        self.assertNotEqual(first, other)
+        self.assertEqual(admin.runtime_account_proxy_url("colacct_liliac", ""), "")
+
+    def test_runtime_account_proxy_url_requires_matching_product(self):
+        with patch.object(admin, "_load_config", return_value=self._config()):
+            with self.assertRaisesRegex(RuntimeError, "matching product is unavailable"):
+                admin.runtime_account_proxy_url("colacct_liliac", "9999999")
+
+    def test_allocate_runtime_account_proxy_pins_session_and_returns_exit_ip(self) -> None:
+        config = self._config()
+        config["account_proxy"]["password"] = "secret_session-OLDTOKEN_ttl-30m"
+        config["sticky_session_seconds"] = 1800
+        probe = {"ok": True, "exit_ip": "203.0.113.44", "latency_ms": 12, "checked_at": 100}
+        with patch.object(admin, "_load_config", return_value=config), \
+             patch.object(admin, "_test_connection", return_value=probe), \
+             patch.object(admin, "_record_sticky_session") as recorded, \
+             patch.object(admin, "_now", return_value=1000):
+            allocated = admin.allocate_runtime_account_proxy("account-abc")
+        self.assertEqual(allocated["exit_ip"], "203.0.113.44")
+        self.assertEqual(allocated["expires_at"], 2800)
+        self.assertEqual(allocated["product_id"], "2301582")
+        self.assertEqual(allocated["server"], "http://thehub.proxy-cheap.com:8080")
+        self.assertNotIn("OLDTOKEN", allocated["password"])
+        self.assertIn("_ttl-30m", allocated["password"])
+        recorded.assert_called_once()
+        self.assertEqual(recorded.call_args.args[0], "account-abc")
+
+    def test_allocate_runtime_account_proxy_requires_account_id(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "account_id is required"):
+            admin.allocate_runtime_account_proxy("")
+
+    def test_worker_exposes_signed_sticky_allocate_route(self) -> None:
+        from pathlib import Path
+
+        worker = (Path(__file__).resolve().parents[1] / "worker_server.py").read_text(encoding="utf-8")
+        self.assertIn('"/internal/worker/v1/account-proxy/allocate"', worker)
+        self.assertIn("allocate_runtime_account_proxy", worker)
+
 
 if __name__ == "__main__":
     unittest.main()

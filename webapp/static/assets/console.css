@@ -8666,10 +8666,12 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--accent-ink);
 }
 
-.persona-history-toolbar-actions {
+.persona-history-toolbar-actions,
+.publish-history-refresh-actions {
   display: flex;
   align-items: center;
   justify-content: flex-start;
+  gap: 8px;
   margin-left: auto;
 }
 
@@ -8731,6 +8733,26 @@ body.persona-touch-dragging .persona-list-card:active {
   border-color: var(--line);
   background: var(--soft);
   color: var(--muted);
+}
+
+.persona-history-refresh-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.persona-history-refresh-cancel:hover,
+.persona-history-refresh-cancel:focus-visible {
+  border-color: var(--ink);
 }
 
 .persona-history-loading {
@@ -25018,6 +25040,7 @@ body.console-page {
   display: inline-flex;
   align-items: center;
   justify-self: end;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -25088,6 +25111,20 @@ body.console-page {
 
 .persona-dashboard-toolbar-refresh.is-failed {
   color: var(--danger, #b42318);
+}
+
+.persona-dashboard-toolbar-cancel {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 800;
 }
 
 @media (min-width: 981px) {

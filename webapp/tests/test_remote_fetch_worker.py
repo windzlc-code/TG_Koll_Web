@@ -719,6 +719,17 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(state["status"], "success")
         self.assertEqual(state["result"]["archiveId"], "archive_12345678")
 
+    def test_runtime_starts_multiple_job_workers(self) -> None:
+        with patch.dict(os.environ, {"TG_WORKER_JOB_CONCURRENCY": "3"}):
+            runtime = WorkerRuntime(self.store, lambda _payload, _cancel: {"ok": True})
+            runtime.start()
+            try:
+                self.assertEqual(len(runtime.threads), 3)
+                self.assertTrue(all(thread.is_alive() for thread in runtime.threads))
+            finally:
+                runtime.stop()
+        self.assertEqual(runtime.threads, [])
+
 
 class RemoteFetchIsolationTests(unittest.TestCase):
     def test_runtime_sync_contains_only_empty_persona_scaffolds_and_allowlisted_profiles(self) -> None:
@@ -872,6 +883,121 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(payload["archiveId"], "archive_12345678")
         self.assertEqual(payload["searchMode"], "strict")
         self.assertEqual(payload["archiveSnapshot"]["id"], "archive_12345678")
+
+    def test_profile_metrics_capability_leases_collector_viewer_and_hides_secrets(self) -> None:
+        capability, unit_id, payload = _validate_envelope(
+            {
+                "capability": "persona.profile_metrics.v1",
+                "unit_id": "archive_12345678",
+                "payload": {
+                    "action": "refresh-profile-metrics",
+                    "archiveId": "archive_12345678",
+                    "username": "sherryjim68",
+                    "platform": "threads",
+                    "outputOnly": True,
+                    "profile_dir": "/new-host/private-profile",
+                    "accountId": "must-not-cross",
+                    "cookies": ["secret"],
+                },
+            }
+        )
+        self.assertEqual(capability, "persona.profile_metrics.v1")
+        self.assertEqual(payload["action"], "refresh-profile-metrics")
+        self.assertEqual(payload["username"], "sherryjim68")
+        self.assertEqual(payload["platform"], "threads")
+        self.assertIs(payload["outputOnly"], True)
+        self.assertNotIn("profile_dir", payload)
+        self.assertNotIn("accountId", payload)
+        self.assertNotIn("cookies", payload)
+        with self.assertRaisesRegex(ProtocolError, "output-only"):
+            _validate_envelope(
+                {
+                    "capability": "persona.profile_metrics.v1",
+                    "unit_id": "archive_12345678",
+                    "payload": {
+                        "archiveId": "archive_12345678",
+                        "username": "sherryjim68",
+                        "platform": "threads",
+                    },
+                }
+            )
+
+        class FakePool:
+            def __init__(self):
+                self.released = []
+
+            def acquire(self, **kwargs):
+                self.acquire_args = kwargs
+                return {"lease_id": "collease_profile", "account": {"id": "colacct_viewer"}}
+
+            def use_runtime_profile(self, _lease_id, *, holder, consumer):
+                return consumer({
+                    "platform": "threads",
+                    "profile_dir": "/collector/profiles/viewer",
+                    "account_id": "colacct_viewer",
+                    "proxy_id": "2301582",
+                })
+
+            def release(self, lease_id, **kwargs):
+                self.released.append((lease_id, kwargs))
+
+        class FakeProcess:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def communicate(self):
+                return json.dumps({
+                    "ok": True,
+                    "outputOnly": True,
+                    "username": "sherryjim68",
+                    "metrics": {"complete": True, "scannedPosts": 6},
+                }), ""
+
+        pool = FakePool()
+        observed = {}
+
+        def popen(command, **kwargs):
+            observed["env"] = kwargs["env"]
+            observed["command"] = command
+            return FakeProcess()
+
+        with (
+            patch("webapp.worker_server._configured_collector_pool", return_value=pool),
+            patch(
+                "webapp.worker_server.runtime_account_proxy_url",
+                return_value="http://viewer:sess@thehub.proxy-cheap.com:8080",
+            ) as resolve_proxy,
+            patch("webapp.worker_server.subprocess.Popen", side_effect=popen),
+        ):
+            result = run_tool_r18_job(
+                {
+                    "_workerCapability": "persona.profile_metrics.v1",
+                    "action": "refresh-profile-metrics",
+                    "archiveId": "archive_12345678",
+                    "username": "sherryjim68",
+                    "platform": "threads",
+                    "outputOnly": True,
+                    "profileDir": "/must-not-reach-node",
+                },
+                threading.Event(),
+            )
+
+        self.assertTrue(result["ok"])
+        sent = json.loads(observed["command"][-1])
+        self.assertEqual(sent["action"], "refresh-profile-metrics")
+        self.assertEqual(sent["username"], "sherryjim68")
+        self.assertNotIn("profileDir", sent)
+        self.assertEqual(observed["env"]["PERSONA_DASHBOARD_THREADS_PROFILE_DIR"], "/collector/profiles/viewer")
+        self.assertEqual(observed["env"]["TG_COLLECTOR_PROFILE_REQUIRED"], "1")
+        self.assertEqual(
+            observed["env"]["PERSONA_DASHBOARD_THREADS_PROXY_URL"],
+            "http://viewer:sess@thehub.proxy-cheap.com:8080",
+        )
+        resolve_proxy.assert_called_once_with("colacct_viewer", "2301582")
+        self.assertEqual(pool.acquire_args["capability"], "persona.profile_metrics.v1")
+        self.assertTrue(pool.released[0][1]["succeeded"])
 
     def test_runtime_uses_only_the_leased_collector_profile(self) -> None:
         class FakePool:

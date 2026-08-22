@@ -24,7 +24,7 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
             mock.patch.object(runner, "_visible_first", side_effect=visible_first),
             mock.patch.object(runner, "_clear_and_type") as type_text,
             mock.patch.object(runner, "_click_text_button", return_value=True) as click,
-            mock.patch.object(runner, "_click_threads_instagram_login_entry") as handoff,
+            mock.patch.object(runner, "_click_login_submit_by_structure", return_value=False),
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner.time, "sleep"),
             mock.patch.object(runner, "_screenshot", return_value="native-form.png"),
@@ -44,9 +44,8 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
             ["navon3562", "saved-password"],
         )
         self.assertEqual([call.args[3] for call in click.call_args_list], ["auto_login_submit"])
-        handoff.assert_not_called()
 
-    def test_missing_form_preserves_text_entry_then_uses_structural_branch_and_existing_flow(self):
+    def test_missing_form_uses_structural_entry_before_text_and_keeps_existing_flow(self):
         page = mock.Mock()
         page.url = "https://www.threads.com/"
         username_input = mock.Mock()
@@ -59,8 +58,6 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
             return password_input if any("password" in item for item in selectors) else username_input
 
         def click_text(_page, _logger, names, stage, **_kwargs):
-            if stage == "threads_login_username_instead":
-                return False
             if stage == "auto_login_submit":
                 return True
             return False
@@ -79,7 +76,7 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
                 "_click_threads_username_entry_by_structure",
                 side_effect=click_structure,
             ) as structure,
-            mock.patch.object(runner, "_click_threads_instagram_login_entry") as handoff,
+            mock.patch.object(runner, "_click_login_submit_by_structure", return_value=False),
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner.time, "sleep"),
             mock.patch.object(runner, "_screenshot", return_value="username-entry.png"),
@@ -91,19 +88,19 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
                 _Logger(),
                 {"id": "localized-username-entry"},
                 Path("."),
-        )
+            )
 
         self.assertTrue(submitted)
+        structure.assert_called()
+        self.assertEqual(structure.call_count, 1)
         self.assertEqual(
             [call.args[3] for call in click.call_args_list],
-            ["threads_login_username_instead", "auto_login_submit"],
+            ["auto_login_submit"],
         )
-        structure.assert_called_once()
         self.assertEqual(
             [call.args[2] for call in type_text.call_args_list],
             ["navon3562", "saved-password"],
         )
-        handoff.assert_not_called()
         self.assertNotIn("_threads_official_handoff_attempted", payload)
 
     def test_structure_entry_reuses_instagram_anchor_and_safe_clicker(self):
@@ -117,7 +114,7 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
         with (
             mock.patch.object(
                 runner,
-                "_find_threads_instagram_entry_by_structure",
+                "_find_threads_login_card_anchor",
                 return_value=anchor,
             ) as find_anchor,
             mock.patch.object(runner, "_human_click", return_value=True) as human_click,
@@ -135,6 +132,71 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
             "threads_login_username_structure",
             abort_if=None,
         )
+
+    def test_home_without_form_clicks_login_on_home_instead_of_opening_login_url(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.net/"
+        username_input = mock.Mock()
+        password_input = mock.Mock()
+        state = {"form_ready": False}
+
+        def visible_first(_page, selectors, _timeout_ms=1200):
+            if not state["form_ready"]:
+                return None
+            return password_input if any("password" in item for item in selectors) else username_input
+
+        def click_structure(_page, _logger, **_kwargs):
+            state["form_ready"] = True
+            return True
+
+        with (
+            mock.patch.object(runner, "_visible_first", side_effect=visible_first),
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_clear_and_type") as type_text,
+            mock.patch.object(runner, "_click_text_button", return_value=True),
+            mock.patch.object(runner, "_click_login_submit_by_structure", return_value=False),
+            mock.patch.object(
+                runner,
+                "_click_threads_username_entry_by_structure",
+                side_effect=click_structure,
+            ) as structure,
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner.time, "sleep"),
+            mock.patch.object(runner, "_screenshot", return_value="home-click-login.png"),
+        ):
+            submitted = runner._auto_submit_login_form(
+                page,
+                "threads",
+                {"login_username": "sherryjim68", "login_password": "saved-password"},
+                _Logger(),
+                {"id": "home-click-login"},
+                Path("."),
+            )
+
+        self.assertTrue(submitted)
+        goto.assert_not_called()
+        structure.assert_called()
+        self.assertEqual(
+            [call.args[2] for call in type_text.call_args_list],
+            ["sherryjim68", "saved-password"],
+        )
+
+    def test_threads_login_state_uses_login_card_structure_without_english_copy(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        page.locator.return_value.first.is_visible.return_value = False
+        page.locator.return_value.first.count.return_value = 0
+        page.locator.return_value.inner_text.return_value = "Instagramで続ける"
+        page.context.cookies.return_value = []
+
+        with (
+            mock.patch.object(runner, "_browser_navigation_error_visible", return_value=False),
+            mock.patch.object(runner, "_find_threads_login_card_anchor", return_value=mock.Mock()),
+        ):
+            status = runner._detect_threads_login_state(page)
+
+        self.assertEqual(status["status"], "cookie_expired")
+        self.assertEqual(status["evidence"], "visual_structure")
 
 
 if __name__ == "__main__":

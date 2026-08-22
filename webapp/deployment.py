@@ -55,11 +55,17 @@ def deployment_boundary(value: str | None = None) -> DeploymentBoundary:
                 "/pricing.html",
                 "/register.html",
                 "/subscription.html",
+                "/persona-automation-log.html",
             }
         ),
         blocked_api_prefixes=(
             "/api/auth/google/",
             "/api/billing/",
+            "/api/persona_dashboard/refresh",
+            "/api/persona_dashboard/selection",
+            "/api/persona_dashboard/monitor",
+            "/api/persona_dashboard/media",
+            "/api/persona_dashboard/groups",
         ),
         blocked_api_paths=frozenset(
             {

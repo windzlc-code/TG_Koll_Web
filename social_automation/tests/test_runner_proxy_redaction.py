@@ -110,12 +110,81 @@ class RunnerProxyRedactionTests(unittest.TestCase):
                         "social_automation.browser_runtime.verify_pinned_browser_runtime",
                         return_value={"camoufox": "0.4.11"},
                     ),
+                    mock.patch.object(runner, "_live_network_locale", return_value=None),
                     mock.patch.object(manager, "_start_live_browser_session", return_value=None),
                     mock.patch.object(manager, "_enter_camoufox", side_effect=record_launch),
                 ):
                     manager.__enter__()
 
         self.assertEqual(observed, ["TW", "JP"])
+
+    def test_live_locale_uses_cached_exit_ip_without_probing_through_proxy(self):
+        proxy = {
+            **self.proxy,
+            "last_check_result": json.dumps({"ok": True, "exit_ip": "203.0.113.44", "response": {"ip": "203.0.113.44"}}),
+        }
+        runner._NETWORK_LOCALE_CACHE.clear()
+        with (
+            mock.patch.object(runner, "_live_exit_ip") as live_probe,
+            mock.patch.object(runner, "_lookup_ip_country", return_value="TW") as lookup,
+        ):
+            locale = runner._live_network_locale(proxy)
+        self.assertEqual(locale, "TW")
+        lookup.assert_called_once_with("203.0.113.44")
+        live_probe.assert_not_called()
+
+    def test_current_network_locale_prefers_live_exit_over_stale_last_check(self):
+        proxy = {
+            **self.proxy,
+            "country": "JP",
+            "last_check_result": json.dumps({"response": {"country": "Japan", "country_code": "JP"}}),
+        }
+        runner._NETWORK_LOCALE_CACHE.clear()
+        with (
+            mock.patch.object(runner, "_live_exit_ip", return_value="203.0.113.10"),
+            mock.patch.object(runner, "_lookup_ip_country", return_value="TW") as lookup,
+        ):
+            locale = runner._current_network_locale(proxy)
+        self.assertEqual(locale, "TW")
+        lookup.assert_called_once_with("203.0.113.10")
+
+    def test_direct_network_locale_uses_live_public_ip_not_leftover_proxy_country(self):
+        runner._NETWORK_LOCALE_CACHE.clear()
+        with (
+            mock.patch.object(runner, "_live_exit_ip", return_value="47.243.99.2"),
+            mock.patch.object(runner, "_lookup_ip_country", return_value="HK"),
+        ):
+            locale = runner._current_network_locale(None)
+        self.assertEqual(locale, "HK")
+
+    def test_camoufox_launch_without_proxy_still_pins_live_locale_and_geoip(self):
+        captured = {}
+        logger = _RecordingLogger()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = runner._BrowserContextManager(
+                {"id": "account-direct", "profile_dir": str(Path(temp_dir) / "profile")},
+                None,
+                logger,
+            )
+
+            def record_launch(_camoufox, kwargs):
+                captured.update(kwargs)
+
+            with (
+                mock.patch(
+                    "social_automation.browser_runtime.verify_pinned_browser_runtime",
+                    return_value={"camoufox": "0.4.11"},
+                ),
+                mock.patch.object(runner, "_current_network_locale", return_value="HK"),
+                mock.patch.object(manager, "_start_live_browser_session", return_value=None),
+                mock.patch.object(manager, "_enter_camoufox", side_effect=record_launch),
+            ):
+                manager.__enter__()
+
+        self.assertEqual(captured.get("locale"), "HK")
+        self.assertTrue(captured.get("geoip"))
+        self.assertNotIn("proxy", captured)
+        self.assertEqual(captured["firefox_user_prefs"]["intl.accept_languages"], "zh-HK,zh-TW,zh,en-US,en")
 
     def test_camoufox_launch_error_and_log_redact_proxy_credentials(self):
         username = self.proxy["username"]
@@ -185,6 +254,7 @@ class RunnerProxyRedactionTests(unittest.TestCase):
                         "browser_release": "beta.28",
                     },
                 ),
+                mock.patch.object(runner, "_current_network_locale", return_value=None),
                 mock.patch.object(manager, "_start_live_browser_session", return_value=None),
                 mock.patch.object(manager, "_enter_camoufox", side_effect=record_launch),
                 mock.patch.dict(

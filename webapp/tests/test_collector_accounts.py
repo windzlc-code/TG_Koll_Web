@@ -208,10 +208,20 @@ class CollectorAccountPoolTests(unittest.TestCase):
             consumer=lambda value: {
                 "platform": value["platform"],
                 "basename": Path(value["profile_dir"]).name,
+                "proxy_id": value.get("proxy_id"),
+                "account_id": value.get("account_id"),
             },
             now=111,
         )
-        self.assertEqual(observed, {"platform": "threads", "basename": "colacct_one"})
+        self.assertEqual(
+            observed,
+            {
+                "platform": "threads",
+                "basename": "colacct_one",
+                "proxy_id": "private-proxy",
+                "account_id": "colacct_one",
+            },
+        )
         self.assertNotIn("profile_dir", lease)
         self.assertNotIn("profile_dir", lease["account"])
 

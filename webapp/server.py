@@ -25,7 +25,7 @@ import time
 import uuid
 import zipfile
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
@@ -61,7 +61,7 @@ from .auth import (
     verify_password,
 )
 from .db import db, get_admin_config, init_db, set_admin_config
-from .deployment import deployment_boundary, is_collector_deployment
+from .deployment import deployment_boundary, deployment_role, is_collector_deployment
 from .collector_api import register_collector_routes
 from .remote_fetch_protocol import signed_headers
 from .auth_email import (
@@ -5738,10 +5738,29 @@ def _asset_version(*relative_parts: str) -> str:
     return f"{int(stat_result.st_mtime)}-{stat_result.st_size}"
 
 
+def _collector_boundary_assets() -> str:
+    if not is_collector_deployment():
+        return ""
+    css_v = _asset_version("assets", "collector-boundary.css")
+    js_v = _asset_version("assets", "collector-boundary.js")
+    return (
+        '<script>document.documentElement.dataset.deploymentRole="collector";</script>\n'
+        f'<link rel="stylesheet" href="/assets/collector-boundary.css?v={css_v}" />\n'
+        f'<script src="/assets/collector-boundary.js?v={js_v}"></script>\n'
+    )
+
+
 def _html_response_with_versions(filename: str, replacements: dict[str, str] | None = None) -> HTMLResponse:
     html = (STATIC_DIR / filename).read_text(encoding="utf-8")
-    for key, value in (replacements or {}).items():
+    merged = dict(replacements or {})
+    if filename == "console.html":
+        merged.setdefault("__DEPLOYMENT_ROLE__", deployment_role())
+        merged.setdefault("__COLLECTOR_BOUNDARY_ASSETS__", _collector_boundary_assets())
+    for key, value in merged.items():
         html = html.replace(key, value)
+    if filename == "console.html" and is_collector_deployment():
+        html = re.sub(r"\s*<script src=\"/assets/persona-dashboard\.js\?v=[^\"]+\"></script>", "", html)
+        html = re.sub(r"\s*<script src=\"/assets/console-onboarding\.js\?v=[^\"]+\"></script>", "", html)
     fixed_theme_stylesheet = (
         '<link rel="stylesheet" '
         f'href="/assets/fixed-light.css?v={_asset_version("assets", "fixed-light.css")}" />'
@@ -12530,7 +12549,9 @@ def _filter_active_persona_archives(archives: list[dict[str, Any]]) -> list[dict
 
 
 PERSONA_DASHBOARD_REFRESH_TASKS: dict[str, dict[str, Any]] = {}
+PERSONA_DASHBOARD_REFRESH_PROCESSES: dict[str, subprocess.Popen[str]] = {}
 PERSONA_DASHBOARD_REFRESH_LOCK = threading.Lock()
+PERSONA_DASHBOARD_REFRESH_ACTIVE_STATUSES = {"queued", "running", "cancelling"}
 PERSONA_DASHBOARD_ARCHIVE_LOCK_TIMEOUT_SECONDS = 30
 PERSONA_DASHBOARD_ARCHIVE_THREAD_LOCK = threading.RLock()
 PERSONA_DASHBOARD_ARCHIVE_LOCK_STATE = threading.local()
@@ -14277,6 +14298,8 @@ def _remote_fetch_capability(payload: dict[str, Any]) -> str:
         return "persona.hot_recycle.v1"
     if action == "refresh-hot-post":
         return "persona.hot_post_metrics.v1"
+    if action == "refresh-profile-metrics":
+        return "persona.profile_metrics.v1"
     return ""
 
 
@@ -14569,12 +14592,24 @@ def _run_remote_persona_hot_workflow(
         if post_snapshot is not None:
             remote_payload["postSnapshot"] = post_snapshot
         remote_payload["outputOnly"] = True
+    if capability == "persona.profile_metrics.v1":
+        remote_payload["outputOnly"] = True
+        remote_payload["username"] = str(payload.get("username") or "").strip().lstrip("@")
+        remote_payload["platform"] = str(payload.get("platform") or "threads").strip().lower() or "threads"
+        published_urls = payload.get("publishedUrls")
+        if isinstance(published_urls, list):
+            remote_payload["publishedUrls"] = [
+                str(item or "").strip() for item in published_urls if str(item or "").strip()
+            ]
     unit_descriptor = {
         "capability": capability,
         "archiveId": archive_id,
         "query": str(payload.get("query") or payload.get("prompt") or ""),
     }
-    if capability != "crm.threads_live_search.v1":
+    if capability == "persona.profile_metrics.v1":
+        unit_descriptor["username"] = str(remote_payload.get("username") or "")
+        unit_descriptor["platform"] = str(remote_payload.get("platform") or "")
+    elif capability != "crm.threads_live_search.v1":
         unit_descriptor["accountId"] = str(payload.get("accountId") or "")
     unit_digest = hashlib.sha256(
         json.dumps(
@@ -20964,6 +20999,30 @@ def _persona_dashboard_refresh_archive_ids(archive_id: str, user: dict[str, Any]
     return visible_archive_ids
 
 
+def _persona_dashboard_refresh_scope_keys(
+    archive_id: str,
+    archive_ids: list[str] | None,
+) -> set[str] | None:
+    clean_id = str(archive_id or "").strip()
+    if clean_id:
+        return {clean_id}
+    cleaned = {
+        str(item or "").strip()
+        for item in (archive_ids or [])
+        if str(item or "").strip()
+    }
+    return cleaned or None
+
+
+def _persona_dashboard_refresh_scopes_conflict(
+    left: set[str] | None,
+    right: set[str] | None,
+) -> bool:
+    if left is None or right is None:
+        return True
+    return bool(left & right)
+
+
 def _start_persona_dashboard_refresh(
     archive_id: str = "",
     source: str = "",
@@ -20984,21 +21043,42 @@ def _start_persona_dashboard_refresh(
         else "全部已绑定人设"
     )
     owner_user_id = max(0, int(user_id or 0))
+    requested_scope = _persona_dashboard_refresh_scope_keys(
+        str(archive_id or "").strip(),
+        None if archive_id == "" and archive_ids is None else scoped_archive_ids,
+    )
     with PERSONA_DASHBOARD_REFRESH_LOCK:
-        active = next((
+        active_tasks = [
             task for task in PERSONA_DASHBOARD_REFRESH_TASKS.values()
-            if str(task.get("status") or "") in {"queued", "running"}
+            if str(task.get("status") or "") in PERSONA_DASHBOARD_REFRESH_ACTIVE_STATUSES
+        ]
+        same_request = next((
+            task for task in active_tasks
+            if int(task.get("user_id") or 0) == owner_user_id
+            and str(task.get("archive_id") or "") == str(archive_id or "").strip()
+            and list(task.get("archive_ids") or []) == scoped_archive_ids
+            and str(task.get("source") or "") == refresh_source
         ), None)
-        if active:
-            same_request = (
-                int(active.get("user_id") or 0) == owner_user_id
-                and str(active.get("archive_id") or "") == str(archive_id or "").strip()
-                and list(active.get("archive_ids") or []) == scoped_archive_ids
-                and str(active.get("source") or "") == refresh_source
+        if same_request:
+            return dict(same_request)
+        owner_busy = next((
+            task for task in active_tasks
+            if int(task.get("user_id") or 0) == owner_user_id
+        ), None)
+        if owner_busy:
+            raise HTTPException(status_code=409, detail="当前账号已有刷新任务正在运行，请等待完成后再试。")
+        overlapping = next((
+            task for task in active_tasks
+            if _persona_dashboard_refresh_scopes_conflict(
+                requested_scope,
+                _persona_dashboard_refresh_scope_keys(
+                    str(task.get("archive_id") or ""),
+                    list(task.get("archive_ids") or []) if "archive_ids" in task else None,
+                ),
             )
-            if same_request:
-                return dict(active)
-            raise HTTPException(status_code=409, detail="已有全量热点刷新任务正在运行，请等待当前任务完成后再试。")
+        ), None)
+        if overlapping:
+            raise HTTPException(status_code=409, detail="相关人设正在刷新，请等待当前任务完成后再试。")
         PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {
             "id": task_id,
             "user_id": owner_user_id,
@@ -21077,6 +21157,127 @@ def _persona_dashboard_refresh_proxy_urls(
     return resolved_urls
 
 
+def _persona_dashboard_bound_refresh_targets(
+    *,
+    user_id: int = 0,
+    archive_id: str = "",
+    archive_ids: list[str] | None = None,
+) -> list[dict[str, str]]:
+    clauses = [
+        "trim(account.username) <> ''",
+        "lower(account.status) NOT IN ('banned', 'disabled')",
+    ]
+    params: list[Any] = []
+    owner_user_id = max(0, int(user_id or 0))
+    clean_archive_id = str(archive_id or "").strip()
+    clean_archive_ids = list(dict.fromkeys(
+        str(item or "").strip() for item in (archive_ids or []) if str(item or "").strip()
+    ))
+    if owner_user_id:
+        clauses.append("account.user_id = ?")
+        params.append(owner_user_id)
+    if clean_archive_id:
+        clauses.append("account.persona_id = ?")
+        params.append(clean_archive_id)
+    elif archive_ids is not None:
+        if not clean_archive_ids:
+            return []
+        clauses.append(f"account.persona_id IN ({','.join('?' for _ in clean_archive_ids)})")
+        params.extend(clean_archive_ids)
+    query = f"""
+        SELECT account.persona_id, account.platform, account.username
+        FROM social_accounts AS account
+        WHERE {' AND '.join(clauses)}
+        ORDER BY account.updated_at DESC, account.created_at DESC
+    """
+    targets: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    with db() as conn:
+        for row in conn.execute(query, params).fetchall():
+            platform = str(row["platform"] or "").strip().lower()
+            username = str(row["username"] or "").strip().lstrip("@")
+            persona_id = str(row["persona_id"] or "").strip()
+            if platform not in {"threads", "instagram"} or not username or not persona_id:
+                continue
+            key = (persona_id, platform, username.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append({
+                "archive_id": persona_id,
+                "platform": platform,
+                "username": username,
+            })
+    return targets
+
+
+def _persona_dashboard_profile_metrics_concurrency(target_count: int) -> int:
+    try:
+        configured = int(os.getenv("TG_PROFILE_METRICS_PREFETCH_CONCURRENCY", "4") or 4)
+    except (TypeError, ValueError):
+        configured = 4
+    return max(1, min(configured, 8, max(1, int(target_count or 1))))
+
+
+def _fetch_one_persona_dashboard_remote_metrics(target: dict[str, str]) -> tuple[str, dict[str, Any] | None]:
+    platform = str(target.get("platform") or "").strip().lower()
+    username = str(target.get("username") or "").strip().lstrip("@")
+    key = f"{platform}:{username.lower()}"
+    try:
+        result = _run_remote_persona_hot_workflow(
+            {
+                "action": "refresh-profile-metrics",
+                "archiveId": target["archive_id"],
+                "username": username,
+                "platform": platform,
+                "outputOnly": True,
+            },
+            timeout_seconds=180,
+        )
+    except Exception:
+        return key, None
+    metrics = result.get("metrics") if isinstance(result, dict) else None
+    if isinstance(metrics, dict) and str(metrics.get("username") or username).strip():
+        return key, metrics
+    return key, None
+
+
+def _prefetch_persona_dashboard_remote_metrics(
+    *,
+    user_id: int = 0,
+    archive_id: str = "",
+    archive_ids: list[str] | None = None,
+    task_id: str = "",
+) -> dict[str, Any]:
+    if configured_remote_fetch_client() is None:
+        return {}
+    prefetched: dict[str, Any] = {}
+    targets = _persona_dashboard_bound_refresh_targets(
+        user_id=user_id,
+        archive_id=archive_id,
+        archive_ids=archive_ids,
+    )
+    workers = _persona_dashboard_profile_metrics_concurrency(len(targets))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="persona-profile-metrics") as pool:
+        futures = [pool.submit(_fetch_one_persona_dashboard_remote_metrics, target) for target in targets]
+        for index, future in enumerate(as_completed(futures), start=1):
+            if task_id and _persona_dashboard_refresh_cancel_requested(task_id):
+                for pending in futures:
+                    pending.cancel()
+                raise _PersonaDashboardRefreshCancelled("刷新已取消。")
+            key, metrics = future.result()
+            if metrics is not None:
+                prefetched[key] = metrics
+            if task_id:
+                with PERSONA_DASHBOARD_REFRESH_LOCK:
+                    PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
+                        "step": "读取账号资料",
+                        "progress": min(24, 14 + index),
+                        "message": f"正在并行读取已绑定账号资料（{index}/{len(targets)}）...",
+                    })
+    return prefetched
+
+
 def _persona_dashboard_refresh_worker_v2(
     task_id: str,
     archive_id: str = "",
@@ -21090,9 +21291,9 @@ def _persona_dashboard_refresh_worker_v2(
     stdout_file: Any | None = None
     stderr_file: Any | None = None
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "http_first").strip().lower() or "http_first"
-    # HTTP-first and RSSHub can enter the existing browser compatibility path
-    # when a session endpoint or pagination contract is unavailable.
-    needs_browser_lease = refresh_source in {"http_first", "browser", "rsshub"}
+    # http_first stays on the collector HTTP path. Browser leases remain for
+    # the explicit browser source and RSSHub detail backfill only.
+    needs_browser_lease = refresh_source in {"browser", "rsshub"}
     scope = "单个人设" if archive_id else (
         f"当前账号的 {len(archive_ids)} 个人设"
         if archive_ids is not None
@@ -21119,6 +21320,8 @@ def _persona_dashboard_refresh_worker_v2(
     env = os.environ.copy()
     env.setdefault("TOOL_R18_RUNTIME_DIR", str(TOOL_R18_RUNTIME_DIR))
     env.setdefault("NODE_PATH", str(ROOT_DIR / "tool_r18" / "node_modules"))
+    if refresh_source == "http_first":
+        env["TG_THREADS_PROFILE_HTTP_ONLY"] = "1"
     try:
         with PERSONA_DASHBOARD_REFRESH_LOCK:
             refresh_user_id = int(PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {}).get("user_id") or 0)
@@ -21131,9 +21334,43 @@ def _persona_dashboard_refresh_worker_v2(
             env["PERSONA_DASHBOARD_ACCOUNT_PROXY_URLS_B64"] = base64.urlsafe_b64encode(
                 json.dumps(proxy_urls, ensure_ascii=True).encode("utf-8")
             ).decode("ascii").rstrip("=")
+        with PERSONA_DASHBOARD_REFRESH_LOCK:
+            PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
+                "step": "读取账号资料",
+                "progress": 14,
+                "message": "正在读取已绑定账号的资料...",
+            })
+        prefetched_metrics = _prefetch_persona_dashboard_remote_metrics(
+            user_id=refresh_user_id,
+            archive_id=archive_id,
+            archive_ids=archive_ids,
+            task_id=task_id,
+        )
+        if _persona_dashboard_refresh_cancel_requested(task_id):
+            raise _PersonaDashboardRefreshCancelled("刷新已取消。")
+        if prefetched_metrics:
+            env["PERSONA_DASHBOARD_PREFETCHED_METRICS_B64"] = base64.urlsafe_b64encode(
+                json.dumps(prefetched_metrics, ensure_ascii=True).encode("utf-8")
+            ).decode("ascii").rstrip("=")
+        bound_targets = _persona_dashboard_bound_refresh_targets(
+            user_id=refresh_user_id,
+            archive_id=archive_id,
+            archive_ids=archive_ids,
+        )
+        if (
+            prefetched_metrics
+            and bound_targets
+            and all(
+                f"{item['platform']}:{item['username'].lower()}" in prefetched_metrics
+                for item in bound_targets
+            )
+        ):
+            needs_browser_lease = False
         if needs_browser_lease:
             resource_wait_deadline = time.monotonic() + 300.0
             while time.monotonic() < resource_wait_deadline and not browser_lease:
+                if _persona_dashboard_refresh_cancel_requested(task_id):
+                    raise _PersonaDashboardRefreshCancelled("刷新已取消。")
                 browser_lease = acquire_external_browser_lease(
                     "persona-dashboard-refresh"
                 )
@@ -21164,7 +21401,7 @@ def _persona_dashboard_refresh_worker_v2(
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
                 "step": "启动采集脚本",
                 "progress": 18,
-                "message": "正在通过账号登录态优先刷新数据，必要时自动进入兼容链路...",
+                "message": "正在更新人设缓存，必要时自动进入兼容链路...",
             })
         tmpdir = tempfile.TemporaryDirectory(prefix="persona_dashboard_refresh_")
         stdout_path = Path(tmpdir.name) / "stdout.log"
@@ -21181,7 +21418,13 @@ def _persona_dashboard_refresh_worker_v2(
             start_new_session=os.name != "nt",
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
+        with PERSONA_DASHBOARD_REFRESH_LOCK:
+            PERSONA_DASHBOARD_REFRESH_PROCESSES[task_id] = proc
+            if bool((PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id) or {}).get("cancel_requested")):
+                raise _PersonaDashboardRefreshCancelled("刷新已取消。")
         while proc.poll() is None:
+            if _persona_dashboard_refresh_cancel_requested(task_id):
+                raise _PersonaDashboardRefreshCancelled("刷新已取消。")
             with PERSONA_DASHBOARD_REFRESH_LOCK:
                 refresh_trigger = str(PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {}).get("trigger") or "")
             if refresh_trigger == "auto_monitor" and _matrix_publish_browser_pressure_active():
@@ -21203,6 +21446,8 @@ def _persona_dashboard_refresh_worker_v2(
                     "message": f"正在刷新{scope}的 Threads / Instagram 账号热点数据，已执行 {elapsed} 秒...",
                 })
             time.sleep(2)
+        if _persona_dashboard_refresh_cancel_requested(task_id):
+            raise _PersonaDashboardRefreshCancelled("刷新已取消。")
         proc.wait(timeout=10)
         stdout_file.flush()
         stderr_file.flush()
@@ -21248,6 +21493,16 @@ def _persona_dashboard_refresh_worker_v2(
                 "elapsed_seconds": int(time.time() - started),
                 "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             })
+    except _PersonaDashboardRefreshCancelled:
+        with PERSONA_DASHBOARD_REFRESH_LOCK:
+            PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
+                "status": "cancelled",
+                "step": "已取消",
+                "progress": 100,
+                "message": "已取消刷新。",
+                "elapsed_seconds": int(time.time() - started),
+                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
     except Exception as exc:
         with PERSONA_DASHBOARD_REFRESH_LOCK:
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
@@ -21259,6 +21514,8 @@ def _persona_dashboard_refresh_worker_v2(
                 "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             })
     finally:
+        with PERSONA_DASHBOARD_REFRESH_LOCK:
+            PERSONA_DASHBOARD_REFRESH_PROCESSES.pop(task_id, None)
         if proc is not None and proc.poll() is None:
             _terminate_persona_hot_process(proc)
         for output_file in (stdout_file, stderr_file):
@@ -21274,11 +21531,52 @@ def _persona_dashboard_refresh_worker_v2(
 
 def _persona_dashboard_refresh_is_running() -> bool:
     with PERSONA_DASHBOARD_REFRESH_LOCK:
-        return any(str(task.get("status") or "") in {"queued", "running"} for task in PERSONA_DASHBOARD_REFRESH_TASKS.values())
+        return any(str(task.get("status") or "") in PERSONA_DASHBOARD_REFRESH_ACTIVE_STATUSES for task in PERSONA_DASHBOARD_REFRESH_TASKS.values())
 
 
 class _PersonaDashboardRefreshDeferred(RuntimeError):
     pass
+
+
+class _PersonaDashboardRefreshCancelled(RuntimeError):
+    pass
+
+
+def _persona_dashboard_refresh_cancel_requested(task_id: str) -> bool:
+    with PERSONA_DASHBOARD_REFRESH_LOCK:
+        task = PERSONA_DASHBOARD_REFRESH_TASKS.get(str(task_id or "").strip()) or {}
+        return bool(task.get("cancel_requested")) or str(task.get("status") or "") in {"cancelling", "cancelled"}
+
+
+def _cancel_persona_dashboard_refresh(task_id: str, user_id: int) -> dict[str, Any]:
+    clean_id = str(task_id or "").strip()
+    owner_user_id = max(0, int(user_id or 0))
+    with PERSONA_DASHBOARD_REFRESH_LOCK:
+        task = PERSONA_DASHBOARD_REFRESH_TASKS.get(clean_id)
+        if not task or int(task.get("user_id") or 0) != owner_user_id:
+            raise HTTPException(status_code=404, detail="刷新任务不存在。")
+        status = str(task.get("status") or "")
+        if status not in PERSONA_DASHBOARD_REFRESH_ACTIVE_STATUSES:
+            return dict(task)
+        task.update({
+            "cancel_requested": True,
+            "status": "cancelling",
+            "step": "取消中",
+            "message": "正在停止刷新任务...",
+        })
+        process = PERSONA_DASHBOARD_REFRESH_PROCESSES.get(clean_id)
+        if process is None:
+            task.update({
+                "status": "cancelled",
+                "step": "已取消",
+                "progress": 100,
+                "message": "已取消刷新。",
+                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+        snapshot = dict(task)
+    if process is not None:
+        _terminate_persona_hot_process(process)
+    return snapshot
 
 
 def _matrix_publish_browser_pressure_active() -> bool:
@@ -22711,6 +23009,8 @@ def create_app() -> FastAPI:
                 "__CONSOLE_BOOTSTRAP_JSON__": _json_script_payload(console_bootstrap),
                 "__ADMIN_WORKSPACE_USER_ID__": str(_workspace_user_id(user)) if _is_admin_workspace(user) else "",
                 "__ADMIN_CONSOLE_SESSION__": "1" if admin_console else "",
+                "__DEPLOYMENT_ROLE__": boundary.role,
+                "__COLLECTOR_BOUNDARY_ASSETS__": _collector_boundary_assets(),
             },
         )
         return response
@@ -26392,6 +26692,10 @@ def create_app() -> FastAPI:
         if not task or int(task.get("user_id") or 0) != _workspace_user_id(user):
             raise HTTPException(status_code=404, detail="刷新任务不存在。")
         return task
+
+    @app.post("/api/persona_dashboard/refresh/{task_id}/cancel")
+    def api_persona_dashboard_refresh_cancel(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
+        return _cancel_persona_dashboard_refresh(task_id, _workspace_user_id(user))
 
     @app.get("/api/client_defaults")
     def api_client_defaults(user: dict[str, Any] = Depends(get_current_user)):

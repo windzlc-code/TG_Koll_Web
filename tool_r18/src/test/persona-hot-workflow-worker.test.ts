@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   downloadCandidateMedia: vi.fn(),
   recycleUnusedSentimentHotCandidates: vi.fn(),
   rememberSentimentHotImported: vi.fn(),
+  fetchThreadsProfileHotMetrics: vi.fn(),
+  fetchInstagramProfileHotMetrics: vi.fn(),
 }));
 
 vi.mock("@/runtime/node/browser-shim", () => ({}));
@@ -30,6 +32,8 @@ vi.mock("@/lib/sentiment-hot-importer", () => ({
   refreshSentimentSourceMetrics: mocks.refreshSentimentSourceMetrics,
   recycleUnusedSentimentHotCandidates: mocks.recycleUnusedSentimentHotCandidates,
   warmSentimentHotSearchStrategy: vi.fn(),
+  fetchThreadsProfileHotMetrics: mocks.fetchThreadsProfileHotMetrics,
+  fetchInstagramProfileHotMetrics: mocks.fetchInstagramProfileHotMetrics,
 }));
 vi.mock("@/lib/sentiment-runtime-manager", () => ({ stopSentimentRuntime: vi.fn() }));
 vi.mock("@/lib/sentiment-candidate-store", () => ({ rememberSentimentHotImported: mocks.rememberSentimentHotImported }));
@@ -40,6 +44,7 @@ import {
   hydrateHotImportMedia,
   prepareHotKeywords,
   refreshHotPost,
+  refreshProfileMetrics,
 } from "../../scripts/skills/persona-hot-workflow";
 
 function archiveSnapshot(overrides: Record<string, unknown> = {}) {
@@ -225,6 +230,34 @@ describe("persona hot workflow remote worker snapshots", () => {
 
     expect(mocks.loadPersonaArchive).not.toHaveBeenCalled();
     expect(mocks.fetchSentimentHotCandidates).not.toHaveBeenCalled();
+  });
+
+  it("reads another user's profile metrics with collector login and never persists locally", async () => {
+    mocks.fetchThreadsProfileHotMetrics.mockResolvedValue({
+      platform: "threads",
+      username: "sherryjim68",
+      method: "http",
+      complete: true,
+      scannedPosts: 6,
+    });
+
+    const result = await refreshProfileMetrics({
+      action: "refresh-profile-metrics",
+      archiveId: "persona-1",
+      username: "sherryjim68",
+      platform: "threads",
+      outputOnly: true,
+    });
+
+    expect(mocks.fetchThreadsProfileHotMetrics).toHaveBeenCalledWith("sherryjim68");
+    expect(mocks.loadPersonaArchive).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      ok: true,
+      outputOnly: true,
+      username: "sherryjim68",
+      platform: "threads",
+      metrics: { complete: true, scannedPosts: 6 },
+    });
   });
 
   it("hydrates an already imported draft with downloaded local media and does not recreate the post", async () => {

@@ -699,7 +699,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
     def test_mobile_task_dock_adds_home_and_omits_the_browser_shortcut(self):
         self.assertIn('id="mobileTaskDock"', self.markup)
         self.assertIn("function renderMobileTaskDock()", self.console_script)
-        self.assertIn('const mobileDockItems = [', self.console_script)
+        self.assertIn("const mobileDockItems = COLLECTOR_DEPLOYMENT", self.console_script)
         self.assertIn('{ id: "persona_dashboard", label: "首页", view: "persona_dashboard" }', self.console_script)
         self.assertIn('...modules.filter((item) => item.id !== "browser_list")', self.console_script)
         self.assertIn("mobileDockItems.map((item) =>", self.console_script)

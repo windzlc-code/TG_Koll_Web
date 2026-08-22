@@ -94,6 +94,26 @@ let cachedThreadsAccountPool: PersonaThreadsAccountBinding[] | null = null;
 let cachedInstagramAccountPool: PersonaThreadsAccountBinding[] | null = null;
 let cachedResolvedAccountProxyUrls: Record<string, string> | null = null;
 
+let cachedPrefetchedMetrics: Record<string, any> | null | undefined;
+
+function readPrefetchedProfileMetrics(): Record<string, any> {
+  if (cachedPrefetchedMetrics) return cachedPrefetchedMetrics;
+  try {
+    const encoded = String(process.env.PERSONA_DASHBOARD_PREFETCHED_METRICS_B64 || "").trim();
+    const parsed = encoded ? JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) : {};
+    cachedPrefetchedMetrics = parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    cachedPrefetchedMetrics = {};
+  }
+  return cachedPrefetchedMetrics;
+}
+
+function prefetchedProfileMetrics(platform: "threads" | "instagram", username: string): any | null {
+  const key = platform === "instagram" ? instagramHotMetricKey(username) : hotMetricKey(username);
+  const metrics = readPrefetchedProfileMetrics()[key];
+  return metrics && typeof metrics === "object" ? metrics : null;
+}
+
 function resolvedAccountProxyUrl(accountId: unknown): string | undefined {
   if (!cachedResolvedAccountProxyUrls) {
     try {
@@ -728,6 +748,15 @@ async function main() {
         let metrics: any;
         let refreshAttempt: { metrics: any; attempts: number; complete: boolean };
         try {
+          const prefetched = !useRssHub ? prefetchedProfileMetrics("threads", username) : null;
+          if (prefetched) {
+            refreshAttempt = {
+              metrics: prefetched,
+              attempts: 1,
+              complete: isCompleteMetrics(prefetched),
+            };
+            metrics = refreshAttempt.metrics;
+          } else {
           if (target.profileDir) {
             process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = target.profileDir;
           } else {
@@ -747,6 +776,7 @@ async function main() {
               : isCompleteMetrics(candidate),
           );
           metrics = refreshAttempt.metrics;
+          }
         } finally {
           if (previousProfileDir) {
             process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = previousProfileDir;
@@ -899,6 +929,15 @@ async function main() {
           let metrics: any;
           let refreshAttempt: { metrics: any; attempts: number; complete: boolean };
           try {
+            const prefetched = prefetchedProfileMetrics("instagram", username);
+            if (prefetched) {
+              refreshAttempt = {
+                metrics: prefetched,
+                attempts: 1,
+                complete: isCompleteMetrics(prefetched),
+              };
+              metrics = refreshAttempt.metrics;
+            } else {
             if (target.profileDir) {
               process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR = target.profileDir;
             } else {
@@ -917,6 +956,7 @@ async function main() {
               isCompleteMetrics,
             );
             metrics = refreshAttempt.metrics;
+            }
           } finally {
             if (previousProfileDir) {
               process.env.PERSONA_DASHBOARD_INSTAGRAM_PROFILE_DIR = previousProfileDir;
@@ -1014,11 +1054,19 @@ async function main() {
   const requiredResults = results.filter((item) => !(item.skipped && !String(item.username || "").trim()));
   const fullyRefreshed = requiredResults.length > 0 && requiredResults.every((item) => item.ok && !item.partial && !item.skipped);
   const failed = requiredResults.filter((item) => !item.ok || item.partial || item.skipped);
+  const failedReasons = failed
+    .map((item) => {
+      const label = [item.platform || "threads", item.username].filter(Boolean).join(":");
+      const detail = String(item.message || "").trim();
+      return detail ? `${label} ${detail}` : "";
+    })
+    .filter(Boolean)
+    .slice(0, 2);
   const message = fullyRefreshed
     ? `全量同步完成：${requiredResults.length} 个账号的数据与时间快照已更新。`
     : (results.some((item) => item.ok)
       ? `部分同步完成：${requiredResults.length - failed.length}/${requiredResults.length || 0} 个账号已更新；其余账号已局部重试一次。`
-      : `同步未完成：${failed.length}/${requiredResults.length || 0} 个账号未取得完整新快照。`);
+      : `同步未完成：${failed.length}/${requiredResults.length || 0} 个账号未取得完整新快照。${failedReasons.length ? ` ${failedReasons.join("；")}` : ""}`);
   console.log(JSON.stringify({
     ok: results.some((item) => item.ok),
     complete: fullyRefreshed,

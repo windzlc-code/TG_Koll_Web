@@ -26,10 +26,15 @@ class DeploymentBoundaryTests(unittest.TestCase):
             "/pricing.html",
             "/register.html",
             "/subscription.html",
+            "/persona-automation-log.html",
             "/api/auth/apply",
             "/api/auth/register",
             "/api/auth/google/start",
             "/api/billing/orders",
+            "/api/persona_dashboard/refresh",
+            "/api/persona_dashboard/refresh/abc/cancel",
+            "/api/persona_dashboard/groups",
+            "/api/persona_dashboard/selection/batch-delete",
         ):
             with self.subTest(path=path):
                 self.assertTrue(boundary.blocks(path))
@@ -42,6 +47,8 @@ class DeploymentBoundaryTests(unittest.TestCase):
             "/api/crm/v1/threads/search",
             "/api/persona_dashboard/automation/accounts",
             "/api/persona_dashboard/automation/tasks",
+            "/api/persona_dashboard/automation/overview",
+            "/api/persona_dashboard/personas",
             "/api/admin/sentiment/browser_auth/profiles",
             "/api/admin/modules/crm/health",
             "/admin-console.html",

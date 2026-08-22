@@ -32,6 +32,9 @@ def test_collector_dashboard_keeps_the_requested_modules_and_boundary_copy() -> 
     assert "新机执行" in dashboard
     assert "用户自有账号" in dashboard
     assert "管理员采集账号池" in dashboard
+    assert "进入采集账号管理" in dashboard
+    assert "进入完整账号管理" not in dashboard
+    assert 'href="/admin-console.html?view=accounts"' in dashboard
 
 
 def test_collector_javascript_uses_only_existing_read_endpoints_for_summaries() -> None:

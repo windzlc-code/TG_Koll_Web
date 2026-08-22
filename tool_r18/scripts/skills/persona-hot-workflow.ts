@@ -8,6 +8,8 @@ import {
   cleanSentimentCandidateContent,
   downloadCandidateMedia,
   fetchSentimentHotCandidates,
+  fetchInstagramProfileHotMetrics,
+  fetchThreadsProfileHotMetrics,
   getSentimentHotGlobalPoolStat,
   listSentimentHotCandidatePoolStats,
   sentimentHotCandidatePoolLimits,
@@ -95,6 +97,15 @@ type RefreshHotPostInput = {
   executionMode?: "local" | "worker";
 };
 
+type RefreshProfileMetricsInput = {
+  action: "refresh-profile-metrics";
+  archiveId: string;
+  username: string;
+  platform?: "threads" | "instagram" | string;
+  publishedUrls?: string[];
+  outputOnly?: boolean;
+};
+
 type WarmHotStrategyInput = {
   action: "warm-hot-strategy";
   archiveId: string;
@@ -105,7 +116,7 @@ type PoolStatsInput = {
   archiveIds?: string[];
 };
 
-type PersonaHotWorkflowInput = FetchHotCandidatesInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RecycleHotCandidatesInput | FinalizeHotImportInput | RefreshHotPostInput | WarmHotStrategyInput | PoolStatsInput;
+type PersonaHotWorkflowInput = FetchHotCandidatesInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RecycleHotCandidatesInput | FinalizeHotImportInput | RefreshHotPostInput | RefreshProfileMetricsInput | WarmHotStrategyInput | PoolStatsInput;
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -496,6 +507,28 @@ export async function refreshHotPost(input: RefreshHotPostInput) {
   return { ok: true, archiveId, post: updated };
 }
 
+export async function refreshProfileMetrics(input: RefreshProfileMetricsInput) {
+  const archiveId = String(input.archiveId || "").trim();
+  const username = String(input.username || "").replace(/^@+/, "").trim();
+  const platform = String(input.platform || "threads").trim().toLowerCase();
+  if (!archiveId) throw new Error("persona archive id is required");
+  if (!username) throw new Error("profile username is required");
+  if (platform !== "threads" && platform !== "instagram") {
+    throw new Error("profile platform must be threads or instagram");
+  }
+  const metrics = platform === "instagram"
+    ? await fetchInstagramProfileHotMetrics(username, Array.isArray(input.publishedUrls) ? input.publishedUrls : [])
+    : await fetchThreadsProfileHotMetrics(username);
+  return {
+    ok: true,
+    archiveId,
+    username,
+    platform,
+    outputOnly: true,
+    metrics,
+  };
+}
+
 async function main() {
   const raw = process.argv[2];
   if (!raw) {
@@ -528,6 +561,9 @@ async function main() {
   }
   if (input.action === "refresh-hot-post") {
     await printJsonAndExit(await refreshHotPost(input));
+  }
+  if (input.action === "refresh-profile-metrics") {
+    await printJsonAndExit(await refreshProfileMetrics(input));
   }
   await printJsonAndExit({ ok: false, error: "unsupported action" }, 1);
 }

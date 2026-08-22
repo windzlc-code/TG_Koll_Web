@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import ipaddress
 import json
 import os
 import queue
@@ -11,6 +12,8 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
 from urllib.parse import quote, quote_plus, urljoin, urlparse
@@ -19,6 +22,7 @@ from urllib.parse import quote, quote_plus, urljoin, urlparse
 INSTAGRAM_HOME = "https://www.instagram.com/"
 INSTAGRAM_LOGIN = "https://www.instagram.com/accounts/login/"
 THREADS_HOME = "https://www.threads.net/"
+THREADS_LOGIN = "https://www.threads.com/login"
 THREADS_POST_SUBMIT_WATCH_SECONDS = 2
 DEFAULT_LOGIN_SELF_HEAL_ATTEMPTS = 4
 LOGIN_FORM_WAIT_SECONDS = 12
@@ -146,10 +150,11 @@ def _browser_image_surface_cache_mb() -> int:
     )
 
 
-def _browser_runtime_preferences() -> dict[str, Any]:
+def _browser_runtime_preferences(locale: str | None = None) -> dict[str, Any]:
     """Reduce speculative background work without changing rendered content."""
     preferences = _browser_disk_cache_preferences()
     if not _conservative_browser_resources_enabled():
+        _apply_network_locale_preferences(preferences, locale)
         return preferences
     preferences.update(
         {
@@ -205,6 +210,7 @@ def _browser_runtime_preferences() -> dict[str, Any]:
         # conservative so visible Threads images and publish previews remain
         # smooth while old decoded feed images cannot grow without bound.
         preferences["image.mem.surfacecache.max_size_kb"] = surface_cache_mb * 1024
+    _apply_network_locale_preferences(preferences, locale)
     return preferences
 
 
@@ -1159,7 +1165,7 @@ class _BrowserContextManager:
         profile_dir.mkdir(parents=True, exist_ok=True)
         _cleanup_stale_profile_locks(profile_dir, self.logger)
         proxy_config = _proxy_config(self.proxy)
-        proxy_locale = _proxy_locale(self.proxy)
+        proxy_locale = _current_network_locale(self.proxy)
         self.live_session = self._start_live_browser_session()
         try:
             self._raise_if_cancelled_before_launch()
@@ -1174,7 +1180,7 @@ class _BrowserContextManager:
             "user_data_dir": str(profile_dir),
             "headless": headless,
             "humanize": float(os.getenv("SOCIAL_AUTOMATION_HUMANIZE_MAX_SECONDS", "0.5")),
-            "firefox_user_prefs": _browser_runtime_preferences(),
+            "firefox_user_prefs": _browser_runtime_preferences(proxy_locale),
         }
         if self.live_session is not None:
             geometry_config = _live_browser_geometry_config(self.live_session)
@@ -1207,11 +1213,11 @@ class _BrowserContextManager:
                 self.context_control["live_browser_chrome_reserve_height"] = (
                     geometry_config["window.outerHeight"] - geometry_config["window.innerHeight"]
                 )
+        kwargs["geoip"] = True
         if proxy_config:
             kwargs["proxy"] = proxy_config
-            kwargs["geoip"] = True
-            if proxy_locale:
-                kwargs["locale"] = proxy_locale
+        if proxy_locale:
+            kwargs["locale"] = proxy_locale
         try:
             self._raise_if_cancelled_before_launch()
         except Exception:
@@ -1671,6 +1677,174 @@ def _proxy_locale(proxy: dict[str, Any] | None) -> str | None:
     return None
 
 
+_NETWORK_LOCALE_CACHE_LOCK = threading.Lock()
+_NETWORK_LOCALE_CACHE: dict[str, tuple[float, str]] = {}
+_NETWORK_LOCALE_CACHE_TTL_SECONDS = 45
+_COUNTRY_ACCEPT_LANGUAGES = {
+    "TW": "zh-TW,zh,en-US,en",
+    "HK": "zh-HK,zh-TW,zh,en-US,en",
+    "CN": "zh-CN,zh,en-US,en",
+    "MO": "zh-MO,zh-TW,zh,en-US,en",
+    "JP": "ja,en-US,en",
+    "KR": "ko,en-US,en",
+    "PT": "pt-PT,pt,en-US,en",
+    "BR": "pt-BR,pt,en-US,en",
+    "ES": "es-ES,es,en-US,en",
+    "MX": "es-MX,es,en-US,en",
+    "US": "en-US,en",
+    "GB": "en-GB,en-US,en",
+    "DE": "de,en-US,en",
+    "FR": "fr,en-US,en",
+    "IT": "it,en-US,en",
+    "TH": "th,en-US,en",
+    "VN": "vi,en-US,en",
+    "ID": "id,en-US,en",
+    "MY": "ms,en-US,en",
+}
+
+
+def _normalize_country_code(value: Any) -> str | None:
+    text = str(value or "").strip().upper()
+    aliases = {
+        "TAIWAN": "TW",
+        "中国台湾": "TW",
+        "中國台灣": "TW",
+        "台灣": "TW",
+        "台湾": "TW",
+        "JAPAN": "JP",
+        "KOREA": "KR",
+        "PORTUGAL": "PT",
+        "UNITED STATES": "US",
+        "USA": "US",
+        "HONG KONG": "HK",
+    }
+    normalized = aliases.get(text, text)
+    if len(normalized) == 2 and normalized.isalpha():
+        return normalized
+    return None
+
+
+def _network_locale_cache_key(proxy: dict[str, Any] | None) -> str:
+    if not proxy:
+        return "direct"
+    return "|".join(
+        (
+            str(proxy.get("host") or "").strip().lower(),
+            str(proxy.get("port") or "").strip(),
+            str(proxy.get("username") or "").strip(),
+            str((proxy.get("source") or "")).strip().lower(),
+        )
+    )
+
+
+def _live_exit_ip(proxy: dict[str, Any] | None) -> str | None:
+    request = urllib.request.Request(
+        "https://api.ipify.org?format=json",
+        headers={"User-Agent": "Vecto-Locale-Probe/1.0"},
+    )
+    opener = urllib.request.build_opener()
+    if proxy:
+        config = _proxy_config(proxy)
+        server = str((config or {}).get("server") or "")
+        if not server.startswith(("http://", "https://")):
+            return None
+        parsed = urlparse(server)
+        username = str((config or {}).get("username") or "")
+        password = str((config or {}).get("password") or "")
+        auth = ""
+        if username or password:
+            auth = f"{quote(username, safe='')}:{quote(password, safe='')}@"
+        proxy_url = f"{parsed.scheme}://{auth}{parsed.hostname}:{parsed.port}"
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        )
+    try:
+        with opener.open(request, timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+        ip_text = str((payload or {}).get("ip") or "").strip()
+        ipaddress.ip_address(ip_text)
+        return ip_text
+    except Exception:
+        return None
+
+
+def _lookup_ip_country(ip_text: str) -> str | None:
+    ip_value = str(ip_text or "").strip()
+    if not ip_value:
+        return None
+    request = urllib.request.Request(
+        f"http://ip-api.com/json/{quote(ip_value, safe='.')}?fields=status,countryCode",
+        headers={"User-Agent": "Vecto-Locale-Probe/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            payload = json.loads(response.read().decode("utf-8", "replace"))
+        if str((payload or {}).get("status") or "").strip().lower() != "success":
+            return None
+        return _normalize_country_code((payload or {}).get("countryCode"))
+    except Exception:
+        return None
+
+
+def _cached_exit_ip(proxy: dict[str, Any] | None) -> str | None:
+    if not proxy:
+        return None
+    last_check = proxy.get("last_check_result") or proxy.get("last_check_result_json")
+    if isinstance(last_check, str) and last_check.strip():
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
+            last_check = json.loads(last_check)
+    candidates: list[Any] = []
+    if isinstance(last_check, dict):
+        for section in (last_check.get("response"), last_check.get("detected"), last_check):
+            if isinstance(section, dict):
+                candidates.extend((section.get("exit_ip"), section.get("ip")))
+    candidates.append(proxy.get("exit_ip"))
+    for candidate in candidates:
+        ip_text = str(candidate or "").strip()
+        if not ip_text:
+            continue
+        try:
+            ipaddress.ip_address(ip_text)
+        except ValueError:
+            continue
+        return ip_text
+    return None
+
+
+def _live_network_locale(proxy: dict[str, Any] | None) -> str | None:
+    if str(os.getenv("SOCIAL_AUTOMATION_SKIP_LIVE_LOCALE") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return None
+    exit_ip = _cached_exit_ip(proxy) or _live_exit_ip(proxy)
+    if not exit_ip:
+        return None
+    return _lookup_ip_country(exit_ip)
+
+
+def _current_network_locale(proxy: dict[str, Any] | None) -> str | None:
+    """Resolve the locale from the current exit IP, never a leftover proxy country."""
+    cache_key = _network_locale_cache_key(proxy)
+    now = time.monotonic()
+    with _NETWORK_LOCALE_CACHE_LOCK:
+        cached = _NETWORK_LOCALE_CACHE.get(cache_key)
+        if cached and now - cached[0] < _NETWORK_LOCALE_CACHE_TTL_SECONDS:
+            return cached[1]
+    live = _live_network_locale(proxy)
+    if live:
+        with _NETWORK_LOCALE_CACHE_LOCK:
+            _NETWORK_LOCALE_CACHE[cache_key] = (now, live)
+        return live
+    return _proxy_locale(proxy) if proxy else None
+
+
+def _apply_network_locale_preferences(preferences: dict[str, Any], locale: str | None) -> None:
+    country = _normalize_country_code(locale)
+    if not country:
+        return
+    languages = _COUNTRY_ACCEPT_LANGUAGES.get(country) or "en-US,en"
+    preferences["intl.accept_languages"] = languages
+    preferences["intl.locale.requested"] = country.lower()
+
+
 def _masked_proxy(proxy_config: dict[str, str] | None) -> dict[str, str]:
     if not proxy_config:
         return {}
@@ -2115,14 +2289,63 @@ def _compose_warmup_evidence_sheet(
         return ""
 
 
+def _page_navigation_unusable(page) -> bool:
+    """HTTP/blank/error documents must not count as a successful Threads navigation."""
+    url = str(getattr(page, "url", "") or "").strip()
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return True
+    host = str(parsed.hostname or "").lower()
+    if not url or parsed.scheme in {"", "about"}:
+        return True
+    if parsed.scheme == "http" and host.endswith(("threads.net", "threads.com", "instagram.com")):
+        return True
+    if _browser_navigation_error_visible(page):
+        return True
+    try:
+        body = str(page.locator("body").inner_text(timeout=800) or "").strip()
+    except Exception:
+        return False
+    interactive = 0
+    try:
+        interactive = int(page.locator("input, button, a, img, [role='button']").count() or 0)
+    except Exception:
+        interactive = 0
+    return (not body) and interactive <= 0
+
+
 def _goto(page, url: str, logger: AutomationLogger, stage: str, *, timeout_ms: int = 60000, networkidle_ms: int = 15000) -> None:
     logger.log("info", stage, f"正在打开页面：{url}")
     candidates = [url]
     if url == THREADS_HOME:
         candidates.extend(["https://www.threads.com/", "https://www.threads.com/login"])
+    home_open = url == THREADS_HOME
+    per_try = min(int(timeout_ms or 60000), 15000) if home_open else int(timeout_ms or 60000)
+    # Sticky HTTP proxies can land on a blank HTTP document that never fires
+    # DOMContentLoaded. Commit returns as soon as the URL is known so the
+    # existing home fallback (threads.com/) can run instead of hanging.
+    wait_until = "commit" if home_open else "domcontentloaded"
+    login_ready = False
     for index, candidate in enumerate(candidates):
         try:
-            page.goto(candidate, wait_until="domcontentloaded", timeout=timeout_ms)
+            page.goto(candidate, wait_until=wait_until, timeout=per_try)
+            if home_open:
+                current_scheme = str(urlparse(str(getattr(page, "url", "") or "")).scheme or "").lower()
+                if current_scheme != "http":
+                    with contextlib.suppress(Exception):
+                        page.wait_for_load_state("domcontentloaded", timeout=4000)
+                if _page_navigation_unusable(page):
+                    logger.log(
+                        "warn",
+                        f"{stage}_navigation_recovery",
+                        "打开的页面不可用（空白、HTTP 或错误页），改试下一地址。",
+                        {"from": candidate, "url": _safe_navigation_url(getattr(page, "url", ""))},
+                    )
+                    if index + 1 < len(candidates):
+                        continue
+                if _threads_login_surface_visible(page):
+                    login_ready = True
             break
         except Exception as exc:
             message = str(exc)
@@ -2136,11 +2359,13 @@ def _goto(page, url: str, logger: AutomationLogger, stage: str, *, timeout_ms: i
                 )
             )
             is_transient_threads_navigation = (
-                url == THREADS_HOME and _is_transient_navigation_exception(message)
+                home_open and _is_transient_navigation_exception(message)
             )
             if not is_redirect_navigation and not is_transient_threads_navigation:
                 raise
-            if is_redirect_navigation and current_url and current_url != "about:blank":
+            if is_redirect_navigation and current_url and current_url != "about:blank" and not (
+                home_open and _page_navigation_unusable(page)
+            ):
                 logger.log(
                     "warn",
                     stage,
@@ -2164,7 +2389,11 @@ def _goto(page, url: str, logger: AutomationLogger, stage: str, *, timeout_ms: i
                 {"url": candidate},
             )
     try:
-        page.wait_for_load_state("networkidle", timeout=networkidle_ms)
+        if login_ready:
+            pass
+        elif not (home_open and _page_navigation_unusable(page)):
+            idle_ms = min(int(networkidle_ms or 15000), 4000) if home_open else int(networkidle_ms or 15000)
+            page.wait_for_load_state("networkidle", timeout=idle_ms)
     except Exception:
         pass
 
@@ -2507,7 +2736,14 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
     if _page_shows_invalid_credentials(page, body_text=body_text):
         return {"status": "invalid_credentials", "reason": "平台提示账号或密码不正确，请重新输入。", "url": url}
     if "/login" in url:
-        return {"status": "cookie_expired", "reason": "检测到 Threads 登录页面。", "url": url}
+        return {"status": "cookie_expired", "reason": "检测到 Threads 登录页面。", "url": url, "evidence": "url"}
+    if _threads_login_surface_visible(page):
+        return {
+            "status": "cookie_expired",
+            "reason": "检测到 Threads 登录卡或登录表单结构。",
+            "url": url,
+            "evidence": "visual_structure",
+        }
     login_prompt_selectors = [
         'text="Log in or sign up for Threads"',
         'text="Log in with username instead"',
@@ -2526,7 +2762,7 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
     )
     try:
         if login_inputs.count() > 0 and login_inputs.first.is_visible():
-            return {"status": "cookie_expired", "reason": "检测到 Threads 登录表单。"}
+            return {"status": "cookie_expired", "reason": "检测到 Threads 登录表单。", "evidence": "visual_structure"}
     except Exception:
         pass
     login_markers = ["log in", "login", "continue with instagram", "forgot password", "sign up"]
@@ -2886,22 +3122,24 @@ def _prepare_manual_threads_login_page(page, logger: AutomationLogger) -> None:
 
     if status.get("status") == "ready":
         return
-    opened = _click_text_button(
-        page,
-        logger,
-        [
-            "Log in with username instead",
-            "Log in with username",
-            "Use username instead",
-            "改用用户名登录",
-            "使用用户名登录",
-            "改用用戶名稱登入",
-            "使用用戶名稱登入",
-        ],
-        "manual_threads_username_login",
-    )
+    opened = _click_threads_username_entry_by_structure(page, logger)
     if not opened:
-        opened = _click_threads_username_entry_by_structure(page, logger)
+        opened = _click_text_button(
+            page,
+            logger,
+            [
+                "Log in with username instead",
+                "Log in with username",
+                "Use username instead",
+                "代わりにユーザーネームでログイン",
+                "ユーザーネームでログイン",
+                "改用用户名登录",
+                "使用用户名登录",
+                "改用用戶名稱登入",
+                "使用用戶名稱登入",
+            ],
+            "manual_threads_username_login",
+        )
     logger.log(
         "info" if opened else "warn",
         "manual_threads_username_login",
@@ -10496,6 +10734,94 @@ def _find_threads_login_card_anchor(
         return None
 
 
+def _threads_login_surface_visible(page) -> bool:
+    """Recognize the Threads login card/form by structure, independent of page language."""
+    if _find_threads_login_card_anchor(page) is not None:
+        return True
+    return _visible_first(
+        page,
+        [
+            'input[name="username"]',
+            'input[autocomplete="username"]',
+            'input[type="password"]',
+            'input[autocomplete="current-password"]',
+        ],
+        timeout_ms=400,
+    ) is not None
+
+
+def _click_login_submit_by_structure(
+    page,
+    logger: AutomationLogger,
+    password_input,
+    *,
+    abort_if: Callable[[], bool] | None = None,
+) -> bool:
+    """Click the primary submit control in the same login form as the password field."""
+    if abort_if is not None and abort_if():
+        return False
+    if password_input is None:
+        return False
+    try:
+        marked = password_input.evaluate(
+            r"""input => {
+                const marker = 'data-vecto-login-submit';
+                document.querySelectorAll(`[${marker}]`).forEach((node) => node.removeAttribute(marker));
+                const isVisible = (node) => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 24 && rect.height > 16
+                        && style.visibility !== 'hidden'
+                        && style.display !== 'none'
+                        && style.pointerEvents !== 'none';
+                };
+                const form = input.form || input.closest('form') || input.parentElement;
+                if (!form) return false;
+                const typed = form.querySelector('button[type="submit"], input[type="submit"], [type="submit"]');
+                if (typed && isVisible(typed)) {
+                    typed.setAttribute(marker, '1');
+                    typed.scrollIntoView({block: 'center', inline: 'center'});
+                    return true;
+                }
+                const inputRect = input.getBoundingClientRect();
+                let best = null;
+                let bestScore = Number.POSITIVE_INFINITY;
+                const controls = form.querySelectorAll('button, [role="button"]');
+                for (const node of controls) {
+                    if (node.disabled || node.getAttribute('aria-disabled') === 'true') continue;
+                    if (!isVisible(node)) continue;
+                    const rect = node.getBoundingClientRect();
+                    if (rect.width < 72 || rect.height > 90) continue;
+                    const gap = rect.top - inputRect.bottom;
+                    if (gap < -8 || gap > 180) continue;
+                    const score = gap * 4 + Math.abs(rect.left - inputRect.left);
+                    if (score < bestScore) {
+                        best = node;
+                        bestScore = score;
+                    }
+                }
+                if (!best) return false;
+                best.setAttribute(marker, '1');
+                best.scrollIntoView({block: 'center', inline: 'center'});
+                return true;
+            }"""
+        )
+        if not marked:
+            return False
+        target = page.locator('[data-vecto-login-submit="1"]').first
+        if not _human_click(page, target, logger, "auto_login_submit_structure", abort_if=abort_if):
+            return False
+        logger.log(
+            "info",
+            "auto_login_submit_structure",
+            "登录提交按钮已通过表单结构识别。",
+            {"evidence": "visual_structure", "url": _safe_navigation_url(page.url)},
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _click_threads_username_entry_by_structure(
     page,
     logger: AutomationLogger,
@@ -11496,27 +11822,27 @@ def _auto_submit_login_form(
                     page.keyboard.press("Escape")
                 except Exception:
                     pass
-                username_entry_clicked = _click_text_button(
+                username_entry_clicked = _click_threads_username_entry_by_structure(
                     page,
                     logger,
-                    [
-                        "Log in with username instead",
-                        "Log in with username",
-                        "Use username instead",
-                        "代わりにユーザーネームでログイン",
-                        "ユーザーネームでログイン",
-                        "改用用户名登录",
-                        "使用用户名登录",
-                        "改用用戶名稱登入",
-                        "使用用戶名稱登入",
-                    ],
-                    "threads_login_username_instead",
                     abort_if=takeover_requested,
                 )
                 if not username_entry_clicked:
-                    username_entry_clicked = _click_threads_username_entry_by_structure(
+                    username_entry_clicked = _click_text_button(
                         page,
                         logger,
+                        [
+                            "Log in with username instead",
+                            "Log in with username",
+                            "Use username instead",
+                            "代わりにユーザーネームでログイン",
+                            "ユーザーネームでログイン",
+                            "改用用户名登录",
+                            "使用用户名登录",
+                            "改用用戶名稱登入",
+                            "使用用戶名稱登入",
+                        ],
+                        "threads_login_username_instead",
                         abort_if=takeover_requested,
                     )
                 if not username_entry_clicked:
@@ -11536,7 +11862,6 @@ def _auto_submit_login_form(
                 "Threads-native username/password form is not available yet; keeping recovery on threads.com.",
                 {"url": _safe_navigation_url(page.url)},
             )
-            return False
 
     logger.log("info", "auto_login_find_inputs", "正在查找用户名和密码输入框。", {"url": _safe_navigation_url(page.url)})
     username_selectors = [
@@ -11608,13 +11933,20 @@ def _auto_submit_login_form(
     logger.log("info", "auto_login_form_filled", "登录表单已填写完成。", {"username": username, "password": "***"}, filled_shot)
     if _manual_takeover_requested(context_control):
         return False
-    clicked = _click_text_button(
+    clicked = _click_login_submit_by_structure(
         page,
         logger,
-        ["Log in", "Log In", "Login", "Continue", "ログイン", "\u767b\u5f55", "\u767b\u5165", "\u7ee7\u7eed"],
-        "auto_login_submit",
+        password_input,
         abort_if=takeover_requested,
     )
+    if not clicked:
+        clicked = _click_text_button(
+            page,
+            logger,
+            ["Log in", "Log In", "Login", "Continue", "ログイン", "\u767b\u5f55", "\u767b\u5165", "\u7ee7\u7eed"],
+            "auto_login_submit",
+            abort_if=takeover_requested,
+        )
     if not clicked:
         if takeover_requested():
             return False

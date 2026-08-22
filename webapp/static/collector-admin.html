@@ -97,7 +97,7 @@
               <div class="collector-panel-index">BOUNDARY / NEW NODE</div>
               <span class="collector-module-tag is-remote">新机执行</span>
               <h2>人设全量刷新</h2>
-              <p>本节点不运行人设全量刷新，不保存完整用户人设。新机按钮仅在需要抓取时触发旧机能力。</p>
+              <p>本节点不保存完整用户人设。新机按钮触发旧机采集号读取指定用户资料，人设全量刷新的写入仍在新机执行。</p>
               <div class="collector-inline-status is-locked"><i></i><span>边界已锁定</span></div>
             </article>
           </div>
@@ -118,17 +118,18 @@
             <article><small>CAP-01</small><strong>热点候选抓取</strong><code>persona.hot_candidates.v1</code><p>接收新机关键词请求，公开页抓取后返回合格热点。</p></article>
             <article><small>CAP-02</small><strong>帖子指标刷新</strong><code>persona.hot_post_metrics.v1</code><p>只读取公开指标，不修改用户内容。</p></article>
             <article><small>CAP-03</small><strong>CRM 实时搜索</strong><code>crm.threads_live_search.v1</code><p>为 CRM 返回实时平台数据与证据。</p></article>
+            <article><small>CAP-04</small><strong>人设资料全量读取</strong><code>persona.profile_metrics.v1</code><p>用采集号登录态读取指定绑定用户的帖子与浏览量，结果写回仍在新机执行。</p></article>
           </div>
           <div class="collector-panel collector-hot-summary">
             <div><div class="collector-panel-index">AUTH PROFILES</div><h2>抓取登录态摘要</h2></div>
             <div id="collectorHotProfiles" class="collector-mini-list">正在读取…</div>
             <button type="button" class="collector-secondary-button" data-collector-view-jump="cookies">检查 Cookie 状态</button>
           </div>
-          <div class="collector-boundary-warning"><strong>不在旧机执行</strong><span>人设全量刷新、内容生成、用户账号发布与用户数据展示。</span></div>
+          <div class="collector-boundary-warning"><strong>写入仍在新机执行</strong><span>人设全量刷新的缓存写入、内容生成、用户账号发布与用户数据展示不落在旧机；旧机只提供采集号登录态读取。</span></div>
         </section>
 
         <section class="collector-view" data-collector-panel="accounts">
-          <header class="collector-page-heading"><div><p>RESOURCE / COLLECTOR ACCOUNTS</p><h1>管理员采集账号池</h1></div><a class="collector-secondary-link" href="/admin-console.html">进入完整账号管理 ↗</a></header>
+          <header class="collector-page-heading"><div><p>RESOURCE / COLLECTOR ACCOUNTS</p><h1>管理员采集账号池</h1></div><a class="collector-secondary-link" href="/admin-console.html?view=accounts">进入采集账号管理 ↗</a></header>
           <p class="collector-section-note">这里只显示安全摘要，不读取或展示账号密码、Cookie 内容、TOTP 密钥。</p>
           <div class="collector-table-wrap">
             <table><thead><tr><th>平台 / 账号</th><th>会话状态</th><th>代理绑定</th><th>TOTP</th><th>最近更新</th></tr></thead><tbody id="collectorAccountsBody"><tr><td colspan="5">正在读取采集账号池…</td></tr></tbody></table>
@@ -142,7 +143,7 @@
         </section>
 
         <section class="collector-view" data-collector-panel="proxies">
-          <header class="collector-page-heading"><div><p>RESOURCE / NETWORK</p><h1>代理资源</h1></div><a class="collector-secondary-link" href="/admin-console.html">进入完整代理管理 ↗</a></header>
+          <header class="collector-page-heading"><div><p>RESOURCE / NETWORK</p><h1>代理资源</h1></div><a class="collector-secondary-link" href="/admin-console.html?view=accounts&amp;browser_panel=proxies">进入采集代理管理 ↗</a></header>
           <p class="collector-section-note">代理密码不会进入此摘要页。账号执行前仍由服务端完成归属和健康校验。</p>
           <div class="collector-table-wrap">
             <table><thead><tr><th>代理名称</th><th>协议</th><th>区域</th><th>健康状态</th><th>最近检测</th></tr></thead><tbody id="collectorProxiesBody"><tr><td colspan="5">正在读取代理资源…</td></tr></tbody></table>

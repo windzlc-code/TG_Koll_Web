@@ -1,4 +1,5 @@
 import base64
+import inspect
 import json
 import os
 import sqlite3
@@ -1680,6 +1681,24 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 404, resp.text)
         self.assertEqual(primary_path.read_text(encoding="utf-8"), before)
 
+    def test_public_refresh_cancel_stops_the_running_process(self):
+        process = mock.Mock(pid=4321)
+        process.poll.return_value = None
+        server.PERSONA_DASHBOARD_REFRESH_TASKS["pdr_cancel"] = {
+            "id": "pdr_cancel",
+            "user_id": 1,
+            "status": "running",
+            "message": "采集中",
+        }
+        server.PERSONA_DASHBOARD_REFRESH_PROCESSES["pdr_cancel"] = process
+        with mock.patch.object(server, "_terminate_persona_hot_process") as terminate:
+            result = server._cancel_persona_dashboard_refresh("pdr_cancel", 1)
+        self.assertEqual(result["status"], "cancelling")
+        self.assertTrue(result["cancel_requested"])
+        terminate.assert_called_once_with(process)
+        server.PERSONA_DASHBOARD_REFRESH_TASKS.pop("pdr_cancel", None)
+        server.PERSONA_DASHBOARD_REFRESH_PROCESSES.pop("pdr_cancel", None)
+
     def test_public_refresh_endpoint_returns_task_status(self):
         self._write_archives()
         with mock.patch.object(server, "_start_persona_dashboard_refresh", return_value={"id": "pdr_test", "status": "queued", "message": "queued"}):
@@ -1705,10 +1724,44 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_http_first_refresh_does_not_prelaunch_cookie_browser(self):
         script = (server.ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(encoding="utf-8")
+        worker = inspect.getsource(server._persona_dashboard_refresh_worker_v2)
+        importer = (server.ROOT_DIR / "tool_r18" / "src" / "lib" / "sentiment-hot-importer.ts").read_text(encoding="utf-8")
 
         self.assertIn('PERSONA_DASHBOARD_REFRESH_SOURCE || "http_first"', script)
         self.assertIn('const useHttpFirst = source === "http_first";', script)
         self.assertIn("const threadsBrowserNotNeeded = useRssHub || useHttpFirst || !hasBrowserThreadsTargets;", script)
+        self.assertIn('refresh_source in {"browser", "rsshub"}', worker)
+        self.assertNotIn('"http_first", "browser", "rsshub"', worker)
+        self.assertIn('env["TG_THREADS_PROFILE_HTTP_ONLY"] = "1"', worker)
+        self.assertIn("first: 50", importer)
+        self.assertIn("function profileMetricsHttpOnly()", importer)
+
+    def test_http_first_dashboard_refresh_does_not_lease_browser(self):
+        task_id = "pdr_http_only_no_browser"
+        process = mock.Mock()
+        process.poll.return_value = 0
+        process.returncode = 0
+        process.wait.return_value = 0
+        with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+            server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {
+                "id": task_id,
+                "status": "queued",
+                "user_id": self._admin_user_id(),
+            }
+        try:
+            with mock.patch.object(server, "acquire_external_browser_lease") as acquire_lease, \
+                 mock.patch.object(server, "release_external_browser_lease") as release_lease, \
+                 mock.patch.object(server.subprocess, "Popen", return_value=process):
+                server._persona_dashboard_refresh_worker_v2(
+                    task_id,
+                    archive_id="persona-1",
+                    source="http_first",
+                )
+        finally:
+            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(task_id, None)
+        acquire_lease.assert_not_called()
+        release_lease.assert_not_called()
 
     def test_dashboard_refresh_resolves_bound_proxy_credentials_before_node_fetch(self):
         self._write_archives()
@@ -4024,12 +4077,102 @@ class PersonaDashboardApiTests(unittest.TestCase):
         import inspect
 
         worker_source = inspect.getsource(server._persona_dashboard_refresh_worker_v2)
+        prefetch_source = inspect.getsource(server._prefetch_persona_dashboard_remote_metrics)
+        fetch_one_source = inspect.getsource(server._fetch_one_persona_dashboard_remote_metrics)
         self.assertNotIn("refresh-global-hot-pool", worker_source)
         self.assertNotIn("_refresh_persona_hot_global_pool", worker_source)
+        self.assertIn("_prefetch_persona_dashboard_remote_metrics", worker_source)
+        self.assertIn("refresh-profile-metrics", fetch_one_source)
+        self.assertIn("PERSONA_DASHBOARD_PREFETCHED_METRICS_B64", worker_source)
+        self.assertNotIn("PERSONA_DASHBOARD_COLLECTOR_HTTP_ONLY", worker_source)
+        self.assertIn("ThreadPoolExecutor", prefetch_source)
+        self.assertIn("as_completed", prefetch_source)
+        self.assertIn("timeout_seconds=180", fetch_one_source)
+        self.assertNotIn("_remote_fetch_worker_reachable", prefetch_source)
+        self.assertNotIn("_persona_dashboard_profile_metrics_prefetch_seconds", fetch_one_source)
+        target_source = inspect.getsource(server._persona_dashboard_bound_refresh_targets)
+        self.assertIn("NOT IN ('banned', 'disabled')", target_source)
+        self.assertNotIn("IN ('ready', 'active')", target_source)
+        self.assertNotIn("旧机", worker_source)
+        self.assertNotIn("旧机", prefetch_source)
+        self.assertNotIn("旧机", fetch_one_source)
+
+    def test_bound_refresh_targets_include_cookie_expired_bound_accounts(self):
+        self._insert_social_account(
+            account_id="threads-expired",
+            persona_id="persona-1",
+            platform="threads",
+            username="sherryjim68",
+            status="cookie_expired",
+        )
+        targets = server._persona_dashboard_bound_refresh_targets(
+            user_id=self._admin_user_id(),
+            archive_id="persona-1",
+        )
+        self.assertEqual(
+            [(item["platform"], item["username"]) for item in targets],
+            [("threads", "sherryjim68")],
+        )
+
+    def test_dashboard_refresh_cancel_without_process_finishes_immediately(self):
+        server.PERSONA_DASHBOARD_REFRESH_TASKS["pdr_cancel_now"] = {
+            "id": "pdr_cancel_now",
+            "user_id": 11,
+            "status": "running",
+            "step": "读取账号资料",
+            "progress": 14,
+            "message": "正在读取已绑定账号的资料...",
+        }
+        server.PERSONA_DASHBOARD_REFRESH_PROCESSES.pop("pdr_cancel_now", None)
+        result = server._cancel_persona_dashboard_refresh("pdr_cancel_now", 11)
+        self.assertEqual(result["status"], "cancelled")
+        self.assertEqual(result["progress"], 100)
+        self.assertEqual(server.PERSONA_DASHBOARD_REFRESH_TASKS["pdr_cancel_now"]["status"], "cancelled")
+        server.PERSONA_DASHBOARD_REFRESH_TASKS.pop("pdr_cancel_now", None)
+
+    def test_disjoint_users_can_refresh_in_parallel_but_same_user_cannot(self):
+        started = []
+
+        class _FakeThread:
+            def __init__(self, *args, **kwargs):
+                started.append(kwargs.get("target"))
+
+            def start(self):
+                return None
+
+        with mock.patch.object(server.threading, "Thread", _FakeThread):
+            first = server._start_persona_dashboard_refresh(
+                "persona-1",
+                source="http_first",
+                archive_ids=["persona-1"],
+                user_id=11,
+            )
+            second = server._start_persona_dashboard_refresh(
+                "persona-2",
+                source="http_first",
+                archive_ids=["persona-2"],
+                user_id=22,
+            )
+            with self.assertRaises(server.HTTPException) as raised:
+                server._start_persona_dashboard_refresh(
+                    "persona-3",
+                    source="http_first",
+                    archive_ids=["persona-3"],
+                    user_id=11,
+                )
+        try:
+            self.assertNotEqual(first["id"], second["id"])
+            self.assertEqual(raised.exception.status_code, 409)
+            self.assertIn("当前账号已有刷新任务", str(raised.exception.detail))
+        finally:
+            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(first["id"], None)
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(second["id"], None)
 
     def test_persona_hot_workflow_only_reserves_browser_for_browser_actions(self):
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "fetch-hot-candidates"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "refresh-hot-post"}))
+        self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "refresh-profile-metrics"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "pool-stats"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "import-hot-candidates"}))
         self.assertFalse(server._persona_hot_workflow_uses_browser({"action": "finalize-hot-import"}))
