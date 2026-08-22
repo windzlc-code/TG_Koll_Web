@@ -105,6 +105,7 @@ from .password_vault import (
     health_check as password_vault_health_check,
     key_version as password_vault_key_version,
 )
+from .proxy_market_credentials import resolve_market_proxy_credentials
 from .social_automation_api import (
     SocialTaskPayload,
     _live_browser_sessions,
@@ -129,6 +130,7 @@ from .social_automation_api import (
     set_daily_publish_limit,
     stop_social_automation_worker,
     wake_social_automation_worker,
+    _proxy_url as _social_automation_proxy_url,
 )
 from .crm import install_crm
 from .crm.service import effective_module_state
@@ -21029,6 +21031,52 @@ def _read_text_tail(path: Path, max_chars: int = 1200) -> str:
     return text[-max_chars:]
 
 
+def _persona_dashboard_refresh_proxy_urls(
+    *,
+    user_id: int = 0,
+    archive_id: str = "",
+    archive_ids: list[str] | None = None,
+) -> dict[str, str]:
+    clauses = ["trim(account.proxy_id) <> ''"]
+    params: list[Any] = []
+    owner_user_id = max(0, int(user_id or 0))
+    clean_archive_id = str(archive_id or "").strip()
+    clean_archive_ids = list(dict.fromkeys(
+        str(item or "").strip() for item in (archive_ids or []) if str(item or "").strip()
+    ))
+    if owner_user_id:
+        clauses.append("account.user_id = ?")
+        params.append(owner_user_id)
+    if clean_archive_id:
+        clauses.append("account.persona_id = ?")
+        params.append(clean_archive_id)
+    elif archive_ids is not None:
+        if not clean_archive_ids:
+            return {}
+        clauses.append(f"account.persona_id IN ({','.join('?' for _ in clean_archive_ids)})")
+        params.extend(clean_archive_ids)
+    query = f"""
+        SELECT proxy.*, account.id AS account_id,
+               account.user_id AS account_owner_user_id
+        FROM social_accounts AS account
+        JOIN social_proxies AS proxy ON proxy.id = account.proxy_id
+        WHERE {' AND '.join(clauses)}
+    """
+    resolved_urls: dict[str, str] = {}
+    with db() as conn:
+        for row in conn.execute(query, params).fetchall():
+            proxy = resolve_market_proxy_credentials(
+                conn,
+                row,
+                owner_user_id=int(row["account_owner_user_id"] or 0),
+            )
+            resolved_urls[str(row["account_id"])] = _social_automation_proxy_url(
+                proxy,
+                include_password=True,
+            )
+    return resolved_urls
+
+
 def _persona_dashboard_refresh_worker_v2(
     task_id: str,
     archive_id: str = "",
@@ -21072,6 +21120,17 @@ def _persona_dashboard_refresh_worker_v2(
     env.setdefault("TOOL_R18_RUNTIME_DIR", str(TOOL_R18_RUNTIME_DIR))
     env.setdefault("NODE_PATH", str(ROOT_DIR / "tool_r18" / "node_modules"))
     try:
+        with PERSONA_DASHBOARD_REFRESH_LOCK:
+            refresh_user_id = int(PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {}).get("user_id") or 0)
+        proxy_urls = _persona_dashboard_refresh_proxy_urls(
+            user_id=refresh_user_id,
+            archive_id=archive_id,
+            archive_ids=archive_ids,
+        )
+        if proxy_urls:
+            env["PERSONA_DASHBOARD_ACCOUNT_PROXY_URLS_B64"] = base64.urlsafe_b64encode(
+                json.dumps(proxy_urls, ensure_ascii=True).encode("utf-8")
+            ).decode("ascii").rstrip("=")
         if needs_browser_lease:
             resource_wait_deadline = time.monotonic() + 300.0
             while time.monotonic() < resource_wait_deadline and not browser_lease:

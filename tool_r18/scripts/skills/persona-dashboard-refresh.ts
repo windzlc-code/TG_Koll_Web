@@ -92,6 +92,20 @@ function resolveWebappDataDirs(): string[] {
 
 let cachedThreadsAccountPool: PersonaThreadsAccountBinding[] | null = null;
 let cachedInstagramAccountPool: PersonaThreadsAccountBinding[] | null = null;
+let cachedResolvedAccountProxyUrls: Record<string, string> | null = null;
+
+function resolvedAccountProxyUrl(accountId: unknown): string | undefined {
+  if (!cachedResolvedAccountProxyUrls) {
+    try {
+      const encoded = String(process.env.PERSONA_DASHBOARD_ACCOUNT_PROXY_URLS_B64 || "").trim();
+      const parsed = encoded ? JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) : {};
+      cachedResolvedAccountProxyUrls = parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      cachedResolvedAccountProxyUrls = {};
+    }
+  }
+  return String(cachedResolvedAccountProxyUrls[String(accountId || "").trim()] || "").trim() || undefined;
+}
 
 function readThreadsAccountPool(): PersonaThreadsAccountBinding[] {
   if (cachedThreadsAccountPool) return cachedThreadsAccountPool;
@@ -121,7 +135,7 @@ function readThreadsAccountPool(): PersonaThreadsAccountBinding[] {
           accountId: String(row?.id || "").trim() || undefined,
           archiveId: String(row?.persona_id || "").trim() || undefined,
           profileDir: String(row?.profile_dir || "").trim() || undefined,
-          proxyUrl: accountProxyUrl(row),
+          proxyUrl: resolvedAccountProxyUrl(row?.id) || accountProxyUrl(row),
           status: String(row?.status || "").trim() || undefined,
           source: "account_pool",
         } as PersonaThreadsAccountBinding & { archiveId?: string });
@@ -178,7 +192,7 @@ function readInstagramAccountPool(): PersonaThreadsAccountBinding[] {
           accountId: String(row?.id || "").trim() || undefined,
           archiveId: String(row?.persona_id || "").trim() || undefined,
           profileDir: String(row?.profile_dir || "").trim() || undefined,
-          proxyUrl: accountProxyUrl(row),
+          proxyUrl: resolvedAccountProxyUrl(row?.id) || accountProxyUrl(row),
           status: String(row?.status || "").trim() || undefined,
           source: "account_pool",
         } as PersonaThreadsAccountBinding & { archiveId?: string });

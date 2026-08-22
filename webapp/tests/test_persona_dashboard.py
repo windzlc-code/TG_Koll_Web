@@ -1710,6 +1710,80 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn('const useHttpFirst = source === "http_first";', script)
         self.assertIn("const threadsBrowserNotNeeded = useRssHub || useHttpFirst || !hasBrowserThreadsTargets;", script)
 
+    def test_dashboard_refresh_resolves_bound_proxy_credentials_before_node_fetch(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-http", platform="threads", username="threads_http")
+
+        with mock.patch.object(
+            server,
+            "resolve_market_proxy_credentials",
+            side_effect=lambda _conn, proxy, owner_user_id: {
+                **dict(proxy),
+                "username": "resolved-user",
+                "password": "resolved-password",
+            },
+        ) as resolve:
+            proxy_urls = server._persona_dashboard_refresh_proxy_urls(
+                user_id=self._admin_user_id(),
+                archive_id="persona-1",
+            )
+
+        self.assertEqual(
+            proxy_urls,
+            {"acct-http": "http://resolved-user:resolved-password@127.0.0.1:18080"},
+        )
+        self.assertEqual(resolve.call_args.kwargs["owner_user_id"], self._admin_user_id())
+
+    def test_dashboard_refresh_script_prefers_secure_proxy_override(self):
+        script = (server.ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(encoding="utf-8")
+
+        self.assertIn("PERSONA_DASHBOARD_ACCOUNT_PROXY_URLS_B64", script)
+        self.assertEqual(
+            script.count("resolvedAccountProxyUrl(row?.id) || accountProxyUrl(row)"),
+            2,
+        )
+
+    def test_dashboard_refresh_passes_resolved_proxy_urls_only_through_child_environment(self):
+        task_id = "pdr_secure_proxy_env"
+        process = mock.Mock()
+        process.poll.return_value = 0
+        process.returncode = 0
+        process.wait.return_value = 0
+        with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+            server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {
+                "id": task_id,
+                "status": "queued",
+                "user_id": self._admin_user_id(),
+            }
+        try:
+            with mock.patch.object(
+                server,
+                "_persona_dashboard_refresh_proxy_urls",
+                return_value={"acct-http": "http://resolved-user:resolved-password@127.0.0.1:18080"},
+            ), mock.patch.object(
+                server,
+                "acquire_external_browser_lease",
+                return_value="lease-http",
+            ), mock.patch.object(
+                server,
+                "release_external_browser_lease",
+            ), mock.patch.object(server.subprocess, "Popen", return_value=process) as popen:
+                server._persona_dashboard_refresh_worker_v2(
+                    task_id,
+                    archive_id="persona-1",
+                    source="http_first",
+                )
+        finally:
+            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(task_id, None)
+
+        encoded = popen.call_args.kwargs["env"]["PERSONA_DASHBOARD_ACCOUNT_PROXY_URLS_B64"]
+        decoded = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8"))
+        self.assertEqual(
+            decoded,
+            {"acct-http": "http://resolved-user:resolved-password@127.0.0.1:18080"},
+        )
+
     def test_removed_platform_oauth_and_sync_routes_stay_unavailable(self):
         self.assertEqual(self.client.get("/api/threads/oauth/start").status_code, 404)
         self.assertEqual(self.client.get("/api/instagram/oauth/start").status_code, 404)
