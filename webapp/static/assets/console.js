@@ -14782,7 +14782,11 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
     const task = await api("/api/persona_dashboard/refresh", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ archive_id: cleanPersonaId, source: "http_first" }),
+      body: JSON.stringify({
+        archive_id: cleanPersonaId,
+        source: "http_first",
+        platform: personaContentPlatform(persona),
+      }),
     });
     const taskId = String(task?.id || "").trim();
     if (!taskId) throw new Error("刷新任务未返回任务 ID");

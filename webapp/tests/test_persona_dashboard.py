@@ -4088,11 +4088,14 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("ThreadPoolExecutor", prefetch_source)
         self.assertIn("as_completed", prefetch_source)
         self.assertIn("timeout_seconds=180", fetch_one_source)
+        self.assertIn("_persona_dashboard_failed_profile_metrics", fetch_one_source)
         self.assertNotIn("_remote_fetch_worker_reachable", prefetch_source)
         self.assertNotIn("_persona_dashboard_profile_metrics_prefetch_seconds", fetch_one_source)
+        self.assertIn("--platform=", worker_source)
         target_source = inspect.getsource(server._persona_dashboard_bound_refresh_targets)
         self.assertIn("NOT IN ('banned', 'disabled')", target_source)
         self.assertNotIn("IN ('ready', 'active')", target_source)
+        self.assertIn("lower(account.platform) = ?", target_source)
         self.assertNotIn("旧机", worker_source)
         self.assertNotIn("旧机", prefetch_source)
         self.assertNotIn("旧机", fetch_one_source)
@@ -4111,6 +4114,22 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertEqual(
             [(item["platform"], item["username"]) for item in targets],
+            [("threads", "sherryjim68")],
+        )
+        self._insert_social_account(
+            account_id="ig-bound",
+            persona_id="persona-1",
+            platform="instagram",
+            username="le.huuuczxsn.196960",
+            status="ready",
+        )
+        threads_only = server._persona_dashboard_bound_refresh_targets(
+            user_id=self._admin_user_id(),
+            archive_id="persona-1",
+            platform="threads",
+        )
+        self.assertEqual(
+            [(item["platform"], item["username"]) for item in threads_only],
             [("threads", "sherryjim68")],
         )
 

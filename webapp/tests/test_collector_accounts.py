@@ -169,6 +169,71 @@ class CollectorAccountPoolTests(unittest.TestCase):
                 lease["lease_id"], holder="wrong_holder", succeeded=True, now=112
             )
 
+    def test_profile_fetch_rotates_pool_viewers_and_skips_the_target_username(self) -> None:
+        self.create_ready(account_id="colacct_target", username="sherryjim68", now=100)
+        self.create_ready(account_id="colacct_viewer", username="pool_viewer", now=101)
+        lease = self.pool.acquire(
+            capability=CAPABILITY,
+            platform="threads",
+            holder="job_profile",
+            now=110,
+            exclude_usernames=["@SherryJim68"],
+        )
+        self.assertEqual(lease["account"]["id"], "colacct_viewer")
+        self.assertEqual(lease["account"]["username"], "pool_viewer")
+        self.pool.release(lease["lease_id"], holder="job_profile", succeeded=True, now=111)
+        same_name = self.pool.acquire(
+            capability=CAPABILITY,
+            platform="threads",
+            holder="job_other",
+            now=120,
+        )
+        self.assertEqual(same_name["account"]["id"], "colacct_target")
+
+    def test_rotate_uses_least_recently_selected_viewer(self) -> None:
+        self.create_ready(account_id="colacct_a", username="viewer_a", now=100)
+        self.create_ready(account_id="colacct_b", username="viewer_b", now=100)
+        first = self.pool.acquire(
+            capability=CAPABILITY,
+            platform="threads",
+            holder="job_one",
+            now=110,
+            rotate=True,
+        )
+        self.assertEqual(first["account"]["id"], "colacct_a")
+        self.pool.release(first["lease_id"], holder="job_one", succeeded=True, now=111)
+        second = self.pool.acquire(
+            capability=CAPABILITY,
+            platform="threads",
+            holder="job_two",
+            now=120,
+            rotate=True,
+        )
+        self.assertEqual(second["account"]["id"], "colacct_b")
+
+    def test_require_healthy_selects_only_healthy_ready_viewers(self) -> None:
+        self.create_ready(account_id="colacct_degraded", username="degraded_viewer", now=100)
+        self.pool.set_account_state("colacct_degraded", status="ready", health_status="degraded", now=101)
+        self.create_ready(account_id="colacct_healthy", username="healthy_viewer", now=102)
+        lease = self.pool.acquire(
+            capability=CAPABILITY,
+            platform="threads",
+            holder="job_healthy",
+            now=110,
+            require_healthy=True,
+        )
+        self.assertEqual(lease["account"]["id"], "colacct_healthy")
+        self.pool.release(lease["lease_id"], holder="job_healthy", succeeded=True, now=111)
+        with self.assertRaises(NoCollectorAccountAvailableError):
+            self.pool.acquire(
+                capability=CAPABILITY,
+                platform="threads",
+                holder="job_none",
+                now=120,
+                require_healthy=True,
+                exclude_usernames=["healthy_viewer"],
+            )
+
     def test_secret_can_only_be_used_by_active_lease_holder(self) -> None:
         self.create_ready()
         lease = self.pool.acquire(

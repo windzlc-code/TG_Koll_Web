@@ -13,6 +13,7 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Any, Callable, Mapping, TypeVar
 
 from .collector_db import collector_db, init_collector_db
@@ -384,6 +385,9 @@ class CollectorAccountPool:
         pool_id: str = "pool_primary",
         lease_seconds: int = 120,
         now: int | None = None,
+        exclude_usernames: Iterable[str] = (),
+        require_healthy: bool = False,
+        rotate: bool = False,
     ) -> dict[str, Any]:
         timestamp = _now() if now is None else int(now)
         clean_capability = _clean_capability(capability)
@@ -393,14 +397,38 @@ class CollectorAccountPool:
         duration = _clean_duration(lease_seconds, label="collector lease duration", maximum=3600)
         if duration < 1:
             raise ValueError("collector lease duration must be positive")
+        excluded: list[str] = []
+        seen: set[str] = set()
+        for item in exclude_usernames or ():
+            name = str(item or "").strip().lstrip("@").lower()
+            if name and name not in seen:
+                seen.add(name)
+                excluded.append(name)
 
         with collector_db(self.db_path) as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "DELETE FROM collector_account_leases WHERE expires_at <= ?", (timestamp,)
             )
+            exclude_sql = ""
+            params: list[Any] = [clean_capability, clean_pool, clean_platform, timestamp, timestamp]
+            if excluded:
+                exclude_sql = f" AND lower(account.username) NOT IN ({','.join('?' for _ in excluded)})"
+                params.extend(excluded)
+            healthy_sql = " AND account.health_status = 'healthy'" if require_healthy else ""
+            order_sql = (
+                "account.last_selected_at ASC, account.id ASC"
+                if rotate
+                else (
+                    "CASE WHEN account.health_status = 'healthy' THEN 0 ELSE 1 END ASC, "
+                    "account.consecutive_failures ASC, "
+                    "account.last_selected_at ASC, "
+                    "account.last_success_at ASC, "
+                    "account.id ASC"
+                )
+            )
             row = conn.execute(
-                """
+                f"""
                 SELECT account.*
                 FROM collector_accounts account
                 JOIN collector_account_capabilities capability
@@ -410,18 +438,16 @@ class CollectorAccountPool:
                 WHERE account.pool_id = ?
                   AND account.platform = ?
                   AND account.status = 'ready'
+                  AND trim(account.profile_dir) <> ''
                   AND account.cooldown_until <= ?
                   AND account.circuit_open_until <= ?
                   AND lease.account_id IS NULL
-                ORDER BY
-                  CASE WHEN account.health_status = 'healthy' THEN 0 ELSE 1 END ASC,
-                  account.consecutive_failures ASC,
-                  account.last_selected_at ASC,
-                  account.last_success_at ASC,
-                  account.id ASC
+                  {healthy_sql}
+                  {exclude_sql}
+                ORDER BY {order_sql}
                 LIMIT 1
                 """,
-                (clean_capability, clean_pool, clean_platform, timestamp, timestamp),
+                params,
             ).fetchone()
             if row is None:
                 raise NoCollectorAccountAvailableError("no collector account is currently available")

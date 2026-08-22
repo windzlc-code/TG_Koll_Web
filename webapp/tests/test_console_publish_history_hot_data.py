@@ -338,6 +338,10 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
 
         self.assertIn('api("/api/persona_dashboard/refresh"', refresh)
         self.assertIn('source: "http_first"', refresh)
+        self.assertIn("platform: personaContentPlatform(persona)", refresh)
+        self.assertIn('argValue("platform")', REFRESH_SCRIPT)
+        self.assertIn("requestedPlatform !== \"instagram\"", REFRESH_SCRIPT)
+        self.assertIn("requestedPlatform !== \"threads\"", REFRESH_SCRIPT)
         self.assertIn("/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}", refresh)
         self.assertIn("loadPersonaPublishHistory(cleanPersonaId, { force: true })", refresh)
         self.assertIn("publishHistoryRefreshPersonaId = cleanPersonaId", refresh)

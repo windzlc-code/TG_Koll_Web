@@ -7851,6 +7851,7 @@ async function requestSessionHttpText(args: {
       const response = await fetch(args.url, {
         method,
         redirect: "follow",
+        maxRedirections: 4,
         signal: controller.signal,
         headers,
         ...(method === "POST" && args.body != null ? { body: args.body } : {}),
@@ -7867,20 +7868,19 @@ async function requestSessionHttpText(args: {
       await dispatcher?.close().catch(() => undefined);
     }
   };
-  let dispatcher: any;
   try {
-    dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
-    return await run(dispatcher);
+    return await run(undefined);
   } catch (error) {
     if (!proxyUrl) throw error;
     const text = [
       error instanceof Error ? error.message : String(error || ""),
       error instanceof Error && error.cause ? String((error.cause as any)?.code || (error.cause as any)?.message || error.cause) : "",
     ].join(" ");
-    if (!/fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|timeout|abort|UND_ERR|Invalid URL|proxy/i.test(text)) {
+    if (!/fetch failed|redirect|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|timeout|abort|UND_ERR|Invalid URL|proxy/i.test(text)) {
       throw error;
     }
-    return await run(undefined);
+    const dispatcher = new ProxyAgent(proxyUrl);
+    return await run(dispatcher);
   }
 }
 
@@ -8066,7 +8066,7 @@ async function paginateThreadsProfileGraphqlPages(args: {
         "sec-fetch-mode": "cors",
         "sec-fetch-dest": "empty",
       },
-      timeoutMs: 20_000,
+      timeoutMs: 8_000,
     }).catch(() => null);
     const payload = safeJson(response?.text || "");
     if (!response?.ok || !payload || payload?.errors) break;
@@ -8088,15 +8088,15 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
   const hasSession = hasThreadsProfileLoginSessionCookie(cookies);
   const profileUrl = buildThreadsProfileUrl(username);
   try {
+    const profileHeaders = {
+      accept: "text/html,application/xhtml+xml",
+      "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    };
     const response = await requestSessionHttpText({
       url: profileUrl,
-      cookies,
-      proxyUrl: platformProxyUrl("threads"),
-      headers: {
-        accept: "text/html,application/xhtml+xml",
-        "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-      },
-      timeoutMs: 20_000,
+      cookies: [],
+      headers: profileHeaders,
+      timeoutMs: 8_000,
     });
     const readerText = spiderHtmlToReaderText(response.text, profileUrl);
     if (!response.ok || /\/login(?:[/?]|$)/i.test(response.url) || detectThreadsProfileLoginWall(readerText)) {
@@ -8123,7 +8123,6 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
         username,
         html: response.text,
         cookies,
-        proxyUrl: platformProxyUrl("threads"),
         initialCursor,
         hasNextPage: true,
       }).catch(() => ({ posts: [] as ThreadsGraphqlProfilePostAggregate[], reachedEnd: false }));
@@ -8136,41 +8135,24 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
     const parsed = parseThreadsProfileHotMetricsText(readerText);
     const posts = [...byKey.values()];
     if (!posts.length) throw new Error("Threads HTTP 页面未返回可识别的账号帖子。");
-    const postMetrics = await Promise.all(posts.map(async (post) => {
-      let viewCount = post.viewCount;
-      if (typeof viewCount !== "number" && post.sourceUrl) {
-        const detail = await requestSessionHttpText({
-          url: post.sourceUrl,
-          cookies,
-          proxyUrl: platformProxyUrl("threads"),
-          headers: {
-            accept: "text/html,application/xhtml+xml",
-            "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-          },
-          timeoutMs: 12_000,
-        }).catch(() => null);
-        if (detail?.ok) viewCount = parseThreadsPostViewCountFromText(spiderHtmlToReaderText(detail.text, post.sourceUrl));
-      }
-      return {
-        pk: post.pk,
-        code: post.code,
-        sourceUrl: post.sourceUrl,
-        ...(post.content ? { content: post.content } : {}),
-        ...(post.publishedAt ? { publishedAt: post.publishedAt } : {}),
-        likeCount: post.likeCount,
-        commentCount: post.commentCount,
-        repostCount: post.repostCount,
-        shareCount: post.shareCount,
-        ...(typeof viewCount === "number" ? { viewCount } : {}),
-        capturedAt: refreshedAt,
-      } satisfies ThreadsProfilePostHotMetrics;
-    }));
+    const postMetrics = posts.map((post) => ({
+      pk: post.pk,
+      code: post.code,
+      sourceUrl: post.sourceUrl,
+      ...(post.content ? { content: post.content } : {}),
+      ...(post.publishedAt ? { publishedAt: post.publishedAt } : {}),
+      likeCount: post.likeCount,
+      commentCount: post.commentCount,
+      repostCount: post.repostCount,
+      shareCount: post.shareCount,
+      ...(typeof post.viewCount === "number" ? { viewCount: post.viewCount } : {}),
+      capturedAt: refreshedAt,
+    } satisfies ThreadsProfilePostHotMetrics));
     const resolvedViews = postMetrics.filter((post) => typeof post.viewCount === "number").length;
     const declaredPosts = typeof parsed.posts === "number" ? parsed.posts : postMetrics.length;
     const complete = hasSession
       && reachedEnd
-      && postMetrics.length >= declaredPosts
-      && resolvedViews === postMetrics.length;
+      && postMetrics.length >= declaredPosts;
     return {
       platform: "threads",
       username,
@@ -8189,7 +8171,7 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       method: "http",
       complete,
       scope: complete ? "authenticated_full_profile" : "public_partial",
-      error: complete ? undefined : "Threads HTTP 已读取账号快照，但游标或浏览量尚未完整，转入浏览器兼容链路。",
+      error: complete ? undefined : "Threads HTTP 已读取账号快照，但 GraphQL 游标尚未完整。",
     };
   } catch (error: any) {
     return {
@@ -8867,28 +8849,6 @@ async function fetchInstagramProfileHotMetricsHttp(
       seenCursors.add(nextMaxId);
       maxId = nextMaxId;
     }
-    const knownCodes = new Set(feedPages
-      .flatMap((page) => Array.isArray(page?.items) ? page.items : [])
-      .map((item: any) => cleanText(item?.code || item?.shortcode))
-      .filter(Boolean));
-    const detailItems: any[] = [];
-    for (const sourceUrl of [...new Set((publishedUrlsInput || []).map(cleanText).filter(Boolean))]) {
-      const code = instagramPostCodeFromUrl(sourceUrl);
-      if (!code || knownCodes.has(code)) continue;
-      const mediaPk = instagramMediaPkFromShortcode(code);
-      if (!mediaPk) continue;
-      const detailResponse = await requestSessionHttpText({
-        url: `https://www.instagram.com/api/v1/media/${encodeURIComponent(mediaPk)}/info/`,
-        cookies,
-        proxyUrl,
-        headers: commonHeaders,
-        timeoutMs: 12_000,
-      }).catch(() => null);
-      if (!detailResponse?.ok) continue;
-      const item = safeJson(detailResponse.text)?.items?.[0];
-      if (item) detailItems.push(item);
-    }
-    if (detailItems.length) feedPages.push({ items: detailItems });
     return buildInstagramProfileHttpMetrics({
       profilePayload,
       feedPages,

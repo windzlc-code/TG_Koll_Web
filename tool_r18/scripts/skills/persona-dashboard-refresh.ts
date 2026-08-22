@@ -697,13 +697,16 @@ async function main() {
   const targetId = argValue("archive-id");
   const scopedTargetIds = new Set([targetId, ...archiveIdsFromArgs()].filter(Boolean));
   const source = (argValue("source") || process.env.PERSONA_DASHBOARD_REFRESH_SOURCE || "http_first").toLowerCase();
+  const requestedPlatform = String(argValue("platform") || "").trim().toLowerCase();
+  const refreshThreads = requestedPlatform !== "instagram";
+  const refreshInstagram = requestedPlatform !== "threads";
   const archives = await listPersonaArchives();
   const targets = scopedTargetIds.size
     ? archives.filter((archive) => scopedTargetIds.has(String(archive.id || "")))
     : archives;
   const useRssHub = source === "rsshub";
   const useHttpFirst = source === "http_first";
-  const hasBrowserThreadsTargets = targets.some((archive) =>
+  const hasBrowserThreadsTargets = refreshThreads && targets.some((archive) =>
     collectThreadsRefreshTargets(archive).length > 0,
   );
   const threadsBrowserNotNeeded = useRssHub || useHttpFirst || !hasBrowserThreadsTargets;
@@ -731,8 +734,8 @@ async function main() {
 
   for (const archive of targets) {
     const setup: any = archive.setup || {};
-    const refreshTargets = collectThreadsRefreshTargets(archive);
-    if (!refreshTargets.length) {
+    const refreshTargets = refreshThreads ? collectThreadsRefreshTargets(archive) : [];
+    if (refreshThreads && !refreshTargets.length) {
       results.push({ archiveId: archive.id, name: archive.name, ok: false, skipped: true, message: "未绑定可用 Threads 账号，请先在账号池绑定并确认账号已登录。" });
     }
     for (const target of refreshTargets) {
@@ -915,7 +918,7 @@ async function main() {
       }
     }
 
-    if (!useRssHub) {
+    if (!useRssHub && refreshInstagram) {
       const instagramTargets = collectInstagramRefreshTargets(archive);
       if (!instagramTargets.length) {
         results.push({ archiveId: archive.id, name: archive.name, platform: "instagram", ok: false, skipped: true, message: "未绑定可用 Instagram 账号，请先在账号池绑定并确认账号已登录。" });

@@ -12363,6 +12363,7 @@ class PersonaDashboardMemoryCreatePayload(BaseModel):
 class PersonaDashboardRefreshPayload(BaseModel):
     archive_id: str = ""
     source: str = ""
+    platform: str = ""
 
 
 class PersonaDashboardDraftPostPayload(BaseModel):
@@ -21023,15 +21024,22 @@ def _persona_dashboard_refresh_scopes_conflict(
     return bool(left & right)
 
 
+def _persona_dashboard_refresh_platform(value: Any) -> str:
+    clean = str(value or "").strip().lower()
+    return clean if clean in {"threads", "instagram"} else ""
+
+
 def _start_persona_dashboard_refresh(
     archive_id: str = "",
     source: str = "",
     trigger: str = "manual",
     archive_ids: list[str] | None = None,
     user_id: int = 0,
+    platform: str = "",
 ) -> dict[str, Any]:
     task_id = f"pdr_{uuid.uuid4().hex[:12]}"
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "http_first").strip().lower() or "http_first"
+    refresh_platform = _persona_dashboard_refresh_platform(platform)
     scoped_archive_ids = list(dict.fromkeys(
         str(item or "").strip() for item in (archive_ids or []) if str(item or "").strip()
     ))
@@ -21058,6 +21066,7 @@ def _start_persona_dashboard_refresh(
             and str(task.get("archive_id") or "") == str(archive_id or "").strip()
             and list(task.get("archive_ids") or []) == scoped_archive_ids
             and str(task.get("source") or "") == refresh_source
+            and str(task.get("platform") or "") == refresh_platform
         ), None)
         if same_request:
             return dict(same_request)
@@ -21085,6 +21094,7 @@ def _start_persona_dashboard_refresh(
             "archive_id": str(archive_id or "").strip(),
             "archive_ids": scoped_archive_ids,
             "source": refresh_source,
+            "platform": refresh_platform,
             "trigger": str(trigger or "manual"),
             "status": "queued",
             "step": "排队中",
@@ -21162,6 +21172,7 @@ def _persona_dashboard_bound_refresh_targets(
     user_id: int = 0,
     archive_id: str = "",
     archive_ids: list[str] | None = None,
+    platform: str = "",
 ) -> list[dict[str, str]]:
     clauses = [
         "trim(account.username) <> ''",
@@ -21170,12 +21181,16 @@ def _persona_dashboard_bound_refresh_targets(
     params: list[Any] = []
     owner_user_id = max(0, int(user_id or 0))
     clean_archive_id = str(archive_id or "").strip()
+    clean_platform = _persona_dashboard_refresh_platform(platform)
     clean_archive_ids = list(dict.fromkeys(
         str(item or "").strip() for item in (archive_ids or []) if str(item or "").strip()
     ))
     if owner_user_id:
         clauses.append("account.user_id = ?")
         params.append(owner_user_id)
+    if clean_platform:
+        clauses.append("lower(account.platform) = ?")
+        params.append(clean_platform)
     if clean_archive_id:
         clauses.append("account.persona_id = ?")
         params.append(clean_archive_id)
@@ -21219,6 +21234,17 @@ def _persona_dashboard_profile_metrics_concurrency(target_count: int) -> int:
     return max(1, min(configured, 8, max(1, int(target_count or 1))))
 
 
+def _persona_dashboard_failed_profile_metrics(platform: str, username: str, error: str) -> dict[str, Any]:
+    return {
+        "platform": platform,
+        "username": username,
+        "method": "failed",
+        "complete": False,
+        "scope": "failed",
+        "error": str(error or "collector unavailable")[:300],
+    }
+
+
 def _fetch_one_persona_dashboard_remote_metrics(target: dict[str, str]) -> tuple[str, dict[str, Any] | None]:
     platform = str(target.get("platform") or "").strip().lower()
     username = str(target.get("username") or "").strip().lstrip("@")
@@ -21234,12 +21260,16 @@ def _fetch_one_persona_dashboard_remote_metrics(target: dict[str, str]) -> tuple
             },
             timeout_seconds=180,
         )
-    except Exception:
-        return key, None
+    except Exception as exc:
+        return key, _persona_dashboard_failed_profile_metrics(platform, username, str(exc))
     metrics = result.get("metrics") if isinstance(result, dict) else None
     if isinstance(metrics, dict) and str(metrics.get("username") or username).strip():
         return key, metrics
-    return key, None
+    return key, _persona_dashboard_failed_profile_metrics(
+        platform,
+        username,
+        str((result or {}).get("error") if isinstance(result, dict) else "") or "collector returned no metrics",
+    )
 
 
 def _prefetch_persona_dashboard_remote_metrics(
@@ -21248,6 +21278,7 @@ def _prefetch_persona_dashboard_remote_metrics(
     archive_id: str = "",
     archive_ids: list[str] | None = None,
     task_id: str = "",
+    platform: str = "",
 ) -> dict[str, Any]:
     if configured_remote_fetch_client() is None:
         return {}
@@ -21256,6 +21287,7 @@ def _prefetch_persona_dashboard_remote_metrics(
         user_id=user_id,
         archive_id=archive_id,
         archive_ids=archive_ids,
+        platform=platform,
     )
     workers = _persona_dashboard_profile_metrics_concurrency(len(targets))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="persona-profile-metrics") as pool:
@@ -21324,7 +21356,11 @@ def _persona_dashboard_refresh_worker_v2(
         env["TG_THREADS_PROFILE_HTTP_ONLY"] = "1"
     try:
         with PERSONA_DASHBOARD_REFRESH_LOCK:
-            refresh_user_id = int(PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {}).get("user_id") or 0)
+            refresh_task = PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {})
+            refresh_user_id = int(refresh_task.get("user_id") or 0)
+            refresh_platform = _persona_dashboard_refresh_platform(refresh_task.get("platform"))
+        if refresh_platform:
+            args.append(f"--platform={refresh_platform}")
         proxy_urls = _persona_dashboard_refresh_proxy_urls(
             user_id=refresh_user_id,
             archive_id=archive_id,
@@ -21345,6 +21381,7 @@ def _persona_dashboard_refresh_worker_v2(
             archive_id=archive_id,
             archive_ids=archive_ids,
             task_id=task_id,
+            platform=refresh_platform,
         )
         if _persona_dashboard_refresh_cancel_requested(task_id):
             raise _PersonaDashboardRefreshCancelled("刷新已取消。")
@@ -21356,6 +21393,7 @@ def _persona_dashboard_refresh_worker_v2(
             user_id=refresh_user_id,
             archive_id=archive_id,
             archive_ids=archive_ids,
+            platform=refresh_platform,
         )
         if (
             prefetched_metrics
@@ -26683,6 +26721,7 @@ def create_app() -> FastAPI:
             source=requested_source,
             archive_ids=archive_ids,
             user_id=_workspace_user_id(user),
+            platform=payload.platform,
         )
         return task
 

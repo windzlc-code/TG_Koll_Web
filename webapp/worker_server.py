@@ -1264,11 +1264,14 @@ def _run_tool_r18_job_once(
         if not capability:
             raise RuntimeError("collector capability is missing")
         try:
+            target_username = str(runtime_payload.get("username") or "").strip().lstrip("@")
             lease = collector_pool.acquire(
                 capability=capability,
                 platform=_collector_platform(runtime_payload),
                 holder=holder,
                 lease_seconds=max(60, min(int(timeout_seconds) + 30, 3600)),
+                exclude_usernames=(target_username,) if capability == "persona.profile_metrics.v1" and target_username else (),
+                rotate=capability == "persona.profile_metrics.v1",
             )
         except NoCollectorAccountAvailableError as exc:
             raise RuntimeError("no healthy collector account is currently available") from exc
@@ -1284,7 +1287,9 @@ def _run_tool_r18_job_once(
                 runtime_environment["THREADS_AUTH_PROFILE_DIR"] = profile_dir
             runtime_environment["TG_COLLECTOR_PROFILE_REQUIRED"] = "1"
             proxy_id = str(runtime_profile.get("proxy_id") or "").strip()
-            if proxy_id:
+            # Profile HTTP hangs or redirect-loops on the login sticky proxy.
+            # Keep cookies from this account; bind proxy only for browser tasks.
+            if proxy_id and capability != "persona.profile_metrics.v1":
                 proxy_url = runtime_account_proxy_url(
                     str(runtime_profile.get("account_id") or ""),
                     proxy_id,
@@ -1350,6 +1355,10 @@ def _run_tool_r18_job_once(
             raise RuntimeError("worker returned invalid JSON")
         if parsed.get("ok") is False:
             raise RuntimeError(str(parsed.get("error") or "worker failed")[:1000])
+        if capability == "persona.profile_metrics.v1":
+            metrics = parsed.get("metrics") if isinstance(parsed.get("metrics"), dict) else {}
+            if not metrics or str(metrics.get("method") or "").strip().lower() == "failed":
+                raise RuntimeError(str(metrics.get("error") or "profile metrics fetch failed")[:1000])
         candidate_rows = parsed.get("candidates") if isinstance(parsed.get("candidates"), list) else []
         requested_limit = max(1, min(int(runtime_payload.get("limit") or 10), 20))
         sparse_collector_result = (

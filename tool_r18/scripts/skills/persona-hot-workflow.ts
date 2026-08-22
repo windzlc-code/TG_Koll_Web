@@ -519,13 +519,15 @@ export async function refreshProfileMetrics(input: RefreshProfileMetricsInput) {
   const metrics = platform === "instagram"
     ? await fetchInstagramProfileHotMetrics(username, Array.isArray(input.publishedUrls) ? input.publishedUrls : [])
     : await fetchThreadsProfileHotMetrics(username);
+  const failed = !metrics || String(metrics.method || "").toLowerCase() === "failed";
   return {
-    ok: true,
+    ok: !failed,
     archiveId,
     username,
     platform,
     outputOnly: true,
     metrics,
+    ...(failed ? { error: String(metrics?.error || "profile metrics fetch failed") } : {}),
   };
 }
 
@@ -563,7 +565,8 @@ async function main() {
     await printJsonAndExit(await refreshHotPost(input));
   }
   if (input.action === "refresh-profile-metrics") {
-    await printJsonAndExit(await refreshProfileMetrics(input));
+    const result = await refreshProfileMetrics(input);
+    await printJsonAndExit(result, result.ok ? 0 : 1);
   }
   await printJsonAndExit({ ok: false, error: "unsupported action" }, 1);
 }

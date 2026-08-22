@@ -18,6 +18,7 @@ from webapp.remote_fetch_protocol import (
     signed_headers,
     verify_request,
 )
+from webapp.collector_accounts import NoCollectorAccountAvailableError
 from webapp.worker_server import (
     JobStore,
     PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
@@ -991,13 +992,97 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertNotIn("profileDir", sent)
         self.assertEqual(observed["env"]["PERSONA_DASHBOARD_THREADS_PROFILE_DIR"], "/collector/profiles/viewer")
         self.assertEqual(observed["env"]["TG_COLLECTOR_PROFILE_REQUIRED"], "1")
-        self.assertEqual(
-            observed["env"]["PERSONA_DASHBOARD_THREADS_PROXY_URL"],
-            "http://viewer:sess@thehub.proxy-cheap.com:8080",
-        )
-        resolve_proxy.assert_called_once_with("colacct_viewer", "2301582")
+        self.assertNotIn("PERSONA_DASHBOARD_THREADS_PROXY_URL", observed["env"])
+        resolve_proxy.assert_not_called()
         self.assertEqual(pool.acquire_args["capability"], "persona.profile_metrics.v1")
+        self.assertEqual(pool.acquire_args["exclude_usernames"], ("sherryjim68",))
+        self.assertTrue(pool.acquire_args.get("rotate"))
         self.assertTrue(pool.released[0][1]["succeeded"])
+
+    def test_profile_metrics_fails_immediately_when_no_logged_in_collector_exists(self) -> None:
+        class EmptyPool:
+            def acquire(self, **kwargs):
+                raise NoCollectorAccountAvailableError("no collector account is currently available")
+
+            def use_runtime_profile(self, *args, **kwargs):
+                raise AssertionError("must not open a collector profile without a lease")
+
+            def release(self, *args, **kwargs):
+                raise AssertionError("must not release a lease that was never acquired")
+
+        with (
+            patch("webapp.worker_server._configured_collector_pool", return_value=EmptyPool()),
+            patch("webapp.worker_server.subprocess.Popen") as popen,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "no healthy collector account is currently available"):
+                run_tool_r18_job(
+                    {
+                        "_workerCapability": "persona.profile_metrics.v1",
+                        "action": "refresh-profile-metrics",
+                        "archiveId": "archive_12345678",
+                        "username": "le.huuuczxsn.196960",
+                        "platform": "instagram",
+                        "outputOnly": True,
+                    },
+                    threading.Event(),
+                )
+        popen.assert_not_called()
+
+    def test_profile_metrics_failed_http_does_not_mark_collector_healthy(self) -> None:
+        class FakePool:
+            def __init__(self):
+                self.released = []
+
+            def acquire(self, **kwargs):
+                return {"lease_id": "collease_failed", "account": {"id": "colacct_viewer"}}
+
+            def use_runtime_profile(self, _lease_id, *, holder, consumer):
+                return consumer({
+                    "platform": "threads",
+                    "profile_dir": "/collector/profiles/viewer",
+                    "account_id": "colacct_viewer",
+                    "proxy_id": "2301582",
+                })
+
+            def release(self, lease_id, **kwargs):
+                self.released.append((lease_id, kwargs))
+
+        class FakeProcess:
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+            def communicate(self):
+                return json.dumps({
+                    "ok": True,
+                    "username": "sherryjim68",
+                    "metrics": {
+                        "method": "failed",
+                        "complete": False,
+                        "error": "fetch failed: redirect count exceeded",
+                    },
+                }), ""
+
+        pool = FakePool()
+        with (
+            patch("webapp.worker_server._configured_collector_pool", return_value=pool),
+            patch("webapp.worker_server.runtime_account_proxy_url", return_value="http://viewer@proxy:8080"),
+            patch("webapp.worker_server.subprocess.Popen", return_value=FakeProcess()),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "redirect count exceeded"):
+                run_tool_r18_job(
+                    {
+                        "_workerCapability": "persona.profile_metrics.v1",
+                        "action": "refresh-profile-metrics",
+                        "archiveId": "archive_12345678",
+                        "username": "sherryjim68",
+                        "platform": "threads",
+                        "outputOnly": True,
+                    },
+                    threading.Event(),
+                )
+        self.assertEqual(pool.released[0][1]["succeeded"], False)
 
     def test_runtime_uses_only_the_leased_collector_profile(self) -> None:
         class FakePool:
