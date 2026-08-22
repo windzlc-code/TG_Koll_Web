@@ -8,6 +8,15 @@ import { createSinglePollScheduler, isModulePolicyError, mergeCursorPage, mergeP
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path) => readFile(resolve(root, path), "utf8");
 
+test("CRM overview exposes a three-step acquisition pipeline", async () => {
+  const app = await read("src/App.tsx");
+  const i18n = await read("src/i18n.ts");
+  assert.match(app, /className="crm-pipeline"/);
+  assert.match(app, /messages\.pipelineCollect/);
+  assert.match(i18n, /pipelineCollect: "发现客户"/);
+  assert.match(i18n, /navGroups: \{ growth: "获客"/);
+});
+
 test("CRM exposes the twelve required work views", async () => {
   const app = await read("src/App.tsx");
   const expected = ["overview", "collect", "pools", "public", "outreach", "groups", "relationships", "tasks", "schedules", "templates", "accounts", "settings"];

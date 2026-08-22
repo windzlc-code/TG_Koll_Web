@@ -425,19 +425,7 @@
     if (!entries.length) return;
     const adminIdentity = currentSessionMode === "admin"
       && Boolean(currentAccount?.is_admin || currentAccount?.acting_admin);
-    if (!adminIdentity) {
-      entries.forEach((entry) => { entry.hidden = true; });
-      return;
-    }
-    try {
-      const payload = await fetchAccountJson("/api/crm/v1/bootstrap");
-      const allowed = Boolean(payload?.module?.effective);
-      entries.forEach((entry) => { entry.hidden = !allowed; });
-    } catch (error) {
-      if (Number(error?.status || 0) === 403) {
-        entries.forEach((entry) => { entry.hidden = true; });
-      }
-    }
+    entries.forEach((entry) => { entry.hidden = !adminIdentity; });
   }
 
   function syncPublicAdminEntry() {

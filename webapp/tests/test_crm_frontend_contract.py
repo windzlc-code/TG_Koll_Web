@@ -30,12 +30,12 @@ def test_shared_navigation_adds_crm_immediately_after_console():
 
 
 def test_crm_navigation_entry_is_admin_only_and_fail_closed():
+    visibility = NAVIGATION[NAVIGATION.index("async function syncCrmEntryVisibility"):NAVIGATION.index("function syncPublicAdminEntry")]
     assert 'const initiallyHidden = key === "crm" ? " hidden" : "";' in NAVIGATION
-    assert 'const adminIdentity = currentSessionMode === "admin"' in NAVIGATION
-    assert 'currentAccount?.is_admin || currentAccount?.acting_admin' in NAVIGATION
-    assert 'if (!adminIdentity)' in NAVIGATION
-    assert 'entry.hidden = true' in NAVIGATION
-    assert 'entry.hidden = false' not in NAVIGATION[NAVIGATION.index("async function syncCrmEntryVisibility"):NAVIGATION.index("function syncPublicAdminEntry")]
+    assert 'const adminIdentity = currentSessionMode === "admin"' in visibility
+    assert 'currentAccount?.is_admin || currentAccount?.acting_admin' in visibility
+    assert "entry.hidden = !adminIdentity" in visibility
+    assert 'fetchAccountJson("/api/crm/v1/bootstrap")' not in visibility
     assert "[data-crm-entry][hidden]" in NAVIGATION_CSS
     crm_hidden_rule = NAVIGATION_CSS[NAVIGATION_CSS.index("[data-crm-entry][hidden]"):]
     assert "display: none !important" in crm_hidden_rule.split("}", 1)[0]
@@ -122,6 +122,7 @@ def test_crm_admin_center_is_novice_friendly_and_hides_technical_payloads():
 
     for copy in (
         "按步骤管理客户 CRM",
+        "打开 CRM 工作台",
         "确认服务",
         "开通客户",
         "导入资料",

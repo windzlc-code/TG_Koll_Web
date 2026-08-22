@@ -42,6 +42,13 @@
   border-bottom: 1px solid var(--crm-line);
 }
 
+.page-admin #secCrm .crm-admin-heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .page-admin #secCrm .crm-admin-heading h3 {
   margin: 4px 0 5px;
   font-size: clamp(24px, 2.4vw, 34px);

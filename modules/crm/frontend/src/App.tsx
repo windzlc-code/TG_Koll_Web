@@ -546,6 +546,18 @@ function Overview({ bootstrap, tasks, messages, navigate, onCreate }: { bootstra
       <Metric label={messages.metrics.active} value={summary.active_tasks ?? active.length} />
       <Metric label={messages.metrics.manual} value={summary.manual_required ?? manual.length} />
     </section>
+    <section className="crm-pipeline" aria-label={messages.acquisitionPath}>
+      {([
+        { id: "collect" as ViewId, icon: "collect" as const, title: messages.pipelineCollect, hint: messages.pipelineCollectHint, action: () => onCreate("collect") },
+        { id: "pools" as ViewId, icon: "pools" as const, title: messages.pipelinePool, hint: messages.pipelinePoolHint, action: () => navigate("pools") },
+        { id: "public" as ViewId, icon: "public" as const, title: messages.pipelineReach, hint: messages.pipelineReachHint, action: () => navigate("public") },
+      ]).map((step, index) => <button type="button" className="crm-pipeline-card" key={step.id} onClick={step.action}>
+        <span className="crm-pipeline-index">{String(index + 1).padStart(2, "0")}</span>
+        <span className="crm-pipeline-icon" aria-hidden="true"><Icon name={step.icon} /></span>
+        <strong>{step.title}</strong>
+        <small>{step.hint}</small>
+      </button>)}
+    </section>
     <div className="crm-overview-grid">
       <section className="crm-panel crm-priority-panel">
         <div className="crm-panel-head"><div><span className="crm-kicker">{messages.actionQueueKicker}</span><h2>{messages.priority}</h2></div><button className="crm-text-button" onClick={() => navigate("tasks")}>{messages.viewTasks}<Icon name="arrow" /></button></div>

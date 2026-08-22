@@ -247,6 +247,51 @@ body.crm-page button { color: inherit; }
   border-radius: 10px;
   box-shadow: 0 6px 20px rgba(16, 24, 32, 0.04);
 }
+
+.crm-pipeline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  max-width: 1320px;
+  margin: 0 auto 18px;
+}
+.crm-pipeline-card {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  min-height: 148px;
+  padding: 20px 22px 18px;
+  text-align: left;
+  color: inherit;
+  background: var(--crm-paper);
+  border: 1px solid var(--crm-line);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(16, 24, 32, 0.05);
+  cursor: pointer;
+}
+.crm-pipeline-card:hover {
+  border-color: var(--crm-accent);
+  box-shadow: 0 14px 28px rgba(16, 24, 32, 0.08);
+}
+.crm-pipeline-index {
+  color: var(--crm-accent);
+  font-family: "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+.crm-pipeline-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  color: var(--crm-accent-strong);
+  background: var(--crm-accent-soft);
+  border-radius: 10px;
+}
+.crm-pipeline-icon svg { width: 18px; height: 18px; }
+.crm-pipeline-card strong { font-size: 18px; line-height: 1.2; }
+.crm-pipeline-card small { color: var(--crm-muted); font-size: 12px; font-weight: 600; }
 .crm-metric { display: grid; gap: 6px; min-width: 0; padding: 19px 22px; }
 .crm-metric + .crm-metric { border-left: 1px solid var(--crm-surface); }
 .crm-metric span { color: var(--crm-muted); font-size: 12px; font-weight: 700; }
@@ -697,6 +742,8 @@ body.crm-page button { color: inherit; }
 
 @media (max-width: 1050px) {
   .crm-overview-grid { grid-template-columns: 1fr; }
+  .crm-pipeline { grid-template-columns: 1fr; }
+  .crm-pipeline-card { min-height: 120px; }
   .crm-metrics { grid-template-columns: repeat(2, 1fr); }
   .crm-metric:nth-child(3) { border-left: 0; border-top: 1px solid var(--crm-surface); }
   .crm-metric:nth-child(4) { border-top: 1px solid var(--crm-surface); }
