@@ -808,6 +808,20 @@ class CRMBackendFoundationTests(unittest.TestCase):
         self.assertFalse(hard_disabled["effective"])
         self.assertIn("hard_disabled", hard_disabled["reasons"])
 
+    def test_admin_operator_can_use_crm_when_customer_access_is_off(self):
+        with db_module.db() as conn:
+            customer = effective_module_state(conn, user_id=self.user_id, identity_is_admin=False)
+            self.assertFalse(customer["effective"])
+            self.assertIn("globally_disabled", customer["reasons"])
+            admin_state = effective_module_state(conn, user_id=self.admin_id, identity_is_admin=True)
+            self.assertTrue(admin_state["effective"])
+            self.assertNotIn("globally_disabled", admin_state["reasons"])
+            self.assertNotIn("permission_denied", admin_state["reasons"])
+            update_module_settings(conn, {"maintenance": True})
+            paused = effective_module_state(conn, user_id=self.admin_id, identity_is_admin=True)
+            self.assertFalse(paused["effective"])
+            self.assertIn("maintenance", paused["reasons"])
+
     def test_runtime_capabilities_enable_native_ports_and_keep_legacy_secrets_blocked(self):
         capabilities = public_capabilities()
         self.assertTrue(capabilities["public_interaction"]["enabled"])

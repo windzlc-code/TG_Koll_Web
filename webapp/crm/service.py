@@ -306,6 +306,11 @@ def effective_module_state(
             reasons.append("user_not_approved")
         if int(user["deleted_at"] or 0) > 0:
             reasons.append("user_deleted")
+    if identity_is_admin:
+        # Admin operators can open CRM directly. The global switch and
+        # per-user grant only control customer workspaces.
+        reasons = [item for item in reasons if item not in {"globally_disabled", "permission_denied"}]
+        access = True
     return {
         "module_key": MODULE_KEY,
         "effective": not reasons,

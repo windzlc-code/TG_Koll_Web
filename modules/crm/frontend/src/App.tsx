@@ -825,7 +825,7 @@ export function App() {
       const reasons = payload.module?.reasons || [];
       const maintenance = payload.module?.maintenance || payload.module?.settings?.maintenance || reasons.includes("maintenance");
       if (maintenance) setBootstrapState("maintenance");
-      else if (payload.module?.effective === false || payload.module?.enabled === false) setBootstrapState("forbidden");
+      else if (payload.module?.effective === false) setBootstrapState("forbidden");
       else setBootstrapState("ready");
       const sessionAccount = account || payload.account || payload.user;
       if (sessionAccount) window.VectoSiteNavigation?.setAccount?.(sessionAccount);
