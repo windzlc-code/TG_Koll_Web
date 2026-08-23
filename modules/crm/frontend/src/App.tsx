@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api";
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
+import { PlatformChip, PlatformLogo, platformLabel } from "./platform";
 import { AnalyticsView, DestinationsView, GroupsView, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
@@ -658,9 +659,9 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
     {loading ? <div className="crm-list-skeleton" aria-live="polite"><span>{messages.loadingData}</span><i /><i /></div> : !accounts.length ? <EmptyState messages={messages} view="accounts" /> : <div className="crm-account-grid">{accounts.map((account, index) => {
       const accountState = account.health_status || account.status || "ready";
       const needsLogin = accountNeedsTakeover(account);
-      return <article className="crm-account-card" key={String(account.id || account.username || index)}>
-        <div className="crm-account-avatar">{String(account.username || account.display_name || "?").slice(0, 1).toUpperCase()}</div>
-        <div><strong>{account.display_name || account.username || `${messages.accountFallback} ${index + 1}`}</strong><span>{account.platform || messages.platformFallback}</span></div>
+      return <article className="crm-account-card" data-account-platform={String(account.platform || "").toLowerCase()} key={String(account.id || account.username || index)}>
+        <div className="crm-account-avatar" aria-hidden="true"><PlatformLogo platform={account.platform} /></div>
+        <div><strong>{account.display_name || account.username || `${messages.accountFallback} ${index + 1}`}</strong><PlatformChip platform={account.platform} label={platformLabel(account.platform) || messages.platformFallback} /></div>
         <StatusBadge status={needsLogin ? "needs_login" : accountState} messages={messages} />
         {account.rotation?.locked && <button className="crm-secondary-button" type="button" disabled={resetting === String(account.id)} onClick={() => void resetRotation(account)}><Icon name="refresh" />{resetting === String(account.id) ? messages.submitting : (language === "zh-Hant" ? "重置私訊輪換" : "重置私信轮换")}</button>}
         {needsLogin && <button className="crm-secondary-button" type="button" disabled={opening === String(account.id) || verifying === String(account.id)} onClick={() => void openLogin(account)}><Icon name="external" />{opening === String(account.id) ? messages.submitting : messages.openLogin}</button>}
@@ -801,7 +802,6 @@ export function App() {
   const [view, setView] = useState<ViewId>(hashView());
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isCompact, setIsCompact] = useState(() => window.matchMedia("(max-width: 980px)").matches);
-  const drawerTrigger = useRef<HTMLButtonElement>(null);
   const sidebar = useRef<HTMLElement>(null);
   const drawerWasOpen = useRef(false);
   const [bootstrapState, setBootstrapState] = useState<"loading" | "ready" | "forbidden" | "maintenance" | "error">("loading");
@@ -892,7 +892,7 @@ export function App() {
     }
     if (drawerWasOpen.current) {
       drawerWasOpen.current = false;
-      drawerTrigger.current?.focus();
+      document.getElementById("crm-main")?.focus({ preventScroll: true });
     }
   }, [drawerOpen, isCompact]);
 
@@ -945,7 +945,6 @@ export function App() {
   };
 
   return <div className="crm-app">
-    <button ref={drawerTrigger} className="crm-mobile-rail-button" type="button" aria-expanded={drawerOpen} aria-controls="crmSidebar" onClick={() => setDrawerOpen(true)}><Icon name="menu" /><span>{messages.navItems[activeNav]}</span></button>
     <div className={`crm-sidebar-backdrop ${drawerOpen ? "is-open" : ""}`} aria-hidden={!drawerOpen} onClick={() => setDrawerOpen(false)} />
     <aside ref={sidebar} id="crmSidebar" className={`crm-sidebar ${drawerOpen ? "is-open" : ""}`} aria-label={messages.product} aria-hidden={isCompact && !drawerOpen ? "true" : undefined} inert={isCompact && !drawerOpen ? true : undefined}>
       <div className="crm-sidebar-head"><div className="crm-monogram">CRM</div><strong>{messages.productShort}</strong><button className="crm-icon-button crm-sidebar-close" type="button" onClick={() => setDrawerOpen(false)} aria-label={messages.closeNav}><Icon name="close" /></button></div>
@@ -955,7 +954,7 @@ export function App() {
     </aside>
     <main id="crm-main" className="crm-main" tabIndex={-1}>
       {bootstrap.workspace?.managed_by_admin && <div className="crm-banner crm-banner--workspace" role="status"><Icon name="accounts" /><span><strong>{messages.managedWorkspace}</strong>{messages.managedWorkspaceDetail(bootstrap.workspace.username || String(bootstrap.workspace.user_id || "—"), bootstrap.workspace.user_id)}</span><a className="crm-secondary-button" href="/admin.html">{messages.exitWorkspace}</a></div>}
-      {loginAccounts.length > 0 && <div className="crm-banner crm-banner--login" role="alert"><Icon name="warning" /><span><strong>{messages.accountsNeedLogin(loginAccounts.length)}</strong>{loginAccounts.slice(0, 3).map((account) => `${account.platform || ""} @${account.username || account.display_name || account.id}`).join(" · ")}</span><button type="button" onClick={() => navigate("accounts")}>{messages.manageAccounts}</button></div>}
+      {loginAccounts.length > 0 && <div className="crm-banner crm-banner--login" role="alert"><Icon name="warning" /><span><strong>{messages.accountsNeedLogin(loginAccounts.length)}</strong><span className="crm-banner-platforms">{loginAccounts.slice(0, 3).map((account) => <PlatformChip key={String(account.id || account.username)} platform={account.platform} label={`@${account.username || account.display_name || account.id}`} />)}</span></span><button type="button" onClick={() => navigate("accounts")}>{messages.manageAccounts}</button></div>}
       {partial && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{messages.partial}</span><button type="button" onClick={() => { void loadBootstrap(); void refreshTasks(); }}><Icon name="refresh" />{messages.retry}</button></div>}
       {bootstrap.module?.degraded && <div className="crm-banner crm-banner--degraded" role="alert"><Icon name="signal" /><span><strong>{messages.degraded}</strong>{messages.degradedHint}</span></div>}
       {view === "overview" && <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} navigate={navigate} onCreate={startWorkflow} />}
@@ -994,5 +993,8 @@ export function App() {
     {taskStripVisible && <aside className="crm-task-strip" aria-live="polite" aria-label={messages.taskStripLabel}><button type="button" onClick={() => navigate("tasks")}><span className="crm-task-strip-pulse" aria-hidden="true" /><span><strong>{messages.runningCount(activeTasks.length)} · {messages.reviewCount(reviewTasks.length)} · {messages.failedCount(failedTasks.length)}</strong><small>{messages.taskStripHint}</small></span><Icon name="arrow" /></button></aside>}
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={(taskId) => { setToast(`${messages.submitted} · ${taskId}`); void refreshTasks(); }} />
     {toast && <div className="crm-toast" role="status">{toast}</div>}
+    <nav className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) }}>
+      {navViews.map((id) => <button type="button" key={id} className={activeNav === id ? "is-active" : ""} aria-current={activeNav === id ? "page" : undefined} onClick={() => navigate(id === "settings" ? "accounts" : id)}><Icon name={id} /><span>{messages.navItems[id]}</span></button>)}
+    </nav>
   </div>;
 }

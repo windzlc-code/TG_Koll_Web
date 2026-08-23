@@ -128,6 +128,8 @@ test("frontend document supplements are represented by accessible, persistent UI
   const app = await read("src/App.tsx");
   const css = await read("src/styles.css");
   assert.match(app, /const navViews:/);
+  assert.match(app, /crm-mobile-dock/);
+  assert.match(css, /--crm-mobile-dock-height/);
   assert.match(app, /role="tablist"/);
   assert.match(app, /role="tab"/);
   assert.match(app, /aria-selected=/);
