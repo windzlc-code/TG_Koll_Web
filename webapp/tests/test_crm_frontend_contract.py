@@ -57,7 +57,8 @@ def test_crm_navigation_entry_is_admin_only_and_fail_closed():
     assert 'X-Admin-Workspace-User-ID' in (FRONTEND / "src" / "api.ts").read_text(encoding="utf-8")
     assert "function installAdminEntry" in NAVIGATION
     assert 'document.querySelectorAll("[data-site-header]")' in NAVIGATION[NAVIGATION.index("function syncPublicAdminEntry"):]
-    assert 'page === "console" ? "authenticated"' in NAVIGATION
+    assert 'header.dataset.siteMode || "public"' in NAVIGATION
+    assert "[data-site-global-controls]" in NAVIGATION[NAVIGATION.index("function installAdminEntry"):NAVIGATION.index("function syncPublicAdminEntry")]
     assert '["console", "crm"].includes(page)' not in NAVIGATION
 
 

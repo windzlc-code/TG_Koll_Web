@@ -542,15 +542,20 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
     def test_admin_entry_is_beside_subscription_and_keeps_permission_gate(self):
         subscription = self.markup.index('class="site-icon-button site-subscription-link"')
         admin_entry = self.markup.index('id="openAdmin"')
+        language = self.markup.index("data-site-language-toggle")
         account_menu = self.markup.index('class="site-account-menu"')
 
         self.assertLess(subscription, admin_entry)
-        self.assertLess(admin_entry, account_menu)
+        self.assertLess(admin_entry, language)
+        self.assertLess(language, account_menu)
+        self.assertIn('data-site-mode="public"', self.markup)
+        self.assertIn("data-site-subscription-entry", self.markup)
+        self.assertIn("data-open-login", self.markup)
         self.assertIn(
-            'class="site-admin-entry admin-only" data-site-copy="adminConsole" hidden>运营后台</button>',
+            'class="site-admin-entry admin-only" data-site-admin-entry data-site-copy="adminConsole" hidden>运营后台</button>',
             self.markup,
         )
-        self.assertIn('if (me.is_admin) $("openAdmin").hidden = false;', self.console_script)
+        self.assertIn('if (openAdmin) openAdmin.hidden = !me.is_admin;', self.console_script)
 
     def test_workspace_navigation_uses_titles_without_descriptions(self):
         self.assertNotIn('<small>${esc(item.hint)}</small>', self.console_script)

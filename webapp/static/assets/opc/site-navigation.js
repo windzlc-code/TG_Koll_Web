@@ -438,13 +438,16 @@
       entry.className = "site-admin-entry admin-only";
       entry.dataset.siteAdminEntry = "true";
       entry.hidden = true;
-      const insertBefore = actions.querySelector(":scope > [data-site-notification-menu], :scope > [data-site-account-menu], :scope > [data-open-login]");
+      const insertBefore = actions.querySelector(":scope > [data-site-global-controls], :scope > [data-site-notification-menu], :scope > [data-site-account-menu], :scope > [data-open-login]");
       if (insertBefore) insertBefore.before(entry);
       else actions.appendChild(entry);
     }
-    if (entry.dataset.siteAdminReady !== "true" && entry.id !== "openAdmin") {
+    if (!entry.id) entry.id = "openAdmin";
+    entry.dataset.siteAdminEntry = "true";
+    if (entry.dataset.siteAdminReady !== "true") {
       entry.dataset.siteAdminReady = "true";
       entry.addEventListener("click", () => {
+        if (document.body.classList.contains("console-page")) return;
         removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
         markAdminConsoleContext();
         window.location.assign("/admin.html");
@@ -807,6 +810,10 @@
       const insertBefore = actions.querySelector("[data-site-notification-menu], [data-site-account-menu], [data-open-login]");
       if (insertBefore) insertBefore.before(nextControls);
       else actions.appendChild(nextControls);
+    }
+    const adminEntry = actions.querySelector(":scope > [data-site-admin-entry], :scope > #openAdmin");
+    if (adminEntry && nextControls && (adminEntry.compareDocumentPosition(nextControls) & Node.DOCUMENT_POSITION_PRECEDING)) {
+      nextControls.before(adminEntry);
     }
     return nextControls;
   }
@@ -2219,7 +2226,7 @@
   function mount(header) {
     if (!header || header.dataset.siteReady === "true") return header;
     const page = header.dataset.sitePage || "home";
-    const mode = header.dataset.siteMode || (page === "console" ? "authenticated" : "public");
+    const mode = header.dataset.siteMode || "public";
     const resolvedMode = mode === "public" ? page : mode;
     const current = ["pricing", "console", "crm", "aboutVecto"].includes(page) ? page : "";
 

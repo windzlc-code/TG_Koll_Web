@@ -17417,13 +17417,15 @@ async function loadMe() {
     if (me.publish_policy) updateDailyPublishPolicy(me.publish_policy, { notify: false, requestSeq: beginDailyPublishPolicyRequest(), force: true });
     if (meName) meName.textContent = me.full_name || me.username || "-";
     window.VectoSiteNavigation?.setAccount(me);
-    if (me.is_admin) $("openAdmin").hidden = false;
+    const openAdmin = $("openAdmin") || document.querySelector("[data-site-admin-entry]");
+    if (openAdmin) openAdmin.hidden = !me.is_admin;
     return me;
   } catch (error) {
     state.currentUser = null;
     window.VectoSiteNavigation?.setAccount(null);
     if (meName) meName.textContent = "本地控制台";
-    $("openAdmin").hidden = true;
+    const openAdmin = $("openAdmin") || document.querySelector("[data-site-admin-entry]");
+    if (openAdmin) openAdmin.hidden = true;
     if (!consoleBoundaryNavigationActive) {
       appendEvent("error", error.detail || error.message || "本地控制台会话不可用");
     }
@@ -36407,7 +36409,9 @@ function bindEvents() {
     if (retry) api(`/api/persona_dashboard/automation/tasks/${encodeURIComponent(retry.dataset.socialRetry)}/retry`, { method: "POST" }).then(loadSocial);
     if (cancel) cancelSocialAutomationTask(cancel.dataset.socialCancel, "socialMsg").catch((error) => showMsg("socialMsg", error.detail || error.message || "停止任务失败", false));
   });
-  $("openAdmin").addEventListener("click", async () => {
+  document.querySelector("[data-site-header]")?.addEventListener("click", async (event) => {
+    if (!event.target.closest("#openAdmin, [data-site-admin-entry]")) return;
+    event.preventDefault();
     if (!(await confirmLeaveTransientWorkspaceState({ allowNextUnload: true }))) return;
     clearTenantInMemoryState();
     location.href = "/admin.html";
