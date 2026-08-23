@@ -2,7 +2,7 @@ import "@/runtime/node/browser-shim";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { fetchInstagramProfileHotMetrics, fetchThreadsBrowserDetailMetricsBatch, fetchThreadsProfileHotMetrics, getLiveSentimentBrowserAuthProfileBinding, refreshSentimentBrowserCookiesForPlatform } from "@/lib/sentiment-hot-importer";
+import { fetchInstagramProfileHotMetrics, fetchThreadsBrowserDetailMetricsBatch, fetchThreadsProfileHotMetrics, fetchThreadsProfileIdentityMetrics, getLiveSentimentBrowserAuthProfileBinding, refreshSentimentBrowserCookiesForPlatform } from "@/lib/sentiment-hot-importer";
 import { listPersonaArchives } from "@/lib/persona-archives";
 import { installNodePersonaArchiveBridge, updatePersonaArchivePlatformHotMetrics, updatePersonaArchiveThreadsHotMetrics } from "@/runtime/node/persona-archive-store";
 
@@ -282,15 +282,12 @@ function publishedThreadsUrlsForHandle(archive: any, usernameInput: string): str
 }
 
 function collectThreadsRefreshTargets(archive: any): PersonaThreadsAccountBinding[] {
-  const setup: any = archive?.setup || {};
-  const accounts = setup.accountManagement || {};
-  const currentLegacyHandle = normalizeThreadsUsername(accounts?.threads?.handle);
   const accountPool = readThreadsAccountPool();
   const currentBindings = (accountPool as Array<PersonaThreadsAccountBinding & { archiveId?: string }>)
     .filter((binding) => String(binding.archiveId || "").trim() === String(archive?.id || "").trim())
     .map((binding) => ({ ...binding, source: "account_pool" as const }));
   if (currentBindings.length) return currentBindings;
-  return currentLegacyHandle ? [{ username: currentLegacyHandle, source: "legacy_binding" }] : [];
+  return [];
 }
 
 function collectInstagramRefreshTargets(archive: any): PersonaThreadsAccountBinding[] {
@@ -631,6 +628,40 @@ function hasUsableMetrics(metrics: any): boolean {
     .some((field) => typeof metrics?.[field] === "number");
 }
 
+function recentViewsWithPostFallback(metrics: any, postViews: number): number | undefined {
+  if (typeof metrics?.recentViews === "number" && metrics.recentViews > 0) return metrics.recentViews;
+  if (postViews > 0) return postViews;
+  if (typeof metrics?.recentViews === "number") return metrics.recentViews;
+  return undefined;
+}
+
+function profileIdentityMetricPatch(metrics: any, postViews = 0): Record<string, number> {
+  const patch: Record<string, number> = {};
+  if (typeof metrics?.followers === "number") patch.followers = metrics.followers;
+  if (typeof metrics?.following === "number") patch.following = metrics.following;
+  const recentViews = recentViewsWithPostFallback(metrics, postViews);
+  if (typeof recentViews === "number") patch.recentViews = recentViews;
+  return patch;
+}
+
+function needsProfileIdentityFill(metrics: any): boolean {
+  return typeof metrics?.followers !== "number" || typeof metrics?.recentViews !== "number";
+}
+
+async function fillMissingProfileIdentityMetrics(username: string, metrics: any): Promise<any> {
+  if (!needsProfileIdentityFill(metrics)) return metrics;
+  const identity = await fetchThreadsProfileIdentityMetrics(username);
+  if (!identity || (typeof identity.followers !== "number" && typeof identity.recentViews !== "number" && typeof identity.following !== "number")) {
+    return metrics;
+  }
+  return {
+    ...metrics,
+    ...(typeof metrics?.followers !== "number" && typeof identity.followers === "number" ? { followers: identity.followers } : {}),
+    ...(typeof metrics?.following !== "number" && typeof identity.following === "number" ? { following: identity.following } : {}),
+    ...(typeof metrics?.recentViews !== "number" && typeof identity.recentViews === "number" ? { recentViews: identity.recentViews } : {}),
+  };
+}
+
 function isCompleteMetrics(metrics: any): boolean {
   const scannedPosts = Number(metrics?.scannedPosts || 0);
   const refreshedAt = String(metrics?.refreshedAt || "").trim();
@@ -736,7 +767,7 @@ async function main() {
     const setup: any = archive.setup || {};
     const refreshTargets = refreshThreads ? collectThreadsRefreshTargets(archive) : [];
     if (refreshThreads && !refreshTargets.length) {
-      results.push({ archiveId: archive.id, name: archive.name, ok: false, skipped: true, message: "未绑定可用 Threads 账号，请先在账号池绑定并确认账号已登录。" });
+      results.push({ archiveId: archive.id, name: archive.name, ok: false, skipped: true, message: "当前 Threads 没有绑定账号，无法刷新热点数据。页面上的数字是上次留下的缓存，绑定账号后才能更新替换。" });
     }
     for (const target of refreshTargets) {
       const username = normalizeThreadsUsername(target.username);
@@ -780,6 +811,8 @@ async function main() {
           );
           metrics = refreshAttempt.metrics;
           }
+          metrics = await fillMissingProfileIdentityMetrics(username, metrics);
+          refreshAttempt = { ...refreshAttempt, metrics };
         } finally {
           if (previousProfileDir) {
             process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = previousProfileDir;
@@ -821,9 +854,7 @@ async function main() {
               targetSource: target.source,
               method: metrics.method,
               feedUrl: metrics.feedUrl,
-              followers: metrics.followers,
-              following: metrics.following,
-              recentViews: metrics.recentViews,
+              ...profileIdentityMetricPatch(metrics, mergedTotalViews),
               posts: useRssHub ? mergedRows.length : Math.max(Number(metrics.posts || 0), mergedRows.length),
               likes: metrics.likes,
               comments: metrics.comments,
@@ -850,6 +881,7 @@ async function main() {
               targetSource: target.source,
               method: metrics.method,
               feedUrl: metrics.feedUrl,
+              ...profileIdentityMetricPatch(metrics, mergedTotalViews),
               complete: false,
               scope: metrics.scope,
               refreshedAt: previousMetrics.refreshedAt,
@@ -914,14 +946,14 @@ async function main() {
           message: complete ? "刷新完成" : nextMetric.error,
         });
       } catch (error: any) {
-        results.push({ archiveId: archive.id, name: archive.name, username, ok: false, message: error instanceof Error ? error.message : String(error || "刷新失败") });
+        results.push({ archiveId: archive.id, name: archive.name, username, ok: false, message: /[\u4e00-\u9fff]/.test(String(error?.message || error || "")) ? String(error?.message || error) : "热点数据刷新失败，请稍后重试。" });
       }
     }
 
     if (!useRssHub && refreshInstagram) {
       const instagramTargets = collectInstagramRefreshTargets(archive);
       if (!instagramTargets.length) {
-        results.push({ archiveId: archive.id, name: archive.name, platform: "instagram", ok: false, skipped: true, message: "未绑定可用 Instagram 账号，请先在账号池绑定并确认账号已登录。" });
+        results.push({ archiveId: archive.id, name: archive.name, platform: "instagram", ok: false, skipped: true, message: "当前 Instagram 没有绑定账号，无法刷新热点数据。页面上的数字是上次留下的缓存，绑定账号后才能更新替换。" });
       }
       for (const target of instagramTargets) {
         const username = normalizeInstagramUsername(target.username);
@@ -995,6 +1027,7 @@ async function main() {
           );
           const resolvedViewPosts = mergedPostMetrics.filter(postViewResolved).length;
           const complete = refreshAttempt.complete;
+          const instagramRecentViews = recentViewsWithPostFallback(metrics, totalViews);
           const nextMetric = {
             ...previousMetrics,
             platform: "instagram",
@@ -1004,6 +1037,7 @@ async function main() {
             method: metrics.method,
             ...(typeof metrics.followers === "number" ? { followers: metrics.followers } : {}),
             ...(typeof metrics.following === "number" ? { following: metrics.following } : {}),
+            ...(typeof instagramRecentViews === "number" ? { recentViews: instagramRecentViews } : {}),
             ...(typeof metrics.posts === "number" ? { posts: metrics.posts } : {}),
             ...(typeof metrics.likes === "number" ? { likes: metrics.likes } : {}),
             ...(typeof metrics.comments === "number" ? { comments: metrics.comments } : {}),
@@ -1046,7 +1080,7 @@ async function main() {
             message: metrics.complete === true ? "Instagram 刷新完成" : metrics.error || "Instagram 近期数据已刷新。",
           });
         } catch (error: any) {
-          results.push({ archiveId: archive.id, name: archive.name, platform: "instagram", username, ok: false, message: error instanceof Error ? error.message : String(error || "Instagram 刷新失败") });
+          results.push({ archiveId: archive.id, name: archive.name, platform: "instagram", username, ok: false, message: /[\u4e00-\u9fff]/.test(String(error?.message || error || "")) ? String(error?.message || error) : "Instagram 热点数据刷新失败，请稍后重试。" });
         }
       }
     }
@@ -1065,11 +1099,17 @@ async function main() {
     })
     .filter(Boolean)
     .slice(0, 2);
-  const message = fullyRefreshed
+  const skippedOnly = results.length > 0 && results.every((item) => item.skipped);
+  const skippedReason = results
+    .map((item) => String(item.message || "").trim())
+    .find((item) => item);
+  const message = skippedOnly && skippedReason
+    ? skippedReason
+    : (fullyRefreshed
     ? `全量同步完成：${requiredResults.length} 个账号的数据与时间快照已更新。`
     : (results.some((item) => item.ok)
       ? `部分同步完成：${requiredResults.length - failed.length}/${requiredResults.length || 0} 个账号已更新；其余账号已局部重试一次。`
-      : `同步未完成：${failed.length}/${requiredResults.length || 0} 个账号未取得完整新快照。${failedReasons.length ? ` ${failedReasons.join("；")}` : ""}`);
+      : `同步未完成：${failed.length}/${requiredResults.length || 0} 个账号未取得完整新快照。${failedReasons.length ? ` ${failedReasons.join("；")}` : ""}`));
   console.log(JSON.stringify({
     ok: results.some((item) => item.ok),
     complete: fullyRefreshed,
@@ -1087,6 +1127,6 @@ async function main() {
 main()
   .then(() => process.exit(0))
   .catch((error) => {
-    console.error(JSON.stringify({ ok: false, message: error instanceof Error ? error.message : String(error || "refresh failed") }));
+    console.error(JSON.stringify({ ok: false, message: "热点数据刷新失败，请稍后重试。" }));
     process.exit(1);
   });

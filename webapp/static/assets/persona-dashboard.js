@@ -297,15 +297,23 @@ function pdPersonaHot(persona, platformOverride = pdPlatformFilter()) {
     hot_score: 0,
   };
   return rows.reduce((sum, row) => {
+    const postViews = Number(row.post_views || 0);
+    const recentViews = Number(row.recent_views || 0);
     sum.likes += Number(row.likes || 0);
     sum.comments += Number(row.comments || 0);
     sum.shares += Number(row.shares || 0);
     sum.reposts += Number(row.reposts || 0);
-    sum.recent_views += Number(row.recent_views || 0);
-    sum.post_views += Number(row.post_views || 0);
-    sum.hot_score += Number(row.likes || 0) + Number(row.comments || 0) + Number(row.shares || 0) + Number(row.reposts || 0) + Number(row.post_views || 0);
+    sum.recent_views += recentViews > 0 ? recentViews : postViews;
+    sum.post_views += postViews;
+    sum.hot_score += Number(row.likes || 0) + Number(row.comments || 0) + Number(row.shares || 0) + Number(row.reposts || 0) + postViews;
     return sum;
   }, { likes: 0, comments: 0, shares: 0, reposts: 0, recent_views: 0, post_views: 0, hot_score: 0 });
+}
+
+function pdHomepageViews(hot) {
+  const recentViews = Number(hot && hot.recent_views || 0);
+  const postViews = Number(hot && hot.post_views || 0);
+  return recentViews > 0 ? recentViews : postViews;
 }
 
 function pdPersonaFollowers(persona, platformOverride = pdPlatformFilter()) {
@@ -346,7 +354,7 @@ function pdVisibleSummary(visiblePersonas) {
     summary.follower_count += pdPersonaFollowers(persona, selectedPlatform);
     summary.post_count += selectedPlatform ? pdPlatformCount(counts.platform_posts, selectedPlatform) : Number(counts.posts || 0);
     summary.published_count += selectedPlatform ? pdPlatformCount(counts.platform_published, selectedPlatform) : Number(counts.published || 0);
-    summary.recent_views += Number(hot.recent_views || 0);
+    summary.recent_views += pdHomepageViews(hot);
     summary.post_views += Number(hot.post_views || 0);
     summary.hot_score += Number(hot.hot_score || 0);
     summary.total_interactions += Number(hot.likes || 0) + Number(hot.comments || 0) + Number(hot.shares || 0) + Number(hot.reposts || 0);
@@ -717,7 +725,7 @@ function pdRenderSummary(visiblePersonas) {
     { label: "帖子", value: summary.post_count, hint: "当前平台归档帖子" },
     { label: "发布", value: summary.published_count, hint: "当前平台发布归档" },
     { label: "互动", value: summary.total_interactions, hint: "点赞、评论、转发、分享" },
-    { label: "主页浏览", value: summary.recent_views, hint: "账号主页级浏览" },
+    { label: "主页浏览", value: summary.recent_views, hint: "账号主页浏览；没有时用已发布推文浏览加总" },
     { label: "逐帖浏览", value: summary.post_views, hint: "逐帖浏览，不与主页浏览合并" },
     { label: "热度", value: summary.hot_score, hint: "逐帖浏览 + 点赞 + 评论 + 分享 + 转发" },
   ];
@@ -774,12 +782,15 @@ function pdSetRefreshControlState(status = "idle", progress = 0) {
   button.dataset.progress = String(value);
   button.style.setProperty("--sync-progress", `${value}%`);
   button.setAttribute("aria-busy", active ? "true" : "false");
-  if (label) label.textContent = "数据刷新";
-  const title = active ? `同步中 ${value}%` : (done ? "同步完成" : (partial ? "部分完成，失败账号已局部重试" : (failed ? "同步失败，点击重试" : "同步全部数据")));
+  if (label) label.textContent = active ? `刷新中 ${value}%` : "数据刷新";
+  const title = active ? `刷新中 ${value}%` : (done ? "数据刷新完成" : (partial ? "部分完成，失败账号已局部重试" : (failed ? "刷新失败，点击重试" : "数据刷新")));
   button.title = title;
   button.setAttribute("aria-label", title);
   const cancel = pdEl("btnPersonaDashboardSyncCancel");
-  if (cancel) cancel.hidden = !active;
+  if (cancel) {
+    cancel.hidden = !active;
+    cancel.setAttribute("aria-hidden", active ? "false" : "true");
+  }
 }
 
 function pdDashboardViewCacheIsFresh() {
@@ -883,7 +894,7 @@ async function pdPollRefresh(taskId) {
     const running = ["queued", "running", "cancelling"].includes(String(task.status));
     if (task.status === "failed" || task.status === "partial" || task.status === "cancelled") {
       const resultType = task.status === "failed" ? "err" : "ok";
-      const fallback = task.status === "partial" ? "部分同步完成" : (task.status === "cancelled" ? "已取消刷新。" : "同步失败");
+      const fallback = task.status === "partial" ? "部分刷新完成" : (task.status === "cancelled" ? "已取消刷新。" : "刷新失败");
       pdSetMsg(task.message ? String(task.message) : fallback, resultType);
     }
     else pdSetMsg("");
@@ -895,7 +906,7 @@ async function pdPollRefresh(taskId) {
     await pdLoadDashboard();
     if (task.status === "failed" || task.status === "partial" || task.status === "cancelled") {
       const resultType = task.status === "failed" ? "err" : "ok";
-      const fallback = task.status === "partial" ? "部分同步完成" : (task.status === "cancelled" ? "已取消刷新。" : "同步失败，请稍后重试。");
+      const fallback = task.status === "partial" ? "部分刷新完成" : (task.status === "cancelled" ? "已取消刷新。" : "刷新失败，请稍后重试。");
       pdSetMsg(task.message ? String(task.message) : fallback, resultType);
     } else {
       pdSetMsg("");
@@ -920,6 +931,7 @@ function pdMountDashboard(root) {
   if (!root) return;
   personaDashboardRoot = root;
   pdBindDashboard(root);
+  pdSetRefreshControlState(personaDashboardRefreshTask ? "running" : "idle", 0);
   if (personaDashboardData) {
     pdRenderDashboard();
     if (!pdDashboardDataIsComplete(personaDashboardData) || !pdDashboardViewCacheIsFresh()) {

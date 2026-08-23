@@ -7894,6 +7894,100 @@ function walkJsonObjects(value: any, visit: (node: any) => void, depth = 0): voi
   for (const child of Object.values(value)) walkJsonObjects(child, visit, depth + 1);
 }
 
+function firstFiniteMetricNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, Math.round(value));
+    if (typeof value === "string" && value.trim()) {
+      const parsed = parseMetricNumberLoose(value);
+      if (typeof parsed === "number") return parsed;
+    }
+  }
+  return undefined;
+}
+
+function mergeThreadsProfileIdentityMetrics(
+  target: Partial<ThreadsProfileHotMetrics>,
+  source: Partial<ThreadsProfileHotMetrics>,
+): void {
+  if (typeof source.followers === "number") target.followers = source.followers;
+  if (typeof source.following === "number") target.following = source.following;
+  if (typeof source.recentViews === "number") target.recentViews = source.recentViews;
+}
+
+function threadsProfileIdentityMetricsFromUserNode(node: any, username: string): Partial<ThreadsProfileHotMetrics> {
+  const nodeUsername = cleanText(node?.username || node?.unique_id).replace(/^@+/, "").toLowerCase();
+  if (!username || nodeUsername !== username) return {};
+  const profileInfo = node?.text_post_app_profile_info && typeof node.text_post_app_profile_info === "object"
+    ? node.text_post_app_profile_info
+    : {};
+  const insightInfo = node?.text_post_app_insights && typeof node.text_post_app_insights === "object"
+    ? node.text_post_app_insights
+    : {};
+  const out: Partial<ThreadsProfileHotMetrics> = {};
+  const followers = firstFiniteMetricNumber(
+    node.follower_count,
+    node.followerCount,
+    node.edge_followed_by?.count,
+  );
+  const following = firstFiniteMetricNumber(
+    node.following_count,
+    node.followingCount,
+    node.edge_follow?.count,
+  );
+  const recentViews = firstFiniteMetricNumber(
+    node.profile_view_count,
+    node.profileViewCount,
+    node.total_profile_visits,
+    node.profile_visits,
+    profileInfo.profile_view_count,
+    profileInfo.profileViewCount,
+    profileInfo.total_profile_visits,
+    insightInfo.profile_view_count,
+    insightInfo.profile_visits,
+  );
+  if (typeof followers === "number") out.followers = followers;
+  if (typeof following === "number") out.following = following;
+  if (typeof recentViews === "number") out.recentViews = recentViews;
+  return out;
+}
+
+export function extractThreadsProfileUserStats(html: string, usernameInput: string): Partial<ThreadsProfileHotMetrics> {
+  const username = String(usernameInput || "").replace(/^@+/, "").trim().toLowerCase();
+  const out: Partial<ThreadsProfileHotMetrics> = {};
+  if (!username) return out;
+  const escaped = username.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const source = String(html || "");
+  for (const match of source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
+    const raw = String(match[1] || "").trim();
+    if (!raw || (!raw.includes("follower_count") && !raw.includes("followerCount") && !raw.includes("profile_view"))) continue;
+    let parsed: any;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    walkJsonObjects(parsed, (node) => {
+      mergeThreadsProfileIdentityMetrics(out, threadsProfileIdentityMetricsFromUserNode(node, username));
+    });
+  }
+  if (typeof out.followers !== "number") {
+    const followerMatch = source.match(new RegExp(`"username"\\s*:\\s*"${escaped}"[\\s\\S]{0,2000}?"follower_count"\\s*:\\s*(\\d+)`))
+      || source.match(new RegExp(`"follower_count"\\s*:\\s*(\\d+)[\\s\\S]{0,2000}?"username"\\s*:\\s*"${escaped}"`));
+    if (followerMatch?.[1]) out.followers = Number(followerMatch[1]);
+  }
+  if (typeof out.following !== "number") {
+    const followingMatch = source.match(new RegExp(`"username"\\s*:\\s*"${escaped}"[\\s\\S]{0,2000}?"following_count"\\s*:\\s*(\\d+)`))
+      || source.match(new RegExp(`"following_count"\\s*:\\s*(\\d+)[\\s\\S]{0,2000}?"username"\\s*:\\s*"${escaped}"`));
+    if (followingMatch?.[1]) out.following = Number(followingMatch[1]);
+  }
+  if (typeof out.recentViews !== "number") {
+    const viewMatch = source.match(new RegExp(`"username"\\s*:\\s*"${escaped}"[\\s\\S]{0,2400}?"(?:profile_view_count|total_profile_visits)"\\s*:\\s*(\\d+)`))
+      || source.match(new RegExp(`"(?:profile_view_count|total_profile_visits)"\\s*:\\s*(\\d+)[\\s\\S]{0,2400}?"username"\\s*:\\s*"${escaped}"`));
+    if (viewMatch?.[1]) out.recentViews = Number(viewMatch[1]);
+  }
+  return out;
+}
+
 export function extractThreadsProfileHttpPayloads(html: string): any[] {
   const payloads: any[] = [];
   const seen = new Set<string>();
@@ -8082,6 +8176,33 @@ async function paginateThreadsProfileGraphqlPages(args: {
   return { posts, reachedEnd };
 }
 
+export async function fetchThreadsProfileIdentityMetrics(usernameInput: string): Promise<Partial<ThreadsProfileHotMetrics>> {
+  const username = String(usernameInput || "").replace(/^@+/, "").trim();
+  if (!username) return {};
+  const profileUrl = buildThreadsProfileUrl(username);
+  try {
+    const response = await requestSessionHttpText({
+      url: profileUrl,
+      cookies: [],
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+      },
+      timeoutMs: 8_000,
+    });
+    if (!response.ok) return {};
+    const parsed = parseThreadsProfileHotMetricsText(spiderHtmlToReaderText(response.text, profileUrl));
+    const userStats = extractThreadsProfileUserStats(response.text, username);
+    const out: Partial<ThreadsProfileHotMetrics> = { ...userStats };
+    if (typeof parsed.followers === "number") out.followers = parsed.followers;
+    if (typeof parsed.following === "number") out.following = parsed.following;
+    if (typeof parsed.recentViews === "number") out.recentViews = parsed.recentViews;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<ThreadsProfileHotMetrics> {
   const refreshedAt = new Date().toISOString();
   const cookies = readSentimentBrowserAuthCookies("threads");
@@ -8133,6 +8254,7 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       if (extra.reachedEnd) reachedEnd = true;
     }
     const parsed = parseThreadsProfileHotMetricsText(readerText);
+    const userStats = extractThreadsProfileUserStats(response.text, username);
     const posts = [...byKey.values()];
     if (!posts.length) throw new Error("Threads HTTP 页面未返回可识别的账号帖子。");
     const postMetrics = posts.map((post) => ({
@@ -8157,6 +8279,10 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       platform: "threads",
       username,
       ...parsed,
+      ...userStats,
+      ...(typeof parsed.followers === "number" ? { followers: parsed.followers } : {}),
+      ...(typeof parsed.following === "number" ? { following: parsed.following } : {}),
+      ...(typeof parsed.recentViews === "number" ? { recentViews: parsed.recentViews } : {}),
       posts: Math.max(declaredPosts, postMetrics.length),
       likes: postMetrics.reduce((sum, post) => sum + Number(post.likeCount || 0), 0),
       comments: postMetrics.reduce((sum, post) => sum + Number(post.commentCount || 0), 0),

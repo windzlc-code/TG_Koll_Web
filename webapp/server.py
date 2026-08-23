@@ -2549,6 +2549,13 @@ def _sum_numbers(*values: Any) -> int:
     return sum(_number(value, 0) for value in values)
 
 
+def _homepage_views_or_post_fallback(recent_views: Any, post_views: Any) -> int:
+    homepage_views = _number(recent_views, 0)
+    if homepage_views > 0:
+        return homepage_views
+    return _number(post_views, 0)
+
+
 def _read_dotenv_values(path: Path | None = None) -> dict[str, str]:
     env_path = path or (ROOT_DIR / ".env")
     if not env_path.exists():
@@ -12440,6 +12447,16 @@ class PersonaDashboardPostMediaUploadPayload(BaseModel):
     replace_existing: bool = False
 
 
+class PersonaDashboardPublishHistoryRecognizePayload(BaseModel):
+    url: str = ""
+    caption: str = ""
+    auto: bool = False
+
+
+class PersonaDashboardPublishHistoryDeletePayload(BaseModel):
+    history_ids: list[str] = Field(default_factory=list)
+
+
 class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     prompt: str = ""
     refresh: bool = False
@@ -16904,7 +16921,7 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     archive = _find_persona_archive(archives, clean_id)
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
-    current_accounts = _persona_bound_account_identities(clean_id, archive)
+    current_accounts = _persona_bound_account_identities(clean_id, archive, include_legacy=False)
     rows = []
     for reconciled_record in _verified_persona_publish_history(archive):
         compact = _compact_publish_record(
@@ -17028,6 +17045,415 @@ def _requeue_persona_publish_record(archive_id: str, history_id: str) -> dict[st
         "history_id": clean_history_id,
         "post": compact,
         "posts": _list_persona_archive_posts(clean_id, "posts"),
+    }
+
+
+def _canonical_manual_publish_permalink(raw: str) -> tuple[str, str]:
+    normalized = _normalized_dashboard_post_url(raw)
+    if normalized.startswith("threads.com/@") and "/post/" in normalized:
+        path = normalized[len("threads.com"):]
+        return "threads", f"https://www.threads.net{path}"
+    instagram = re.match(r"^instagram\.com/(p|reel|tv)/([^/]+)$", normalized, re.I)
+    if instagram:
+        kind = str(instagram.group(1) or "p").lower()
+        code = str(instagram.group(2) or "").strip()
+        if code:
+            return "instagram", f"https://www.instagram.com/{kind}/{code}/"
+    raise HTTPException(status_code=400, detail="请粘贴 Threads 或 Instagram 已发布帖子的完整链接。")
+
+
+def _try_canonical_profile_permalink(raw: str) -> tuple[str, str] | None:
+    try:
+        return _canonical_manual_publish_permalink(raw)
+    except HTTPException:
+        return None
+
+
+def _hot_metric_row_canonical_permalink(row: Any) -> tuple[str, str] | None:
+    candidates: list[str] = []
+    if isinstance(row, dict):
+        for key in ("publishedUrl", "published_url", "postUrl", "post_url", "sourceUrl", "source_url", "url"):
+            text = str(row.get(key) or "").strip()
+            if text:
+                candidates.append(text)
+    urls, _, _ = _hot_metric_row_match_values(row)
+    for normalized in urls:
+        candidates.append(normalized if "://" in normalized else f"https://{normalized}")
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = candidate.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        parsed = _try_canonical_profile_permalink(candidate)
+        if parsed:
+            return parsed
+    return None
+
+
+def _latest_unconfirmed_publish_caption(archive_id: str) -> str:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        return ""
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT payload_json, result_json
+                FROM social_automation_tasks
+                WHERE persona_id = ? AND task_type = 'publish_post'
+                ORDER BY updated_at DESC
+                LIMIT 12
+                """,
+                (clean_id,),
+            ).fetchall()
+    except Exception:
+        return ""
+    for row in rows:
+        try:
+            result = json.loads(str(row["result_json"] or "{}"))
+        except Exception:
+            result = {}
+        if not isinstance(result, dict):
+            result = {}
+        if _normalized_dashboard_post_url(
+            result.get("url") or result.get("published_url") or (result.get("published") or {}).get("url")
+        ):
+            continue
+        try:
+            payload = json.loads(str(row["payload_json"] or "{}"))
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        caption = str(payload.get("caption") or payload.get("content") or payload.get("text") or "").strip()
+        if caption:
+            return caption
+    return ""
+
+
+def _write_persona_archive_publish_history(archive_id: str, history: list[Any]) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    now = _persona_dashboard_iso_now()
+    archive["publishHistory"] = list(history)
+    archive["updatedAt"] = now
+    _write_persona_archives_preserving_shape_unlocked(path, raw, archives)
+    for storage_path in (
+        TOOL_R18_RUNTIME_DIR / "persona_archives.json",
+        TOOL_R18_RUNTIME_DIR / "persona_archives_cache.json",
+    ):
+        if storage_path.resolve() == path.resolve() or not storage_path.is_file():
+            continue
+        storage_raw = _read_json_file(storage_path)
+        storage_archives = _extract_persona_archive_list(storage_raw)
+        storage_archive = _find_persona_archive(storage_archives, clean_id)
+        if not storage_archive:
+            continue
+        storage_archive["publishHistory"] = copy.deepcopy(history)
+        storage_archive["updatedAt"] = now
+        _write_persona_archives_preserving_shape_unlocked(storage_path, storage_raw, storage_archives)
+    return archive
+
+
+@_persona_archive_write_locked
+def _recognize_persona_publish_record(archive_id: str, url: str, caption: str = "") -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    platform, canonical_url = _canonical_manual_publish_permalink(url)
+    content = str(caption or "").strip() or _latest_unconfirmed_publish_caption(clean_id) or "手动识别的已发布推文"
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        existing_url = _normalized_dashboard_post_url(_confirmed_archive_publish_url(item) or _published_record_url(item))
+        if existing_url and existing_url == _normalized_dashboard_post_url(canonical_url):
+            compact = _compact_publish_record(
+                item,
+                _publish_history_hot_metrics(item, archive),
+                _persona_bound_account_identities(clean_id, archive),
+            )
+            return {"ok": True, "reused": True, "publish_history": _list_persona_archive_publish_history(clean_id), "record": compact}
+    identities = _persona_bound_account_identities(clean_id, archive)
+    identity = identities.get(platform) if isinstance(identities.get(platform), dict) else {}
+    now = _persona_dashboard_iso_now()
+    username = str(identity.get("username") or "").strip().lstrip("@") or _threads_username_from_published_url(canonical_url)
+    source_meta = {
+        "platform": platform,
+        "source": "manual_recognize",
+        "taskType": "publish_post",
+        "accountId": str(identity.get("account_id") or ""),
+        "username": username,
+        "publishedAt": now,
+        "capturedAt": now,
+        "publishedUrl": canonical_url,
+        "likeCount": 0,
+        "commentCount": 0,
+        "shareCount": 0,
+        "repostCount": 0,
+        "viewCount": 0,
+        "metricComplete": False,
+        "metricMatched": False,
+    }
+    record = {
+        "id": f"manual-pub-{uuid.uuid4().hex[:12]}",
+        "title": content[:40],
+        "content": content,
+        "wordCount": len(content),
+        "publishedAt": now,
+        "platform": platform,
+        "status": "success",
+        "publishedUrl": canonical_url,
+        "sourceMeta": source_meta,
+        "publishedMeta": source_meta,
+        "publishedTargets": [{
+            "platform": platform,
+            "publishedUrl": canonical_url,
+            "publishedMeta": source_meta,
+        }],
+        "automationTaskType": "publish_post",
+    }
+    _write_persona_archive_publish_history(clean_id, [record, *history])
+    compact = _compact_publish_record(
+        record,
+        _publish_history_hot_metrics(record, archive),
+        identities,
+    )
+    return {"ok": True, "reused": False, "publish_history": _list_persona_archive_publish_history(clean_id), "record": compact}
+
+
+def _profile_post_metric_meta(
+    platform: str,
+    canonical_url: str,
+    identity: dict[str, str] | None,
+    row: dict[str, Any],
+    source: str = "auto_recognize",
+) -> dict[str, Any]:
+    now = _persona_dashboard_iso_now()
+    username = str((identity or {}).get("username") or "").strip().lstrip("@") or _threads_username_from_published_url(canonical_url)
+    captured = str(row.get("capturedAt") or row.get("captured_at") or now)
+    published_at = str(row.get("publishedAt") or row.get("published_at") or captured)
+    media_items = row.get("mediaItems") if isinstance(row.get("mediaItems"), list) else []
+    if not media_items:
+        media_items = row.get("media_items") if isinstance(row.get("media_items"), list) else []
+    return {
+        "platform": platform,
+        "source": source,
+        "taskType": "publish_post",
+        "accountId": str((identity or {}).get("account_id") or ""),
+        "username": username,
+        "publishedAt": published_at,
+        "capturedAt": captured,
+        "publishedUrl": canonical_url,
+        "likeCount": _hot_post_metric(row, "likeCount", "like_count"),
+        "commentCount": _hot_post_metric(row, "commentCount", "comment_count"),
+        "shareCount": _hot_post_metric(row, "shareCount", "share_count", "send_count"),
+        "repostCount": _hot_post_metric(row, "repostCount", "repost_count"),
+        "viewCount": _hot_post_metric(row, "viewCount", "view_count"),
+        "metricComplete": bool(_source_view_available(row) or _hot_post_metric(row, "viewCount", "view_count") > 0),
+        "metricMatched": True,
+        "mediaItems": copy.deepcopy(media_items),
+    }
+
+
+def _publish_record_from_profile_post(
+    platform: str,
+    canonical_url: str,
+    content: str,
+    identity: dict[str, str] | None,
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    source_meta = _profile_post_metric_meta(platform, canonical_url, identity, row)
+    caption = str(content or "").strip() or "自动识别的已发布推文"
+    return {
+        "id": f"manual-pub-{uuid.uuid4().hex[:12]}",
+        "title": caption[:40],
+        "content": caption,
+        "wordCount": len(caption),
+        "publishedAt": source_meta.get("publishedAt"),
+        "platform": platform,
+        "status": "success",
+        "publishedUrl": canonical_url,
+        "sourceMeta": source_meta,
+        "publishedMeta": source_meta,
+        "publishedTargets": [{
+            "platform": platform,
+            "publishedUrl": canonical_url,
+            "publishedMeta": source_meta,
+        }],
+        "automationTaskType": "publish_post",
+    }
+
+
+def _attach_permalink_to_publish_record(
+    record: dict[str, Any],
+    platform: str,
+    canonical_url: str,
+    identity: dict[str, str] | None,
+    row: dict[str, Any],
+) -> None:
+    source_meta = _profile_post_metric_meta(platform, canonical_url, identity, row, source="auto_recognize_attach")
+    record["publishedUrl"] = canonical_url
+    record["status"] = "success"
+    if not str(record.get("platform") or "").strip():
+        record["platform"] = platform
+    if not str(record.get("publishedAt") or record.get("published_at") or "").strip():
+        record["publishedAt"] = source_meta.get("publishedAt")
+    current_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+    record["publishedMeta"] = {**current_meta, **source_meta}
+    record["sourceMeta"] = {**(record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}), **source_meta}
+    targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
+    if not targets:
+        record["publishedTargets"] = [{
+            "platform": platform,
+            "publishedUrl": canonical_url,
+            "publishedMeta": source_meta,
+        }]
+    else:
+        for target in targets:
+            if not isinstance(target, dict):
+                continue
+            if not str(target.get("publishedUrl") or target.get("published_url") or "").strip():
+                target["publishedUrl"] = canonical_url
+            target_meta = target.get("publishedMeta") if isinstance(target.get("publishedMeta"), dict) else {}
+            target["publishedMeta"] = {**target_meta, **source_meta}
+
+
+def _hot_metric_matches_bound_identity(
+    platform_name: str,
+    platform_metric: dict[str, Any],
+    identities: dict[str, dict[str, str]],
+) -> bool:
+    identity = identities.get(platform_name) if isinstance(identities.get(platform_name), dict) else {}
+    metric_account_id = str(platform_metric.get("accountId") or platform_metric.get("account_id") or "").strip()
+    metric_username = str(platform_metric.get("username") or platform_metric.get("accountUsername") or platform_metric.get("account_username") or "").strip().lstrip("@")
+    current_account_id = str(identity.get("account_id") or "").strip()
+    current_username = str(identity.get("username") or "").strip().lstrip("@")
+    has_current_identity = bool(current_account_id or current_username)
+    if current_username and metric_username:
+        matches = current_username.lower() == metric_username.lower()
+    elif current_account_id and metric_account_id:
+        matches = current_account_id == metric_account_id
+    else:
+        matches = not has_current_identity or not (metric_account_id or metric_username)
+    return (not has_current_identity) or matches
+
+
+@_persona_archive_write_locked
+def _auto_recognize_persona_publish_records(archive_id: str) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    identities = _persona_bound_account_identities(clean_id, archive)
+    history = [item for item in (archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []) if item is not None]
+    seen_urls: set[str] = set()
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        existing_url = _normalized_dashboard_post_url(_confirmed_archive_publish_url(item))
+        if existing_url:
+            seen_urls.add(existing_url)
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    hot_metrics = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
+    new_records: list[dict[str, Any]] = []
+    updated_count = 0
+    for platform_key, platform_metric in hot_metrics.items():
+        if not isinstance(platform_metric, dict):
+            continue
+        platform_name = _normalize_persona_content_platform(platform_metric.get("platform") or platform_key)
+        if platform_name not in {"threads", "instagram"}:
+            continue
+        if not _hot_metric_matches_bound_identity(platform_name, platform_metric, identities):
+            continue
+        identity = identities.get(platform_name) if isinstance(identities.get(platform_name), dict) else {}
+        if not identity:
+            identity = {
+                "account_id": str(platform_metric.get("accountId") or platform_metric.get("account_id") or "").strip(),
+                "username": str(platform_metric.get("username") or "").strip().lstrip("@"),
+            }
+        for row in _deduplicated_dashboard_post_metrics(platform_metric.get("postMetrics")):
+            parsed = _hot_metric_row_canonical_permalink(row)
+            if not parsed:
+                continue
+            platform, canonical_url = parsed
+            url_key = _normalized_dashboard_post_url(canonical_url)
+            if not url_key or url_key in seen_urls:
+                continue
+            _, _, row_content = _hot_metric_row_match_values(row)
+            attached = False
+            for item in history:
+                if not isinstance(item, dict) or not _is_persona_publish_history_record(item):
+                    continue
+                if _normalized_dashboard_post_url(_confirmed_archive_publish_url(item)):
+                    continue
+                item_platform, _, _ = _publish_record_account_identity(item)
+                if item_platform and platform and item_platform != platform:
+                    continue
+                _, _, item_content = _publish_record_match_values(item)
+                if not item_content or not row_content or not _dashboard_post_content_compatible(item_content, row_content):
+                    continue
+                _attach_permalink_to_publish_record(item, platform, canonical_url, identity, row)
+                seen_urls.add(url_key)
+                updated_count += 1
+                attached = True
+                break
+            if attached:
+                continue
+            content = str(
+                row.get("content") or row.get("originalContent") or row.get("text") or row.get("caption") or ""
+            ).strip() or "自动识别的已发布推文"
+            new_records.append(_publish_record_from_profile_post(platform, canonical_url, content, identity, row))
+            seen_urls.add(url_key)
+    if new_records or updated_count:
+        _write_persona_archive_publish_history(clean_id, [*new_records, *history])
+    return {
+        "ok": True,
+        "added_count": len(new_records),
+        "updated_count": updated_count,
+        "publish_history": _list_persona_archive_publish_history(clean_id),
+    }
+
+
+@_persona_archive_write_locked
+def _delete_persona_publish_records(archive_id: str, history_ids: list[str]) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    wanted = {str(item or "").strip() for item in history_ids if str(item or "").strip()}
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID。")
+    if not wanted:
+        raise HTTPException(status_code=400, detail="请选择要删除的已发布推文。")
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+    kept: list[Any] = []
+    removed: list[str] = []
+    for item in history:
+        item_id = str((item or {}).get("id") or "").strip() if isinstance(item, dict) else ""
+        if item_id and item_id in wanted:
+            removed.append(item_id)
+            continue
+        kept.append(item)
+    if not removed:
+        raise HTTPException(status_code=404, detail="未找到要删除的已发布推文。")
+    _write_persona_archive_publish_history(clean_id, kept)
+    return {
+        "ok": True,
+        "removed_ids": removed,
+        "publish_history": _list_persona_archive_publish_history(clean_id),
     }
 
 
@@ -18670,6 +19096,50 @@ def _unbind_persona_threads_username(archive_id: str) -> dict[str, Any]:
     return {"ok": True, "archive_id": clean_id, "path": path.name}
 
 
+@_persona_archive_write_locked
+def _purge_unbound_persona_hot_metrics(archive_id: str, platform: str = "") -> bool:
+    clean_id = str(archive_id or "").strip()
+    wanted_platform = _persona_dashboard_refresh_platform(platform)
+    if not clean_id:
+        return False
+    identities = _persona_bound_account_identities(
+        clean_id,
+        include_legacy=False,
+        refreshable_only=True,
+    )
+    path, raw, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        return False
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    hot_metrics = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
+    if not isinstance(hot_metrics, dict) or not hot_metrics:
+        return False
+    kept: dict[str, Any] = {}
+    changed = False
+    for key, value in hot_metrics.items():
+        platform_name = _normalize_persona_content_platform(
+            (value.get("platform") if isinstance(value, dict) else "") or str(key).split(":", 1)[0]
+        )
+        if wanted_platform and platform_name != wanted_platform:
+            kept[key] = value
+            continue
+        if (
+            platform_name in identities
+            and isinstance(value, dict)
+            and _hot_metric_matches_bound_identity(platform_name, value, identities)
+        ):
+            kept[key] = value
+            continue
+        changed = True
+    if not changed:
+        return False
+    archive["setup"] = {**setup, "hotMetrics": kept}
+    archive["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    _write_persona_archives_preserving_shape(path, raw, archives)
+    return True
+
+
 def _build_persona_dashboard_profile(archive: dict[str, Any]) -> dict[str, Any]:
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
     account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
@@ -19921,18 +20391,22 @@ def _threads_username_from_published_url(value: Any) -> str:
 def _persona_bound_account_identities(
     archive_id: str,
     archive: dict[str, Any] | None = None,
+    include_legacy: bool = True,
+    refreshable_only: bool = False,
 ) -> dict[str, dict[str, str]]:
     """Return the currently bound account identity for each supported platform."""
     clean_archive_id = str(archive_id or "").strip()
     identities: dict[str, dict[str, str]] = {}
     if clean_archive_id:
+        status_clause = "AND lower(status) NOT IN ('banned', 'disabled')" if refreshable_only else ""
         with db() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, platform, username
                 FROM social_accounts
                 WHERE persona_id = ?
                   AND lower(platform) IN ('threads', 'instagram')
+                  {status_clause}
                 ORDER BY updated_at DESC, created_at DESC
                 """,
                 (clean_archive_id,),
@@ -19952,7 +20426,7 @@ def _persona_bound_account_identities(
     account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
     threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
     legacy_threads_handle = _normalize_threads_username(threads_account.get("handle"))
-    if legacy_threads_handle and "threads" not in identities:
+    if include_legacy and legacy_threads_handle and "threads" not in identities:
         identities["threads"] = {"account_id": "", "username": legacy_threads_handle}
     return identities
 
@@ -20095,16 +20569,23 @@ def _compact_publish_record(
     current_identity = current_account_map.get(platform) if isinstance(current_account_map.get(platform), dict) else {}
     current_account_id = str(current_identity.get("account_id") or "").strip()
     current_account_username = str(current_identity.get("username") or "").strip().lstrip("@")
+    has_current_identity = bool(current_account_id or current_account_username)
     if source_account_id and current_account_id:
         account_matches_current = source_account_id == current_account_id
     elif source_account_username and current_account_username:
         account_matches_current = source_account_username.lower() == current_account_username.lower()
+    elif not has_current_identity:
+        account_matches_current = False
     else:
         account_matches_current = True
     account_match_warning = ""
     if not account_matches_current:
-        source_label = f"@{source_account_username}" if source_account_username else "系统授权账号"
-        account_match_warning = f"历史账号：{source_label}"
+        source_label = f"@{source_account_username}" if source_account_username else ("已解绑账号" if not has_current_identity else "系统授权账号")
+        account_match_warning = (
+            f"当前未绑定执行账号，这条记录来自历史账号：{source_label}"
+            if not has_current_identity
+            else f"历史账号：{source_label}"
+        )
     return {
         "id": record.get("id"),
         "archive_post_id": record.get("archivePostId") or record.get("archive_post_id"),
@@ -20164,6 +20645,38 @@ def _metric_value(metrics: dict[str, Any], *keys: str) -> int:
     for key in keys:
         if key in metrics:
             return _number(metrics.get(key), 0)
+    return 0
+
+
+def _hot_post_metric(row: Any, *keys: str) -> int:
+    if not isinstance(row, dict):
+        return 0
+    aliases = {
+        "likeCount": ("likes",),
+        "like_count": ("likes",),
+        "commentCount": ("comments", "replies"),
+        "comment_count": ("comments", "replies"),
+        "shareCount": ("shares", "sends"),
+        "share_count": ("shares", "sends", "send_count"),
+        "repostCount": ("reposts",),
+        "repost_count": ("reposts",),
+        "viewCount": ("views",),
+        "view_count": ("views",),
+    }
+    wanted = list(keys)
+    for key in keys:
+        wanted.extend(aliases.get(key, ()))
+    containers = [row]
+    engagement = row.get("engagement") if isinstance(row.get("engagement"), dict) else {}
+    metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+    if engagement:
+        containers.append(engagement)
+    if metrics:
+        containers.append(metrics)
+    for container in containers:
+        for key in wanted:
+            if key in container:
+                return _number(container.get(key), 0)
     return 0
 
 
@@ -20817,7 +21330,7 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
                 (record_urls and row_urls and record_urls.intersection(row_urls))
                 or (record_codes and row_codes and record_codes.intersection(row_codes))
             )
-            if exact_identity and _dashboard_post_content_compatible(record_content, row_content):
+            if exact_identity:
                 identity_matches.append((row, platform_metric))
     matched = identity_matches
     if matched:
@@ -20832,14 +21345,18 @@ def _publish_history_hot_metrics(record: dict[str, Any], archive: dict[str, Any]
             ),
         )
         values = {
-            "likes": _metric_value(row, "likeCount", "like_count"),
-            "comments": _metric_value(row, "commentCount", "comment_count"),
-            "shares": _metric_value(row, "shareCount", "share_count", "send_count"),
-            "reposts": _metric_value(row, "repostCount", "repost_count"),
-            "views": _metric_value(row, "viewCount", "view_count"),
+            "likes": _hot_post_metric(row, "likeCount", "like_count"),
+            "comments": _hot_post_metric(row, "commentCount", "comment_count"),
+            "shares": _hot_post_metric(row, "shareCount", "share_count", "send_count"),
+            "reposts": _hot_post_metric(row, "repostCount", "repost_count"),
+            "views": _hot_post_metric(row, "viewCount", "view_count"),
         }
         scope = str(platform_metric.get("scope") or "").strip()
-        views_available = _source_view_available(row)
+        views_available = bool(
+            _source_view_available(row)
+            or values["views"] > 0
+            or _sum_numbers(values["likes"], values["comments"], values["shares"], values["reposts"]) == 0
+        )
         complete = bool(
             platform_metric.get("complete") is True
             and scope == "authenticated_full_profile"
@@ -20939,12 +21456,21 @@ def _compact_hot_post(raw: Any, archive_id: str = "") -> dict[str, Any]:
         "full_content": full_content[:5000],
         "published_at": raw.get("publishedAt") or raw.get("published_at"),
         "captured_at": raw.get("capturedAt") or raw.get("captured_at"),
-        "like_count": _metric_value(raw, "likeCount", "like_count"),
-        "comment_count": _metric_value(raw, "commentCount", "comment_count"),
-        "repost_count": _metric_value(raw, "repostCount", "repost_count"),
-        "share_count": _metric_value(raw, "shareCount", "share_count", "send_count"),
-        "view_count": _metric_value(raw, "viewCount", "view_count"),
-        "view_available": _source_view_available(raw),
+        "like_count": _hot_post_metric(raw, "likeCount", "like_count"),
+        "comment_count": _hot_post_metric(raw, "commentCount", "comment_count"),
+        "repost_count": _hot_post_metric(raw, "repostCount", "repost_count"),
+        "share_count": _hot_post_metric(raw, "shareCount", "share_count", "send_count"),
+        "view_count": _hot_post_metric(raw, "viewCount", "view_count"),
+        "view_available": bool(
+            _source_view_available(raw)
+            or _hot_post_metric(raw, "viewCount", "view_count") > 0
+            or _sum_numbers(
+                _hot_post_metric(raw, "likeCount", "like_count"),
+                _hot_post_metric(raw, "commentCount", "comment_count"),
+                _hot_post_metric(raw, "shareCount", "share_count", "send_count"),
+                _hot_post_metric(raw, "repostCount", "repost_count"),
+            ) == 0
+        ),
         "media_items": _compact_dashboard_media_items(raw),
         "details": _sanitize_dashboard_value(raw, "post"),
     }
@@ -21057,6 +21583,25 @@ def _persona_dashboard_refresh_platform(value: Any) -> str:
     return clean if clean in {"threads", "instagram"} else ""
 
 
+def _persona_dashboard_refresh_purge_archive_ids(
+    archive_id: str = "",
+    archive_ids: list[str] | None = None,
+) -> list[str]:
+    clean_id = str(archive_id or "").strip()
+    if clean_id:
+        return [clean_id]
+    if archive_ids is not None:
+        return list(dict.fromkeys(
+            str(item or "").strip() for item in archive_ids if str(item or "").strip()
+        ))
+    archives, _ = _read_tool_r18_persona_archives()
+    return [
+        str(item.get("id") or "").strip()
+        for item in archives
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
+
+
 def _start_persona_dashboard_refresh(
     archive_id: str = "",
     source: str = "",
@@ -21132,6 +21677,34 @@ def _start_persona_dashboard_refresh(
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
     worker_archive_ids = scoped_archive_ids if archive_ids is not None else None
+    for purge_id in _persona_dashboard_refresh_purge_archive_ids(str(archive_id or "").strip(), worker_archive_ids):
+        _purge_unbound_persona_hot_metrics(purge_id, refresh_platform)
+    if archive_id:
+        pool_identities = _persona_bound_account_identities(
+            str(archive_id).strip(),
+            include_legacy=False,
+            refreshable_only=True,
+        )
+        all_identities = _persona_bound_account_identities(str(archive_id).strip(), include_legacy=False)
+        has_target = bool(pool_identities.get(refresh_platform) if refresh_platform else pool_identities)
+        if not has_target:
+            platform_name = "Instagram" if refresh_platform == "instagram" else "Threads"
+            invalid_bound = bool(all_identities.get(refresh_platform) if refresh_platform else all_identities)
+            with PERSONA_DASHBOARD_REFRESH_LOCK:
+                PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
+                    "status": "failed",
+                    "step": "失败",
+                    "progress": 100,
+                    "message": (
+                        f"当前 {platform_name} 账号已失效或停用，无法刷新热点数据。"
+                        "已清空该平台缓存，避免继续显示过期数字。"
+                        if invalid_bound else
+                        f"当前 {platform_name} 没有绑定账号，无法刷新热点数据。"
+                        "已清空该平台缓存，避免继续显示过期数字。绑定账号后才能更新替换。"
+                    ),
+                    "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                })
+                return dict(PERSONA_DASHBOARD_REFRESH_TASKS[task_id])
     thread = threading.Thread(
         target=_persona_dashboard_refresh_worker_v2,
         args=(task_id, str(archive_id or "").strip(), refresh_source, worker_archive_ids),
@@ -21338,6 +21911,16 @@ def _prefetch_persona_dashboard_remote_metrics(
     return prefetched
 
 
+def _persona_dashboard_refresh_user_message(
+    value: Any,
+    fallback: str = "热点数据刷新失败，请稍后重试。",
+) -> str:
+    text = str(getattr(value, "detail", None) or value or "").strip()
+    if any("\u4e00" <= char <= "\u9fff" for char in text):
+        return text
+    return fallback
+
+
 def _persona_dashboard_refresh_worker_v2(
     task_id: str,
     archive_id: str = "",
@@ -21351,6 +21934,12 @@ def _persona_dashboard_refresh_worker_v2(
     stdout_file: Any | None = None
     stderr_file: Any | None = None
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "http_first").strip().lower() or "http_first"
+    with PERSONA_DASHBOARD_REFRESH_LOCK:
+        refresh_task = PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {})
+        refresh_user_id = int(refresh_task.get("user_id") or 0)
+        refresh_platform = _persona_dashboard_refresh_platform(refresh_task.get("platform"))
+    for purge_id in _persona_dashboard_refresh_purge_archive_ids(archive_id, archive_ids):
+        _purge_unbound_persona_hot_metrics(purge_id, refresh_platform)
     # http_first stays on the collector HTTP path. Browser leases remain for
     # the explicit browser source and RSSHub detail backfill only.
     needs_browser_lease = refresh_source in {"browser", "rsshub"}
@@ -21537,12 +22126,17 @@ def _persona_dashboard_refresh_worker_v2(
         status = "partial" if partial else ("success" if proc.returncode == 0 and isinstance(parsed, dict) and parsed.get("ok") else "failed")
         parsed_message = str(parsed.get("message") or "").strip() if isinstance(parsed, dict) else ""
         refresh_message = parsed_message or "刷新完成，缓存数据与趋势快照已更新。"
+        if status not in {"success", "partial"}:
+            refresh_message = _persona_dashboard_refresh_user_message(
+                parsed_message,
+                "当前平台没有绑定账号，或热点数据刷新失败。绑定账号后才能更新替换缓存。",
+            )
         with PERSONA_DASHBOARD_REFRESH_LOCK:
             PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
                 "status": status,
                 "step": "完成" if status == "success" else ("部分完成" if status == "partial" else "失败"),
                 "progress": 100,
-                "message": refresh_message if status in {"success", "partial"} else (parsed_message or "刷新未完成，请查看结果提示。"),
+                "message": refresh_message,
                 "elapsed_seconds": int(time.time() - started),
                 "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "result": parsed,
@@ -21575,7 +22169,7 @@ def _persona_dashboard_refresh_worker_v2(
                 "status": "failed",
                 "step": "失败",
                 "progress": 100,
-                "message": str(exc),
+                "message": _persona_dashboard_refresh_user_message(exc),
                 "elapsed_seconds": int(time.time() - started),
                 "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             })
@@ -21995,6 +22589,7 @@ def _build_persona_dashboard_overview(
                     _metric_value(row, "viewCount", "view_count")
                     for row in resolved_view_rows
                 )
+            platform_recent_views = _homepage_views_or_post_fallback(platform_recent_views, platform_post_views)
             platform_hot_score = _sum_numbers(platform_likes, platform_comments, platform_shares, platform_reposts, platform_post_views)
             persona_hot["likes"] += platform_likes
             persona_hot["comments"] += platform_comments
@@ -22368,7 +22963,10 @@ def _build_persona_dashboard_console_overview(
             persona_hot["comments"] += platform_comments
             persona_hot["shares"] += platform_shares
             persona_hot["reposts"] += platform_reposts
-            persona_hot["recent_views"] += _number(metric_value.get("recentViews"), 0)
+            persona_hot["recent_views"] += _homepage_views_or_post_fallback(
+                metric_value.get("recentViews"),
+                platform_post_views,
+            )
             persona_hot["post_views"] += platform_post_views
             persona_hot["hot_score"] += _sum_numbers(
                 platform_likes,
@@ -26209,6 +26807,34 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_publish_history_requeue(archive_id: str, history_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
         result = _requeue_persona_publish_record(archive_id, history_id)
         return _apply_persona_post_retention(result, user)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/publish_history/recognize")
+    def api_persona_dashboard_persona_publish_history_recognize(
+        archive_id: str,
+        payload: PersonaDashboardPublishHistoryRecognizePayload,
+        _user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        if payload.auto:
+            return _auto_recognize_persona_publish_records(archive_id)
+        if not str(payload.url or "").strip():
+            raise HTTPException(status_code=400, detail="缺少帖子链接。")
+        return _recognize_persona_publish_record(archive_id, payload.url, payload.caption)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/publish_history/delete")
+    def api_persona_dashboard_persona_publish_history_delete(
+        archive_id: str,
+        payload: PersonaDashboardPublishHistoryDeletePayload,
+        _user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        return _delete_persona_publish_records(archive_id, payload.history_ids)
+
+    @app.delete("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}")
+    def api_persona_dashboard_persona_publish_history_delete_one(
+        archive_id: str,
+        history_id: str,
+        _user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        return _delete_persona_publish_records(archive_id, [history_id])
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/memories")
     def api_persona_dashboard_persona_memories(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):

@@ -293,7 +293,7 @@ class DailyPublishLimitTests(unittest.TestCase):
         self.assertEqual(policy["used"], 0)
         self.assertFalse(policy["locked"])
 
-    def test_publish_cooldown_escalates_only_after_a_confirmed_thirty_minute_gap(self):
+    def test_publish_cooldown_stays_thirty_minutes_after_a_confirmed_gap(self):
         first = self._create(self._payload())
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -345,7 +345,7 @@ class DailyPublishLimitTests(unittest.TestCase):
                     "threads",
                     target_at=second_now,
                 )
-        self.assertEqual(policy["cooldown_seconds"], 60 * 60)
+        self.assertEqual(policy["cooldown_seconds"], 30 * 60)
         self.assertFalse(policy["can_publish"])
 
     def test_publish_cooldown_returns_to_thirty_minutes_after_an_hour_gap(self):

@@ -132,7 +132,6 @@ SOCIAL_TASK_REQUIRED_PLATFORM = {
 AUTOMATION_PLAN_NORMAL_PUBLISH_TASK = "normal_publish"
 PUBLISH_BATCH_LIMITS = {"threads": 2, "instagram": 1}
 PUBLISH_DEFAULT_COOLDOWN_SECONDS = 30 * 60
-PUBLISH_ESCALATED_COOLDOWN_SECONDS = 60 * 60
 AUTOMATION_PLAN_NORMAL_PUBLISH_MAX_COUNT = max(PUBLISH_BATCH_LIMITS.values())
 _ADMIN_BILLING_WAIVED_PAYLOAD_IDS: set[int] = set()
 _ADMIN_BILLING_WAIVED_PAYLOAD_IDS_LOCK = threading.Lock()
@@ -1068,12 +1067,7 @@ def _publish_cooldown_policy_in_transaction(
             "message": "",
         }
     last_published_at = int(published[0])
-    previous_gap = last_published_at - int(published[1]) if len(published) > 1 else PUBLISH_ESCALATED_COOLDOWN_SECONDS
-    cooldown_seconds = (
-        PUBLISH_ESCALATED_COOLDOWN_SECONDS
-        if PUBLISH_DEFAULT_COOLDOWN_SECONDS <= previous_gap < PUBLISH_ESCALATED_COOLDOWN_SECONDS
-        else PUBLISH_DEFAULT_COOLDOWN_SECONDS
-    )
+    cooldown_seconds = PUBLISH_DEFAULT_COOLDOWN_SECONDS
     next_available_at = last_published_at + cooldown_seconds
     remaining_seconds = max(0, next_available_at - effective_target)
     remaining_minutes = max(1, (remaining_seconds + 59) // 60) if remaining_seconds else 0

@@ -245,6 +245,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("function pdPersonaFollowers", self.dashboard_script)
         self.assertIn("summary.follower_count += pdPersonaFollowers(persona, selectedPlatform);", self.dashboard_script)
         self.assertIn("value: summary.follower_count", self.dashboard_script)
+        self.assertIn("function pdHomepageViews", self.dashboard_script)
+        self.assertIn("summary.recent_views += pdHomepageViews(hot);", self.dashboard_script)
+        self.assertIn("账号主页浏览；没有时用已发布推文浏览加总", self.dashboard_script)
 
     def test_dashboard_heading_is_the_current_platform_context(self):
         self.assertIn('id="personaDashboardContext"', self.markup)
@@ -2582,7 +2585,9 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('class="persona-dashboard-toolbar-refresh"', self.markup)
         self.assertIn('class="ui-refresh-icon"', self.markup)
         self.assertIn('id="personaDashboardSyncStatus"', self.markup)
-        self.assertIn('label.textContent = "数据刷新";', self.dashboard_script)
+        self.assertIn(">数据刷新</span>", self.markup)
+        self.assertIn('.persona-dashboard-toolbar-cancel[hidden]', self.styles)
+        self.assertIn('label.textContent = active ? `刷新中 ${value}%` : "数据刷新";', self.dashboard_script)
         refresh_selector = ".persona-dashboard-toolbar-refresh {"
         refresh_start = self.styles.index(refresh_selector)
         refresh_rule = self.styles[refresh_start:self.styles.index("}", refresh_start) + 1]
@@ -2610,7 +2615,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('.mobile-page-toolbar-actions[hidden] {', self.styles)
         self.assertIn('personaDashboardActions.hidden = state.view !== "persona_dashboard";', self.console_script)
         self.assertIn('personaDashboardSyncStatus', self.markup)
-        self.assertIn('label.textContent = "数据刷新";', self.dashboard_script)
+        self.assertIn('label.textContent = active ? `刷新中 ${value}%` : "数据刷新";', self.dashboard_script)
         self.assertNotIn('pdSetMsg(running ? `同步中 ${progress}%`', self.dashboard_script)
         self.assertNotIn('pdSetMsg("同步完成。", "ok")', self.dashboard_script)
 

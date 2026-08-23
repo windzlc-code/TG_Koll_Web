@@ -69,6 +69,7 @@ import {
   extractThreadsHydrationCandidatesFromHtml,
   extractThreadsProfileHttpPayloads,
   extractThreadsProfileUserId,
+  extractThreadsProfileUserStats,
   buildSpiderSearchMarkdownFromHotCandidates,
   parseThreadsDetailEngagementMarkdown,
   parseThreadsDetailMediaMarkdown,
@@ -3759,6 +3760,23 @@ Instagram
   it("extracts a Threads profile user id without using the target account's own login", () => {
     const html = `{"username":"sherryjim68","pk":"43951714650","full_name":"SherryJim"}`;
     expect(extractThreadsProfileUserId(html, "sherryjim68")).toBe("43951714650");
+  });
+
+  it("extracts public Threads follower and profile view counts from embedded profile JSON", () => {
+    const html = `<html><script type="application/json">${JSON.stringify({
+      user: {
+        username: "barber_demo",
+        follower_count: 1280,
+        following_count: 44,
+        text_post_app_profile_info: { profile_view_count: 61200 },
+      },
+    })}</script></html>`;
+
+    expect(extractThreadsProfileUserStats(html, "barber_demo")).toEqual({
+      followers: 1280,
+      following: 44,
+      recentViews: 61200,
+    });
   });
 
   it("parses Threads text-feed connection GraphQL pages used by collector viewers", () => {

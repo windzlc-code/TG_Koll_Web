@@ -875,6 +875,21 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(persona["post_metrics"][0]["media_items"][0]["url"], "data:image/png;base64,abc123")
         self.assertIn("浏览", persona["hot_score_formula"])
 
+    def test_missing_homepage_views_fall_back_to_published_post_views(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"]["threads"].pop("recentViews", None)
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/overview")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["personas"][0]["hot"]["post_views"], 300)
+        self.assertEqual(data["personas"][0]["hot"]["recent_views"], 300)
+        self.assertEqual(data["summary"]["recent_views"], 300)
+        self.assertEqual(data["summary"]["post_views"], 300)
+
     def test_post_metadata_keeps_reposts_and_shares_as_independent_metrics(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
@@ -1338,6 +1353,115 @@ class PersonaDashboardApiTests(unittest.TestCase):
         persona = overview["personas"][0]
         self.assertFalse(persona["threads_account"]["bound"])
         self.assertEqual(persona["threads_account"]["handle"], "")
+
+    def test_refresh_without_bound_account_clears_cached_hot_metrics(self):
+        self._write_archives()
+        started = self.client.post(
+            "/api/persona_dashboard/refresh",
+            json={"archive_id": "persona-1", "source": "http_first", "platform": "threads"},
+        )
+        self.assertEqual(started.status_code, 200)
+        body = started.json()
+        self.assertEqual(body["status"], "failed")
+        self.assertIn("没有绑定账号", body["message"])
+        self.assertIn("已清空该平台缓存", body["message"])
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertEqual(archives[0]["setup"].get("hotMetrics") or {}, {})
+
+    def test_auto_monitor_full_refresh_purges_invalid_account_hot_metrics(self):
+        self._write_archives()
+        self._insert_social_account(
+            account_id="threads-banned",
+            persona_id="persona-1",
+            platform="threads",
+            username="history",
+            status="banned",
+        )
+        process = mock.Mock()
+        process.poll.return_value = 0
+        process.returncode = 0
+        process.wait.return_value = 0
+        task_id = "pdr_auto_purge"
+        with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+            server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {
+                "id": task_id,
+                "status": "queued",
+                "user_id": 0,
+                "platform": "",
+            }
+        try:
+            with mock.patch.object(server, "acquire_external_browser_lease") as acquire_lease, \
+                 mock.patch.object(server.subprocess, "Popen", return_value=process):
+                server._persona_dashboard_refresh_worker_v2(task_id, archive_id="", source="http_first")
+        finally:
+            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(task_id, None)
+        acquire_lease.assert_not_called()
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertEqual(archives[0]["setup"].get("hotMetrics") or {}, {})
+
+    def test_refresh_drops_stale_username_metrics_when_current_account_is_valid(self):
+        self._write_archives()
+        self._insert_social_account(
+            account_id="threads-current",
+            persona_id="persona-1",
+            platform="threads",
+            username="current_user",
+            status="ready",
+        )
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"] = {
+            "threads:current_user": {
+                "platform": "threads",
+                "accountId": "threads-current",
+                "username": "current_user",
+                "views": 12,
+                "likes": 2,
+            },
+            "threads:old_user": {
+                "platform": "threads",
+                "accountId": "threads-old",
+                "username": "old_user",
+                "views": 300,
+                "likes": 79,
+            },
+        }
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        self.assertTrue(server._purge_unbound_persona_hot_metrics("persona-1"))
+        kept = json.loads(path.read_text(encoding="utf-8"))[0]["setup"]["hotMetrics"]
+        self.assertEqual(list(kept), ["threads:current_user"])
+        self.assertEqual(kept["threads:current_user"]["views"], 12)
+
+    def test_refresh_without_usable_account_clears_banned_cache(self):
+        self._write_archives()
+        self._insert_social_account(
+            account_id="threads-disabled",
+            persona_id="persona-1",
+            platform="threads",
+            username="history",
+            status="disabled",
+        )
+        started = self.client.post(
+            "/api/persona_dashboard/refresh",
+            json={"archive_id": "persona-1", "source": "http_first", "platform": "threads"},
+        )
+        self.assertEqual(started.status_code, 200)
+        body = started.json()
+        self.assertEqual(body["status"], "failed")
+        self.assertIn("已失效或停用", body["message"])
+        self.assertIn("已清空该平台缓存", body["message"])
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertEqual(archives[0]["setup"].get("hotMetrics") or {}, {})
+
+    def test_publish_history_warns_when_execution_account_is_unbound(self):
+        self._write_archives()
+        resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+        self.assertEqual(resp.status_code, 200)
+        row = resp.json()["publish_history"][0]
+        self.assertFalse(row["account_match"]["matches_current"])
+        self.assertIn("当前未绑定执行账号", row["account_match"]["warning"])
 
     def test_public_persona_profile_returns_editable_fields(self):
         self._write_archives()
@@ -3156,6 +3280,136 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(archived_paths[0].is_file())
         self.assertEqual(archived_paths[0].read_bytes(), second_path.read_bytes())
 
+    def test_persona_publish_history_can_be_manually_recognized_and_deleted(self):
+        self._write_archives()
+        created = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/publish_history/recognize",
+            json={"url": "https://www.threads.com/@history/post/manual-1", "caption": "手动补进列表的帖子"},
+        )
+        self.assertEqual(created.status_code, 200)
+        created_body = created.json()
+        self.assertTrue(created_body["ok"])
+        self.assertFalse(created_body["reused"])
+        self.assertEqual(created_body["record"]["published_url"], "https://www.threads.net/@history/post/manual-1")
+        listed = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+        self.assertEqual(len(listed.json()["publish_history"]), 2)
+
+        duplicate = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/publish_history/recognize",
+            json={"url": "https://www.threads.net/@history/post/manual-1"},
+        )
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertTrue(duplicate.json()["reused"])
+
+        invalid = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/publish_history/recognize",
+            json={"url": "https://example.com/not-a-post"},
+        )
+        self.assertEqual(invalid.status_code, 400)
+
+        history_id = created_body["record"]["id"]
+        deleted = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/publish_history/delete",
+            json={"history_ids": [history_id]},
+        )
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(deleted.json()["removed_ids"], [history_id])
+        remaining = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+        self.assertEqual(len(remaining.json()["publish_history"]), 1)
+
+    def test_persona_publish_history_auto_recognizes_missing_profile_posts(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"]["threads"]["postMetrics"].append({
+            "sourceUrl": "https://www.threads.com/@history/post/missing-1",
+            "content": "个人页上还没进列表的帖子",
+            "likeCount": 8,
+            "commentCount": 3,
+            "shareCount": 1,
+            "viewCount": 120,
+            "capturedAt": "2026-06-30T04:00:00Z",
+        })
+        archives[0]["publishHistory"].append({
+            "id": "pub-unconfirmed",
+            "title": "未确认发布",
+            "content": "人设发出但没写回链接的帖子",
+            "wordCount": 16,
+            "platform": "threads",
+            "status": "success",
+            "automationTaskType": "publish_post",
+        })
+        archives[0]["setup"]["hotMetrics"]["threads"]["postMetrics"].append({
+            "sourceUrl": "https://www.threads.com/@history/post/unconfirmed-1",
+            "content": "人设发出但没写回链接的帖子",
+            "likeCount": 4,
+            "commentCount": 1,
+            "shareCount": 0,
+            "viewCount": 50,
+            "capturedAt": "2026-06-30T05:00:00Z",
+        })
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        created = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/publish_history/recognize",
+            json={"auto": True},
+        )
+        self.assertEqual(created.status_code, 200)
+        body = created.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["added_count"], 1)
+        self.assertEqual(body["updated_count"], 1)
+        urls = {row["published_url"] for row in body["publish_history"]}
+        self.assertIn("https://www.threads.net/@history/post/abc", urls)
+        self.assertIn("https://www.threads.net/@history/post/missing-1", urls)
+        self.assertIn("https://www.threads.net/@history/post/unconfirmed-1", urls)
+        attached = next(row for row in body["publish_history"] if row["id"] == "pub-unconfirmed")
+        self.assertEqual(attached["published_url"], "https://www.threads.net/@history/post/unconfirmed-1")
+        added = next(row for row in body["publish_history"] if "missing-1" in str(row.get("published_url") or ""))
+        self.assertEqual(added["hot_metrics"]["likes"], 8)
+        self.assertEqual(added["hot_metrics"]["views"], 120)
+        self.assertTrue(added["hot_metrics"]["views_available"])
+        self.assertEqual(added["hot_metrics"]["comments"], 3)
+
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"]["threads"]["postMetrics"].append({
+            "sourceUrl": "https://www.threads.com/@history/post/nested-1",
+            "content": "嵌套互动字段的个人页帖子",
+            "engagement": {"likeCount": 9, "commentCount": 2, "viewCount": 40},
+            "metrics": {"repost_count": 1, "send_count": 3},
+            "capturedAt": "2026-06-30T06:00:00Z",
+        })
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+        nested = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/publish_history/recognize",
+            json={"auto": True},
+        )
+        self.assertEqual(nested.status_code, 200)
+        nested_row = next(
+            row for row in nested.json()["publish_history"]
+            if "nested-1" in str(row.get("published_url") or "")
+        )
+        self.assertEqual(nested_row["hot_metrics"]["likes"], 9)
+        self.assertEqual(nested_row["hot_metrics"]["views"], 40)
+        self.assertEqual(nested_row["hot_metrics"]["comments"], 2)
+        self.assertEqual(nested_row["hot_metrics"]["reposts"], 1)
+        self.assertEqual(nested_row["hot_metrics"]["shares"], 3)
+        self.assertTrue(nested_row["hot_metrics"]["views_available"])
+
+        again = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/publish_history/recognize",
+            json={"auto": True},
+        )
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json()["added_count"], 0)
+        self.assertEqual(again.json()["updated_count"], 0)
+
+        missing_url = self.client.post(
+            "/api/persona_dashboard/personas/persona-1/publish_history/recognize",
+            json={},
+        )
+        self.assertEqual(missing_url.status_code, 400)
+
     def test_persona_publish_history_lists_visible_records(self):
         self._write_archives()
         resp = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
@@ -3213,14 +3467,20 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_persona_publish_history_marks_account_mismatch_only_when_current_handle_differs(self):
         self._write_archives()
+        self._insert_social_account(
+            account_id="threads-current",
+            persona_id="persona-1",
+            platform="threads",
+            username="current_user",
+        )
         path = self.tool_runtime_dir / "persona_archives.json"
         archives = json.loads(path.read_text(encoding="utf-8"))
         archive = archives[0]
         archive["setup"]["accountManagement"]["threads"]["handle"] = "current_user"
         archive["publishHistory"][0]["publishedUrl"] = "https://www.threads.com/@old_user/post/abc"
         archive["publishHistory"][0]["publishedMeta"].update({
-            "accountId": "threads-current",
-            "username": "current_user",
+            "accountId": "threads-old",
+            "username": "old_user",
             "publishedUrl": "https://www.threads.com/@old_user/post/abc",
         })
         path.write_text(json.dumps(archives), encoding="utf-8")

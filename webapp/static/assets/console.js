@@ -525,6 +525,7 @@ const state = {
     content: localStorage.getItem("personaDashboardPostTypeFilter") || "all",
     sort: "time_desc",
   },
+  personaPublishHistorySelectedIds: [],
   personaPublishAccountIds: {},
   personaPublishResults: {},
   personaPublishWatchers: {},
@@ -718,6 +719,7 @@ function setSelectedPersonaId(personaId, { persist = true } = {}) {
   state.selectedPersonaId = cleanId;
   if (changed) {
     state.publishHistoryPreviewId = "";
+    state.personaPublishHistorySelectedIds = [];
   }
   if (!persist) return cleanId;
   const key = selectedPersonaStorageKey();
@@ -829,6 +831,7 @@ function clearTenantInMemoryState() {
     content: localStorage.getItem("personaDashboardPostTypeFilter") || "all",
     sort: "time_desc",
   };
+  state.personaPublishHistorySelectedIds = [];
   state.personaAutomationResults = {};
   state.personaAutomationWatchers = {};
   state.accountPoolAccountId = "";
@@ -5660,6 +5663,19 @@ function fallbackPersonaProfile(persona) {
     avatar: null,
     _fallback: true,
   };
+}
+
+function personaHotRefreshBlockedReason(persona = selectedPersona()) {
+  const platform = personaContentPlatform(persona);
+  const platformName = platform === "instagram" ? "Instagram" : "Threads";
+  if (personaAccounts(persona, platform).length) return "";
+  return `当前 ${platformName} 没有绑定账号，无法刷新热点数据。页面上的数字是上次留下的缓存，绑定账号后才能更新替换。`;
+}
+
+function chineseRefreshMessage(text, fallback = "热点数据刷新失败，请稍后重试。") {
+  const localized = localizeConsoleMessage(text || "", 0);
+  if (/[\u4e00-\u9fff]/.test(localized)) return localized;
+  return fallback;
 }
 
 function personaAccounts(persona, platform = "") {
@@ -10788,11 +10804,91 @@ function positionPersonaHistoryFilterMenu(menu) {
   menu.classList.toggle("opens-upward", opensUpward);
 }
 
+function renderPublishHistoryToolbarEditMenu({ personaId = "", selectedCount = 0 } = {}) {
+  return `<details class="publish-history-edit-menu" data-console-dropdown data-publish-history-toolbar-edit>
+    <summary class="persona-history-filter-trigger" title="更多操作" aria-label="更多操作"><span class="persona-history-filter-icon">${renderMoreIcon()}</span></summary>
+    <div class="publish-history-edit-popover">
+      <button type="button" class="persona-history-recognize" data-publish-history-recognize ${personaId ? "" : "disabled"}>${renderFormListIcon()}<span>自动识别</span></button>
+      <button type="button" class="persona-history-delete-selected" data-publish-history-delete-selected ${selectedCount ? "" : "disabled"} title="${selectedCount ? `删除选中 ${selectedCount} 条` : "请先勾选要删除的推文"}">${renderTrashIcon()}<span>删除选中</span></button>
+    </div>
+  </details>`;
+}
+
+function renderPublishHistoryCardEditMenu(recordId = "") {
+  return `<details class="publish-history-edit-menu publish-history-card-edit-menu" data-console-dropdown data-publish-history-card-edit>
+    <summary class="publish-history-card-action" title="更多操作" aria-label="更多操作">${renderMoreIcon()}</summary>
+    <div class="publish-history-edit-popover">
+      <button type="button" class="publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}">${renderRequeueIcon()}<span>重回草稿</span></button>
+      <button type="button" class="danger publish-history-card-delete" data-publish-history-delete="${esc(recordId)}">${renderTrashIcon()}<span>从列表删除</span></button>
+    </div>
+  </details>`;
+}
+
+function syncPublishHistoryEditMenuState(menu, opening) {
+  if (!menu) return;
+  const card = menu.closest(".publish-history-card");
+  const panel = menu.closest(".persona-profile-data-panel, .publish-history-picker");
+  const popover = menu.querySelector(".publish-history-edit-popover");
+  menu.classList.toggle("is-open", Boolean(opening));
+  if (!opening) {
+    menu.classList.remove("opens-upward");
+    if (popover) {
+      popover.style.position = "";
+      popover.style.left = "";
+      popover.style.right = "";
+      popover.style.top = "";
+      popover.style.bottom = "";
+      popover.style.zIndex = "";
+    }
+  }
+  card?.classList.toggle("is-menu-open", Boolean(opening));
+  panel?.classList.toggle("is-menu-open", Boolean(opening));
+}
+
+function positionPublishHistoryEditMenu(menu) {
+  if (!menu?.open) return;
+  const popover = menu.querySelector(".publish-history-edit-popover");
+  const trigger = menu.querySelector("summary");
+  if (!popover || !trigger) return;
+  const dock = document.querySelector(".mobile-task-dock");
+  const dockRect = dock && window.getComputedStyle(dock).display !== "none" ? dock.getBoundingClientRect() : null;
+  const viewportBottom = dockRect?.top || window.innerHeight;
+  const triggerRect = trigger.getBoundingClientRect();
+  const isCard = menu.matches("[data-publish-history-card-edit]");
+  popover.style.position = "fixed";
+  popover.style.bottom = "auto";
+  popover.style.zIndex = "5200";
+  if (isCard) {
+    popover.style.left = "auto";
+    popover.style.right = `${Math.max(8, window.innerWidth - triggerRect.right)}px`;
+  } else {
+    popover.style.right = "auto";
+    popover.style.left = `${Math.max(8, triggerRect.left)}px`;
+  }
+  popover.style.top = `${triggerRect.bottom + 6}px`;
+  const popoverRect = popover.getBoundingClientRect();
+  if (popoverRect.right > window.innerWidth - 8) {
+    popover.style.left = "auto";
+    popover.style.right = "8px";
+  }
+  if (popoverRect.left < 8) {
+    popover.style.right = "auto";
+    popover.style.left = "8px";
+  }
+  const opensUpward = popoverRect.bottom > viewportBottom - 8 && triggerRect.top - popoverRect.height - 8 >= 0;
+  menu.classList.toggle("opens-upward", opensUpward);
+  if (opensUpward) {
+    popover.style.top = "auto";
+    popover.style.bottom = `${Math.max(8, window.innerHeight - triggerRect.top + 6)}px`;
+  }
+}
+
 function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
   const filters = state.personaHistoryFilters || {};
   const personaId = String(persona?.id || "");
   const refreshing = Boolean(personaId && state.publishHistoryRefreshPersonaId === personaId && state.publishHistoryRefreshTaskId);
   const refreshStatus = refreshing ? state.publishHistoryRefreshStatus : null;
+  const selectedCount = (state.personaPublishHistorySelectedIds || []).length;
   const contentOptions = [
     ["all", "全部内容"],
     ["text", "有文字"],
@@ -10816,6 +10912,7 @@ function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
     { key: "sort", label: "排序方式", icon: renderPersonaHistorySortFilterIcon(), options: sortOptions },
   ];
   return `<div class="persona-history-toolbar">
+    ${renderPublishHistoryToolbarEditMenu({ personaId, selectedCount })}
     <div class="persona-history-filters" aria-label="历史推文筛选">
       ${filterMenus.map(({ key, label, icon, options }) => {
         const defaultValue = key === "content" ? "all" : "time_desc";
@@ -14671,6 +14768,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
   const rows = Array.isArray(options.rows) ? options.rows : personaPublishHistoryRows(persona);
   if (!rows.length) return renderPersonaPublishHistoryEmptyState();
   const activeId = String(state.publishHistoryPreviewId || rows[0]?.id || "");
+  const selectedIds = new Set(state.personaPublishHistorySelectedIds || []);
   const personaId = String(persona?.id || "");
   const stream = mobileTweetStreamInfo(rows, options.streamKey || `publish-history:${personaId}`, MOBILE_PUBLISH_HISTORY_BATCH_SIZE);
   return `
@@ -14681,12 +14779,16 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
         const displayIndex = fullIndex >= 0 ? fullIndex : index;
         const active = recordId === activeId;
         const publishedUrl = safeExternalHttpUrl(record.published_url);
+        const bulkChecked = selectedIds.has(recordId);
         const platform = String(record.platform || record.publishPlatform || "").trim();
         const platformName = platformLabel(platform);
         const publishedAt = formatTime(publishHistoryRecordTime(record));
         return `
-          <article class="publish-post-card publish-history-card ${active ? "is-selected" : ""}" data-publish-history-card="${esc(recordId)}" data-account-platform="${esc(platform)}">
+          <article class="publish-post-card publish-history-card ${active ? "is-selected" : ""} ${bulkChecked ? "is-bulk-selected" : ""}" data-publish-history-card="${esc(recordId)}" data-account-platform="${esc(platform)}">
             <div class="publish-history-card-main">
+              <label class="publish-history-bulk-toggle" data-publish-history-bulk-toggle="${esc(recordId)}" aria-label="勾选这条已发布推文">
+                <input type="checkbox" data-publish-history-bulk-id="${esc(recordId)}" ${bulkChecked ? "checked" : ""} />
+              </label>
               <span class="publish-post-card-index">${esc(displayIndex + 1)}</span>
               <span class="publish-post-card-copy">
                 <span class="publish-post-card-head">
@@ -14699,7 +14801,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
               <span class="publish-history-card-actions" aria-label="任务历史操作">
                 ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" data-account-public-link="${esc(record.account_id || "")}" title="打开已发布推文" aria-label="打开已发布推文">${renderSourceLinkIcon()}</a>` : ""}
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
-                <button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>
+                ${renderPublishHistoryCardEditMenu(recordId)}
               </span>
               ${renderPublishHistoryMetrics(record, "publish-history-card-metrics")}
             </div>
@@ -14765,6 +14867,7 @@ function renderPublishHistoryPanel(persona = selectedPersona()) {
         <div class="publish-panel-head">
           <div><strong>任务历史</strong><span>${esc(persona?.name || "当前人设")}</span></div>
           <div class="publish-history-refresh-actions">
+            ${renderPublishHistoryToolbarEditMenu({ personaId, selectedCount: (state.personaPublishHistorySelectedIds || []).length })}
             <button type="button" data-publish-history-refresh class="primary" aria-busy="${refreshing ? "true" : "false"}" ${refreshing || !persona?.id ? "disabled" : ""}>${renderPublishHistoryRefreshContent(refreshing, refreshStatus)}</button>
             ${renderPublishHistoryRefreshCancel(refreshing)}
           </div>
@@ -14872,10 +14975,117 @@ async function requeuePublishHistoryRecord(historyId = "", persona = selectedPer
   }
 }
 
-async function refreshPublishHistoryHotData(persona = selectedPersona()) {
+function selectedPublishHistoryIds() {
+  return Array.from(new Set((state.personaPublishHistorySelectedIds || []).map((item) => String(item || "").trim()).filter(Boolean)));
+}
+
+function syncPublishHistoryBulkSelection(recordId = "", checked = false) {
+  const cleanId = String(recordId || "").trim();
+  if (!cleanId) return;
+  const selected = new Set(selectedPublishHistoryIds());
+  if (checked) selected.add(cleanId);
+  else selected.delete(cleanId);
+  state.personaPublishHistorySelectedIds = Array.from(selected);
+  if (isPersonaWorkspaceModule()) renderPersonaDetail();
+  else if (!syncPublishHistorySelectionDom()) renderSimpleFlowModule("publishing");
+}
+
+async function recognizePublishHistoryRecord(persona = selectedPersona()) {
   const cleanPersonaId = String(persona?.id || "").trim();
   if (!cleanPersonaId) {
+    showMsg("commandMsg", "请先选择人设。", false);
+    return;
+  }
+  const lockParts = ["publish_history_recognize", cleanPersonaId];
+  if (isActionLocked(...lockParts) || state.publishHistoryRefreshTaskId) {
+    showMsg("commandMsg", "正在自动识别或刷新数据，请稍候。", false);
+    return;
+  }
+  setActionLocked(lockParts, true);
+  closeConsoleDropdowns();
+  try {
+    showMsg("commandMsg", "正在自动识别：先刷新个人页数据...", true);
+    await refreshPublishHistoryHotData(persona, { backfillHistory: true });
+  } finally {
+    setActionLocked(lockParts, false);
+  }
+}
+
+async function deletePublishHistoryRecords(historyIds = [], persona = selectedPersona()) {
+  const cleanPersonaId = String(persona?.id || "").trim();
+  const ids = Array.from(new Set((historyIds || []).map((item) => String(item || "").trim()).filter(Boolean)));
+  if (!cleanPersonaId || !ids.length) {
+    showMsg("commandMsg", "请先勾选要删除的已发布推文。", false);
+    return;
+  }
+  const confirmed = await openConsoleModal({
+    title: "从列表删除",
+    message: `将删除 ${ids.length} 条已发布记录。只从本列表移除，不会删除平台上的原帖。`,
+    confirmText: "删除",
+    cancelText: "取消",
+    danger: true,
+    modalKey: "publish-history-delete",
+  });
+  if (!confirmed) return;
+  const lockParts = ["publish_history_delete", cleanPersonaId];
+  if (isActionLocked(...lockParts)) {
+    showMsg("commandMsg", "正在删除已发布推文，请稍候。", false);
+    return;
+  }
+  setActionLocked(lockParts, true);
+  try {
+    showMsg("commandMsg", "正在从列表删除...", true);
+    const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(cleanPersonaId)}/publish_history/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ history_ids: ids }),
+    });
+    const rows = Array.isArray(result?.publish_history) ? result.publish_history : [];
+    state.personaPublishHistories[cleanPersonaId] = sortPersonaPublishHistory(rows);
+    const removed = new Set(ids);
+    state.personaPublishHistorySelectedIds = selectedPublishHistoryIds().filter((item) => !removed.has(item));
+    if (removed.has(String(state.publishHistoryPreviewId || ""))) state.publishHistoryPreviewId = "";
+    await loadPersonas().catch(() => {});
+    showMsg("commandMsg", `已从列表删除 ${ids.length} 条。`, true);
+    if (isPersonaWorkspaceModule()) renderPersonaDetail();
+    if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+  } catch (error) {
+    showMsg("commandMsg", error.detail || error.message || "删除失败", false);
+  } finally {
+    setActionLocked(lockParts, false);
+  }
+}
+
+async function refreshPublishHistoryHotData(persona = selectedPersona(), options = {}) {
+  const cleanPersonaId = String(persona?.id || "").trim();
+  const backfillHistory = Boolean(options.backfillHistory);
+  if (!cleanPersonaId) {
     showMsg("commandMsg", "请先选择要刷新的任务人设。", false);
+    return;
+  }
+  const blockedReason = personaHotRefreshBlockedReason(persona);
+  if (blockedReason) {
+    try {
+      const task = await api("/api/persona_dashboard/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          archive_id: cleanPersonaId,
+          source: "http_first",
+          platform: personaContentPlatform(persona),
+        }),
+      });
+      await Promise.all([
+        loadPersonas().catch(() => {}),
+        loadPersonaPublishHistory(cleanPersonaId, { force: true }).catch(() => []),
+        loadPersonaDashboardOverview({ force: true }).catch(() => null),
+      ]);
+      const message = chineseRefreshMessage(task?.message, blockedReason);
+      showMsg("commandMsg", message, false);
+      if (isPersonaWorkspaceModule()) renderPersonaDetail();
+    } catch (error) {
+      showMsg("commandMsg", chineseRefreshMessage(error.detail || error.message, blockedReason), false);
+    }
     return;
   }
   if (state.publishHistoryRefreshTaskId) {
@@ -14885,7 +15095,10 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
   try {
     state.publishHistoryRefreshTaskId = "starting";
     state.publishHistoryRefreshPersonaId = cleanPersonaId;
-    state.publishHistoryRefreshStatus = { progress: 0, message: "正在启动全量热点刷新..." };
+    state.publishHistoryRefreshStatus = {
+      progress: 0,
+      message: backfillHistory ? "正在启动自动识别，先刷新个人页数据..." : "正在启动全量热点刷新...",
+    };
     syncPublishHistoryRefreshDom(persona);
     const task = await api("/api/persona_dashboard/refresh", {
       method: "POST",
@@ -14920,7 +15133,7 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
           showMsg("commandMsg", "已取消刷新。", true);
           break;
         }
-        if (status !== "success") throw new Error(current?.message || "热点数据刷新失败");
+        if (status !== "success") throw new Error(chineseRefreshMessage(current?.message, "热点数据刷新失败"));
         break;
       }
       await new Promise((resolve) => window.setTimeout(resolve, status === "cancelling" ? 300 : 2500));
@@ -14929,11 +15142,35 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
       await loadPersonas().catch(() => {});
       await loadPersonaPublishHistory(cleanPersonaId, { force: true });
       await loadPersonaDashboardOverview({ force: true }).catch(() => null);
-      state.publishHistoryRefreshStatus = { progress: 100, message: "全量热点刷新完成，任务历史已更新。" };
-      showMsg("commandMsg", "全量热点刷新完成，任务历史已更新。", true);
+      if (backfillHistory) {
+        state.publishHistoryRefreshStatus = { progress: 100, message: "正在补齐缺失的已发布推文..." };
+        syncPublishHistoryRefreshDom(persona);
+        const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(cleanPersonaId)}/publish_history/recognize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ auto: true }),
+        });
+        const rows = Array.isArray(result?.publish_history) ? result.publish_history : [];
+        if (rows.length) state.personaPublishHistories[cleanPersonaId] = sortPersonaPublishHistory(rows);
+        await loadPersonas().catch(() => {});
+        await loadPersonaDashboardOverview({ force: true }).catch(() => null);
+        const added = Number(result?.added_count || 0);
+        const updated = Number(result?.updated_count || 0);
+        const message = added || updated
+          ? `自动识别完成，补上 ${added} 条推文${updated ? `，补齐 ${updated} 条数据` : ""}。`
+          : "自动识别完成，未发现缺失的已发布推文。";
+        state.publishHistoryRefreshStatus = { progress: 100, message };
+        showMsg("commandMsg", message, true);
+      } else {
+        state.publishHistoryRefreshStatus = { progress: 100, message: "全量热点刷新完成，任务历史已更新。" };
+        showMsg("commandMsg", "全量热点刷新完成，任务历史已更新。", true);
+      }
     }
   } catch (error) {
-    state.publishHistoryRefreshStatus = { progress: 100, message: error.detail || error.message || "热点数据刷新失败" };
+    state.publishHistoryRefreshStatus = {
+      progress: 100,
+      message: chineseRefreshMessage(error.detail || error.message, "热点数据刷新失败，请稍后重试。"),
+    };
     showMsg("commandMsg", state.publishHistoryRefreshStatus.message, false);
   } finally {
     state.publishHistoryRefreshTaskId = "";
@@ -15815,7 +16052,7 @@ function bindSimpleFlowInputs(moduleId) {
     });
     document.querySelectorAll("[data-publish-history-card]").forEach((node) => {
       node.addEventListener("click", (event) => {
-        if (event.target.closest("[data-publish-history-view], [data-publish-history-requeue], a")) return;
+        if (event.target.closest("[data-publish-history-view], [data-publish-history-requeue], [data-publish-history-delete], [data-publish-history-bulk-toggle], [data-console-dropdown], a")) return;
         event.stopPropagation();
         state.publishHistoryPreviewId = String(node.dataset.publishHistoryCard || "").trim();
         if (!syncPublishHistorySelectionDom()) renderSimpleFlowModule("publishing");
@@ -15830,7 +16067,36 @@ function bindSimpleFlowInputs(moduleId) {
     document.querySelectorAll("[data-publish-history-requeue]").forEach((node) => {
       node.addEventListener("click", (event) => {
         event.stopPropagation();
+        closeConsoleDropdowns();
         requeuePublishHistoryRecord(node.dataset.publishHistoryRequeue || "").catch(() => {});
+      });
+    });
+    document.querySelectorAll("[data-publish-history-delete]").forEach((node) => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeConsoleDropdowns();
+        deletePublishHistoryRecords([node.dataset.publishHistoryDelete || ""]).catch(() => {});
+      });
+    });
+    document.querySelectorAll("[data-publish-history-recognize]").forEach((node) => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeConsoleDropdowns();
+        recognizePublishHistoryRecord(selectedPersona()).catch(() => {});
+      });
+    });
+    document.querySelectorAll("[data-publish-history-delete-selected]").forEach((node) => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeConsoleDropdowns();
+        deletePublishHistoryRecords(selectedPublishHistoryIds()).catch(() => {});
+      });
+    });
+    document.querySelectorAll("[data-publish-history-bulk-id]").forEach((node) => {
+      node.addEventListener("click", (event) => event.stopPropagation());
+      node.addEventListener("change", (event) => {
+        event.stopPropagation();
+        syncPublishHistoryBulkSelection(node.dataset.publishHistoryBulkId || "", Boolean(node.checked));
       });
     });
     document.querySelectorAll("[data-publish-history-refresh-cancel]").forEach((node) => {
@@ -32531,7 +32797,11 @@ function closeLiveBrowserActionMenus(exceptMenu = null) {
 
 function closeConsoleDropdowns(exceptMenu = null) {
   document.querySelectorAll("details[open][data-console-dropdown]").forEach((menu) => {
-    if (menu !== exceptMenu) menu.removeAttribute("open");
+    if (menu === exceptMenu) return;
+    menu.removeAttribute("open");
+    if (menu.matches("[data-publish-history-toolbar-edit], [data-publish-history-card-edit]")) {
+      syncPublishHistoryEditMenuState(menu, false);
+    }
   });
   document.querySelectorAll("[data-persona-media-edit-menu].is-open").forEach((menu) => {
     if (menu === exceptMenu) return;
@@ -34291,6 +34561,11 @@ function bindEvents() {
         requestAnimationFrame(() => positionPersonaHistoryFilterMenu(historyFilterMenu));
         return;
       }
+      const historyEditMenu = event.target.closest("[data-publish-history-toolbar-edit], [data-publish-history-card-edit]");
+      if (historyEditMenu && event.target.closest("summary")) {
+        requestAnimationFrame(() => positionPublishHistoryEditMenu(historyEditMenu));
+        return;
+      }
       const historyFilterOption = event.target.closest("[data-persona-history-filter-option]");
       if (historyFilterOption) {
         const key = String(historyFilterOption.dataset.personaHistoryFilterOption || "");
@@ -34303,7 +34578,7 @@ function bindEvents() {
         return;
       }
       const historyCard = event.target.closest("[data-publish-history-card]");
-      if (historyCard && !event.target.closest("[data-publish-history-view], [data-publish-history-requeue], a")) {
+      if (historyCard && !event.target.closest("[data-publish-history-view], [data-publish-history-requeue], [data-publish-history-delete], [data-publish-history-bulk-toggle], [data-console-dropdown], a")) {
         state.publishHistoryPreviewId = String(historyCard.dataset.publishHistoryCard || "").trim();
         if (!syncPublishHistorySelectionDom()) renderPersonaDetail();
         return;
@@ -34317,7 +34592,27 @@ function bindEvents() {
       const historyRequeue = event.target.closest("[data-publish-history-requeue]");
       if (historyRequeue) {
         event.stopPropagation();
+        closeConsoleDropdowns();
         requeuePublishHistoryRecord(historyRequeue.dataset.publishHistoryRequeue || "").catch(() => {});
+        return;
+      }
+      const historyDelete = event.target.closest("[data-publish-history-delete]");
+      if (historyDelete) {
+        event.stopPropagation();
+        closeConsoleDropdowns();
+        deletePublishHistoryRecords([historyDelete.dataset.publishHistoryDelete || ""]).catch(() => {});
+        return;
+      }
+      if (event.target.closest("[data-publish-history-recognize]")) {
+        event.stopPropagation();
+        closeConsoleDropdowns();
+        recognizePublishHistoryRecord(selectedPersona()).catch(() => {});
+        return;
+      }
+      if (event.target.closest("[data-publish-history-delete-selected]")) {
+        event.stopPropagation();
+        closeConsoleDropdowns();
+        deletePublishHistoryRecords(selectedPublishHistoryIds()).catch(() => {});
         return;
       }
       if (event.target.closest("[data-publish-history-refresh-cancel]")) {
@@ -35870,6 +36165,10 @@ function bindEvents() {
       renderConfirmSummary();
       return;
     }
+    if (event.target?.matches?.("[data-publish-history-bulk-id]")) {
+      syncPublishHistoryBulkSelection(event.target.getAttribute("data-publish-history-bulk-id") || "", Boolean(event.target.checked));
+      return;
+    }
     if (event.target?.matches?.("[data-persona-hot-candidate-id]")) {
       const persona = selectedPersona();
       if (!persona) return;
@@ -36542,6 +36841,14 @@ function bindEvents() {
     closeLiveBrowserActionMenus(event.target.closest(".live-browser-action-menu"));
     closeConsoleDropdowns(event.target.closest("[data-console-dropdown]"));
   });
+  document.addEventListener("toggle", (event) => {
+    const menu = event.target;
+    if (!(menu instanceof HTMLElement)) return;
+    if (!menu.matches("[data-publish-history-toolbar-edit], [data-publish-history-card-edit]")) return;
+    const opening = menu.open;
+    syncPublishHistoryEditMenuState(menu, opening);
+    if (opening) requestAnimationFrame(() => positionPublishHistoryEditMenu(menu));
+  }, true);
   if ($("accountBrowserShell")) $("accountBrowserShell").addEventListener("change", (event) => {
     const proxyPageSize = event.target.closest("[data-proxy-page-size]");
     if (proxyPageSize) {

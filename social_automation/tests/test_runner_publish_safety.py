@@ -4942,7 +4942,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             mock.patch.object(runner, "_goto"),
             mock.patch.object(runner, "_find_threads_post_permalink", return_value=""),
             mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[]),
-            mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 31, 91]),
+            mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 1, 91]),
             mock.patch.object(runner, "_sleep_between"),
         ):
             result = runner._wait_for_threads_own_post(
@@ -4955,7 +4955,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertFalse(result["confirmed"])
-        page.reload.assert_called_once_with(wait_until="commit", timeout=5000)
+        page.reload.assert_called()
+        page.reload.assert_called_with(wait_until="commit", timeout=5000)
 
     def test_threads_confirmation_recovers_after_refresh_timeout_and_detects_post(self):
         old_permalink = "https://www.threads.net/@alice/post/OLD"
@@ -4965,9 +4966,9 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         with (
             mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
             mock.patch.object(runner, "_goto"),
-            mock.patch.object(runner, "_find_threads_post_permalinks", side_effect=[[old_permalink], [old_permalink], [new_permalink, old_permalink]]),
+            mock.patch.object(runner, "_find_threads_post_permalinks", side_effect=[[old_permalink], [new_permalink, old_permalink]]),
             mock.patch.object(runner, "_find_threads_post_permalink", return_value=new_permalink),
-            mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 31, 40]),
+            mock.patch.object(runner.time, "monotonic", side_effect=[0, 0, 1]),
             mock.patch.object(runner, "_sleep_between"),
         ):
             result = runner._wait_for_threads_own_post(
@@ -5278,8 +5279,8 @@ class RunnerPublishSafetyTests(unittest.TestCase):
                     {"username": "alice"},
                 )
 
-        self.assertTrue(any(call.kwargs.get("block_heavy_assets") for call in background_page.call_args_list))
-        self.assertTrue(any(call.kwargs.get("block_heavy_assets") is False for call in background_page.call_args_list))
+        self.assertEqual(background_page.call_count, 1)
+        self.assertFalse(background_page.call_args.kwargs.get("block_heavy_assets"))
         self.assertNotIn("force_primary", background_page.call_args.kwargs)
         start_barrier.assert_not_called()
 
@@ -5361,7 +5362,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual(clear_and_type.call_args_list[1].kwargs["mode"], "type")
         start_barrier.assert_not_called()
 
-    def test_threads_profile_baseline_requires_two_stable_empty_reads(self):
+    def test_threads_profile_baseline_accepts_first_stable_empty_read(self):
         page = _Page("https://www.threads.net/@alice")
         with (
             mock.patch.object(runner, "_goto") as goto,
@@ -5372,13 +5373,13 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             baseline = runner._capture_threads_profile_baseline(page, "https://www.threads.net/@alice", _Logger())
 
         self.assertEqual(baseline, set())
-        self.assertEqual(goto.call_count, 2)
+        self.assertEqual(goto.call_count, 1)
 
-    def test_threads_profile_baseline_rejects_only_one_empty_observation(self):
+    def test_threads_profile_baseline_rejects_unreadable_empty_scans(self):
         page = _Page("https://www.threads.net/@alice")
         with (
             mock.patch.object(runner, "_goto", side_effect=[TimeoutError("slow"), None, TimeoutError("slow again")]),
-            mock.patch.object(runner, "_find_threads_post_permalinks", side_effect=[None, [], None]),
+            mock.patch.object(runner, "_find_threads_post_permalinks", side_effect=[None, None, None]),
             mock.patch.object(runner, "_threads_profile_is_stably_empty", return_value=True),
             mock.patch.object(runner, "_sleep_between"),
         ):
@@ -5420,7 +5421,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(baseline, set())
-        self.assertEqual(goto.call_count, 2)
+        self.assertEqual(goto.call_count, 1)
 
     def test_threads_profile_loaded_handle_without_empty_copy_is_not_empty_baseline(self):
         page = _ThreadsShellPage(
@@ -5449,7 +5450,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertEqual(baseline, set())
-        self.assertEqual(goto.call_count, 2)
+        self.assertEqual(goto.call_count, 1)
 
     def test_threads_profile_empty_baseline_accepts_composer_chrome_without_copy(self):
         page = _ThreadsShellPage(
@@ -5640,7 +5641,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(background_pages, [True])
+        self.assertEqual(background_pages, [False])
         mocked["_threads_compose_opener_by_structure"].assert_called()
         mocked["_click_threads_compose_opener"].assert_called()
         mocked["_click_threads_active_dialog_post"].assert_called_once()
@@ -5727,14 +5728,19 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         sidebar = source.split("def _threads_sidebar_compose_opener(", 1)[1].split("def _threads_compose_opener_by_structure(", 1)[0]
         self.assertIn("return 'left-rail-2'", opener)
         self.assertNotIn("return 'fab'", opener)
+        self.assertNotIn("left-rail-plus", opener)
         self.assertIn("leftRows[1]", opener)
+        self.assertIn("leftRows.length < 3", opener)
         self.assertIn("rect.top < 84", opener)
+        self.assertIn("rect.height < 32 || rect.height > 58", opener)
         self.assertIn("isSearchIcon", opener)
         self.assertNotIn("ланцюжок", source)
         self.assertNotIn("Новий", source)
         self.assertNotIn("composeWords", opener)
         self.assertNotIn('text="New thread"', sidebar)
         self.assertNotIn('text="新串文"', sidebar)
+        self.assertIn("timeout=0", sidebar)
+        self.assertNotIn("timeout=500", sidebar)
 
     def test_threads_compose_opener_uses_bottom_right_plus_structure(self):
         empty = mock.Mock()

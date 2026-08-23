@@ -12358,16 +12358,16 @@ def _threads_sidebar_compose_opener(page):
         for index in range(total):
             try:
                 locator = group.nth(index)
-                if not locator.is_visible(timeout=500):
+                if not locator.is_visible(timeout=0):
                     continue
-                href = str(locator.get_attribute("href", timeout=500) or "").strip()
+                href = str(locator.get_attribute("href", timeout=0) or "").strip()
                 if not href:
                     clickable = locator.locator(
                         "xpath=ancestor-or-self::*[self::a or self::button or @role='button' or @role='link' or @tabindex='0'][1]"
                     )
-                    if clickable.count() and clickable.is_visible(timeout=500):
+                    if clickable.count() and clickable.is_visible(timeout=0):
                         locator = clickable
-                        href = str(locator.get_attribute("href", timeout=500) or "").strip()
+                        href = str(locator.get_attribute("href", timeout=0) or "").strip()
                 href_kind = _threads_compose_href_kind(href, page_url)
                 if href_kind == "reject":
                     continue
@@ -13143,16 +13143,26 @@ def _wait_for_threads_own_post(
             )
         if baseline_known and permalink:
             return {"confirmed": True, "reason": "已在账号主页定位到本次发布帖子的链接。", "url": permalink}
-        _wait_for_cancellation(random.uniform(1.8, 2.6), cancel_event)
-        refresh_due = refresh_count < refresh_limit and now - started_at >= ((refresh_count + 1) * confirm_seconds / (refresh_limit + 1))
+        refresh_due = refresh_count < refresh_limit and (
+            refresh_count == 0
+            or now - started_at >= ((refresh_count + 1) * confirm_seconds / (refresh_limit + 1))
+        )
         if refresh_due:
             refresh_count += 1
+            logger.log(
+                "info",
+                "threads_publish_profile_refresh",
+                "账号主页尚未看到新帖，正在刷新一次。",
+                {"attempt": attempt, "refresh": refresh_count},
+            )
             try:
                 _raise_if_cancelled(cancel_event)
                 page.reload(wait_until="commit", timeout=min(nav_timeout_ms, 5000))
             except Exception as exc:
                 _raise_if_cancelled(cancel_event)
                 logger.log("debug", "threads_publish_profile_refresh", "账号主页刷新未完成，将继续确认发布结果。", {"error": str(exc)[:500]})
+            continue
+        _wait_for_cancellation(random.uniform(1.8, 2.6), cancel_event)
     return {"confirmed": False, "reason": "发布已提交，但账号主页未看到本次发布内容。", "url": str(page.url or target_url)}
 
 
@@ -13339,7 +13349,6 @@ def _capture_threads_profile_baseline(
     last_error = ""
     last_permalinks: list[str] | None = None
     last_login_status = ""
-    stable_empty_count = 0
     observed_permalinks: set[str] = set()
     successful_reads = 0
     for attempt in range(3):
@@ -13354,31 +13363,26 @@ def _capture_threads_profile_baseline(
                 raise RuntimeError(last_error or "Threads profile navigation did not reach the expected account.")
             permalinks = _find_threads_post_permalinks(page)
             last_permalinks = permalinks
-            try:
-                last_login_status = str((_detect_threads_login_state(page) or {}).get("status") or "")
-            except Exception:
-                last_login_status = ""
             if permalinks is not None:
                 successful_reads += 1
             if permalinks:
                 observed_permalinks.update(permalinks)
-                stable_empty_count = 0
                 if successful_reads >= 2:
                     return observed_permalinks
             if permalinks == [] and _threads_profile_is_stably_empty(page, profile_url):
-                stable_empty_count += 1
-                if stable_empty_count >= 2:
-                    return set()
-            else:
-                if permalinks == [] and not last_error:
-                    last_error = "Threads profile post-link scan returned no posts, but the page was not a ready own-profile."
-                stable_empty_count = 0
+                return set()
+            if permalinks == [] and not last_error:
+                last_error = "Threads profile post-link scan returned no posts, but the page was not a ready own-profile."
         except Exception as exc:
             last_error = str(exc)
         if attempt < 2:
             _sleep_between(0.8, 1.2)
     if observed_permalinks:
         return observed_permalinks
+    try:
+        last_login_status = str((_detect_threads_login_state(page) or {}).get("status") or "")
+    except Exception:
+        last_login_status = ""
     logger.log(
         "warn",
         "threads_publish_baseline_failed",
@@ -13400,12 +13404,34 @@ def _threads_profile_is_stably_empty(page, profile_url: str) -> bool:
     current = _normalize_threads_profile_url(getattr(page, "url", ""))
     if not expected or current != expected:
         return False
-    state = _detect_threads_login_state(page)
-    if str(state.get("status") or "") != "ready":
-        return False
     if _browser_navigation_error_visible(page):
         return False
-    if _threads_login_surface_visible(page):
+    if not _has_threads_session_cookie(page):
+        return False
+    if _visible_first(
+        page,
+        [
+            'input[name="username"]',
+            'input[type="password"]',
+            'input[autocomplete="username"]',
+            'input[autocomplete="current-password"]',
+        ],
+        timeout_ms=0,
+    ) is not None:
+        return False
+    try:
+        snippet = str(page.locator("body").inner_text(timeout=800) or "").lower()
+    except Exception:
+        snippet = ""
+    if any(
+        marker in snippet
+        for marker in (
+            "something went wrong",
+            "please try again later",
+            "unable to load",
+            "couldn't refresh",
+        )
+    ):
         return False
     return True
 
@@ -13711,32 +13737,6 @@ def _run_threads_publish_post(
                 page,
                 logger,
                 "threads_publish_baseline_background",
-                block_heavy_assets=True,
-            ) as blocked_page:
-                blocked_baseline = _capture_threads_profile_baseline(
-                    blocked_page,
-                    profile_url,
-                    logger,
-                )
-                if blocked_baseline is not None:
-                    if not blocked_baseline:
-                        logger.log(
-                            "info",
-                            "threads_publish_baseline_empty",
-                            "账号主页没有已有帖子，将按空基线继续点击左侧发帖加号。",
-                            {"known_permalinks": 0},
-                        )
-                    return blocked_page is page, blocked_baseline
-            logger.log(
-                "warn",
-                "threads_publish_baseline_retry_full",
-                "轻量主页没有读到帖子基线，改为完整加载后再读一次。",
-                {"blocked_baseline": None if blocked_baseline is None else len(blocked_baseline)},
-            )
-            with _temporary_background_page(
-                page,
-                logger,
-                "threads_publish_baseline_background",
                 block_heavy_assets=False,
             ) as full_page:
                 full_baseline = _capture_threads_profile_baseline(
@@ -13744,10 +13744,13 @@ def _run_threads_publish_post(
                     profile_url,
                     logger,
                 )
-                if full_baseline:
-                    return full_page is page, full_baseline
-                if blocked_baseline == set() or full_baseline == set():
-                    return full_page is page, set()
+                if full_baseline == set():
+                    logger.log(
+                        "info",
+                        "threads_publish_baseline_empty",
+                        "账号主页没有已有帖子，将按空基线继续点击左侧发帖加号。",
+                        {"known_permalinks": 0},
+                    )
                 return full_page is page, full_baseline
 
         baseline_used_primary_page, previous_permalinks = _run_matrix_resource_phase(
