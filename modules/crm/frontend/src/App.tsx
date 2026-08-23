@@ -22,14 +22,18 @@ const viewIds: ViewId[] = [
   "relationships", "tasks", "schedules", "templates", "accounts", "settings",
 ];
 
-type NavViewId = "overview" | "collect" | "pools" | "public" | "outreach" | "groups" | "tasks" | "settings";
-const navViews: NavViewId[] = ["overview", "collect", "pools", "public", "outreach", "groups", "tasks", "settings"];
+type NavViewId = "overview" | "collect" | "public" | "tasks" | "settings";
+const navViews: NavViewId[] = ["overview", "collect", "public", "tasks", "settings"];
 const viewAliases: Partial<Record<ViewId, ViewId>> = {
+  pools: "collect",
+  outreach: "public",
+  groups: "public",
   schedules: "tasks",
   templates: "settings",
   accounts: "settings",
   relationships: "settings",
 };
+const engageTabs: ViewId[] = ["public", "outreach", "groups"];
 const taskTabs: ViewId[] = ["tasks", "schedules"];
 const settingTabs: ViewId[] = ["accounts", "templates", "settings", "relationships"];
 
@@ -955,6 +959,21 @@ export function App() {
       {partial && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{messages.partial}</span><button type="button" onClick={() => { void loadBootstrap(); void refreshTasks(); }}><Icon name="refresh" />{messages.retry}</button></div>}
       {bootstrap.module?.degraded && <div className="crm-banner crm-banner--degraded" role="alert"><Icon name="signal" /><span><strong>{messages.degraded}</strong>{messages.degradedHint}</span></div>}
       {view === "overview" && <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} navigate={navigate} onCreate={startWorkflow} />}
+      {activeNav === "collect" && <>
+        <div className="crm-module-toolbar">
+          <h2>{messages.views.collect[0]}</h2>
+          {viewEnabled("collect") && <button className="crm-primary-button" type="button" onClick={() => startWorkflow("collect")}><Icon name="collect" />{messages.create}</button>}
+        </div>
+        {!viewEnabled("collect") && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`}</span></div>}
+        {viewAdvisory("collect") && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{viewAdvisory("collect")}</span></div>}
+        <PoolsView language={language} />
+      </>}
+      {activeNav === "public" && <>
+        <CompactTabs items={engageTabs} value={engageTabs.includes(view) ? view : "public"} messages={messages} navigate={navigate} label={messages.navItems.public} />
+        {view === "groups"
+          ? <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />
+          : <ResourceList key={view} view={engageTabs.includes(view) ? view : "public"} messages={messages} language={language} enabled={viewEnabled(engageTabs.includes(view) ? view : "public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory(engageTabs.includes(view) ? view : "public")} onCreate={() => startWorkflow(engageTabs.includes(view) ? view : "public")} />}
+      </>}
       {activeNav === "tasks" && <>
         <CompactTabs items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"} messages={messages} navigate={navigate} label={messages.views.tasks[0]} />
         {view === "schedules"
@@ -971,9 +990,6 @@ export function App() {
         {(view === "relationships") && <ResourceList key="relationships" view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />}
         {(view === "accounts" || !settingTabs.includes(view)) && <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />}
       </>}
-      {view === "pools" && <PoolsView language={language} />}
-      {view === "groups" && <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />}
-      {view !== "overview" && activeNav !== "tasks" && activeNav !== "settings" && view !== "pools" && view !== "groups" && <ResourceList key={view} view={view} messages={messages} language={language} enabled={viewEnabled(view)} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory(view)} onCreate={() => startWorkflow(view)} />}
     </main>
     {taskStripVisible && <aside className="crm-task-strip" aria-live="polite" aria-label={messages.taskStripLabel}><button type="button" onClick={() => navigate("tasks")}><span className="crm-task-strip-pulse" aria-hidden="true" /><span><strong>{messages.runningCount(activeTasks.length)} · {messages.reviewCount(reviewTasks.length)} · {messages.failedCount(failedTasks.length)}</strong><small>{messages.taskStripHint}</small></span><Icon name="arrow" /></button></aside>}
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={(taskId) => { setToast(`${messages.submitted} · ${taskId}`); void refreshTasks(); }} />
