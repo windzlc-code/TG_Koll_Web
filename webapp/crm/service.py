@@ -279,38 +279,28 @@ def effective_module_state(
         (int(user_id),),
     ).fetchone()
     reasons: list[str] = []
-    if not settings["hard_enabled"]:
-        reasons.append("hard_disabled")
-    if not bool(settings.get("enabled")):
-        reasons.append("globally_disabled")
+    # CRM usage is open for approved accounts. Env flags, the global module
+    # switch, per-user grants, and import-pending markers stay visible in
+    # settings/admin APIs but must not wall off the workspace.
+    _ = identity_is_admin
     if bool(settings.get("maintenance")):
         reasons.append("maintenance")
     if bool(settings.get("emergency_pause")):
         reasons.append("emergency_pause")
-    if bool(settings.get("migration_required")):
-        reasons.append("import_pending")
     if user is None:
         reasons.append("user_missing")
         access = False
     else:
-        access_row = conn.execute(
-            "SELECT enabled FROM user_module_access WHERE user_id = ? AND module_key = 'crm'",
-            (int(user_id),),
-        ).fetchone()
-        access = bool(int(access_row["enabled"] or 0)) if access_row is not None else bool(int(user["is_admin"] or 0) and identity_is_admin)
-        if not access:
-            reasons.append("permission_denied")
+        access = True
         if int(user["is_disabled"] or 0) == 1:
             reasons.append("user_disabled")
+            access = False
         if str(user["approval_status"] or "") != "approved":
             reasons.append("user_not_approved")
+            access = False
         if int(user["deleted_at"] or 0) > 0:
             reasons.append("user_deleted")
-    if identity_is_admin:
-        # Admin operators can open CRM directly. The global switch and
-        # per-user grant only control customer workspaces.
-        reasons = [item for item in reasons if item not in {"globally_disabled", "permission_denied"}]
-        access = True
+            access = False
     return {
         "module_key": MODULE_KEY,
         "effective": not reasons,

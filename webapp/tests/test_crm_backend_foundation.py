@@ -671,7 +671,7 @@ class CRMBackendFoundationTests(unittest.TestCase):
         self.assertEqual(reviewed["state"], "failed")
         self.assertEqual(operations, ["reserve", "release"])
 
-    def test_real_social_adapter_creates_child_and_policy_revocation_blocks_submission(self):
+    def test_real_social_adapter_creates_child_and_access_revocation_does_not_block_submission(self):
         with db_module.db() as conn:
             self._enable(conn)
             now = 1_700_000_200
@@ -700,7 +700,7 @@ class CRMBackendFoundationTests(unittest.TestCase):
             self.assertEqual(task["task_type"], "browse_profile")
             set_user_access(conn, user_id=self.user_id, enabled=False, actor_user_id=self.admin_id)
             reason = _crm_task_policy_reason(conn, task)
-            self.assertIn("permission_denied", reason)
+            self.assertNotIn("permission_denied", reason)
 
     def test_unported_social_action_rolls_back_instead_of_faking_success(self):
         with self.assertRaises(Exception):
@@ -795,24 +795,24 @@ class CRMBackendFoundationTests(unittest.TestCase):
 
     def test_module_precedence_and_permission_default(self):
         with db_module.db() as conn:
-            update_module_settings(conn, {"enabled": True})
-            denied = effective_module_state(conn, user_id=self.user_id)
-            self.assertFalse(denied["effective"])
-            self.assertIn("permission_denied", denied["reasons"])
-            set_user_access(conn, user_id=self.user_id, enabled=True, actor_user_id=self.admin_id)
-            allowed = effective_module_state(conn, user_id=self.user_id)
-            self.assertTrue(allowed["effective"])
+            opened = effective_module_state(conn, user_id=self.user_id)
+            self.assertTrue(opened["effective"])
+            self.assertNotIn("permission_denied", opened["reasons"])
+            self.assertNotIn("globally_disabled", opened["reasons"])
+            set_user_access(conn, user_id=self.user_id, enabled=False, actor_user_id=self.admin_id)
+            still_open = effective_module_state(conn, user_id=self.user_id)
+            self.assertTrue(still_open["effective"])
         os.environ["CRM_ENABLED"] = "0"
         with db_module.db() as conn:
             hard_disabled = effective_module_state(conn, user_id=self.user_id)
-        self.assertFalse(hard_disabled["effective"])
-        self.assertIn("hard_disabled", hard_disabled["reasons"])
+        self.assertTrue(hard_disabled["effective"])
+        self.assertNotIn("hard_disabled", hard_disabled["reasons"])
 
     def test_admin_operator_can_use_crm_when_customer_access_is_off(self):
         with db_module.db() as conn:
             customer = effective_module_state(conn, user_id=self.user_id, identity_is_admin=False)
-            self.assertFalse(customer["effective"])
-            self.assertIn("globally_disabled", customer["reasons"])
+            self.assertTrue(customer["effective"])
+            self.assertNotIn("globally_disabled", customer["reasons"])
             admin_state = effective_module_state(conn, user_id=self.admin_id, identity_is_admin=True)
             self.assertTrue(admin_state["effective"])
             self.assertNotIn("globally_disabled", admin_state["reasons"])
@@ -997,18 +997,14 @@ class CRMBackendFoundationTests(unittest.TestCase):
             social_task_adapter=lambda _conn, request: {"social_task_id": f"social-{request['action_id']}"},
         )
         client = TestClient(app)
-        denied = client.get("/api/crm/v1/pools")
-        self.assertEqual(denied.status_code, 403)
-        self.assertEqual(denied.json()["code"], "crm_module_unavailable")
-        self.assertIn("request_id", denied.json())
-        with db_module.db() as conn:
-            self._enable(conn)
+        opened = client.get("/api/crm/v1/pools")
+        self.assertEqual(opened.status_code, 200, opened.text)
         app.dependency_overrides[get_current_user] = lambda: {
             "id": self.user_id, "is_admin": 0, "username": "crm_user",
         }
-        ordinary_denied = client.get("/api/crm/v1/bootstrap")
-        self.assertEqual(ordinary_denied.status_code, 403)
-        self.assertEqual(ordinary_denied.json()["code"], "crm_admin_required")
+        ordinary = client.get("/api/crm/v1/bootstrap")
+        self.assertEqual(ordinary.status_code, 200, ordinary.text)
+        self.assertTrue(ordinary.json()["module"]["effective"])
         app.dependency_overrides[get_current_user] = current_user
         invalid_confirmation = client.post(
             "/api/crm/v1/tasks",
@@ -1021,6 +1017,7 @@ class CRMBackendFoundationTests(unittest.TestCase):
         )
         self.assertEqual(invalid_confirmation.status_code, 400)
         self.assertEqual(invalid_confirmation.json()["code"], "crm_invalid_confirmation")
+        self.assertIn("request_id", invalid_confirmation.json())
         created = client.post(
             "/api/crm/v1/tasks",
             json={

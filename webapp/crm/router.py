@@ -274,7 +274,6 @@ def _require_admin_operator(user: dict[str, Any]) -> None:
 
 
 def _require_effective(conn: Any, user: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    _require_admin_operator(user)
     user_id = workspace_user_id(user)
     state = effective_module_state(conn, user_id=user_id, identity_is_admin=_identity_is_admin(user))
     if not state["effective"]:
@@ -649,7 +648,6 @@ def create_crm_router(
 
     @router.get("/api/crm/v1/bootstrap")
     def bootstrap(user: dict[str, Any] = Depends(get_current_user)):
-        _require_admin_operator(user)
         target_id = workspace_user_id(user)
         with db() as conn:
             state = effective_module_state(conn, user_id=target_id, identity_is_admin=_identity_is_admin(user))

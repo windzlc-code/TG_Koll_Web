@@ -23096,13 +23096,10 @@ def create_app() -> FastAPI:
             return RedirectResponse(url="/crm.html?admin_console=1", status_code=302)
         elif workspace_user_id > 0:
             raise HTTPException(status_code=403, detail="administrator workspace access required")
-        else:
-            raise HTTPException(status_code=403, detail="administrator access required")
 
         target_user_id = _workspace_user_id(user)
-        # Authenticated users must be able to load the shell so bootstrap can
-        # render the localized maintenance / permission state.  Every CRM data
-        # and write API remains fail-closed in _require_effective().
+        # Authenticated approved accounts can open CRM directly. The top-nav
+        # entry stays admin-only; ordinary accounts simply do not see it.
         return _html_response_with_versions(
             "crm.html",
             replacements={

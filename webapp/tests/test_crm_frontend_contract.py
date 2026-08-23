@@ -68,8 +68,10 @@ def test_crm_page_and_container_use_native_authenticated_single_service_runtime(
     assert "effective_module_state" in server
     assert "_get_session_user_allowing_password_change" in server
     assert "install_crm(" in server
-    assert 'raise HTTPException(status_code=403, detail="administrator access required")' in server
+    assert 'raise HTTPException(status_code=403, detail="administrator workspace access required")' in server
+    assert 'detail="administrator access required"' not in server
     assert "def _require_admin_operator" in (ROOT / "webapp" / "crm" / "router.py").read_text(encoding="utf-8")
+    assert "_require_admin_operator(user)" not in (ROOT / "webapp" / "crm" / "router.py").read_text(encoding="utf-8")
     assert "CRM_ENABLED=0" in dockerfile
     assert "EXPOSE 8001" in dockerfile
     assert "8090" not in dockerfile and "8091" not in dockerfile and "EXPOSE 3000" not in dockerfile
