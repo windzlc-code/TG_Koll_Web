@@ -81,16 +81,22 @@ export function resolvePersonaImageRoute(
   };
 }
 
-export function buildReferenceSheetPrompt(setup: DramaSetup, personaContent: string): string {
+function refineSheetVisualTraits(customPrompt?: string): string {
+  return (customPrompt || "").replace(/\s+/g, " ").trim().slice(0, 180);
+}
+
+export function buildReferenceSheetPrompt(setup: DramaSetup, personaContent: string, customPrompt?: string): string {
   const appearance = setup.personaAppearance || setup.personaDescription || "";
   const gender = setup.personaGender || "女性";
   const nationality = setup.personaNationality || "";
   const contentHint = personaContent.slice(0, 300);
+  const extraTraits = refineSheetVisualTraits(customPrompt);
   return [
     `character reference sheet, three views: front view, side view, back view, same person all three angles, consistent appearance`,
     appearance ? `appearance: ${appearance}` : "",
     `${nationality ? nationality + " " : ""}${gender}, photorealistic, natural lighting`,
     contentHint ? `persona style hint: ${contentHint.replace(/\n/g, " ").slice(0, 150)}` : "",
+    extraTraits ? `naturally blend in these extra visual traits: ${extraTraits}` : "",
     "white or neutral background, full body or half body, no text, no watermark, high detail, consistent face and outfit across all three views",
   ].filter(Boolean).join(", ");
 }
@@ -190,15 +196,50 @@ export function buildPersonaCardImageDirection(setup: DramaSetup, signals?: Pers
   ].filter(Boolean).join(", ");
 }
 
+export function buildLibraryImageEditPrompt(customPrompt: string): string {
+  const request = (customPrompt || "").replace(/\s+/g, " ").trim();
+  return [
+    request ? `Current request: ${request}` : "",
+    "Edit the attached source image. The attached image is the only visual source.",
+    "Keep the original composition, layout, number of views, camera framing, and background unless the current request explicitly asks to change them.",
+    "If the source is a three-view character sheet, keep three views of the same person: front view, side view, and back view.",
+    "Apply the current request onto the person already in the attached image. Do not generate a new lifestyle photo, selfie, or unrelated scene. No text, no watermark.",
+  ].filter(Boolean).join("\n");
+}
+
+export async function generateLibraryImageEdit(
+  imageAPI: any,
+  sourceImageUrl: string,
+  customPrompt: string,
+  model: string,
+  aspectRatio: string,
+  runtimeOptions?: PersonaImageRuntimeOptions,
+): Promise<{ ok: boolean; url?: string; mode: "library-image-edit"; error?: string; timings?: unknown }> {
+  if (!imageAPI?.generate) return { ok: false, mode: "library-image-edit", error: "image API 不可用" };
+  const source = String(sourceImageUrl || "").trim();
+  if (!source) return { ok: false, mode: "library-image-edit", error: "未找到要修改的人设图。" };
+  const request = String(customPrompt || "").trim();
+  if (!request) return { ok: false, mode: "library-image-edit", error: "请输入对选中人设图的修改要求。" };
+  const prompt = buildLibraryImageEditPrompt(request);
+  const avatarBase64 = source.replace(/^data:[^;]+;base64,/, "");
+  const avatarMimeType = (source.match(/^data:([^;]+);/) || [])[1] || "image/jpeg";
+  const result = await callClosedModel(imageAPI, prompt, model, aspectRatio, avatarBase64, avatarMimeType, runtimeOptions, {
+    runningHubNewPersonaMode: "image-to-image",
+    avatarSource: source,
+  });
+  return { ok: !!result?.ok, url: result?.url, mode: "library-image-edit", error: result?.error, timings: (result as any)?.timings };
+}
+
 export async function generateReferenceSheet(
   imageAPI: any,
   setup: DramaSetup,
   personaContent: string,
   model: string,
   runtimeOptions?: PersonaImageRuntimeOptions,
+  customPrompt?: string,
 ): Promise<{ ok: boolean; url?: string; error?: string; timings?: unknown }> {
   if (!imageAPI?.generate) return { ok: false, error: "image API 不可用" };
-  const prompt = buildReferenceSheetPrompt(setup, personaContent);
+  const prompt = buildReferenceSheetPrompt(setup, personaContent, customPrompt);
 
 
   // Closed-model personas: use existing avatar as seed if available

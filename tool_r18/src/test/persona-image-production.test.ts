@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildLibraryImageEditPrompt,
   buildPersonaImagePrompt,
   buildPersonaCardImageDirection,
+  buildReferenceSheetPrompt,
+  generateLibraryImageEdit,
   generatePersonaImage,
   generateReferenceSheet,
   resolvePersonaImageRoute,
@@ -61,6 +64,105 @@ describe("persona image production", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].runningHubNewPersonaMode).toBe("text-to-image");
     expect(calls[0].prompt).toContain("character reference sheet, three views");
+  });
+
+  it("keeps the original July reference-sheet prompt when there is no user supplement", () => {
+    const prompt = buildReferenceSheetPrompt(
+      {
+        ...nonWorkflowSetup({
+          personaAppearance: "",
+          personaDescription: "深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。",
+          personaNationality: "",
+        }),
+      },
+      "敏姐是一位深耕東京與大阪頂級不動產長達12年的台籍專屬融資顧問。",
+    );
+
+    expect(prompt).toBe([
+      "character reference sheet, three views: front view, side view, back view, same person all three angles, consistent appearance",
+      "appearance: 深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。",
+      "女性, photorealistic, natural lighting",
+      "persona style hint: 敏姐是一位深耕東京與大阪頂級不動產長達12年的台籍專屬融資顧問。",
+      "white or neutral background, full body or half body, no text, no watermark, high detail, consistent face and outfit across all three views",
+    ].join(", "));
+  });
+
+  it("blends user visual traits onto the existing sheet prompt instead of replacing it", () => {
+    const prompt = buildReferenceSheetPrompt(
+      {
+        ...nonWorkflowSetup({
+          personaAppearance: "",
+          personaDescription: "深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。",
+          personaNationality: "",
+        }),
+      },
+      "敏姐是一位深耕東京與大阪頂級不動產長達12年的台籍專屬融資顧問。",
+      "爆乳美女，身材非常的好，会十分的性感诱惑。",
+    );
+
+    expect(prompt).toContain("appearance: 深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。");
+    expect(prompt).toContain("persona style hint: 敏姐是一位深耕東京與大阪頂級不動產長達12年的台籍專屬融資顧問。");
+    expect(prompt).toContain("naturally blend in these extra visual traits: 爆乳美女，身材非常的好，会十分的性感诱惑。");
+    expect(prompt).toContain("character reference sheet, three views");
+    expect(prompt).not.toContain("highest priority visual request:");
+    expect(prompt).not.toContain("slim well-proportioned figure");
+    expect(prompt).not.toContain("summer styling");
+  });
+
+  it("keeps card appearance as the sheet appearance when no visual supplement is given", () => {
+    const prompt = buildReferenceSheetPrompt(
+      nonWorkflowSetup({ personaNationality: "" }),
+      "日常生活观察者",
+    );
+
+    expect(prompt).toContain("appearance: twenty-something Taiwanese woman, fair skin, neat soft hands, simple cream cardigan");
+    expect(prompt).toContain("persona style hint: 日常生活观察者");
+    expect(prompt).toContain("女性, photorealistic, natural lighting");
+    expect(prompt).not.toContain("Asian 女性");
+    expect(prompt).not.toContain("naturally blend in these extra visual traits:");
+  });
+
+  it("edits a selected library image from the source and user prompt only", async () => {
+    const calls: any[] = [];
+    const source = "data:image/png;base64,c2hlZXQ=";
+    const userPrompt = "把脸换成网红脸，身材凹凸有致，前凸后翘，穿着职业包臀制服。";
+    const result = await generateLibraryImageEdit(
+      {
+        generate: async (payload: any) => {
+          calls.push(payload);
+          return { ok: true, url: "https://example.com/library-edit.png" };
+        },
+      },
+      source,
+      userPrompt,
+      "gemini-3.1-flash-image-preview",
+      "1:1",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.mode).toBe("library-image-edit");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].runningHubNewPersonaMode).toBe("image-to-image");
+    expect(calls[0].avatarSource).toBe(source);
+    expect(calls[0].prompt).toContain(userPrompt);
+    expect(calls[0].prompt).toContain("Keep the original composition");
+    expect(calls[0].prompt).toContain("three views");
+    expect(calls[0].prompt).not.toContain("appearance:");
+    expect(calls[0].prompt).not.toContain("persona style hint");
+    expect(calls[0].prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
+    expect(calls[0].prompt).not.toContain("Use the attached persona reference image as the source");
+  });
+
+  it("builds library image-edit prompts from the user request without persona biography", () => {
+    const prompt = buildLibraryImageEditPrompt("把脸换成网红脸，身材凹凸有致，前凸后翘，穿着职业包臀制服。");
+
+    expect(prompt).toContain("Current request: 把脸换成网红脸，身材凹凸有致，前凸后翘，穿着职业包臀制服。");
+    expect(prompt).toContain("Keep the original composition");
+    expect(prompt).toContain("three views");
+    expect(prompt).not.toContain("appearance:");
+    expect(prompt).not.toContain("persona style hint");
+    expect(prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
+    expect(prompt).not.toContain("Highest priority");
   });
 
   it("uses the generated post as the main referenced image prompt source", async () => {

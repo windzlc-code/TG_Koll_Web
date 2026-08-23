@@ -509,6 +509,24 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(next_task, ("cancelled", "account_banned_by_platform"))
         self.assertEqual(self._status("publish-retry-after-ban"), "queued")
 
+    def test_ban_signal_does_not_cancel_queued_open_login(self):
+        self._insert_account(status="ready")
+        self._insert_task("publish-ban-signal", "running", task_type="publish_post")
+        self._insert_task("reopen-after-ban", "queued", task_type="open_login")
+
+        social_automation_api._finish_task(
+            "publish-ban-signal",
+            "failed",
+            {
+                "ok": False,
+                "status": "disabled",
+                "health_reason": "平台明确提示账号已被封禁。",
+            },
+            "平台明确提示账号已被封禁。",
+        )
+
+        self.assertEqual(self._status("reopen-after-ban"), "queued")
+
     def test_explicit_publish_retry_launches_browser_after_account_ban(self):
         self._insert_account(status="disabled")
         with sqlite3.connect(self.db_path) as conn:
@@ -655,6 +673,87 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(account_row[0], "disabled")
         self.assertEqual(account_row[1], "banned")
         self.assertIn("numeric captcha", account_row[2])
+
+    def test_open_login_on_banned_account_still_starts_browser_to_refresh_status(self):
+        self._insert_account(status="disabled")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE social_accounts SET health_status = 'banned' WHERE id = 'account-1'")
+        self._insert_task("reopen-login", "running", task_type="open_login")
+        task = {
+            "id": "reopen-login",
+            "account_id": "account-1",
+            "platform": "threads",
+            "task_type": "open_login",
+            "payload": {},
+        }
+        control = {
+            "cancel_event": threading.Event(),
+            "task": dict(task),
+            "live_browser_session_id": "",
+        }
+        ran = {"called": False}
+
+        def fake_run(*_args, **_kwargs):
+            ran["called"] = True
+            return {"ok": False, "status": "disabled", "health_status": "banned"}
+
+        with (
+            mock.patch.object(
+                social_automation_api,
+                "_apply_runtime_task_preferences",
+                side_effect=lambda runtime_task, _account, _control: runtime_task,
+            ),
+            mock.patch.object(
+                social_automation_api,
+                "_run_social_task_in_clean_thread",
+                side_effect=fake_run,
+            ),
+        ):
+            social_automation_api._execute_claimed_task_with_control(task, control)
+
+        self.assertTrue(ran["called"])
+        with sqlite3.connect(self.db_path) as conn:
+            error = conn.execute(
+                "SELECT error FROM social_automation_tasks WHERE id = ?",
+                ("reopen-login",),
+            ).fetchone()[0]
+        self.assertNotIn("已阻止启动自动化浏览器", str(error or ""))
+
+    def test_public_access_invalid_post_marks_account_banned(self):
+        self._insert_account(status="ready")
+        with mock.patch.object(
+            social_automation_api.requests,
+            "get",
+            return_value=mock.Mock(
+                url="https://www.threads.com/?error=invalid_post",
+                text="并非所有迷路者都迷失了方向，但此页面确实已丢失",
+            ),
+        ):
+            result = social_automation_api._inspect_account_public_access(
+                "account-1",
+                "https://www.threads.com/@navon3562/post/DcTbX3IiSGf",
+            )
+        self.assertFalse(result["accessible"])
+        self.assertEqual(result["outcome"], "unavailable")
+        self.assertEqual(result["account"]["status"], "disabled")
+        self.assertEqual(result["account"]["health_status"], "banned")
+
+    def test_public_access_login_wall_marks_cookie_expired(self):
+        self._insert_account(status="ready")
+        with mock.patch.object(
+            social_automation_api.requests,
+            "get",
+            return_value=mock.Mock(
+                url="https://www.threads.com/login/?next=https://www.threads.com/@navon3562/",
+                text="Log in or sign up for Threads",
+            ),
+        ):
+            result = social_automation_api._inspect_account_public_access(
+                "account-1",
+                "https://www.threads.com/@navon3562",
+            )
+        self.assertEqual(result["outcome"], "login_required")
+        self.assertEqual(result["account"]["status"], "cookie_expired")
 
     def test_publish_confirmation_timeout_requeues_confirmation_without_manual_state(self):
         self._insert_account(status="cookie_expired")

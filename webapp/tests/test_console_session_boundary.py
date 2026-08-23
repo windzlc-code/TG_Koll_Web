@@ -1536,6 +1536,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('data-login-assistance-stop', self._function_source("renderLoginAssistanceAction"))
         self.assertIn('data-login-assistance-close-after-stop', self._function_source("renderLoginAssistanceAction"))
         self.assertIn("关闭并停止任务", self._function_source("renderLoginAssistanceAction"))
+        self.assertIn("stopTaskOnClose: taskCanStop,", self._function_source("updateLoginAssistanceModal"))
+        self.assertNotIn('contains("is-publish-assistance") && taskCanStop', self._function_source("updateLoginAssistanceModal"))
         self.assertIn('modal.dataset.publishAssistanceStopped = "true"', self._function_source("openTaskAssistanceView"))
         self.assertIn('modal.dataset.publishAssistanceStopped === "true"', self._function_source("openTaskAssistanceView"))
         self.assertNotIn("data-login-assistance-minimize", self._function_source("openTaskAssistanceView"))
@@ -1550,9 +1552,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("data-media-preview-group", self._function_source("renderTaskAssistanceDetails"))
         self.assertIn("openPersonaMediaLightbox", self._function_source("openTaskAssistanceView"))
         self.assertIn("refreshPublishingDockAfterAssistanceSettle", self._function_source("openTaskAssistanceView"))
-        self.assertIn(".login-assistance-modal.is-publish-assistance .login-assistance-dialog", self.styles)
+        self.assertIn(".login-assistance-dialog {", self.styles)
+        self.assertIn("width: min(430px, calc(100vw - 30px));", self.styles)
         self.assertIn(".login-assistance-footer[hidden]", self.styles)
-        self.assertIn("min-height: 0", self.styles)
+        self.assertNotIn(".login-assistance-modal.is-publish-assistance .login-assistance-dialog", self.styles)
         self.assertIn("function loginAssistanceMappedInputAllowed", self.source)
         self.assertIn("loginAssistanceMappedInputAllowed(session)", self._function_source("renderLoginAssistanceAction"))
         self.assertIn('data-login-assistance-accept', self._function_source("renderLoginAssistanceAction"))
@@ -1729,11 +1732,20 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               }},
             }};
 
-            updateLoginAssistanceModal(modal, {{ status: "running" }}, {{ id: "live-task-1" }});
-            assert.ok(body.html.includes("关闭并停止任务"));
-            assert.ok(bodyStop);
-            assert.strictEqual(bodyStop.hidden, false, "the close-and-stop action must remain visible");
-            assert.strictEqual(footer.hidden, true, "the legacy running-state footer must be hidden on errors");
+            function run(isPublish) {{
+              bodyStop = null;
+              body.html = "";
+              footer.hidden = false;
+              modal.dataset.loginAssistanceRenderKey = "";
+              modal.classList.contains = (name) => isPublish && name === "is-publish-assistance";
+              updateLoginAssistanceModal(modal, {{ status: "running" }}, {{ id: "live-task-1" }});
+              assert.ok(body.html.includes("关闭并停止任务"), isPublish ? "publish" : "login");
+              assert.ok(bodyStop, isPublish ? "publish" : "login");
+              assert.strictEqual(bodyStop.hidden, false, "the close-and-stop action must remain visible");
+              assert.strictEqual(footer.hidden, true, "the legacy running-state footer must be hidden on errors");
+            }}
+            run(true);
+            run(false);
             """
         )
         self._run_node(harness)

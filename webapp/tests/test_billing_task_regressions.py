@@ -73,13 +73,89 @@ class BillingTaskRegressionTests(unittest.TestCase):
             mock.patch.object(server.subprocess, "run", return_value=completed) as run,
             mock.patch.object(server, "_persona_archive_persist_reference_image", return_value={"saved_item_id": "saved-reference"}),
         ):
-            result = server._run_persona_image_cli_for_web("persona-1")
+            result = server._run_persona_image_cli_for_web(
+                "persona-1",
+                prompt="爆奶美女，身材非常的好，性感知性。",
+            )
 
         cli_payload = json.loads(run.call_args.args[0][4])
         self.assertTrue(cli_payload["generateReferenceSheet"])
+        self.assertFalse(cli_payload.get("editExistingImage"))
         self.assertIsNone(cli_payload["referenceImageUrl"])
         self.assertIsNone(cli_payload["referenceSheetUrl"])
+        self.assertEqual(cli_payload["content"], "测试人设正文")
+        self.assertEqual(cli_payload["customPrompt"], "爆奶美女，身材非常的好，性感知性。")
         self.assertEqual(result["generation"]["image_url"], "/generated-reference.jpg")
+
+    def test_persona_image_blank_prompt_uses_archive_content(self):
+        archive = {
+            "id": "persona-1",
+            "name": "测试人设",
+            "content": "测试人设正文",
+            "setup": {"personaImageReferenceUrl": "/existing-reference.jpg"},
+        }
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "referenceSheet": {"ok": True, "url": "/generated-reference.jpg"},
+                    "imageResult": {"ok": True, "url": "/generated-reference.jpg", "mode": "closed-person"},
+                }
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.object(server, "_persona_archive_source_for_write", return_value=(Path("archive.json"), {}, [archive])),
+            mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"),
+            mock.patch.object(server.subprocess, "run", return_value=completed) as run,
+            mock.patch.object(server, "_persona_archive_persist_reference_image", return_value={"saved_item_id": "saved-reference"}),
+        ):
+            server._run_persona_image_cli_for_web("persona-1")
+
+        cli_payload = json.loads(run.call_args.args[0][4])
+        self.assertTrue(cli_payload["generateReferenceSheet"])
+        self.assertEqual(cli_payload["content"], "测试人设正文")
+        self.assertIsNone(cli_payload.get("customPrompt"))
+
+    def test_persona_image_edit_uses_selected_library_image_instead_of_sheet(self):
+        archive = {
+            "id": "persona-1",
+            "name": "测试人设",
+            "content": "测试人设正文",
+            "setup": {"personaImageReferenceUrl": "/existing-reference.jpg"},
+            "personaImageLibrary": [
+                {"id": "img-edit-1", "imageUrl": "/library/edit-source.jpg"},
+            ],
+        }
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "imageResult": {"ok": True, "url": "/generated-edit.jpg", "mode": "closed-person"},
+                }
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.object(server, "_persona_archive_source_for_write", return_value=(Path("archive.json"), {}, [archive])),
+            mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"),
+            mock.patch.object(server.subprocess, "run", return_value=completed) as run,
+            mock.patch.object(server, "_persona_archive_persist_reference_image", return_value={"saved_item_id": "saved-edit"}),
+        ):
+            result = server._run_persona_image_cli_for_web(
+                "persona-1",
+                prompt="把西装改成红色连衣裙",
+                source_image_id="img-edit-1",
+            )
+
+        cli_payload = json.loads(run.call_args.args[0][4])
+        self.assertFalse(cli_payload["generateReferenceSheet"])
+        self.assertTrue(cli_payload["editExistingImage"])
+        self.assertEqual(cli_payload["referenceImageUrl"], "/library/edit-source.jpg")
+        self.assertEqual(cli_payload["customPrompt"], "把西装改成红色连衣裙")
+        self.assertEqual(cli_payload["content"], "")
+        self.assertEqual(cli_payload.get("setup") or {}, {})
+        self.assertEqual(result["generation"]["image_url"], "/generated-edit.jpg")
 
     def test_persona_image_library_downloads_remote_result_before_saving_record(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:

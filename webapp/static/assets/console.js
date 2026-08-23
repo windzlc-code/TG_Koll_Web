@@ -1071,9 +1071,10 @@ function clearPersonaStepOperationKey(step, operationKey = "") {
 
 function personaStepErrorKeepsOperationKey(error) {
   if (error?.code === "BILLABLE_OPERATION_IN_PROGRESS") return true;
+  if (error?.name === "AbortError" || Number(error?.status) === 499) return false;
   const status = Number(error?.status);
   if (!Number.isFinite(status)) return true;
-  return status === 0 || status === 408 || status === 499 || status === 500 || status === 503 || status === 504;
+  return status === 0 || status === 408 || status === 500 || status === 503 || status === 504;
 }
 
 function ensurePersonaCreateState() {
@@ -3835,7 +3836,7 @@ function personaFormState(personaId) {
       generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, postDirectionsByMode: { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotRewrittenByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
-      images: { prompt: "", aspectRatio: "1:1", selectedImageId: "" },
+      images: { prompt: "", aspectRatio: "1:1", selectedImageId: "", editImageId: "" },
     };
   }
   if (!state.personaForms[key]) {
@@ -3891,15 +3892,19 @@ function personaFormState(personaId) {
         prompt: "",
         aspectRatio: "1:1",
         selectedImageId: "",
+        editImageId: "",
       },
     };
   }
   const generate = state.personaForms[key].generate;
   if (!state.personaForms[key].images || typeof state.personaForms[key].images !== "object") {
-    state.personaForms[key].images = { prompt: "", aspectRatio: "1:1", selectedImageId: "" };
+    state.personaForms[key].images = { prompt: "", aspectRatio: "1:1", selectedImageId: "", editImageId: "" };
   }
   if (!("selectedImageId" in state.personaForms[key].images)) {
     state.personaForms[key].images.selectedImageId = "";
+  }
+  if (!("editImageId" in state.personaForms[key].images)) {
+    state.personaForms[key].images.editImageId = "";
   }
   delete state.personaForms[key].images.referenceImageId;
   if (!PERSONA_WRITING_LOCALES.some(([value]) => value === String(generate.writingLocale || ""))) {
@@ -6922,22 +6927,85 @@ function personaAccountHomepageUrl(persona = selectedPersona()) {
   return personaAccountHomepageTarget(persona).url;
 }
 
+function mergeSocialAccountRecord(account) {
+  const accountId = String(account?.id || "").trim();
+  if (!accountId) return;
+  const rows = Array.isArray(state.socialAccounts) ? [...state.socialAccounts] : [];
+  const index = rows.findIndex((item) => String(item?.id || "") === accountId);
+  if (index >= 0) rows[index] = { ...rows[index], ...account };
+  else rows.push(account);
+  state.socialAccounts = rows;
+  saveSocialAccountsSnapshot();
+  updateAccountStatusViews();
+}
+
+async function promptAccountRelogin(accountId, { title = "需要重新登录", message = "" } = {}) {
+  const account = selectedSocialAccount(accountId);
+  const confirmed = await openConsoleModal({
+    title,
+    message: message || "公开页面无法打开，请重新打开登录确认账号状态。",
+    confirmText: "打开登录",
+    cancelText: "关闭",
+  });
+  if (!confirmed) return;
+  const activeTask = activeOpenLoginTaskForAccount(accountId);
+  if (activeTask?.id) {
+    openLoginAssistanceView(activeTask.id, accountId);
+    return;
+  }
+  const result = await createSocialTask("open_login", accountId, account?.persona_id || "", "commandMsg");
+  const taskId = String(result?.task?.id || "").trim();
+  if (taskId) openLoginAssistanceView(taskId, accountId);
+}
+
+async function openAccountPublicUrl(url, accountId = "", { kind = "post" } = {}) {
+  const safeUrl = safeExternalHttpUrl(url);
+  const cleanAccountId = String(accountId || "").trim();
+  if (!safeUrl) {
+    showMsg("commandMsg", kind === "homepage" ? "当前平台尚未绑定可打开的账号。" : "没有可打开的推文链接。", false);
+    return;
+  }
+  const account = selectedSocialAccount(cleanAccountId);
+  const status = accountEffectiveStatus(account);
+  if (["risk_control", "disabled", "banned"].includes(status)) {
+    await promptAccountRelogin(cleanAccountId, {
+      title: "账号封控",
+      message: kind === "homepage"
+        ? "当前账号处于封控状态，主页可能无法打开。请重新打开登录确认账号状态。"
+        : "当前账号处于封控状态，推文链接可能无法打开。请重新打开登录确认账号状态。",
+    });
+    return;
+  }
+  if (!cleanAccountId) {
+    window.open(safeUrl, "_blank", "noopener,noreferrer");
+    return;
+  }
+  try {
+    const data = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanAccountId)}/public_access`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: safeUrl }),
+    });
+    if (data?.account) mergeSocialAccountRecord(data.account);
+    if (data?.accessible) {
+      if (kind === "homepage" && isMobileNavMode()) window.location.assign(safeUrl);
+      else window.open(safeUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    await promptAccountRelogin(cleanAccountId, {
+      title: accountStatusDisplayLabel(accountEffectiveStatus(data?.account || account)) === "账号封控" ? "账号封控" : "需要重新登录",
+      message: data?.message || (kind === "homepage"
+        ? "账号主页无法打开，请重新打开登录确认账号状态。"
+        : "推文链接无法打开，请重新打开登录确认账号状态。"),
+    });
+  } catch (error) {
+    showMsg("commandMsg", error?.detail || error?.message || "检测公开链接失败", false);
+  }
+}
+
 function openPersonaAccountHomepage() {
   const target = personaAccountHomepageTarget();
-  if (!target.url) {
-    showMsg("commandMsg", "当前平台尚未绑定可打开的账号。", false);
-    return;
-  }
-  const mobile = isMobileNavMode();
-  if (mobile && accountDisplayedStatus(target.account) !== "ready") {
-    showMsg("commandMsg", "当前账号尚未确认登录，请先完成登录后再打开主页。", false);
-    return;
-  }
-  if (mobile) {
-    window.location.assign(target.url);
-    return;
-  }
-  window.open(target.url, "_blank", "noopener,noreferrer");
+  openAccountPublicUrl(target.url, target.account?.id || "", { kind: "homepage" });
 }
 
 function personaSummaryCounts(persona) {
@@ -9103,9 +9171,21 @@ function togglePersonaImageSelection(imageId) {
   const selectedImageId = String(imageId || "").trim();
   if (!persona || !selectedImageId) return;
   const form = personaFormState(persona.id);
-  if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1", selectedImageId: "" };
+  if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1", selectedImageId: "", editImageId: "" };
   const currentImageId = String(form.images.selectedImageId || "").trim();
   form.images.selectedImageId = currentImageId === selectedImageId ? "" : selectedImageId;
+  refreshPersonaImageEditor();
+}
+
+function togglePersonaImageEditSource(imageId) {
+  const persona = selectedPersona();
+  const editImageId = String(imageId || "").trim();
+  if (!persona || !editImageId) return;
+  const form = personaFormState(persona.id);
+  if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1", selectedImageId: "", editImageId: "" };
+  const currentEditId = String(form.images.editImageId || "").trim();
+  const nextEditId = currentEditId === editImageId ? "" : editImageId;
+  form.images.editImageId = nextEditId;
   refreshPersonaImageEditor();
 }
 
@@ -10757,6 +10837,16 @@ function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
   </div>`;
 }
 
+function personaHistoryAccountRestrictionNote(persona) {
+  const platform = personaContentPlatform(persona);
+  const account = (personaAccounts(persona) || []).find(
+    (item) => normalizePersonaContentPlatform(item?.platform) === platform,
+  ) || null;
+  const status = accountEffectiveStatus(account);
+  if (!["risk_control", "disabled", "banned"].includes(status)) return "";
+  return `<div class="publish-history-account-warning">当前执行账号处于账号封控状态，平台推文链接可能无法打开。请重新打开登录以同步最新状态。</div>`;
+}
+
 function renderPersonaHistoryDataContent(persona) {
   const hasDashboardData = Boolean(personaDashboardDetail(persona));
   if (!hasDashboardData && !state.personaDashboardOverviewFetch) {
@@ -10767,6 +10857,7 @@ function renderPersonaHistoryDataContent(persona) {
   const loading = !hasDashboardData && Boolean(state.personaDashboardOverviewFetch);
   return `<div class="persona-history-data-panel">
     ${renderPersonaHistoryFilters(rows, persona)}
+    ${personaHistoryAccountRestrictionNote(persona)}
     ${loading ? `<div class="persona-history-loading" role="status">正在同步完整人设发布推文...</div>` : (rows.length ? `
       <div class="publish-history-note">汇总当前人设的已发布推文和真实互动数据；可按平台、内容类型与数据排序。</div>
       ${renderPublishHistorySelectionList(persona, {
@@ -10905,22 +10996,34 @@ function syncPersonaImagePromptState(input) {
   if (!persona || !input) return;
   const value = String(input.value || "");
   const form = personaFormState(persona.id);
-  if (!form.images || typeof form.images !== "object") form.images = { prompt: "", aspectRatio: "1:1" };
+  if (!form.images || typeof form.images !== "object") {
+    form.images = { prompt: "", aspectRatio: "1:1", selectedImageId: "", editImageId: "" };
+  }
   form.images.prompt = value;
   const button = input.closest("[data-persona-image-generation-section]")?.querySelector("[data-persona-generate-image]")
     || document.querySelector("[data-persona-generate-image]");
-  if (!button || button.disabled) return;
-  const baseLabel = String(button.dataset.personaImageGenerateLabel || button.textContent || "").trim();
+  if (!button) return;
+  const editing = Boolean(String(form.images.editImageId || "").trim());
+  const busy = button.getAttribute("aria-busy") === "true" || isActionLocked("persona", persona.id, "image_generate");
+  const baseLabel = String(button.dataset.personaImageGenerateLabel || "").trim()
+    || (editing ? "修改人设图" : "重新生成人设图");
+  button.disabled = Boolean(busy || (editing && !value.trim()));
+  if (busy) return;
   button.textContent = value.trim() ? `根据提示词${baseLabel}` : baseLabel;
 }
 
-function renderPersonaImagePromptField(imageForm) {
-  const label = "补充提示词（可选）";
-  const placeholder = "留空按人设默认生成；填写后将按提示词生成新图。";
+function renderPersonaImagePromptField(imageForm, { editing = false } = {}) {
+  const label = editing ? "图片局部修改提示词" : "补充提示词（可选）";
+  const placeholder = editing
+    ? "请输入对选中人设图的修改要求；未提及的外貌、身份和画面细节将尽量保持不变。"
+    : "留空按人设默认生成；填写后将按提示词生成新图。";
   return `
-    <div class="persona-image-prompt-field">
-      <span class="persona-image-prompt-label">${label}</span>
-      <textarea rows="3" data-persona-image-prompt placeholder="${placeholder}">${esc(imageForm?.prompt || "")}</textarea>
+    <div class="persona-image-prompt-field${editing ? " is-image-editing" : ""}">
+      <span class="persona-image-prompt-label">${esc(label)}</span>
+      ${editing ? `<span class="sr-only">已选择一张人设图作为修改基础，再次点击图标可取消。</span>` : ""}
+      <span class="persona-media-prompt-input-shell">
+        <textarea rows="3" data-persona-image-prompt placeholder="${esc(placeholder)}">${esc(imageForm?.prompt || "")}</textarea>
+      </span>
     </div>`;
 }
 
@@ -10929,7 +11032,7 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
   const imageBusy = isActionLocked("persona", persona.id, "image_generate")
     || (String(imageRunState?.kind || "") === "persona_image" && String(imageRunState?.status || "") === "running");
   const imageBusyStartedAt = actionTaskStartedAt(imageRunState, "persona", persona.id, "image_generate");
-  const imageForm = personaFormState(persona.id).images || { prompt: "", aspectRatio: "1:1" };
+  const imageForm = personaFormState(persona.id).images || { prompt: "", aspectRatio: "1:1", selectedImageId: "", editImageId: "" };
   const library = personaImageLibraryState(persona.id);
   const libraryItems = Array.isArray(library?.items) ? library.items : [];
   const hasImages = libraryItems.length > 0;
@@ -10937,16 +11040,21 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
     String(library?.current_reference_url || "").trim()
     || libraryItems.some((item) => item && (item.is_reference || item.isReference))
   );
-  const imageIntro = hasCurrentReference
-    ? "当前已有可用人设图，重新生成会产出新图，原图库仍会保留。"
-    : (hasImages ? "图库里已有历史图，可以先设为当前，也可以重新生成一张。" : "先生成一张人设图，生成后会进入图库。");
+  const editingImageId = String(imageForm.editImageId || "").trim();
+  const editing = Boolean(editingImageId);
+  const imageIntro = editing
+    ? "已选中一张人设图，将按提示词在原图上修改；再次点击图标可取消。"
+    : (hasCurrentReference
+      ? "当前已有可用人设图，重新生成会产出新图，原图库仍会保留。"
+      : (hasImages ? "图库里已有历史图，可以先设为当前，也可以重新生成一张。" : "先生成一张人设图，生成后会进入图库。"));
   const baseGenerateLabel = imageBusy
     ? "正在生成..."
-    : (hasCurrentReference ? "重新生成人设图" : "生成人设图");
+    : (editing ? "修改人设图" : (hasCurrentReference ? "重新生成人设图" : "生成人设图"));
   const generateLabel = !imageBusy && String(imageForm.prompt || "").trim()
     ? `根据提示词${baseGenerateLabel}`
     : baseGenerateLabel;
-  const promptField = renderPersonaImagePromptField(imageForm);
+  const promptField = renderPersonaImagePromptField(imageForm, { editing });
+  const generateDisabled = Boolean(imageBusy || (editing && !String(imageForm.prompt || "").trim()));
   if (!hasImages) {
     return `
       <div class="persona-profile-image-panel persona-profile-section--empty-images ${embedded ? "is-embedded" : ""}" id="personaImageGenerationSection" data-persona-image-generation-section>
@@ -10956,7 +11064,7 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
         </div>
         ${promptField}
         <div class="row-actions">
-          <button type="button" class="primary" data-persona-generate-image data-persona-image-generate-label="${esc(baseGenerateLabel)}" ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
+          <button type="button" class="primary" data-persona-generate-image data-persona-image-generate-label="${esc(baseGenerateLabel)}" ${generateDisabled ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
           <button type="button" data-persona-upload-image-trigger>上传自定义人设图</button>
           <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
         </div>
@@ -10970,12 +11078,12 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
       </div>
       ${promptField}
       <div class="row-actions">
-        <button type="button" class="primary" data-persona-generate-image data-persona-image-generate-label="${esc(baseGenerateLabel)}" ${imageBusy ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
+        <button type="button" class="primary" data-persona-generate-image data-persona-image-generate-label="${esc(baseGenerateLabel)}" ${generateDisabled ? "disabled" : ""}>${renderBusyButtonContent(generateLabel, imageBusy, imageBusyStartedAt)}</button>
         <input id="personaImageUploadFile" type="file" accept=".png,.jpg,.jpeg,.webp,.bmp,.gif,.tif,.tiff,.heic" data-persona-upload-image-file hidden />
       </div>
       <div class="persona-inline-panel persona-inline-panel--nested">
         <strong>图库预览</strong>
-        ${renderPersonaImageLibraryGrid(library, imageForm.selectedImageId)}
+        ${renderPersonaImageLibraryGrid(library, imageForm.selectedImageId, imageForm.editImageId)}
       </div>
     </div>`;
 }
@@ -14547,12 +14655,12 @@ function renderPublishHistoryAccountWarning(record = {}) {
   return warning ? `<div class="publish-history-account-warning">${esc(warning)}</div>` : "";
 }
 
-function renderPublishHistorySourceLink(url = "", { showUrl = false, compact = false } = {}) {
+function renderPublishHistorySourceLink(url = "", { showUrl = false, compact = false, accountId = "" } = {}) {
   const safeUrl = safeExternalHttpUrl(url);
   if (!safeUrl) return "";
   return `
     <div class="publish-history-source-row ${compact ? "is-compact" : ""}">
-      <a class="publish-history-source-link" href="${esc(safeUrl)}" target="_blank" rel="noopener">
+      <a class="publish-history-source-link" href="${esc(safeUrl)}" target="_blank" rel="noopener" data-account-public-link="${esc(accountId)}">
         ${renderSourceLinkIcon()}<span>查看已发布推文</span>
       </a>
       ${showUrl ? `<span class="publish-history-source-url" title="${esc(safeUrl)}">${esc(safeUrl)}</span>` : ""}
@@ -14589,7 +14697,7 @@ function renderPublishHistorySelectionList(persona = selectedPersona(), options 
                 ${renderPublishHistoryAccountWarning(record)}
               </span>
               <span class="publish-history-card-actions" aria-label="任务历史操作">
-                ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" title="打开已发布推文" aria-label="打开已发布推文">${renderSourceLinkIcon()}</a>` : ""}
+                ${publishedUrl ? `<a class="publish-history-card-action" href="${esc(publishedUrl)}" target="_blank" rel="noopener" data-account-public-link="${esc(record.account_id || "")}" title="打开已发布推文" aria-label="打开已发布推文">${renderSourceLinkIcon()}</a>` : ""}
                 <button type="button" class="publish-history-card-action" data-publish-history-view="${esc(recordId)}" title="查看任务历史" aria-label="查看任务历史">${renderEyeIcon()}</button>
                 <button type="button" class="publish-history-card-action publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}" title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>
               </span>
@@ -14635,7 +14743,7 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
             ${renderPublishHistoryAccountWarning(activeRecord)}
             <div class="publish-history-hot-status ${hotMetrics.complete ? "is-complete" : "is-stale"}">${esc(hotStatus)}</div>
             <div class="row-actions publish-history-actions">
-              ${renderPublishHistorySourceLink(publishedUrl, { compact: true })}
+              ${renderPublishHistorySourceLink(publishedUrl, { compact: true, accountId: activeRecord?.account_id || "" })}
               <button type="button" class="publish-history-requeue-button" data-publish-history-requeue="${esc(String(activeRecord?.id || ""))}">${renderRequeueIcon()}<span>重回草稿</span></button>
             </div>
             ${renderPublishPreviewMedia(activeMediaItems)}
@@ -14719,7 +14827,7 @@ async function openPublishHistoryRecordModal(historyId = "", persona = selectedP
         ${renderPublishHistoryMetrics(record, "publish-history-modal-metrics")}
         <p>${esc(String(record.content || record.caption || record.text || "").trim() || "该记录没有正文摘要。")}</p>
         ${renderPublishHistoryAccountWarning(record)}
-        ${renderPublishHistorySourceLink(publishedUrl, { showUrl: true })}
+        ${renderPublishHistorySourceLink(publishedUrl, { showUrl: true, accountId: record.account_id || "" })}
         ${renderPublishPreviewMedia(mediaItems)}
       </article>`,
     cancelText: "关闭",
@@ -16601,6 +16709,8 @@ async function openPersonaProfileEditorModalWithOptions({ immediate = false } = 
       );
       return;
     }
+    const imageEdit = event.target.closest("[data-persona-image-edit]");
+    if (imageEdit) return togglePersonaImageEditSource(imageEdit.dataset.personaImageEdit || "");
     const imageSelection = event.target.closest("[data-persona-image-select]");
     if (imageSelection) return togglePersonaImageSelection(imageSelection.dataset.personaImageSelect || "");
     // The modal itself records the active page with this data attribute. Limit
@@ -20483,9 +20593,10 @@ async function suggestPersonaCreateKeywords() {
     createState.aiKeywordOperationKey,
   );
   createState.aiKeywordOperationKey = operationKey;
+  const controller = new AbortController();
   state.personaCreateBusy.keywords = true;
   state.personaCreateBusy.keywordsStartedAt = Date.now();
-  state.personaCreateKeywordController = new AbortController();
+  state.personaCreateKeywordController = controller;
   renderPersonaCreateSurface();
   try {
     showMsg("commandMsg", "正在提炼人设方向关键词...", true);
@@ -20496,7 +20607,7 @@ async function suggestPersonaCreateKeywords() {
         "Idempotency-Key": operationKey,
       },
       body: JSON.stringify(requestPayload),
-      signal: state.personaCreateKeywordController.signal,
+      signal: controller.signal,
     }, 90000);
     createState.aiStep = "keywords";
     createState.aiKeywords = Array.isArray(result.keywords) ? result.keywords : [];
@@ -20507,31 +20618,42 @@ async function suggestPersonaCreateKeywords() {
     renderPersonaCreateSurface();
     showMsg("commandMsg", withBillingChargeMessage("已提炼出人设方向关键词。", result), true);
   } catch (error) {
-    if (!personaStepErrorKeepsOperationKey(error)) {
+    const cancelled = error?.name === "AbortError" || Number(error?.status) === 499;
+    if (cancelled || !personaStepErrorKeepsOperationKey(error)) {
       clearPersonaStepOperationKey("keywords", operationKey);
       createState.aiKeywordOperationKey = "";
     }
-    if (error?.name === "AbortError" || error?.status === 499) {
+    if (cancelled) {
       showMsg("commandMsg", "已取消关键词提炼。", true);
     } else {
       showMsg("commandMsg", error?.detail || "关键词提炼失败，请稍后重试。", false);
     }
   } finally {
-    state.personaCreateBusy.keywords = false;
-    state.personaCreateBusy.keywordsStartedAt = 0;
-    state.personaCreateKeywordController = null;
-    if (state.personaCreateMode) renderPersonaCreateSurface();
+    if (state.personaCreateKeywordController === controller) {
+      state.personaCreateBusy.keywords = false;
+      state.personaCreateBusy.keywordsStartedAt = 0;
+      state.personaCreateKeywordController = null;
+      if (state.personaCreateMode) renderPersonaCreateSurface();
+    }
   }
 }
 
 function cancelPersonaCreateKeywords() {
   const controller = state.personaCreateKeywordController;
+  const createState = ensurePersonaCreateState();
+  const operationKey = String(createState.aiKeywordOperationKey || "").trim();
   if (controller && !controller.signal.aborted) {
     controller.abort(new DOMException("Request cancelled", "AbortError"));
   }
-  state.personaCreateBusy.keywords = false;
-  state.personaCreateBusy.keywordsStartedAt = 0;
-  state.personaCreateKeywordController = null;
+  if (operationKey) {
+    clearPersonaStepOperationKey("keywords", operationKey);
+    createState.aiKeywordOperationKey = "";
+  }
+  if (state.personaCreateKeywordController === controller) {
+    state.personaCreateBusy.keywords = false;
+    state.personaCreateBusy.keywordsStartedAt = 0;
+    state.personaCreateKeywordController = null;
+  }
   showMsg("commandMsg", "已取消关键词提炼。", true);
   if (state.personaCreateMode) renderPersonaCreateSurface();
 }
@@ -22540,6 +22662,13 @@ async function submitPersonaImageGeneration() {
     showMsg("commandMsg", "请先选择一个人设。", false);
     return;
   }
+  const imageForm = personaFormState(persona.id).images || {};
+  const prompt = String(imageForm.prompt || "").trim();
+  const sourceImageId = String(imageForm.editImageId || "").trim();
+  if (sourceImageId && !prompt) {
+    showMsg("commandMsg", "请输入对选中人设图的修改要求。", false);
+    return;
+  }
   const lockParts = ["persona", persona.id, "image_generate"];
   if (isActionLocked(...lockParts)) {
     showMsg("commandMsg", "当前人设图正在生成，请等待本次生成完成。", false);
@@ -22549,7 +22678,7 @@ async function submitPersonaImageGeneration() {
   setPersonaGenerateRunState(persona.id, {
     kind: "persona_image",
     status: "running",
-    message: "人设图生成中",
+    message: sourceImageId ? "人设图修改中" : "人设图生成中",
     error: "",
   });
   clearMsg("commandMsg");
@@ -22559,9 +22688,10 @@ async function submitPersonaImageGeneration() {
     body.append("task_type", "persona_image");
     body.append("params_json", JSON.stringify({
       related_persona_id: persona.id,
-      prompt: String(personaFormState(persona.id).images?.prompt || "").trim(),
+      prompt,
       aspect_ratio: "1:1",
       mode: "person",
+      source_image_id: sourceImageId,
     }));
     const result = await api("/api/tasks/submit", {
       method: "POST",
@@ -22720,6 +22850,9 @@ async function deletePersonaLibraryImage(imageId) {
   const imageForm = personaFormState(persona.id).images;
   if (imageForm && String(imageForm.selectedImageId || "").trim() === cleanImageId) {
     imageForm.selectedImageId = "";
+  }
+  if (imageForm && String(imageForm.editImageId || "").trim() === cleanImageId) {
+    imageForm.editImageId = "";
   }
   await Promise.all([
     loadPersonas(),
@@ -25447,7 +25580,7 @@ function renderPersonaEditableMediaGrid(items, options = {}) {
   </div>`;
 }
 
-function renderPersonaImageLibraryPreview(item, groupId, index, unavailable = false) {
+function renderPersonaImageLibraryPreview(item, groupId, index, unavailable = false, editing = false) {
   const displayUrl = adminWorkspaceUrl(item.previewUrl);
   const label = mediaPreviewLabel(item.label, "人设图");
   const caption = item.isReference ? "当前参考图" : "历史图";
@@ -25455,9 +25588,16 @@ function renderPersonaImageLibraryPreview(item, groupId, index, unavailable = fa
     ? `<div class="persona-image-library-frame persona-media-frame--empty"><strong>媒体已失效</strong><small>源文件无法加载</small></div>`
     : `<img class="persona-image-library-frame" src="${esc(displayUrl)}" data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "人设图")}" loading="lazy" decoding="async" draggable="false" onerror="handlePersonaMediaFrameError(this)" />`;
   const zoomButton = `<button type="button" class="persona-image-library-zoom-button" data-media-preview-group="${esc(groupId)}" data-media-preview-index="${esc(index)}" data-media-preview-type="image" data-media-preview-label="${esc(label || caption)}" title="点击放大查看" aria-label="点击放大查看 ${esc(label || caption)}">${renderZoomInIcon()}</button>`;
+  const editTitle = editing ? "取消局部修改选中" : "按提示词修改这张人设图";
+  const editButton = unavailable
+    ? ""
+    : `<button type="button" class="persona-image-library-edit-button${editing ? " is-active" : ""}" data-persona-image-edit="${esc(item.id)}" title="${esc(editTitle)}" aria-label="${esc(editTitle)}" aria-pressed="${editing ? "true" : "false"}">${renderEditIcon()}</button>`;
   return `<div class="persona-image-library-preview${unavailable ? " is-unavailable" : ""}" data-persona-image-select="${esc(item.id)}">
     ${frame}
-    ${zoomButton}
+    <div class="persona-image-library-preview-actions">
+      ${editButton}
+      ${zoomButton}
+    </div>
     <span>${esc(caption)}</span>
   </div>`;
 }
@@ -25480,7 +25620,7 @@ function renderPersonaImageUploadPlaceholderCard() {
     </div>`;
 }
 
-function renderPersonaImageLibraryGrid(library, selectedImageId = "") {
+function renderPersonaImageLibraryGrid(library, selectedImageId = "", editImageId = "") {
   const rows = Array.isArray(library?.items) ? library.items : [];
   const previewable = rows
     .map((item) => ({
@@ -25501,12 +25641,15 @@ function renderPersonaImageLibraryGrid(library, selectedImageId = "") {
   }
   const groupId = registerMediaPreviewGroup(previewable);
   const selectedCardId = String(selectedImageId || "").trim();
+  const editingCardId = String(editImageId || "").trim();
   return `<div class="persona-image-library-grid">${previewable.map((item, index) => {
     const itemUnavailable = Boolean(item.unavailable || state.failedMediaPreviewUrls.has(adminWorkspaceUrl(item.previewUrl)));
+    const editing = editingCardId === item.id;
+    const selected = !editing && selectedCardId === item.id;
     return `
-    <div class="persona-image-library-card ${item.isReference ? "is-reference" : ""}${selectedCardId === item.id ? " is-selected" : ""}">
+    <div class="persona-image-library-card ${item.isReference ? "is-reference" : ""}${selected ? " is-selected" : ""}${editing ? " is-modify-source" : ""}">
       <div class="persona-image-library-preview-wrap${itemUnavailable ? " is-media-unavailable" : ""}">
-      ${renderPersonaImageLibraryPreview(item, groupId, index, itemUnavailable)}
+      ${renderPersonaImageLibraryPreview(item, groupId, index, itemUnavailable, editing)}
       </div>
       <small>${esc(item.createdAt ? formatTime(item.createdAt) : "")}</small>
       <div class="row-actions persona-image-library-actions">
@@ -27654,7 +27797,7 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     </div>
     ${renderTaskAssistanceDetails(model)}
     <div class="login-assistance-action">${renderLoginAssistanceAction(model, session, {
-      stopTaskOnClose: modal.classList.contains("is-publish-assistance") && taskCanStop,
+      stopTaskOnClose: taskCanStop,
     })}</div>
     ${session && model.kind !== "browser_interaction" && model.phase !== "success"
       ? `<button type="button" class="login-assistance-live-link" data-login-assistance-live>查看实时画面</button>`
@@ -34292,6 +34435,8 @@ function bindEvents() {
       );
       return;
     }
+    const imageEdit = event.target.closest("[data-persona-image-edit]");
+    if (imageEdit) return togglePersonaImageEditSource(imageEdit.dataset.personaImageEdit || "");
     const imageSelection = event.target.closest("[data-persona-image-select]");
     if (imageSelection) return togglePersonaImageSelection(imageSelection.dataset.personaImageSelect || "");
     const memoryBulkButton = event.target.closest("[data-persona-memory-bulk]");
@@ -35446,6 +35591,14 @@ function bindEvents() {
     }
     if (event.target.closest("[data-persona-open-account-homepage]")) {
       openPersonaAccountHomepage();
+      return;
+    }
+    const publicLink = event.target.closest("[data-account-public-link]");
+    if (publicLink) {
+      event.preventDefault();
+      event.stopPropagation();
+      openAccountPublicUrl(publicLink.getAttribute("href") || "", publicLink.dataset.accountPublicLink || "", { kind: "post" })
+        .catch((error) => showMsg("commandMsg", error.detail || error.message || "打开推文失败", false));
       return;
     }
     if (event.target.closest("[data-persona-edit-name]")) {

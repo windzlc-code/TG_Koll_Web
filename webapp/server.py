@@ -10917,6 +10917,7 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
             prompt=str(payload.get("prompt") or "").strip(),
             aspect_ratio=str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1",
             mode=str(payload.get("mode") or "person").strip() or "person",
+            source_image_id=str(payload.get("source_image_id") or payload.get("sourceImageId") or "").strip(),
         )
     except HTTPException as exc:
         raise RuntimeError(str(exc.detail or "人设图生成失败。")) from exc
@@ -19134,7 +19135,24 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
     return data
 
 
-def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_ratio: str = "1:1", mode: str = "person") -> dict[str, Any]:
+def _persona_archive_library_image_input(archive: dict[str, Any], image_id: str) -> str:
+    clean_image_id = str(image_id or "").strip()
+    if not clean_image_id:
+        return ""
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    for item in library:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id") or "").strip() != clean_image_id:
+            continue
+        return _persona_reference_image_input_for_cli({
+            "setup": {"personaImageReferenceUrl": str(item.get("imageUrl") or "").strip()},
+            "personaImageLibrary": [item],
+        })
+    return ""
+
+
+def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_ratio: str = "1:1", mode: str = "person", source_image_id: str = "") -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
@@ -19143,16 +19161,26 @@ def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_
     if not archive:
         raise HTTPException(status_code=404, detail="人设不存在。")
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    user_prompt = str(prompt or "").strip()
+    source_id = str(source_image_id or "").strip()
+    edit_source = _persona_archive_library_image_input(archive, source_id) if source_id else ""
+    if source_id and not edit_source:
+        raise HTTPException(status_code=400, detail="未找到要修改的人设图。")
+    if edit_source and not user_prompt:
+        raise HTTPException(status_code=400, detail="请输入对选中人设图的修改要求。")
     payload = {
-        "setup": setup,
-        "content": str(prompt or archive.get("content") or ""),
+        "setup": {} if edit_source else setup,
+        "content": "" if edit_source else str(archive.get("content") or ""),
+        "customPrompt": user_prompt or None,
         "aspectRatio": str(aspect_ratio or "1:1").strip() or "1:1",
         "mode": str(mode or "person").strip() or "person",
-        "referenceImageUrl": None,
+        "referenceImageUrl": edit_source or None,
         "referenceSheetUrl": None,
-        "generateReferenceSheet": True,
+        "generateReferenceSheet": not bool(edit_source),
         "dryRun": False,
     }
+    if edit_source:
+        payload["editExistingImage"] = True
     _sync_tool_r18_api_config_for_persona_workflow()
     command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(payload, ensure_ascii=False)]
     try:

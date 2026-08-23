@@ -870,14 +870,73 @@ class _CookieContext:
 class _ThreadsShellPage:
     url = "https://www.threads.com/"
 
-    def __init__(self, cookies, body_text=""):
+    def __init__(self, cookies, body_text="", structure=None):
         self.context = _CookieContext(cookies)
         self.body = _LoginStateLocator(text=body_text, visible=True)
+        self.structure = structure
 
     def locator(self, selector):
         if selector == "body":
             return self.body
         return _LoginStateLocator(visible=("aria-label" in selector))
+
+    def evaluate(self, script, value=None):
+        source = str(script or "")
+        if "articleCount" in source or "composerCount" in source:
+            if self.structure is None:
+                raise RuntimeError("structure snapshot unavailable")
+            return self.structure
+        if "found.push" in source or "isPostHref" in source:
+            return []
+        return False
+
+
+def _empty_threads_profile_structure(**overrides):
+    snapshot = {
+        "articleCount": 0,
+        "postLinkCount": 0,
+        "hasSpinner": False,
+        "hasLoginInput": False,
+        "composerCount": 1,
+        "tabCount": 4,
+        "avatarCount": 1,
+        "headerButtonCount": 2,
+    }
+    snapshot.update(overrides)
+    return snapshot
+
+
+class _RestrictionSplashPage:
+    """Disabled/suspended splash recognized by href/form structure, not page language."""
+
+    def __init__(self, url, *, help_href="https://help.instagram.com/447613741984126", cookies=None):
+        self.url = url
+        self.help_href = help_href
+        self.context = _CookieContext(cookies or [])
+        self.body = _LoginStateLocator(text="", visible=True)
+
+    def locator(self, selector):
+        if selector == "body":
+            return self.body
+        lowered = str(selector or "").lower()
+        if any(
+            token in lowered
+            for token in (
+                "help.instagram.com/447613741984126",
+                "help.instagram.com/366994040048856",
+                "help.instagram.com/477434105621119",
+                "/accounts/disabled",
+                "/checkpoint/disabled",
+                "/suspended/",
+                'action*="disabled"',
+                'action*="suspended"',
+            )
+        ):
+            return _AttrLocator({"href": self.help_href, "action": self.help_href}, visible=True)
+        return _LoginStateLocator(visible=False)
+
+    def evaluate(self, _script, *_args):
+        return True
 
 
 class _InstagramLoginFormPage:
@@ -1573,6 +1632,17 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(status["status"], "cookie_expired")
         self.assertEqual(status["health_status"], "banned")
+        self.assertEqual(status["evidence"], "url")
+
+    def test_threads_disabled_splash_is_classified_as_banned_by_structure(self):
+        page = _RestrictionSplashPage("https://www.threads.com/")
+
+        status = runner._detect_threads_login_state(page)
+
+        self.assertEqual(status["status"], "cookie_expired")
+        self.assertEqual(status["health_status"], "banned")
+        self.assertEqual(status["evidence"], "visual_structure")
+        self.assertIn("封禁", status["reason"])
 
     def test_threads_sidebar_without_a_session_cookie_is_not_ready(self):
         status = runner._detect_threads_login_state(_ThreadsShellPage([]))
@@ -1646,6 +1716,25 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         self.assertEqual(status["status"], "cookie_expired")
         self.assertEqual(status["health_status"], "banned")
+        self.assertEqual(status["evidence"], "url")
+
+    def test_instagram_disabled_splash_is_classified_as_banned_by_structure(self):
+        page = _RestrictionSplashPage("https://www.instagram.com/")
+
+        status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["status"], "cookie_expired")
+        self.assertEqual(status["health_status"], "banned")
+        self.assertEqual(status["evidence"], "visual_structure")
+
+    def test_restriction_splash_locator_fallback_does_not_need_page_language(self):
+        page = _RestrictionSplashPage("https://www.instagram.com/")
+        page.evaluate = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("no evaluate"))
+
+        status = runner._detect_instagram_login_state(page)
+
+        self.assertEqual(status["health_status"], "banned")
+        self.assertEqual(status["evidence"], "visual_structure")
 
     def test_instagram_unknown_page_without_session_is_not_ready(self):
         page = _ThreadsShellPage([])
@@ -5305,17 +5394,17 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         page.url = "https://www.threads.com/@alice"
         self.assertFalse(runner._threads_profile_is_stably_empty(page, "https://www.threads.net/@alice"))
 
-        page.body.text = "No threads yet"
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
+            structure=_empty_threads_profile_structure(),
+        )
+        page.url = "https://www.threads.com/@alice"
         self.assertTrue(runner._threads_profile_is_stably_empty(page, "https://www.threads.net/@alice"))
 
     def test_threads_profile_empty_baseline_accepts_authenticated_first_post_onboarding(self):
         page = _ThreadsShellPage(
             [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
-            (
-                "個人檔案 陳雅婷 chenyating119 0位粉絲 編輯個人檔案 "
-                "串文 回覆 影音內容 轉發 有什麼新鮮事？ 發佈 "
-                "完成個人檔案 剩2項 建立串文 說說你的想法，或是分享最近發生的精彩事物。 建立"
-            ),
+            structure=_empty_threads_profile_structure(composerCount=1, tabCount=4),
         )
         page.url = "https://www.threads.com/@chenyating119"
 
@@ -5336,11 +5425,248 @@ class RunnerPublishSafetyTests(unittest.TestCase):
     def test_threads_profile_loaded_handle_without_empty_copy_is_not_empty_baseline(self):
         page = _ThreadsShellPage(
             [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
-            "Alice @alice Followers Following",
         )
-        page.url = "https://www.threads.com/@alice"
+        page.url = "https://www.threads.com/"
 
         self.assertFalse(runner._threads_profile_is_stably_empty(page, "https://www.threads.net/@alice"))
+
+    def test_threads_profile_empty_baseline_accepts_locale_independent_empty_structure(self):
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
+            structure=_empty_threads_profile_structure(),
+        )
+        page.url = "https://www.threads.com/@mysticshadowxp214"
+
+        with (
+            mock.patch.object(runner, "_goto") as goto,
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[]),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            baseline = runner._capture_threads_profile_baseline(
+                page,
+                "https://www.threads.net/@mysticshadowxp214",
+                _Logger(),
+            )
+
+        self.assertEqual(baseline, set())
+        self.assertEqual(goto.call_count, 2)
+
+    def test_threads_profile_empty_baseline_accepts_composer_chrome_without_copy(self):
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
+            structure=_empty_threads_profile_structure(tabCount=0, avatarCount=0, headerButtonCount=0, composerCount=1),
+        )
+        page.url = "https://www.threads.com/@mysticshadowxp214"
+
+        self.assertTrue(
+            runner._threads_profile_is_stably_empty(
+                page,
+                "https://www.threads.net/@mysticshadowxp214",
+            )
+        )
+
+    def test_threads_ready_own_profile_with_no_post_links_is_empty_baseline(self):
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
+        )
+        page.url = "https://www.threads.com/@mysticshadowxp214"
+        self.assertTrue(
+            runner._threads_profile_is_stably_empty(
+                page,
+                "https://www.threads.net/@mysticshadowxp214",
+            )
+        )
+
+    def test_threads_empty_structure_baseline_to_first_post_confirmation_closed_loop(self):
+        profile = "https://www.threads.net/@mysticshadowxp214"
+        new_permalink = "https://www.threads.net/@mysticshadowxp214/post/NEW1"
+        page = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
+            structure=_empty_threads_profile_structure(),
+        )
+        page.url = "https://www.threads.com/@mysticshadowxp214"
+
+        with (
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[]),
+            mock.patch.object(runner, "_sleep_between"),
+        ):
+            baseline = runner._capture_threads_profile_baseline(page, profile, _Logger())
+
+        self.assertEqual(baseline, set())
+
+        feed_page = _Page(new_permalink)
+        with mock.patch.object(runner.time, "time", side_effect=[0, 1]):
+            submitted = runner._wait_for_threads_publish_success(
+                feed_page,
+                _Logger(),
+                caption="first post",
+                profile_url=profile,
+                previous_permalinks=baseline,
+            )
+        self.assertTrue(submitted["confirmed"])
+        self.assertEqual(submitted["url"], new_permalink)
+
+        profile_page = _Page(profile)
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[new_permalink]),
+            mock.patch.object(runner, "_find_threads_post_permalink", return_value=new_permalink),
+        ):
+            confirmed = runner._wait_for_threads_own_post(
+                profile_page,
+                "first post",
+                _Logger(),
+                {"username": "mysticshadowxp214"},
+                previous_permalinks=baseline,
+                profile_url=profile,
+            )
+
+        self.assertTrue(confirmed["confirmed"])
+        self.assertEqual(confirmed["url"], new_permalink)
+
+    def test_threads_empty_structure_publish_pipeline_submits_and_returns_permalink(self):
+        permalink = "https://www.threads.net/@mysticshadowxp214/post/NEW1"
+        shell = _ThreadsShellPage(
+            [{"name": "sessionid", "value": "active-session", "domain": ".instagram.com"}],
+            structure=_empty_threads_profile_structure(),
+        )
+        shell.url = "https://www.threads.com/@mysticshadowxp214"
+        page = _PageWithBackground("https://www.threads.net/")
+        opener = _Locator()
+        compose = _Locator()
+        control = {"task": {"id": "publish-empty-loop", "payload": {"caption": "hello threads"}}}
+        patches = {
+            "_dismiss_threads_compose_dialogs": {},
+            "_ensure_threads_home_for_publish": {},
+            "_temporary_background_page": {"return_value": contextlib.nullcontext(shell)},
+            "_goto": {},
+            "_find_threads_post_permalinks": {"return_value": []},
+            "_sleep_between": {},
+            "_threads_dialog_compose_box": {"side_effect": [None, compose]},
+            "_threads_compose_opener_by_structure": {"return_value": opener},
+            "_click_threads_compose_opener": {"return_value": True},
+            "_focus_threads_compose": {"return_value": compose},
+            "_human_click": {},
+            "_clear_and_type": {},
+            "_threads_active_dialog_text": {"return_value": "hello threads"},
+            "_click_threads_active_dialog_post": {"return_value": True},
+            "_resolve_threads_profile_url": {"return_value": "https://www.threads.net/@mysticshadowxp214"},
+            "_persist_publish_confirmation_context": {},
+            "_wait_for_threads_publish_success": {
+                "return_value": {"confirmed": True, "submitted": True, "url": permalink},
+            },
+            "_wait_for_threads_own_post": {},
+            "_click_threads_confirmed_post": {"return_value": True},
+            "_dismiss_threads_cookie_consent": {"return_value": True},
+            "_threads_publish_evidence_page_ready": {"return_value": True},
+            "_screenshot": {"return_value": "final.png"},
+        }
+        with contextlib.ExitStack() as stack:
+            mocked = {
+                name: stack.enter_context(mock.patch.object(runner, name, **kwargs))
+                for name, kwargs in patches.items()
+            }
+            result = runner._run_threads_publish_post(
+                page,
+                {"id": "publish-empty-loop"},
+                {"caption": "hello threads"},
+                Path("."),
+                _Logger(),
+                {"username": "mysticshadowxp214"},
+                control,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["url"], permalink)
+        self.assertEqual(result["screenshot_path"], "final.png")
+        mocked["_threads_compose_opener_by_structure"].assert_called()
+        mocked["_click_threads_compose_opener"].assert_called()
+        mocked["_click_threads_active_dialog_post"].assert_called_once()
+        mocked["_wait_for_threads_own_post"].assert_not_called()
+
+    def test_threads_empty_lightweight_baseline_skips_full_reload_and_clicks_left_icon(self):
+        permalink = "https://www.threads.net/@mysticshadowxp214/post/NEW1"
+        page = _PageWithBackground("https://www.threads.net/")
+        opener = _Locator()
+        compose = _Locator()
+        control = {"task": {"id": "publish-empty-light", "payload": {"caption": "hello threads"}}}
+        background_pages = []
+
+        @contextlib.contextmanager
+        def fake_background(_page, _logger, _stage, *, block_heavy_assets=False):
+            background_pages.append(block_heavy_assets)
+            yield page
+
+        patches = {
+            "_dismiss_threads_compose_dialogs": {},
+            "_ensure_threads_home_for_publish": {},
+            "_temporary_background_page": {"side_effect": fake_background},
+            "_goto": {},
+            "_capture_threads_profile_baseline": {"return_value": set()},
+            "_sleep_between": {},
+            "_threads_dialog_compose_box": {"side_effect": [None, compose]},
+            "_threads_compose_opener_by_structure": {"return_value": opener},
+            "_click_threads_compose_opener": {"return_value": True},
+            "_focus_threads_compose": {"return_value": compose},
+            "_human_click": {},
+            "_clear_and_type": {},
+            "_threads_active_dialog_text": {"return_value": "hello threads"},
+            "_click_threads_active_dialog_post": {"return_value": True},
+            "_resolve_threads_profile_url": {"return_value": "https://www.threads.net/@mysticshadowxp214"},
+            "_persist_publish_confirmation_context": {},
+            "_wait_for_threads_publish_success": {
+                "return_value": {"confirmed": True, "submitted": True, "url": permalink},
+            },
+            "_screenshot": {"return_value": "final.png"},
+            "_threads_publish_evidence_page_ready": {"return_value": True},
+            "_dismiss_threads_cookie_consent": {"return_value": True},
+            "_click_threads_confirmed_post": {"return_value": True},
+        }
+        with contextlib.ExitStack() as stack:
+            mocked = {
+                name: stack.enter_context(mock.patch.object(runner, name, **kwargs))
+                for name, kwargs in patches.items()
+            }
+            result = runner._run_threads_publish_post(
+                page,
+                {"id": "publish-empty-light"},
+                {"caption": "hello threads"},
+                Path("."),
+                _Logger(),
+                {"username": "mysticshadowxp214"},
+                control,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(background_pages, [True])
+        mocked["_threads_compose_opener_by_structure"].assert_called()
+        mocked["_click_threads_compose_opener"].assert_called()
+        mocked["_click_threads_active_dialog_post"].assert_called_once()
+
+    def test_threads_unreadable_structure_still_aborts_before_submit(self):
+        page = _Page("https://www.threads.net/")
+        with (
+            mock.patch.object(runner, "_dismiss_threads_compose_dialogs"),
+            mock.patch.object(runner, "_ensure_threads_home_for_publish"),
+            mock.patch.object(runner, "_resolve_threads_profile_url", return_value="https://www.threads.net/@mysticshadowxp214"),
+            mock.patch.object(runner, "_temporary_background_page", return_value=contextlib.nullcontext(page)),
+            mock.patch.object(runner, "_goto"),
+            mock.patch.object(runner, "_find_threads_post_permalinks", return_value=[]),
+            mock.patch.object(runner, "_sleep_between"),
+            mock.patch.object(runner, "_click_threads_active_dialog_post") as submit,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "未点击发布按钮"):
+                runner._run_threads_publish_post(
+                    page,
+                    {"id": "publish-unreadable"},
+                    {"caption": "hello threads"},
+                    Path("."),
+                    _Logger(),
+                    {"username": "mysticshadowxp214"},
+                )
+        submit.assert_not_called()
 
     def test_threads_compose_ready_prefers_direct_new_opener_once(self):
         opener = _Locator()

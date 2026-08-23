@@ -2515,35 +2515,93 @@ def _temporary_background_page(
                 page.bring_to_front()
 
 
-def _detect_platform_account_restriction(url: str, body_text: str, platform: str) -> dict[str, Any] | None:
+_ACCOUNT_RESTRICTION_URL_MARKERS = (
+    "/disabled/",
+    "/suspended/",
+    "/checkpoint/disabled",
+    "/accounts/disabled",
+)
+_ACCOUNT_RESTRICTION_SURFACE_SELECTORS = (
+    'a[href*="/accounts/disabled"]',
+    'a[href*="/checkpoint/disabled"]',
+    'a[href*="/suspended/"]',
+    'a[href*="help.instagram.com/447613741984126"]',
+    'a[href*="help.instagram.com/366994040048856"]',
+    'a[href*="help.instagram.com/477434105621119"]',
+    'form[action*="/accounts/disabled"]',
+    'form[action*="/checkpoint/disabled"]',
+    'form[action*="disabled"]',
+    'form[action*="suspended"]',
+)
+_ACCOUNT_RESTRICTION_TEXT_MARKERS = (
+    "your account has been disabled",
+    "your account was disabled",
+    "we disabled your account",
+    "your account has been suspended",
+    "your account was suspended",
+    "we suspended your account",
+    "account has been deactivated",
+    "account is disabled",
+)
+
+
+def _platform_restriction_surface_visible(page) -> bool:
+    """Recognize a disabled/suspended splash by DOM hrefs and forms, independent of page language."""
+    try:
+        marked = page.evaluate(
+            r"""() => {
+                const hrefOf = (node) => String(
+                    node.href || node.action || node.getAttribute('href') || node.getAttribute('action') || ''
+                );
+                const isVisible = (node) => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0
+                        && style.visibility !== 'hidden'
+                        && style.display !== 'none';
+                };
+                const disabledPath = /\/(?:accounts|checkpoint)\/disabled(?:\/|$|\?)|\/suspended(?:\/|$|\?)/i;
+                const helpDisabled = /help\.instagram\.com\/(?:447613741984126|366994040048856|477434105621119)/i;
+                const nodes = Array.from(document.querySelectorAll('a[href], form[action]'));
+                for (const node of nodes) {
+                    if (node.tagName !== 'FORM' && !isVisible(node)) continue;
+                    const href = hrefOf(node);
+                    if (disabledPath.test(href) || helpDisabled.test(href)) return true;
+                }
+                return false;
+            }"""
+        )
+        if marked:
+            return True
+    except Exception:
+        pass
+    return _visible_first(page, list(_ACCOUNT_RESTRICTION_SURFACE_SELECTORS), timeout_ms=400) is not None
+
+
+def _detect_platform_account_restriction(
+    url: str,
+    body_text: str,
+    platform: str,
+    page=None,
+) -> dict[str, Any] | None:
     clean_url = str(url or "").lower()
     clean_text = str(body_text or "").lower()
-    url_markers = (
-        "/disabled/",
-        "/suspended/",
-        "/checkpoint/disabled",
-        "/accounts/disabled",
-    )
-    text_markers = (
-        "your account has been disabled",
-        "your account was disabled",
-        "we disabled your account",
-        "your account has been suspended",
-        "your account was suspended",
-        "we suspended your account",
-        "account has been deactivated",
-        "account is disabled",
-    )
-    if not any(marker in clean_url for marker in url_markers) and not any(
-        marker in clean_text for marker in text_markers
-    ):
+    evidence = ""
+    if any(marker in clean_url for marker in _ACCOUNT_RESTRICTION_URL_MARKERS):
+        evidence = "url"
+    elif page is not None and _platform_restriction_surface_visible(page):
+        evidence = "visual_structure"
+    elif any(marker in clean_text for marker in _ACCOUNT_RESTRICTION_TEXT_MARKERS):
+        evidence = "page_text"
+    if not evidence:
         return None
     platform_name = _platform_name(platform)
     return {
         "status": "cookie_expired",
         "health_status": "banned",
-        "reason": f"{platform_name} account appears disabled or suspended.",
+        "reason": f"{platform_name} 检测到账号已被停用或封禁。",
         "url": str(url or ""),
+        "evidence": evidence,
     }
 
 
@@ -2569,7 +2627,7 @@ def _detect_instagram_login_state(page) -> dict[str, Any]:
         body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
     except Exception:
         pass
-    restriction = _detect_platform_account_restriction(url, body_text, "instagram")
+    restriction = _detect_platform_account_restriction(url, body_text, "instagram", page=page)
     if restriction is not None:
         return restriction
     if "/accounts/scraping_warning" in normalized_url:
@@ -2684,7 +2742,7 @@ def _detect_threads_login_state(page) -> dict[str, Any]:
         body_text = str(page.locator("body").inner_text(timeout=5000) or "").lower()
     except Exception:
         pass
-    restriction = _detect_platform_account_restriction(url, body_text, "threads")
+    restriction = _detect_platform_account_restriction(url, body_text, "threads", page=page)
     if restriction is not None:
         return restriction
     if _is_verification_url(url):
@@ -5050,7 +5108,7 @@ def _warmup_risk_state(page, platform: str) -> dict[str, str] | None:
                 if locator.is_visible(timeout=500):
                     notice_text_parts.append(str(locator.inner_text(timeout=1000) or "").lower())
     notice_text = " ".join(notice_text_parts)
-    restriction = _detect_platform_account_restriction(url, body_text, platform)
+    restriction = _detect_platform_account_restriction(url, body_text, platform, page=page)
     if restriction is not None:
         return {
             "status": str(restriction.get("status") or "cookie_expired"),
@@ -13279,6 +13337,8 @@ def _capture_threads_profile_baseline(
     if not profile_url:
         return None
     last_error = ""
+    last_permalinks: list[str] | None = None
+    last_login_status = ""
     stable_empty_count = 0
     observed_permalinks: set[str] = set()
     successful_reads = 0
@@ -13293,6 +13353,11 @@ def _capture_threads_profile_baseline(
             if not expected_profile or current_profile != expected_profile:
                 raise RuntimeError(last_error or "Threads profile navigation did not reach the expected account.")
             permalinks = _find_threads_post_permalinks(page)
+            last_permalinks = permalinks
+            try:
+                last_login_status = str((_detect_threads_login_state(page) or {}).get("status") or "")
+            except Exception:
+                last_login_status = ""
             if permalinks is not None:
                 successful_reads += 1
             if permalinks:
@@ -13305,6 +13370,8 @@ def _capture_threads_profile_baseline(
                 if stable_empty_count >= 2:
                     return set()
             else:
+                if permalinks == [] and not last_error:
+                    last_error = "Threads profile post-link scan returned no posts, but the page was not a ready own-profile."
                 stable_empty_count = 0
         except Exception as exc:
             last_error = str(exc)
@@ -13312,11 +13379,23 @@ def _capture_threads_profile_baseline(
             _sleep_between(0.8, 1.2)
     if observed_permalinks:
         return observed_permalinks
-    logger.log("warn", "threads_publish_baseline_failed", "发布前多次无法读取账号主页基线，任务不会点击发布。", {"error": last_error[:500]})
+    logger.log(
+        "warn",
+        "threads_publish_baseline_failed",
+        "发布前多次无法读取账号主页基线，任务不会点击发布。",
+        {
+            "error": last_error[:500],
+            "url": str(getattr(page, "url", "") or ""),
+            "permalink_count": None if last_permalinks is None else len(last_permalinks),
+            "login_status": last_login_status,
+            "evidence": "post_link_structure",
+        },
+    )
     return None
 
 
 def _threads_profile_is_stably_empty(page, profile_url: str) -> bool:
+    """Empty own-profile is a ready profile whose existing post-link scan returned no posts."""
     expected = _normalize_threads_profile_url(profile_url)
     current = _normalize_threads_profile_url(getattr(page, "url", ""))
     if not expected or current != expected:
@@ -13324,42 +13403,11 @@ def _threads_profile_is_stably_empty(page, profile_url: str) -> bool:
     state = _detect_threads_login_state(page)
     if str(state.get("status") or "") != "ready":
         return False
-    try:
-        body_text = " ".join(str(page.locator("body").inner_text(timeout=5000) or "").lower().split())
-    except Exception:
+    if _browser_navigation_error_visible(page):
         return False
-    blocked_markers = (
-        "something went wrong",
-        "please try again later",
-        "try again",
-        "unable to load",
-        "couldn't refresh",
-        "log in",
-        "continue with instagram",
-        "challenge",
-        "verification",
-    )
-    if any(marker in body_text for marker in blocked_markers):
+    if _threads_login_surface_visible(page):
         return False
-    empty_markers = (
-        "no threads yet",
-        "no posts yet",
-        "hasn't posted yet",
-        "has not posted yet",
-        "尚未发布任何内容",
-        "還沒有任何串文",
-        "尚未發佈任何內容",
-    )
-    if any(marker in body_text for marker in empty_markers):
-        return True
-    first_post_onboarding_markers = (
-        "編輯個人檔案",
-        "完成個人檔案",
-        "建立串文",
-    )
-    if all(marker in body_text for marker in first_post_onboarding_markers):
-        return True
-    return False
+    return True
 
 
 def _wait_for_manual_threads_publish_completion(
@@ -13670,7 +13718,14 @@ def _run_threads_publish_post(
                     profile_url,
                     logger,
                 )
-                if blocked_baseline:
+                if blocked_baseline is not None:
+                    if not blocked_baseline:
+                        logger.log(
+                            "info",
+                            "threads_publish_baseline_empty",
+                            "账号主页没有已有帖子，将按空基线继续点击左侧发帖加号。",
+                            {"known_permalinks": 0},
+                        )
                     return blocked_page is page, blocked_baseline
             logger.log(
                 "warn",

@@ -2602,6 +2602,17 @@ def register_social_automation_routes(app: FastAPI) -> None:
             ),
         }
 
+    @app.post("/api/persona_dashboard/automation/accounts/{account_id}/public_access")
+    def api_social_account_public_access(
+        account_id: str,
+        payload: dict[str, Any] | None = Body(default=None),
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        _require_account_access(account_id, user)
+        body = payload if isinstance(payload, dict) else {}
+        url = str(body.get("url") or "").strip()
+        return _inspect_account_public_access(account_id, url)
+
     @app.post("/api/persona_dashboard/automation/accounts/{account_id}/reuse_session")
     def api_social_account_reuse_session(
         account_id: str,
@@ -9860,24 +9871,6 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
                     ) from exc
     account = dict(account_row)
     proxy = dict(proxy_row) if proxy_row else None
-    if task.get("task_type") != "publish_post" and (
-        str(account.get("status") or "").strip().lower() == "disabled"
-        or str(account.get("health_status") or "").strip().lower() == "banned"
-    ):
-        _finish_task(
-            task_id,
-            "cancelled",
-            {
-                "ok": False,
-                "status": "disabled",
-                "health_status": "banned",
-                "account_dead": True,
-                "retryable": False,
-            },
-            "平台账号已被封禁，已阻止启动自动化浏览器。",
-            account_status="disabled",
-        )
-        return
     if proxy is not None and not _account_proxy_type_allowed(proxy):
         raise RuntimeError("账号代理不是静态住宅 IP 或系统导入的机房代理，已阻止浏览器启动")
     if proxy_id and proxy is None:
@@ -11198,6 +11191,140 @@ def _persist_crm_relationship_evidence_in_transaction(
     return written
 
 
+_PUBLIC_SOCIAL_HOSTS = {"threads.com", "threads.net", "instagram.com"}
+_PUBLIC_ACCESS_RESTRICTION_URLS = (
+    "/disabled/",
+    "/suspended/",
+    "/checkpoint/disabled",
+    "/accounts/disabled",
+)
+
+
+def _normalize_public_social_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if str(parsed.scheme or "").lower() != "https":
+        return ""
+    host = str(parsed.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host not in _PUBLIC_SOCIAL_HOSTS:
+        return ""
+    return text
+
+
+def _classify_public_social_access(requested_url: str, final_url: str, body: str) -> str:
+    requested_path = str(urlparse(requested_url).path or "").lower()
+    final = str(final_url or "")
+    text = str(body or "")
+    lower_final = final.lower()
+    lower_text = text.lower()
+    if any(marker in lower_final for marker in _PUBLIC_ACCESS_RESTRICTION_URLS):
+        return "restricted"
+    if "error=invalid_post" in lower_final or "error=invalid_post" in lower_text:
+        return "unavailable"
+    if any(token in text for token in ("并非所有迷路者", "迷失方向", "此页面确实已丢失")):
+        return "unavailable"
+    if "sorry, this page isn't available" in lower_text or "this page isn't available" in lower_text:
+        return "unavailable"
+    final_path = str(urlparse(final).path or "").lower()
+    if "/login" in final_path:
+        if any(token in requested_path for token in ("/post/", "/p/", "/reel/", "/tv/")):
+            return "unavailable"
+        return "login_required"
+    return "ok"
+
+
+def _probe_public_social_url(url: str) -> dict[str, Any]:
+    clean_url = _normalize_public_social_url(url)
+    if not clean_url:
+        raise HTTPException(status_code=400, detail="只支持检测 Threads 或 Instagram 公开链接")
+    try:
+        response = requests.get(
+            clean_url,
+            timeout=(5, 12),
+            allow_redirects=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "zh-TW,zh;q=0.9,en;q=0.8",
+            },
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"公开链接检测失败：{exc}") from exc
+    body = str(response.text or "")[:80000]
+    outcome = _classify_public_social_access(clean_url, str(response.url or clean_url), body)
+    return {
+        "url": clean_url,
+        "final_url": str(response.url or clean_url),
+        "outcome": outcome,
+        "accessible": outcome == "ok",
+    }
+
+
+def _mark_account_from_public_access(account_id: str, outcome: str, detail: str) -> dict[str, Any]:
+    clean_account_id = str(account_id or "").strip()
+    clean_outcome = str(outcome or "").strip().lower()
+    now = _now()
+    with db() as conn:
+        row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (clean_account_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="账号不存在")
+        current_status = str(row["status"] or "").strip().lower()
+        current_health = str(row["health_status"] or "").strip().lower()
+        if clean_outcome in {"restricted", "unavailable"}:
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET status = 'disabled', health_status = 'banned', health_checked_at = ?,
+                    health_detail = ?, last_login_check_at = ?, last_error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, detail[:1000], now, detail[:1000], now, clean_account_id),
+            )
+        elif clean_outcome == "login_required" and current_health != "banned" and current_status != "disabled":
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET status = 'cookie_expired', last_login_check_at = ?, last_error = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, detail[:1000], now, clean_account_id),
+            )
+    return get_social_account(clean_account_id)
+
+
+def _inspect_account_public_access(account_id: str, url: str) -> dict[str, Any]:
+    probe = _probe_public_social_url(url)
+    outcome = str(probe.get("outcome") or "ok")
+    if outcome == "restricted":
+        message = "平台账号主页或推文已进入封控页，请重新打开登录确认账号状态。"
+    elif outcome == "unavailable":
+        message = "公开链接无法打开，请重新打开登录确认账号状态。"
+    elif outcome == "login_required":
+        message = "平台要求重新登录后才能打开该页面。"
+    else:
+        message = ""
+    account = get_social_account(account_id) if outcome == "ok" else _mark_account_from_public_access(
+        account_id,
+        outcome,
+        message,
+    )
+    return {
+        "ok": True,
+        "accessible": outcome == "ok",
+        "outcome": outcome,
+        "message": message,
+        "account": account,
+        **probe,
+    }
+
+
 def _result_reports_banned_account(result: dict[str, Any] | None) -> bool:
     """Return whether a browser task conclusively reported a platform ban.
 
@@ -11239,7 +11366,8 @@ def _disable_banned_account_in_transaction(
     queued_rows = conn.execute(
         """
         SELECT * FROM social_automation_tasks
-        WHERE account_id = ? AND id != ? AND task_type != 'publish_post'
+        WHERE account_id = ? AND id != ?
+          AND task_type NOT IN ('publish_post', 'open_login', 'check_login')
           AND status IN ('preparing', 'queued', 'need_manual')
         """,
         (clean_account_id, str(current_task_id or "")),
@@ -11251,7 +11379,8 @@ def _disable_banned_account_in_transaction(
         """
         UPDATE social_automation_tasks
         SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ?
-        WHERE account_id = ? AND id != ? AND task_type != 'publish_post'
+        WHERE account_id = ? AND id != ?
+          AND task_type NOT IN ('publish_post', 'open_login', 'check_login')
           AND status IN ('preparing', 'queued', 'need_manual')
         """,
         (now, cancellation_reason, now, clean_account_id, str(current_task_id or "")),

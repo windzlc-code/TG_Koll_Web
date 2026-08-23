@@ -2914,6 +2914,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(source_copy.is_file())
         self.assertEqual(source_copy.resolve(), self.draft_media_path.resolve())
         self.assertEqual(source_copy.read_bytes(), self.draft_media_path.read_bytes())
+        self.assertFalse(cli_payload["generateReferenceSheet"])
+        self.assertFalse(cli_payload.get("editExistingImage"))
         self.assertTrue(result["image_edit_mode"])
         self.assertEqual(len(result["image_paths"]), 1)
         self.assertEqual(Path(server._extract_download_paths(result)[0]).resolve(), Path(result["image_paths"][0]).resolve())
