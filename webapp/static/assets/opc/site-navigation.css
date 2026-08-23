@@ -258,8 +258,9 @@ html {
     justify-content: flex-end;
   }
 
-  /* Keep the console and public pages on the same grid anchor when a nav link navigates between them. */
-  .site-header[data-site-page="console"] .header-actions {
+  /* Keep the console, CRM, and public pages on the same grid anchor when a nav link navigates between them. */
+  .site-header[data-site-page="console"] .header-actions,
+  .site-header[data-site-page="crm"] .header-actions {
     min-width: 274px;
     justify-content: flex-end;
   }

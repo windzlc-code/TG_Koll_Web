@@ -10,7 +10,8 @@ NAVIGATION_CSS = (ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigati
 def test_crm_shell_is_native_and_uses_shared_navigation():
     shell = (ROOT / "webapp" / "static" / "crm.html").read_text(encoding="utf-8")
     assert 'data-site-page="crm"' in shell
-    assert 'data-site-mode="authenticated"' in shell
+    assert 'data-site-mode="public"' in shell
+    assert 'data-site-auth-state="pending"' in shell
     assert '/assets/opc/site-navigation.js' in shell
     assert '/assets/fixed-light.css' in shell
     assert '<iframe' not in shell.lower()
@@ -41,12 +42,23 @@ def test_crm_navigation_entry_is_admin_only_and_fail_closed():
     assert "display: none !important" in crm_hidden_rule.split("}", 1)[0]
 
     source_shell = (FRONTEND / "index.html").read_text(encoding="utf-8")
+    production_shell = (ROOT / "webapp" / "static" / "crm.html").read_text(encoding="utf-8")
+    assert 'data-site-mode="public"' in source_shell
+    assert 'data-site-auth-state="pending"' in source_shell
     assert 'data-crm-entry hidden' in source_shell
-    assert 'data-site-admin-entry' in source_shell
-    assert '运营后台' in source_shell
+    for control in (
+        "data-site-mobile-menu",
+        "data-site-subscription-entry",
+        "data-site-language-toggle",
+        "data-open-login",
+    ):
+        assert control in source_shell
+        assert control in production_shell
     assert 'X-Admin-Workspace-User-ID' in (FRONTEND / "src" / "api.ts").read_text(encoding="utf-8")
     assert "function installAdminEntry" in NAVIGATION
     assert 'document.querySelectorAll("[data-site-header]")' in NAVIGATION[NAVIGATION.index("function syncPublicAdminEntry"):]
+    assert 'page === "console" ? "authenticated"' in NAVIGATION
+    assert '["console", "crm"].includes(page)' not in NAVIGATION
 
 
 def test_crm_and_shared_navigation_reject_legacy_green_palette():

@@ -2219,7 +2219,7 @@
   function mount(header) {
     if (!header || header.dataset.siteReady === "true") return header;
     const page = header.dataset.sitePage || "home";
-    const mode = header.dataset.siteMode || (["console", "crm"].includes(page) ? "authenticated" : "public");
+    const mode = header.dataset.siteMode || (page === "console" ? "authenticated" : "public");
     const resolvedMode = mode === "public" ? page : mode;
     const current = ["pricing", "console", "crm", "aboutVecto"].includes(page) ? page : "";
 
