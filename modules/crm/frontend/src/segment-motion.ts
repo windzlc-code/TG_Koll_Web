@@ -1,7 +1,9 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { flushSync } from "react-dom";
+import { resolveSegmentSlideAction, SLIDE_EASE, SLIDE_MS } from "./segment-motion-policy.js";
 
-export const SLIDE_MS = 180;
-export const SLIDE_EASE = "cubic-bezier(.2, .72, .2, 1)";
+export { resolveSegmentSlideAction, SLIDE_EASE, SLIDE_MS };
+export type SegmentSlideAction = "skip" | "coalesce" | "start";
 
 type SlideStyle = Record<string, string>;
 
@@ -30,6 +32,15 @@ function relativeBox(group: HTMLElement, item: HTMLElement) {
   };
 }
 
+function capturedFill(style: CSSStyleDeclaration) {
+  const image = style.backgroundImage;
+  const color = style.backgroundColor;
+  const transparent = !color || color === "transparent" || color === "rgba(0, 0, 0, 0)";
+  if (image && image !== "none") return transparent ? image : `${color} ${image}`.trim();
+  if (!transparent) return color;
+  return "var(--public-action-gradient, linear-gradient(#253746, #253746))";
+}
+
 function boxStyle(box: { left: number; top: number; width: number; height: number }, colors: SlideStyle): SlideStyle {
   return {
     ...colors,
@@ -49,7 +60,7 @@ export function captureSegmentSlide(group: HTMLElement, fromButton: HTMLElement,
   const activeStyle = getComputedStyle(fromButton);
   const inactiveStyle = getComputedStyle(toButton);
   const colors: SlideStyle = {
-    "--segment-slide-background": activeStyle.background,
+    "--segment-slide-background": capturedFill(activeStyle),
     "--segment-slide-border": activeStyle.borderColor,
     "--segment-slide-radius": activeStyle.borderRadius,
     "--segment-slide-shadow": activeStyle.boxShadow,
@@ -66,7 +77,7 @@ export function captureSegmentSlide(group: HTMLElement, fromButton: HTMLElement,
 }
 
 export function slideGroupClass(base: string, slide: SegmentSlide | null) {
-  return slide ? `${base} is-segment-background-sliding is-segment-slide-positioned` : base;
+  return slide ? `${base} is-segment-background-sliding` : base;
 }
 
 export function slideGroupStyle(slide: SegmentSlide | null, extra?: CSSProperties): CSSProperties {
@@ -84,22 +95,64 @@ export function slideButtonClass(slide: SegmentSlide | null, index: number, acti
 
 export function useSegmentSlide() {
   const [slide, setSlide] = useState<SegmentSlide | null>(null);
+  const slideRef = useRef<SegmentSlide | null>(null);
+  const commitFrame = useRef(0);
+  const commitToken = useRef(0);
+  slideRef.current = slide;
 
   useEffect(() => {
-    if (!slide) return;
-    if (slide.phase === "from") {
-      const frame = window.requestAnimationFrame(() => {
-        setSlide((current) => (current && current.phase === "from" ? { ...current, phase: "to" } : current));
+    if (slide?.phase !== "to") return;
+    const timer = window.setTimeout(() => {
+      window.requestAnimationFrame(() => {
+        setSlide((current) => (current?.phase === "to" ? null : current));
       });
-      return () => window.cancelAnimationFrame(frame);
-    }
-    const timer = window.setTimeout(() => setSlide(null), SLIDE_MS);
+    }, SLIDE_MS);
     return () => window.clearTimeout(timer);
   }, [slide]);
 
-  const start = (group: HTMLElement | null, fromButton: HTMLElement | null, toButton: HTMLElement | null) => {
-    if (!group || !fromButton || !toButton) return;
-    setSlide(captureSegmentSlide(group, fromButton, toButton));
+  const start = (
+    group: HTMLElement | null,
+    fromButton: HTMLElement | null,
+    toButton: HTMLElement | null,
+    commit?: () => void,
+  ): SegmentSlideAction => {
+    const token = ++commitToken.current;
+    const runCommit = () => {
+      if (token !== commitToken.current) return;
+      commit?.();
+    };
+    const buttons = group ? [...group.querySelectorAll<HTMLElement>(":scope > button")] : [];
+    const action = resolveSegmentSlideAction({
+      fromIndex: fromButton && group ? buttons.indexOf(fromButton) : -1,
+      toIndex: toButton && group ? buttons.indexOf(toButton) : -1,
+      pending: Boolean(slideRef.current),
+      reducedMotion: prefersReducedMotion(),
+    });
+    if (action === "skip") {
+      runCommit();
+      return action;
+    }
+    if (action === "coalesce") {
+      if (commitFrame.current) window.cancelAnimationFrame(commitFrame.current);
+      commitFrame.current = window.requestAnimationFrame(() => {
+        commitFrame.current = 0;
+        runCommit();
+      });
+      return action;
+    }
+    const captured = group && fromButton && toButton ? captureSegmentSlide(group, fromButton, toButton) : null;
+    if (!captured || !group) {
+      runCommit();
+      return "skip";
+    }
+    flushSync(() => setSlide(captured));
+    void group.offsetWidth;
+    commitFrame.current = window.requestAnimationFrame(() => {
+      commitFrame.current = 0;
+      setSlide((current) => (current && current.phase === "from" ? { ...current, phase: "to" } : current));
+      runCommit();
+    });
+    return action;
   };
 
   return {

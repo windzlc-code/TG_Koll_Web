@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api";
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
@@ -171,9 +171,10 @@ function CompactTabs({ items, value, messages, navigate, label }: { items: ViewI
     const target = button || node?.querySelector<HTMLButtonElement>(`#crm-tab-${next}`);
     const buttons = node ? [...node.querySelectorAll<HTMLButtonElement>("button")] : [];
     const direction = navigationDirection(buttons, current || null, target || null);
-    segment.start(node, current || null, target || null);
-    navigate(next, { direction });
-    window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus());
+    segment.start(node, current || null, target || null, () => {
+      navigate(next, { direction });
+      window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus());
+    });
   };
   const move = (event: React.KeyboardEvent<HTMLButtonElement>, current: ViewId) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -920,7 +921,7 @@ export function App() {
     window.requestAnimationFrame(() => document.getElementById("crm-main")?.focus({ preventScroll: true }));
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const direction = pageSlide.current;
     if (!direction) return;
     pageSlide.current = 0;
@@ -938,8 +939,7 @@ export function App() {
     const current = group?.querySelector<HTMLButtonElement>("button.is-active");
     const buttons = group ? [...group.querySelectorAll<HTMLButtonElement>("button")] : [];
     const direction = navigationDirection(buttons, current || null, button);
-    dockSlide.start(group, current || null, button);
-    navigate(next, { direction });
+    dockSlide.start(group, current || null, button, () => navigate(next, { direction }));
   };
 
   const activeTasks = useMemo(() => tasks.filter((task) => activeStatuses.has(String(task.status || ""))), [tasks]);
