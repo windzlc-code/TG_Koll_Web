@@ -130,6 +130,15 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(app, /const navViews:/);
   assert.match(app, /crm-mobile-dock/);
   assert.match(css, /--crm-mobile-dock-height/);
+  const motion = await read("src/segment-motion.ts");
+  assert.match(css, /cubic-bezier\(\.2, \.72, \.2, 1\)/);
+  assert.match(css, /is-segment-background-sliding/);
+  assert.match(css, /--public-action-gradient/);
+  assert.match(app, /useSegmentSlide/);
+  assert.match(app, /animatePageSlide/);
+  assert.match(app, /dockSlide\.start/);
+  assert.match(motion, /cubic-bezier\(\.2, \.72, \.2, 1\)/);
+  assert.match(motion, /export function useSegmentSlide/);
   assert.match(app, /role="tablist"/);
   assert.match(app, /role="tab"/);
   assert.match(app, /aria-selected=/);

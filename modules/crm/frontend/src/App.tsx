@@ -7,6 +7,7 @@ import { AnalyticsView, DestinationsView, GroupsView, PoolsView, SchedulesView, 
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
+import { animatePageSlide, navigationDirection, prefersReducedMotion, useSegmentSlide } from "./segment-motion";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -160,18 +161,29 @@ function StatusBadge({ status, messages }: { status?: string; messages: Messages
   return <span className={`crm-status crm-status--${statusTone(status)}`}><i aria-hidden="true" />{statusText(status, messages)}</span>;
 }
 
-function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId) => void; label: string }) {
+function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId, options?: { direction?: number }) => void; label: string }) {
+  const group = useRef<HTMLDivElement>(null);
+  const segment = useSegmentSlide();
+  const select = (next: ViewId, button?: HTMLButtonElement | null) => {
+    if (next === value) return;
+    const node = group.current;
+    const current = node?.querySelector<HTMLButtonElement>("button.is-active, button[aria-selected='true']");
+    const target = button || node?.querySelector<HTMLButtonElement>(`#crm-tab-${next}`);
+    const buttons = node ? [...node.querySelectorAll<HTMLButtonElement>("button")] : [];
+    const direction = navigationDirection(buttons, current || null, target || null);
+    segment.start(node, current || null, target || null);
+    navigate(next, { direction });
+    window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus());
+  };
   const move = (event: React.KeyboardEvent<HTMLButtonElement>, current: ViewId) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const currentIndex = items.indexOf(current);
     const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + items.length) % items.length;
-    const next = items[nextIndex];
-    navigate(next);
-    window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus());
+    select(items[nextIndex], event.currentTarget);
   };
-  return <div className="crm-compact-tabs" role="tablist" aria-label={label}>
-    {items.map((id) => <button id={`crm-tab-${id}`} type="button" role="tab" aria-selected={value === id} tabIndex={value === id ? 0 : -1} key={id} onKeyDown={(event) => move(event, id)} onClick={() => navigate(id)}>{messages.views[id][0]}</button>)}
+  return <div ref={group} className={segment.groupClass("crm-compact-tabs")} style={segment.groupStyle()} role="tablist" aria-label={label}>
+    {items.map((id, index) => <button id={`crm-tab-${id}`} type="button" role="tab" aria-selected={value === id} tabIndex={value === id ? 0 : -1} className={segment.buttonClass(index, value === id)} key={id} onKeyDown={(event) => move(event, id)} onClick={(event) => select(id, event.currentTarget)}>{messages.views[id][0]}</button>)}
   </div>;
 }
 
@@ -803,6 +815,10 @@ export function App() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [isCompact, setIsCompact] = useState(() => window.matchMedia("(max-width: 980px)").matches);
   const sidebar = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const dockRef = useRef<HTMLElement>(null);
+  const pageSlide = useRef(0);
+  const dockSlide = useSegmentSlide();
   const drawerWasOpen = useRef(false);
   const [bootstrapState, setBootstrapState] = useState<"loading" | "ready" | "forbidden" | "maintenance" | "error">("loading");
   const [bootstrap, setBootstrap] = useState<BootstrapPayload>({});
@@ -896,11 +912,34 @@ export function App() {
     }
   }, [drawerOpen, isCompact]);
 
-  const navigate = (next: ViewId) => {
+  const navigate = (next: ViewId, options?: { direction?: number }) => {
     window.location.hash = next;
+    pageSlide.current = options?.direction || 0;
     setView(next);
     setDrawerOpen(false);
     window.requestAnimationFrame(() => document.getElementById("crm-main")?.focus({ preventScroll: true }));
+  };
+
+  useEffect(() => {
+    const direction = pageSlide.current;
+    if (!direction) return;
+    pageSlide.current = 0;
+    if (!isCompact) return;
+    animatePageSlide(mainRef.current, direction);
+  }, [view, isCompact]);
+
+  const goDock = (id: NavViewId, button: HTMLButtonElement) => {
+    const next: ViewId = id === "settings" ? "accounts" : id;
+    if (navViewOf(next) === navViewOf(view)) {
+      window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
+      return;
+    }
+    const group = dockRef.current;
+    const current = group?.querySelector<HTMLButtonElement>("button.is-active");
+    const buttons = group ? [...group.querySelectorAll<HTMLButtonElement>("button")] : [];
+    const direction = navigationDirection(buttons, current || null, button);
+    dockSlide.start(group, current || null, button);
+    navigate(next, { direction });
   };
 
   const activeTasks = useMemo(() => tasks.filter((task) => activeStatuses.has(String(task.status || ""))), [tasks]);
@@ -952,7 +991,7 @@ export function App() {
         {navViews.map((id) => <button type="button" key={id} className={activeNav === id ? "is-active" : ""} aria-current={activeNav === id ? "page" : undefined} onClick={() => navigate(id === "settings" ? "accounts" : id)}><Icon name={id} /><span>{messages.navItems[id]}</span></button>)}
       </nav>
     </aside>
-    <main id="crm-main" className="crm-main" tabIndex={-1}>
+    <main ref={mainRef} id="crm-main" className="crm-main" tabIndex={-1}>
       {bootstrap.workspace?.managed_by_admin && <div className="crm-banner crm-banner--workspace" role="status"><Icon name="accounts" /><span><strong>{messages.managedWorkspace}</strong>{messages.managedWorkspaceDetail(bootstrap.workspace.username || String(bootstrap.workspace.user_id || "—"), bootstrap.workspace.user_id)}</span><a className="crm-secondary-button" href="/admin.html">{messages.exitWorkspace}</a></div>}
       {loginAccounts.length > 0 && <div className="crm-banner crm-banner--login" role="alert"><Icon name="warning" /><span><strong>{messages.accountsNeedLogin(loginAccounts.length)}</strong><span className="crm-banner-platforms">{loginAccounts.slice(0, 3).map((account) => <PlatformChip key={String(account.id || account.username)} platform={account.platform} label={`@${account.username || account.display_name || account.id}`} />)}</span></span><button type="button" onClick={() => navigate("accounts")}>{messages.manageAccounts}</button></div>}
       {partial && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{messages.partial}</span><button type="button" onClick={() => { void loadBootstrap(); void refreshTasks(); }}><Icon name="refresh" />{messages.retry}</button></div>}
@@ -993,8 +1032,8 @@ export function App() {
     {taskStripVisible && <aside className="crm-task-strip" aria-live="polite" aria-label={messages.taskStripLabel}><button type="button" onClick={() => navigate("tasks")}><span className="crm-task-strip-pulse" aria-hidden="true" /><span><strong>{messages.runningCount(activeTasks.length)} · {messages.reviewCount(reviewTasks.length)} · {messages.failedCount(failedTasks.length)}</strong><small>{messages.taskStripHint}</small></span><Icon name="arrow" /></button></aside>}
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={(taskId) => { setToast(`${messages.submitted} · ${taskId}`); void refreshTasks(); }} />
     {toast && <div className="crm-toast" role="status">{toast}</div>}
-    <nav className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) }}>
-      {navViews.map((id) => <button type="button" key={id} className={activeNav === id ? "is-active" : ""} aria-current={activeNav === id ? "page" : undefined} onClick={() => navigate(id === "settings" ? "accounts" : id)}><Icon name={id} /><span>{messages.navItems[id]}</span></button>)}
+    <nav ref={dockRef} className={dockSlide.groupClass("crm-mobile-dock")} aria-label={messages.product} style={dockSlide.groupStyle({ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) })}>
+      {navViews.map((id, index) => <button type="button" key={id} className={dockSlide.buttonClass(index, activeNav === id)} aria-current={activeNav === id ? "page" : undefined} onClick={(event) => goDock(id, event.currentTarget)}><Icon name={id} /><span>{messages.navItems[id]}</span></button>)}
     </nav>
   </div>;
 }

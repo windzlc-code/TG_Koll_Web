@@ -184,10 +184,32 @@ body.crm-page button { color: inherit; }
 .crm-workspace-tabs,
 .crm-compact-tabs { display: inline-flex; flex-wrap: wrap; gap: 2px; max-width: 1320px; margin: 0 auto 8px; padding: 2px; background: var(--crm-paper); border: 1px solid var(--crm-line); border-radius: 8px; }
 .crm-workspace-tabs button,
-.crm-compact-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 26px; padding: 0 8px; color: var(--crm-muted); background: transparent; border: 0; border-radius: 6px; font-size: 12px; font-weight: 800; cursor: pointer; }
+.crm-compact-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 8px;
+  color: var(--crm-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 180ms cubic-bezier(.2, .72, .2, 1), background-color 180ms cubic-bezier(.2, .72, .2, 1), border-color 180ms cubic-bezier(.2, .72, .2, 1);
+}
 .crm-workspace-tabs button svg { width: 14px; height: 14px; }
 .crm-workspace-tabs button[aria-selected="true"],
-.crm-compact-tabs button[aria-selected="true"] { color: var(--crm-ink); background: var(--crm-accent-soft); }
+.crm-compact-tabs button[aria-selected="true"],
+.crm-compact-tabs button.is-active {
+  color: #fff;
+  background-color: var(--public-cool-dark, #253746);
+  background-image: var(--public-action-gradient, linear-gradient(#253746, #253746));
+  border-color: var(--vecto-action-border, #34495e);
+}
 
 .crm-module-toolbar {
   display: flex;
@@ -608,6 +630,62 @@ body.crm-page button { color: inherit; }
 .crm-banner-platforms { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .platform-outline-icon--instagram { overflow: visible; fill: none; stroke: none; }
 .crm-mobile-dock { display: none; }
+.crm-compact-tabs,
+.crm-mobile-dock { isolation: isolate; }
+.crm-compact-tabs { position: relative; }
+.crm-compact-tabs.is-segment-slide-positioned { position: relative; }
+.crm-mobile-dock.is-segment-slide-positioned { position: relative; }
+.crm-compact-tabs.is-segment-background-sliding,
+.crm-mobile-dock.is-segment-background-sliding { pointer-events: none; }
+.crm-compact-tabs.is-segment-background-sliding::before,
+.crm-mobile-dock.is-segment-background-sliding::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  left: 0;
+  top: 0;
+  width: var(--segment-slide-width);
+  height: var(--segment-slide-height);
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 1px solid var(--segment-slide-border);
+  border-radius: var(--segment-slide-radius);
+  background: var(--segment-slide-background);
+  box-shadow: var(--segment-slide-shadow);
+  transform: translate3d(var(--segment-slide-x), var(--segment-slide-y), 0);
+  will-change: transform, width, height;
+  transition:
+    transform 180ms cubic-bezier(.2, .72, .2, 1),
+    width 180ms cubic-bezier(.2, .72, .2, 1),
+    height 180ms cubic-bezier(.2, .72, .2, 1);
+}
+.crm-mobile-dock.is-segment-background-sliding::before {
+  will-change: transform;
+  transition: transform 180ms cubic-bezier(.2, .72, .2, 1);
+}
+.crm-compact-tabs.is-segment-background-sliding > button,
+.crm-mobile-dock.is-segment-background-sliding > button {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+.crm-compact-tabs.is-segment-background-sliding > button:is(.is-active, [aria-selected="true"], .is-segment-slide-to),
+.crm-mobile-dock.is-segment-background-sliding > button:is(.is-active, .is-segment-slide-to) {
+  border-color: transparent !important;
+  background: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+.crm-compact-tabs.is-segment-background-sliding > button.is-segment-slide-from,
+.crm-mobile-dock.is-segment-background-sliding > button.is-segment-slide-from {
+  color: var(--segment-slide-inactive-color) !important;
+  transition: color 180ms cubic-bezier(.2, .72, .2, 1) !important;
+}
+.crm-compact-tabs.is-segment-background-sliding > button.is-segment-slide-to,
+.crm-mobile-dock.is-segment-background-sliding > button.is-segment-slide-to {
+  color: var(--segment-slide-active-color) !important;
+  transition: color 180ms cubic-bezier(.2, .72, .2, 1) !important;
+}
 .crm-wizard-fieldset { display: flex; flex-wrap: wrap; min-width: 0; min-height: 44px; margin: 0; padding: 11px 12px; gap: 8px; color: var(--crm-ink-soft); background: var(--crm-surface-soft); border: 1px solid var(--crm-surface); border-radius: 8px; }
 .crm-platform-fieldset > button {
   display: inline-flex;
@@ -828,7 +906,8 @@ body.crm-page button { color: inherit; }
   .crm-mobile-rail-button,
   .crm-sidebar,
   .crm-sidebar-backdrop { display: none !important; }
-  .crm-mobile-dock {
+  .crm-mobile-dock,
+  .crm-mobile-dock.is-segment-slide-positioned {
     position: fixed;
     z-index: 90;
     right: 0;
@@ -842,7 +921,7 @@ body.crm-page button { color: inherit; }
     padding: 5px max(5px, env(safe-area-inset-right, 0px)) max(5px, env(safe-area-inset-bottom, 0px)) max(5px, env(safe-area-inset-left, 0px));
     background: color-mix(in srgb, var(--crm-paper) 94%, transparent);
     border-top: 1px solid var(--crm-line);
-    box-shadow: 0 -8px 22px rgba(16, 24, 32, 0.08);
+    box-shadow: 0 -8px 22px rgba(7, 17, 18, 0.16);
     backdrop-filter: blur(14px);
   }
   .crm-mobile-dock button {
@@ -870,9 +949,16 @@ body.crm-page button { color: inherit; }
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .crm-mobile-dock button {
+    -webkit-tap-highlight-color: transparent;
+    transition: color 180ms cubic-bezier(.2, .72, .2, 1), background-color 180ms cubic-bezier(.2, .72, .2, 1), border-color 180ms cubic-bezier(.2, .72, .2, 1);
+  }
+  .crm-mobile-dock button:focus:not(:focus-visible) { outline: none; }
   .crm-mobile-dock button.is-active {
-    color: var(--crm-ink);
-    background: var(--crm-accent-soft);
+    color: #fff;
+    background-color: var(--public-cool-dark, #253746);
+    background-image: var(--public-action-gradient, linear-gradient(#253746, #253746));
+    border-color: var(--vecto-action-border, #34495e);
   }
   .crm-main { min-height: calc(100vh - var(--site-header-height, 68px) - var(--crm-mobile-dock-height)); margin-left: 0; padding: 12px 12px calc(var(--crm-mobile-dock-height) + 16px); }
   .crm-compact-tabs { display: flex; width: 100%; overflow-x: auto; }
