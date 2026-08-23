@@ -8,13 +8,13 @@ import { createSinglePollScheduler, isModulePolicyError, mergeCursorPage, mergeP
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path) => readFile(resolve(root, path), "utf8");
 
-test("CRM overview exposes a three-step acquisition pipeline", async () => {
+test("CRM overview exposes a compact action grid", async () => {
   const app = await read("src/App.tsx");
   const i18n = await read("src/i18n.ts");
-  assert.match(app, /className="crm-pipeline"/);
-  assert.match(app, /messages\.pipelineCollect/);
+  assert.match(app, /className="crm-action-grid"/);
+  assert.match(app, /messages\.pipelineCollectHint/);
   assert.match(i18n, /pipelineCollect: "发现客户"/);
-  assert.match(i18n, /navGroups: \{ growth: "获客"/);
+  assert.match(i18n, /navItems: \{ overview: "总览"/);
 });
 
 test("CRM exposes the twelve required work views", async () => {
@@ -127,7 +127,7 @@ test("policy failures are fail-closed and unknown actions expose review API", as
 test("frontend document supplements are represented by accessible, persistent UI", async () => {
   const app = await read("src/App.tsx");
   const css = await read("src/styles.css");
-  assert.match(app, /const viewGroups:/);
+  assert.match(app, /const navViews:/);
   assert.match(app, /role="tablist"/);
   assert.match(app, /role="tab"/);
   assert.match(app, /aria-selected=/);
@@ -136,7 +136,7 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(app, /managed_by_admin/);
   assert.match(app, /cancelTaskConfirm/);
   assert.match(app, /role="progressbar"/);
-  assert.match(css, /--crm-sidebar-width:\s*264px/);
+  assert.match(css, /--crm-sidebar-width:\s*188px/);
   assert.match(css, /@media \(max-width: 980px\)/);
   assert.doesNotMatch(css, /font-size:\s*(?:9|10|11)px|font:\s*(?:9|10|11)px/);
 });

@@ -22,11 +22,16 @@ const viewIds: ViewId[] = [
   "relationships", "tasks", "schedules", "templates", "accounts", "settings",
 ];
 
-const viewGroups: Array<{ label: "growth" | "engagement" | "operations"; views: ViewId[] }> = [
-  { label: "growth", views: ["overview", "collect", "pools"] },
-  { label: "engagement", views: ["public", "outreach", "groups", "relationships"] },
-  { label: "operations", views: ["tasks", "schedules", "templates", "accounts", "settings"] },
-];
+type NavViewId = "overview" | "collect" | "pools" | "public" | "outreach" | "groups" | "tasks" | "settings";
+const navViews: NavViewId[] = ["overview", "collect", "pools", "public", "outreach", "groups", "tasks", "settings"];
+const viewAliases: Partial<Record<ViewId, ViewId>> = {
+  schedules: "tasks",
+  templates: "settings",
+  accounts: "settings",
+  relationships: "settings",
+};
+const taskTabs: ViewId[] = ["tasks", "schedules"];
+const settingTabs: ViewId[] = ["accounts", "templates", "settings", "relationships"];
 
 const endpointByView: Partial<Record<ViewId, string>> = {
   collect: "hotspots",
@@ -56,7 +61,10 @@ const capabilityByView: Partial<Record<ViewId, string>> = {
   relationships: "relationship_live_verify",
 };
 const activeStatuses = new Set(["queued", "running", "manual_required", "paused_by_user", "paused_by_policy", "unknown", "awaiting_confirmation"]);
-const engagementViews: ViewId[] = ["public", "outreach", "groups"];
+
+function navViewOf(view: ViewId): NavViewId {
+  return (viewAliases[view] || view) as NavViewId;
+}
 
 function hashView(): ViewId {
   const value = window.location.hash.replace(/^#\/?/, "") as ViewId;
@@ -147,18 +155,18 @@ function StatusBadge({ status, messages }: { status?: string; messages: Messages
   return <span className={`crm-status crm-status--${statusTone(status)}`}><i aria-hidden="true" />{statusText(status, messages)}</span>;
 }
 
-function EngagementTabs({ view, messages, navigate }: { view: ViewId; messages: Messages; navigate: (view: ViewId) => void }) {
+function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId) => void; label: string }) {
   const move = (event: React.KeyboardEvent<HTMLButtonElement>, current: ViewId) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const currentIndex = engagementViews.indexOf(current);
-    const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? engagementViews.length - 1 : (currentIndex + (event.key === 'ArrowRight' ? 1 : -1) + engagementViews.length) % engagementViews.length;
-    const next = engagementViews[nextIndex];
+    const currentIndex = items.indexOf(current);
+    const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + items.length) % items.length;
+    const next = items[nextIndex];
     navigate(next);
     window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus());
   };
-  return <div className="crm-workspace-tabs" role="tablist" aria-label={messages.navGroups.engagement}>
-    {engagementViews.map((id) => <button id={`crm-tab-${id}`} type="button" role="tab" aria-controls={`crm-panel-${id}`} aria-selected={view === id} tabIndex={view === id ? 0 : -1} key={id} onKeyDown={(event) => move(event, id)} onClick={() => navigate(id)}><Icon name={id} />{messages.views[id][0]}</button>)}
+  return <div className="crm-compact-tabs" role="tablist" aria-label={label}>
+    {items.map((id) => <button id={`crm-tab-${id}`} type="button" role="tab" aria-selected={value === id} tabIndex={value === id ? 0 : -1} key={id} onKeyDown={(event) => move(event, id)} onClick={() => navigate(id)}>{messages.views[id][0]}</button>)}
   </div>;
 }
 
@@ -493,7 +501,7 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
   const filtersActive = Boolean(query.trim() || statusFilter);
   const clearFilters = () => { setQuery(""); setStatusFilter(""); };
 
-  return <section id={`crm-panel-${view}`} className="crm-panel crm-resource-panel" role={engagementViews.includes(view) ? "tabpanel" : undefined} aria-labelledby={engagementViews.includes(view) ? `crm-tab-${view}` : undefined} aria-busy={state === "loading"}>
+  return <section id={`crm-panel-${view}`} className="crm-panel crm-resource-panel" aria-busy={state === "loading"}>
     <div className="crm-panel-head">
       <div><span className="crm-kicker">{messages.workspace}</span><h2>{messages.views[view][0]}</h2></div>
       {writeViews.has(view) && enabled && <button className="crm-primary-button" type="button" onClick={onCreate}>{messages.create}</button>}
@@ -528,17 +536,20 @@ function Overview({ bootstrap, tasks, messages, navigate, onCreate }: { bootstra
   const summary = bootstrap.summary || bootstrap.counts || {};
   const active = tasks.filter((task) => activeStatuses.has(String(task.status || "")));
   const manual = tasks.filter((task) => ["manual_required", "unknown"].includes(String(task.status || "")));
-  const onboarding = bootstrap.onboarding;
-  const needsOnboarding = onboarding && onboarding.completed !== true;
+  const actions = [
+    { id: "collect" as ViewId, title: messages.views.collect[0], hint: messages.pipelineCollectHint, run: () => onCreate("collect") },
+    { id: "outreach" as ViewId, title: messages.views.outreach[0], hint: messages.views.outreach[1], run: () => onCreate("outreach") },
+    { id: "public" as ViewId, title: messages.views.public[0], hint: messages.views.public[1], run: () => onCreate("public") },
+    { id: "groups" as ViewId, title: messages.views.groups[0], hint: messages.views.groups[1], run: () => onCreate("groups") },
+    { id: "tasks" as ViewId, title: messages.views.tasks[0], hint: messages.views.tasks[1], run: () => navigate("tasks") },
+  ];
 
   return <>
     <section className="crm-overview-hero">
       <div>
-        <p className="crm-eyebrow">Vecto CRM</p>
         <h1>{messages.views.overview[0]}</h1>
         <p>{messages.views.overview[1]}</p>
       </div>
-      <button className="crm-primary-button" type="button" onClick={() => onCreate("collect")}><Icon name="collect" />{messages.create}</button>
     </section>
     <section className="crm-metrics" aria-label={messages.views.overview[0]}>
       <Metric label={messages.metrics.leads} value={summary.leads ?? summary.lead_count} />
@@ -546,39 +557,19 @@ function Overview({ bootstrap, tasks, messages, navigate, onCreate }: { bootstra
       <Metric label={messages.metrics.active} value={summary.active_tasks ?? active.length} />
       <Metric label={messages.metrics.manual} value={summary.manual_required ?? manual.length} />
     </section>
-    <section className="crm-pipeline" aria-label={messages.acquisitionPath}>
-      {([
-        { id: "collect" as ViewId, icon: "collect" as const, title: messages.pipelineCollect, hint: messages.pipelineCollectHint, action: () => onCreate("collect") },
-        { id: "pools" as ViewId, icon: "pools" as const, title: messages.pipelinePool, hint: messages.pipelinePoolHint, action: () => navigate("pools") },
-        { id: "public" as ViewId, icon: "public" as const, title: messages.pipelineReach, hint: messages.pipelineReachHint, action: () => navigate("public") },
-      ]).map((step, index) => <button type="button" className="crm-pipeline-card" key={step.id} onClick={step.action}>
-        <span className="crm-pipeline-index">{String(index + 1).padStart(2, "0")}</span>
-        <span className="crm-pipeline-icon" aria-hidden="true"><Icon name={step.icon} /></span>
+    <section className="crm-action-grid" aria-label={messages.acquisitionPath}>
+      {actions.map((step) => <button type="button" className="crm-action-card" key={step.id} onClick={step.run}>
+        <span className="crm-pipeline-icon" aria-hidden="true"><Icon name={step.id} /></span>
         <strong>{step.title}</strong>
         <small>{step.hint}</small>
       </button>)}
     </section>
-    <div className="crm-overview-grid">
-      <section className="crm-panel crm-priority-panel">
-        <div className="crm-panel-head"><div><span className="crm-kicker">{messages.actionQueueKicker}</span><h2>{messages.priority}</h2></div><button className="crm-text-button" onClick={() => navigate("tasks")}>{messages.viewTasks}<Icon name="arrow" /></button></div>
-        {!manual.length && !active.length ? <EmptyState messages={messages} view="tasks" /> : <div className="crm-compact-tasks">
-          {[...manual, ...active].slice(0, 5).map((task, index) => <button type="button" key={String(task.task_id || task.id || index)} onClick={() => navigate("tasks")}><span><strong>{task.title || task.name || task.kind || task.task_id}</strong><small>{task.message || task.updated_at || messages.noSimulatedProgress}</small></span><StatusBadge status={String(task.status || "queued")} messages={messages} /></button>)}
-        </div>}
-      </section>
-      <section className="crm-panel crm-path-panel">
-        <div className="crm-panel-head"><div><span className="crm-kicker">{messages.customerPathKicker}</span><h2>{messages.customerPath}</h2></div></div>
-        <div className="crm-path">
-          {(["collect", "pools", "public", "outreach", "relationships"] as ViewId[]).map((view, index) => <button type="button" key={view} onClick={() => navigate(view)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{messages.views[view][0]}</strong><Icon name="arrow" /></button>)}
-        </div>
-      </section>
-    </div>
-    {needsOnboarding && <section className="crm-panel crm-onboarding">
-      <div className="crm-panel-head"><div><span className="crm-kicker">{messages.firstRunKicker}</span><h2>{messages.firstRun}</h2><p>{messages.firstRunHint}</p></div></div>
-      <ol>{messages.firstSteps.map((step, index) => {
-        const completed = onboarding.steps?.find((entry) => entry.id === ["permission", "account", "session", "pool", "task"][index])?.completed;
-        return <li className={completed ? "is-complete" : ""} key={step}><span>{completed ? <Icon name="check" /> : index + 1}</span>{step}</li>;
-      })}</ol>
-    </section>}
+    <section className="crm-panel crm-priority-panel">
+      <div className="crm-panel-head"><div><h2>{messages.priority}</h2></div><button className="crm-text-button" onClick={() => navigate("tasks")}>{messages.viewTasks}<Icon name="arrow" /></button></div>
+      {!manual.length && !active.length ? <EmptyState messages={messages} view="tasks" /> : <div className="crm-compact-tasks">
+        {[...manual, ...active].slice(0, 5).map((task, index) => <button type="button" key={String(task.task_id || task.id || index)} onClick={() => navigate("tasks")}><span><strong>{task.title || task.name || task.kind || task.task_id}</strong><small>{task.message || task.updated_at || messages.noSimulatedProgress}</small></span><StatusBadge status={String(task.status || "queued")} messages={messages} /></button>)}
+      </div>}
+    </section>
   </>;
 }
 
@@ -944,34 +935,45 @@ export function App() {
   if (bootstrapState === "maintenance") return <StatePage icon="signal" title={messages.maintenance} description={bootstrap.module?.message || messages.maintenanceHint} action={<button className="crm-primary-button" type="button" onClick={() => void loadBootstrap()}>{messages.retry}</button>} />;
   if (bootstrapState === "error") return <StatePage title={messages.unavailable} description={messages.loadingHint} action={<button className="crm-primary-button" type="button" onClick={() => void loadBootstrap()}><Icon name="refresh" />{messages.retry}</button>} />;
 
+  const activeNav = navViewOf(view);
+  const startWorkflow = (next: ViewId) => {
+    if (viewEnabled(next) && ["collect", "public", "outreach", "groups", "relationships"].includes(next)) setWorkflowView(next as WizardView);
+  };
+
   return <div className="crm-app">
-    <button ref={drawerTrigger} className="crm-mobile-rail-button" type="button" aria-expanded={drawerOpen} aria-controls="crmSidebar" onClick={() => setDrawerOpen(true)}><Icon name="menu" /><span>{messages.views[view][0]}</span></button>
+    <button ref={drawerTrigger} className="crm-mobile-rail-button" type="button" aria-expanded={drawerOpen} aria-controls="crmSidebar" onClick={() => setDrawerOpen(true)}><Icon name="menu" /><span>{messages.navItems[activeNav]}</span></button>
     <div className={`crm-sidebar-backdrop ${drawerOpen ? "is-open" : ""}`} aria-hidden={!drawerOpen} onClick={() => setDrawerOpen(false)} />
     <aside ref={sidebar} id="crmSidebar" className={`crm-sidebar ${drawerOpen ? "is-open" : ""}`} aria-label={messages.product} aria-hidden={isCompact && !drawerOpen ? "true" : undefined} inert={isCompact && !drawerOpen ? true : undefined}>
-      <div className="crm-sidebar-head"><div className="crm-monogram">CRM</div><div><strong>{messages.productShort}</strong><span>{messages.workspace}</span></div><button className="crm-icon-button crm-sidebar-close" type="button" onClick={() => setDrawerOpen(false)} aria-label={messages.closeNav}><Icon name="close" /></button></div>
+      <div className="crm-sidebar-head"><div className="crm-monogram">CRM</div><strong>{messages.productShort}</strong><button className="crm-icon-button crm-sidebar-close" type="button" onClick={() => setDrawerOpen(false)} aria-label={messages.closeNav}><Icon name="close" /></button></div>
       <nav className="crm-nav">
-        {viewGroups.map((group, groupIndex) => <section className="crm-nav-group" aria-labelledby={`crm-nav-${group.label}`} key={group.label}>
-          <h2 id={`crm-nav-${group.label}`}>{messages.navGroups[group.label]}</h2>
-          {group.views.map((id, index) => <button type="button" key={id} className={view === id ? "is-active" : ""} aria-current={view === id ? "page" : undefined} onClick={() => navigate(id)}><Icon name={id} /><span><strong>{messages.views[id][0]}</strong>{groupIndex === 0 && index === 0 && <small>{bootstrap.module?.version || "CRM v1"}</small>}</span></button>)}
-        </section>)}
+        {navViews.map((id) => <button type="button" key={id} className={activeNav === id ? "is-active" : ""} aria-current={activeNav === id ? "page" : undefined} onClick={() => navigate(id === "settings" ? "accounts" : id)}><Icon name={id} /><span>{messages.navItems[id]}</span></button>)}
       </nav>
-      <div className={`crm-service-state ${bootstrap.module?.degraded ? "is-degraded" : ""}`}><Icon name="signal" /><span><strong>{bootstrap.module?.degraded ? messages.degraded : messages.serviceName}</strong><small>{bootstrap.module?.degraded ? messages.degradedHint : messages.serviceDetail}</small></span></div>
     </aside>
     <main id="crm-main" className="crm-main" tabIndex={-1}>
       {bootstrap.workspace?.managed_by_admin && <div className="crm-banner crm-banner--workspace" role="status"><Icon name="accounts" /><span><strong>{messages.managedWorkspace}</strong>{messages.managedWorkspaceDetail(bootstrap.workspace.username || String(bootstrap.workspace.user_id || "—"), bootstrap.workspace.user_id)}</span><a className="crm-secondary-button" href="/admin.html">{messages.exitWorkspace}</a></div>}
       {loginAccounts.length > 0 && <div className="crm-banner crm-banner--login" role="alert"><Icon name="warning" /><span><strong>{messages.accountsNeedLogin(loginAccounts.length)}</strong>{loginAccounts.slice(0, 3).map((account) => `${account.platform || ""} @${account.username || account.display_name || account.id}`).join(" · ")}</span><button type="button" onClick={() => navigate("accounts")}>{messages.manageAccounts}</button></div>}
       {partial && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{messages.partial}</span><button type="button" onClick={() => { void loadBootstrap(); void refreshTasks(); }}><Icon name="refresh" />{messages.retry}</button></div>}
       {bootstrap.module?.degraded && <div className="crm-banner crm-banner--degraded" role="alert"><Icon name="signal" /><span><strong>{messages.degraded}</strong>{messages.degradedHint}</span></div>}
-      {engagementViews.includes(view) && <EngagementTabs view={view} messages={messages} navigate={navigate} />}
-      {view === "overview" && <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} navigate={navigate} onCreate={(next) => { if (viewEnabled(next) && ["collect", "public", "outreach", "groups", "relationships"].includes(next)) setWorkflowView(next as WizardView); }} />}
-      {view === "tasks" && <div className="crm-task-data-stack"><AnalyticsView language={language} /><TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} /></div>}
-      {view === "accounts" && <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />}
+      {view === "overview" && <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} navigate={navigate} onCreate={startWorkflow} />}
+      {activeNav === "tasks" && <>
+        <CompactTabs items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"} messages={messages} navigate={navigate} label={messages.views.tasks[0]} />
+        {view === "schedules"
+          ? <SchedulesView language={language} onCreate={(workflow) => setWorkflowView(workflow)} />
+          : <>
+            <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} />
+            <details className="crm-analytics-fold"><summary>{language === "zh-Hant" ? "營運分析" : "运营分析"}</summary><AnalyticsView language={language} /></details>
+          </>}
+      </>}
+      {activeNav === "settings" && <>
+        <CompactTabs items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"} messages={messages} navigate={navigate} label={messages.views.settings[0]} />
+        {(view === "templates") && <TemplatesView language={language} />}
+        {(view === "settings") && <DestinationsView language={language} />}
+        {(view === "relationships") && <ResourceList key="relationships" view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />}
+        {(view === "accounts" || !settingTabs.includes(view)) && <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />}
+      </>}
       {view === "pools" && <PoolsView language={language} />}
       {view === "groups" && <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />}
-      {view === "schedules" && <SchedulesView language={language} onCreate={(workflow) => setWorkflowView(workflow)} />}
-      {view === "templates" && <TemplatesView language={language} />}
-      {view === "settings" && <DestinationsView language={language} />}
-      {view !== "overview" && view !== "tasks" && view !== "accounts" && view !== "pools" && view !== "groups" && view !== "schedules" && view !== "templates" && view !== "settings" && <ResourceList key={view} view={view} messages={messages} language={language} enabled={viewEnabled(view)} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory(view)} onCreate={() => setWorkflowView(view as WizardView)} />}
+      {view !== "overview" && activeNav !== "tasks" && activeNav !== "settings" && view !== "pools" && view !== "groups" && <ResourceList key={view} view={view} messages={messages} language={language} enabled={viewEnabled(view)} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory(view)} onCreate={() => startWorkflow(view)} />}
     </main>
     {taskStripVisible && <aside className="crm-task-strip" aria-live="polite" aria-label={messages.taskStripLabel}><button type="button" onClick={() => navigate("tasks")}><span className="crm-task-strip-pulse" aria-hidden="true" /><span><strong>{messages.runningCount(activeTasks.length)} · {messages.reviewCount(reviewTasks.length)} · {messages.failedCount(failedTasks.length)}</strong><small>{messages.taskStripHint}</small></span><Icon name="arrow" /></button></aside>}
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={(taskId) => { setToast(`${messages.submitted} · ${taskId}`); void refreshTasks(); }} />

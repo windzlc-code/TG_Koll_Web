@@ -42,7 +42,11 @@ def test_crm_navigation_entry_is_admin_only_and_fail_closed():
 
     source_shell = (FRONTEND / "index.html").read_text(encoding="utf-8")
     assert 'data-crm-entry hidden' in source_shell
+    assert 'data-site-admin-entry' in source_shell
+    assert '运营后台' in source_shell
     assert 'X-Admin-Workspace-User-ID' in (FRONTEND / "src" / "api.ts").read_text(encoding="utf-8")
+    assert "function installAdminEntry" in NAVIGATION
+    assert 'document.querySelectorAll("[data-site-header]")' in NAVIGATION[NAVIGATION.index("function syncPublicAdminEntry"):]
 
 
 def test_crm_and_shared_navigation_reject_legacy_green_palette():

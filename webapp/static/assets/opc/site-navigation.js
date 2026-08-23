@@ -428,35 +428,40 @@
     entries.forEach((entry) => { entry.hidden = !adminIdentity; });
   }
 
+  function installAdminEntry(header) {
+    const actions = header?.querySelector(".header-actions");
+    if (!actions) return null;
+    let entry = actions.querySelector(":scope > [data-site-admin-entry], :scope > #openAdmin");
+    if (!entry) {
+      entry = document.createElement("button");
+      entry.type = "button";
+      entry.className = "site-admin-entry admin-only";
+      entry.dataset.siteAdminEntry = "true";
+      entry.hidden = true;
+      const insertBefore = actions.querySelector(":scope > [data-site-notification-menu], :scope > [data-site-account-menu], :scope > [data-open-login]");
+      if (insertBefore) insertBefore.before(entry);
+      else actions.appendChild(entry);
+    }
+    if (entry.dataset.siteAdminReady !== "true" && entry.id !== "openAdmin") {
+      entry.dataset.siteAdminReady = "true";
+      entry.addEventListener("click", () => {
+        removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
+        markAdminConsoleContext();
+        window.location.assign("/admin.html");
+      });
+    }
+    return entry;
+  }
+
   function syncPublicAdminEntry() {
     const labels = copy[currentLanguage()];
     const isAdmin = currentSessionMode === "admin"
-      && (currentAccount?.is_admin === true || Number(currentAccount?.is_admin) === 1);
-    document.querySelectorAll('[data-site-header][data-site-mode="public"]').forEach((header) => {
-      const actions = header.querySelector(".header-actions");
-      if (!actions) return;
-      let entry = actions.querySelector(":scope > [data-site-admin-entry]");
-      if (!isAdmin) {
-        entry?.remove();
-        return;
-      }
-      if (!entry) {
-        entry = document.createElement("button");
-        entry.type = "button";
-        entry.className = "site-admin-entry";
-        entry.dataset.siteAdminEntry = "true";
-        entry.addEventListener("click", () => {
-          removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
-          markAdminConsoleContext();
-          window.location.assign("/admin.html");
-        });
-        const notificationMenu = actions.querySelector(":scope > [data-site-notification-menu]");
-        const accountMenu = actions.querySelector(":scope > [data-site-account-menu]");
-        if (notificationMenu) notificationMenu.before(entry);
-        else if (accountMenu) accountMenu.before(entry);
-        else actions.appendChild(entry);
-      }
-      entry.hidden = false;
+      || Boolean(currentAccount?.is_admin === true || Number(currentAccount?.is_admin) === 1 || currentAccount?.acting_admin);
+    document.querySelectorAll("[data-site-header]").forEach((header) => {
+      const entry = installAdminEntry(header);
+      if (!entry) return;
+      entry.hidden = !isAdmin;
+      if (!isAdmin) return;
       entry.textContent = labels.adminConsole;
       entry.setAttribute("aria-label", labels.adminConsole);
     });
@@ -2229,6 +2234,7 @@
     if (mode === "authenticated") {
       installUnifiedAccountMenu(header, page);
       installUnifiedNotificationMenu(header);
+      installAdminEntry(header);
     }
 
     header.dataset.siteReady = "true";
