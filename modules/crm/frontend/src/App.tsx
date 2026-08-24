@@ -950,11 +950,7 @@ export function App() {
       window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
       return;
     }
-    const group = dockRef.current;
-    const current = group?.querySelector<HTMLButtonElement>("button.is-active");
-    const buttons = group ? [...group.querySelectorAll<HTMLButtonElement>(".crm-mobile-dock-items > button")] : [];
-    const direction = navigationDirection(buttons, current || null, button);
-    navigate(next, { direction });
+    navigate(next);
   };
 
   const activeTasks = useMemo(() => tasks.filter((task) => activeStatuses.has(String(task.status || ""))), [tasks]);

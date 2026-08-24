@@ -39,33 +39,12 @@ export function applyDockPill(dock: HTMLElement | null, pill: HTMLElement | null
       scrollTop: dock.scrollTop,
     },
   );
-  const fromX = Number(pill.dataset.pillX ?? box.x);
-  const fromY = Number(pill.dataset.pillY ?? box.y);
-  pill.dataset.pillX = String(box.x);
-  pill.dataset.pillY = String(box.y);
   pill.style.left = "0px";
   pill.style.top = "0px";
   pill.style.width = `${box.width}px`;
   pill.style.height = `${box.height}px`;
   pill.getAnimations().forEach((animation) => animation.cancel());
-  const toTransform = `translate3d(${box.x}px, ${box.y}px, 0)`;
-  if (instant || prefersReducedMotion() || typeof pill.animate !== "function") {
-    pill.style.transform = toTransform;
-    return box;
-  }
-  const animation = pill.animate(
-    [
-      { transform: `translate3d(${fromX}px, ${fromY}px, 0)` },
-      { transform: toTransform },
-    ],
-    { duration: SLIDE_MS, easing: SLIDE_EASE, fill: "forwards" },
-  );
-  animation.finished.catch(() => {}).finally(() => {
-    if (pill.dataset.pillX === String(box.x) && pill.dataset.pillY === String(box.y)) {
-      pill.style.transform = toTransform;
-      animation.cancel();
-    }
-  });
+  pill.style.transform = `translate3d(${box.x}px, ${box.y}px, 0)`;
   return box;
 }
 
