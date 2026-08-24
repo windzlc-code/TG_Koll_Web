@@ -916,11 +916,12 @@ body.crm-page button { color: inherit; }
     box-shadow: 0 -8px 22px rgba(7, 17, 18, 0.16);
     backdrop-filter: blur(14px);
     isolation: isolate;
-    overflow: hidden;
   }
   .crm-mobile-dock-pill {
     position: absolute;
     z-index: 0;
+    grid-column: 1 / -1;
+    grid-row: 1;
     top: 0;
     left: 0;
     width: 0;
@@ -931,8 +932,8 @@ body.crm-page button { color: inherit; }
     border-radius: 7px;
     background-color: var(--public-cool-dark, #253746);
     background-image: var(--public-action-gradient, linear-gradient(#253746, #253746));
-    transform: translate3d(0, 0, 0);
-    transition: transform 180ms cubic-bezier(.2, .72, .2, 1);
+    transform: none;
+    transition: left 180ms cubic-bezier(.2, .72, .2, 1), top 180ms cubic-bezier(.2, .72, .2, 1), width 180ms cubic-bezier(.2, .72, .2, 1), height 180ms cubic-bezier(.2, .72, .2, 1);
   }
   .crm-mobile-dock button {
     position: relative;

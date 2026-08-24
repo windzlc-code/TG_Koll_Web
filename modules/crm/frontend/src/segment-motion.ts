@@ -40,9 +40,11 @@ export function applyDockPill(dock: HTMLElement | null, pill: HTMLElement | null
     },
   );
   if (instant) pill.style.transition = "none";
+  pill.style.left = box.left;
+  pill.style.top = box.top;
   pill.style.width = `${box.width}px`;
   pill.style.height = `${box.height}px`;
-  pill.style.transform = box.transform;
+  pill.style.transform = "none";
   if (instant) {
     void pill.offsetWidth;
     pill.style.removeProperty("transition");

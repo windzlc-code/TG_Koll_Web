@@ -16,7 +16,8 @@ export function dockPillBox(button, dock) {
     y,
     width: button.width,
     height: button.height,
-    transform: `translate3d(${x}px, ${y}px, 0)`,
+    left: `${x}px`,
+    top: `${y}px`,
   };
 }
 
@@ -48,7 +49,7 @@ export function stressTestDockDirections(rounds = 40) {
     ltrAllPositive: ltr.every((delta) => delta === step),
     rtlAllNegative: rtl.every((delta) => delta === -step),
     sameStep: ltr.every((delta) => delta === step) && rtl.every((delta) => delta === -step),
-    usesPx: buttons.every((_, index) => dockPillBox(buttons[index], dock).transform.includes("px") && !dockPillBox(buttons[index], dock).transform.includes("%")),
+    usesPx: buttons.every((_, index) => dockPillBox(buttons[index], dock).left.endsWith("px") && !dockPillBox(buttons[index], dock).left.includes("%")),
   };
 }
 

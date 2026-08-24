@@ -48,8 +48,8 @@ test("LTR and RTL dock pill steps are equal pixel distances and never use percen
   assert.equal(result.usesPx, true);
   const left = dockPillBox({ left: 5, top: 5, width: 81, height: 50 }, { left: 0, top: 0 });
   const right = dockPillBox({ left: 341, top: 5, width: 81, height: 50 }, { left: 0, top: 0 });
-  assert.equal(left.transform, "translate3d(5px, 5px, 0)");
-  assert.equal(right.transform, "translate3d(341px, 5px, 0)");
+  assert.equal(left.left, "5px");
+  assert.equal(right.left, "341px");
   assert.equal(right.x - left.x, 336);
 });
 
@@ -61,13 +61,12 @@ test("CRM dock keeps a persistent pill so selected chrome never unmounts", async
   assert.match(app, /crm-mobile-dock-pill/);
   assert.match(app, /applyDockPill/);
   assert.doesNotMatch(app, /dockSlide/);
-  assert.match(policy, /translate3d\(\$\{x\}px, \$\{y\}px, 0\)/);
-  assert.match(motion, /applyDockPill/);
+  assert.match(policy, /left: `\$\{x\}px`/);
+  assert.match(motion, /pill\.style\.left = box\.left/);
   const pillRule = css.slice(css.indexOf(".crm-mobile-dock-pill {"), css.indexOf(".crm-mobile-dock button {", css.indexOf(".crm-mobile-dock-pill {")));
   assert.doesNotMatch(pillRule, /100%/);
-  assert.doesNotMatch(pillRule, /translate3d\(calc\(/);
-  assert.match(css, /\.crm-mobile-dock \{[\s\S]*?overflow:\s*hidden;/);
-  assert.match(css, /\.crm-mobile-dock-pill \{[\s\S]*?transition:\s*transform 180ms cubic-bezier\(\.2, \.72, \.2, 1\)/);
+  assert.match(pillRule, /transition:\s*left 180ms/);
+  assert.match(css, /body\.crm-page \{[\s\S]*?overflow-x:\s*hidden;/);
   assert.match(css, /\.crm-mobile-dock button\.is-active \{[\s\S]*?background:\s*transparent;/);
   assert.doesNotMatch(css, /\.crm-mobile-dock\.is-segment-background-sliding/);
   assert.match(app, /useLayoutEffect/);
