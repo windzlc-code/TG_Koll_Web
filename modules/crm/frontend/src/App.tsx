@@ -1031,8 +1031,8 @@ export function App() {
     {taskStripVisible && <aside className="crm-task-strip" aria-live="polite" aria-label={messages.taskStripLabel}><button type="button" onClick={() => navigate("tasks")}><span className="crm-task-strip-pulse" aria-hidden="true" /><span><strong>{messages.runningCount(activeTasks.length)} · {messages.reviewCount(reviewTasks.length)} · {messages.failedCount(failedTasks.length)}</strong><small>{messages.taskStripHint}</small></span><Icon name="arrow" /></button></aside>}
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={(taskId) => { setToast(`${messages.submitted} · ${taskId}`); void refreshTasks(); }} />
     {toast && <div className="crm-toast" role="status">{toast}</div>}
-    <nav ref={dockRef} className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length), ["--crm-dock-index" as string]: String(Math.max(0, navViews.indexOf(activeNav))) }}>
-      <span className="crm-mobile-dock-pill" aria-hidden="true" />
+    <nav ref={dockRef} className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) }}>
+      <span className="crm-mobile-dock-pill" aria-hidden="true" style={{ transform: `translate3d(calc(${Math.max(0, navViews.indexOf(activeNav))} * (100% + var(--crm-dock-gap))), 0, 0)` }} />
       {navViews.map((id) => <button type="button" key={id} className={activeNav === id ? "is-active" : ""} aria-current={activeNav === id ? "page" : undefined} onClick={(event) => goDock(id, event.currentTarget)}><Icon name={id} /><span>{messages.navItems[id]}</span></button>)}
     </nav>
   </div>;

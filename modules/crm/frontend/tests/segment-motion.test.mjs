@@ -42,7 +42,7 @@ test("CRM dock keeps a persistent pill so selected chrome never unmounts", async
   const css = await read("src/styles.css");
   const app = await read("src/App.tsx");
   assert.match(app, /crm-mobile-dock-pill/);
-  assert.match(app, /--crm-dock-index/);
+  assert.match(app, /translate3d\(calc\(\$\{Math\.max\(0, navViews\.indexOf\(activeNav\)\)\}/);
   assert.doesNotMatch(app, /dockSlide/);
   assert.match(css, /\.crm-mobile-dock-pill \{[\s\S]*?transition:\s*transform 180ms cubic-bezier\(\.2, \.72, \.2, 1\)/);
   assert.match(css, /\.crm-mobile-dock button\.is-active \{[\s\S]*?background:\s*transparent;/);
