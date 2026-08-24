@@ -630,13 +630,9 @@ body.crm-page button { color: inherit; }
 .crm-banner-platforms { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .platform-outline-icon--instagram { overflow: visible; fill: none; stroke: none; }
 .crm-mobile-dock { display: none; }
-.crm-compact-tabs,
-.crm-mobile-dock { isolation: isolate; }
-.crm-compact-tabs { position: relative; }
-.crm-compact-tabs.is-segment-background-sliding,
-.crm-mobile-dock.is-segment-background-sliding { pointer-events: none; }
-.crm-compact-tabs.is-segment-background-sliding::before,
-.crm-mobile-dock.is-segment-background-sliding::before {
+.crm-compact-tabs { isolation: isolate; position: relative; }
+.crm-compact-tabs.is-segment-background-sliding { pointer-events: none; }
+.crm-compact-tabs.is-segment-background-sliding::before {
   content: "";
   position: absolute;
   z-index: 0;
@@ -657,30 +653,22 @@ body.crm-page button { color: inherit; }
     width 180ms cubic-bezier(.2, .72, .2, 1),
     height 180ms cubic-bezier(.2, .72, .2, 1);
 }
-.crm-mobile-dock.is-segment-background-sliding::before {
-  will-change: transform;
-  transition: transform 180ms cubic-bezier(.2, .72, .2, 1);
-}
-.crm-compact-tabs.is-segment-background-sliding > button,
-.crm-mobile-dock.is-segment-background-sliding > button {
+.crm-compact-tabs.is-segment-background-sliding > button {
   position: relative;
   z-index: 1;
   pointer-events: none;
 }
-.crm-compact-tabs.is-segment-background-sliding > button:is(.is-active, [aria-selected="true"], .is-segment-slide-to),
-.crm-mobile-dock.is-segment-background-sliding > button:is(.is-active, .is-segment-slide-to) {
+.crm-compact-tabs.is-segment-background-sliding > button:is(.is-active, [aria-selected="true"], .is-segment-slide-to) {
   border-color: transparent !important;
   background: transparent !important;
   background-image: none !important;
   box-shadow: none !important;
 }
-.crm-compact-tabs.is-segment-background-sliding > button.is-segment-slide-from,
-.crm-mobile-dock.is-segment-background-sliding > button.is-segment-slide-from {
+.crm-compact-tabs.is-segment-background-sliding > button.is-segment-slide-from {
   color: var(--segment-slide-inactive-color) !important;
   transition: color 180ms cubic-bezier(.2, .72, .2, 1) !important;
 }
-.crm-compact-tabs.is-segment-background-sliding > button.is-segment-slide-to,
-.crm-mobile-dock.is-segment-background-sliding > button.is-segment-slide-to {
+.crm-compact-tabs.is-segment-background-sliding > button.is-segment-slide-to {
   color: var(--segment-slide-active-color) !important;
   transition: color 180ms cubic-bezier(.2, .72, .2, 1) !important;
 }
@@ -905,6 +893,10 @@ body.crm-page button { color: inherit; }
   .crm-sidebar,
   .crm-sidebar-backdrop { display: none !important; }
   .crm-mobile-dock {
+    --crm-dock-gap: 3px;
+    --crm-dock-pad-y: 5px;
+    --crm-dock-pad-left: max(5px, env(safe-area-inset-left, 0px));
+    --crm-dock-pad-right: max(5px, env(safe-area-inset-right, 0px));
     position: fixed;
     z-index: 90;
     right: 0;
@@ -912,16 +904,36 @@ body.crm-page button { color: inherit; }
     left: 0;
     display: grid;
     grid-template-columns: repeat(var(--crm-mobile-dock-item-count, 5), minmax(0, 1fr));
-    gap: 3px;
+    gap: var(--crm-dock-gap);
     height: var(--crm-mobile-dock-height);
     min-height: var(--crm-mobile-dock-height);
-    padding: 5px max(5px, env(safe-area-inset-right, 0px)) max(5px, env(safe-area-inset-bottom, 0px)) max(5px, env(safe-area-inset-left, 0px));
+    padding: var(--crm-dock-pad-y) var(--crm-dock-pad-right) max(5px, env(safe-area-inset-bottom, 0px)) var(--crm-dock-pad-left);
     background: color-mix(in srgb, var(--crm-paper) 94%, transparent);
     border-top: 1px solid var(--crm-line);
     box-shadow: 0 -8px 22px rgba(7, 17, 18, 0.16);
     backdrop-filter: blur(14px);
+    isolation: isolate;
+  }
+  .crm-mobile-dock-pill {
+    position: absolute;
+    z-index: 0;
+    top: var(--crm-dock-pad-y);
+    left: var(--crm-dock-pad-left);
+    width: calc((100% - var(--crm-dock-pad-left) - var(--crm-dock-pad-right) - (var(--crm-mobile-dock-item-count, 5) - 1) * var(--crm-dock-gap)) / var(--crm-mobile-dock-item-count, 5));
+    bottom: max(5px, env(safe-area-inset-bottom, 0px));
+    box-sizing: border-box;
+    pointer-events: none;
+    border: 1px solid var(--vecto-action-border, #34495e);
+    border-radius: 7px;
+    background-color: var(--public-cool-dark, #253746);
+    background-image: var(--public-action-gradient, linear-gradient(#253746, #253746));
+    transform: translate3d(calc(var(--crm-dock-index, 0) * (100% + var(--crm-dock-gap))), 0, 0);
+    transition: transform 180ms cubic-bezier(.2, .72, .2, 1);
+    will-change: transform;
   }
   .crm-mobile-dock button {
+    position: relative;
+    z-index: 1;
     display: grid;
     grid-template-rows: 22px auto;
     place-items: center;
@@ -934,6 +946,8 @@ body.crm-page button { color: inherit; }
     border: 1px solid transparent;
     border-radius: 7px;
     cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 180ms cubic-bezier(.2, .72, .2, 1);
   }
   .crm-mobile-dock button svg { width: 20px; height: 20px; }
   .crm-mobile-dock button > span {
@@ -946,17 +960,12 @@ body.crm-page button { color: inherit; }
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .crm-mobile-dock button {
-    -webkit-tap-highlight-color: transparent;
-    transition: none;
-  }
   .crm-mobile-dock button:focus:not(:focus-visible) { outline: none; }
   .crm-mobile-dock button.is-active {
     color: #fff;
-    background-color: var(--public-cool-dark, #253746);
-    background-image: var(--public-action-gradient, linear-gradient(#253746, #253746));
-    border-color: var(--vecto-action-border, #34495e);
-    transition: none;
+    background: transparent;
+    background-image: none;
+    border-color: transparent;
   }
   .crm-main { min-height: calc(100vh - var(--site-header-height, 68px) - var(--crm-mobile-dock-height)); margin-left: 0; padding: 12px 12px calc(var(--crm-mobile-dock-height) + 16px); }
   .crm-compact-tabs { display: flex; width: 100%; overflow-x: auto; }

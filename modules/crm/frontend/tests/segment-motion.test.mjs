@@ -38,22 +38,15 @@ test("rapid dock clicks never overlap sliding backgrounds and still commit every
   assert.equal(paced.started.length, 10);
 });
 
-test("CRM dock CSS matches console: no background fade, color only during the 180ms pill slide", async () => {
+test("CRM dock keeps a persistent pill so selected chrome never unmounts", async () => {
   const css = await read("src/styles.css");
-  const motion = await read("src/segment-motion.ts");
   const app = await read("src/App.tsx");
-  assert.match(css, /\.crm-mobile-dock button \{[\s\S]*?transition:\s*none;/);
-  assert.match(css, /\.crm-mobile-dock button\.is-active \{[\s\S]*?transition:\s*none;/);
-  assert.doesNotMatch(css, /\.crm-mobile-dock button \{[^}]*background-color\s+180ms/);
-  assert.doesNotMatch(css, /\.crm-mobile-dock button \{[^}]*border-color\s+180ms/);
-  assert.match(
-    css,
-    /\.crm-mobile-dock\.is-segment-background-sliding > button\.is-segment-slide-to \{[\s\S]*?transition:\s*color 180ms cubic-bezier\(\.2, \.72, \.2, 1\)/,
-  );
-  assert.match(css, /pointer-events:\s*none/);
-  assert.match(motion, /flushSync/);
-  assert.match(motion, /void group\.offsetWidth/);
-  assert.match(motion, /requestAnimationFrame/);
-  assert.match(app, /dockSlide\.start\([\s\S]*navigate\(/);
+  assert.match(app, /crm-mobile-dock-pill/);
+  assert.match(app, /--crm-dock-index/);
+  assert.doesNotMatch(app, /dockSlide/);
+  assert.match(css, /\.crm-mobile-dock-pill \{[\s\S]*?transition:\s*transform 180ms cubic-bezier\(\.2, \.72, \.2, 1\)/);
+  assert.match(css, /\.crm-mobile-dock button\.is-active \{[\s\S]*?background:\s*transparent;/);
+  assert.doesNotMatch(css, /\.crm-mobile-dock\.is-segment-background-sliding/);
+  assert.doesNotMatch(css, /\.crm-mobile-dock button\.is-active \{[\s\S]*?background-image:\s*var\(--public-action-gradient/);
   assert.match(app, /useLayoutEffect/);
 });

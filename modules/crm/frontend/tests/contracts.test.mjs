@@ -136,10 +136,10 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /--public-action-gradient/);
   assert.match(app, /useSegmentSlide/);
   assert.match(app, /animatePageSlide/);
-  assert.match(app, /dockSlide\.start/);
-  assert.match(motion, /flushSync/);
-  assert.match(motion, /resolveSegmentSlideAction/);
-  assert.match(css, /\.crm-mobile-dock button \{[\s\S]*?transition:\s*none;/);
+  assert.match(app, /crm-mobile-dock-pill/);
+  assert.match(css, /--crm-dock-index/);
+  assert.match(css, /\.crm-mobile-dock-pill/);
+  assert.match(css, /\.crm-mobile-dock button\.is-active \{[\s\S]*?background:\s*transparent;/);
   assert.match(app, /role="tablist"/);
   assert.match(app, /role="tab"/);
   assert.match(app, /aria-selected=/);
