@@ -952,7 +952,7 @@ export function App() {
     }
     const group = dockRef.current;
     const current = group?.querySelector<HTMLButtonElement>("button.is-active");
-    const buttons = group ? [...group.querySelectorAll<HTMLButtonElement>("button")] : [];
+    const buttons = group ? [...group.querySelectorAll<HTMLButtonElement>(".crm-mobile-dock-items > button")] : [];
     const direction = navigationDirection(buttons, current || null, button);
     navigate(next, { direction });
   };
@@ -1048,8 +1048,10 @@ export function App() {
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={(taskId) => { setToast(`${messages.submitted} · ${taskId}`); void refreshTasks(); }} />
     {toast && <div className="crm-toast" role="status">{toast}</div>}
     <nav ref={dockRef} className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) }}>
-      <span ref={dockPillRef} className="crm-mobile-dock-pill" aria-hidden="true" />
-      {navViews.map((id) => <button type="button" key={id} className={activeNav === id ? "is-active" : ""} aria-current={activeNav === id ? "page" : undefined} onClick={(event) => goDock(id, event.currentTarget)}><Icon name={id} /><span>{messages.navItems[id]}</span></button>)}
+      <span className="crm-mobile-dock-track" aria-hidden="true"><span ref={dockPillRef} className="crm-mobile-dock-pill" /></span>
+      <div className="crm-mobile-dock-items">
+        {navViews.map((id) => <button type="button" key={id} className={activeNav === id ? "is-active" : ""} aria-current={activeNav === id ? "page" : undefined} onClick={(event) => goDock(id, event.currentTarget)}><Icon name={id} /><span>{messages.navItems[id]}</span></button>)}
+      </div>
     </nav>
   </div>;
 }

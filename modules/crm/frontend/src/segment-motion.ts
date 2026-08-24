@@ -23,7 +23,7 @@ export function prefersReducedMotion() {
 
 export function applyDockPill(dock: HTMLElement | null, pill: HTMLElement | null, index: number, instant = false) {
   if (!dock || !pill) return null;
-  const buttons = [...dock.querySelectorAll<HTMLElement>(":scope > button")];
+  const buttons = [...dock.querySelectorAll<HTMLElement>(".crm-mobile-dock-items > button, :scope > button")];
   const button = buttons[index];
   if (!button) return null;
   const dockRect = dock.getBoundingClientRect();

@@ -905,9 +905,7 @@ body.crm-page button { color: inherit; }
     right: 0;
     bottom: 0;
     left: 0;
-    display: grid;
-    grid-template-columns: repeat(var(--crm-mobile-dock-item-count, 5), minmax(0, 1fr));
-    gap: var(--crm-dock-gap);
+    display: block;
     height: var(--crm-mobile-dock-height);
     min-height: var(--crm-mobile-dock-height);
     padding: var(--crm-dock-pad-y) var(--crm-dock-pad-right) max(5px, env(safe-area-inset-bottom, 0px)) var(--crm-dock-pad-left);
@@ -917,11 +915,23 @@ body.crm-page button { color: inherit; }
     backdrop-filter: blur(14px);
     isolation: isolate;
   }
+  .crm-mobile-dock-track {
+    position: absolute;
+    z-index: 0;
+    inset: 0;
+    pointer-events: none;
+  }
+  .crm-mobile-dock-items {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: repeat(var(--crm-mobile-dock-item-count, 5), minmax(0, 1fr));
+    gap: var(--crm-dock-gap);
+    height: 100%;
+  }
   .crm-mobile-dock-pill {
     position: absolute;
     z-index: 0;
-    grid-column: 1 / -1;
-    grid-row: 1;
     top: 0;
     left: 0;
     width: 0;
