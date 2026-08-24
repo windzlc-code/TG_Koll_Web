@@ -942,8 +942,8 @@ body.crm-page button { color: inherit; }
     border-radius: 7px;
     background-color: var(--public-cool-dark, #253746);
     background-image: var(--public-action-gradient, linear-gradient(#253746, #253746));
-    transform: none;
-    transition: left 180ms cubic-bezier(.2, .72, .2, 1), top 180ms cubic-bezier(.2, .72, .2, 1), width 180ms cubic-bezier(.2, .72, .2, 1), height 180ms cubic-bezier(.2, .72, .2, 1);
+    transform: translate3d(0, 0, 0);
+    transition: none;
   }
   .crm-mobile-dock button {
     position: relative;
