@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
-import { resolveSegmentSlideAction, SLIDE_EASE, SLIDE_MS } from "./segment-motion-policy.js";
+import { dockPillBox, resolveSegmentSlideAction, SLIDE_EASE, SLIDE_MS } from "./segment-motion-policy.js";
 
-export { resolveSegmentSlideAction, SLIDE_EASE, SLIDE_MS };
+export { dockPillBox, resolveSegmentSlideAction, SLIDE_EASE, SLIDE_MS };
 export type SegmentSlideAction = "skip" | "coalesce" | "start";
 
 type SlideStyle = Record<string, string>;
@@ -19,6 +19,35 @@ let pageSlideAnimation: Animation | null = null;
 
 export function prefersReducedMotion() {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
+}
+
+export function applyDockPill(dock: HTMLElement | null, pill: HTMLElement | null, index: number, instant = false) {
+  if (!dock || !pill) return null;
+  const buttons = [...dock.querySelectorAll<HTMLElement>(":scope > button")];
+  const button = buttons[index];
+  if (!button) return null;
+  const dockRect = dock.getBoundingClientRect();
+  const buttonRect = button.getBoundingClientRect();
+  const box = dockPillBox(
+    { left: buttonRect.left, top: buttonRect.top, width: buttonRect.width, height: buttonRect.height },
+    {
+      left: dockRect.left,
+      top: dockRect.top,
+      clientLeft: dock.clientLeft,
+      clientTop: dock.clientTop,
+      scrollLeft: dock.scrollLeft,
+      scrollTop: dock.scrollTop,
+    },
+  );
+  if (instant) pill.style.transition = "none";
+  pill.style.width = `${box.width}px`;
+  pill.style.height = `${box.height}px`;
+  pill.style.transform = box.transform;
+  if (instant) {
+    void pill.offsetWidth;
+    pill.style.removeProperty("transition");
+  }
+  return box;
 }
 
 function relativeBox(group: HTMLElement, item: HTMLElement) {

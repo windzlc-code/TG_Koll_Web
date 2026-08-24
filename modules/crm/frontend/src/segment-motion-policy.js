@@ -8,6 +8,50 @@ export function resolveSegmentSlideAction(input) {
   return "start";
 }
 
+export function dockPillBox(button, dock) {
+  const x = button.left - dock.left - (dock.clientLeft || 0) + (dock.scrollLeft || 0);
+  const y = button.top - dock.top - (dock.clientTop || 0) + (dock.scrollTop || 0);
+  return {
+    x,
+    y,
+    width: button.width,
+    height: button.height,
+    transform: `translate3d(${x}px, ${y}px, 0)`,
+  };
+}
+
+export function stressTestDockDirections(rounds = 40) {
+  const gap = 3;
+  const cell = 81;
+  const origin = 5;
+  const buttons = [0, 1, 2, 3, 4].map((index) => ({
+    left: origin + index * (cell + gap),
+    width: cell,
+    top: 5,
+    height: 50,
+  }));
+  const dock = { left: 0, top: 0, clientLeft: 0, clientTop: 0, scrollLeft: 0, scrollTop: 0 };
+  const ltr = [];
+  const rtl = [];
+  for (let round = 0; round < rounds; round += 1) {
+    for (let index = 0; index < 4; index += 1) {
+      ltr.push(dockPillBox(buttons[index + 1], dock).x - dockPillBox(buttons[index], dock).x);
+    }
+    for (let index = 4; index > 0; index -= 1) {
+      rtl.push(dockPillBox(buttons[index - 1], dock).x - dockPillBox(buttons[index], dock).x);
+    }
+  }
+  const step = cell + gap;
+  return {
+    ltrCount: ltr.length,
+    rtlCount: rtl.length,
+    ltrAllPositive: ltr.every((delta) => delta === step),
+    rtlAllNegative: rtl.every((delta) => delta === -step),
+    sameStep: ltr.every((delta) => delta === step) && rtl.every((delta) => delta === -step),
+    usesPx: buttons.every((_, index) => dockPillBox(buttons[index], dock).transform.includes("px") && !dockPillBox(buttons[index], dock).transform.includes("%")),
+  };
+}
+
 export function stressTestDockClicks(clicks, intervalMs, slideMs = SLIDE_MS) {
   let pendingUntil = -1;
   let active = 0;

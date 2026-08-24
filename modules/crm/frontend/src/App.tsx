@@ -7,7 +7,7 @@ import { AnalyticsView, DestinationsView, GroupsView, PoolsView, SchedulesView, 
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
-import { animatePageSlide, navigationDirection, prefersReducedMotion, useSegmentSlide } from "./segment-motion";
+import { animatePageSlide, applyDockPill, navigationDirection, prefersReducedMotion, useSegmentSlide } from "./segment-motion";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -818,6 +818,8 @@ export function App() {
   const sidebar = useRef<HTMLElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const dockRef = useRef<HTMLElement>(null);
+  const dockPillRef = useRef<HTMLSpanElement>(null);
+  const dockPillReady = useRef(false);
   const pageSlide = useRef(0);
   const drawerWasOpen = useRef(false);
   const [bootstrapState, setBootstrapState] = useState<"loading" | "ready" | "forbidden" | "maintenance" | "error">("loading");
@@ -928,6 +930,20 @@ export function App() {
     animatePageSlide(mainRef.current, direction);
   }, [view, isCompact]);
 
+  useLayoutEffect(() => {
+    if (bootstrapState !== "ready") return;
+    const index = Math.max(0, navViews.indexOf(navViewOf(view)));
+    applyDockPill(dockRef.current, dockPillRef.current, index, !dockPillReady.current);
+    dockPillReady.current = true;
+  }, [view, bootstrapState]);
+
+  useEffect(() => {
+    if (bootstrapState !== "ready") return;
+    const sync = () => applyDockPill(dockRef.current, dockPillRef.current, Math.max(0, navViews.indexOf(navViewOf(view))), true);
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
+  }, [view, bootstrapState]);
+
   const goDock = (id: NavViewId, button: HTMLButtonElement) => {
     const next: ViewId = id === "settings" ? "accounts" : id;
     if (navViewOf(next) === navViewOf(view)) {
@@ -1032,7 +1048,7 @@ export function App() {
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={(taskId) => { setToast(`${messages.submitted} · ${taskId}`); void refreshTasks(); }} />
     {toast && <div className="crm-toast" role="status">{toast}</div>}
     <nav ref={dockRef} className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) }}>
-      <span className="crm-mobile-dock-pill" aria-hidden="true" style={{ transform: `translate3d(calc(${Math.max(0, navViews.indexOf(activeNav))} * (100% + var(--crm-dock-gap))), 0, 0)` }} />
+      <span ref={dockPillRef} className="crm-mobile-dock-pill" aria-hidden="true" />
       {navViews.map((id) => <button type="button" key={id} className={activeNav === id ? "is-active" : ""} aria-current={activeNav === id ? "page" : undefined} onClick={(event) => goDock(id, event.currentTarget)}><Icon name={id} /><span>{messages.navItems[id]}</span></button>)}
     </nav>
   </div>;

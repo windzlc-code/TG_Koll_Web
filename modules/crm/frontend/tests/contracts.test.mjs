@@ -137,8 +137,9 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(app, /useSegmentSlide/);
   assert.match(app, /animatePageSlide/);
   assert.match(app, /crm-mobile-dock-pill/);
-  assert.match(app, /translate3d\(calc\(\$\{Math\.max\(0, navViews\.indexOf\(activeNav\)\)\}/);
+  assert.match(app, /applyDockPill/);
   assert.match(css, /\.crm-mobile-dock-pill/);
+  assert.match(css, /overflow-x:\s*hidden/);
   assert.match(css, /\.crm-mobile-dock button\.is-active \{[\s\S]*?background:\s*transparent;/);
   assert.match(app, /role="tablist"/);
   assert.match(app, /role="tab"/);
