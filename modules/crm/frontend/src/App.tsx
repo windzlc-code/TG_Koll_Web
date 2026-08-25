@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Children, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api";
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
@@ -170,6 +170,35 @@ function StatusBadge({ status, messages }: { status?: string; messages: Messages
   return <span className={`crm-status crm-status--${statusTone(status)}`}><i aria-hidden="true" />{statusText(status, messages)}</span>;
 }
 
+function AccountHealthIcon({ tone }: { tone: "healthy" | "warning" | "danger" }) {
+  if (tone === "healthy") return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16.5 9" /></svg>;
+  if (tone === "warning") return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v4" /><path d="M12 16.5h.01" /></svg>;
+  return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" /><path d="m9 9 6 6" /><path d="m15 9-6 6" /></svg>;
+}
+
+function AccountStatusChip({ account, messages }: { account: CrmAccount; messages: Messages }) {
+  const needsLogin = accountNeedsTakeover(account);
+  const raw = String(account.health_status || account.status || "").toLowerCase();
+  const blocked = ["banned", "disabled", "blocked", "suspended", "risk_control", "abnormal"].includes(raw);
+  const statusClass = needsLogin ? "pending_login" : blocked ? "abnormal" : "ready";
+  const tone: "healthy" | "warning" | "danger" = needsLogin ? "warning" : blocked ? "danger" : "healthy";
+  const label = needsLogin ? messages.loggedOut : blocked ? messages.statuses.banned : messages.statuses.alive;
+  return <span className={`status ${statusClass}`} title={label}>
+    <span className={`account-status-icon is-${tone}`} aria-hidden="true"><AccountHealthIcon tone={tone} /></span>
+    <span className="account-status-label">{label}</span>
+  </span>;
+}
+
+function SubpageStrip({ items, value, children }: { items: ViewId[]; value: ViewId; children: ReactNode }) {
+  const index = Math.max(0, items.indexOf(value));
+  const pages = Children.toArray(children);
+  return <div className="crm-panel-clip">
+    <div className="crm-panel-strip" style={{ transform: `translate3d(${-index * 100}%, 0, 0)` }}>
+      {items.map((id, pageIndex) => <div className="crm-subpage" key={id} aria-hidden={id !== value} inert={id !== value ? true : undefined}>{pages[pageIndex]}</div>)}
+    </div>
+  </div>;
+}
+
 type NavigateOptions = { direction?: number; panel?: boolean };
 
 function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId, options?: NavigateOptions) => void; label: string }) {
@@ -255,18 +284,6 @@ const takeoverAccountStates = new Set(["pending_login", "needs_login", "need_ver
 
 function accountNeedsTakeover(account: CrmAccount) {
   return Boolean(account.needs_login) || takeoverAccountStates.has(String(account.status || "").toLowerCase()) || takeoverAccountStates.has(String(account.health_status || "").toLowerCase());
-}
-
-function accountPoolStatus(account: CrmAccount, messages: Messages) {
-  if (accountNeedsTakeover(account)) return { tone: "needs_login", label: messages.statuses.needs_login };
-  const raw = String(account.health_status || account.status || "").toLowerCase();
-  if (["banned", "disabled", "blocked", "suspended", "risk_control", "abnormal"].includes(raw)) {
-    return { tone: "failed", label: statusText(raw, messages) };
-  }
-  if (["alive", "ready", "healthy", "success", "standby", "active"].includes(raw) || !raw) {
-    return { tone: "ready", label: messages.statuses.alive };
-  }
-  return { tone: raw || "ready", label: statusText(raw, messages) };
 }
 
 function accountIsReady(account: CrmAccount | undefined) {
@@ -808,7 +825,6 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
     {error && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{error}</span><button type="button" onClick={() => { setError(""); setLoading(true); void loadAccounts().catch((nextError) => { setError(localizedError(nextError, messages)); setLoading(false); }); }}><Icon name="refresh" />{messages.retry}</button></div>}
     {loading ? <div className="crm-list-skeleton" aria-live="polite"><span>{messages.loadingData}</span><i /><i /></div> : !accounts.length ? <EmptyState messages={messages} view="accounts" /> : <div className="crm-account-grid">{accounts.map((account, index) => {
       const needsLogin = accountNeedsTakeover(account);
-      const poolStatus = accountPoolStatus(account, messages);
       const username = account.username || account.display_name || `${messages.accountFallback} ${index + 1}`;
       const platformName = platformLabel(account.platform) || messages.platformFallback;
       return <article className="crm-account-card" data-account-platform={String(account.platform || "").toLowerCase()} key={String(account.id || account.username || index)}>
@@ -818,7 +834,7 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
             <span>{platformName}</span>
           </span>
           <strong title={username}>{username}</strong>
-          <span className={`crm-status crm-status--${statusTone(poolStatus.tone)}`}><i aria-hidden="true" />{poolStatus.label}</span>
+          <AccountStatusChip account={account} messages={messages} />
         </div>
         <div className="crm-account-card-actions">
           {needsLogin && <button className="crm-account-card-action crm-account-card-action--login" type="button" disabled={opening === String(account.id) || verifying === String(account.id)} onClick={() => void openLogin(account)}><Icon name="external" />{opening === String(account.id) ? messages.submitting : messages.openLogin}</button>}
@@ -968,7 +984,6 @@ export function App() {
   const dockPillReady = useRef(false);
   const pageSlide = useRef({ direction: 0, panel: false });
   const viewStage = useRef<HTMLDivElement>(null);
-  const panelStage = useRef<HTMLDivElement>(null);
   const drawerWasOpen = useRef(false);
   const [bootstrapState, setBootstrapState] = useState<"loading" | "ready" | "forbidden" | "maintenance" | "error">("loading");
   const [bootstrap, setBootstrap] = useState<BootstrapPayload>({});
@@ -1073,7 +1088,8 @@ export function App() {
     const { direction, panel } = pageSlide.current;
     if (!direction) return;
     pageSlide.current = { direction: 0, panel: false };
-    animatePageSlide(panel ? panelStage.current : viewStage.current, direction);
+    if (panel) return;
+    animatePageSlide(viewStage.current, direction);
   }, [view]);
 
   useLayoutEffect(() => {
@@ -1162,31 +1178,30 @@ export function App() {
       </>}
       {activeNav === "public" && <>
         <CompactTabs items={engageTabs} value={engageTabs.includes(view) ? view : "public"} messages={messages} navigate={navigate} label={messages.navItems.public} />
-        <div className="crm-panel-clip"><div ref={panelStage} className="crm-panel-stage">
-        {view === "groups"
-          ? <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />
-          : <ResourceList key={view} view={engageTabs.includes(view) ? view : "public"} messages={messages} language={language} enabled={viewEnabled(engageTabs.includes(view) ? view : "public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory(engageTabs.includes(view) ? view : "public")} onCreate={() => startWorkflow(engageTabs.includes(view) ? view : "public")} />}
-        </div></div>
+        <SubpageStrip items={engageTabs} value={engageTabs.includes(view) ? view : "public"}>
+          <ResourceList view="public" messages={messages} language={language} enabled={viewEnabled("public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("public")} onCreate={() => startWorkflow("public")} />
+          <ResourceList view="outreach" messages={messages} language={language} enabled={viewEnabled("outreach")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("outreach")} onCreate={() => startWorkflow("outreach")} />
+          <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />
+        </SubpageStrip>
       </>}
       {activeNav === "tasks" && <>
         <CompactTabs items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"} messages={messages} navigate={navigate} label={messages.views.tasks[0]} />
-        <div className="crm-panel-clip"><div ref={panelStage} className="crm-panel-stage">
-        {view === "schedules"
-          ? <SchedulesView language={language} onCreate={(workflow) => setWorkflowView(workflow)} />
-          : <>
+        <SubpageStrip items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"}>
+          <>
             <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} />
             <details className="crm-analytics-fold"><summary>{language === "zh-Hant" ? "營運分析" : "运营分析"}</summary><AnalyticsView language={language} /></details>
-          </>}
-        </div></div>
+          </>
+          <SchedulesView language={language} onCreate={(workflow) => setWorkflowView(workflow)} />
+        </SubpageStrip>
       </>}
       {activeNav === "settings" && <>
         <CompactTabs items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"} messages={messages} navigate={navigate} label={messages.views.settings[0]} />
-        <div className="crm-panel-clip"><div ref={panelStage} className="crm-panel-stage">
-        {(view === "templates") && <TemplatesView language={language} />}
-        {(view === "settings") && <DestinationsView language={language} />}
-        {(view === "relationships") && <ResourceList key="relationships" view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />}
-        {(view === "accounts" || !settingTabs.includes(view)) && <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />}
-        </div></div>
+        <SubpageStrip items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"}>
+          <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />
+          <TemplatesView language={language} />
+          <DestinationsView language={language} />
+          <ResourceList view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />
+        </SubpageStrip>
       </>}
       </div>
     </main>

@@ -26,6 +26,15 @@
   --instagram-platform-gradient: linear-gradient(135deg, #405de6 0%, #833ab4 30%, #c13584 52%, #e1306c 68%, #f77737 86%, #fcaf45 100%);
   --instagram-brand-gradient: linear-gradient(120deg, #ffcc00 0%, #fe4a05 24%, #ff0f3f 43%, #ff005f 58%, #fc01d8 78%, #780cff 100%);
   --crm-mobile-dock-height: 0px;
+  --status-success-bg: #dcfce7;
+  --status-success-ink: #166534;
+  --status-error-bg: #fee2e2;
+  --status-error-ink: #991b1b;
+  --status-manual-bg: #ffedd5;
+  --status-manual-ink: #c2410c;
+  --persona-status-success-ink: #1f6b42;
+  --persona-status-running-ink: #9a5b00;
+  --persona-status-error-ink: #b42318;
 }
 
 * { box-sizing: border-box; }
@@ -190,16 +199,27 @@ body.crm-page button { color: inherit; }
   overflow: hidden;
   min-width: 0;
 }
-.crm-panel-stage {
-  position: relative;
+.crm-panel-strip {
+  display: flex;
+  width: 100%;
   transform: translate3d(0, 0, 0);
+  will-change: transform;
+  transition: transform 180ms cubic-bezier(.2, .72, .2, 1);
+}
+.crm-subpage {
+  flex: 0 0 100%;
+  min-width: 0;
+}
+.crm-subpage[aria-hidden="true"] { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .crm-panel-strip { transition: none; }
 }
 
 .crm-mobile-rail-button { display: none; }
 .crm-sidebar-backdrop { display: none; }
 
 .crm-workspace-tabs,
-.crm-compact-tabs { display: flex; flex-wrap: nowrap; gap: 2px; width: 100%; max-width: 1320px; margin: 0 auto 8px; padding: 2px; overflow: hidden; background: var(--crm-paper); border: 1px solid var(--crm-line); border-radius: 8px; }
+.crm-compact-tabs { display: flex; flex-wrap: nowrap; gap: 4px; width: 100%; max-width: 1320px; margin: 0 auto 8px; padding: 4px; overflow: hidden; background: var(--crm-surface-soft); border: 1px solid var(--crm-line); border-radius: 999px; }
 .crm-workspace-tabs button,
 .crm-compact-tabs button {
   display: inline-flex;
@@ -208,12 +228,12 @@ body.crm-page button { color: inherit; }
   gap: 4px;
   flex: 1 1 0;
   min-width: 0;
-  min-height: 32px;
+  min-height: 34px;
   padding: 0 12px;
   color: var(--crm-muted);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 999px;
   font-size: 13px;
   font-weight: 800;
   white-space: nowrap;
@@ -883,12 +903,47 @@ body.crm-page button { color: inherit; }
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-.crm-account-card-main > .crm-status {
+.crm-account-card-main > .status {
   grid-area: status;
   justify-self: end;
-  min-height: 22px;
-  padding: 0 7px;
 }
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.status.ready { background: var(--status-success-bg); color: var(--status-success-ink); }
+.status.pending_login { background: var(--status-manual-bg); color: var(--status-manual-ink); }
+.status.abnormal { background: var(--status-error-bg); color: var(--status-error-ink); }
+.account-status-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  line-height: 0;
+}
+.account-status-icon.is-healthy { color: var(--persona-status-success-ink); }
+.account-status-icon.is-warning { color: var(--persona-status-running-ink); }
+.account-status-icon.is-danger { color: var(--persona-status-error-ink); }
+.account-status-icon svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.account-status-label { min-width: 0; white-space: nowrap; }
 .crm-account-card-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1024,7 +1079,7 @@ body.crm-page button { color: inherit; }
   box-sizing: border-box;
   pointer-events: none;
   border: 1px solid var(--vecto-action-border, #34495e);
-  border-radius: 6px;
+  border-radius: 999px;
   background-color: var(--public-cool-dark, #253746);
   background-image: var(--public-action-gradient, linear-gradient(#253746, #253746));
   transform: translate3d(0, 0, 0);
@@ -1388,7 +1443,7 @@ body.crm-page button { color: inherit; }
     overflow-x: clip;
   }
   .crm-compact-tabs { display: flex; width: 100%; overflow: hidden; }
-  .crm-compact-tabs button { flex: 1 1 0; min-width: 0; min-height: 32px; padding: 0 8px; }
+  .crm-compact-tabs button { flex: 1 1 0; min-width: 0; min-height: 34px; padding: 0 8px; }
   .crm-donut-wrap { grid-template-columns: minmax(0, 1fr) 108px; }
   .crm-donut { width: 108px; height: 108px; }
   .crm-donut > div { inset: 18px; }
