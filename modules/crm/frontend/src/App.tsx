@@ -5,7 +5,7 @@ import { Icon } from "./icons";
 import { PlatformChip, PlatformLogo, platformLabel } from "./platform";
 import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { BarChart, DonutChart, LineChart } from "./charts";
-import { chartColor, dailyTrend, groupEventMix, humanText, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
+import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
@@ -88,6 +88,10 @@ function itemId(item: Record<string, unknown>, index: number) {
 }
 
 function itemTitle(item: Record<string, unknown>, fallback: string, language: Language = "zh-Hans") {
+  const person = humanText(item.preview_user || item.username || item.display_name, "");
+  if (person && person !== "—") return person.startsWith("@") ? person : `@${person}`;
+  const eventName = eventPreviewLabel(String(item.event_type || ""), language);
+  if (eventName) return eventName;
   return taskTitle(item, fallback, language);
 }
 
@@ -105,11 +109,14 @@ function localizedDate(value: unknown, language: Language) {
 }
 
 function itemMeta(item: Record<string, unknown>, language: Language) {
-  const descriptive = item.description || item.summary || item.platform;
-  if (descriptive) return humanText(descriptive);
-  const kind = item.kind || item.type || item.workflow_type;
-  if (kind) return workflowLabel(String(kind), language);
-  return localizedDate(item.updated_at || item.created_at, language);
+  const preview = humanText(item.preview_text || item.content || item.message || item.description || item.summary, "");
+  if (preview && preview !== "—") return preview;
+  const kind = item.kind || item.type || item.workflow_type || item.event_type;
+  if (kind) {
+    const label = eventPreviewLabel(String(kind), language) || workflowLabel(String(kind), language);
+    if (label && !/^[a-z0-9_]+$/i.test(label)) return label;
+  }
+  return localizedDate(item.occurred_at || item.updated_at || item.created_at, language);
 }
 
 function statusTone(status = "") {
@@ -541,9 +548,14 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
       <div className="crm-record-list">
       {filteredItems.map((item, index) => {
         const status = String(item.status || item.state || "");
+        const body = humanText(item.preview_text || item.content || item.message, "");
         return <article className="crm-record" key={itemId(item, index)}>
           <span className="crm-record-icon"><Icon name={view} /></span>
-          <span className="crm-record-copy"><strong>{itemTitle(item, `${messages.views[view][0]} ${index + 1}`, language)}</strong><small>{itemMeta(item, language)}</small></span>
+          <span className="crm-record-copy">
+            <strong>{itemTitle(item, `${messages.views[view][0]} ${index + 1}`, language)}</strong>
+            {body && body !== "—" ? <small className="crm-record-body">{body}</small> : null}
+            <small>{itemMeta(item, language) === body ? localizedDate(item.occurred_at || item.updated_at || item.created_at, language) : itemMeta(item, language)}</small>
+          </span>
           {status && <StatusBadge status={status} messages={messages} />}
         </article>;
       })}
@@ -839,6 +851,7 @@ export function App() {
   const dockPillRef = useRef<HTMLSpanElement>(null);
   const dockPillReady = useRef(false);
   const pageSlide = useRef(0);
+  const viewStage = useRef<HTMLDivElement>(null);
   const drawerWasOpen = useRef(false);
   const [bootstrapState, setBootstrapState] = useState<"loading" | "ready" | "forbidden" | "maintenance" | "error">("loading");
   const [bootstrap, setBootstrap] = useState<BootstrapPayload>({});
@@ -937,16 +950,14 @@ export function App() {
     pageSlide.current = options?.direction || 0;
     setView(next);
     setDrawerOpen(false);
-    window.requestAnimationFrame(() => document.getElementById("crm-main")?.focus({ preventScroll: true }));
   };
 
   useLayoutEffect(() => {
     const direction = pageSlide.current;
     if (!direction) return;
     pageSlide.current = 0;
-    if (!isCompact) return;
-    animatePageSlide(mainRef.current, direction);
-  }, [view, isCompact]);
+    animatePageSlide(viewStage.current, direction);
+  }, [view]);
 
   useLayoutEffect(() => {
     if (bootstrapState !== "ready") return;
@@ -968,9 +979,9 @@ export function App() {
       window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
       return;
     }
-    const buttons = dockRef.current ? [...dockRef.current.querySelectorAll<HTMLButtonElement>(".crm-mobile-dock-items > button")] : [];
-    const current = buttons.find((item) => item.classList.contains("is-active")) || null;
-    navigate(next, { direction: navigationDirection(buttons, current, button) });
+    const from = navViews.indexOf(navViewOf(view));
+    const to = navViews.indexOf(id);
+    navigate(next, { direction: to === from ? 0 : to > from ? 1 : -1 });
   };
 
   const partial = Boolean(bootstrap.warnings?.length || pollError);
@@ -1018,6 +1029,7 @@ export function App() {
       </nav>
     </aside>
     <main ref={mainRef} id="crm-main" className="crm-main" tabIndex={-1}>
+      <div ref={viewStage} className="crm-view">
       {bootstrap.workspace?.managed_by_admin && <div className="crm-banner crm-banner--workspace" role="status"><Icon name="accounts" /><span><strong>{messages.managedWorkspace}</strong>{messages.managedWorkspaceDetail(bootstrap.workspace.username || String(bootstrap.workspace.user_id || "—"), bootstrap.workspace.user_id)}</span><a className="crm-secondary-button" href="/admin.html">{messages.exitWorkspace}</a></div>}
       {partial && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{messages.partial}</span><button type="button" onClick={() => { void loadBootstrap(); void refreshTasks(); }}><Icon name="refresh" />{messages.retry}</button></div>}
       {bootstrap.module?.degraded && <div className="crm-banner crm-banner--degraded" role="alert"><Icon name="signal" /><span><strong>{messages.degraded}</strong>{messages.degradedHint}</span></div>}
@@ -1053,6 +1065,7 @@ export function App() {
         {(view === "relationships") && <ResourceList key="relationships" view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />}
         {(view === "accounts" || !settingTabs.includes(view)) && <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />}
       </>}
+      </div>
     </main>
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={() => { setToast(messages.submitted); void refreshTasks(); }} />
     {toast && <div className="crm-toast" role="status">{toast}</div>}

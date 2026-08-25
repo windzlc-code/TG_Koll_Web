@@ -429,20 +429,52 @@ def row_public(row: sqlite3.Row | dict[str, Any] | None) -> JsonDict | None:
     return result
 
 
+def _list_preview_fields(data: JsonDict) -> JsonDict:
+    text = str(
+        data.get("content")
+        or data.get("comment")
+        or data.get("message")
+        or data.get("instruction")
+        or data.get("text")
+        or data.get("source_text")
+        or ""
+    ).strip()[:160]
+    user = str(
+        data.get("recipient")
+        or data.get("recipient_username")
+        or data.get("username")
+        or data.get("display_name")
+        or data.get("target")
+        or ""
+    ).strip()
+    preview: JsonDict = {}
+    if text:
+        preview["preview_text"] = text
+    if user and user not in text:
+        preview["preview_user"] = user
+    return preview
+
+
 def row_public_list(row: sqlite3.Row | dict[str, Any] | None) -> JsonDict | None:
     result = row_public(row)
     if not result:
         return result
+    blob = result.get("payload") if isinstance(result.get("payload"), dict) else result.get("input")
+    if isinstance(blob, dict):
+        result.update(_list_preview_fields(blob))
     for key in LIST_OMIT_PUBLIC_KEYS:
         result.pop(key, None)
     return result
 
 
 def list_select_sql(conn: sqlite3.Connection, table: str) -> str:
+    omit = set(LIST_BLOB_COLUMNS)
+    if table in {"crm_events", "crm_workflows"}:
+        omit.discard("payload_json" if table == "crm_events" else "input_json")
     columns = [
         str(item[1])
         for item in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        if str(item[1]) not in LIST_BLOB_COLUMNS
+        if str(item[1]) not in omit
     ]
     return ", ".join(columns) if columns else "*"
 

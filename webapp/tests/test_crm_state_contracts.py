@@ -431,6 +431,7 @@ class CRMStateContractTests(unittest.TestCase):
         self.assertNotIn("legacy_payload", listed_item)
         self.assertNotIn("input", listed_item)
         self.assertNotIn("result", listed_item)
+        self.assertNotIn("payload", listed_item)
         detail = client.get(f"/api/crm/v1/tasks/{task_id}")
         self.assertEqual(detail.status_code, 200, detail.text)
         self.assertIn("steps", detail.json())

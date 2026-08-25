@@ -146,6 +146,8 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(app, /useSegmentSlide/);
   assert.match(app, /animatePageSlide/);
   assert.match(motion, /left: `\$\{direction \* distance\}px`/);
+  assert.match(motion, /max-width: 980px/);
+  assert.match(css, /\.crm-view/);
   assert.match(css, /\.crm-chart-placeholder/);
   assert.match(css, /overflow-x:\s*clip/);
   assert.match(app, /crm-mobile-dock-track/);
@@ -172,7 +174,8 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /\.crm-member-grid/);
   assert.match(app, /useSegmentSlide/);
   assert.match(app, /navigate\(next, \{ direction \}\)/);
-  assert.match(app, /navigate\(next, \{ direction: navigationDirection/);
+  assert.match(app, /className="crm-view"/);
+  assert.match(app, /animatePageSlide\(viewStage\.current/);
   assert.match(app, /cancelTaskConfirm/);
   assert.match(app, /role="progressbar"/);
   assert.match(css, /--crm-sidebar-width:\s*188px/);

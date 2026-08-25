@@ -193,6 +193,7 @@ export function useSegmentSlide() {
 
 export function animatePageSlide(node: HTMLElement | null, direction: number) {
   if (!node || !direction || prefersReducedMotion() || typeof node.animate !== "function") return;
+  if (!window.matchMedia("(max-width: 980px)").matches) return;
   const distance = Math.min(56, Math.max(32, Math.round(window.innerWidth * 0.12)));
   pageSlideAnimation?.cancel();
   const animation = node.animate(

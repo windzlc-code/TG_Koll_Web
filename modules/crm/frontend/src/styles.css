@@ -175,11 +175,15 @@ body.crm-page button { color: inherit; }
 .crm-service-state.is-degraded { color: #eadfd8; background: #382f2b; border-color: rgba(233, 225, 216, 0.32); }
 
 .crm-main {
-  position: relative;
   min-height: calc(100vh - var(--site-header-height, 68px));
   margin-left: var(--crm-sidebar-width);
   padding: 16px clamp(16px, 2.4vw, 36px) 96px;
   outline: none;
+  overflow-x: clip;
+}
+.crm-view {
+  position: relative;
+  left: 0;
 }
 
 .crm-mobile-rail-button { display: none; }
@@ -732,8 +736,17 @@ body.crm-page button { color: inherit; }
 .crm-record-icon { display: grid; place-items: center; width: 34px; height: 34px; color: var(--crm-accent); background: var(--crm-accent-soft); border-radius: 7px; }
 .crm-record-icon svg { width: 17px; height: 17px; }
 .crm-record-copy { display: grid; gap: 4px; min-width: 0; }
-.crm-record-copy strong { overflow: hidden; color: var(--crm-ink-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.crm-record-copy strong { overflow: hidden; color: var(--crm-ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .crm-record-copy small { overflow: hidden; color: var(--crm-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.crm-record-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+  text-overflow: ellipsis;
+  color: var(--crm-ink-soft);
+  line-height: 1.45;
+}
 
 .crm-empty { display: grid; justify-items: center; gap: 7px; min-height: 250px; align-content: center; color: var(--crm-muted); text-align: center; }
 .crm-empty > svg { width: 30px; height: 30px; margin-bottom: 4px; color: var(--crm-accent); }
@@ -887,7 +900,12 @@ body.crm-page button { color: inherit; }
 .crm-wizard-assistant > svg { width: 20px; height: 20px; margin-top: 2px; color: var(--crm-accent-strong); }
 .crm-wizard-assistant span { display: grid; gap: 3px; font-size: 13px; line-height: 1.55; }
 .crm-wizard-assistant strong { color: var(--crm-ink); }
-.crm-wizard-body { min-height: 310px; }
+.crm-wizard-body { min-height: 310px; padding-bottom: 12px; }
+.crm-wizard-body .crm-field textarea {
+  min-height: 120px;
+  color: var(--crm-ink);
+  background: var(--crm-paper);
+}
 .crm-wizard-choices { display: grid; gap: 10px; }
 .crm-wizard-choice { display: grid; grid-template-columns: 42px minmax(0, 1fr) 18px; align-items: center; gap: 12px; min-height: 76px; padding: 13px 15px; color: var(--crm-ink-soft); text-align: left; background: #fbfcfd; border: 1px solid var(--crm-surface); border-radius: 8px; cursor: pointer; }
 .crm-wizard-choice:hover, .crm-wizard-choice.is-active { background: var(--crm-accent-soft); border-color: var(--crm-accent); box-shadow: inset 3px 0 var(--crm-accent-strong); }
@@ -1116,6 +1134,7 @@ body.crm-page button { color: inherit; }
 .crm-preflight-review > dl > div { padding: 9px; background: var(--crm-paper); border: 1px solid var(--crm-surface); border-radius: 6px; }
 .crm-preflight-review dt { color: var(--crm-muted); font-size: 12px; }
 .crm-preflight-review dd { margin: 5px 0 0; color: var(--crm-ink); font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+.crm-wizard-confirmation dd { overflow-wrap: anywhere; white-space: pre-wrap; }
 .crm-preflight-review details { color: var(--crm-ink-soft); font-size: 13px; }
 .crm-preflight-review details ul { display: grid; gap: 6px; max-height: 180px; margin: 9px 0 0; padding: 0; overflow: auto; list-style: none; }
 .crm-preflight-review details li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 9px; background: var(--crm-paper); border-radius: 5px; }
