@@ -21,30 +21,63 @@ export function prefersReducedMotion() {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches === true;
 }
 
+function pillBoxForButton(group: HTMLElement, button: HTMLElement) {
+  const groupRect = group.getBoundingClientRect();
+  const buttonRect = button.getBoundingClientRect();
+  return dockPillBox(
+    { left: buttonRect.left, top: buttonRect.top, width: buttonRect.width, height: buttonRect.height },
+    {
+      left: groupRect.left,
+      top: groupRect.top,
+      clientLeft: group.clientLeft,
+      clientTop: group.clientTop,
+      scrollLeft: group.scrollLeft,
+      scrollTop: group.scrollTop,
+    },
+  );
+}
+
+function placePill(pill: HTMLElement, box: { x: number; y: number; width: number; height: number }) {
+  pill.style.left = "0px";
+  pill.style.top = "0px";
+  pill.style.width = `${box.width}px`;
+  pill.style.height = `${box.height}px`;
+  pill.style.transform = `translate3d(${box.x}px, ${box.y}px, 0)`;
+}
+
 export function applyDockPill(dock: HTMLElement | null, pill: HTMLElement | null, index: number, instant = false) {
   if (!dock || !pill) return null;
   const buttons = [...dock.querySelectorAll<HTMLElement>(".crm-mobile-dock-items > button, :scope > button")];
   const button = buttons[index];
   if (!button) return null;
-  const dockRect = dock.getBoundingClientRect();
-  const buttonRect = button.getBoundingClientRect();
-  const box = dockPillBox(
-    { left: buttonRect.left, top: buttonRect.top, width: buttonRect.width, height: buttonRect.height },
-    {
-      left: dockRect.left,
-      top: dockRect.top,
-      clientLeft: dock.clientLeft,
-      clientTop: dock.clientTop,
-      scrollLeft: dock.scrollLeft,
-      scrollTop: dock.scrollTop,
-    },
-  );
-  pill.style.left = "0px";
-  pill.style.top = "0px";
-  pill.style.width = `${box.width}px`;
-  pill.style.height = `${box.height}px`;
+  const box = pillBoxForButton(dock, button);
   pill.getAnimations().forEach((animation) => animation.cancel());
-  pill.style.transform = `translate3d(${box.x}px, ${box.y}px, 0)`;
+  placePill(pill, box);
+  return box;
+}
+
+export function applySegmentPill(group: HTMLElement | null, track: HTMLElement | null, index: number, instant = false) {
+  if (!group || !track) return null;
+  const buttons = [...group.querySelectorAll<HTMLElement>(":scope > button")];
+  const button = buttons[index];
+  if (!button) return null;
+  const box = pillBoxForButton(group, button);
+  const next = `translate3d(${box.x}px, ${box.y}px, 0)`;
+  const currentTransform = getComputedStyle(track).transform;
+  const fromWidth = track.style.width || `${Math.round(track.getBoundingClientRect().width)}px`;
+  const fromHeight = track.style.height || `${Math.round(track.getBoundingClientRect().height)}px`;
+  track.getAnimations().forEach((animation) => animation.cancel());
+  placePill(track, box);
+  if (instant || prefersReducedMotion() || typeof track.animate !== "function") return box;
+  const from = !currentTransform || currentTransform === "none" ? "translate3d(0, 0, 0)" : currentTransform;
+  if (from === next) return box;
+  track.animate(
+    [
+      { transform: from, width: fromWidth, height: fromHeight },
+      { transform: next, width: `${box.width}px`, height: `${box.height}px` },
+    ],
+    { duration: SLIDE_MS, easing: SLIDE_EASE },
+  );
   return box;
 }
 

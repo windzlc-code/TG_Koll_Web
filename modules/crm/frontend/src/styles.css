@@ -199,14 +199,15 @@ body.crm-page button { color: inherit; }
 .crm-sidebar-backdrop { display: none; }
 
 .crm-workspace-tabs,
-.crm-compact-tabs { display: flex; flex-wrap: nowrap; gap: 2px; width: 100%; max-width: 1320px; margin: 0 auto 8px; padding: 2px; overflow-x: auto; background: var(--crm-paper); border: 1px solid var(--crm-line); border-radius: 8px; }
+.crm-compact-tabs { display: flex; flex-wrap: nowrap; gap: 2px; width: 100%; max-width: 1320px; margin: 0 auto 8px; padding: 2px; overflow: hidden; background: var(--crm-paper); border: 1px solid var(--crm-line); border-radius: 8px; }
 .crm-workspace-tabs button,
 .crm-compact-tabs button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  flex: 1 0 auto;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 32px;
   padding: 0 12px;
   color: var(--crm-muted);
@@ -215,18 +216,24 @@ body.crm-page button { color: inherit; }
   border-radius: 6px;
   font-size: 13px;
   font-weight: 800;
+  white-space: nowrap;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   transition: color 180ms cubic-bezier(.2, .72, .2, 1);
 }
 .crm-workspace-tabs button svg { width: 14px; height: 14px; }
-.crm-workspace-tabs button[aria-selected="true"],
-.crm-compact-tabs button[aria-selected="true"],
-.crm-compact-tabs button.is-active {
+.crm-workspace-tabs button[aria-selected="true"] {
   color: #fff;
   background-color: var(--public-cool-dark, #253746);
   background-image: var(--public-action-gradient, linear-gradient(#253746, #253746));
   border-color: var(--vecto-action-border, #34495e);
+}
+.crm-compact-tabs button[aria-selected="true"],
+.crm-compact-tabs button.is-active {
+  color: #fff;
+  background: transparent;
+  background-image: none;
+  border-color: transparent;
 }
 
 .crm-module-toolbar {
@@ -830,21 +837,87 @@ body.crm-page button { color: inherit; }
 .crm-live-indicator i { width: 6px; height: 6px; background: currentColor; border-radius: 50%; animation: crm-live 1.6s ease-out infinite; }
 .crm-live-indicator.is-offline { color: var(--crm-warning); background: var(--crm-warning-soft); }
 
-.crm-account-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-.crm-account-card { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 15px; background: #fbfcfd; border: 1px solid var(--crm-surface); border-radius: 8px; }
+.crm-account-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.crm-account-card {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  background: var(--crm-paper);
+  border: 1px solid var(--crm-line);
+  border-radius: 8px;
+}
 .crm-account-card[data-account-platform="threads"] { border-color: #111; }
 .crm-account-card[data-account-platform="instagram"] {
   border: 1px solid transparent;
-  background: linear-gradient(#fbfcfd, #fbfcfd) padding-box, var(--instagram-platform-gradient) border-box;
+  background: linear-gradient(var(--crm-paper), var(--crm-paper)) padding-box, var(--instagram-platform-gradient) border-box;
 }
-.crm-account-avatar { display: grid; place-items: center; width: 42px; height: 42px; color: var(--crm-ink); background: var(--crm-paper); border: 1px solid var(--crm-line); border-radius: 50%; }
-.crm-account-avatar .platform-brand-icon { width: 22px; height: 22px; }
-.crm-account-card[data-account-platform="threads"] .crm-account-avatar { color: #111; border-color: #111; }
-.crm-account-card[data-account-platform="instagram"] .crm-account-avatar { color: #c13584; border-color: transparent; background: linear-gradient(#fff, #fff) padding-box, var(--instagram-platform-gradient) border-box; }
-.crm-account-card > div:nth-child(2) { display: grid; gap: 3px; min-width: 0; }
-.crm-account-card > div:nth-child(2) strong { overflow: hidden; color: var(--crm-ink-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.crm-account-card > div:nth-child(2) span { color: var(--crm-muted); font-size: 12px; }
-.crm-account-card .crm-secondary-button { grid-column: 1 / -1; }
+.crm-account-card-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "platform . status"
+    "username username username";
+  align-items: center;
+  gap: 4px 8px;
+}
+.crm-account-card-platform {
+  grid-area: platform;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--crm-muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.crm-account-card-platform .platform-brand-icon { width: 14px; height: 14px; flex: 0 0 14px; }
+.crm-account-card[data-account-platform="threads"] .crm-account-card-platform { color: #111; }
+.crm-account-card[data-account-platform="instagram"] .crm-account-card-platform { color: #c13584; }
+.crm-account-card-main > strong {
+  grid-area: username;
+  min-width: 0;
+  color: var(--crm-ink);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.crm-account-card-main > .crm-status {
+  grid-area: status;
+  justify-self: end;
+  min-height: 22px;
+  padding: 0 7px;
+}
+.crm-account-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.crm-account-card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--crm-ink-soft);
+  background: var(--crm-paper);
+  border: 1px solid var(--crm-line);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.crm-account-card-action svg { width: 13px; height: 13px; }
+.crm-account-card-action:disabled { opacity: 0.48; cursor: not-allowed; }
+.crm-account-card-action--login {
+  color: var(--crm-on-dark);
+  background: var(--crm-accent-strong);
+  border-color: var(--crm-accent-strong);
+}
 
 .crm-banner { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; max-width: 1320px; min-height: 36px; margin: 0 auto 10px; padding: 6px 10px; border: 1px solid; border-radius: 8px; font-size: 12px; }
 .crm-banner > svg { width: 15px; height: 15px; }
@@ -941,6 +1014,22 @@ body.crm-page button { color: inherit; }
 .platform-outline-icon--instagram { overflow: visible; fill: none; stroke: none; }
 .crm-mobile-dock { display: none; }
 .crm-compact-tabs { isolation: isolate; position: relative; }
+.crm-compact-tabs-pill {
+  position: absolute;
+  z-index: 0;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 1px solid var(--vecto-action-border, #34495e);
+  border-radius: 6px;
+  background-color: var(--public-cool-dark, #253746);
+  background-image: var(--public-action-gradient, linear-gradient(#253746, #253746));
+  transform: translate3d(0, 0, 0);
+}
+.crm-compact-tabs > button { position: relative; z-index: 1; }
 .crm-compact-tabs.is-segment-background-sliding { pointer-events: none; }
 .crm-compact-tabs.is-segment-background-sliding::before {
   content: "";
@@ -1298,8 +1387,8 @@ body.crm-page button { color: inherit; }
     padding: 12px 12px calc(var(--crm-mobile-dock-height) + 16px);
     overflow-x: clip;
   }
-  .crm-compact-tabs { display: flex; width: 100%; overflow-x: auto; }
-  .crm-compact-tabs button { flex: 1 0 auto; min-height: 32px; padding: 0 10px; }
+  .crm-compact-tabs { display: flex; width: 100%; overflow: hidden; }
+  .crm-compact-tabs button { flex: 1 1 0; min-width: 0; min-height: 32px; padding: 0 8px; }
   .crm-donut-wrap { grid-template-columns: minmax(0, 1fr) 108px; }
   .crm-donut { width: 108px; height: 108px; }
   .crm-donut > div { inset: 18px; }
@@ -1375,8 +1464,7 @@ body.crm-page button { color: inherit; }
   .crm-metrics { grid-template-columns: 1fr 1fr; }
   .crm-metric { padding: 13px 12px; }
   .crm-account-grid { grid-template-columns: 1fr; }
-  .crm-account-card { grid-template-columns: 38px minmax(0, 1fr); }
-  .crm-account-card > .crm-status { grid-column: 2; justify-self: start; }
+  .crm-account-card-action { min-height: 28px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -143,7 +143,8 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /cubic-bezier\(\.2, \.72, \.2, 1\)/);
   assert.match(css, /is-segment-background-sliding/);
   assert.match(css, /--public-action-gradient/);
-  assert.match(app, /useSegmentSlide/);
+  assert.match(app, /applySegmentPill/);
+  assert.match(app, /crm-compact-tabs-pill/);
   assert.match(app, /animatePageSlide/);
   assert.match(motion, /translate3d\(\$\{direction \* 100\}%, 0, 0\)/);
   assert.match(motion, /max-width: 980px/);
@@ -157,6 +158,8 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(app, /crm-mobile-dock-pill/);
   assert.match(app, /applyDockPill/);
   assert.match(css, /\.crm-mobile-dock-pill/);
+  assert.match(css, /\.crm-compact-tabs-pill/);
+  assert.match(css, /\.crm-account-card-platform/);
   assert.match(css, /overflow-x:\s*hidden/);
   assert.match(css, /\.crm-mobile-dock button\.is-active \{[\s\S]*?background:\s*transparent;/);
   assert.match(app, /role="tablist"/);
@@ -175,7 +178,8 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /\.crm-line-chart/);
   assert.match(css, /\.crm-mix-bar/);
   assert.match(css, /\.crm-member-grid/);
-  assert.match(app, /useSegmentSlide/);
+  assert.match(app, /applySegmentPill/);
+  assert.match(app, /crm-account-card-platform/);
   assert.match(app, /navigate\(next, \{ direction, panel: true \}\)/);
   assert.match(app, /className="crm-view"/);
   assert.match(app, /className="crm-panel-stage"/);

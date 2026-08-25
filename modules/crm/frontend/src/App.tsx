@@ -2,14 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api";
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
-import { PlatformChip, PlatformLogo, platformLabel } from "./platform";
+import { PlatformLogo, platformLabel } from "./platform";
 import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { BarChart, DonutChart, LineChart } from "./charts";
 import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
-import { animatePageSlide, applyDockPill, prefersReducedMotion, useSegmentSlide } from "./segment-motion";
+import { animatePageSlide, applyDockPill, applySegmentPill, prefersReducedMotion } from "./segment-motion";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -174,28 +174,35 @@ type NavigateOptions = { direction?: number; panel?: boolean };
 
 function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId, options?: NavigateOptions) => void; label: string }) {
   const group = useRef<HTMLDivElement>(null);
-  const segment = useSegmentSlide();
-  const select = (next: ViewId, button?: HTMLButtonElement | null) => {
+  const pill = useRef<HTMLSpanElement>(null);
+  const pillReady = useRef(false);
+  const select = (next: ViewId) => {
     if (next === value) return;
     const fromIndex = items.indexOf(value);
     const toIndex = items.indexOf(next);
     const direction = toIndex === fromIndex || fromIndex < 0 || toIndex < 0 ? 0 : toIndex > fromIndex ? 1 : -1;
-    const node = group.current;
-    const current = node?.querySelector<HTMLButtonElement>("button.is-active, button[aria-selected='true']");
-    const target = button || node?.querySelector<HTMLButtonElement>(`#crm-tab-${next}`);
-    segment.start(node, current || null, target || null);
     navigate(next, { direction, panel: true });
-    window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus());
+    window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus({ preventScroll: true }));
   };
   const move = (event: React.KeyboardEvent<HTMLButtonElement>, current: ViewId) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const currentIndex = items.indexOf(current);
     const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + items.length) % items.length;
-    select(items[nextIndex], event.currentTarget);
+    select(items[nextIndex]);
   };
-  return <div ref={group} className={segment.groupClass("crm-compact-tabs")} style={segment.groupStyle()} role="tablist" aria-label={label}>
-    {items.map((id, index) => <button id={`crm-tab-${id}`} type="button" role="tab" aria-selected={value === id} tabIndex={value === id ? 0 : -1} className={segment.buttonClass(index, value === id)} key={id} onKeyDown={(event) => move(event, id)} onClick={(event) => select(id, event.currentTarget)}>{messages.views[id][0]}</button>)}
+  useLayoutEffect(() => {
+    applySegmentPill(group.current, pill.current, Math.max(0, items.indexOf(value)), !pillReady.current);
+    pillReady.current = true;
+  }, [items, value]);
+  useEffect(() => {
+    const sync = () => applySegmentPill(group.current, pill.current, Math.max(0, items.indexOf(value)), true);
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
+  }, [items, value]);
+  return <div ref={group} className="crm-compact-tabs" role="tablist" aria-label={label}>
+    <span ref={pill} className="crm-compact-tabs-pill" aria-hidden="true" />
+    {items.map((id) => <button id={`crm-tab-${id}`} type="button" role="tab" aria-selected={value === id} tabIndex={value === id ? 0 : -1} className={value === id ? "is-active" : ""} key={id} onKeyDown={(event) => move(event, id)} onClick={() => select(id)}>{messages.views[id][0]}</button>)}
   </div>;
 }
 
@@ -248,6 +255,18 @@ const takeoverAccountStates = new Set(["pending_login", "needs_login", "need_ver
 
 function accountNeedsTakeover(account: CrmAccount) {
   return Boolean(account.needs_login) || takeoverAccountStates.has(String(account.status || "").toLowerCase()) || takeoverAccountStates.has(String(account.health_status || "").toLowerCase());
+}
+
+function accountPoolStatus(account: CrmAccount, messages: Messages) {
+  if (accountNeedsTakeover(account)) return { tone: "needs_login", label: messages.statuses.needs_login };
+  const raw = String(account.health_status || account.status || "").toLowerCase();
+  if (["banned", "disabled", "blocked", "suspended", "risk_control", "abnormal"].includes(raw)) {
+    return { tone: "failed", label: statusText(raw, messages) };
+  }
+  if (["alive", "ready", "healthy", "success", "standby", "active"].includes(raw) || !raw) {
+    return { tone: "ready", label: messages.statuses.alive };
+  }
+  return { tone: raw || "ready", label: statusText(raw, messages) };
 }
 
 function accountIsReady(account: CrmAccount | undefined) {
@@ -788,15 +807,24 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
     <div className="crm-panel-head"><div><span className="crm-kicker">{messages.accountHealth}</span><h2>{messages.views.accounts[0]}</h2></div></div>
     {error && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{error}</span><button type="button" onClick={() => { setError(""); setLoading(true); void loadAccounts().catch((nextError) => { setError(localizedError(nextError, messages)); setLoading(false); }); }}><Icon name="refresh" />{messages.retry}</button></div>}
     {loading ? <div className="crm-list-skeleton" aria-live="polite"><span>{messages.loadingData}</span><i /><i /></div> : !accounts.length ? <EmptyState messages={messages} view="accounts" /> : <div className="crm-account-grid">{accounts.map((account, index) => {
-      const accountState = account.health_status || account.status || "ready";
       const needsLogin = accountNeedsTakeover(account);
+      const poolStatus = accountPoolStatus(account, messages);
+      const username = account.username || account.display_name || `${messages.accountFallback} ${index + 1}`;
+      const platformName = platformLabel(account.platform) || messages.platformFallback;
       return <article className="crm-account-card" data-account-platform={String(account.platform || "").toLowerCase()} key={String(account.id || account.username || index)}>
-        <div className="crm-account-avatar" aria-hidden="true"><PlatformLogo platform={account.platform} /></div>
-        <div><strong>{account.display_name || account.username || `${messages.accountFallback} ${index + 1}`}</strong><PlatformChip platform={account.platform} label={platformLabel(account.platform) || messages.platformFallback} /></div>
-        <StatusBadge status={needsLogin ? "needs_login" : accountState} messages={messages} />
-        {account.rotation?.locked && <button className="crm-secondary-button" type="button" disabled={resetting === String(account.id)} onClick={() => void resetRotation(account)}><Icon name="refresh" />{resetting === String(account.id) ? messages.submitting : (language === "zh-Hant" ? "重置私訊輪換" : "重置私信轮换")}</button>}
-        {needsLogin && <button className="crm-secondary-button" type="button" disabled={opening === String(account.id) || verifying === String(account.id)} onClick={() => void openLogin(account)}><Icon name="external" />{opening === String(account.id) ? messages.submitting : messages.openLogin}</button>}
-        <button className="crm-secondary-button" type="button" disabled={verifying === String(account.id) || opening === String(account.id)} onClick={() => void verifyLogin(account)}><Icon name="refresh" />{verifying === String(account.id) ? messages.verifyingLogin : messages.verifyLogin}</button>
+        <div className="crm-account-card-main">
+          <span className="crm-account-card-platform">
+            <PlatformLogo platform={account.platform} />
+            <span>{platformName}</span>
+          </span>
+          <strong title={username}>{username}</strong>
+          <span className={`crm-status crm-status--${statusTone(poolStatus.tone)}`}><i aria-hidden="true" />{poolStatus.label}</span>
+        </div>
+        <div className="crm-account-card-actions">
+          {needsLogin && <button className="crm-account-card-action crm-account-card-action--login" type="button" disabled={opening === String(account.id) || verifying === String(account.id)} onClick={() => void openLogin(account)}><Icon name="external" />{opening === String(account.id) ? messages.submitting : messages.openLogin}</button>}
+          <button className="crm-account-card-action" type="button" disabled={verifying === String(account.id) || opening === String(account.id)} onClick={() => void verifyLogin(account)}><Icon name="refresh" />{verifying === String(account.id) ? messages.verifyingLogin : messages.verifyLogin}</button>
+          {account.rotation?.locked && <button className="crm-account-card-action" type="button" disabled={resetting === String(account.id)} onClick={() => void resetRotation(account)}><Icon name="refresh" />{resetting === String(account.id) ? messages.submitting : (language === "zh-Hant" ? "重置私訊輪換" : "重置私信轮换")}</button>}
+        </div>
       </article>;
     })}</div>}
     {notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
