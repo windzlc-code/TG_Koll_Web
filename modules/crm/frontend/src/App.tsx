@@ -479,6 +479,19 @@ function EmptyState({ messages, view, actionLabel, onAction, filtered = false }:
   </div>;
 }
 
+function isReachRecord(item: Record<string, unknown>, view: ViewId) {
+  const type = String(item.event_type || item.kind || item.workflow_type || "").toLowerCase();
+  const text = String(item.preview_text || item.content || item.message || "").toLowerCase();
+  const hay = `${type} ${text}`;
+  if (view === "public") {
+    if (/pool|persona |business pools|deduplication|scope audited|tags updated|consolidated|task deleted|task_deleted/.test(hay)) return false;
+    if (/(^| )collect( |$|_)/.test(hay) && !/public|comment|reply|outreach|message|engagement/.test(hay)) return false;
+    return /public|outreach|comment|reply|direct_message|engagement|group|message|互动|留言|私信/.test(hay);
+  }
+  if (view === "outreach") return /outreach|direct_message|dm_|私信|message/.test(hay) || !type;
+  return true;
+}
+
 function inspectPayload(detail: Record<string, unknown>) {
   const nested = [detail.payload, detail.input, detail.result, detail.evidence].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
   const merged: Record<string, unknown> = { ...detail };
@@ -539,16 +552,17 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
 
   useEffect(() => { void load(""); }, [load]);
 
-  const statuses = useMemo(() => [...new Set(items.map((item) => String(item.status || item.state || "").trim()).filter(Boolean))].sort(), [items]);
+  const visibleItems = useMemo(() => items.filter((item) => isReachRecord(item, view)), [items, view]);
+  const statuses = useMemo(() => [...new Set(visibleItems.map((item) => String(item.status || item.state || "").trim()).filter(Boolean))].sort(), [visibleItems]);
   const filteredItems = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase(language);
-    return items.filter((item, index) => {
+    return visibleItems.filter((item, index) => {
       const status = String(item.status || item.state || "").trim();
       if (statusFilter && status !== statusFilter) return false;
       if (!needle) return true;
       return `${itemTitle(item, `${messages.views[view][0]} ${index + 1}`, language)} ${itemMeta(item, language)}`.toLocaleLowerCase(language).includes(needle);
     });
-  }, [items, language, messages.views, query, statusFilter, view]);
+  }, [visibleItems, language, messages.views, query, statusFilter, view]);
   const filtersActive = Boolean(query.trim() || statusFilter);
   const clearFilters = () => { setQuery(""); setStatusFilter(""); };
 
@@ -562,13 +576,13 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
     {state === "loading" && <div className="crm-list-skeleton" aria-live="polite"><span>{messages.loadingData}</span><i /><i /><i /></div>}
     {state === "error" && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{loadError?.message || messages.dataError}{loadError?.retryable && <small>{messages.retryableHint}</small>}</span><button type="button" onClick={() => void load()}><Icon name="refresh" />{messages.retry}</button></div>}
     {state === "ready" && loadError && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{loadError.message}</span><button type="button" onClick={() => void load(nextCursor)}><Icon name="refresh" />{messages.retry}</button></div>}
-    {state === "ready" && items.length > 0 && <div className="crm-filter-bar" role="search" aria-label={messages.filterRecords}>
+    {state === "ready" && visibleItems.length > 0 && <div className="crm-filter-bar" role="search" aria-label={messages.filterRecords}>
       <label><span>{messages.search}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={messages.searchPlaceholder} /></label>
       <label><span>{messages.status}</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">{messages.allStatuses}</option>{statuses.map((status) => <option key={status} value={status}>{statusText(status, messages)}</option>)}</select></label>
       {filtersActive && <button className="crm-secondary-button" type="button" onClick={clearFilters}>{messages.clearFilters}</button>}
     </div>}
-    {state === "ready" && !items.length && <EmptyState messages={messages} view={view} actionLabel={writeViews.has(view) && enabled ? messages.create : undefined} onAction={writeViews.has(view) && enabled ? onCreate : undefined} />}
-    {state === "ready" && items.length > 0 && !filteredItems.length && <EmptyState messages={messages} view={view} filtered actionLabel={messages.clearFilters} onAction={clearFilters} />}
+    {state === "ready" && !visibleItems.length && <EmptyState messages={messages} view={view} actionLabel={writeViews.has(view) && enabled ? messages.create : undefined} onAction={writeViews.has(view) && enabled ? onCreate : undefined} />}
+    {state === "ready" && visibleItems.length > 0 && !filteredItems.length && <EmptyState messages={messages} view={view} filtered actionLabel={messages.clearFilters} onAction={clearFilters} />}
     {state === "ready" && filteredItems.length > 0 && <>
       <MixBar parts={mixFromValues(filteredItems.map((item) => item.status || item.state), language)} />
       <div className="crm-record-list">

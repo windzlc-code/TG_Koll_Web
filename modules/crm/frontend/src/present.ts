@@ -93,6 +93,11 @@ export function metricLabel(key: string, language: "zh-Hans" | "zh-Hant") {
     clicked: ["已点击", "已點擊"],
     created: ["新建", "新建"],
     task_deleted: ["任务已删除", "任務已刪除"],
+    persona_scope_audited: ["人设范围已核对", "人設範圍已核對"],
+    pool_deduplication_reconciled: ["客户池已去重", "客戶池已去重"],
+    business_pools_consolidated: ["客户池已合并", "客戶池已合併"],
+    pool_tags_updated: ["客户池标签已更新", "客戶池標籤已更新"],
+    task_manual_attention_recorded: ["任务需要处理", "任務需要處理"],
   };
   const pair = map[key];
   if (pair) return hant ? pair[1] : pair[0];
