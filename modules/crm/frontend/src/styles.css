@@ -889,18 +889,6 @@ body.crm-page button { color: inherit; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-body.crm-page .crm-account-platforms button[data-account-platform="all"] {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-areas: "label";
-  color: var(--crm-ink);
-  background: #fff;
-  border: 1px solid var(--crm-line);
-}
-body.crm-page .crm-account-platforms button[data-account-platform="all"].is-active {
-  color: #fff;
-  background: var(--crm-accent-strong);
-  border-color: var(--crm-accent-strong);
-}
 body.crm-page .crm-account-platforms button[data-account-platform="threads"] {
   color: #000;
   background: #fff;
@@ -1057,6 +1045,29 @@ body.crm-page .crm-account-card-action--login {
   color: #fff;
   background: var(--crm-accent-strong);
   border-color: var(--crm-accent-strong);
+}
+body.crm-page a.crm-account-card-action { text-decoration: none; }
+.crm-account-track {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  background: var(--crm-surface-soft);
+  border: 1px solid var(--crm-line);
+  border-radius: 8px;
+}
+.crm-account-track strong { color: var(--crm-ink); font-size: 13px; }
+.crm-account-track small { color: var(--crm-ink-soft); font-size: 12px; }
+.crm-account-track .crm-progress { margin: 2px 0; }
+.crm-account-track .crm-progress span.is-live {
+  width: 36%;
+  animation: crm-track-slide 1.1s ease-in-out infinite;
+}
+.crm-account-track .crm-progress span.is-settled { width: 100%; }
+.crm-account-track .crm-progress.is-failed span { background: var(--crm-danger); }
+.crm-account-track-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+@keyframes crm-track-slide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
 }
 
 .crm-banner { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; max-width: 1320px; min-height: 36px; margin: 0 auto 10px; padding: 6px 10px; border: 1px solid; border-radius: 8px; font-size: 12px; }

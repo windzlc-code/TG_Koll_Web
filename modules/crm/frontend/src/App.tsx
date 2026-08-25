@@ -291,6 +291,31 @@ function accountIsReady(account: CrmAccount | undefined) {
   return String(account.status || "").toLowerCase() === "ready" && !["banned", "disabled"].includes(String(account.health_status || "").toLowerCase());
 }
 
+type AccountTrack = {
+  accountId: string;
+  kind: "open_login" | "account_check";
+  taskId: string;
+  status: string;
+  phase: "queued" | "running" | "ready" | "done" | "failed";
+  browserUrl?: string;
+};
+
+function accountTrackPhase(kind: AccountTrack["kind"], status: string, browserUrl?: string): AccountTrack["phase"] {
+  if (["completed", "confirmed"].includes(status)) return "done";
+  if (["failed", "cancelled", "unknown"].includes(status)) return "failed";
+  if (kind === "open_login" && browserUrl) return "ready";
+  if (status === "running" || status === "manual_required") return "running";
+  return "queued";
+}
+
+function liveBrowserHref(sessionId: string) {
+  const context = adminWorkspaceContext();
+  const query = new URLSearchParams();
+  if (context.isAdmin) query.set("admin_console", "1");
+  if (context.workspaceId) query.set("admin_workspace_user_id", context.workspaceId);
+  return `/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(sessionId)}/kasm/${query.size ? `?${query}` : ""}`;
+}
+
 async function waitForWorkflow(taskId: string, attempts = 90) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const task = await crmApi.task(taskId);
@@ -747,14 +772,15 @@ function Overview({ bootstrap, tasks, messages, language }: { bootstrap: Bootstr
 
 function AccountsView({ accounts: seedAccounts, messages, language }: { accounts: CrmAccount[]; messages: Messages; language: Language }) {
   const [accounts, setAccounts] = useState<CrmAccount[]>(seedAccounts);
-  const [platformFilter, setPlatformFilter] = useState<"all" | "threads" | "instagram">("all");
+  const [platformFilter, setPlatformFilter] = useState<"threads" | "instagram">("threads");
   const [loading, setLoading] = useState(!seedAccounts.length);
   const [opening, setOpening] = useState("");
   const [verifying, setVerifying] = useState("");
   const [resetting, setResetting] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const visibleAccounts = accounts.filter((account) => platformFilter === "all" || normalizePlatform(account.platform) === platformFilter);
+  const [track, setTrack] = useState<AccountTrack | null>(null);
+  const visibleAccounts = accounts.filter((account) => normalizePlatform(account.platform) === platformFilter);
   const loadAccounts = useCallback(async () => {
     const payload = await crmApi.list("accounts");
     const next = payloadItems(payload) as CrmAccount[];
@@ -774,24 +800,63 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
     });
     return () => { active = false; };
   }, [messages.dataError]);
+  useEffect(() => {
+    if (!accounts.length) return;
+    if (visibleAccounts.length) return;
+    const fallback = normalizePlatform(accounts[0]?.platform) === "instagram" ? "instagram" : "threads";
+    if (fallback !== platformFilter) setPlatformFilter(fallback);
+  }, [accounts, platformFilter, visibleAccounts.length]);
+  useEffect(() => {
+    if (!track?.taskId) return;
+    const taskId = track.taskId;
+    const kind = track.kind;
+    let cancelled = false;
+    let timer = 0;
+    const tick = async () => {
+      try {
+        const detail = await crmApi.task(taskId);
+        if (cancelled) return;
+        const status = String(detail.status || "queued");
+        let foundUrl = "";
+        if (kind === "open_login") {
+          const steps = taskDetailSteps(detail);
+          const socialIds = new Set(steps.map((step) => String(step.social_task_id || "")).filter(Boolean));
+          const sessions = (await crmApi.browserSessions()).sessions || [];
+          const session = sessions.find((item) => (socialIds.has(String(item.task_id || "")) || String(item.task_id || "") === taskId) && item.browser_ready !== false);
+          const sessionId = String(session?.id || session?.session_id || "");
+          if (sessionId) foundUrl = liveBrowserHref(sessionId);
+        }
+        setTrack((current) => {
+          if (!current || current.taskId !== taskId) return current;
+          const browserUrl = current.browserUrl || foundUrl;
+          return { ...current, status, browserUrl, phase: accountTrackPhase(kind, status, browserUrl) };
+        });
+        if (["completed", "failed", "cancelled", "unknown"].includes(status)) {
+          await loadAccounts();
+          if (status === "completed") setNotice(messages.loginVerified);
+          return;
+        }
+        timer = window.setTimeout(() => { void tick(); }, 1_000);
+      } catch (nextError) {
+        if (!cancelled) setError(localizedError(nextError, messages));
+      }
+    };
+    timer = window.setTimeout(() => { void tick(); }, 200);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [track?.taskId, track?.kind, loadAccounts, messages]);
   const openLogin = async (account: CrmAccount) => {
     const id = String(account.id || "");
     if (!id) return;
     setOpening(id);
     setError(""); setNotice("");
     try {
-      await openLoginSession(id, language);
-      setOpening(""); setVerifying(id);
-      for (let attempt = 0; attempt < 60; attempt += 1) {
-        const next = await loadAccounts();
-        if (accountIsReady(next.find((item) => String(item.id) === id))) { setNotice(messages.loginVerified); return; }
-        await new Promise((resolve) => window.setTimeout(resolve, 5_000));
-      }
-      throw new Error(operationCatalog[language].browserTimeout);
+      const result = await crmApi.openLogin(id);
+      if (!result.task_id) throw new Error(operationCatalog[language].browserTimeout);
+      setTrack({ accountId: id, kind: "open_login", taskId: result.task_id, status: "queued", phase: "queued" });
     } catch (nextError) {
       setError(localizedError(nextError, messages));
     } finally {
-      setOpening(""); setVerifying("");
+      setOpening("");
     }
   };
   const verifyLogin = async (account: CrmAccount) => {
@@ -799,9 +864,7 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
     setVerifying(id); setError(""); setNotice("");
     try {
       const result = await crmApi.verifyAccount(id);
-      const task = await waitForWorkflow(result.task_id);
-      if (String(task.status || "") !== "completed") throw new Error(String(task.error_detail || task.error_code || "crm.errors.accountNeedsLogin"));
-      await loadAccounts(); setNotice(messages.loginVerified);
+      setTrack({ accountId: id, kind: "account_check", taskId: result.task_id, status: result.status || "queued", phase: "queued" });
     } catch (nextError) { setError(localizedError(nextError, messages)); }
     finally { setVerifying(""); }
   };
@@ -825,7 +888,6 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
   return <section className="crm-panel">
     <div className="crm-panel-head"><div><span className="crm-kicker">{messages.accountHealth}</span><h2>{messages.views.accounts[0]}</h2></div></div>
     <div className="crm-account-platforms" role="tablist" aria-label={messages.platformFilter}>
-      <button type="button" role="tab" aria-selected={platformFilter === "all"} className={platformFilter === "all" ? "is-active" : ""} data-account-platform="all" onClick={() => setPlatformFilter("all")}><strong>{messages.allPlatforms}</strong></button>
       <button type="button" role="tab" aria-selected={platformFilter === "threads"} className={platformFilter === "threads" ? "is-active" : ""} data-account-platform="threads" onClick={() => setPlatformFilter("threads")}><PlatformLogo platform="threads" /><strong>Threads</strong></button>
       <button type="button" role="tab" aria-selected={platformFilter === "instagram"} className={platformFilter === "instagram" ? "is-active" : ""} data-account-platform="instagram" onClick={() => setPlatformFilter("instagram")}><PlatformLogo platform="instagram" /><strong>Instagram</strong></button>
     </div>
@@ -844,10 +906,20 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
           <AccountStatusChip account={account} messages={messages} />
         </div>
         <div className="crm-account-card-actions">
-          {needsLogin && <button className="crm-account-card-action crm-account-card-action--login" type="button" disabled={opening === String(account.id) || verifying === String(account.id)} onClick={() => void openLogin(account)}><Icon name="external" />{opening === String(account.id) ? messages.submitting : messages.openLogin}</button>}
-          <button className="crm-account-card-action" type="button" disabled={verifying === String(account.id) || opening === String(account.id)} onClick={() => void verifyLogin(account)}><Icon name="refresh" />{verifying === String(account.id) ? messages.verifyingLogin : messages.verifyLogin}</button>
+          {needsLogin && <button className="crm-account-card-action crm-account-card-action--login" type="button" disabled={opening === String(account.id) || verifying === String(account.id) || track?.accountId === String(account.id)} onClick={() => void openLogin(account)}><Icon name="external" />{opening === String(account.id) ? messages.submitting : messages.openLogin}</button>}
+          <button className="crm-account-card-action" type="button" disabled={verifying === String(account.id) || opening === String(account.id) || track?.accountId === String(account.id)} onClick={() => void verifyLogin(account)}><Icon name="refresh" />{verifying === String(account.id) ? messages.verifyingLogin : messages.verifyLogin}</button>
           {account.rotation?.locked && <button className="crm-account-card-action" type="button" disabled={resetting === String(account.id)} onClick={() => void resetRotation(account)}><Icon name="refresh" />{resetting === String(account.id) ? messages.submitting : (language === "zh-Hant" ? "重置私訊輪換" : "重置私信轮换")}</button>}
         </div>
+        {track?.accountId === String(account.id) && <div className="crm-account-track" role="status">
+          <strong>{track.kind === "open_login" ? messages.loginAssistant : messages.verifyAssistant}</strong>
+          <small>{messages.accountTrack[track.phase]}</small>
+          <div className={`crm-progress ${track.phase === "failed" ? "is-failed" : ""}`} role="progressbar" aria-label={messages.taskProgress}><span className={track.phase === "done" || track.phase === "failed" ? "is-settled" : "is-live"} /></div>
+          <div className="crm-account-track-actions">
+            {track.browserUrl && <a className="crm-account-card-action crm-account-card-action--login" href={track.browserUrl} target="_blank" rel="noopener noreferrer">{messages.openLiveView}</a>}
+            <button className="crm-account-card-action" type="button" onClick={() => { window.location.hash = "tasks"; }}>{messages.viewLoginTask}</button>
+            {(track.phase === "done" || track.phase === "failed") && <button className="crm-account-card-action" type="button" onClick={() => setTrack(null)}>{messages.cancel}</button>}
+          </div>
+        </div>}
       </article>;
     })}</div>}
     {notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
