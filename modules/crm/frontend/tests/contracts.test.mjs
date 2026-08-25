@@ -148,6 +148,8 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(app, /crm-filter-bar/);
   assert.match(app, /crm-evidence-timeline/);
   assert.match(app, /managed_by_admin/);
+  assert.doesNotMatch(app, /crm-banner--login/);
+  assert.doesNotMatch(app, /crm-task-strip/);
   assert.match(app, /cancelTaskConfirm/);
   assert.match(app, /role="progressbar"/);
   assert.match(css, /--crm-sidebar-width:\s*188px/);

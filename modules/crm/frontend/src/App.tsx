@@ -953,11 +953,6 @@ export function App() {
     navigate(next);
   };
 
-  const activeTasks = useMemo(() => tasks.filter((task) => activeStatuses.has(String(task.status || ""))), [tasks]);
-  const failedTasks = useMemo(() => tasks.filter((task) => String(task.status || "") === "failed"), [tasks]);
-  const reviewTasks = useMemo(() => tasks.filter((task) => ["manual_required", "unknown"].includes(String(task.status || ""))), [tasks]);
-  const taskStripVisible = activeTasks.length > 0 || failedTasks.length > 0 || reviewTasks.length > 0;
-  const loginAccounts = useMemo(() => (bootstrap.accounts || []).filter(accountNeedsTakeover), [bootstrap.accounts]);
   const partial = Boolean(bootstrap.warnings?.length || pollError);
   const viewEnabled = (candidate: ViewId) => {
     const capability = capabilityByView[candidate];
@@ -1004,7 +999,6 @@ export function App() {
     </aside>
     <main ref={mainRef} id="crm-main" className="crm-main" tabIndex={-1}>
       {bootstrap.workspace?.managed_by_admin && <div className="crm-banner crm-banner--workspace" role="status"><Icon name="accounts" /><span><strong>{messages.managedWorkspace}</strong>{messages.managedWorkspaceDetail(bootstrap.workspace.username || String(bootstrap.workspace.user_id || "—"), bootstrap.workspace.user_id)}</span><a className="crm-secondary-button" href="/admin.html">{messages.exitWorkspace}</a></div>}
-      {loginAccounts.length > 0 && <div className="crm-banner crm-banner--login" role="alert"><Icon name="warning" /><span><strong>{messages.accountsNeedLogin(loginAccounts.length)}</strong><span className="crm-banner-platforms">{loginAccounts.slice(0, 3).map((account) => <PlatformChip key={String(account.id || account.username)} platform={account.platform} label={`@${account.username || account.display_name || account.id}`} />)}</span></span><button type="button" onClick={() => navigate("accounts")}>{messages.manageAccounts}</button></div>}
       {partial && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{messages.partial}</span><button type="button" onClick={() => { void loadBootstrap(); void refreshTasks(); }}><Icon name="refresh" />{messages.retry}</button></div>}
       {bootstrap.module?.degraded && <div className="crm-banner crm-banner--degraded" role="alert"><Icon name="signal" /><span><strong>{messages.degraded}</strong>{messages.degradedHint}</span></div>}
       {view === "overview" && <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} navigate={navigate} onCreate={startWorkflow} />}
@@ -1040,7 +1034,6 @@ export function App() {
         {(view === "accounts" || !settingTabs.includes(view)) && <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />}
       </>}
     </main>
-    {taskStripVisible && <aside className="crm-task-strip" aria-live="polite" aria-label={messages.taskStripLabel}><button type="button" onClick={() => navigate("tasks")}><span className="crm-task-strip-pulse" aria-hidden="true" /><span><strong>{messages.runningCount(activeTasks.length)} · {messages.reviewCount(reviewTasks.length)} · {messages.failedCount(failedTasks.length)}</strong><small>{messages.taskStripHint}</small></span><Icon name="arrow" /></button></aside>}
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={(taskId) => { setToast(`${messages.submitted} · ${taskId}`); void refreshTasks(); }} />
     {toast && <div className="crm-toast" role="status">{toast}</div>}
     <nav ref={dockRef} className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) }}>
