@@ -2,7 +2,7 @@ import { Children, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api";
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
-import { PlatformLogo, platformLabel } from "./platform";
+import { PlatformLogo, normalizePlatform, platformLabel } from "./platform";
 import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { BarChart, DonutChart, LineChart } from "./charts";
 import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
@@ -747,12 +747,14 @@ function Overview({ bootstrap, tasks, messages, language }: { bootstrap: Bootstr
 
 function AccountsView({ accounts: seedAccounts, messages, language }: { accounts: CrmAccount[]; messages: Messages; language: Language }) {
   const [accounts, setAccounts] = useState<CrmAccount[]>(seedAccounts);
+  const [platformFilter, setPlatformFilter] = useState<"all" | "threads" | "instagram">("all");
   const [loading, setLoading] = useState(!seedAccounts.length);
   const [opening, setOpening] = useState("");
   const [verifying, setVerifying] = useState("");
   const [resetting, setResetting] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const visibleAccounts = accounts.filter((account) => platformFilter === "all" || normalizePlatform(account.platform) === platformFilter);
   const loadAccounts = useCallback(async () => {
     const payload = await crmApi.list("accounts");
     const next = payloadItems(payload) as CrmAccount[];
@@ -822,8 +824,13 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
   };
   return <section className="crm-panel">
     <div className="crm-panel-head"><div><span className="crm-kicker">{messages.accountHealth}</span><h2>{messages.views.accounts[0]}</h2></div></div>
+    <div className="crm-account-platforms" role="tablist" aria-label={messages.platformFilter}>
+      <button type="button" role="tab" aria-selected={platformFilter === "all"} className={platformFilter === "all" ? "is-active" : ""} data-account-platform="all" onClick={() => setPlatformFilter("all")}><strong>{messages.allPlatforms}</strong></button>
+      <button type="button" role="tab" aria-selected={platformFilter === "threads"} className={platformFilter === "threads" ? "is-active" : ""} data-account-platform="threads" onClick={() => setPlatformFilter("threads")}><PlatformLogo platform="threads" /><strong>Threads</strong></button>
+      <button type="button" role="tab" aria-selected={platformFilter === "instagram"} className={platformFilter === "instagram" ? "is-active" : ""} data-account-platform="instagram" onClick={() => setPlatformFilter("instagram")}><PlatformLogo platform="instagram" /><strong>Instagram</strong></button>
+    </div>
     {error && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{error}</span><button type="button" onClick={() => { setError(""); setLoading(true); void loadAccounts().catch((nextError) => { setError(localizedError(nextError, messages)); setLoading(false); }); }}><Icon name="refresh" />{messages.retry}</button></div>}
-    {loading ? <div className="crm-list-skeleton" aria-live="polite"><span>{messages.loadingData}</span><i /><i /></div> : !accounts.length ? <EmptyState messages={messages} view="accounts" /> : <div className="crm-account-grid">{accounts.map((account, index) => {
+    {loading ? <div className="crm-list-skeleton" aria-live="polite"><span>{messages.loadingData}</span><i /><i /></div> : !accounts.length ? <EmptyState messages={messages} view="accounts" /> : !visibleAccounts.length ? <p className="crm-quiet-empty">{messages.noPlatformAccounts}</p> : <div className="crm-account-grid">{visibleAccounts.map((account, index) => {
       const needsLogin = accountNeedsTakeover(account);
       const username = account.username || account.display_name || `${messages.accountFallback} ${index + 1}`;
       const platformName = platformLabel(account.platform) || messages.platformFallback;

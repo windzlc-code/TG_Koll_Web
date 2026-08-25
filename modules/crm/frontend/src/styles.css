@@ -857,6 +857,84 @@ body.crm-page button { color: inherit; }
 .crm-live-indicator i { width: 6px; height: 6px; background: currentColor; border-radius: 50%; animation: crm-live 1.6s ease-out infinite; }
 .crm-live-indicator.is-offline { color: var(--crm-warning); background: var(--crm-warning-soft); }
 
+.crm-account-platforms {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  max-width: 1320px;
+  margin: 0 auto 10px;
+}
+.crm-account-platforms button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas: "icon label";
+  align-items: center;
+  justify-content: center;
+  column-gap: 8px;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 44px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.crm-account-platforms button > svg { grid-area: icon; width: 18px; height: 18px; }
+.crm-account-platforms button > strong {
+  grid-area: label;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.crm-page .crm-account-platforms button[data-account-platform="all"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "label";
+  color: var(--crm-ink);
+  background: #fff;
+  border: 1px solid var(--crm-line);
+}
+body.crm-page .crm-account-platforms button[data-account-platform="all"].is-active {
+  color: #fff;
+  background: var(--crm-accent-strong);
+  border-color: var(--crm-accent-strong);
+}
+body.crm-page .crm-account-platforms button[data-account-platform="threads"] {
+  color: #000;
+  background: #fff;
+  border: 1px solid #000;
+}
+body.crm-page .crm-account-platforms button[data-account-platform="threads"].is-active {
+  color: #fff;
+  background: #000;
+}
+body.crm-page .crm-account-platforms button[data-account-platform="instagram"] {
+  color: #c13584;
+  background: linear-gradient(#fff, #fff) padding-box, var(--instagram-platform-gradient) border-box;
+  border: 1px solid transparent;
+}
+body.crm-page .crm-account-platforms button[data-account-platform="instagram"]:not(.is-active) > strong {
+  background: var(--instagram-brand-gradient);
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+body.crm-page .crm-account-platforms button[data-account-platform="instagram"].is-active {
+  color: #fff;
+  background: var(--instagram-platform-gradient) padding-box, var(--instagram-platform-gradient) border-box;
+}
+body.crm-page .crm-account-platforms button[data-account-platform="instagram"].is-active > strong {
+  color: #fff;
+  background: none;
+  -webkit-text-fill-color: #fff;
+}
+body.crm-page .crm-account-platforms button[data-account-platform="instagram"].is-active .platform-outline-icon--instagram {
+  filter: brightness(0) invert(1);
+}
+
 .crm-account-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .crm-account-card {
   display: grid;
@@ -893,6 +971,13 @@ body.crm-page button { color: inherit; }
 .crm-account-card-platform .platform-brand-icon { width: 14px; height: 14px; flex: 0 0 14px; }
 .crm-account-card[data-account-platform="threads"] .crm-account-card-platform { color: #111; }
 .crm-account-card[data-account-platform="instagram"] .crm-account-card-platform { color: #c13584; }
+.crm-account-card[data-account-platform="instagram"] .crm-account-card-platform > span {
+  background: var(--instagram-brand-gradient);
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
 .crm-account-card-main > strong {
   grid-area: username;
   min-width: 0;
@@ -950,15 +1035,15 @@ body.crm-page button { color: inherit; }
   align-items: center;
   gap: 6px;
 }
-.crm-account-card-action {
+body.crm-page .crm-account-card-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
   min-height: 28px;
   padding: 0 8px;
-  color: var(--crm-ink-soft);
-  background: var(--crm-paper);
+  color: var(--crm-ink);
+  background: var(--crm-surface-soft);
   border: 1px solid var(--crm-line);
   border-radius: 7px;
   font-size: 12px;
@@ -966,10 +1051,10 @@ body.crm-page button { color: inherit; }
   white-space: nowrap;
   cursor: pointer;
 }
-.crm-account-card-action svg { width: 13px; height: 13px; }
-.crm-account-card-action:disabled { opacity: 0.48; cursor: not-allowed; }
-.crm-account-card-action--login {
-  color: var(--crm-on-dark);
+body.crm-page .crm-account-card-action svg { width: 13px; height: 13px; color: inherit; }
+body.crm-page .crm-account-card-action:disabled { opacity: 0.48; cursor: not-allowed; }
+body.crm-page .crm-account-card-action--login {
+  color: #fff;
   background: var(--crm-accent-strong);
   border-color: var(--crm-accent-strong);
 }

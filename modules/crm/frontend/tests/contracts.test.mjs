@@ -180,6 +180,9 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /\.crm-member-grid/);
   assert.match(app, /applySegmentPill/);
   assert.match(app, /crm-account-card-platform/);
+  assert.match(app, /crm-account-platforms/);
+  assert.match(css, /\.crm-account-platforms/);
+  assert.match(css, /body\.crm-page \.crm-account-card-action--login/);
   assert.match(app, /navigate\(next, \{ direction, panel: true \}\)/);
   assert.match(app, /className="crm-view"/);
   assert.match(app, /className="crm-panel-strip"/);
