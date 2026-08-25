@@ -553,6 +553,10 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
   useEffect(() => { void load(""); }, [load]);
 
   const visibleItems = useMemo(() => items.filter((item) => isReachRecord(item, view)), [items, view]);
+  useEffect(() => {
+    if (state !== "ready" || loadingMore || !nextCursor || visibleItems.length >= 8 || items.length >= 400) return;
+    void load(nextCursor);
+  }, [state, loadingMore, nextCursor, visibleItems.length, items.length, load]);
   const statuses = useMemo(() => [...new Set(visibleItems.map((item) => String(item.status || item.state || "").trim()).filter(Boolean))].sort(), [visibleItems]);
   const filteredItems = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase(language);
@@ -602,7 +606,7 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
       })}
       </div>
     </>}
-    {state === "ready" && nextCursor && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={() => void load(nextCursor)}>{loadingMore ? messages.loadingMore : messages.loadMore}</button></div>}
+    {state === "ready" && nextCursor && visibleItems.length > 0 && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={() => void load(nextCursor)}>{loadingMore ? messages.loadingMore : messages.loadMore}</button></div>}
     {inspect && <div className="crm-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setInspect(null); }}>
       <div className="crm-modal" role="dialog" aria-modal="true" aria-labelledby="crmRecordDetailTitle">
         <div className="crm-modal-head"><div><span className="crm-kicker">{messages.views[view][0]}</span><h2 id="crmRecordDetailTitle">{messages.recordDetail}</h2></div><button className="crm-icon-button" type="button" onClick={() => setInspect(null)} aria-label={messages.cancel}><Icon name="close" /></button></div>
