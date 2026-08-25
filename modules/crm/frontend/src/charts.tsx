@@ -4,12 +4,21 @@ function ChartHead({ title, hint }: { title: string; hint?: string }) {
   return <div className="crm-chart-head"><h3>{title}</h3>{hint ? <span>{hint}</span> : null}</div>;
 }
 
+function ChartPlaceholder({ kind, message }: { kind: "donut" | "line" | "bars"; message: string }) {
+  const shape = kind === "donut"
+    ? <div className="crm-chart-placeholder-donut" aria-hidden="true"><span>0</span></div>
+    : kind === "line"
+      ? <svg className="crm-chart-placeholder-line" viewBox="0 0 240 76" aria-hidden="true" focusable="false"><path d="M8 60 L54 44 L96 50 L142 24 L188 38 L232 12" /></svg>
+      : <div className="crm-chart-placeholder-bars" aria-hidden="true"><i /><i /><i /><i /><i /></div>;
+  return <div className={`crm-chart-placeholder crm-chart-placeholder--${kind}`} role="img" aria-label={message}>{shape}<span>{message}</span></div>;
+}
+
 export function DonutChart({ title, hint, parts, totalLabel, empty }: { title: string; hint?: string; parts: MixPart[]; totalLabel: string; empty?: string }) {
   const total = parts.reduce((sum, part) => sum + part.count, 0);
   if (!total) {
     return <article className="crm-chart-panel">
       <ChartHead title={title} hint={hint} />
-      <div className="crm-chart-empty">{empty || totalLabel}</div>
+      <ChartPlaceholder kind="donut" message={empty || totalLabel} />
     </article>;
   }
   let cursor = 0;
@@ -51,7 +60,7 @@ export function LineChart({
   const pathFor = (values: number[]) => values.map((value, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(" ");
   return <article className="crm-chart-panel crm-chart-panel-wide">
     <ChartHead title={title} hint={hint} />
-    {!hasData ? <div className="crm-chart-empty">{empty}</div> : <svg className="crm-line-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
+    {!hasData ? <ChartPlaceholder kind="line" message={empty} /> : <svg className="crm-line-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
       {[0, 0.5, 1].map((ratio) => {
         const gridY = y(max * ratio);
         return <g key={ratio}>
@@ -74,6 +83,6 @@ export function BarChart({ title, hint, parts, empty }: { title: string; hint?: 
   const max = Math.max(...parts.map((part) => part.count), 1);
   return <article className="crm-chart-panel crm-chart-panel-wide">
     <ChartHead title={title} hint={hint} />
-    {!parts.length ? <div className="crm-chart-empty">{empty}</div> : <div className="crm-analytics-bars">{parts.slice(0, 8).map((part, index) => <div key={part.key}><span><strong>{part.label}</strong><b>{part.count}</b></span><i><span style={{ width: `${(part.count / max) * 100}%`, background: chartColor(index, mixTone(part.key)) }} /></i></div>)}</div>}
+    {!parts.length ? <ChartPlaceholder kind="bars" message={empty} /> : <div className="crm-analytics-bars">{parts.slice(0, 8).map((part, index) => <div key={part.key}><span><strong>{part.label}</strong><b>{part.count}</b></span><i><span style={{ width: `${(part.count / max) * 100}%`, background: chartColor(index, mixTone(part.key)) }} /></i></div>)}</div>}
   </article>;
 }

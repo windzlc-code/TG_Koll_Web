@@ -197,8 +197,8 @@ export function animatePageSlide(node: HTMLElement | null, direction: number) {
   pageSlideAnimation?.cancel();
   const animation = node.animate(
     [
-      { transform: `translate3d(${direction * distance}px, 0, 0)` },
-      { transform: "translate3d(0, 0, 0)" },
+      { left: `${direction * distance}px` },
+      { left: "0px" },
     ],
     { duration: SLIDE_MS, easing: SLIDE_EASE },
   );

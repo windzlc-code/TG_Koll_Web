@@ -17,6 +17,8 @@ test("CRM overview exposes preview charts and no other-page task launchers", asy
   assert.match(app, /LineChart/);
   assert.match(charts, /conic-gradient/);
   assert.match(charts, /crm-line-chart/);
+  assert.match(charts, /crm-chart-placeholder/);
+  assert.match(charts, /persona-chart-placeholder-line|M8 60 L54 44/);
   assert.doesNotMatch(app, /className="crm-action-grid"/);
   assert.doesNotMatch(app, /crm-priority-panel/);
   assert.doesNotMatch(app, /crm-flow-board/);
@@ -143,6 +145,9 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /--public-action-gradient/);
   assert.match(app, /useSegmentSlide/);
   assert.match(app, /animatePageSlide/);
+  assert.match(motion, /left: `\$\{direction \* distance\}px`/);
+  assert.match(css, /\.crm-chart-placeholder/);
+  assert.match(css, /overflow-x:\s*clip/);
   assert.match(app, /crm-mobile-dock-track/);
   assert.match(app, /crm-mobile-dock-pill/);
   assert.match(app, /applyDockPill/);
@@ -166,7 +171,8 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /\.crm-mix-bar/);
   assert.match(css, /\.crm-member-grid/);
   assert.match(app, /useSegmentSlide/);
-  assert.match(app, /navigate\(next\);/);
+  assert.match(app, /navigate\(next, \{ direction \}\)/);
+  assert.match(app, /navigate\(next, \{ direction: navigationDirection/);
   assert.match(app, /cancelTaskConfirm/);
   assert.match(app, /role="progressbar"/);
   assert.match(css, /--crm-sidebar-width:\s*188px/);
@@ -218,6 +224,8 @@ test("business views preserve bilingual, responsive, no-green UI", async () => {
   assert.match(present, /export function cronFriendly/);
   assert.match(present, /export function poolInsightCards/);
   assert.match(present, /export function mixParts/);
+  assert.match(present, /export function eventPreviewLabel/);
+  assert.match(present, /public_comment_reply_monitor_started/);
 });
 
 test("workflow wizard preserves the legacy prepare-review-confirm operation order", async () => {

@@ -5,11 +5,11 @@ import { Icon } from "./icons";
 import { PlatformChip, PlatformLogo, platformLabel } from "./platform";
 import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { BarChart, DonutChart, LineChart } from "./charts";
-import { chartColor, dailyTrend, humanText, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
+import { chartColor, dailyTrend, groupEventMix, humanText, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
-import { animatePageSlide, applyDockPill, prefersReducedMotion, useSegmentSlide } from "./segment-motion";
+import { animatePageSlide, applyDockPill, navigationDirection, prefersReducedMotion, useSegmentSlide } from "./segment-motion";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -161,7 +161,7 @@ function StatusBadge({ status, messages }: { status?: string; messages: Messages
   return <span className={`crm-status crm-status--${statusTone(status)}`}><i aria-hidden="true" />{statusText(status, messages)}</span>;
 }
 
-function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId) => void; label: string }) {
+function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId, options?: { direction?: number }) => void; label: string }) {
   const group = useRef<HTMLDivElement>(null);
   const segment = useSegmentSlide();
   const select = (next: ViewId, button?: HTMLButtonElement | null) => {
@@ -169,8 +169,10 @@ function CompactTabs({ items, value, messages, navigate, label }: { items: ViewI
     const node = group.current;
     const current = node?.querySelector<HTMLButtonElement>("button.is-active, button[aria-selected='true']");
     const target = button || node?.querySelector<HTMLButtonElement>(`#crm-tab-${next}`);
+    const buttons = node ? [...node.querySelectorAll<HTMLButtonElement>("button")] : [];
+    const direction = navigationDirection(buttons, current || null, target || null);
     segment.start(node, current || null, target || null, () => {
-      navigate(next);
+      navigate(next, { direction });
       window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus());
     });
   };
@@ -573,8 +575,8 @@ function Overview({ bootstrap, tasks, messages, language }: { bootstrap: Bootstr
       .filter(([, count]) => count > 0),
     language,
   );
-  const eventMix = mixParts(
-    Object.entries((analytics.event_types || {}) as Record<string, number>).map(([key, count]) => [key, Number(count) || 0] as [string, number]).filter(([, count]) => count > 0).slice(0, 8),
+  const eventMix = groupEventMix(
+    Object.entries((analytics.event_types || {}) as Record<string, number>).map(([key, count]) => [key, Number(count) || 0]),
     language,
   );
   const trend = dailyTrend(tasks as Array<Record<string, unknown>>);
@@ -966,7 +968,9 @@ export function App() {
       window.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
       return;
     }
-    navigate(next);
+    const buttons = dockRef.current ? [...dockRef.current.querySelectorAll<HTMLButtonElement>(".crm-mobile-dock-items > button")] : [];
+    const current = buttons.find((item) => item.classList.contains("is-active")) || null;
+    navigate(next, { direction: navigationDirection(buttons, current, button) });
   };
 
   const partial = Boolean(bootstrap.warnings?.length || pollError);

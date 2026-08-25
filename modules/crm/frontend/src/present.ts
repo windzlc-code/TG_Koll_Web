@@ -106,6 +106,55 @@ export function workflowLabel(type: string, language: "zh-Hans" | "zh-Hant") {
   return metricLabel(String(type || "").trim(), language);
 }
 
+export function eventPreviewLabel(key: string, language: "zh-Hans" | "zh-Hant") {
+  const hant = language === "zh-Hant";
+  const normalized = String(key || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const map: Record<string, [string, string]> = {
+    draft: ["草稿", "草稿"],
+    public_comment_published: ["公开留言", "公開留言"],
+    public_comment_submitted_unverified: ["公开留言", "公開留言"],
+    public_comment_evidence_verified: ["公开留言已确认", "公開留言已確認"],
+    public_comment_reply_monitor_started: ["公开回复监听", "公開回覆監聽"],
+    public_reply_published: ["公开回复", "公開回覆"],
+    engagement_touch_submitted: ["互动已提交", "互動已提交"],
+    engagement_touch_published: ["互动已完成", "互動已完成"],
+    engagement_touch_failed: ["互动失败", "互動失敗"],
+    outreach_evidence_verified: ["私信已确认", "私訊已確認"],
+    outreach_reply_monitor_started: ["私信回复监听", "私訊回覆監聽"],
+    message_sent_verified: ["私信已确认", "私訊已確認"],
+    group_post_verified: ["群组发帖已确认", "群組發文已確認"],
+    legacy_tracking_click: ["链接点击", "連結點擊"],
+    tracking_click: ["链接点击", "連結點擊"],
+  };
+  const pair = map[normalized];
+  if (pair) return hant ? pair[1] : pair[0];
+  const mapped = metricLabel(normalized, language);
+  if (mapped && mapped !== normalized && !/[a-z]{4,}/i.test(mapped)) return mapped;
+  if (normalized.includes("draft")) return hant ? "草稿" : "草稿";
+  if (normalized.includes("failed") || normalized.endsWith("_fail")) return hant ? "失败" : "失败";
+  if (normalized.includes("monitor")) return hant ? "回复监听" : "回复监听";
+  if (normalized.includes("evidence") || normalized.includes("verified") || normalized.includes("confirmed") || normalized.includes("published")) {
+    return hant ? "已确认" : "已确认";
+  }
+  if (normalized.includes("outreach") || normalized.includes("direct_message") || normalized.includes("dm_")) return hant ? "私信" : "私信";
+  if (normalized.includes("group")) return hant ? "拉群" : "拉群";
+  if (normalized.includes("collect") || normalized.includes("hotspot")) return hant ? "采集" : "采集";
+  if (normalized.includes("public") || normalized.includes("engagement") || normalized.includes("comment") || normalized.includes("reply")) {
+    return hant ? "公开互动" : "公开互动";
+  }
+  return "";
+}
+
+export function groupEventMix(entries: Array<[string, number]>, language: "zh-Hans" | "zh-Hant") {
+  const counts = new Map<string, number>();
+  for (const [key, count] of entries) {
+    const label = eventPreviewLabel(key, language);
+    if (!label) continue;
+    counts.set(label, (counts.get(label) || 0) + Number(count || 0));
+  }
+  return mixParts([...counts.entries()], language);
+}
+
 export function taskTitle(task: Record<string, unknown>, fallback: string, language: "zh-Hans" | "zh-Hant") {
   for (const candidate of [task.title, task.name, task.label, task.subject]) {
     const text = humanText(candidate, "");
