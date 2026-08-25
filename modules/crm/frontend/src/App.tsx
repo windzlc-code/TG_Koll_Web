@@ -496,6 +496,12 @@ function inspectPayload(detail: Record<string, unknown>) {
   const nested = [detail.payload, detail.input, detail.result, detail.evidence].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
   const merged: Record<string, unknown> = { ...detail };
   for (const row of nested) Object.assign(merged, row);
+  const deeper = [merged.detail, merged.evidence].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  for (const row of deeper) {
+    if (!merged.content) merged.content = row.content || row.comment || row.name || row.title;
+    if (!merged.username) merged.username = row.username || row.display_name;
+  }
+  if (typeof merged.detail === "string" && !merged.content) merged.content = merged.detail;
   return merged;
 }
 

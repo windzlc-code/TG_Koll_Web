@@ -430,6 +430,8 @@ def row_public(row: sqlite3.Row | dict[str, Any] | None) -> JsonDict | None:
 
 
 def _list_preview_fields(data: JsonDict) -> JsonDict:
+    nested = data.get("detail") if isinstance(data.get("detail"), dict) else {}
+    evidence = data.get("evidence") if isinstance(data.get("evidence"), dict) else {}
     text = str(
         data.get("content")
         or data.get("comment")
@@ -437,6 +439,13 @@ def _list_preview_fields(data: JsonDict) -> JsonDict:
         or data.get("instruction")
         or data.get("text")
         or data.get("source_text")
+        or nested.get("name")
+        or nested.get("title")
+        or nested.get("comment")
+        or nested.get("content")
+        or evidence.get("comment")
+        or evidence.get("content")
+        or (data.get("detail") if isinstance(data.get("detail"), str) else "")
         or ""
     ).strip()[:160]
     user = str(
@@ -445,6 +454,8 @@ def _list_preview_fields(data: JsonDict) -> JsonDict:
         or data.get("username")
         or data.get("display_name")
         or data.get("target")
+        or nested.get("username")
+        or nested.get("display_name")
         or ""
     ).strip()
     preview: JsonDict = {}
