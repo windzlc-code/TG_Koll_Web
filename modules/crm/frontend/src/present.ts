@@ -92,6 +92,7 @@ export function metricLabel(key: string, language: "zh-Hans" | "zh-Hant") {
     engaged: ["已互动", "已互動"],
     clicked: ["已点击", "已點擊"],
     created: ["新建", "新建"],
+    task_deleted: ["任务已删除", "任務已刪除"],
   };
   const pair = map[key];
   if (pair) return hant ? pair[1] : pair[0];
@@ -130,6 +131,7 @@ export function eventPreviewLabel(key: string, language: "zh-Hans" | "zh-Hant") 
   if (pair) return hant ? pair[1] : pair[0];
   const mapped = metricLabel(normalized, language);
   if (mapped && mapped !== normalized && !/[a-z]{4,}/i.test(mapped)) return mapped;
+  if (normalized === "task_deleted" || normalized.includes("task_deleted")) return hant ? "任务已删除" : "任务已删除";
   if (normalized.includes("draft")) return hant ? "草稿" : "草稿";
   if (normalized.includes("failed") || normalized.endsWith("_fail")) return hant ? "失败" : "失败";
   if (normalized.includes("monitor")) return hant ? "回复监听" : "回复监听";

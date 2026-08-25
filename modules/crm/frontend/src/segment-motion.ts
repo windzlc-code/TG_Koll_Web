@@ -194,12 +194,11 @@ export function useSegmentSlide() {
 export function animatePageSlide(node: HTMLElement | null, direction: number) {
   if (!node || !direction || prefersReducedMotion() || typeof node.animate !== "function") return;
   if (!window.matchMedia("(max-width: 980px)").matches) return;
-  const distance = Math.min(56, Math.max(32, Math.round(window.innerWidth * 0.12)));
   pageSlideAnimation?.cancel();
   const animation = node.animate(
     [
-      { left: `${direction * distance}px` },
-      { left: "0px" },
+      { transform: `translate3d(${direction * 100}%, 0, 0)` },
+      { transform: "translate3d(0, 0, 0)" },
     ],
     { duration: SLIDE_MS, easing: SLIDE_EASE },
   );

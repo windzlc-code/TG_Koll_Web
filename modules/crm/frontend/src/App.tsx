@@ -90,7 +90,7 @@ function itemId(item: Record<string, unknown>, index: number) {
 function itemTitle(item: Record<string, unknown>, fallback: string, language: Language = "zh-Hans") {
   const person = humanText(item.preview_user || item.username || item.display_name, "");
   if (person && person !== "—") return person.startsWith("@") ? person : `@${person}`;
-  const eventName = eventPreviewLabel(String(item.event_type || ""), language);
+  const eventName = eventPreviewLabel(String(item.event_type || item.preview_text || ""), language);
   if (eventName) return eventName;
   return taskTitle(item, fallback, language);
 }
@@ -109,7 +109,9 @@ function localizedDate(value: unknown, language: Language) {
 }
 
 function itemMeta(item: Record<string, unknown>, language: Language) {
-  const preview = humanText(item.preview_text || item.content || item.message || item.description || item.summary, "");
+  const rawPreview = String(item.preview_text || item.content || item.message || item.description || item.summary || "").trim();
+  const mappedPreview = rawPreview ? eventPreviewLabel(rawPreview, language) : "";
+  const preview = mappedPreview || humanText(rawPreview, "");
   if (preview && preview !== "—") return preview;
   const kind = item.kind || item.type || item.workflow_type || item.event_type;
   if (kind) {
@@ -477,6 +479,13 @@ function EmptyState({ messages, view, actionLabel, onAction, filtered = false }:
   </div>;
 }
 
+function inspectPayload(detail: Record<string, unknown>) {
+  const nested = [detail.payload, detail.input, detail.result, detail.evidence].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  const merged: Record<string, unknown> = { ...detail };
+  for (const row of nested) Object.assign(merged, row);
+  return merged;
+}
+
 function ResourceList({ view, messages, language, enabled, blockedHint, advisory, onCreate }: { view: ViewId; messages: Messages; language: Language; enabled: boolean; blockedHint: string; advisory?: string; onCreate: () => void }) {
   const resource = endpointByView[view];
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -486,6 +495,23 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [loadError, setLoadError] = useState<{ message: string; requestId: string; retryable: boolean } | null>(null);
+  const [inspect, setInspect] = useState<Record<string, unknown> | null>(null);
+  const [inspectBusy, setInspectBusy] = useState(false);
+  const openInspect = async (item: Record<string, unknown>, index: number) => {
+    const id = itemId(item, index);
+    setInspect(item);
+    setInspectBusy(true);
+    try {
+      const full = view === "outreach" || resource === "tasks"
+        ? await crmApi.task(id)
+        : await crmApi.resource(String(resource || view), id);
+      setInspect({ ...item, ...full });
+    } catch {
+      setInspect(item);
+    } finally {
+      setInspectBusy(false);
+    }
+  };
 
   const load = useCallback(async (cursor = "") => {
     if (!resource) return;
@@ -553,15 +579,39 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
           <span className="crm-record-icon"><Icon name={view} /></span>
           <span className="crm-record-copy">
             <strong>{itemTitle(item, `${messages.views[view][0]} ${index + 1}`, language)}</strong>
-            {body && body !== "—" ? <small className="crm-record-body">{body}</small> : null}
+            {body && body !== "—" ? <small className="crm-record-body">{eventPreviewLabel(body, language) || body}</small> : null}
             <small>{itemMeta(item, language) === body ? localizedDate(item.occurred_at || item.updated_at || item.created_at, language) : itemMeta(item, language)}</small>
           </span>
           {status && <StatusBadge status={status} messages={messages} />}
+          <button className="crm-secondary-button" type="button" onClick={() => void openInspect(item, index)}>{messages.viewRecord}</button>
         </article>;
       })}
       </div>
     </>}
     {state === "ready" && nextCursor && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={() => void load(nextCursor)}>{loadingMore ? messages.loadingMore : messages.loadMore}</button></div>}
+    {inspect && <div className="crm-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setInspect(null); }}>
+      <div className="crm-modal" role="dialog" aria-modal="true" aria-labelledby="crmRecordDetailTitle">
+        <div className="crm-modal-head"><div><span className="crm-kicker">{messages.views[view][0]}</span><h2 id="crmRecordDetailTitle">{messages.recordDetail}</h2></div><button className="crm-icon-button" type="button" onClick={() => setInspect(null)} aria-label={messages.cancel}><Icon name="close" /></button></div>
+        {inspectBusy ? <p className="crm-quiet-empty">{messages.loadingData}</p> : <dl className="crm-record-detail">
+          {(() => {
+            const payload = inspectPayload(inspect);
+            const kind = eventPreviewLabel(String(inspect.event_type || inspect.workflow_type || inspect.kind || inspect.type || ""), language) || itemTitle(inspect, messages.views[view][0], language);
+            const target = humanText(payload.preview_user || payload.recipient || payload.recipient_username || payload.username || payload.display_name, "");
+            const content = eventPreviewLabel(String(payload.preview_text || payload.content || payload.comment || payload.message || payload.instruction || payload.text || payload.source_text || ""), language)
+              || humanText(payload.preview_text || payload.content || payload.comment || payload.message || payload.instruction || payload.text || payload.source_text, "");
+            const rows = [
+              [messages.views[view][0], kind],
+              [messages.recordTarget, target],
+              [messages.status, statusText(String(inspect.status || inspect.state || payload.status || ""), messages)],
+              [messages.recordTime, localizedDate(inspect.occurred_at || inspect.updated_at || inspect.created_at, language)],
+              [messages.recordContent, content && content !== "—" ? content : messages.noRecordBody],
+            ].filter(([, value]) => value && value !== "—");
+            return rows.map(([label, value]) => <div key={String(label)}><dt>{label}</dt><dd>{value}</dd></div>);
+          })()}
+        </dl>}
+        <div className="crm-modal-actions"><button className="crm-primary-button" type="button" onClick={() => setInspect(null)}>{messages.cancel}</button></div>
+      </div>
+    </div>}
   </section>;
 }
 

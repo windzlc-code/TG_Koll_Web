@@ -184,6 +184,7 @@ body.crm-page button { color: inherit; }
 .crm-view {
   position: relative;
   left: 0;
+  transform: translate3d(0, 0, 0);
 }
 
 .crm-mobile-rail-button { display: none; }
@@ -726,13 +727,17 @@ body.crm-page button { color: inherit; }
 .crm-record-list { display: grid; border-top: 1px solid var(--crm-surface); }
 .crm-record {
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
+  grid-template-columns: 38px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   min-height: 67px;
   padding: 8px 2px;
   border-bottom: 1px solid var(--crm-surface);
 }
+.crm-record-detail { display: grid; gap: 10px; margin: 0 0 8px; }
+.crm-record-detail > div { padding: 12px; background: var(--crm-surface-soft); border-radius: 8px; }
+.crm-record-detail dt { color: var(--crm-muted); font-size: 12px; font-weight: 800; }
+.crm-record-detail dd { margin: 6px 0 0; color: var(--crm-ink); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; }
 .crm-record-icon { display: grid; place-items: center; width: 34px; height: 34px; color: var(--crm-accent); background: var(--crm-accent-soft); border-radius: 7px; }
 .crm-record-icon svg { width: 17px; height: 17px; }
 .crm-record-copy { display: grid; gap: 4px; min-width: 0; }
@@ -1313,6 +1318,7 @@ body.crm-page button { color: inherit; }
   .crm-onboarding li::before { top: -8px; right: auto; bottom: calc(50% + 15px); left: 15px; width: 1px; height: auto; }
   .crm-record { grid-template-columns: 34px minmax(0, 1fr) auto; }
   .crm-record > .crm-status { grid-column: 2 / 3; justify-self: start; }
+  .crm-record > .crm-secondary-button { grid-column: 1 / -1; width: 100%; }
   .crm-task-foot { align-items: flex-start; flex-direction: column; }
   .crm-inline-actions { flex-wrap: wrap; }
   .crm-task-strip { right: 10px; bottom: calc(var(--crm-mobile-dock-height) + 8px); width: calc(100vw - 20px); }

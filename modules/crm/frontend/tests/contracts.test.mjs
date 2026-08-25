@@ -145,8 +145,11 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /--public-action-gradient/);
   assert.match(app, /useSegmentSlide/);
   assert.match(app, /animatePageSlide/);
-  assert.match(motion, /left: `\$\{direction \* distance\}px`/);
+  assert.match(motion, /translate3d\(\$\{direction \* 100\}%, 0, 0\)/);
   assert.match(motion, /max-width: 980px/);
+  assert.match(app, /messages\.viewRecord/);
+  assert.match(app, /crm-record-detail/);
+  assert.match(app, /openInspect/);
   assert.match(css, /\.crm-view/);
   assert.match(css, /\.crm-chart-placeholder/);
   assert.match(css, /overflow-x:\s*clip/);
