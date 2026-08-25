@@ -3,7 +3,8 @@ import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api"
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
 import { PlatformChip, PlatformLogo, platformLabel } from "./platform";
-import { AnalyticsView, DestinationsView, GroupsView, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
+import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
+import { humanText, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
@@ -78,20 +79,15 @@ function hashView(): ViewId {
 }
 
 function displayValue(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "—";
-  if (typeof value === "boolean") return value ? "✓" : "—";
-  if (typeof value === "number") return new Intl.NumberFormat().format(value);
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.slice(0, 3).map(displayValue).join(" · ");
-  return "—";
+  return humanText(value);
 }
 
 function itemId(item: Record<string, unknown>, index: number) {
   return String(item.id || item.task_id || item.legacy_id || item.username || index);
 }
 
-function itemTitle(item: Record<string, unknown>, fallback: string) {
-  return displayValue(item.title || item.name || item.username || item.label || item.subject || item.task_id || fallback);
+function itemTitle(item: Record<string, unknown>, fallback: string, language: Language = "zh-Hans") {
+  return taskTitle(item, fallback, language);
 }
 
 function localizedDate(value: unknown, language: Language) {
@@ -108,8 +104,11 @@ function localizedDate(value: unknown, language: Language) {
 }
 
 function itemMeta(item: Record<string, unknown>, language: Language) {
-  const descriptive = item.description || item.summary || item.platform || item.kind || item.type;
-  return descriptive ? displayValue(descriptive) : localizedDate(item.updated_at || item.created_at, language);
+  const descriptive = item.description || item.summary || item.platform;
+  if (descriptive) return humanText(descriptive);
+  const kind = item.kind || item.type || item.workflow_type;
+  if (kind) return workflowLabel(String(kind), language);
+  return localizedDate(item.updated_at || item.created_at, language);
 }
 
 function statusTone(status = "") {
@@ -128,7 +127,7 @@ function statusText(status: string | undefined, messages: Messages) {
 
 function operationText(value: string | undefined, messages: Messages) {
   const key = String(value || "");
-  return (messages.operationLabels as Record<string, string>)[key] || key || messages.platformAction;
+  return (messages.operationLabels as Record<string, string>)[key] || workflowLabel(key, document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans") || messages.platformAction;
 }
 
 function StatePage({ icon = "warning", title, description, action }: { icon?: "warning" | "signal"; title: string; description: string; action?: React.ReactNode }) {
@@ -394,7 +393,7 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
   const loginRequired = needsLoginTakeover(detail) && Boolean(accountId);
   return <article className="crm-task-card">
     <div className="crm-task-card-head">
-      <div><strong>{task.title || task.name || task.kind || id}</strong><small>{id}</small></div>
+      <div><strong>{taskTitle(task as Record<string, unknown>, messages.untitledTask, language)}</strong><small>{humanText(task.account_username, "") || localizedDate(task.updated_at || task.created_at, language)}</small></div>
       <StatusBadge status={status} messages={messages} />
     </div>
     {task.message && <p>{task.message}</p>}
@@ -418,12 +417,12 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
         {!detailSteps.length && !detailActions.length ? <p>{messages.noEvidence}</p> : <ol>
           {detailSteps.map((step, index) => <li key={String(step.id || step.social_task_id || index)}>
             <span className="crm-timeline-mark" aria-hidden="true" />
-            <div><strong>{operationText(step.step_type, messages) || `${messages.taskStep} ${index + 1}`}</strong><small>{step.social_task_id || step.error_code || messages.noEvidence}</small></div>
+            <div><strong>{operationText(step.step_type, messages) || `${messages.taskStep} ${index + 1}`}</strong><small>{(messages.errors as Record<string, string>)[String(step.error_code || "")] || messages.noEvidence}</small></div>
             <StatusBadge status={String(step.status || "queued")} messages={messages} />
           </li>)}
           {detailActions.map((action, index) => <li key={String(action.id || action.action_id || index)}>
             <span className="crm-timeline-mark" aria-hidden="true" />
-            <div><strong>{operationText(action.action_type, messages) || `${messages.platformAction} ${index + 1}`}</strong><small>{action.error_code || (action.evidence && Object.keys(action.evidence).length ? messages.evidenceAvailable : messages.noEvidence)}</small></div>
+            <div><strong>{operationText(action.action_type, messages) || `${messages.platformAction} ${index + 1}`}</strong><small>{(action.evidence && Object.keys(action.evidence).length ? messages.evidenceAvailable : messages.noEvidence)}</small></div>
             <StatusBadge status={String(action.state || "planned")} messages={messages} />
           </li>)}
         </ol>}
@@ -513,7 +512,7 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
       const status = String(item.status || item.state || "").trim();
       if (statusFilter && status !== statusFilter) return false;
       if (!needle) return true;
-      return `${itemTitle(item, `${messages.views[view][0]} ${index + 1}`)} ${itemMeta(item, language)}`.toLocaleLowerCase(language).includes(needle);
+      return `${itemTitle(item, `${messages.views[view][0]} ${index + 1}`, language)} ${itemMeta(item, language)}`.toLocaleLowerCase(language).includes(needle);
     });
   }, [items, language, messages.views, query, statusFilter, view]);
   const filtersActive = Boolean(query.trim() || statusFilter);
@@ -527,8 +526,8 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
     {!enabled && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{blockedHint}</span></div>}
     {enabled && advisory && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{advisory}</span></div>}
     {state === "loading" && <div className="crm-list-skeleton" aria-live="polite"><span>{messages.loadingData}</span><i /><i /><i /></div>}
-    {state === "error" && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{loadError?.message || messages.dataError}{loadError?.requestId && <small>{messages.requestId}: {loadError.requestId}</small>}{loadError?.retryable && <small>{messages.retryableHint}</small>}</span><button type="button" onClick={() => void load()}><Icon name="refresh" />{messages.retry}</button></div>}
-    {state === "ready" && loadError && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{loadError.message}{loadError.requestId && <small>{messages.requestId}: {loadError.requestId}</small>}</span><button type="button" onClick={() => void load(nextCursor)}><Icon name="refresh" />{messages.retry}</button></div>}
+    {state === "error" && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{loadError?.message || messages.dataError}{loadError?.retryable && <small>{messages.retryableHint}</small>}</span><button type="button" onClick={() => void load()}><Icon name="refresh" />{messages.retry}</button></div>}
+    {state === "ready" && loadError && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{loadError.message}</span><button type="button" onClick={() => void load(nextCursor)}><Icon name="refresh" />{messages.retry}</button></div>}
     {state === "ready" && items.length > 0 && <div className="crm-filter-bar" role="search" aria-label={messages.filterRecords}>
       <label><span>{messages.search}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={messages.searchPlaceholder} /></label>
       <label><span>{messages.status}</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">{messages.allStatuses}</option>{statuses.map((status) => <option key={status} value={status}>{statusText(status, messages)}</option>)}</select></label>
@@ -536,24 +535,38 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
     </div>}
     {state === "ready" && !items.length && <EmptyState messages={messages} view={view} actionLabel={writeViews.has(view) && enabled ? messages.create : undefined} onAction={writeViews.has(view) && enabled ? onCreate : undefined} />}
     {state === "ready" && items.length > 0 && !filteredItems.length && <EmptyState messages={messages} view={view} filtered actionLabel={messages.clearFilters} onAction={clearFilters} />}
-    {state === "ready" && filteredItems.length > 0 && <div className="crm-record-list">
+    {state === "ready" && filteredItems.length > 0 && <>
+      <MixBar parts={mixFromValues(filteredItems.map((item) => item.status || item.state), language)} />
+      <div className="crm-record-list">
       {filteredItems.map((item, index) => {
-        const status = displayValue(item.status || item.state);
+        const status = String(item.status || item.state || "");
         return <article className="crm-record" key={itemId(item, index)}>
           <span className="crm-record-icon"><Icon name={view} /></span>
-          <span className="crm-record-copy"><strong>{itemTitle(item, `${messages.views[view][0]} ${index + 1}`)}</strong><small>{itemMeta(item, language)}</small></span>
-          {status !== "—" && <StatusBadge status={status} messages={messages} />}
+          <span className="crm-record-copy"><strong>{itemTitle(item, `${messages.views[view][0]} ${index + 1}`, language)}</strong><small>{itemMeta(item, language)}</small></span>
+          {status && <StatusBadge status={status} messages={messages} />}
         </article>;
       })}
-    </div>}
+      </div>
+    </>}
     {state === "ready" && nextCursor && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={() => void load(nextCursor)}>{loadingMore ? messages.loadingMore : messages.loadMore}</button></div>}
   </section>;
 }
 
-function Overview({ bootstrap, tasks, messages, navigate, onCreate }: { bootstrap: BootstrapPayload; tasks: CrmTask[]; messages: Messages; navigate: (view: ViewId) => void; onCreate: (view: ViewId) => void }) {
+function Overview({ bootstrap, tasks, messages, language, navigate, onCreate }: { bootstrap: BootstrapPayload; tasks: CrmTask[]; messages: Messages; language: Language; navigate: (view: ViewId) => void; onCreate: (view: ViewId) => void }) {
   const summary = bootstrap.summary || bootstrap.counts || {};
   const active = tasks.filter((task) => activeStatuses.has(String(task.status || "")));
   const manual = tasks.filter((task) => ["manual_required", "unknown"].includes(String(task.status || "")));
+  const completed = tasks.filter((task) => String(task.status || "") === "completed").length;
+  const leadCount = Number(summary.leads ?? summary.lead_count ?? 0);
+  const poolCount = Number(summary.pools ?? summary.pool_count ?? 0);
+  const flowValues = [leadCount, poolCount, active.length, manual.length, completed];
+  const flowGoes = [
+    () => onCreate("collect"),
+    () => navigate("collect"),
+    () => onCreate("public"),
+    () => navigate("tasks"),
+    () => navigate("tasks"),
+  ];
   const actions = [
     { id: "collect" as ViewId, title: messages.views.collect[0], hint: messages.pipelineCollectHint, run: () => onCreate("collect") },
     { id: "outreach" as ViewId, title: messages.views.outreach[0], hint: messages.views.outreach[1], run: () => onCreate("outreach") },
@@ -561,20 +574,41 @@ function Overview({ bootstrap, tasks, messages, navigate, onCreate }: { bootstra
     { id: "groups" as ViewId, title: messages.views.groups[0], hint: messages.views.groups[1], run: () => onCreate("groups") },
     { id: "tasks" as ViewId, title: messages.views.tasks[0], hint: messages.views.tasks[1], run: () => navigate("tasks") },
   ];
+  const taskMix = mixParts(
+    Object.entries(tasks.reduce((counts, task) => {
+      const status = String(task.status || "queued");
+      counts[status] = (counts[status] || 0) + 1;
+      return counts;
+    }, {} as Record<string, number>)),
+    language,
+  );
 
   return <>
     <section className="crm-overview-hero">
       <div>
+        <p className="crm-flow-kicker">{messages.flowKicker}</p>
         <h1>{messages.views.overview[0]}</h1>
-        <p>{messages.views.overview[1]}</p>
+        <p>{messages.flowHint}</p>
       </div>
     </section>
     <section className="crm-metrics" aria-label={messages.views.overview[0]}>
-      <Metric label={messages.metrics.leads} value={summary.leads ?? summary.lead_count} />
-      <Metric label={messages.metrics.pools} value={summary.pools ?? summary.pool_count} />
+      <Metric label={messages.metrics.leads} value={leadCount} />
+      <Metric label={messages.metrics.pools} value={poolCount} />
       <Metric label={messages.metrics.active} value={summary.active_tasks ?? active.length} />
       <Metric label={messages.metrics.manual} value={summary.manual_required ?? manual.length} />
     </section>
+    <section className="crm-flow-board" aria-label={messages.flowKicker}>
+      <ol>
+        {messages.flowSteps.map((step, index) => <li key={step[0]}>
+          <button type="button" onClick={flowGoes[index]}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <div><strong>{step[0]}</strong><small>{step[1]}</small></div>
+            <b>{displayValue(flowValues[index])}</b>
+          </button>
+        </li>)}
+      </ol>
+    </section>
+    {taskMix.length > 0 && <MixBar title={messages.mixTasks} parts={taskMix} />}
     <section className="crm-action-grid" aria-label={messages.acquisitionPath}>
       {actions.map((step) => <button type="button" className="crm-action-card" key={step.id} onClick={step.run}>
         <span className="crm-pipeline-icon" aria-hidden="true"><Icon name={step.id} /></span>
@@ -585,7 +619,7 @@ function Overview({ bootstrap, tasks, messages, navigate, onCreate }: { bootstra
     <section className="crm-panel crm-priority-panel">
       <div className="crm-panel-head"><div><h2>{messages.priority}</h2></div><button className="crm-text-button" onClick={() => navigate("tasks")}>{messages.viewTasks}<Icon name="arrow" /></button></div>
       {!manual.length && !active.length ? <EmptyState messages={messages} view="tasks" /> : <div className="crm-compact-tasks">
-        {[...manual, ...active].slice(0, 5).map((task, index) => <button type="button" key={String(task.task_id || task.id || index)} onClick={() => navigate("tasks")}><span><strong>{task.title || task.name || task.kind || task.task_id}</strong><small>{task.message || task.updated_at || messages.noSimulatedProgress}</small></span><StatusBadge status={String(task.status || "queued")} messages={messages} /></button>)}
+        {[...manual, ...active].slice(0, 5).map((task, index) => <button type="button" key={String(task.task_id || task.id || index)} onClick={() => navigate("tasks")}><span><strong>{taskTitle(task as Record<string, unknown>, messages.untitledTask, language)}</strong><small>{humanText(task.message, "") || localizedDate(task.updated_at || task.created_at, language)}</small></span><StatusBadge status={String(task.status || "queued")} messages={messages} /></button>)}
       </div>}
     </section>
   </>;
@@ -1001,7 +1035,7 @@ export function App() {
       {bootstrap.workspace?.managed_by_admin && <div className="crm-banner crm-banner--workspace" role="status"><Icon name="accounts" /><span><strong>{messages.managedWorkspace}</strong>{messages.managedWorkspaceDetail(bootstrap.workspace.username || String(bootstrap.workspace.user_id || "—"), bootstrap.workspace.user_id)}</span><a className="crm-secondary-button" href="/admin.html">{messages.exitWorkspace}</a></div>}
       {partial && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{messages.partial}</span><button type="button" onClick={() => { void loadBootstrap(); void refreshTasks(); }}><Icon name="refresh" />{messages.retry}</button></div>}
       {bootstrap.module?.degraded && <div className="crm-banner crm-banner--degraded" role="alert"><Icon name="signal" /><span><strong>{messages.degraded}</strong>{messages.degradedHint}</span></div>}
-      {view === "overview" && <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} navigate={navigate} onCreate={startWorkflow} />}
+      {view === "overview" && <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} language={language} navigate={navigate} onCreate={startWorkflow} />}
       {activeNav === "collect" && <>
         <div className="crm-module-toolbar">
           <h2>{messages.views.collect[0]}</h2>
@@ -1034,7 +1068,7 @@ export function App() {
         {(view === "accounts" || !settingTabs.includes(view)) && <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />}
       </>}
     </main>
-    <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={(taskId) => { setToast(`${messages.submitted} · ${taskId}`); void refreshTasks(); }} />
+    <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={() => { setToast(messages.submitted); void refreshTasks(); }} />
     {toast && <div className="crm-toast" role="status">{toast}</div>}
     <nav ref={dockRef} className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) }}>
       <span className="crm-mobile-dock-track" aria-hidden="true"><span ref={dockPillRef} className="crm-mobile-dock-pill" /></span>

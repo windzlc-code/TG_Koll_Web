@@ -150,6 +150,13 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(app, /managed_by_admin/);
   assert.doesNotMatch(app, /crm-banner--login/);
   assert.doesNotMatch(app, /crm-task-strip/);
+  assert.match(app, /from "\.\/present"/);
+  assert.match(app, /crm-flow-board/);
+  assert.match(app, /taskTitle\(/);
+  assert.doesNotMatch(app, /task\.title \|\| task\.name \|\| task\.kind \|\| task\.task_id/);
+  assert.match(css, /\.crm-flow-board/);
+  assert.match(css, /\.crm-mix-bar/);
+  assert.match(css, /\.crm-member-grid/);
   assert.match(app, /cancelTaskConfirm/);
   assert.match(app, /role="progressbar"/);
   assert.match(css, /--crm-sidebar-width:\s*188px/);
@@ -191,6 +198,16 @@ test("business views preserve bilingual, responsive, no-green UI", async () => {
   assert.match(css, /\.crm-structured-evidence/);
   assert.match(css, /@media \(max-width: 760px\)/);
   assert.doesNotMatch(`${views}\n${css}`, /teal|emerald|lime|#0a817f|#77d8c3/i);
+  assert.match(views, /poolInsightCards/);
+  assert.match(views, /function MixBar/);
+  assert.doesNotMatch(views, /Object\.entries\(snapshot\)/);
+  assert.doesNotMatch(views, /content_hash/);
+  assert.doesNotMatch(views, /JSON\.stringify\(evidence/);
+  const present = await read("src/present.ts");
+  assert.match(present, /export function isTechnicalId/);
+  assert.match(present, /export function cronFriendly/);
+  assert.match(present, /export function poolInsightCards/);
+  assert.match(present, /export function mixParts/);
 });
 
 test("workflow wizard preserves the legacy prepare-review-confirm operation order", async () => {
