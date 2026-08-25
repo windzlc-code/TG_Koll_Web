@@ -186,6 +186,14 @@ body.crm-page button { color: inherit; }
   left: 0;
   transform: translate3d(0, 0, 0);
 }
+.crm-panel-clip {
+  overflow: hidden;
+  min-width: 0;
+}
+.crm-panel-stage {
+  position: relative;
+  transform: translate3d(0, 0, 0);
+}
 
 .crm-mobile-rail-button { display: none; }
 .crm-sidebar-backdrop { display: none; }

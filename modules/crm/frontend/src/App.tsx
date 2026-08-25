@@ -9,7 +9,7 @@ import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, mi
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
-import { animatePageSlide, applyDockPill, navigationDirection, prefersReducedMotion, useSegmentSlide } from "./segment-motion";
+import { animatePageSlide, applyDockPill, prefersReducedMotion, useSegmentSlide } from "./segment-motion";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -170,20 +170,22 @@ function StatusBadge({ status, messages }: { status?: string; messages: Messages
   return <span className={`crm-status crm-status--${statusTone(status)}`}><i aria-hidden="true" />{statusText(status, messages)}</span>;
 }
 
-function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId, options?: { direction?: number }) => void; label: string }) {
+type NavigateOptions = { direction?: number; panel?: boolean };
+
+function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId, options?: NavigateOptions) => void; label: string }) {
   const group = useRef<HTMLDivElement>(null);
   const segment = useSegmentSlide();
   const select = (next: ViewId, button?: HTMLButtonElement | null) => {
     if (next === value) return;
+    const fromIndex = items.indexOf(value);
+    const toIndex = items.indexOf(next);
+    const direction = toIndex === fromIndex || fromIndex < 0 || toIndex < 0 ? 0 : toIndex > fromIndex ? 1 : -1;
     const node = group.current;
     const current = node?.querySelector<HTMLButtonElement>("button.is-active, button[aria-selected='true']");
     const target = button || node?.querySelector<HTMLButtonElement>(`#crm-tab-${next}`);
-    const buttons = node ? [...node.querySelectorAll<HTMLButtonElement>("button")] : [];
-    const direction = navigationDirection(buttons, current || null, target || null);
-    segment.start(node, current || null, target || null, () => {
-      navigate(next, { direction });
-      window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus());
-    });
+    segment.start(node, current || null, target || null);
+    navigate(next, { direction, panel: true });
+    window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus());
   };
   const move = (event: React.KeyboardEvent<HTMLButtonElement>, current: ViewId) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -936,8 +938,9 @@ export function App() {
   const dockRef = useRef<HTMLElement>(null);
   const dockPillRef = useRef<HTMLSpanElement>(null);
   const dockPillReady = useRef(false);
-  const pageSlide = useRef(0);
+  const pageSlide = useRef({ direction: 0, panel: false });
   const viewStage = useRef<HTMLDivElement>(null);
+  const panelStage = useRef<HTMLDivElement>(null);
   const drawerWasOpen = useRef(false);
   const [bootstrapState, setBootstrapState] = useState<"loading" | "ready" | "forbidden" | "maintenance" | "error">("loading");
   const [bootstrap, setBootstrap] = useState<BootstrapPayload>({});
@@ -1031,18 +1034,18 @@ export function App() {
     }
   }, [drawerOpen, isCompact]);
 
-  const navigate = (next: ViewId, options?: { direction?: number }) => {
+  const navigate = (next: ViewId, options?: NavigateOptions) => {
     window.location.hash = next;
-    pageSlide.current = options?.direction || 0;
+    pageSlide.current = { direction: options?.direction || 0, panel: Boolean(options?.panel) };
     setView(next);
     setDrawerOpen(false);
   };
 
   useLayoutEffect(() => {
-    const direction = pageSlide.current;
+    const { direction, panel } = pageSlide.current;
     if (!direction) return;
-    pageSlide.current = 0;
-    animatePageSlide(viewStage.current, direction);
+    pageSlide.current = { direction: 0, panel: false };
+    animatePageSlide(panel ? panelStage.current : viewStage.current, direction);
   }, [view]);
 
   useLayoutEffect(() => {
@@ -1131,25 +1134,31 @@ export function App() {
       </>}
       {activeNav === "public" && <>
         <CompactTabs items={engageTabs} value={engageTabs.includes(view) ? view : "public"} messages={messages} navigate={navigate} label={messages.navItems.public} />
+        <div className="crm-panel-clip"><div ref={panelStage} className="crm-panel-stage">
         {view === "groups"
           ? <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />
           : <ResourceList key={view} view={engageTabs.includes(view) ? view : "public"} messages={messages} language={language} enabled={viewEnabled(engageTabs.includes(view) ? view : "public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory(engageTabs.includes(view) ? view : "public")} onCreate={() => startWorkflow(engageTabs.includes(view) ? view : "public")} />}
+        </div></div>
       </>}
       {activeNav === "tasks" && <>
         <CompactTabs items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"} messages={messages} navigate={navigate} label={messages.views.tasks[0]} />
+        <div className="crm-panel-clip"><div ref={panelStage} className="crm-panel-stage">
         {view === "schedules"
           ? <SchedulesView language={language} onCreate={(workflow) => setWorkflowView(workflow)} />
           : <>
             <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} />
             <details className="crm-analytics-fold"><summary>{language === "zh-Hant" ? "營運分析" : "运营分析"}</summary><AnalyticsView language={language} /></details>
           </>}
+        </div></div>
       </>}
       {activeNav === "settings" && <>
         <CompactTabs items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"} messages={messages} navigate={navigate} label={messages.views.settings[0]} />
+        <div className="crm-panel-clip"><div ref={panelStage} className="crm-panel-stage">
         {(view === "templates") && <TemplatesView language={language} />}
         {(view === "settings") && <DestinationsView language={language} />}
         {(view === "relationships") && <ResourceList key="relationships" view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />}
         {(view === "accounts" || !settingTabs.includes(view)) && <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />}
+        </div></div>
       </>}
       </div>
     </main>

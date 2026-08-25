@@ -176,9 +176,12 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /\.crm-mix-bar/);
   assert.match(css, /\.crm-member-grid/);
   assert.match(app, /useSegmentSlide/);
-  assert.match(app, /navigate\(next, \{ direction \}\)/);
+  assert.match(app, /navigate\(next, \{ direction, panel: true \}\)/);
   assert.match(app, /className="crm-view"/);
-  assert.match(app, /animatePageSlide\(viewStage\.current/);
+  assert.match(app, /className="crm-panel-stage"/);
+  assert.match(app, /animatePageSlide\(panel \? panelStage\.current : viewStage\.current/);
+  assert.match(css, /\.crm-panel-clip/);
+  assert.match(css, /\.crm-panel-stage/);
   assert.match(app, /cancelTaskConfirm/);
   assert.match(app, /role="progressbar"/);
   assert.match(css, /--crm-sidebar-width:\s*188px/);
