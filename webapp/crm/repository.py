@@ -141,6 +141,17 @@ JSON_FIELDS = {
     "evidence_json", "media_ids_json", "members_json", "counts_json", "report_json",
 }
 
+LIST_BLOB_COLUMNS = {
+    "input_json", "result_json", "confirmation_json", "legacy_payload_json",
+    "snapshot_json", "profile_json", "evidence_json", "payload_json",
+    "report_json", "metrics_json",
+}
+
+LIST_OMIT_PUBLIC_KEYS = (
+    "input", "result", "confirmation", "legacy_payload",
+    "snapshot", "profile", "evidence", "payload", "report", "metrics",
+)
+
 
 def now_ts() -> int:
     return int(time.time())
@@ -418,6 +429,24 @@ def row_public(row: sqlite3.Row | dict[str, Any] | None) -> JsonDict | None:
     return result
 
 
+def row_public_list(row: sqlite3.Row | dict[str, Any] | None) -> JsonDict | None:
+    result = row_public(row)
+    if not result:
+        return result
+    for key in LIST_OMIT_PUBLIC_KEYS:
+        result.pop(key, None)
+    return result
+
+
+def list_select_sql(conn: sqlite3.Connection, table: str) -> str:
+    columns = [
+        str(item[1])
+        for item in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        if str(item[1]) not in LIST_BLOB_COLUMNS
+    ]
+    return ", ".join(columns) if columns else "*"
+
+
 def workspace_user_id(user: JsonDict) -> int:
     try:
         value = int(user.get("_workspace_user_id") or user.get("id") or 0)
@@ -466,7 +495,7 @@ def list_resource(
         params.extend((updated_at, updated_at, record_id))
     params.append(page_size + 1)
     rows = conn.execute(
-        f"SELECT * FROM {table} WHERE user_id = ? AND active = 1{cursor_sql} "
+        f"SELECT {list_select_sql(conn, table)} FROM {table} WHERE user_id = ? AND active = 1{cursor_sql} "
         "ORDER BY updated_at DESC, id DESC LIMIT ?",
         tuple(params),
     ).fetchall()
@@ -476,7 +505,7 @@ def list_resource(
     if has_more and visible:
         next_cursor = encode_cursor(int(visible[-1]["updated_at"] or 0), str(visible[-1]["id"]))
     return {
-        "items": [row_public(row) for row in visible],
+        "items": [row_public_list(row) for row in visible],
         "next_cursor": next_cursor,
         "has_more": has_more,
         "limit": page_size,

@@ -7468,6 +7468,22 @@ body.persona-touch-dragging .persona-list-card:active {
   field-sizing: content;
 }
 
+.persona-hot-editor-instruction {
+  display: grid;
+  gap: 6px;
+}
+
+.persona-hot-editor-instruction span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.persona-hot-editor-copy textarea[data-persona-hot-rewrite-instruction] {
+  min-height: 76px;
+}
+
 .persona-hot-editor-section-head {
   display: flex;
   align-items: center;
@@ -7556,6 +7572,10 @@ body.persona-touch-dragging .persona-list-card:active {
 
   .persona-hot-editor-copy textarea {
     min-height: 190px;
+  }
+
+  .persona-hot-editor-copy textarea[data-persona-hot-rewrite-instruction] {
+    min-height: 76px;
   }
 
   .persona-hot-editor-source {
@@ -7986,6 +8006,16 @@ body.persona-touch-dragging .persona-list-card:active {
   .live-browser-expand-button {
     min-width: 44px;
     min-height: 44px;
+  }
+
+  .persona-media-lightbox-icon-button,
+  .persona-media-lightbox-close,
+  .persona-media-lightbox-actions .persona-media-lightbox-icon-button {
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+    min-height: 48px;
+    padding: 0;
   }
 
   .status-grid,
@@ -10259,11 +10289,12 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-account-picker-card .account-pool-card-copy strong {
   grid-area: username;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   font-size: 15px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .persona-account-picker-card .account-pool-card-flags {
@@ -10705,8 +10736,6 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-public-media-card,
 .persona-media-prompt-field.is-image-editing,
-.persona-image-library-card.is-modify-source,
-.persona-image-prompt-field.is-image-editing,
 .persona-gradient-outline-action {
   --media-edit-flow-deep: color-mix(in srgb, var(--accent-dark) 8%, #326f8e);
   --media-edit-flow-blue: color-mix(in srgb, var(--accent-dark) 10%, #2b83ad);
@@ -11113,9 +11142,7 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   .persona-public-media-card.is-modify-source,
-  .persona-image-library-card.is-modify-source,
-  .persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before,
-  .persona-image-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {
+  .persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {
     animation: none;
   }
 }
@@ -11372,16 +11399,6 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   resize: vertical;
 }
 
-.persona-image-prompt-field.is-image-editing {
-  position: relative;
-  isolation: isolate;
-}
-
-.persona-image-prompt-field.is-image-editing > :not(.sr-only) {
-  position: relative;
-  z-index: 1;
-}
-
 .persona-image-prompt-field .persona-media-prompt-input-shell {
   position: relative;
   display: grid;
@@ -11394,29 +11411,6 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   z-index: 1;
   width: 100%;
   box-sizing: border-box;
-}
-
-.persona-image-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  padding: 2px;
-  pointer-events: none;
-  border-radius: inherit;
-  background: var(--media-edit-flow-gradient);
-  background-size: 200% 100%;
-  background-repeat: repeat-x;
-  background-position: 0 0;
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: personaMediaPromptBorderFlow 2.8s linear infinite;
-}
-
-.persona-image-prompt-field.is-image-editing textarea:focus {
-  box-shadow: none;
 }
 
 .persona-image-prompt-label {
@@ -12019,7 +12013,7 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   font-size: 12px;
 }
 
-.persona-post-direction-tools > button {
+.persona-post-direction-tools > .bulk-selection-icon-button {
   flex: 0 0 30px;
 }
 
@@ -12045,6 +12039,99 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-ink);
+}
+
+.persona-image-style-panel {
+  margin-bottom: 0;
+}
+
+.persona-image-style-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.persona-image-style-head strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.persona-image-style-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 88px;
+  width: auto;
+  height: 32px;
+  min-height: 32px;
+  max-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.persona-image-style-action .ui-refresh-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
+.persona-image-style-action .task-button-busy,
+.persona-image-style-action .task-button-busy > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-height: 32px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.persona-image-style-action .task-button-spinner {
+  width: 14px;
+  height: 14px;
+}
+
+.persona-image-style-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.persona-image-style-tags {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.persona-image-style-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 8px;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .persona-generate-ai-action {
@@ -14271,31 +14358,6 @@ body.persona-media-sorting {
   }
 }
 
-.persona-image-library-card.is-modify-source,
-.persona-image-library-card.is-modify-source.is-selected,
-.persona-image-library-card.is-reference.is-modify-source {
-  position: relative;
-  z-index: 1;
-  overflow: visible;
-  border: 2px solid transparent;
-  background:
-    linear-gradient(var(--panel-solid), var(--panel-solid)) padding-box,
-    var(--media-edit-flow-gradient) border-box;
-  background-size: 100% 100%, 200% 100%;
-  background-repeat: no-repeat, repeat-x;
-  background-position: 0 0, 0 0;
-  box-shadow: none;
-  animation: personaMediaEditBorderFlow 2.8s linear infinite;
-}
-
-.persona-image-library-card.is-modify-source::after,
-.persona-image-library-card.is-modify-source.is-selected::after {
-  content: none;
-  animation: none;
-  background: none;
-  box-shadow: none;
-}
-
 .persona-image-library-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -14326,64 +14388,19 @@ body.persona-media-sorting {
   cursor: pointer;
 }
 
-.persona-image-library-preview-actions {
+.persona-image-library-zoom-button,
+.persona-image-library-zoom-hint {
   position: absolute;
-  z-index: 4;
+  z-index: 1;
   top: 8px;
   right: 8px;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-}
-
-.persona-image-library-zoom-button,
-.persona-image-library-zoom-hint,
-.persona-image-library-edit-button {
-  position: static;
-  z-index: 1;
   display: grid;
-  box-sizing: border-box;
   width: 32px;
   height: 32px;
-  min-width: 32px;
-  max-width: 32px;
-  min-height: 32px;
-  max-height: 32px;
   place-items: center;
-  padding: 0;
-  border: 0;
   border-radius: 999px;
   background: rgb(15 23 42 / 72%);
   color: #fff;
-  cursor: pointer;
-  opacity: .9;
-  transform: none;
-  transition: background var(--motion-fast), opacity var(--motion-fast), transform var(--motion-fast);
-}
-
-.persona-image-library-zoom-hint {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  pointer-events: none;
-}
-
-.persona-image-library-edit-button .ui-action-icon,
-.persona-image-library-zoom-button .ui-zoom-in-icon,
-.persona-image-library-zoom-hint .ui-zoom-in-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.persona-image-library-edit-button:hover,
-.persona-image-library-edit-button:focus-visible,
-.persona-image-library-edit-button.is-active,
-.persona-image-library-zoom-button:hover,
-.persona-image-library-zoom-button:focus-visible {
-  background: var(--accent);
-  opacity: 1;
-  transform: scale(1.04);
 }
 
 .persona-image-library-zoom-button {
@@ -14596,6 +14613,25 @@ body.persona-media-sorting {
 .persona-media-frame--empty small {
   font-size: 11px;
   line-height: 1.4;
+}
+
+.persona-media-frame--video-poster {
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  text-align: center;
+  min-height: 120px;
+  background: #1c2228;
+  color: #dce7e5;
+}
+
+.persona-media-frame--video-poster strong {
+  font-size: 13px;
+}
+
+.persona-media-frame--video-poster small {
+  font-size: 11px;
+  opacity: 0.8;
 }
 
 .console-modal {
@@ -15219,44 +15255,44 @@ body.persona-media-sorting {
 .persona-media-lightbox-icon-button {
   display: inline-grid;
   place-items: center;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  min-height: 36px;
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
   padding: 0;
   border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--viewer-muted);
+  border-radius: 999px;
+  background: rgba(241, 243, 244, .18);
+  color: var(--viewer-ink);
   box-shadow: none;
 }
 
 .persona-media-lightbox-icon-button:hover,
 .persona-media-lightbox-icon-button:focus-visible {
-  background: transparent;
-  color: var(--viewer-ink);
+  background: rgba(241, 243, 244, .32);
+  color: #fff;
 }
 
 .persona-media-lightbox-icon-button:focus-visible {
   outline: none;
-  box-shadow: inset 0 -2px 0 var(--viewer-focus);
+  box-shadow: 0 0 0 2px var(--viewer-focus);
 }
 
 .persona-media-lightbox-icon-button:disabled {
   border: 0;
-  background: transparent;
-  color: var(--viewer-line);
+  background: rgba(241, 243, 244, .08);
+  color: var(--viewer-muted);
   cursor: not-allowed;
 }
 
 .persona-media-lightbox-icon-button .ui-lightbox-icon,
 .persona-media-lightbox-icon-button .ui-undo-icon,
 .persona-media-lightbox-icon-button .ui-action-icon {
-  width: 18px;
-  height: 18px;
+  width: 26px;
+  height: 26px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2;
+  stroke-width: 2.6;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -15286,7 +15322,7 @@ body.persona-media-sorting {
 .persona-media-lightbox-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 10px;
 }
 
 .persona-media-lightbox-actions [hidden] {
@@ -19917,11 +19953,12 @@ body.persona-media-sorting {
 
 .account-pool-card-copy strong {
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   font-size: 16px;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .account-pool-card-copy-button {
@@ -20247,9 +20284,12 @@ body.persona-media-sorting {
   grid-area: username;
   margin-left: 0;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  text-overflow: unset;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.45;
 }
 
 .account-pool-card:not(.persona-account-pool-card) .account-pool-card-copy-button {
@@ -22456,6 +22496,16 @@ body.live-browser-modal-open {
     font-size: 13px;
   }
 
+  .persona-media-lightbox-icon-button,
+  .persona-media-lightbox-close,
+  .persona-media-lightbox-actions .persona-media-lightbox-icon-button {
+    width: 48px;
+    min-width: 48px;
+    height: 48px;
+    min-height: 48px;
+    padding: 0;
+  }
+
   .persona-list-actions:not(.persona-list-actions--bulk) {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 5px;
@@ -22823,9 +22873,9 @@ body.live-browser-modal-open {
   }
 
   .persona-media-lightbox-actions {
-    min-height: 44px;
+    min-height: 52px;
     flex-wrap: nowrap;
-    gap: 6px;
+    gap: 10px;
   }
 }
 
@@ -24716,6 +24766,25 @@ body.console-page {
   .console-page .persona-post-direction-tag {
     min-height: 32px;
     padding: 5px 9px;
+    font-size: 12px;
+  }
+
+  .console-page .persona-image-style-head {
+    gap: 6px;
+  }
+
+  .console-page .persona-image-style-action {
+    min-width: 76px;
+    height: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .console-page .persona-image-style-tag {
+    min-height: 30px;
+    padding: 4px 7px;
     font-size: 12px;
   }
 

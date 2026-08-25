@@ -2,7 +2,6 @@ import fs from "node:fs";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import {
-  generateLibraryImageEdit,
   generatePersonaImage,
   generateReferenceSheet,
   type PersonaImageGenerationMode,
@@ -19,6 +18,7 @@ export interface GeneratePersonaImagesInput {
   setup: DramaSetup;
   content: string;
   customPrompt?: string;
+  styleHint?: string;
   model?: string;
   aspectRatio?: string;
   mode?: PersonaImageGenerationMode;
@@ -26,7 +26,6 @@ export interface GeneratePersonaImagesInput {
   referenceImageUrl?: string;
   referenceSheetUrl?: string;
   generateReferenceSheet?: boolean;
-  editExistingImage?: boolean;
   dryRun?: boolean;
   configPath?: string;
   dataDir?: string;
@@ -327,30 +326,6 @@ async function main() {
     || process.env.PERSONA_IMAGE_MODEL
     || "gemini-3.1-flash-image-preview";
 
-  if (input.editExistingImage) {
-    const imageStartedAt = Date.now();
-    const imageResult = await generateLibraryImageEdit(
-      unsupportedImageApi,
-      input.referenceImageUrl || "",
-      input.customPrompt || "",
-      model,
-      input.aspectRatio || "1:1",
-      runtimeOptions,
-    );
-    printJson({
-      ok: Boolean(imageResult?.ok && imageResult?.url),
-      dryRun: input.dryRun !== false,
-      imageResult,
-      timings: {
-        totalMs: Date.now() - startedAt,
-        imageMs: Date.now() - imageStartedAt,
-        provider: (imageResult as any)?.timings?.provider,
-        detail: (imageResult as any)?.timings,
-      },
-    });
-    return;
-  }
-
   let referenceSheetMs: number | undefined;
   const referenceSheet = input.generateReferenceSheet
     ? await (async () => {
@@ -378,6 +353,8 @@ async function main() {
         url: referenceSheet?.url,
         mode: "closed-person",
         error: referenceSheet?.error,
+        prompt: (referenceSheet as any)?.prompt || "",
+        customPrompt: (referenceSheet as any)?.customPrompt || input.customPrompt || "",
       },
       timings: {
         totalMs: Date.now() - startedAt,
@@ -402,6 +379,7 @@ async function main() {
     input.referenceSheetUrl,
     runtimeOptions,
     input.customPrompt,
+    input.styleHint,
   );
 
   printJson({

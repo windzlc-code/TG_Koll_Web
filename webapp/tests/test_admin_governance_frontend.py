@@ -102,6 +102,8 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('{ method: "DELETE" }', self.script)
         self.assertIn('requestAdminPublicAction({', self.script)
         self.assertIn('确认删除数据集', self.script)
+        self.assertIn('从本页移除', self.script)
+        self.assertIn('item.global ? 100000 : 30', self.script)
         self.assertIn('function renderHotDatasetOverview(', self.script)
         self.assertIn('function renderHotDatasetEvents(', self.script)
         self.assertIn('候选已使用或清理', self.script)

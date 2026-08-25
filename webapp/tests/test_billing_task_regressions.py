@@ -10,6 +10,22 @@ import webapp.server as server
 
 
 class BillingTaskRegressionTests(unittest.TestCase):
+    def test_extract_task_prompt_fields_shows_empty_and_stored_prompts(self):
+        empty = server._extract_task_prompt_fields({"related_persona_id": "p1", "prompt": ""}, {})
+        self.assertEqual(empty["user_prompt"], "")
+        self.assertEqual(empty["prompt_display"], "（未填写）")
+        self.assertEqual(empty["final_prompt_display"], "（未填写）")
+
+        filled = server._extract_task_prompt_fields(
+            {"prompt": "性感美女穿着性感，喜欢穿低胸装。"},
+            {"final_prompt": "Highest priority visual request: 性感美女穿着性感，喜欢穿低胸装。"},
+        )
+        self.assertEqual(filled["user_prompt"], "性感美女穿着性感，喜欢穿低胸装。")
+        self.assertEqual(filled["final_prompt"], "Highest priority visual request: 性感美女穿着性感，喜欢穿低胸装。")
+        self.assertEqual(filled["prompt_display"], "性感美女穿着性感，喜欢穿低胸装。")
+        self.assertTrue(server._user_prompt_reached_model("穿红色连衣裙", "appearance: 穿红色连衣裙, photorealistic"))
+        self.assertFalse(server._user_prompt_reached_model("穿红色连衣裙", "appearance: 职业西装, photorealistic"))
+
     def test_single_image_url_counts_as_one_billable_output(self):
         self.assertEqual(
             server._billing_actual_image_quantity({"image_url": "/uploads/generated.png"}),
@@ -33,6 +49,8 @@ class BillingTaskRegressionTests(unittest.TestCase):
 
         self.assertEqual(output["image_url"], "/uploads/persona.png")
         self.assertEqual(output["image_count"], 1)
+        self.assertEqual(output["user_prompt"], "")
+        self.assertEqual(output["prompt"], "")
 
     def test_persona_image_task_forwards_custom_prompt(self):
         result = {
@@ -40,7 +58,7 @@ class BillingTaskRegressionTests(unittest.TestCase):
             "saved_item_id": "saved-prompt-1",
         }
         with mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner:
-            server._run_persona_image_task(
+            output = server._run_persona_image_task(
                 "task-prompt-1",
                 {
                     "related_persona_id": "persona-1",
@@ -49,6 +67,8 @@ class BillingTaskRegressionTests(unittest.TestCase):
             )
 
         self.assertEqual(runner.call_args.kwargs["prompt"], "穿深色西装，办公室暖光，半身构图")
+        self.assertEqual(output["user_prompt"], "穿深色西装，办公室暖光，半身构图")
+        self.assertEqual(output["prompt"], "穿深色西装，办公室暖光，半身构图")
 
     def test_persona_image_regeneration_keeps_standard_reference_sheet_chain(self):
         archive = {
@@ -61,8 +81,13 @@ class BillingTaskRegressionTests(unittest.TestCase):
             returncode=0,
             stdout=json.dumps(
                 {
-                    "referenceSheet": {"ok": True, "url": "/generated-reference.jpg"},
-                    "imageResult": {"ok": True, "url": "/generated-reference.jpg", "mode": "closed-person"},
+                    "referenceSheet": {
+                        "ok": True,
+                        "url": "/generated-reference.jpg",
+                        "prompt": "appearance: 爆奶美女，身材非常的好，性感知性。",
+                        "customPrompt": "爆奶美女，身材非常的好，性感知性。",
+                    },
+                    "imageResult": {"ok": True, "url": "/generated-reference.jpg", "mode": "closed-person", "prompt": "appearance: 爆奶美女，身材非常的好，性感知性。"},
                 }
             ),
             stderr="",
@@ -80,7 +105,7 @@ class BillingTaskRegressionTests(unittest.TestCase):
 
         cli_payload = json.loads(run.call_args.args[0][4])
         self.assertTrue(cli_payload["generateReferenceSheet"])
-        self.assertFalse(cli_payload.get("editExistingImage"))
+        self.assertNotIn("editExistingImage", cli_payload)
         self.assertIsNone(cli_payload["referenceImageUrl"])
         self.assertIsNone(cli_payload["referenceSheetUrl"])
         self.assertEqual(cli_payload["content"], "测试人设正文")
@@ -117,7 +142,7 @@ class BillingTaskRegressionTests(unittest.TestCase):
         self.assertEqual(cli_payload["content"], "测试人设正文")
         self.assertIsNone(cli_payload.get("customPrompt"))
 
-    def test_persona_image_edit_uses_selected_library_image_instead_of_sheet(self):
+    def test_persona_image_prompt_stays_on_text_to_image_sheet_chain(self):
         archive = {
             "id": "persona-1",
             "name": "测试人设",
@@ -131,7 +156,13 @@ class BillingTaskRegressionTests(unittest.TestCase):
             returncode=0,
             stdout=json.dumps(
                 {
-                    "imageResult": {"ok": True, "url": "/generated-edit.jpg", "mode": "closed-person"},
+                    "referenceSheet": {
+                        "ok": True,
+                        "url": "/generated-reference.jpg",
+                        "prompt": "appearance: 把西装改成红色连衣裙",
+                        "customPrompt": "把西装改成红色连衣裙",
+                    },
+                    "imageResult": {"ok": True, "url": "/generated-reference.jpg", "mode": "closed-person", "prompt": "appearance: 把西装改成红色连衣裙"},
                 }
             ),
             stderr="",
@@ -140,22 +171,51 @@ class BillingTaskRegressionTests(unittest.TestCase):
             mock.patch.object(server, "_persona_archive_source_for_write", return_value=(Path("archive.json"), {}, [archive])),
             mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"),
             mock.patch.object(server.subprocess, "run", return_value=completed) as run,
-            mock.patch.object(server, "_persona_archive_persist_reference_image", return_value={"saved_item_id": "saved-edit"}),
+            mock.patch.object(server, "_persona_archive_persist_reference_image", return_value={"saved_item_id": "saved-reference"}),
         ):
             result = server._run_persona_image_cli_for_web(
                 "persona-1",
                 prompt="把西装改成红色连衣裙",
-                source_image_id="img-edit-1",
             )
 
         cli_payload = json.loads(run.call_args.args[0][4])
-        self.assertFalse(cli_payload["generateReferenceSheet"])
-        self.assertTrue(cli_payload["editExistingImage"])
-        self.assertEqual(cli_payload["referenceImageUrl"], "/library/edit-source.jpg")
+        self.assertTrue(cli_payload["generateReferenceSheet"])
+        self.assertNotIn("editExistingImage", cli_payload)
+        self.assertIsNone(cli_payload["referenceImageUrl"])
         self.assertEqual(cli_payload["customPrompt"], "把西装改成红色连衣裙")
-        self.assertEqual(cli_payload["content"], "")
-        self.assertEqual(cli_payload.get("setup") or {}, {})
-        self.assertEqual(result["generation"]["image_url"], "/generated-edit.jpg")
+        self.assertEqual(cli_payload["content"], "测试人设正文")
+        self.assertEqual(cli_payload["setup"], archive["setup"])
+        self.assertEqual(result["generation"]["image_url"], "/generated-reference.jpg")
+        self.assertEqual(result["generation"]["user_prompt"], "把西装改成红色连衣裙")
+        self.assertIn("把西装改成红色连衣裙", result["generation"]["final_prompt"])
+
+    def test_persona_image_cli_rejects_when_user_prompt_missing_from_model_prompt(self):
+        archive = {
+            "id": "persona-1",
+            "name": "测试人设",
+            "content": "测试人设正文",
+            "setup": {},
+        }
+        completed = mock.Mock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "referenceSheet": {"ok": True, "url": "/generated-reference.jpg", "prompt": "appearance: 职业西装"},
+                    "imageResult": {"ok": True, "url": "/generated-reference.jpg", "mode": "closed-person"},
+                }
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.object(server, "_persona_archive_source_for_write", return_value=(Path("archive.json"), {}, [archive])),
+            mock.patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"),
+            mock.patch.object(server.subprocess, "run", return_value=completed),
+            mock.patch.object(server, "_persona_archive_persist_reference_image"),
+        ):
+            with self.assertRaises(server.HTTPException) as ctx:
+                server._run_persona_image_cli_for_web("persona-1", prompt="穿红色连衣裙")
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.assertIn("未进入模型提示词", str(ctx.exception.detail))
 
     def test_persona_image_library_downloads_remote_result_before_saving_record(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:

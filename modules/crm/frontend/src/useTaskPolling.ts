@@ -64,8 +64,8 @@ export function useTaskPolling(seed: CrmTask[] | undefined, onPolicyFailure: () 
     const scheduler = createSinglePollScheduler({
       run: refresh,
       getDelay: () => {
-        const base = document.visibilityState === "visible" ? 1_000 : 5_000;
-        return Math.min(30_000, base * Math.max(1, 2 ** failures.current));
+        const base = document.visibilityState === "visible" ? 8_000 : 20_000;
+        return Math.min(60_000, base * Math.max(1, 2 ** failures.current));
       },
     });
     scheduler.start();

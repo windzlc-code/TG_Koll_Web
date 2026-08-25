@@ -67,11 +67,14 @@ function extractOutputUrl(value: unknown): string | undefined {
 
 function classifyRunningHubError(errorText: string): { retryable: boolean; reasonCode: string } {
   if (/API Key|TOKEN|auth|unauthor/i.test(errorText)) return { retryable: false, reasonCode: "auth_missing" };
+  if (/605|812|余额不足|balance is insufficient|insufficient balance/i.test(errorText)) {
+    return { retryable: false, reasonCode: "insufficient_balance" };
+  }
   if (/1005|1017|service is upgrading|restarting|internal server error/i.test(errorText)) {
     return { retryable: true, reasonCode: "upstream_error" };
   }
   if (/timeout|超时|逾時/i.test(errorText)) return { retryable: true, reasonCode: "timeout" };
-  if (/RunningHub 任务失败|fail|error/i.test(errorText)) return { retryable: true, reasonCode: "upstream_error" };
+  if (/任务失败|fail|error/i.test(errorText)) return { retryable: true, reasonCode: "upstream_error" };
   return { retryable: false, reasonCode: "unknown" };
 }
 
@@ -278,7 +281,7 @@ export async function generateRunningHubNewPersonaStandardImage(
   if (!aspectRatio) {
     return {
       ok: false,
-      error: `RunningHub OpenAPI v2 不支持畫面比例：${String(params.aspectRatio || "").trim()}`,
+      error: `当前图片模型不支持该画面比例：${String(params.aspectRatio || "").trim()}`,
       retryable: false,
       reasonCode: "aspect_ratio_unsupported",
     };
@@ -303,11 +306,11 @@ export async function generateRunningHubNewPersonaStandardImage(
   try {
     const created = await createRunningHubStandardModelTask(config, endpointPath, payload);
     const taskId = String(created?.taskId || created?.data?.taskId || created?.data?.task_id || created?.data || "");
-    if (!taskId) throw new Error(`RunningHub OpenAPI v2 未返回 taskId：${JSON.stringify(created).slice(0, 500)}`);
+    if (!taskId) throw new Error("当前图片模型未返回任务编号。");
     const outputs = await waitRunningHubOpenApiV2TaskOutputs(config, taskId, params.timeoutMs || 300_000, 5000);
     const url = extractOutputUrl(outputs);
     if (!url) {
-      return { ok: false, taskId, outputs, error: `RunningHub OpenAPI v2 任务完成但未返回图片 URL：${JSON.stringify(outputs).slice(0, 500)}`, retryable: true, reasonCode: "output_missing" };
+      return { ok: false, taskId, outputs, error: "当前图片模型已完成但未返回图片。", retryable: true, reasonCode: "output_missing" };
     }
     return { ok: true, taskId, outputs, url };
   } catch (error: any) {

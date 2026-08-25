@@ -252,6 +252,62 @@ class ProxyIpAdminTests(unittest.TestCase):
         )
         self.assertEqual(refused.status_code, 409, refused.text)
 
+    def test_admin_can_share_purchased_proxy_with_another_admin(self):
+        from webapp.db import db
+        from webapp.system_proxy_pool import list_system_proxy_pool_options
+
+        owner_id = self._create_user("proxy-owner-customer")
+        admin_id = self._create_user("proxy-receiver-admin", is_admin=1)
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT INTO proxy_market_items(
+                  id, sku, display_name, provider_key, proxy_type, host, port,
+                  credential_owner_user_id, status, health_status, last_check_at,
+                  last_check_result_json, ownership_type, owner_user_id,
+                  provider_purchase_order_id, provider_proxy_id, created_at, updated_at
+                ) VALUES (
+                  'owned_proxy_item_share_admin', 'owned-share-admin', '已购台湾代理', 'proxycheap',
+                  'http', '203.0.113.88', 42994, ?, 'allocated', 'healthy', 1,
+                  '{"ok":true,"exit_ip":"203.0.113.88"}', 'owned', ?,
+                  'proxy_order_share_admin', '2332357', 1, 1
+                )
+                """,
+                (owner_id, owner_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO social_proxies(
+                  id, user_id, name, proxy_type, host, port, source, purchase_status,
+                  status, market_item_id, created_at, updated_at
+                ) VALUES (
+                  'social_proxy_share_admin_owner', ?, '已购台湾代理', 'http', '203.0.113.88', 42994,
+                  'provider_purchase', 'owned', 'active', 'owned_proxy_item_share_admin', 1, 1
+                )
+                """,
+                (owner_id,),
+            )
+
+        saved = self.client.put(
+            "/api/admin/proxy-market/items/owned_proxy_item_share_admin/shares",
+            json={"user_ids": [admin_id], "confirm_impact": True},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["user_ids"], [admin_id])
+
+        with db() as conn:
+            copies = conn.execute(
+                "SELECT user_id, purchase_status FROM social_proxies WHERE market_item_id = ? ORDER BY user_id",
+                ("owned_proxy_item_share_admin",),
+            ).fetchall()
+            admin_options = list_system_proxy_pool_options(conn, owner_user_id=admin_id)
+        self.assertEqual([int(row["user_id"]) for row in copies], sorted([owner_id, admin_id]))
+        self.assertIn("shared", [str(row["purchase_status"]) for row in copies if int(row["user_id"]) == admin_id])
+        self.assertEqual(
+            [row["market_item_id"] for row in admin_options if row["ownership_type"] == "owned"],
+            ["owned_proxy_item_share_admin"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1223,8 +1223,6 @@ def set_owned_market_shares(
             )
         for user_id in add_ids:
             target = _require_enabled_user(conn, user_id)
-            if int(target.get("is_admin") or 0) == 1:
-                continue
             proxy_id = _ensure_owned_social_proxy(
                 conn,
                 item=item,

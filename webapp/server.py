@@ -1452,6 +1452,13 @@ def _dashboard_media_proxy_url(path: Path) -> str:
     return f"/api/persona_dashboard/media/{token}"
 
 
+def _immutable_media_headers() -> dict[str, str]:
+    return {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "CDN-Cache-Control": "public, max-age=31536000, immutable",
+    }
+
+
 def _serve_dashboard_media_proxy(token: str) -> FileResponse:
     raw = str(token or "").strip()
     if not raw:
@@ -1464,7 +1471,7 @@ def _serve_dashboard_media_proxy(token: str) -> FileResponse:
     path = Path(decoded).expanduser().resolve()
     if not path.is_file() or not _is_allowed_dashboard_media_path(path):
         raise HTTPException(status_code=404, detail="媒体文件不存在。")
-    return FileResponse(str(path), filename=path.name)
+    return FileResponse(str(path), filename=path.name, headers=_immutable_media_headers())
 
 
 def _cleanup_files_once(*, retention_days: int) -> dict[str, Any]:
@@ -4032,16 +4039,33 @@ def _check_runninghub_account_key(api_key: str) -> dict[str, Any]:
 
     data = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else {}
     api_type = str(data.get("apiType") or "").upper()
+    currency = str(data.get("currency") or "").strip() or "USD"
     money_raw = data.get("remainMoney")
     coins_raw = data.get("remainCoins")
     money = _to_float(money_raw, 0.0) if money_raw not in {None, ""} else None
     coins = _to_float(coins_raw, 0.0) if coins_raw not in {None, ""} else None
-    usable = money > 0 if api_type == "SHARED" and money is not None else (coins > 0 if coins is not None else None)
+    money_text = f"{money:g} {currency}" if money is not None else "未知"
+    coins_text = f"{int(coins)}" if coins is not None and coins == int(coins) else (f"{coins:g}" if coins is not None else "未知")
+    # SHARED 账号的 OpenAPI 生图扣企业余额，不扣平台积分。
+    # 后台检测只要 >0 就会显示“可用”，但 0.02 USD 级余额不够付一张图。
+    shared_image_min_money = 0.05
     if api_type == "SHARED" and money is not None:
-        message = "Key 有效，企业余额可用。" if usable else "Key 有效，但企业余额不足。"
+        usable = money >= shared_image_min_money
+        if money <= 0:
+            message = f"Key 有效，但企业余额不足（{money_text}）。"
+        elif not usable:
+            message = f"Key 有效，当前图片模型企业余额仅 {money_text}，不足以支付生图。平台积分 {coins_text} 不能用于该模型。"
+        else:
+            message = f"Key 有效，当前图片模型企业余额 {money_text}，可以生图。"
     elif coins is not None:
-        message = "Key 有效，RH 币余额可用。" if usable else "Key 有效，但 RH 币余额不足。"
+        usable = coins > 0
+        message = (
+            f"Key 有效，当前图片模型积分 {coins_text}，可以生图。"
+            if usable
+            else f"Key 有效，但积分不足（{coins_text}）。"
+        )
     else:
+        usable = None
         message = "Key 有效；账户余额接口未返回可判断余额。"
     return {
         "checked": True,
@@ -4050,6 +4074,7 @@ def _check_runninghub_account_key(api_key: str) -> dict[str, Any]:
         "api_type": api_type,
         "remain_money": money,
         "remain_coins": coins,
+        "currency": currency,
         "message": message,
     }
 
@@ -4651,14 +4676,14 @@ def _serve_task_output_media(task_id: str, index: int, user: dict[str, Any]) -> 
     path = _task_output_media_path(task_id, index, user)
     return FileResponse(
         str(path),
-        headers={"Cache-Control": "private, max-age=86400"},
+        headers=_immutable_media_headers(),
     )
 
 
 def _serve_task_output_media_thumbnail(task_id: str, index: int, user: dict[str, Any]) -> FileResponse:
     path = _task_output_media_path(task_id, index, user)
     if path.suffix.lower() not in IMAGE_EXTS:
-        return _serve_task_output_media(task_id, index, user)
+        return _serve_persona_media_thumbnail(path)
 
     stat = path.stat()
     source_key = hashlib.sha256(
@@ -4689,7 +4714,7 @@ def _serve_task_output_media_thumbnail(task_id: str, index: int, user: dict[str,
     return FileResponse(
         str(cache_path),
         media_type="image/jpeg",
-        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        headers=_immutable_media_headers(),
     )
 
 
@@ -6046,6 +6071,85 @@ def _build_workflow_chain_summary(*, task_type: str, payload: dict[str, Any], wo
     return (f"{total_steps} 步" if total_steps > 0 else "", total_steps)
 
 
+_TASK_USER_PROMPT_KEYS = (
+    "user_prompt",
+    "customPrompt",
+    "custom_prompt",
+    "prompt",
+    "prompt_text",
+    "message",
+    "tg_user_instruction",
+    "generation_content",
+    "instruction",
+    "rewrite_instruction",
+)
+_TASK_FINAL_PROMPT_KEYS = (
+    "final_prompt",
+    "assembled_prompt",
+    "image_prompt",
+    "generation_prompt",
+    "model_prompt",
+    "prompt",
+)
+
+
+def _user_prompt_reached_model(user_prompt: str, final_prompt: str) -> bool:
+    needle = " ".join(str(user_prompt or "").split())
+    haystack = " ".join(str(final_prompt or "").split())
+    if not needle:
+        return True
+    if not haystack:
+        return False
+    if needle in haystack:
+        return True
+    return needle[:80] in haystack
+
+
+def _first_nonempty_text(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _prompt_from_mapping(payload: Any, keys: tuple[str, ...]) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in keys:
+        text = str(payload.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _extract_task_prompt_fields(input_payload: Any = None, output_payload: Any = None) -> dict[str, str]:
+    inp = input_payload if isinstance(input_payload, dict) else {}
+    out = output_payload if isinstance(output_payload, dict) else {}
+    library = out.get("library") if isinstance(out.get("library"), dict) else {}
+    generation = out.get("generation") if isinstance(out.get("generation"), dict) else {}
+    nested_generation = library.get("generation") if isinstance(library.get("generation"), dict) else {}
+    user_prompt = _first_nonempty_text(
+        _prompt_from_mapping(out, ("user_prompt", "customPrompt")),
+        _prompt_from_mapping(generation, ("user_prompt", "customPrompt")),
+        _prompt_from_mapping(nested_generation, ("user_prompt", "customPrompt")),
+        _prompt_from_mapping(inp, _TASK_USER_PROMPT_KEYS),
+    )
+    final_prompt = _first_nonempty_text(
+        _prompt_from_mapping(out, _TASK_FINAL_PROMPT_KEYS),
+        _prompt_from_mapping(generation, _TASK_FINAL_PROMPT_KEYS),
+        _prompt_from_mapping(nested_generation, _TASK_FINAL_PROMPT_KEYS),
+        _prompt_from_mapping(library, ("finalPrompt", "final_prompt")),
+        user_prompt,
+    )
+    return {
+        "user_prompt": user_prompt,
+        "final_prompt": final_prompt,
+        "prompt_display": user_prompt or "（未填写）",
+        "final_prompt_display": final_prompt or user_prompt or "（未填写）",
+    }
+
+
 def _build_workflow_meta(*, task_id: str, task_type: str, input_payload: Any, output_payload: Any, runninghub_task_id: Any) -> dict[str, Any]:
     payload = input_payload if isinstance(input_payload, dict) else {}
     output = output_payload if isinstance(output_payload, dict) else {}
@@ -6079,6 +6183,7 @@ def _build_workflow_meta(*, task_id: str, task_type: str, input_payload: Any, ou
     )
     workflow_ids = [_workflow_stage_display_id(value) for value in workflow_ids]
     workflow_id = ", ".join(workflow_ids)
+    prompt_fields = _extract_task_prompt_fields(payload, output)
     return {
         "task_id": str(task_id or "").strip(),
         "task_type": str(task_type or "").strip(),
@@ -6091,6 +6196,10 @@ def _build_workflow_meta(*, task_id: str, task_type: str, input_payload: Any, ou
         "workflow_mode_label": workflow_mode_label,
         "runninghub_task_id": runninghub_ids[0] if runninghub_ids else "",
         "runninghub_task_ids": runninghub_ids,
+        "user_prompt": prompt_fields["user_prompt"],
+        "final_prompt": prompt_fields["final_prompt"],
+        "prompt_display": prompt_fields["prompt_display"],
+        "final_prompt_display": prompt_fields["final_prompt_display"],
     }
 
 
@@ -6277,6 +6386,10 @@ def _build_task_detail_payload(*, task: dict[str, Any], include_logs: bool = Tru
         "workflow_chain_summary": workflow_meta.get("workflow_chain_summary"),
         "workflow_step_count": int(_to_int(workflow_meta.get("workflow_step_count"), 0)),
         "runninghub_task_ids": workflow_meta.get("runninghub_task_ids"),
+        "user_prompt": workflow_meta.get("user_prompt") or "",
+        "final_prompt": workflow_meta.get("final_prompt") or "",
+        "prompt_display": workflow_meta.get("prompt_display") or "（未填写）",
+        "final_prompt_display": workflow_meta.get("final_prompt_display") or "（未填写）",
         "execution_trace": execution_trace,
         "has_download": bool(has_download),
         "media_items": media_items,
@@ -10629,6 +10742,259 @@ _PERSONA_POST_IMAGE_ASPECT_RATIOS = ("1:1", "3:4", "4:3", "9:16", "16:9")
 _PERSONA_POST_IMAGE_ASPECT_RATIO_VALUES = {"auto", *_PERSONA_POST_IMAGE_ASPECT_RATIOS}
 _PERSONA_POST_IMAGE_RATIO_TWEET_MAX_CHARS = 4000
 _PERSONA_POST_IMAGE_RATIO_PROMPT_MAX_CHARS = 2000
+_PERSONA_POST_IMAGE_MODES = ("auto", "person", "pov", "scene", "object", "third_person")
+_PERSONA_IMAGE_STYLE_COUNT = 6
+_PERSONA_IMAGE_STYLE_KIND_ORDER = ("person", "third_person", "pov", "scene", "object")
+_PERSONA_IMAGE_STYLE_KIND_LABELS = {
+    "zh-Hans": {
+        "scene": "场景",
+        "object": "事物",
+        "pov": "第一人称",
+        "third_person": "第三人称",
+        "person": "人物",
+    },
+    "zh-Hant": {
+        "scene": "場景",
+        "object": "事物",
+        "pov": "第一人稱",
+        "third_person": "第三人稱",
+        "person": "人物",
+    },
+}
+_PERSONA_IMAGE_STYLE_ANCHORS: tuple[tuple[str, str, str], ...] = (
+    (r"便利店|超商|全家|7-?11|711", "便利店", "便利店"),
+    (r"冰美式|美式咖啡|美式", "冰美式", "冰美式"),
+    (r"拿铁|拿鐵", "拿铁", "拿鐵"),
+    (r"咖啡店|咖啡厅|咖啡廳|咖啡馆|咖啡館|咖啡", "咖啡", "咖啡"),
+    (r"加班|工位|办公室|辦公室", "加班", "加班"),
+    (r"地铁|捷运|捷運|月台|车站|車站", "站台", "站台"),
+    (r"海边|海邊|沙滩|沙灘", "海边", "海邊"),
+    (r"夕阳|夕陽", "夕阳", "夕陽"),
+    (r"房间|房間|卧室|臥室|家里|家裡", "房间", "房間"),
+    (r"奶茶|手摇|手搖", "手摇", "手搖"),
+    (r"蛋糕|甜點|甜点", "甜点", "甜點"),
+    (r"便当|便當|食物", "食物", "食物"),
+    (r"手机|手機", "手机", "手機"),
+    (r"雨伞|雨傘|下雨|雨景", "雨景", "雨景"),
+    (r"豪宅|頂級豪宅|顶级豪宅", "豪宅", "豪宅"),
+    (r"东京|東京", "东京", "東京"),
+    (r"大阪", "大阪", "大阪"),
+    (r"融资|融資", "融资", "融資"),
+    (r"韭菜", "韭菜", "韭菜"),
+    (r"资产|資產", "资产", "資產"),
+)
+
+
+def _normalize_persona_post_image_mode(value: Any) -> str:
+    mode = re.sub(r"[\s-]+", "_", str(value or "").strip().lower())
+    aliases = {
+        "thirdperson": "third_person",
+        "first_person": "pov",
+        "scenery": "scene",
+        "environment": "scene",
+        "no_person": "scene",
+        "still_life": "object",
+        "product": "object",
+        "portrait": "person",
+        "selfie": "person",
+        "candid": "third_person",
+    }
+    mode = aliases.get(mode, mode)
+    return mode if mode in _PERSONA_POST_IMAGE_MODES else "auto"
+
+
+def _persona_image_style_kind_labels(interface_language: str) -> dict[str, str]:
+    return _PERSONA_IMAGE_STYLE_KIND_LABELS["zh-Hant" if interface_language == "zh-Hant" else "zh-Hans"]
+
+
+def _sort_persona_image_styles(styles: list[dict[str, str]]) -> list[dict[str, str]]:
+    order = {kind: index for index, kind in enumerate(_PERSONA_IMAGE_STYLE_KIND_ORDER)}
+    return sorted(
+        styles,
+        key=lambda item: (order.get(str(item.get("kind") or ""), 99), str(item.get("label") or "")),
+    )
+
+
+def _normalize_persona_image_style_item(value: Any) -> dict[str, str] | None:
+    if isinstance(value, str):
+        label = re.sub(r"\s+", " ", value).strip()[:16]
+        kind = "scene"
+    elif isinstance(value, dict):
+        label = re.sub(r"\s+", " ", str(value.get("label") or value.get("keyword") or value.get("name") or "")).strip()[:16]
+        kind = _normalize_persona_post_image_mode(value.get("kind") or value.get("type") or value.get("mode"))
+        if kind == "auto":
+            kind = "scene"
+    else:
+        return None
+    if len(label) < 2 or kind not in {"person", "pov", "scene", "object", "third_person"}:
+        return None
+    return {"label": label, "kind": kind}
+
+
+def _persona_image_style_anchors(title: str, content: str, *, traditional: bool) -> list[str]:
+    text = f"{title} {content}".strip()
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(noun: str) -> None:
+        clean = re.sub(r"\s+", "", str(noun or "")).strip()[:8]
+        key = _persona_post_direction_key(clean)
+        if len(clean) < 2 or not key or key in seen:
+            return
+        seen.add(key)
+        found.append(clean)
+
+    for pattern, hans, hant in _PERSONA_IMAGE_STYLE_ANCHORS:
+        if text and re.search(pattern, text):
+            _add(hant if traditional else hans)
+    for clause in re.split(r"[，。！？!?、；;\n]+", text):
+        compact = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", clause)
+        if 2 <= len(compact) <= 6:
+            _add(compact)
+    return found
+
+
+def _persona_image_style_candidates(anchors: list[str], *, traditional: bool) -> list[tuple[str, str]]:
+    place = anchors[0] if anchors else ("现场" if not traditional else "現場")
+    thing = anchors[1] if len(anchors) > 1 else place
+    extra = anchors[2] if len(anchors) > 2 else (anchors[-1] if anchors else place)
+    if traditional:
+        return [
+            ("person", f"{place}自拍"),
+            ("third_person", f"路過{place}"),
+            ("pov", f"手拿{thing}"),
+            ("scene", f"{place}街景"),
+            ("object", f"{thing}特寫"),
+            ("scene", f"{extra}建筑"),
+        ]
+    return [
+        ("person", f"{place}自拍"),
+        ("third_person", f"路过{place}"),
+        ("pov", f"手拿{thing}"),
+        ("scene", f"{place}街景"),
+        ("object", f"{thing}特写"),
+        ("scene", f"{extra}建筑"),
+    ]
+
+
+def _persona_fallback_image_styles(
+    title: str = "",
+    content: str = "",
+    *,
+    interface_language: str = "zh-Hans",
+    previous_labels: list[str] | None = None,
+) -> list[dict[str, str]]:
+    traditional = interface_language == "zh-Hant"
+    excluded = {
+        _persona_post_direction_key(item)
+        for item in (previous_labels or [])
+        if str(item or "").strip()
+    }
+    anchors = _persona_image_style_anchors(title, content, traditional=traditional)
+    rotated = anchors[1:] + anchors[:1] if excluded and len(anchors) > 1 else anchors
+    pool = _persona_image_style_candidates(rotated or anchors, traditional=traditional)
+    if len(rotated) > 3:
+        extra_place = rotated[3]
+        extra_thing = rotated[4] if len(rotated) > 4 else extra_place
+        pool.extend([
+            ("person", f"{extra_place}自拍"),
+            ("third_person", f"{'路過' if traditional else '路过'}{extra_place}"),
+            ("pov", f"手拿{extra_thing}"),
+            ("scene", f"{extra_place}{'建築' if traditional else '建筑'}"),
+            ("object", f"{extra_thing}{'特寫' if traditional else '特写'}"),
+        ])
+    picked: list[dict[str, str]] = []
+    seen: set[str] = set()
+    used_kinds: set[str] = set()
+    for kind, label in pool:
+        key = _persona_post_direction_key(label)
+        if not key or key in seen or key in excluded:
+            continue
+        if kind == "person" and "person" in used_kinds:
+            continue
+        if kind in used_kinds and kind != "scene" and len(picked) < _PERSONA_IMAGE_STYLE_COUNT:
+            continue
+        seen.add(key)
+        used_kinds.add(kind)
+        picked.append({"label": label, "kind": kind})
+        if len(picked) >= _PERSONA_IMAGE_STYLE_COUNT and len(used_kinds) >= 4:
+            break
+    if len(picked) < _PERSONA_IMAGE_STYLE_COUNT:
+        for kind, label in _persona_image_style_candidates(anchors or ["现场" if not traditional else "現場"], traditional=traditional):
+            key = _persona_post_direction_key(label)
+            if not key or key in seen:
+                continue
+            if kind == "person" and "person" in used_kinds:
+                continue
+            seen.add(key)
+            used_kinds.add(kind)
+            picked.append({"label": label, "kind": kind})
+            if len(picked) >= _PERSONA_IMAGE_STYLE_COUNT:
+                break
+    return _sort_persona_image_styles(picked[:_PERSONA_IMAGE_STYLE_COUNT])
+
+
+def _collect_persona_image_styles(
+    raw: Any,
+    *,
+    title: str = "",
+    content: str = "",
+    interface_language: str = "zh-Hans",
+    previous_labels: list[str] | None = None,
+) -> list[dict[str, str]]:
+    source = []
+    if isinstance(raw, list):
+        source = raw
+    elif isinstance(raw, dict):
+        if isinstance(raw.get("image_styles"), list):
+            source = raw.get("image_styles") or []
+        elif isinstance(raw.get("imageStyles"), list):
+            source = raw.get("imageStyles") or []
+    styles: list[dict[str, str]] = []
+    seen: set[str] = set()
+    person_count = 0
+    for item in source:
+        parsed = _normalize_persona_image_style_item(item)
+        if not parsed:
+            continue
+        key = f"{parsed['kind']}:{_persona_post_direction_key(parsed['label'])}"
+        if key in seen:
+            continue
+        if parsed["kind"] == "person":
+            if person_count >= 1:
+                continue
+            person_count += 1
+        seen.add(key)
+        styles.append(parsed)
+        if len(styles) >= _PERSONA_IMAGE_STYLE_COUNT:
+            break
+    if len(styles) < 4:
+        fallback = _persona_fallback_image_styles(
+            title,
+            content,
+            interface_language=interface_language,
+            previous_labels=previous_labels,
+        )
+        for item in fallback:
+            key = f"{item['kind']}:{_persona_post_direction_key(item['label'])}"
+            if key in seen:
+                continue
+            if item["kind"] == "person" and any(existing["kind"] == "person" for existing in styles):
+                continue
+            seen.add(key)
+            styles.append(item)
+            if len(styles) >= _PERSONA_IMAGE_STYLE_COUNT:
+                break
+    kind_labels = _persona_image_style_kind_labels(interface_language)
+    ranked = _sort_persona_image_styles(styles[:_PERSONA_IMAGE_STYLE_COUNT])
+    finalized: list[dict[str, str]] = []
+    for item in ranked:
+        finalized.append({
+            "label": item["label"],
+            "kind": item["kind"],
+            "kind_label": kind_labels.get(item["kind"], item["kind"]),
+        })
+    return finalized
 
 
 def _normalize_persona_post_image_aspect_ratio(value: Any, *, default: str = "1:1") -> str:
@@ -10802,12 +11168,15 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         raise RuntimeError(str(exc)) from exc
     _persist_persona_post_image_aspect_ratio(task_id, aspect_ratio)
     aspect_ratio_ms = round((time.perf_counter() - aspect_started_at) * 1000, 1)
+    image_mode = _normalize_persona_post_image_mode(payload.get("image_mode") or payload.get("mode"))
+    style_hint = str(payload.get("image_style_label") or payload.get("style_hint") or payload.get("styleHint") or "").strip()[:24]
     cli_payload = {
         "setup": archive.get("setup") if isinstance(archive.get("setup"), dict) else {},
         "content": source_content or prompt,
         "customPrompt": prompt or None,
+        "styleHint": style_hint or None,
         "aspectRatio": aspect_ratio,
-        "mode": "auto",
+        "mode": image_mode,
         "referenceImageUrl": edit_reference_path or None,
         "referenceSheetUrl": _persona_reference_image_input_for_cli(archive) or None,
         "generateReferenceSheet": False,
@@ -10924,12 +11293,13 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
             prompt=str(payload.get("prompt") or "").strip(),
             aspect_ratio=str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1",
             mode=str(payload.get("mode") or "person").strip() or "person",
-            source_image_id=str(payload.get("source_image_id") or payload.get("sourceImageId") or "").strip(),
         )
     except HTTPException as exc:
         raise RuntimeError(str(exc.detail or "人设图生成失败。")) from exc
     generation = result.get("generation") if isinstance(result.get("generation"), dict) else {}
     image_url = str(generation.get("image_url") or result.get("current_reference_url") or "").strip()
+    user_prompt = str(payload.get("prompt") or generation.get("user_prompt") or "").strip()
+    final_prompt = str(generation.get("final_prompt") or "").strip()
     return {
         "ok": True,
         "message": "人设图生成完成",
@@ -10937,6 +11307,9 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
         "image_url": image_url,
         "image_count": 1 if image_url else 0,
         "saved_item_id": str(result.get("saved_item_id") or "").strip(),
+        "user_prompt": user_prompt,
+        "final_prompt": final_prompt,
+        "prompt": user_prompt,
         "library": result,
     }
 
@@ -12296,6 +12669,16 @@ class PersonaDashboardPostDirectionsPayload(BaseModel):
     previous_keywords: list[str] = Field(default_factory=list)
 
 
+class PersonaDashboardImageStylesPayload(BaseModel):
+    post_id: str = ""
+    input_title: str = ""
+    input_content: str = ""
+    platform: str = "threads"
+    writing_locale: str = "zh-TW"
+    interface_language: str = "zh-Hans"
+    previous_image_styles: list[str] = Field(default_factory=list)
+
+
 class PersonaDashboardPersonaAiCreatePayload(BaseModel):
     name: str = ""
     prompt: str = ""
@@ -12403,7 +12786,7 @@ class PersonaDashboardResolveGeneratedCandidatesPayload(BaseModel):
     title: str | None = None
 
 
-PERSONA_PUBLISH_SEQUENCE_LIMIT = 2
+PERSONA_PUBLISH_SEQUENCE_LIMIT = 1
 
 
 class PersonaDashboardDraftPublishPayload(BaseModel):
@@ -12473,6 +12856,7 @@ class PersonaDashboardHotRewritePayload(BaseModel):
     source_content: str = ""
     writing_locale: str = "zh-TW"
     platform: str = "threads"
+    instruction: str = ""
 
 
 class PersonaDashboardHotCandidatesImportPayload(BaseModel):
@@ -15289,6 +15673,8 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
     source_length = _persona_hot_rewrite_char_count(source_content)
     min_length, max_length = _persona_hot_rewrite_length_bounds(source_length)
     rewrite_max_output_tokens = max(2048, min(8192, source_length * 2 + 512))
+    instruction = str(payload.instruction or "").strip()[:1200]
+    directed = bool(instruction)
     length_contract = "\n".join([
         "【字数硬性合同，必须一次写对】",
         f"原文去掉空白后是 {source_length} 字。改写后不得少于 {min_length} 字，可以超过原文字数。",
@@ -15297,7 +15683,7 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         "不要按微博、推特或 Threads 的发布字数上限压缩。即使接近平台上限，也不许擅自删减。",
         "写完后先在心里核对字数；不够就补同等细节，超过原文字数可以直接保留。",
     ])
-    system_prompt = "\n".join([
+    system_prompt_lines = [
         length_contract,
         "你是社交媒体文案写手。只输出一篇可直接发布的正文，不要标题、解释、引号或 Markdown。",
         f"目标平台：{platform}。",
@@ -15311,8 +15697,15 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         "4. 成稿自检：确认语义通顺、人设鲜明、字数达标、标点完整；不得与原文复用连续 24 个字符，整体表达也不得高度相似。",
         "每个完整语义单元都要自然使用逗号、句号、问号或感叹号；完成自检后只输出最终正文。",
         "不要写成客服回复，不要出现原帖作者身份。不要注水解说。",
-    ])
-    user_input = "\n".join([
+    ]
+    if directed:
+        system_prompt_lines.extend([
+            "在以上基础规范全部保留的前提下，额外落实用户改写要求，做融合综合改写，而不是另起一套更短的规则。",
+            "用户要求优先落实：替换指定字词、改热点事件或名称、调整语气或结构时，都要准确完成。",
+            "没有被用户点名修改的事实、数字和结论仍须保留；全文仍须满足字数、人设、禁止照抄和标点要求。",
+        ])
+    system_prompt = "\n".join(system_prompt_lines)
+    user_input_lines = [
         length_contract,
         "",
         "当前人设：",
@@ -15321,7 +15714,14 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         f"热点原文约 {source_length} 字。改写后不得少于 {min_length} 字，超过原文字数允许直接输出。",
         "热点原文（只作素材，禁止照抄）：",
         source_content[:4000],
-    ])
+    ]
+    if directed:
+        user_input_lines.extend([
+            "",
+            "用户改写要求（必须落实，叠加在上述规范之上，不是替换上述规范）：",
+            instruction,
+        ])
+    user_input = "\n".join(user_input_lines)
 
     def request_rewrite(prompt_user: str, label: str) -> str:
         try:
@@ -15343,7 +15743,10 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
     last_quality_issues: list[str] = []
     prompt_user = user_input
     for attempt in range(1, PERSONA_HOT_REWRITE_MAX_ATTEMPTS + 1):
-        label = "热点按人设改写" if attempt == 1 else "热点按人设改写校准"
+        if directed:
+            label = "热点按提示改写" if attempt == 1 else "热点按提示改写校准"
+        else:
+            label = "热点按人设改写" if attempt == 1 else "热点按人设改写校准"
         content = request_rewrite(prompt_user, label)
         if not content:
             continue
@@ -15364,7 +15767,7 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         if last_length < min_length:
             retry_reasons.append(f"字数只有 {last_length} 字，低于最低要求 {min_length} 字，还差 {gap} 字")
         retry_reasons.extend(last_quality_issues)
-        prompt_user = "\n".join([
+        prompt_user_lines = [
             user_input,
             "",
             f"上次改写不合格：{'；'.join(retry_reasons)}。",
@@ -15372,7 +15775,10 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
             "禁止继续摘要。把原文里的数字、金额、产品和问题都写回去，用同等信息量补足字数。",
             "必须从新的观察角度重新组织开头、段落顺序、句型和结尾，不能沿用原文口吻或连续原句。",
             "补齐自然标点和完整断句，确保读起来连贯、顺口，并明显体现当前人设的表达习惯。",
-        ])
+        ]
+        if directed:
+            prompt_user_lines.append("重写时仍须落实用户改写要求，不能为了通过校准而丢掉这些要求。")
+        prompt_user = "\n".join(prompt_user_lines)
     if not last_content:
         raise HTTPException(status_code=502, detail="模型没有返回可用正文，请稍后重试。")
     if last_length < min_length:
@@ -16818,13 +17224,57 @@ def _serve_persona_media_file(path: Path) -> FileResponse:
     return FileResponse(
         str(path),
         filename=path.name,
-        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        headers=_immutable_media_headers(),
     )
 
 
+def _write_video_poster_placeholder(dest: Path) -> None:
+    image = Image.new("RGB", (480, 270), (28, 34, 40))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    image.save(dest, format="JPEG", quality=70, optimize=True)
+
+
+def _extract_video_poster(path: Path, dest: Path) -> bool:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = dest.with_name(f".{dest.name}.{uuid.uuid4().hex}.tmp.jpg")
+    try:
+        completed = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                "0.2",
+                "-i",
+                str(path),
+                "-frames:v",
+                "1",
+                "-vf",
+                "scale=480:-2",
+                "-q:v",
+                "5",
+                str(temp_path),
+            ],
+            check=False,
+            timeout=12,
+            capture_output=True,
+        )
+        if completed.returncode != 0 or not temp_path.is_file() or temp_path.stat().st_size < 32:
+            return False
+        temp_path.replace(dest)
+        return True
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 def _serve_persona_media_thumbnail(path: Path) -> FileResponse:
-    if path.suffix.lower() not in IMAGE_EXTS:
-        return _serve_persona_media_file(path)
     source_key = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
     version = _persona_media_cache_token(path)
     cache_dir = path.parent / ".thumbnails"
@@ -16832,28 +17282,41 @@ def _serve_persona_media_thumbnail(path: Path) -> FileResponse:
     if not cache_path.is_file():
         cache_dir.mkdir(parents=True, exist_ok=True)
         temp_path = cache_dir / f".{cache_path.name}.{uuid.uuid4().hex}.tmp"
+        wrote = False
         try:
-            with Image.open(path) as source_image:
-                image = ImageOps.exif_transpose(source_image)
-                image.thumbnail((480, 480), Image.Resampling.LANCZOS)
-                if "A" in image.getbands():
-                    rgb = Image.new("RGB", image.size, "white")
-                    rgb.paste(image, mask=image.getchannel("A"))
-                else:
-                    rgb = image.convert("RGB")
-                rgb.save(temp_path, format="JPEG", quality=78, optimize=True)
-            temp_path.replace(cache_path)
+            if path.suffix.lower() in IMAGE_EXTS:
+                with Image.open(path) as source_image:
+                    image = ImageOps.exif_transpose(source_image)
+                    image.thumbnail((480, 480), Image.Resampling.LANCZOS)
+                    if "A" in image.getbands():
+                        rgb = Image.new("RGB", image.size, "white")
+                        rgb.paste(image, mask=image.getchannel("A"))
+                    else:
+                        rgb = image.convert("RGB")
+                    rgb.save(temp_path, format="JPEG", quality=78, optimize=True)
+                temp_path.replace(cache_path)
+                wrote = True
+            elif path.suffix.lower() in VIDEO_EXTS:
+                wrote = _extract_video_poster(path, cache_path)
+                if not wrote:
+                    _write_video_poster_placeholder(cache_path)
+                    wrote = True
         except (OSError, ValueError):
-            return _serve_persona_media_file(path)
+            wrote = False
         finally:
             temp_path.unlink(missing_ok=True)
+        if not wrote:
+            if path.suffix.lower() in VIDEO_EXTS:
+                _write_video_poster_placeholder(cache_path)
+            else:
+                return _serve_persona_media_file(path)
         for stale in cache_dir.glob(f"{source_key}-*.jpg"):
             if stale != cache_path:
                 stale.unlink(missing_ok=True)
     return FileResponse(
         str(cache_path),
         media_type="image/jpeg",
-        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        headers=_immutable_media_headers(),
     )
 
 
@@ -17658,6 +18121,77 @@ def _persona_dashboard_suggest_post_directions(
     }
 
 
+def _persona_dashboard_suggest_image_styles(
+    archive_id: str,
+    payload: PersonaDashboardImageStylesPayload,
+) -> dict[str, Any]:
+    clean_id = str(archive_id or "").strip()
+    _, _, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    post_id = str(payload.post_id or "").strip()
+    title = str(payload.input_title or "").strip()
+    content = str(payload.input_content or "").strip()
+    if post_id:
+        posts = archive.get("posts") if isinstance(archive.get("posts"), list) else []
+        post = next((item for item in posts if isinstance(item, dict) and str(item.get("id") or "").strip() == post_id), None)
+        if not post:
+            raise HTTPException(status_code=404, detail="草稿不存在。")
+        title = title or str(post.get("title") or "").strip()
+        content = content or str(post.get("content") or "").strip()
+    user_content = "\n".join([item for item in [title, content] if item]).strip()
+    if not user_content:
+        raise HTTPException(status_code=400, detail="请先选择一篇有正文的推文，再生成配图风格。")
+    previous_image_styles = [
+        str(item or "").strip()
+        for item in (payload.previous_image_styles or [])
+        if str(item or "").strip()
+    ][:20]
+    interface_language = "zh-Hant" if str(payload.interface_language or "").strip() == "zh-Hant" else "zh-Hans"
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    persona_name = str(archive.get("name") or setup.get("personaName") or "").strip()
+    persona_core = {
+        "name": persona_name,
+        "content": str(archive.get("content") or "").strip(),
+        "description": str(setup.get("personaDescription") or "").strip(),
+        "content_theme": str(setup.get("contentTheme") or "").strip(),
+    }
+    result: dict[str, Any] = {}
+    try:
+        result = _run_persona_create_cli({
+            "action": "suggest-image-styles",
+            "personaName": persona_name,
+            "personaCore": json.dumps(persona_core, ensure_ascii=False, separators=(",", ":")),
+            "userContent": user_content,
+            "previousImageStyles": previous_image_styles,
+            "interfaceLanguage": interface_language,
+        }, timeout_seconds=35)
+    except HTTPException as exc:
+        detail = str(exc.detail or "")
+        if exc.status_code in {402, 403} or "余额" in detail or "餘額" in detail:
+            raise
+        result = {}
+    except Exception:
+        result = {}
+    image_styles = _collect_persona_image_styles(
+        result,
+        title=title,
+        content=content,
+        interface_language=interface_language,
+        previous_labels=previous_image_styles,
+    )
+    if len(image_styles) < 4:
+        raise HTTPException(status_code=502, detail="配图风格生成失败：未返回足够可用的风格标签，请重试。")
+    return {
+        "ok": True,
+        "archive_id": clean_id,
+        "post_id": post_id,
+        "image_styles": image_styles,
+        "source": "content",
+    }
+
+
 def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAiCreatePayload) -> dict[str, Any]:
     name = str(payload.name or "").strip()
     prompt = str(payload.prompt or "").strip()
@@ -18242,6 +18776,33 @@ def _persona_post_directions_request_fingerprint(
             "previous_keywords": [
                 str(item or "").strip()
                 for item in (raw.get("previous_keywords") or [])
+                if str(item or "").strip()
+            ][:20],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _persona_image_styles_request_fingerprint(
+    archive_id: str,
+    payload: PersonaDashboardImageStylesPayload,
+) -> str:
+    raw = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload.dict()
+    encoded = json.dumps(
+        {
+            "archive_id": str(archive_id or "").strip(),
+            "post_id": str(raw.get("post_id") or "").strip(),
+            "input_title": str(raw.get("input_title") or "").strip(),
+            "input_content": str(raw.get("input_content") or "").strip(),
+            "platform": _normalize_persona_content_platform(raw.get("platform")),
+            "writing_locale": _normalize_persona_writing_locale(raw.get("writing_locale")),
+            "interface_language": "zh-Hant" if str(raw.get("interface_language") or "").strip() == "zh-Hant" else "zh-Hans",
+            "previous_image_styles": [
+                str(item or "").strip()
+                for item in (raw.get("previous_image_styles") or [])
                 if str(item or "").strip()
             ][:20],
         },
@@ -19265,6 +19826,7 @@ def _compact_persona_image_library_item(archive_id: str, item: dict[str, Any]) -
         "preview_url": _persona_library_preview_url(archive_id, image_id, raw_url),
         "created_at": str(item.get("createdAt") or "").strip(),
         "prompt": str(item.get("prompt") or "").strip(),
+        "final_prompt": str(item.get("finalPrompt") or item.get("final_prompt") or "").strip(),
         "mode": str(item.get("mode") or "").strip(),
         "source": str(item.get("source") or "").strip(),
         "aspect_ratio": str(item.get("aspectRatio") or "").strip(),
@@ -19370,7 +19932,7 @@ def _apply_persona_archive_reference_image(archive_id: str, image_id: str) -> di
 
 
 @_persona_archive_write_locked
-def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str, prompt: str = "", mode: str | None = "closed-model", source: str = "portrait", aspect_ratio: str = "1:1", notes: str = "current persona reference image") -> dict[str, Any]:
+def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str, prompt: str = "", final_prompt: str = "", mode: str | None = "closed-model", source: str = "portrait", aspect_ratio: str = "1:1", notes: str = "current persona reference image") -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     image_url = str(image_url or "").strip()
     if not clean_id or not image_url:
@@ -19394,6 +19956,7 @@ def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str,
         "imageUrl": persisted_image_url,
         "createdAt": now,
         "prompt": prompt,
+        "finalPrompt": str(final_prompt or "").strip(),
         "mode": mode,
         "source": source,
         "aspectRatio": aspect_ratio,
@@ -19605,24 +20168,7 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
     return data
 
 
-def _persona_archive_library_image_input(archive: dict[str, Any], image_id: str) -> str:
-    clean_image_id = str(image_id or "").strip()
-    if not clean_image_id:
-        return ""
-    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
-    for item in library:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("id") or "").strip() != clean_image_id:
-            continue
-        return _persona_reference_image_input_for_cli({
-            "setup": {"personaImageReferenceUrl": str(item.get("imageUrl") or "").strip()},
-            "personaImageLibrary": [item],
-        })
-    return ""
-
-
-def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_ratio: str = "1:1", mode: str = "person", source_image_id: str = "") -> dict[str, Any]:
+def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_ratio: str = "1:1", mode: str = "person") -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
@@ -19632,25 +20178,17 @@ def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_
         raise HTTPException(status_code=404, detail="人设不存在。")
     setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
     user_prompt = str(prompt or "").strip()
-    source_id = str(source_image_id or "").strip()
-    edit_source = _persona_archive_library_image_input(archive, source_id) if source_id else ""
-    if source_id and not edit_source:
-        raise HTTPException(status_code=400, detail="未找到要修改的人设图。")
-    if edit_source and not user_prompt:
-        raise HTTPException(status_code=400, detail="请输入对选中人设图的修改要求。")
     payload = {
-        "setup": {} if edit_source else setup,
-        "content": "" if edit_source else str(archive.get("content") or ""),
+        "setup": setup,
+        "content": str(archive.get("content") or ""),
         "customPrompt": user_prompt or None,
         "aspectRatio": str(aspect_ratio or "1:1").strip() or "1:1",
         "mode": str(mode or "person").strip() or "person",
-        "referenceImageUrl": edit_source or None,
+        "referenceImageUrl": None,
         "referenceSheetUrl": None,
-        "generateReferenceSheet": not bool(edit_source),
+        "generateReferenceSheet": True,
         "dryRun": False,
     }
-    if edit_source:
-        payload["editExistingImage"] = True
     _sync_tool_r18_api_config_for_persona_workflow()
     command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(payload, ensure_ascii=False)]
     try:
@@ -19680,10 +20218,20 @@ def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_
     image_url = str(reference_sheet.get("url") or image_result.get("url") or "").strip()
     if not image_url:
         raise HTTPException(status_code=500, detail=str(image_result.get("error") or data.get("error") or "生成人设图失败。").strip())
+    final_prompt = str(
+        reference_sheet.get("prompt")
+        or image_result.get("prompt")
+        or ""
+    ).strip()
+    if user_prompt and not final_prompt:
+        raise HTTPException(status_code=500, detail="人设图生成未返回模型提示词，已中止以免空提示出图。")
+    if user_prompt and not _user_prompt_reached_model(user_prompt, final_prompt):
+        raise HTTPException(status_code=500, detail="人设图提示词未进入模型提示词，已中止生成。")
     persisted = _persona_archive_persist_reference_image(
         clean_id,
         image_url=image_url,
-        prompt=prompt.strip() or f"人设图：{archive.get('name') or clean_id}",
+        prompt=user_prompt or f"人设图：{archive.get('name') or clean_id}",
+        final_prompt=final_prompt,
         mode=str(image_result.get("mode") or "closed-model"),
         source="portrait",
         aspect_ratio=str(payload.get("aspectRatio") or "1:1"),
@@ -19692,6 +20240,9 @@ def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_
         "ok": True,
         "image_url": image_url,
         "mode": str(image_result.get("mode") or ""),
+        "user_prompt": user_prompt,
+        "final_prompt": final_prompt,
+        "prompt": user_prompt,
         "timings": data.get("timings"),
     }
     return persisted
@@ -20960,14 +21511,14 @@ def _previewable_persona_media_items(
                 if path is not None and path.is_file():
                     version = _persona_media_cache_token(path)
                     preview_url = f"{base_url}?v={version}"
-                    if path.suffix.lower() in IMAGE_EXTS:
+                    if path.suffix.lower() in IMAGE_EXTS or path.suffix.lower() in VIDEO_EXTS:
                         thumbnail_url = f"{base_url}/thumbnail?v={version}"
                 else:
                     preview_url = base_url
                     incoming_thumb = str((item or {}).get("thumbnail_url") or (item or {}).get("thumbnailUrl") or "").strip()
                     if incoming_thumb and incoming_thumb != url:
-                        thumbnail_url = f"{base_url}/thumbnail"
-                    elif _guess_media_type(url, (item or {}).get("type") or "") != "video":
+                        thumbnail_url = incoming_thumb
+                    else:
                         thumbnail_url = f"{base_url}/thumbnail"
             else:
                 reason = "原始媒体文件不存在"
@@ -20977,7 +21528,7 @@ def _previewable_persona_media_items(
                 base_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/publish_history/{quote(str(history_id).strip(), safe='')}/media/{index}"
                 version = _persona_media_cache_token(path)
                 preview_url = f"{base_url}?v={version}"
-                if path.suffix.lower() in IMAGE_EXTS:
+                if path.suffix.lower() in IMAGE_EXTS or path.suffix.lower() in VIDEO_EXTS:
                     thumbnail_url = f"{base_url}/thumbnail?v={version}"
             else:
                 reason = "原始媒体文件不存在"
@@ -26737,6 +27288,23 @@ def create_app() -> FastAPI:
             request_fingerprint=_persona_post_directions_request_fingerprint(archive_id, payload),
         )
 
+    @app.post("/api/persona_dashboard/personas/{archive_id}/image_styles")
+    def api_persona_dashboard_image_styles(
+        archive_id: str,
+        payload: PersonaDashboardImageStylesPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        return _run_billable_operation(
+            user,
+            ref_type="persona_image_styles",
+            sku="basic_text_post",
+            quantity=1,
+            operation=lambda: _persona_dashboard_suggest_image_styles(archive_id, payload),
+            idempotency_key=str(request.headers.get("idempotency-key") or ""),
+            request_fingerprint=_persona_image_styles_request_fingerprint(archive_id, payload),
+        )
+
     @app.post("/api/persona_dashboard/personas/{archive_id}/duplicate")
     def api_persona_dashboard_duplicate_persona(archive_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
@@ -28173,6 +28741,10 @@ def create_app() -> FastAPI:
                     payload.get("aspect_ratio") or payload.get("aspectRatio") or "auto",
                     default="auto",
                 )
+                payload["image_mode"] = _normalize_persona_post_image_mode(
+                    payload.get("image_mode") or payload.get("mode")
+                )
+                payload["image_style_label"] = str(payload.get("image_style_label") or "").strip()[:24]
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not payload["related_persona_id"] or not payload["related_post_id"]:

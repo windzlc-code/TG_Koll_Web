@@ -10,7 +10,7 @@ import {
 } from "@/lib/persona-image-search";
 import type { DramaSetup } from "@/types/drama";
 
-export type PersonaImageGenerationMode = "auto" | "person" | "pov" | "scene";
+export type PersonaImageGenerationMode = "auto" | "person" | "pov" | "scene" | "object" | "third_person";
 export type PersonaImageReferenceMode = "none" | "outfit" | "pose" | "outfit+pose";
 export type PersonaImageClosedMode = "closed-person" | "closed-pov" | "closed-scene";
 export type PersonaImageResolvedMode = PersonaImageClosedMode | "blocked-missing-reference";
@@ -32,9 +32,9 @@ export function resolvePersonaImageMode(
   setup: DramaSetup,
   requestedMode: PersonaImageGenerationMode = "auto",
 ): PersonaImageClosedMode {
-  if (requestedMode === "person") return "closed-person";
+  if (requestedMode === "person" || requestedMode === "third_person") return "closed-person";
   if (requestedMode === "pov") return "closed-pov";
-  if (requestedMode === "scene") return "closed-scene";
+  if (requestedMode === "scene" || requestedMode === "object") return "closed-scene";
   const subject = classifyPersonaImageSubject(content, setup);
   if (subject === "pov") return "closed-pov";
   if (subject === "scene") return "closed-scene";
@@ -81,22 +81,97 @@ export function resolvePersonaImageRoute(
   };
 }
 
-function refineSheetVisualTraits(customPrompt?: string): string {
-  return (customPrompt || "").replace(/\s+/g, " ").trim().slice(0, 180);
+const SHEET_VISUAL_SLOTS: Array<{ id: string; pattern: RegExp }> = [
+  { id: "clothing", pattern: /穿|衣服|裙|西装|西裝|制服|外套|针织|針織|大衣|衬衫|襯衫|裤|褲|帽|鞋|低胸|黑丝|黑絲|丝袜|絲襪|袜|襪|吊带|吊帶|露肩|紧身|緊身|hoodie|jacket|dress|suit|cardigan|outfit|服装|服裝|衣着|衣著|毛衣|连衣|連衣|stockings|pantyhose|tights/i },
+  { id: "hair", pattern: /发|髮|短发|长发|卷发|直发|发型|劉海|刘海|hair|bangs/i },
+  { id: "face", pattern: /脸|臉|五官|妆|妝|网红脸|網紅臉|面容|face|makeup/i },
+  { id: "body", pattern: /身材|胸|腰|臀|瘦|胖|高挑|矮|凹凸|爆乳|性感|诱惑|誘惑|身形|body|figure|slim|curvy/i },
+  { id: "accessories", pattern: /眼镜|眼鏡|墨镜|墨鏡|耳环|耳環|项链|項鍊|手表|手錶|包|glasses|earring|necklace/i },
+  { id: "age", pattern: /岁|歲|年龄|年齡|twenty|thirty|forty|\d+\s*year/i },
+  { id: "background", pattern: /背景|办公室|辦公室|海边|海邊|室内|室內|场景|場景|background|office|beach/i },
+  { id: "pose", pattern: /姿势|姿勢|坐着|站着|pose|sitting|standing/i },
+  { id: "look", pattern: /风格|風格|赛博|賽博|写实|寫實|动漫|動漫|电影|電影|氛围|氛圍|质感|質感/i },
+];
+
+function splitVisualClauses(text: string): string[] {
+  return String(text || "")
+    .split(/[，,。；;、\n]+/)
+    .map((item) => item.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function clauseVisualSlots(clause: string): string[] {
+  return SHEET_VISUAL_SLOTS.filter((item) => item.pattern.test(clause)).map((item) => item.id);
+}
+
+function refineSheetVisualRequest(customPrompt?: string): string {
+  return (customPrompt || "").replace(/\s+/g, " ").trim().slice(0, 500);
+}
+
+export function applyUserVisualReplacements(
+  baseText: string,
+  userPrompt?: string,
+  options?: { mode?: "merge" | "strip" },
+): string {
+  const request = refineSheetVisualRequest(userPrompt);
+  const base = String(baseText || "").replace(/\s+/g, " ").trim();
+  if (!request) return base;
+  const replacedSlots = new Set(splitVisualClauses(request).flatMap(clauseVisualSlots));
+  if (!replacedSlots.size) replacedSlots.add("look");
+  const baseClauses = splitVisualClauses(base);
+  const kept = baseClauses.filter((clause) => {
+    const slots = clauseVisualSlots(clause);
+    if (!slots.length) return true;
+    return !slots.some((slot) => replacedSlots.has(slot));
+  });
+  if (options?.mode === "strip") {
+    return kept.length === baseClauses.length ? base : kept.join(", ");
+  }
+  return [...kept, request].filter(Boolean).join(", ");
+}
+
+function resolveSheetGender(setup: DramaSetup, customPrompt?: string): string {
+  const request = String(customPrompt || "");
+  const mentionsMale = /男性|男人|男生|男的/.test(request);
+  const mentionsFemale = /女性|女人|女生|女的/.test(request);
+  if (mentionsMale && !mentionsFemale) return "男性";
+  if (mentionsFemale && !mentionsMale) return "女性";
+  return setup.personaGender || "女性";
 }
 
 export function buildReferenceSheetPrompt(setup: DramaSetup, personaContent: string, customPrompt?: string): string {
-  const appearance = setup.personaAppearance || setup.personaDescription || "";
-  const gender = setup.personaGender || "女性";
+  const request = refineSheetVisualRequest(customPrompt);
   const nationality = setup.personaNationality || "";
-  const contentHint = personaContent.slice(0, 300);
-  const extraTraits = refineSheetVisualTraits(customPrompt);
+  const gender = request
+    ? resolveSheetGender(setup, request)
+    : (setup.personaGender || "女性");
+
+  if (!request) {
+    const appearance = setup.personaAppearance || setup.personaDescription || "";
+    const contentHint = personaContent.slice(0, 300);
+    return [
+      `character reference sheet, three views: front view, side view, back view, same person all three angles, consistent appearance`,
+      appearance ? `appearance: ${appearance}` : "",
+      `${nationality ? nationality + " " : ""}${gender}, photorealistic, natural lighting`,
+      contentHint ? `persona style hint: ${contentHint.replace(/\n/g, " ").slice(0, 150)}` : "",
+      "white or neutral background, full body or half body, no text, no watermark, high detail, consistent face and outfit across all three views",
+    ].filter(Boolean).join(", ");
+  }
+
+  const visualBase = String(setup.personaAppearance || "").replace(/\s+/g, " ").trim();
+  const keptVisual = applyUserVisualReplacements(visualBase, request, { mode: "strip" });
+  const appearance = [request, keptVisual].filter(Boolean).join(", ");
+  const moodHint = applyUserVisualReplacements(
+    String(setup.personaPersonality || "").replace(/\s+/g, " ").trim(),
+    request,
+    { mode: "strip" },
+  ).slice(0, 80);
   return [
     `character reference sheet, three views: front view, side view, back view, same person all three angles, consistent appearance`,
     appearance ? `appearance: ${appearance}` : "",
+    "user appearance has highest priority and must be visible",
     `${nationality ? nationality + " " : ""}${gender}, photorealistic, natural lighting`,
-    contentHint ? `persona style hint: ${contentHint.replace(/\n/g, " ").slice(0, 150)}` : "",
-    extraTraits ? `naturally blend in these extra visual traits: ${extraTraits}` : "",
+    moodHint ? `expression mood: ${moodHint}` : "",
     "white or neutral background, full body or half body, no text, no watermark, high detail, consistent face and outfit across all three views",
   ].filter(Boolean).join(", ");
 }
@@ -106,9 +181,11 @@ export function buildPersonaImagePrompt(
   setup: DramaSetup,
   requestedMode: PersonaImageGenerationMode = "auto",
   referenceMode: PersonaImageReferenceMode = "none",
+  styleHint?: string,
 ): { prompt: string; mode: PersonaImageClosedMode; withAvatar: boolean } {
   const signals = getPersonaImageSignals(setup, content);
   const mode = resolvePersonaImageMode(content, setup, requestedMode);
+  const hint = normalizePromptCue(styleHint || "");
   const referencePrompt = referenceMode === "outfit"
     ? "reference image should guide outfit and styling only, do not copy pose or framing"
     : referenceMode === "pose"
@@ -117,10 +194,69 @@ export function buildPersonaImagePrompt(
         ? "reference image should guide both outfit styling and pose, while keeping the new scene natural"
         : "";
 
+  if (requestedMode === "object") {
+    const objectContent = `${content}\n不出现人物，不要手，object only，只拍事物特写${hint ? `：${hint}` : ""}`;
+    return {
+      prompt: [
+        buildSceneOnlyImagePrompt(objectContent, setup, signals),
+        hint ? `featured object: ${hint}` : "",
+        "object-only still-life or product close-up from the post, no person, no face, no body, no hands, candid phone snapshot of the object itself",
+        referencePrompt,
+      ].filter(Boolean).join(", "),
+      mode: "closed-scene",
+      withAvatar: false,
+    };
+  }
+
+  if (requestedMode === "scene") {
+    const cleanedContent = String(content || "").replace(/\s+/g, " ").trim().slice(0, 220);
+    return {
+      prompt: [
+        cleanedContent,
+        hint ? `visual setting: ${hint}` : "",
+        "photograph the background, scenery, architecture, street, interior or landscape described by the post",
+        "the persona protagonist must not appear; this is not a portrait or selfie of the main character",
+        "other people, pedestrians or crowds may appear as part of the real place when they belong there",
+        "not an empty deserted shot, not a vacant no-human void, not a tabletop object close-up, not first-person hands",
+        "candid realistic photo, natural available light, no text, no watermark",
+        referencePrompt,
+      ].filter(Boolean).join(", "),
+      mode: "closed-scene",
+      withAvatar: false,
+    };
+  }
+
+  if (requestedMode === "pov") {
+    const povContent = `${content}\n第一人称视角，手拿，只露手${hint ? `：${hint}` : ""}`;
+    return {
+      prompt: [
+        buildSceneOnlyImagePrompt(povContent, setup, signals),
+        hint ? `first-person subject: ${hint}` : "",
+        referencePrompt,
+      ].filter(Boolean).join(", "),
+      mode: "closed-pov",
+      withAvatar: false,
+    };
+  }
+
+  if (requestedMode === "third_person") {
+    return {
+      prompt: [
+        buildPersonaSocialImagePrompt(content, setup, signals),
+        hint ? `third-person scene: ${hint}` : "",
+        "third-person candid documentary photo of the same person inside the real environment from the post, three-quarter or full body, not a selfie, not a mirror self-portrait, not looking into the camera, not a studio half-body cutout against a fake backdrop, environment must remain readable",
+        referencePrompt,
+      ].filter(Boolean).join(", "),
+      mode: "closed-person",
+      withAvatar: true,
+    };
+  }
+
   if (mode === "closed-person") {
     return {
       prompt: [
         buildPersonaSocialImagePrompt(content, setup, signals),
+        hint ? `portrait direction: ${hint}` : "",
         "photorealistic portrait or half-body lifestyle photo, consistent same person, natural body language, no text, no watermark",
         referencePrompt,
       ].filter(Boolean).join(", "),
@@ -131,14 +267,22 @@ export function buildPersonaImagePrompt(
 
   if (mode === "closed-pov") {
     return {
-      prompt: [buildSceneOnlyImagePrompt(content, setup, signals), referencePrompt].filter(Boolean).join(", "),
+      prompt: [
+        buildSceneOnlyImagePrompt(content, setup, signals),
+        hint ? `first-person subject: ${hint}` : "",
+        referencePrompt,
+      ].filter(Boolean).join(", "),
       mode,
       withAvatar: false,
     };
   }
 
   return {
-    prompt: [buildSceneOnlyImagePrompt(content, setup, signals), referencePrompt].filter(Boolean).join(", "),
+    prompt: [
+      buildSceneOnlyImagePrompt(content, setup, signals),
+      hint ? `environment subject: ${hint}` : "",
+      referencePrompt,
+    ].filter(Boolean).join(", "),
     mode,
     withAvatar: false,
   };
@@ -196,40 +340,6 @@ export function buildPersonaCardImageDirection(setup: DramaSetup, signals?: Pers
   ].filter(Boolean).join(", ");
 }
 
-export function buildLibraryImageEditPrompt(customPrompt: string): string {
-  const request = (customPrompt || "").replace(/\s+/g, " ").trim();
-  return [
-    request ? `Current request: ${request}` : "",
-    "Edit the attached source image. The attached image is the only visual source.",
-    "Keep the original composition, layout, number of views, camera framing, and background unless the current request explicitly asks to change them.",
-    "If the source is a three-view character sheet, keep three views of the same person: front view, side view, and back view.",
-    "Apply the current request onto the person already in the attached image. Do not generate a new lifestyle photo, selfie, or unrelated scene. No text, no watermark.",
-  ].filter(Boolean).join("\n");
-}
-
-export async function generateLibraryImageEdit(
-  imageAPI: any,
-  sourceImageUrl: string,
-  customPrompt: string,
-  model: string,
-  aspectRatio: string,
-  runtimeOptions?: PersonaImageRuntimeOptions,
-): Promise<{ ok: boolean; url?: string; mode: "library-image-edit"; error?: string; timings?: unknown }> {
-  if (!imageAPI?.generate) return { ok: false, mode: "library-image-edit", error: "image API 不可用" };
-  const source = String(sourceImageUrl || "").trim();
-  if (!source) return { ok: false, mode: "library-image-edit", error: "未找到要修改的人设图。" };
-  const request = String(customPrompt || "").trim();
-  if (!request) return { ok: false, mode: "library-image-edit", error: "请输入对选中人设图的修改要求。" };
-  const prompt = buildLibraryImageEditPrompt(request);
-  const avatarBase64 = source.replace(/^data:[^;]+;base64,/, "");
-  const avatarMimeType = (source.match(/^data:([^;]+);/) || [])[1] || "image/jpeg";
-  const result = await callClosedModel(imageAPI, prompt, model, aspectRatio, avatarBase64, avatarMimeType, runtimeOptions, {
-    runningHubNewPersonaMode: "image-to-image",
-    avatarSource: source,
-  });
-  return { ok: !!result?.ok, url: result?.url, mode: "library-image-edit", error: result?.error, timings: (result as any)?.timings };
-}
-
 export async function generateReferenceSheet(
   imageAPI: any,
   setup: DramaSetup,
@@ -240,19 +350,14 @@ export async function generateReferenceSheet(
 ): Promise<{ ok: boolean; url?: string; error?: string; timings?: unknown }> {
   if (!imageAPI?.generate) return { ok: false, error: "image API 不可用" };
   const prompt = buildReferenceSheetPrompt(setup, personaContent, customPrompt);
-
-
-  // Closed-model personas: use existing avatar as seed if available
-  const avatarBase64 = setup.personaAvatarUrl
-    ? setup.personaAvatarUrl.replace(/^data:[^;]+;base64,/, "")
-    : undefined;
-  const avatarMimeType = setup.personaAvatarUrl
-    ? ((setup.personaAvatarUrl.match(/^data:([^;]+);/) || [])[1] || "image/jpeg")
-    : undefined;
-  return callClosedModel(imageAPI, prompt, model, "1:1", avatarBase64, avatarMimeType, runtimeOptions, {
+  const result = await callClosedModel(imageAPI, prompt, model, "1:1", undefined, undefined, runtimeOptions, {
     runningHubNewPersonaMode: "text-to-image",
-    avatarSource: setup.personaAvatarUrl,
   });
+  return {
+    ...result,
+    prompt,
+    customPrompt: String(customPrompt || "").trim(),
+  };
 }
 
 export async function generatePersonaImage(
@@ -267,6 +372,7 @@ export async function generatePersonaImage(
   referenceSheetUrl?: string,
   runtimeOptions?: PersonaImageRuntimeOptions,
   customPrompt?: string,
+  styleHint?: string,
 ): Promise<{ ok: boolean; url?: string; mode: PersonaImageResolvedMode; error?: string; timings?: unknown }> {
   if (!imageAPI?.generate) return { ok: false, mode: "closed-scene", error: "image API 不可用" };
 
@@ -282,7 +388,7 @@ export async function generatePersonaImage(
     };
   }
 
-  const built = buildPersonaImagePrompt(content, setup, requestedMode, referenceMode);
+  const built = buildPersonaImagePrompt(content, setup, requestedMode, referenceMode, styleHint);
   // An explicitly selected library image always means image-to-image editing.
   // Keep the normal scene/POV classifier for text-only generation, but do not
   // discard the user's source image just because the edit prompt describes a scene.
@@ -311,5 +417,13 @@ export async function generatePersonaImage(
     runningHubNewPersonaMode: withAvatar ? "image-to-image" : "text-to-image",
     avatarSource,
   });
-  return { ok: !!result?.ok, url: result?.url, mode, error: result?.error, timings: (result as any)?.timings };
+  return {
+    ok: !!result?.ok,
+    url: result?.url,
+    mode,
+    error: result?.error,
+    timings: (result as any)?.timings,
+    prompt: finalPrompt,
+    customPrompt: customCue || "",
+  };
 }

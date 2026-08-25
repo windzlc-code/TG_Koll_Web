@@ -15,8 +15,8 @@ class ModalIconStyleContractTests(unittest.TestCase):
     def test_persona_image_viewer_uses_project_dark_theme_without_framed_icons(self):
         viewer = self._rule(".persona-media-lightbox {", ".notice {")
         icon_rule = self._rule(
-            ".persona-media-lightbox-icon-button {",
-            ".persona-media-lightbox-icon-button:hover,",
+            "\n.persona-media-lightbox-icon-button {",
+            "\n.persona-media-lightbox-icon-button:hover,",
         )
 
         self.assertIn("--viewer-bg: #080a0b;", viewer)
@@ -27,8 +27,19 @@ class ModalIconStyleContractTests(unittest.TestCase):
         self.assertNotIn("#111817", viewer)
         self.assertNotIn("#0f766e", viewer)
         self.assertIn("border: 0;", icon_rule)
-        self.assertIn("background: transparent;", icon_rule)
+        self.assertIn("width: 48px;", icon_rule)
+        self.assertIn("height: 48px;", icon_rule)
+        self.assertIn("border-radius: 999px;", icon_rule)
+        self.assertIn("background: rgba(241, 243, 244, .18);", icon_rule)
+        self.assertIn("color: var(--viewer-ink);", icon_rule)
         self.assertNotIn("border: 1px", icon_rule)
+        icon_glyph = self._rule(
+            ".persona-media-lightbox-icon-button .ui-lightbox-icon,",
+            ".persona-media-lightbox-meta {",
+        )
+        self.assertIn("width: 26px;", icon_glyph)
+        self.assertIn("height: 26px;", icon_glyph)
+        self.assertIn("stroke-width: 2.6;", icon_glyph)
 
     def test_shared_modal_close_and_back_icons_have_no_outer_frame(self):
         close_rule = self._rule(

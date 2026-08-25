@@ -194,8 +194,44 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertIsNotNone(target)
         self.assertEqual(target["archive_id"], "archive_active_target")
         self.assertGreater(target["active_until"], target["last_user_fetch_at"])
-        self.assertEqual(target["low_watermark"], 50)
-        self.assertEqual(target["target_watermark"], 100)
+        self.assertEqual(target["next_run_at"] - target["last_user_fetch_at"], 8 * 3600)
+        self.assertEqual(target["active_until"] - target["last_user_fetch_at"], 2 * 86400)
+        self.assertEqual(target["low_watermark"], 15)
+        self.assertEqual(target["target_watermark"], 15)
+
+    def test_pool_refill_waits_eight_hours_and_stops_after_two_idle_days(self) -> None:
+        now = int(time.time())
+        archive_id = "archive_eight_hour"
+        self.store.submit(
+            idempotency_key="capture:eight-hour:1234",
+            request_digest="a" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=self.pool_payload(archive_id, user_initiated=True),
+        )
+        original = self.store.claim_next()
+        self.assertIsNotNone(original)
+        self.store.finish(original[0]["id"], status="success", result={"ok": True})
+        with self.store._connection() as connection:
+            target = connection.execute("SELECT next_run_at, last_user_fetch_at, active_until FROM fetch_pool_targets").fetchone()
+        due = int(target["next_run_at"])
+        fetched = int(target["last_user_fetch_at"])
+        self.assertEqual(due - fetched, 8 * 3600)
+        self.assertEqual(int(target["active_until"]) - fetched, 2 * 86400)
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=due - 1))
+        self.assertTrue(self.store.enqueue_due_pool_refill(now=due))
+        refill = self.store.claim_next()
+        self.assertIsNotNone(refill)
+        self.assertTrue(refill[1].get("_poolRefill"))
+        self.store.finish(refill[0]["id"], status="success", result={"ok": True})
+        with self.store._connection() as connection:
+            connection.execute(
+                "UPDATE fetch_pool_targets SET next_run_at=?, last_user_fetch_at=?, active_until=?",
+                (now + 2 * 86400, now, now + 2 * 86400),
+            )
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now + 2 * 86400))
+        with self.store._connection() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0], 0)
 
     def test_dataset_overview_lists_global_pool_first_and_named_persona_counts(self) -> None:
         now = int(time.time())
@@ -237,7 +273,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(len(overview["personas"]), 1)
         self.assertEqual(overview["personas"][0]["name"], "理发师")
         self.assertEqual(overview["personas"][0]["count"], 1)
-        self.assertEqual(overview["personas"][0]["capacity"], 100)
+        self.assertEqual(overview["personas"][0]["capacity"], 30)
 
     def test_hot_dataset_change_events_use_first_snapshot_as_baseline_and_can_be_deleted(self) -> None:
         archive_id = "12345678-1234-4234-8234-123456789abc"
@@ -343,17 +379,34 @@ class RemoteFetchStoreTests(unittest.TestCase):
         finally:
             global_db.close()
 
+        self.assertTrue(any(item["archive_id"] == archive_id for item in self.store.dataset_overview()["personas"]))
         persona_result = self.store.clear_hot_dataset(archive_id)
         self.assertEqual(persona_result["deleted_count"], 1)
+        self.assertEqual(persona_result["moved_count"], 0)
+        self.assertFalse(any(item["archive_id"] == archive_id for item in self.store.dataset_overview()["personas"]))
         cleared_cache = json.loads(cache_path.read_text(encoding="utf-8"))
         self.assertEqual(cleared_cache[f"{archive_id}::strict::query"]["candidates"], [])
+        global_db = sqlite3.connect(global_path)
+        try:
+            leftover_ids = {row[0] for row in global_db.execute("SELECT id FROM sentiment_hot_global_candidates")}
+        finally:
+            global_db.close()
+        self.assertEqual(leftover_ids, {"global-1"})
         with self.store._connection() as connection:
             target = connection.execute(
-                "SELECT low_watermark,target_watermark FROM fetch_pool_targets WHERE archive_id=?",
+                "SELECT archive_id FROM fetch_pool_targets WHERE archive_id=?",
                 (archive_id,),
             ).fetchone()
-        self.assertIsNotNone(target)
-        self.assertEqual((target["low_watermark"], target["target_watermark"]), (50, 100))
+        self.assertIsNone(target)
+
+        self.store.submit(
+            idempotency_key="capture:dataset-clear-restart:1234",
+            request_digest="7" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=payload,
+        )
+        self.assertTrue(any(item["archive_id"] == archive_id for item in self.store.dataset_overview()["personas"]))
 
         global_result = self.store.clear_hot_dataset("global")
         self.assertEqual(global_result["deleted_count"], 1)
@@ -366,6 +419,38 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(global_json["candidates"], [])
         with self.assertRaises(ValueError):
             self.store.clear_hot_dataset("not-a-dataset")
+
+    def test_persona_overflow_above_capacity_moves_oldest_to_global(self) -> None:
+        now = int(time.time())
+        archive_id = "12345678-1234-4234-8234-123456789abc"
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        cache_dir.mkdir()
+        candidates = []
+        for index in range(60):
+            candidates.append({
+                "id": f"persona-extra-{index}",
+                "content": f"qualified persona overflow candidate {index} " + ("text " * 20),
+                "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - index)),
+            })
+        cache_path = cache_dir / f"{archive_id}-keywords-strict.json"
+        cache_path.write_text(
+            json.dumps({f"{archive_id}::strict::query": {"candidates": candidates}}),
+            encoding="utf-8",
+        )
+        moved = self.store.spill_persona_overflow_to_global()
+        self.assertEqual(moved, 30)
+        kept = json.loads(cache_path.read_text(encoding="utf-8"))[f"{archive_id}::strict::query"]["candidates"]
+        self.assertEqual(len(kept), 30)
+        kept_ids = {item["id"] for item in kept}
+        self.assertIn("persona-extra-0", kept_ids)
+        self.assertNotIn("persona-extra-59", kept_ids)
+        global_db = sqlite3.connect(self.runtime_dir / "sentiment_hot_global_pool.sqlite3")
+        try:
+            overflow_ids = {row[0] for row in global_db.execute("SELECT id FROM sentiment_hot_global_candidates")}
+        finally:
+            global_db.close()
+        self.assertEqual(len(overflow_ids), 30)
+        self.assertIn("persona-extra-59", overflow_ids)
 
     def test_due_persona_below_watermark_enqueues_one_internal_refill(self) -> None:
         now = int(time.time())
@@ -390,7 +475,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         payload = json.loads(rows[0]["payload_json"])
         self.assertTrue(payload["_poolRefill"])
         self.assertFalse(payload["userInitiated"])
-        self.assertEqual(payload["limit"], 20)
+        self.assertEqual(payload["limit"], 15)
         self.assertFalse(self.store.enqueue_due_pool_refill(now=now + 1))
 
     def test_due_persona_waits_while_its_user_fetch_is_still_active(self) -> None:
@@ -452,7 +537,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         stored = self.store.get(pool["id"])
         self.assertEqual(stored["status"], "cancelled")
 
-    def test_watermark_hysteresis_starts_below_50_and_continues_to_100(self) -> None:
+    def test_watermark_starts_below_15_and_stops_at_15(self) -> None:
         now = int(time.time())
         archive_id = "archive_full_water"
         self.store.submit(
@@ -467,18 +552,22 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.store.finish(original[0]["id"], status="success", result={"ok": True})
         cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
         cache_dir.mkdir()
-        candidates = [
-            {
-                "id": f"candidate-{index}",
-                "content": "useful persona candidate content " * 4,
-                "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
-            }
-            for index in range(50)
-        ]
-        (cache_dir / f"{archive_id}-keywords-strict.json").write_text(
-            json.dumps({f"{archive_id}::strict::query": {"candidates": candidates}}),
-            encoding="utf-8",
-        )
+
+        def write_candidates(count: int) -> None:
+            rows = [
+                {
+                    "id": f"candidate-{index}",
+                    "content": "useful persona candidate content " * 4,
+                    "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+                }
+                for index in range(count)
+            ]
+            (cache_dir / f"{archive_id}-keywords-strict.json").write_text(
+                json.dumps({f"{archive_id}::strict::query": {"candidates": rows}}),
+                encoding="utf-8",
+            )
+
+        write_candidates(15)
         with self.store._connection() as connection:
             connection.execute("UPDATE fetch_pool_targets SET next_run_at=?", (now,))
         self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
@@ -487,9 +576,10 @@ class RemoteFetchStoreTests(unittest.TestCase):
             refill_count = connection.execute(
                 "SELECT COUNT(*) FROM fetch_jobs WHERE unit_id LIKE 'pool_%'"
             ).fetchone()[0]
-        self.assertEqual(target["last_available_count"], 50)
+        self.assertEqual(target["last_available_count"], 15)
         self.assertEqual(refill_count, 0)
 
+        write_candidates(10)
         with self.store._connection() as connection:
             connection.execute(
                 "UPDATE fetch_pool_targets SET last_run_at=last_user_fetch_at,next_run_at=?",
@@ -500,24 +590,13 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertIsNotNone(refill)
         self.store.finish(refill[0]["id"], status="success", result={"ok": True})
 
-        candidates.extend(
-            {
-                "id": f"candidate-{index}",
-                "content": "useful persona candidate content " * 4,
-                "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
-            }
-            for index in range(50, 100)
-        )
-        (cache_dir / f"{archive_id}-keywords-strict.json").write_text(
-            json.dumps({f"{archive_id}::strict::query": {"candidates": candidates}}),
-            encoding="utf-8",
-        )
+        write_candidates(15)
         with self.store._connection() as connection:
             connection.execute("UPDATE fetch_pool_targets SET next_run_at=?", (now + 601,))
         self.assertFalse(self.store.enqueue_due_pool_refill(now=now + 601))
         with self.store._connection() as connection:
             target = connection.execute("SELECT last_available_count,last_run_at FROM fetch_pool_targets").fetchone()
-        self.assertEqual(target["last_available_count"], 100)
+        self.assertEqual(target["last_available_count"], 15)
         self.assertEqual(target["last_run_at"], 0)
 
     def test_expired_persona_target_is_removed_without_refill(self) -> None:
@@ -753,6 +832,9 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         instagram_env: dict[str, str] = {}
         _apply_hot_reader_execution_profile(threads_env, background_refill=False, platform="threads")
         _apply_hot_reader_execution_profile(instagram_env, background_refill=False, platform="instagram")
+        refill_env: dict[str, str] = {}
+        _apply_hot_reader_execution_profile(refill_env, background_refill=True, platform="threads")
+        self.assertEqual(refill_env["SENTIMENT_HOT_READER_CONCURRENCY"], "2")
         self.assertEqual(threads_env["TG_HOT_READER_INCLUDE_INSTAGRAM"], "0")
         self.assertEqual(instagram_env["TG_HOT_READER_INCLUDE_INSTAGRAM"], "1")
         self.assertNotEqual(
@@ -1196,7 +1278,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(sent["sourcePolicy"], "reader_only")
         self.assertFalse(sent["recordShown"])
         self.assertNotIn("userInitiated", sent)
-        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "4")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "2")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "1")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "55000")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_JITTER_MAX_MS"], "5000")

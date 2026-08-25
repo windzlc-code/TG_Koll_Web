@@ -18,10 +18,48 @@ def test_collector_boundary_assets_exist_and_strip_persona_product_surfaces() ->
     assert "data-account-pool-bind-persona" in script
     assert "installCollectorLoginMonitorTab" in script
     assert "登录监控" in script
+    assert "headerNav.dataset.collectorUnified !== \"true\"" in script
+    assert "collectorSurfaceReady" in script
+    assert "collectorRedirectsReady" in script
+    assert "collectorStandaloneRedirected" in script
+    assert "applyDom" in script
+    assert "applyRedirectsOnce" in script
+    # Redirects must not run on every MutationObserver tick; that reloads /admin.html.
+    observer_idx = script.rindex("new MutationObserver")
+    observer_chunk = script[observer_idx:observer_idx + 280]
+    assert "applyDom()" in observer_chunk
+    assert "enforceStandaloneAdmin()" not in observer_chunk
+    assert "applyRedirectsOnce()" not in observer_chunk
 
     assert "html[data-deployment-role=\"collector\"] .account-pool-bound-persona" in styles
     assert "html[data-deployment-role=\"collector\"] .account-pool-persona-shell" in styles
     assert 'html[data-deployment-role="collector"] [data-view="persona_dashboard"]' in styles
+
+
+def test_admin_init_does_not_redirect_admin_html_to_admin_loop() -> None:
+    script = read_static("assets/admin.js")
+    assert "location.href = \"/admin\"" not in script
+    assert "document.body.classList.contains(\"page-admin\")" in script
+    assert 'path === "/admin.html"' in script
+    assert 'collectorDeployment ? "/?login=1" : "/admin"' in script
+
+
+def test_admin_js_renders_grouped_collector_proxy_traffic() -> None:
+    script = read_static("assets/admin.js")
+    assert "/api/admin/collector-proxy/traffic" in script
+    assert "renderCollectorProxyTrafficGroup" in script
+    assert "collectorProxyTraffic${prefix}Total" in script
+    assert 'prefix === "Rotating"' in script
+    assert "btnRefreshCollectorProxyTraffic" in script
+    assert "COLLECTOR_PROXY_TRAFFIC_POLL_INTERVAL_MS" in script
+    assert 'el("collectorProxyTrafficCard")' in script
+
+
+def test_collector_session_boundary_does_not_bounce_through_admin() -> None:
+    script = read_static("assets/console.js")
+    assert "const collectorDeployment = typeof COLLECTOR_DEPLOYMENT !== \"undefined\" && COLLECTOR_DEPLOYMENT;" in script
+    assert "const loginTarget = isAdminConsole && !collectorDeployment" in script
+    assert 'location.href = COLLECTOR_DEPLOYMENT ? "/admin-console.html#operations" : "/admin.html"' in script
 
 
 def test_shared_console_gates_persona_pool_ui_behind_collector_role() -> None:

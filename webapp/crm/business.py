@@ -12,8 +12,10 @@ from .repository import (
     decode_cursor,
     dumps,
     encode_cursor,
+    list_select_sql,
     now_ts,
     row_public,
+    row_public_list,
 )
 
 JsonDict = dict[str, Any]
@@ -259,7 +261,7 @@ def list_resources_filtered(
         params.extend((updated_at, updated_at, record_id))
     params.append(page_size + 1)
     rows = conn.execute(
-        f"SELECT * FROM {table} WHERE {' AND '.join(clauses)} "
+        f"SELECT {list_select_sql(conn, table)} FROM {table} WHERE {' AND '.join(clauses)} "
         "ORDER BY updated_at DESC, id DESC LIMIT ?",
         tuple(params),
     ).fetchall()
@@ -269,7 +271,7 @@ def list_resources_filtered(
     if has_more and visible:
         next_cursor = encode_cursor(int(visible[-1]["updated_at"] or 0), str(visible[-1]["id"]))
     return {
-        "items": [row_public(row) for row in visible],
+        "items": [row_public_list(row) for row in visible],
         "next_cursor": next_cursor,
         "has_more": has_more,
         "limit": page_size,

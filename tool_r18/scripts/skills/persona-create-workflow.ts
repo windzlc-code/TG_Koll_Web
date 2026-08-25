@@ -18,10 +18,16 @@ const CODEX_BOT_TIMEOUT_MS = Number(process.env.CODEX_BOT_TIMEOUT_MS || 300_000)
 const CREATE_PERSONA_KEYWORD_COUNT = 5;
 const CREATE_PERSONA_MAX_SELECTED_KEYWORDS = 2;
 const POST_DIRECTION_KEYWORD_COUNT = 10;
+const POST_IMAGE_STYLE_COUNT = 6;
+const POST_IMAGE_STYLE_KINDS = ["person", "third_person", "pov", "scene", "object"] as const;
+
+type PostImageStyleKind = (typeof POST_IMAGE_STYLE_KINDS)[number];
+type PostImageStyle = { label: string; kind: PostImageStyleKind };
 
 type Input =
   | { action: "suggest-keywords"; personaName: string; userPrompt: string }
   | { action: "suggest-post-directions"; personaName: string; personaCore: string; userContent?: string; previousKeywords?: string[]; interfaceLanguage?: string }
+  | { action: "suggest-image-styles"; personaName: string; personaCore: string; userContent?: string; previousImageStyles?: string[]; interfaceLanguage?: string }
   | { action: "derive-profile"; personaName: string; userPrompt: string; selectedKeywords?: string[] }
   | { action: "create-from-prompt"; personaName: string; userPrompt: string; selectedKeywords?: string[] };
 
@@ -254,6 +260,21 @@ function resolveTextModelPreference(): string {
   ].map((value) => String(value || "").trim()).find(Boolean) || "xai/grok-4.3";
 }
 
+async function runTextModelJsonInstruction(instruction: string, attemptTimeoutMs = 55_000): Promise<any> {
+  const result = await callTextUnderstandingModelWithFallback(
+    resolveTextModelPreference(),
+    [{ role: "user", parts: [{ text: instruction }] }],
+    { maxOutputTokens: 2048, temperature: 0.35 },
+    undefined,
+    {
+      isUsableResponse: (data) => Boolean(extractText(data).trim()),
+      isRetryableError: isTextModelFallbackError,
+      attemptTimeoutMs,
+    },
+  );
+  return extractJsonObject(extractText(result.data).trim());
+}
+
 async function runCodexJsonInstruction(instruction: string): Promise<any> {
   const promptFile = createTempPromptFile(instruction);
   const outputFile = getCodexOutputPath();
@@ -385,6 +406,49 @@ function normalizePostDirectionKeywords(raw: unknown, excluded: string[] = []): 
   return result;
 }
 
+function normalizePostImageStyleKind(value: unknown): PostImageStyleKind | "" {
+  const raw = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (raw === "scene" || raw === "scenery" || raw === "environment" || raw === "no_person") return "scene";
+  if (raw === "object" || raw === "thing" || raw === "still_life" || raw === "product") return "object";
+  if (raw === "pov" || raw === "first_person") return "pov";
+  if (raw === "third_person" || raw === "thirdperson" || raw === "candid") return "third_person";
+  if (raw === "person" || raw === "portrait" || raw === "selfie") return "person";
+  return "";
+}
+
+function normalizePostImageStyles(raw: unknown, excluded: string[] = []): PostImageStyle[] {
+  const source = Array.isArray((raw as any)?.image_styles)
+    ? (raw as any).image_styles
+    : Array.isArray((raw as any)?.imageStyles)
+      ? (raw as any).imageStyles
+      : Array.isArray(raw)
+        ? raw
+        : [];
+  const result: PostImageStyle[] = [];
+  let personCount = 0;
+  for (const item of source) {
+    const kind = normalizePostImageStyleKind(
+      typeof item === "string" ? "" : ((item as any)?.kind || (item as any)?.type || (item as any)?.mode),
+    );
+    const label = normalizePostDirectionKeyword(
+      typeof item === "string" ? item : ((item as any)?.label || (item as any)?.keyword || (item as any)?.name),
+    );
+    if (!kind || label.length < 2) continue;
+    if (kind === "person") {
+      if (personCount >= 1) continue;
+      personCount += 1;
+    }
+    if (
+      excluded.some((existing) => postDirectionsAreTooSimilar(existing, label))
+      || result.some((existing) => existing.kind === kind && postDirectionsAreTooSimilar(existing.label, label))
+    ) continue;
+    result.push({ label, kind });
+    if (result.length >= POST_IMAGE_STYLE_COUNT) break;
+  }
+  const order = new Map(POST_IMAGE_STYLE_KINDS.map((kind, index) => [kind, index]));
+  return result.sort((left, right) => (order.get(left.kind) ?? 99) - (order.get(right.kind) ?? 99));
+}
+
 function personaKeywordSuggestionError(error: unknown): Error {
   const message = String((error as any)?.message || error || "").toLowerCase();
   if (/402|insufficient_funds|余额不足|餘額不足|quota/.test(message)) {
@@ -482,6 +546,57 @@ async function derivePostDirectionKeywordsWithCodex(
   }
 }
 
+async function derivePostImageStylesWithCodex(
+  personaName: string,
+  personaCore: string,
+  userContent = "",
+  previousImageStyles: string[] = [],
+  interfaceLanguage = "zh-Hans",
+): Promise<PostImageStyle[]> {
+  const coreInput = compactLongAiInput(String(personaCore || "").trim(), 5000);
+  const contentInput = compactLongAiInput(String(userContent || "").trim(), 3000);
+  const previousStyles = previousImageStyles
+    .map((item) => normalizePostDirectionKeyword(item))
+    .filter(Boolean)
+    .slice(0, 20);
+  const languageRule = interfaceLanguage === "zh-Hant"
+    ? "标签用于繁体中文控制台选择，统一输出繁体中文。"
+    : "标签用于简体中文控制台选择，统一输出简体中文。";
+  const instruction = [
+    "你是自动化推文运营控制台的配图风格策划助手。",
+    "任务：根据已经写好的推文正文，生成恰好 6 个可供用户选择的配图风格标签。",
+    "这些标签用于决定配图怎么拍，不是推文选题，也不是直接写提示词长文。",
+    "要求：",
+    "1. 必须从这篇推文的主题、对象、场景、物品、情绪和动作提炼拍法，不能六条都是人物半身自拍。",
+    "2. 每个标签含 kind 和 label。kind 只能是 scene、object、pov、third_person、person。",
+    "3. person=画面里要有这篇推文的人设主角；scene=不拍人设主角，但可以拍推文相关的背景、风景、建筑、街景，也可以有路人或行人，不是空无一人的空镜；object=只拍推文里的物品、食物或道具特写；pov=第一人称，最多露出手，不露脸；third_person=第三人称纪实，人设主角在真实场景里，但不是自拍、不是半身对着镜头。",
+    "4. 6 个标签必须覆盖至少 4 种不同 kind；label 要短、具体、能看出拍什么，3 到 12 个中文字，必须从当前推文提炼，例如「便利店夜景」「冰美式特写」「手拿咖啡杯」，不要写空镜、无人、空旷。",
+    `5. ${languageRule}`,
+    previousStyles.length ? `6. 这是“换一批”，尽量避开上一批配图风格及其近义表达：${previousStyles.join("、")}` : "6. 首次生成时优先覆盖场景、事物、第一人称、第三人称，人物自拍只保留一条。",
+    "7. 只输出 JSON，不要 Markdown，不要解释。",
+    "",
+    "JSON schema:",
+    JSON.stringify({
+      image_styles: Array.from({ length: POST_IMAGE_STYLE_COUNT }, (_, index) => ({
+        kind: POST_IMAGE_STYLE_KINDS[index % POST_IMAGE_STYLE_KINDS.length],
+        label: `配图风格${index + 1}`,
+      })),
+    }, null, 2),
+    "",
+    `人设名称：${personaName}`,
+    `人设内核：${coreInput}`,
+    contentInput ? `当前推文正文：${contentInput}` : "当前没有推文正文。",
+  ].join("\n");
+  try {
+    const raw = await runTextModelJsonInstruction(instruction, 20_000);
+    return normalizePostImageStyles(raw, previousStyles);
+  } catch (error: any) {
+    const userError = personaKeywordSuggestionError(error);
+    console.warn("[persona-create][image_style_error]", error?.message || error);
+    throw userError;
+  }
+}
+
 function normalizeCodexPersonaSpec(raw: any, originalText: string): { name: string; content: string; setup: DramaSetup } {
   const name = pickString(raw?.name);
   const content = pickString(raw?.content);
@@ -526,8 +641,8 @@ async function derivePersonaSpecWithCodex(text: string): Promise<{ name: string;
     "要求：",
     "1. 必须理解用户真实意图，名称要和人设内容匹配，不能用泛名。",
     "2. content 是后续生成推文和生成图片都会参考的人设简介，要写清身份、内容领域、语气、视觉倾向和边界。",
-    "3. 图片视觉倾向只能来自人设卡片，例如生活类、搞笑类、职场类等，不能硬编码成固定模板。",
-    "4. 如果是美女传播型，只能标记 isGirlPersona=true，但描述必须限定为成年人、非露骨、非色情。",
+    "3. 图片视觉倾向只能来自人设卡片，例如生活类、搞笑类、福利美女传播型、职场类等，不能硬编码成固定模板。",
+    "4. 如果是福利/美女传播型，可以标记 isGirlPersona=true，但描述必须是成年人、非露骨、非色情。",
     "5. 如果是梗图、搞笑、表情包型，可以标记 isMemePersona=true。",
     "6. 如果用户输入是一整段很长的提示词、模板、脚本规则或内容要求，也必须提炼成人设卡片；不要因为它不是短句而失败。",
     "7. 如果没有明确人设名称，必须根据核心主题自动起一个具体名称。",
@@ -680,6 +795,30 @@ async function main() {
       printJson({ ok: true, action: input.action, personaName, keywords });
     } catch (error: any) {
       printJson({ ok: false, action: input.action, personaName, error: String(error?.message || "推文方向生成失败，请稍后重试。") });
+      process.exitCode = 1;
+    }
+    return;
+  }
+  if (input.action === "suggest-image-styles") {
+    const personaName = normalizeSingleLine(String(input.personaName || "")).slice(0, 60);
+    const personaCore = String(input.personaCore || "").trim();
+    const userContent = String(input.userContent || "").trim();
+    const previousImageStyles = Array.isArray(input.previousImageStyles) ? input.previousImageStyles : [];
+    const interfaceLanguage = input.interfaceLanguage === "zh-Hant" ? "zh-Hant" : "zh-Hans";
+    if (!personaName) throw new Error("persona name cannot be empty");
+    if (!personaCore) throw new Error("persona core cannot be empty");
+    if (!userContent) throw new Error("tweet content cannot be empty");
+    try {
+      const imageStyles = await derivePostImageStylesWithCodex(
+        personaName,
+        personaCore,
+        userContent,
+        previousImageStyles,
+        interfaceLanguage,
+      );
+      printJson({ ok: true, action: input.action, personaName, image_styles: imageStyles });
+    } catch (error: any) {
+      printJson({ ok: false, action: input.action, personaName, error: String(error?.message || "配图风格生成失败，请稍后重试。") });
       process.exitCode = 1;
     }
     return;

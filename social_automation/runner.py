@@ -3516,10 +3516,12 @@ def _run_open_login(
                 )
                 time.sleep(2)
                 continue
-            _publish_login_assistance_state(page, context_control, last_status)
+            if str(last_status.get("status") or "") != "ready":
+                _publish_login_assistance_state(page, context_control, last_status)
             if last_status.get("status") == "ready":
                 stable_status = _confirm_platform_ready(page, platform, logger, cancel_event)
                 if stable_status.get("status") == "ready":
+                    _publish_login_assistance_state(page, context_control, stable_status, handoff=True)
                     _complete_pending_totp_verification(context_control)
                     _report_account_login_status(context_control, "ready", logger)
                     shot = _screenshot(page, screenshot_dir, task, "login_complete", logger)
@@ -3532,6 +3534,8 @@ def _run_open_login(
                     )
                     return {"ok": True, "status": "ready", "screenshot_path": shot, "details": stable_status}
                 last_status = stable_status
+                if str(last_status.get("status") or "") != "ready":
+                    _publish_login_assistance_state(page, context_control, last_status)
             if _verification_visible(page):
                 _publish_login_assistance_state(
                     page,

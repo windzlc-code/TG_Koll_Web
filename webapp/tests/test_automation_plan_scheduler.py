@@ -134,7 +134,7 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
                 social_api.SocialAutomationPlanItemPayload(
                     reservation_minutes=0,
                     task_type="normal_publish",
-                    payload={"publish_count": 2},
+                    payload={"publish_count": 1},
                 ),
                 social_api.SocialAutomationPlanItemPayload(
                     reservation_minutes=30,
@@ -158,17 +158,16 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
 
         with db() as conn:
             rows = social_api._automation_plan_task_rows(conn, plan["id"], cycle_index=1)
-        self.assertEqual([row["task_type"] for row in rows], ["publish_post", "publish_post", "threads_warmup"])
+        self.assertEqual([row["task_type"] for row in rows], ["publish_post", "threads_warmup"])
         task_payloads = [json.loads(row["payload_json"]) for row in rows]
-        self.assertEqual([item["archive_post_id"] for item in task_payloads[:2]], ["draft-earliest", "draft-later"])
-        self.assertEqual([item["_automation_plan_sequence"] for item in task_payloads], [1, 2, 3])
-        self.assertEqual([item["publish_sequence_index"] for item in task_payloads[:2]], [1, 2])
-        self.assertEqual([item["publish_sequence_total"] for item in task_payloads[:2]], [2, 2])
-        self.assertEqual(task_payloads[0]["publish_batch_id"], task_payloads[1]["publish_batch_id"])
+        self.assertEqual(task_payloads[0]["archive_post_id"], "draft-earliest")
+        self.assertEqual([item["_automation_plan_sequence"] for item in task_payloads], [1, 2])
+        self.assertEqual(task_payloads[0]["publish_sequence_index"], 1)
+        self.assertEqual(task_payloads[0]["publish_sequence_total"], 1)
         self.assertEqual(task_payloads[0]["_automation_plan_item_id"], "item_1")
 
     def test_normal_publish_rejects_invalid_counts_and_keeps_virtual_type_out_of_task_api(self):
-        for publish_count in (0, 6, True, "2"):
+        for publish_count in (0, 2, 6, True, "2"):
             payload = social_api.SocialAutomationPlanPayload(
                 persona_id="persona-1",
                 account_id="account-1",
@@ -250,13 +249,13 @@ class AutomationPlanSchedulerTests(unittest.TestCase):
                 social_api.SocialAutomationPlanItemPayload(
                     reservation_minutes=0,
                     task_type="normal_publish",
-                    payload={"publish_count": 2},
+                    payload={"publish_count": 1},
                 )
             ],
         )
         with patch.object(social_api, "_load_persona_archive", return_value={
             "id": "persona-1",
-            "posts": [{"id": "only-draft", "content": "only one"}],
+            "posts": [{"id": "already-published", "content": "old draft", "publishedAt": "2026-07-01T00:00:00Z"}],
         }):
             with self.assertRaises(HTTPException) as rejected:
                 social_api.create_social_automation_plan(payload, user=self.user)

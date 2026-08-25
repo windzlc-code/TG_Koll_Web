@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildLibraryImageEditPrompt,
   buildPersonaImagePrompt,
   buildPersonaCardImageDirection,
   buildReferenceSheetPrompt,
-  generateLibraryImageEdit,
   generatePersonaImage,
   generateReferenceSheet,
   resolvePersonaImageRoute,
@@ -63,7 +61,67 @@ describe("persona image production", () => {
     expect(result.ok).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0].runningHubNewPersonaMode).toBe("text-to-image");
+    expect(calls[0].avatarBase64).toBeUndefined();
+    expect(calls[0].avatarSource).toBeUndefined();
     expect(calls[0].prompt).toContain("character reference sheet, three views");
+  });
+
+  it("sends the user visual request into the text-to-image model prompt", async () => {
+    const calls: any[] = [];
+    const userPrompt = "性感美女穿着性感，喜欢穿低胸装。";
+    const result = await generateReferenceSheet(
+      {
+        generate: async (payload: any) => {
+          calls.push(payload);
+          return { ok: true, url: "https://example.com/reference-sheet.png" };
+        },
+      },
+      nonWorkflowSetup({
+        personaAppearance: "",
+        personaDescription: "深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。",
+        personaNationality: "",
+      }),
+      "敏姐是一位深耕東京與大阪頂級不動產長達12年的台籍專屬融資顧問。",
+      "gemini-3.1-flash-image-preview",
+      undefined,
+      userPrompt,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.customPrompt).toBe(userPrompt);
+    expect(result.prompt).toContain(userPrompt);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].runningHubNewPersonaMode).toBe("text-to-image");
+    expect(calls[0].prompt).toContain(userPrompt);
+    expect(calls[0].prompt).toContain(`appearance: ${userPrompt}`);
+    expect(calls[0].prompt.split(userPrompt).length - 1).toBe(1);
+    expect(calls[0].prompt).toContain("user appearance has highest priority and must be visible");
+    expect(calls[0].prompt).not.toContain("obey this request:");
+    expect(calls[0].prompt).not.toContain("appearance: 深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。");
+    expect(calls[0].prompt).not.toContain("融資顧問");
+    expect(calls[0].prompt).not.toContain("do not default to office suit");
+    expect(calls[0].prompt).toContain("expression mood: 溫柔細膩");
+    expect(calls[0].prompt).not.toContain("台灣繁體中文日常分享");
+    expect(calls[0].prompt).not.toContain("persona identity context");
+  });
+
+  it("does not seed persona reference sheets with an existing avatar", async () => {
+    const calls: any[] = [];
+    await generateReferenceSheet(
+      {
+        generate: async (payload: any) => {
+          calls.push(payload);
+          return { ok: true, url: "https://example.com/reference-sheet.png" };
+        },
+      },
+      nonWorkflowSetup({ personaAvatarUrl: "data:image/png;base64,b2xkLWF2YXRhcg==" }),
+      "日常生活观察者",
+      "gemini-3.1-flash-image-preview",
+    );
+
+    expect(calls[0].runningHubNewPersonaMode).toBe("text-to-image");
+    expect(calls[0].avatarBase64).toBeUndefined();
+    expect(calls[0].avatarSource).toBeUndefined();
   });
 
   it("keeps the original July reference-sheet prompt when there is no user supplement", () => {
@@ -87,7 +145,7 @@ describe("persona image production", () => {
     ].join(", "));
   });
 
-  it("blends user visual traits onto the existing sheet prompt instead of replacing it", () => {
+  it("lets the user visual request own appearance without replacing the empty-prompt template", () => {
     const prompt = buildReferenceSheetPrompt(
       {
         ...nonWorkflowSetup({
@@ -100,13 +158,61 @@ describe("persona image production", () => {
       "爆乳美女，身材非常的好，会十分的性感诱惑。",
     );
 
-    expect(prompt).toContain("appearance: 深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。");
-    expect(prompt).toContain("persona style hint: 敏姐是一位深耕東京與大阪頂級不動產長達12年的台籍專屬融資顧問。");
-    expect(prompt).toContain("naturally blend in these extra visual traits: 爆乳美女，身材非常的好，会十分的性感诱惑。");
-    expect(prompt).toContain("character reference sheet, three views");
-    expect(prompt).not.toContain("highest priority visual request:");
-    expect(prompt).not.toContain("slim well-proportioned figure");
-    expect(prompt).not.toContain("summer styling");
+    expect(prompt).toContain("appearance: 爆乳美女，身材非常的好，会十分的性感诱惑。");
+    expect(prompt).not.toContain("appearance: 深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。");
+    expect(prompt.split("爆乳美女，身材非常的好，会十分的性感诱惑。").length - 1).toBe(1);
+    expect(prompt).toContain("user appearance has highest priority and must be visible");
+    expect(prompt).not.toContain("obey this request:");
+    expect(prompt).toContain("expression mood: 溫柔細膩");
+    expect(prompt).not.toContain("台灣繁體中文日常分享");
+    expect(prompt).not.toContain("persona identity context");
+    expect(prompt.indexOf("appearance: 爆乳美女，身材非常的好，会十分的性感诱惑。")).toBeLessThan(prompt.indexOf("expression mood"));
+    expect(prompt).not.toContain("naturally blend in these extra visual traits");
+    expect(prompt).not.toContain("融資顧問");
+    expect(prompt).not.toContain("do not default to office suit");
+  });
+
+  it("blocks occupation identity and writing style when the user prompt exists, but keeps short personality mood", () => {
+    const prompt = buildReferenceSheetPrompt(
+      {
+        ...nonWorkflowSetup({
+          personaAppearance: "",
+          personaDescription: "深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。",
+          personaPersonality: "專業、沉穩、高雅、值得信賴的智囊",
+          personaStyle: "以專業數據與實戰經驗說話，語氣從容自信，展現高端商務顧問的格局與深度。",
+          personaNationality: "",
+        }),
+      },
+      "敏姐是一位深耕東京與大阪頂級不動產長達12年的台籍專屬融資顧問。",
+      "性感美女喜欢穿低胸装，配上黑丝。",
+    );
+
+    expect(prompt).toContain("appearance: 性感美女喜欢穿低胸装，配上黑丝。");
+    expect(prompt.split("性感美女喜欢穿低胸装，配上黑丝。").length - 1).toBe(1);
+    expect(prompt).toContain("user appearance has highest priority and must be visible");
+    expect(prompt).not.toContain("obey this request:");
+    expect(prompt).toContain("expression mood: 專業、沉穩、高雅、值得信賴的智囊");
+    expect(prompt).not.toContain("商務顧問");
+    expect(prompt).not.toContain("專業數據");
+    expect(prompt).not.toContain("融資顧問");
+    expect(prompt).not.toContain("不動產");
+    expect(prompt).not.toContain("置產軍師");
+    expect(prompt).not.toContain("敏姐是一位");
+    expect(prompt).not.toContain("do not default to office suit");
+  });
+
+  it("keeps unmentioned visual details and still gives the user outfit request priority", () => {
+    const prompt = buildReferenceSheetPrompt(
+      nonWorkflowSetup({ personaNationality: "" }),
+      "日常生活观察者，simple cream cardigan",
+      "穿红色连衣裙",
+    );
+    expect(prompt).toContain("appearance: 穿红色连衣裙, twenty-something Taiwanese woman, fair skin, neat soft hands");
+    expect(prompt.split("穿红色连衣裙").length - 1).toBe(1);
+    expect(prompt).toContain("user appearance has highest priority and must be visible");
+    expect(prompt).not.toContain("obey this request:");
+    expect(prompt).not.toContain("appearance: twenty-something Taiwanese woman, fair skin, neat soft hands, simple cream cardigan");
+    expect(prompt).not.toContain("naturally blend in these extra visual traits");
   });
 
   it("keeps card appearance as the sheet appearance when no visual supplement is given", () => {
@@ -120,49 +226,6 @@ describe("persona image production", () => {
     expect(prompt).toContain("女性, photorealistic, natural lighting");
     expect(prompt).not.toContain("Asian 女性");
     expect(prompt).not.toContain("naturally blend in these extra visual traits:");
-  });
-
-  it("edits a selected library image from the source and user prompt only", async () => {
-    const calls: any[] = [];
-    const source = "data:image/png;base64,c2hlZXQ=";
-    const userPrompt = "把脸换成网红脸，身材凹凸有致，前凸后翘，穿着职业包臀制服。";
-    const result = await generateLibraryImageEdit(
-      {
-        generate: async (payload: any) => {
-          calls.push(payload);
-          return { ok: true, url: "https://example.com/library-edit.png" };
-        },
-      },
-      source,
-      userPrompt,
-      "gemini-3.1-flash-image-preview",
-      "1:1",
-    );
-
-    expect(result.ok).toBe(true);
-    expect(result.mode).toBe("library-image-edit");
-    expect(calls).toHaveLength(1);
-    expect(calls[0].runningHubNewPersonaMode).toBe("image-to-image");
-    expect(calls[0].avatarSource).toBe(source);
-    expect(calls[0].prompt).toContain(userPrompt);
-    expect(calls[0].prompt).toContain("Keep the original composition");
-    expect(calls[0].prompt).toContain("three views");
-    expect(calls[0].prompt).not.toContain("appearance:");
-    expect(calls[0].prompt).not.toContain("persona style hint");
-    expect(calls[0].prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
-    expect(calls[0].prompt).not.toContain("Use the attached persona reference image as the source");
-  });
-
-  it("builds library image-edit prompts from the user request without persona biography", () => {
-    const prompt = buildLibraryImageEditPrompt("把脸换成网红脸，身材凹凸有致，前凸后翘，穿着职业包臀制服。");
-
-    expect(prompt).toContain("Current request: 把脸换成网红脸，身材凹凸有致，前凸后翘，穿着职业包臀制服。");
-    expect(prompt).toContain("Keep the original composition");
-    expect(prompt).toContain("three views");
-    expect(prompt).not.toContain("appearance:");
-    expect(prompt).not.toContain("persona style hint");
-    expect(prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
-    expect(prompt).not.toContain("Highest priority");
   });
 
   it("uses the generated post as the main referenced image prompt source", async () => {
@@ -442,5 +505,51 @@ describe("persona image production", () => {
     expect(built.prompt).toContain("no hands");
     expect(built.prompt).toContain("no face on any screen");
     expect(built.prompt).toContain("focus only on objects and environment");
+  });
+
+  it("builds environment-only prompts for explicit scene style", () => {
+    const built = buildPersonaImagePrompt(
+      "路过便利店买了杯冰美式",
+      nonWorkflowSetup(),
+      "scene",
+      "none",
+      "便利店夜景",
+    );
+    expect(built.mode).toBe("closed-scene");
+    expect(built.withAvatar).toBe(false);
+    expect(built.prompt).toContain("the persona protagonist must not appear");
+    expect(built.prompt).toContain("other people, pedestrians or crowds may appear");
+    expect(built.prompt).toContain("便利店夜景");
+    expect(built.prompt).not.toContain("absolutely no person in frame");
+    expect(built.prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
+  });
+
+  it("builds object-only prompts for explicit object style", () => {
+    const built = buildPersonaImagePrompt(
+      "路过便利店买了杯冰美式",
+      nonWorkflowSetup(),
+      "object",
+      "none",
+      "冰美式特写",
+    );
+    expect(built.mode).toBe("closed-scene");
+    expect(built.withAvatar).toBe(false);
+    expect(built.prompt).toContain("object-only still-life");
+    expect(built.prompt).toContain("冰美式特写");
+  });
+
+  it("builds third-person documentary prompts instead of selfies", () => {
+    const built = buildPersonaImagePrompt(
+      "路过便利店买了杯冰美式",
+      nonWorkflowSetup(),
+      "third_person",
+      "none",
+      "路过便利店",
+    );
+    expect(built.mode).toBe("closed-person");
+    expect(built.withAvatar).toBe(true);
+    expect(built.prompt).toContain("third-person candid documentary photo");
+    expect(built.prompt).toContain("not a selfie");
+    expect(built.prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
   });
 });

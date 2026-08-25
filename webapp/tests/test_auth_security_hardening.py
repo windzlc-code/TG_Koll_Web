@@ -1330,10 +1330,42 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         payload = response.json()
         self.assertTrue(payload["valid"])
         self.assertFalse(payload["usable"])
-        self.assertIn("企业余额不足", payload["message"])
+        self.assertEqual(payload["message"], "Key 有效，但企业余额不足（-0.13 CNY）。")
+        self.assertNotIn("RunningHub", payload["message"])
         self.assertNotIn("saved-runninghub-key", response.text)
         self.assertEqual(request_post.call_args.kwargs["json"], {"apikey": "saved-runninghub-key"})
         self.assertEqual(request_post.call_args.kwargs["headers"]["Authorization"], "Bearer saved-runninghub-key")
+
+    def test_admin_runninghub_key_status_treats_tiny_shared_money_as_unusable_for_images(self):
+        runtime = dict(server.DEFAULT_RUNTIME_CONFIG)
+        runtime["new_persona_runninghub_api_key"] = "saved-runninghub-key"
+        server._write_runtime_config_file(runtime)
+        provider_response = Mock()
+        provider_response.raise_for_status.return_value = None
+        provider_response.json.return_value = {
+            "code": 0,
+            "msg": "success",
+            "data": {
+                "remainCoins": "7890",
+                "remainMoney": "0.025",
+                "currency": "USD",
+                "apiType": "SHARED",
+                "currentTaskCounts": "0",
+            },
+        }
+        admin, _identity = self._admin_client()
+        with patch.object(server.requests, "post", return_value=provider_response):
+            response = admin.post("/api/admin/runninghub/key_status", json={"type": "runninghub"})
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["valid"])
+        self.assertFalse(payload["usable"])
+        self.assertIn("0.025 USD", payload["message"])
+        self.assertIn("不足以支付生图", payload["message"])
+        self.assertIn("7890", payload["message"])
+        self.assertNotIn("可用", payload["message"])
+        self.assertNotIn("RunningHub", payload["message"])
 
     def test_admin_provider_key_status_separates_runninghub_balance_from_model_directory(self):
         model_response = Mock()
@@ -1365,6 +1397,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertTrue(payload["key_status"]["valid"])
         self.assertFalse(payload["key_status"]["usable"])
         self.assertIn("企业余额不足", payload["key_status"]["message"])
+        self.assertIn("0 USD", payload["key_status"]["message"])
         self.assertNotIn("same-runninghub-key", response.text)
         self.assertEqual(request_get.call_args.args[0], "https://llm.runninghub.ai/v1/models")
         self.assertEqual(request_post.call_args.kwargs["headers"]["Authorization"], "Bearer same-runninghub-key")

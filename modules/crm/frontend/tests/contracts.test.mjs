@@ -50,8 +50,8 @@ test("blocked legacy capabilities cannot create fake write workflows", async () 
 test("task progress is polled from the API without simulated timers", async () => {
   const hook = await read("src/useTaskPolling.ts");
   const app = await read("src/App.tsx");
-  assert.match(hook, /document\.visibilityState === "visible" \? 1_000 : 5_000/);
-  assert.match(hook, /Math\.min\(30_000/);
+  assert.match(hook, /document\.visibilityState === "visible" \? 8_000 : 20_000/);
+  assert.match(hook, /Math\.min\(60_000/);
   assert.match(app, /messages\.noSimulatedProgress/);
   assert.doesNotMatch(app, /setInterval\([^)]*progress|fakeProgress|mockProgress/i);
 });

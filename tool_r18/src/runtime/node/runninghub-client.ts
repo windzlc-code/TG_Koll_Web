@@ -56,11 +56,24 @@ function summarizeRunningHubPayload(value: unknown): string {
   }
 }
 
+const RUNNINGHUB_ERROR_TEXT: Record<string, string> = {
+  "605": "当前图片模型余额不足，请充值后再试。",
+  "812": "当前图片模型余额不足，请充值后再试。",
+  "1007": "参考图无法识别，请重新选择人设图后再试。",
+  "1017": "当前图片模型正在升级或重启，请稍后再试。",
+};
+
 function runningHubErrorMessage(payload: any): string {
+  const code = String(payload?.errorCode ?? payload?.code ?? payload?.data?.errorCode ?? payload?.data?.code ?? "").trim();
+  if (RUNNINGHUB_ERROR_TEXT[code]) return RUNNINGHUB_ERROR_TEXT[code];
   const parts = [
+    payload?.errorMessage,
+    payload?.errorMsg,
     payload?.msg,
     payload?.message,
     payload?.error,
+    payload?.data?.errorMessage,
+    payload?.data?.errorMsg,
     payload?.data?.msg,
     payload?.data?.message,
     payload?.data?.error,
@@ -71,7 +84,12 @@ function runningHubErrorMessage(payload: any): string {
   ]
     .map(summarizeRunningHubPayload)
     .filter(Boolean);
-  return parts.length ? parts.join(" | ") : summarizeRunningHubPayload(payload).slice(0, 500);
+  const text = parts.join(" | ");
+  if (/balance is insufficient|insufficient balance|请充值/i.test(text)) return RUNNINGHUB_ERROR_TEXT["605"];
+  if (/could not decode image data/i.test(text)) return RUNNINGHUB_ERROR_TEXT["1007"];
+  if (/upgrading or restarting/i.test(text)) return RUNNINGHUB_ERROR_TEXT["1017"];
+  if (text) return text;
+  return code ? `当前图片模型返回错误 ${code}` : "当前图片模型调用失败，请稍后重试。";
 }
 
 function isRunningHubSuccessCode(code: unknown): boolean {
@@ -154,11 +172,11 @@ export async function runningHubOpenApiV2Request<T>(
   timeoutMs = 60_000,
 ): Promise<T> {
   const response = await runningHubOpenApiV2RequestRaw<T>(config, pathname, body, timeoutMs);
-  if (!response.ok) throw new Error(`RunningHub OpenAPI v2 返回 ${response.status}: ${response.text.slice(0, 500)}`);
+  if (!response.ok) throw new Error(`当前图片模型返回 ${response.status}`);
   const json: any = response.json || {};
   const code = json?.code ?? json?.errorCode;
   if (!isRunningHubSuccessCode(code)) {
-    throw new Error(`RunningHub OpenAPI v2 调用失败：${runningHubErrorMessage(json)}`);
+    throw new Error(runningHubErrorMessage(json));
   }
   return json as T;
 }
@@ -274,17 +292,17 @@ export async function waitRunningHubOpenApiV2TaskOutputs(
         if (/SUCCESS/i.test(lastStatus)) {
           const results = json?.results ?? json?.data?.results ?? json?.data;
           if (hasOutputData(results)) return results;
-          throw new Error(`RunningHub OpenAPI v2 任务成功但未返回图片输出：taskId=${taskId}`);
+          throw new Error("当前图片模型已完成但未返回图片。");
         }
         if (/FAIL|ERROR/i.test(lastStatus)) {
           const detail = runningHubErrorMessage(json) || lastStatus;
-          throw new Error(`RunningHub OpenAPI v2 任务失败：taskId=${taskId} ${detail}`);
+          throw new Error(detail || "当前图片模型生成失败。");
         }
       }
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
-  throw new Error(`RunningHub OpenAPI v2 任务等待超时：taskId=${taskId} status=${lastStatus || "unknown"}${lastError ? `；query=${lastError}` : ""}`);
+  throw new Error(lastError || "当前图片模型等待超时，请稍后重试。");
 }
 
 function hasOutputData(data: unknown): boolean {

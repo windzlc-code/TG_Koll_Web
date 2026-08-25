@@ -5647,7 +5647,7 @@ body.page-admin {
 
 .page-admin .admin-task-table th:nth-child(2),
 .page-admin .admin-task-table td:nth-child(2) {
-  width: 14%;
+  width: 22%;
 }
 
 .page-admin .admin-task-table th:nth-child(3),
@@ -5677,7 +5677,7 @@ body.page-admin {
 
 .page-admin .admin-task-table th:nth-child(8),
 .page-admin .admin-task-table td:nth-child(8) {
-  width: 20%;
+  width: 12%;
 }
 
 .page-admin .admin-task-table td > strong,
@@ -5699,6 +5699,19 @@ body.page-admin {
   color: var(--admin-muted);
   font-size: 11px;
   line-height: 1.4;
+}
+
+.page-admin .admin-task-prompt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  overflow: hidden;
+  color: var(--admin-ink) !important;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .page-admin .admin-task-error {

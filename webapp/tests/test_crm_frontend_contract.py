@@ -118,6 +118,7 @@ def test_crm_frontend_has_cursor_review_and_single_poll_contracts():
     assert "crmApi.reviewAction" in app_source
     assert "/actions/${encodeURIComponent(actionId)}/review" in api_source
     assert "createSinglePollScheduler" in polling_source
+    assert 'document.visibilityState === "visible" ? 8_000 : 20_000' in polling_source
     assert "if (inFlight)" in helper_source
 
 

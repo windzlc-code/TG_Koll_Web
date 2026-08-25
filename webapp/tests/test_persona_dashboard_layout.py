@@ -1877,7 +1877,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertIn('data-persona-image-prompt', prompt_field)
         self.assertIn('根据提示词${baseGenerateLabel}', panel)
-        self.assertIn("source_image_id: sourceImageId", submit)
+        self.assertNotIn("source_image_id", submit)
+        self.assertNotIn("editImageId", submit)
+        self.assertIn("if (promptInput) syncPersonaImagePromptState(promptInput)", submit)
+        self.assertIn("#consoleModal [data-persona-image-prompt]", submit)
+        self.assertIn("promptInput?.value || imageForm.prompt", submit)
         self.assertIn('function syncPersonaImagePromptState(input)', self.console_script)
         self.assertIn('data-persona-image-generate-label', panel)
         self.assertNotIn('data-persona-image-reference-mode', panel)
@@ -1891,32 +1895,55 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         submit_end = self.console_script.index("\nasync function applyPersonaReferenceImage", submit_start)
         submit = self.console_script[submit_start:submit_end]
 
-        self.assertIn("填写后将按提示词生成新图", prompt_field)
+        self.assertIn("填写后只替换提示词里提到的外貌、服装等内容", prompt_field)
         self.assertNotIn("图生图", prompt_field)
+        self.assertNotIn("图片局部修改提示词", prompt_field)
         self.assertNotIn("reference_image_id", submit)
         self.assertIn("delete state.personaForms[key].images.referenceImageId;", self.console_script)
+        self.assertIn("delete state.personaForms[key].images.editImageId;", self.console_script)
         self.assertNotIn("data-media-lightbox-add-reference", self.console_script)
         self.assertIn("function renderPersonaImageLibraryPreview", self.console_script)
         self.assertIn("data-persona-image-select", self.console_script)
         self.assertIn("function togglePersonaImageSelection", self.console_script)
-        self.assertIn("function togglePersonaImageEditSource", self.console_script)
-        self.assertIn("data-persona-image-edit", self.console_script)
+        self.assertNotIn("function togglePersonaImageEditSource", self.console_script)
+        self.assertNotIn("data-persona-image-edit=", self.console_script)
         image_preview_start = self.console_script.index("function renderPersonaImageLibraryPreview")
         image_preview_end = self.console_script.index("\nfunction renderPersonaImageLibraryGrid", image_preview_start)
         image_preview = self.console_script[image_preview_start:image_preview_end]
         media_error_start = self.console_script.index("function handlePersonaMediaFrameError")
         media_error_end = self.console_script.index("\nfunction handlePersonaMediaLightboxError", media_error_start)
         media_error = self.console_script[media_error_start:media_error_end]
+        self.assertNotIn("function personaImageLibraryPromptLabel(item)", self.console_script)
+        self.assertNotIn("${esc(personaImageLibraryPromptLabel(item))}", self.console_script)
+        self.assertNotIn("未填写提示词", self.console_script)
         self.assertIn('class="persona-image-library-zoom-button"', image_preview)
-        self.assertIn("persona-image-library-edit-button", image_preview)
-        self.assertIn("persona-image-library-preview-actions", image_preview)
-        self.assertIn("${renderEditIcon()}", image_preview)
-        self.assertIn("flex-direction: row", self.styles)
-        self.assertIn("button.disabled = Boolean(busy || (editing && !value.trim()));", self.console_script)
+        self.assertNotIn("persona-image-library-edit-button", image_preview)
+        self.assertNotIn("persona-image-library-preview-actions", image_preview)
+        self.assertNotIn("${renderEditIcon()}", image_preview)
+        self.assertNotIn("data-persona-image-edit=", image_preview)
+        self.assertIn("button.disabled = Boolean(busy);", self.console_script)
         self.assertNotIn("if (!button || button.disabled) return;", self.console_script)
         self.assertNotIn('const zoomButton = unavailable', image_preview)
         self.assertIn('if (libraryWrap) return;', media_error)
         self.assertNotIn(".persona-image-reference-prompt-row {", self.styles)
+
+    def test_persona_image_delete_confirm_returns_to_profile_image_page(self):
+        confirm_start = self.console_script.index("async function confirmDangerAction(")
+        confirm_end = self.console_script.index("\nlet consoleScrollPreserveDepth", confirm_start)
+        confirm = self.console_script[confirm_start:confirm_end]
+        editor_start = self.console_script.index("async function openPersonaProfileEditorModalWithOptions(")
+        editor_end = self.console_script.index("modal?.addEventListener(\"change\"", editor_start)
+        editor_handler = self.console_script[editor_start:editor_end]
+        delete_start = self.console_script.index("async function deletePersonaLibraryImage(")
+        delete_end = self.console_script.index("\nasync function refreshPersonaMediaTask", delete_start)
+        delete_fn = self.console_script[delete_start:delete_end]
+
+        self.assertIn("stack: stack ?? Boolean($(\"consoleModal\"))", confirm)
+        self.assertIn('title: "删除人设图"', editor_handler)
+        self.assertIn('return run(() => deletePersonaLibraryImage(imageId), "image")', editor_handler)
+        self.assertNotIn("openPersonaProfileEditorModal()", editor_handler.split("data-persona-delete-image")[1])
+        self.assertIn('editor?.dataset.modalKey === "persona-profile-editor"', delete_fn)
+        self.assertIn('renderPersonaProfileEditorModal(editor.dataset.personaProfileEditorPage || "image")', delete_fn)
 
     def test_persona_image_entry_opens_before_background_refresh(self):
         editor_start = self.console_script.index("async function openPersonaProfileEditorModalWithOptions(")
@@ -2215,7 +2242,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertIn('const previewButton = event.target.closest("[data-media-preview-group]");', editor_handler)
         self.assertIn("openPersonaMediaLightbox(", editor_handler)
-        self.assertIn("const imageEdit = event.target.closest(\"[data-persona-image-edit]\");", editor_handler)
+        self.assertNotIn("const imageEdit = event.target.closest(\"[data-persona-image-edit]\");", editor_handler)
         self.assertIn("const imageSelection = event.target.closest(\"[data-persona-image-select]\");", editor_handler)
         self.assertNotIn("data-persona-reference-image-toggle", editor_handler)
         self.assertNotIn("!event.target.closest(\"[data-media-preview-group]\")", editor_handler)
@@ -2229,22 +2256,14 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn(".persona-profile-editor-item--profile .persona-profile-editor-item-copy b {", self.styles)
         self.assertIn(".persona-profile-editor-form #personaProfileEditorName {", self.styles)
         self.assertIn(".persona-image-library-zoom-button {", self.styles)
-        self.assertIn(".persona-image-library-edit-button {", self.styles)
+        self.assertNotIn(".persona-image-library-edit-button {", self.styles)
         self.assertIn(".persona-image-library-card.is-selected {", self.styles)
-        self.assertIn(".persona-image-library-card.is-modify-source,", self.styles)
+        self.assertNotIn(".persona-image-library-card.is-modify-source", self.styles)
         self.assertIn("var(--media-edit-flow-gradient)", self.styles)
-        self.assertIn(".persona-image-library-card.is-modify-source.is-selected::after {", self.styles)
-        self.assertIn("const selected = !editing && selectedCardId === item.id;", self.console_script)
+        self.assertIn("const selected = selectedCardId === item.id;", self.console_script)
         public_flow = self.styles[self.styles.index(".persona-public-media-card.is-modify-source {") : self.styles.index(".persona-public-media-preview-shell")]
-        library_flow = self.styles[self.styles.index(".persona-image-library-card.is-modify-source,") : self.styles.index(".persona-image-library-card.is-modify-source::after")]
         self.assertIn("var(--media-edit-flow-gradient) border-box", public_flow)
-        self.assertIn("var(--media-edit-flow-gradient) border-box", library_flow)
         self.assertIn("personaMediaEditBorderFlow 2.8s linear infinite", public_flow)
-        self.assertIn("personaMediaEditBorderFlow 2.8s linear infinite", library_flow)
-        self.assertLess(
-            self.styles.index(".persona-image-library-card.is-selected {"),
-            self.styles.index(".persona-image-library-card.is-modify-source.is-selected,"),
-        )
         self.assertIn("min-width: 32px;", self.styles)
         self.assertIn(".persona-image-library-zoom-hint {", self.styles)
         self.assertIn(".persona-image-library-zoom-hint .ui-zoom-in-icon {", self.styles)

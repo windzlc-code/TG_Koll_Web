@@ -37,7 +37,7 @@ class MatrixPublishFrontendContractTests(unittest.TestCase):
         self.assertIn('<select id="matrixPublishCount"', panel)
         self.assertIn("countOptions.map", panel)
         self.assertIn("Math.min(matrixPublishCommonLimit(availability), publishBatchLimit(platform))", panel)
-        self.assertIn('PUBLISH_BATCH_LIMITS = Object.freeze({ threads: 2, instagram: 1 })', CONSOLE_JS)
+        self.assertIn('PUBLISH_BATCH_LIMITS = Object.freeze({ threads: 1, instagram: 1 })', CONSOLE_JS)
         self.assertIn("submitPosts", candidates)
         self.assertIn("availableCount: detail.availablePosts.length", CONSOLE_JS)
         self.assertIn("submitCount: detail.submitPosts.length", CONSOLE_JS)

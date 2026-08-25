@@ -621,7 +621,10 @@ function setActiveAdminPage(page, updateHash = true) {
     void ensureBillingLoaded();
   }
   if (nextPage === "crm") void loadCrmAdminModule();
-  if (nextPage === "overview") void loadGovernanceDashboard();
+  if (nextPage === "overview") {
+    void loadGovernanceDashboard();
+    void loadCollectorProxyTraffic().catch(() => null);
+  }
   if (nextPage === "taxonomy") void loadTaxonomyWorkspace();
   if (nextPage === "audit") void loadAuditEvents();
   if (nextPage === "security") void loadSecurityAlerts();
@@ -657,7 +660,12 @@ async function api(path, opts = {}) {
   }
   if (res.status === 401) {
     clearStoredAdminWorkspaceContext();
-    window.location.replace("/admin");
+    const path = String(location.pathname || "");
+    const onAdminPage = document.body.classList.contains("page-admin") || path === "/admin.html" || path.startsWith("/admin.html");
+    const collectorDeployment = document.documentElement.dataset.deploymentRole === "collector";
+    if (window.self === window.top && !onAdminPage) {
+      window.location.replace(collectorDeployment ? "/?login=1" : "/admin");
+    }
     throw data || { detail: "管理员登录已过期" };
   }
   if (!res.ok) throw data || { detail: `HTTP ${res.status}` };
@@ -2139,6 +2147,7 @@ function closeModelPickersOnOutsideClick(target) {
 
 const TASK_POLL_INTERVAL_MS = 10000;
 const GOVERNANCE_POLL_INTERVAL_MS = 30000;
+const COLLECTOR_PROXY_TRAFFIC_POLL_INTERVAL_MS = 300000;
 const SENTIMENT_COOKIE_POLL_INTERVAL_MS = 300000;
 const PROXY_PURCHASE_FX_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const EMAIL_DELIVERY_MANUAL_LIMIT_MAX = 10000000;
@@ -2197,6 +2206,7 @@ const adminState = {
   sentimentCookieProfiles: [],
   sentimentCookieRefreshPromise: null,
   sentimentCookieRefreshForced: false,
+  collectorProxyTrafficPromise: null,
   billingCatalogVersions: [],
   billingActiveCatalog: null,
   billingCatalogDraftId: null,
@@ -2431,6 +2441,69 @@ function formatTime(ts) {
   return new Date(Number(ts) * 1000).toLocaleString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false });
 }
 
+function formatCollectorProxyGb(value) {
+  const number = Math.max(0, Number(value || 0));
+  return `${number >= 10 ? number.toFixed(1) : number.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")} GB`;
+}
+
+function renderCollectorProxyTrafficGroup(prefix, group = {}) {
+  const total = Math.max(0, Number(group.total_gb || 0));
+  const used = Math.max(0, Number(group.used_gb || 0));
+  const remaining = Math.max(0, Number(group.remaining_gb || 0));
+  const percent = Math.max(0, Math.min(100, Number(group.remaining_percent || 0)));
+  setText(`collectorProxyTraffic${prefix}Total`, formatCollectorProxyGb(total));
+  setText(`collectorProxyTraffic${prefix}Remaining`, formatCollectorProxyGb(remaining));
+  setText(`collectorProxyTraffic${prefix}Used`, formatCollectorProxyGb(used));
+  setText(`collectorProxyTraffic${prefix}Products`, `${Number(group.active_product_count || 0)} / ${Number(group.product_count || 0)}`);
+  setText(`collectorProxyTraffic${prefix}Percent`, `${Math.round(percent)}%`);
+  const donut = el(`collectorProxyTraffic${prefix}Donut`);
+  if (donut) {
+    donut.style.setProperty("--proxy-remaining", `${percent * 3.6}deg`);
+    const label = prefix === "Rotating" ? "动态 IP" : "粘性 IP";
+    donut.setAttribute("aria-label", `${label}剩余流量 ${Math.round(percent)}%`);
+  }
+}
+
+function renderCollectorProxyTraffic(traffic = {}, warning = null) {
+  const groups = traffic.groups && typeof traffic.groups === "object" ? traffic.groups : {};
+  renderCollectorProxyTrafficGroup("Rotating", groups.rotating || {});
+  renderCollectorProxyTrafficGroup("Sticky", groups.sticky || {});
+  const usagePending = Number(traffic.usage_pending_count || 0) > 0
+    || Number(groups.rotating?.usage_pending_count || 0) > 0
+    || Number(groups.sticky?.usage_pending_count || 0) > 0;
+  setText("collectorProxyTrafficStatus", usagePending ? "当前暂无用量记录，按 0 GB 已用展示" : "供应商流量已同步");
+  setText("collectorProxyTrafficUpdatedAt", traffic.synced_at ? `同步于 ${formatTime(traffic.synced_at)}` : "-");
+  const warnNode = el("collectorProxyTrafficWarning");
+  if (warnNode) {
+    const message = String(warning?.message || "").trim();
+    warnNode.hidden = !message;
+    warnNode.textContent = message;
+    warnNode.dataset.level = String(warning?.level || "warning");
+  }
+}
+
+async function loadCollectorProxyTraffic({ force = false } = {}) {
+  if (!el("collectorProxyTrafficCard")) return null;
+  if (adminState.collectorProxyTrafficPromise && !force) return adminState.collectorProxyTrafficPromise;
+  const button = el("btnRefreshCollectorProxyTraffic");
+  if (button && force) button.disabled = true;
+  const request = api(`/api/admin/collector-proxy/traffic${force ? "?force=true" : ""}`)
+    .then((result) => {
+      renderCollectorProxyTraffic(result.traffic || {}, result.warning || null);
+      return result;
+    })
+    .catch((error) => {
+      setText("collectorProxyTrafficStatus", getErrorMessage(error));
+      throw error;
+    })
+    .finally(() => {
+      if (button) button.disabled = false;
+      if (adminState.collectorProxyTrafficPromise === request) adminState.collectorProxyTrafficPromise = null;
+    });
+  adminState.collectorProxyTrafficPromise = request;
+  return request;
+}
+
 function statusPill(status) {
   const s = String(status || "").trim() || "unknown";
   const labels = { success: "已完成", failed: "失败", queued: "排队中", running: "生成中" };
@@ -2596,6 +2669,8 @@ function buildTaskDetailText(data) {
     `内部流程：${data.workflow_name || "-"}`,
     `内部流程编号：${data.workflow_id || "-"}`,
     `链路摘要：${data.workflow_chain_summary || "-"}`,
+    `用户提示词：${taskPromptDisplay(data)}`,
+    `发给模型的提示词：${taskPromptDisplay(data, { final: true })}`,
     `供应商记录编号：${data.runninghub_task_id || "-"}`,
     `供应商记录编号列表：${Array.isArray(data.runninghub_task_ids) && data.runninghub_task_ids.length ? data.runninghub_task_ids.join(", ") : "-"}`,
     `状态：${data.status || "-"}`,
@@ -2713,6 +2788,8 @@ function buildTaskDetailHtml(data) {
         ${inspectItem("内部流程", data.workflow_name)}
         ${inspectItem("内部流程编号", data.workflow_id)}
         ${inspectItem("链路摘要", data.workflow_chain_summary)}
+        ${inspectItem("用户提示词", taskPromptDisplay(data))}
+        ${inspectItem("发给模型的提示词", taskPromptDisplay(data, { final: true }))}
         ${inspectItemHtml("状态", statusPill(data.status))}
         ${inspectItem("供应商记录编号", data.runninghub_task_id)}
         ${inspectItem("供应商记录编号列表", Array.isArray(data.runninghub_task_ids) && data.runninghub_task_ids.length ? data.runninghub_task_ids.join(", ") : "-")}
@@ -2850,6 +2927,13 @@ function getTaskFilterValues() {
   };
 }
 
+function taskPromptDisplay(task, { final = false } = {}) {
+  if (final) {
+    return oneLine(task && (task.final_prompt_display || task.final_prompt || task.prompt_display || task.user_prompt)) || "（未填写）";
+  }
+  return oneLine(task && (task.prompt_display || task.user_prompt)) || "（未填写）";
+}
+
 function taskSearchText(task) {
   return [
     task && task.id,
@@ -2863,6 +2947,9 @@ function taskSearchText(task) {
     ...(Array.isArray(task && task.runninghub_task_ids) ? task.runninghub_task_ids : []),
     task && task.error,
     task && task.first_error,
+    task && task.user_prompt,
+    task && task.final_prompt,
+    task && task.prompt_display,
   ].map((value) => oneLine(value)).join(" ").toLowerCase();
 }
 
@@ -2935,6 +3022,7 @@ function renderTaskRow(task) {
       <td class="admin-task-type-cell">
         <strong>${escapeHtml(workflowName)}</strong>
         <span>${escapeHtml(taskType)}</span>
+        <span class="admin-task-prompt" title="${escapeHtml(taskPromptDisplay(task, { final: true }))}"><span data-admin-i18n-ui="true">提示词：</span>${escapeHtml(taskPromptDisplay(task))}</span>
         ${errorText ? `<span class="admin-task-error" title="${escapeHtml(errorText)}"><span data-admin-i18n-ui="true">错误：</span>${escapeHtml(errorText)}</span>` : ""}
       </td>
       <td>${escapeHtml(userName)}</td>
@@ -3107,7 +3195,7 @@ async function ensureAdmin() {
     location.href = "/admin-console.html";
     return null;
   }
-  el("adminName").textContent = me.username;
+  if (el("adminName")) el("adminName").textContent = me.username;
   const navigation = window.VectoSiteNavigation;
   const accountHost = el("adminSharedAccountHost");
   if (navigation && accountHost) {
@@ -7177,7 +7265,7 @@ async function deleteHotDataset(item = {}) {
     title: `重要提示：删除${datasetName}`,
     message: item.global
       ? "确定后会清空全局热点候选池中的全部内容。此操作不可撤销；后续新抓取的合格内容仍会重新进入全局池。"
-      : `确定后会清空“${datasetName}”的全部热点候选，不会删除人设。此操作不可撤销；如果该人设仍满足原有自动补充条件，后续会重新补充。`,
+      : `确定后会从本页移除“${datasetName}”人设池，队列清空且不再自动补充。下次对该人设启动采集后才会重新出现。`,
     confirmLabel: "确认删除数据集",
     cancelLabel: "取消",
     tone: "danger",
@@ -7189,7 +7277,9 @@ async function deleteHotDataset(item = {}) {
     await refreshHotDatasetEvents();
     showAdminPublicPrompt({
       title: "数据集已清空",
-      message: `已删除 ${Math.max(0, Number(payload?.deleted_count || 0)).toLocaleString("zh-CN")} 条候选数据。`,
+      message: item.global
+        ? `已删除 ${Math.max(0, Number(payload?.deleted_count || 0)).toLocaleString("zh-CN")} 条候选数据。`
+        : `已从列表移除“${datasetName}”。下次启动采集后会重新添加。`,
       ok: true,
     });
   } catch (error) {
@@ -7199,7 +7289,7 @@ async function deleteHotDataset(item = {}) {
 
 function renderHotDatasetRow(item, index) {
   const count = Math.max(0, Number(item.count || 0));
-  const capacity = Math.max(1, Number(item.capacity || (item.global ? 100000 : 100)));
+  const capacity = Math.max(1, Number(item.capacity || (item.global ? 100000 : 30)));
   const percent = Math.min(100, count / capacity * 100);
   const color = hotDatasetColor(index, Boolean(item.global));
   const row = document.createElement("div");
@@ -9952,10 +10042,23 @@ async function archiveProxyMarketItem(itemId, button) {
   }
 }
 
-async function loadProxyMarketShareCustomers() {
+async function loadProxyMarketShareUsers() {
   if (adminState.proxyMarketShareUsers.length) return adminState.proxyMarketShareUsers;
-  const payload = await api("/api/admin/users?role=customer&limit=500");
-  adminState.proxyMarketShareUsers = Array.isArray(payload?.items) ? payload.items.filter((user) => !user.is_admin) : [];
+  const [customers, admins] = await Promise.all([
+    api("/api/admin/users?role=customer&limit=500"),
+    api("/api/admin/users?role=admin&limit=500"),
+  ]);
+  const byId = new Map();
+  for (const user of [...(Array.isArray(customers?.items) ? customers.items : []), ...(Array.isArray(admins?.items) ? admins.items : [])]) {
+    const id = String(user?.id || "").trim();
+    if (!id || byId.has(id)) continue;
+    byId.set(id, user);
+  }
+  adminState.proxyMarketShareUsers = Array.from(byId.values()).sort((left, right) => {
+    const adminDelta = Number(Boolean(right.is_admin)) - Number(Boolean(left.is_admin));
+    if (adminDelta) return adminDelta;
+    return String(left.username || "").localeCompare(String(right.username || ""), "zh");
+  });
   return adminState.proxyMarketShareUsers;
 }
 
@@ -9980,7 +10083,7 @@ function renderProxyMarketShareUsers() {
   if (!users.length) {
     const empty = document.createElement("div");
     empty.className = "small";
-    empty.textContent = "没有匹配的客户账号";
+    empty.textContent = "没有匹配的账号";
     body.appendChild(empty);
     return;
   }
@@ -9998,7 +10101,7 @@ function renderProxyMarketShareUsers() {
       setText("proxyMarketShareSelectedCount", adminState.proxyMarketShareSelected.size);
     });
     const copy = document.createElement("span");
-    copy.textContent = `${user.full_name || user.username || "未命名"} · ${user.username || ""} · ID ${userId}`;
+    copy.textContent = `${user.full_name || user.username || "未命名"} · ${user.is_admin ? "管理员" : "客户"} · ${user.username || ""} · ID ${userId}`;
     label.append(input, copy);
     body.appendChild(label);
   });
@@ -10019,7 +10122,7 @@ async function openProxyMarketSharePanel(itemId) {
   setMsg("proxyMarketShareMsg", "正在加载可共享用户...");
   try {
     const [users, shares] = await Promise.all([
-      loadProxyMarketShareCustomers(),
+      loadProxyMarketShareUsers(),
       api(`/api/admin/proxy-market/items/${encodeURIComponent(item.market_item_id)}/shares`),
     ]);
     adminState.proxyMarketShareUsers = users;
@@ -10776,6 +10879,9 @@ function bindActions() {
   bindTextModelContentTabs();
   bindRunningHubSlotTabs();
   el("btnRefreshGovernance")?.addEventListener("click", () => void loadGovernanceDashboard({ force: true }));
+  el("btnRefreshCollectorProxyTraffic")?.addEventListener("click", () => {
+    void loadCollectorProxyTraffic({ force: true }).catch(() => null);
+  });
   el("btnRefreshHotDatasets")?.addEventListener("click", () => void refreshHotDatasets({ force: true }));
   el("btnHotDatasetPersonaPrev")?.addEventListener("click", () => {
     adminState.hotDatasetPersonaPage = Math.max(1, Number(adminState.hotDatasetPersonaPage || 1) - 1);
@@ -11962,12 +12068,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     initProviderSecretMaskInputs();
     bindActions();
     setActiveAdminPage(readAdminPageFromHash(), false);
-  } catch {
-    location.href = "/admin";
+  } catch (error) {
+    console.error(error);
     return;
   }
 
-  await Promise.allSettled([loadMfaStatus(), loadGovernanceDashboard()]);
+  await Promise.allSettled([loadMfaStatus(), loadGovernanceDashboard(), loadCollectorProxyTraffic().catch(() => null)]);
 
   try {
     await loadRuntime();
@@ -12023,6 +12129,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   setInterval(() => {
     if (!document.hidden && adminState.activePage === "overview") void loadGovernanceDashboard({ force: true });
   }, GOVERNANCE_POLL_INTERVAL_MS);
+  setInterval(() => {
+    if (!document.hidden && adminState.activePage === "overview") void loadCollectorProxyTraffic().catch(() => null);
+  }, COLLECTOR_PROXY_TRAFFIC_POLL_INTERVAL_MS);
   setInterval(() => {
     void refreshSentimentCookieProfilesIfActive({ force: true });
   }, SENTIMENT_COOKIE_POLL_INTERVAL_MS);

@@ -1567,7 +1567,7 @@ def create_crm_router(
         with db() as conn:
             target_id, _ = _require_effective(conn, user)
             # Workflows use the same cursor contract as the other resources.
-            from .repository import decode_cursor, encode_cursor
+            from .repository import decode_cursor, encode_cursor, list_select_sql, row_public_list
 
             page_size = min(max(int(limit), 1), 200)
             params: list[Any] = [target_id]
@@ -1578,13 +1578,14 @@ def create_crm_router(
                 params.extend((updated_at, updated_at, record_id))
             params.append(page_size + 1)
             rows = conn.execute(
-                "SELECT * FROM crm_workflows WHERE user_id = ? AND active = 1" + condition +
+                "SELECT " + list_select_sql(conn, "crm_workflows") +
+                " FROM crm_workflows WHERE user_id = ? AND active = 1" + condition +
                 " ORDER BY updated_at DESC,id DESC LIMIT ?",
                 tuple(params),
             ).fetchall()
             visible = rows[:page_size]
             return {
-                "items": [row_public(row) for row in visible],
+                "items": [row_public_list(row) for row in visible],
                 "has_more": len(rows) > page_size,
                 "next_cursor": encode_cursor(int(visible[-1]["updated_at"]), str(visible[-1]["id"])) if len(rows) > page_size and visible else "",
                 "limit": page_size,

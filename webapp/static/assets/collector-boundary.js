@@ -49,6 +49,8 @@
     const header = document.querySelector("[data-site-header]");
     const authenticated = header?.dataset.siteAuthState === "authenticated" || header?.dataset.siteAuthState === "auth";
     if (authenticated) {
+      if (document.body.dataset.collectorHomeRedirected === "true") return;
+      document.body.dataset.collectorHomeRedirected = "true";
       window.location.replace("/admin-console.html");
       return;
     }
@@ -170,7 +172,7 @@
       }).observe(titleNode, { childList: true, characterData: true, subtree: true });
     }
     const headerNav = document.querySelector('.site-header > .site-nav');
-    if (headerNav) {
+    if (headerNav && headerNav.dataset.collectorUnified !== "true") {
       headerNav.dataset.collectorUnified = "true";
       headerNav.setAttribute("aria-label", "统一采集控制台");
       headerNav.innerHTML = `<span class="collector-header-context">统一采集控制台</span>`;
@@ -242,8 +244,11 @@
       }, true);
       window.addEventListener("hashchange", () => { const route = collectorRoute(); switchCollectorSurface(route.operations ? "operations" : "console", { updateHash: false, page: route.page }); });
     }
-    const route = collectorRoute();
-    switchCollectorSurface(route.operations ? "operations" : "console", { updateHash: false, page: route.page });
+    if (document.body.dataset.collectorSurfaceReady !== "true") {
+      document.body.dataset.collectorSurfaceReady = "true";
+      const route = collectorRoute();
+      switchCollectorSurface(route.operations ? "operations" : "console", { updateHash: false, page: route.page });
+    }
   };
 
   const PERSONA_PRODUCT_SELECTORS = [
@@ -296,17 +301,25 @@
     if (!document.body.classList.contains("page-admin")) return;
     const embedded = window.self !== window.top;
     if (!embedded) {
+      if (document.body.dataset.collectorStandaloneRedirected === "true") return;
+      document.body.dataset.collectorStandaloneRedirected = "true";
       window.location.replace("/admin-console.html#operations");
       return;
     }
     document.documentElement.dataset.collectorEmbeddedAdmin = "true";
     document.body.classList.add("collector-embedded-admin");
   };
-  const apply = () => {
-    replaceExactText(); cleanCollectorWorkspaceMenu(); enforceStandaloneAdmin(); enforceAdminPageBoundary(); pruneAdminOverview(); pruneCollectorHome(); pruneCollectorCrmEntries(); pruneCollectorAccountMenu(); installCollectorUnifiedConsole(); installCollectorLoginMonitorTab(); stripPersonaProductSurfaces();
+  const applyDom = () => {
+    replaceExactText(); cleanCollectorWorkspaceMenu(); enforceAdminPageBoundary(); pruneAdminOverview(); pruneCollectorHome(); pruneCollectorCrmEntries(); pruneCollectorAccountMenu(); installCollectorUnifiedConsole(); installCollectorLoginMonitorTab(); stripPersonaProductSurfaces();
   };
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", apply, { once: true }); else apply();
+  const applyRedirectsOnce = () => {
+    if (document.body.dataset.collectorRedirectsReady === "true") return;
+    document.body.dataset.collectorRedirectsReady = "true";
+    enforceStandaloneAdmin();
+  };
+  const boot = () => { applyRedirectsOnce(); applyDom(); };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once: true }); else boot();
   let queued = false;
-  new MutationObserver(() => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; apply(); }); }).observe(document.documentElement, { childList: true, subtree: true });
+  new MutationObserver(() => { if (queued) return; queued = true; requestAnimationFrame(() => { queued = false; applyDom(); }); }).observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("hashchange", enforceAdminPageBoundary);
 })();

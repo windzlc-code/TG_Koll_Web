@@ -143,7 +143,8 @@ class AutomationPlanFrontendContractTests(unittest.TestCase):
         self.assertIn("validateAutomationPlanDraft", CONSOLE_JS)
         normal_config = function_source("openAutomationPlanNormalPublishConfigurator", "openAutomationPlanTaskConfigurator")
         self.assertIn('data-automation-plan-normal-publish-count', normal_config)
-        self.assertIn('[1, 2, 3, 4, 5]', normal_config)
+        self.assertIn('[1].map((count)', normal_config)
+        self.assertNotIn('[1, 2, 3, 4, 5]', normal_config)
 
     def test_plan_config_hides_persona_description_and_removes_the_outer_frame(self):
         strategy_detail = function_source("personaThreadsStrategyDetail", "billingObject")

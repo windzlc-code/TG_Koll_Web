@@ -932,11 +932,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
         media_response = self.client.get(item["preview_url"])
         self.assertEqual(media_response.status_code, 200)
         self.assertEqual(media_response.headers["content-type"], "image/png")
-        self.assertEqual(media_response.headers["cache-control"], "private, max-age=31536000, immutable")
+        self.assertEqual(media_response.headers["cache-control"], "public, max-age=31536000, immutable")
         thumbnail_response = self.client.get(item["thumbnail_url"])
         self.assertEqual(thumbnail_response.status_code, 200)
         self.assertEqual(thumbnail_response.headers["content-type"], "image/jpeg")
-        self.assertEqual(thumbnail_response.headers["cache-control"], "private, max-age=31536000, immutable")
+        self.assertEqual(thumbnail_response.headers["cache-control"], "public, max-age=31536000, immutable")
 
     def test_console_overview_aggregates_hot_metrics_without_heavy_rows(self):
         self._write_archives()
@@ -3429,7 +3429,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         media_resp = self.client.get(preview_path)
         self.assertEqual(media_resp.status_code, 200)
         self.assertEqual(media_resp.headers["content-type"], "image/png")
-        self.assertEqual(media_resp.headers["cache-control"], "private, max-age=31536000, immutable")
+        self.assertEqual(media_resp.headers["cache-control"], "public, max-age=31536000, immutable")
 
     def test_persona_publish_history_counts_a_permalink_once(self):
         self._write_archives()
@@ -5234,6 +5234,42 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["temperature"], 0.55)
         self.assertGreaterEqual(captured["max_output_tokens"], 2048)
 
+    def test_hot_rewrite_adds_user_instruction_on_top_of_base_rewrite_rules(self):
+        self._write_archives()
+        captured = {}
+        source = "雨天騎車最怕煞車手感變軟，先檢查煞車油、來令片和輪胎狀況，再決定是否繼續上路。"
+        rewritten = "先說結論：雨勢一大，就別急著催油門。以維修老師的經驗，剎車油、來令片與胎紋要逐項看清楚；手感穩定，再安心出發。"
+
+        def fake_llm(**kwargs):
+            captured["system"] = kwargs.get("system_prompt") or ""
+            captured["user"] = kwargs.get("user_input") or ""
+            captured["temperature"] = kwargs.get("temperature")
+            captured["label"] = kwargs.get("request_label") or ""
+            return {"ok": True, "raw_text": rewritten}, {}, []
+
+        with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
+            body = server._rewrite_persona_hot_candidate_content(
+                "persona-1",
+                server.PersonaDashboardHotRewritePayload(
+                    source_content=source,
+                    writing_locale="zh-TW",
+                    platform="threads",
+                    instruction="把「煞車油」换成「剎車油」。",
+                ),
+            )
+
+        self.assertEqual(body["ok"], True)
+        self.assertIn("剎車油", body["content"])
+        self.assertIn("字数硬性合同", captured["system"])
+        self.assertIn("事实清单", captured["system"])
+        self.assertIn("在以上基础规范全部保留的前提下", captured["system"])
+        self.assertIn("禁止照抄", captured["user"])
+        self.assertIn("用户改写要求（必须落实，叠加在上述规范之上，不是替换上述规范）", captured["user"])
+        self.assertIn("把「煞車油」换成「剎車油」。", captured["user"])
+        self.assertLess(captured["user"].index("禁止照抄"), captured["user"].index("用户改写要求"))
+        self.assertEqual(captured["temperature"], 0.55)
+        self.assertEqual(captured["label"], "热点按提示改写")
+
     def test_hot_rewrite_length_bounds_allow_five_percent_shorter_without_an_upper_limit(self):
         self.assertEqual(server._persona_hot_rewrite_length_bounds(100), (95, None))
         self.assertEqual(server._persona_hot_rewrite_length_bounds(500), (475, None))
@@ -6778,7 +6814,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             )
 
         self.assertEqual(publish_resp.status_code, 400)
-        self.assertEqual(publish_resp.json()["detail"], "单次连续发布最多选择 2 篇。")
+        self.assertEqual(publish_resp.json()["detail"], "单次连续发布最多选择 1 篇。")
         mocked.assert_not_called()
 
     def test_matrix_publish_rejects_more_than_platform_limit_per_persona(self):
@@ -6795,7 +6831,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "Threads 单个账号每批最多发布 2 篇。")
+        self.assertEqual(response.json()["detail"], "Threads 单个账号每批最多发布 1 篇。")
 
     def test_publish_persona_post_reuses_active_task_for_same_draft(self):
         self._write_archives()

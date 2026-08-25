@@ -367,12 +367,59 @@ class AccountSettingsApiTests(unittest.TestCase):
         items = list_resp.json()["items"]
         task = next(item for item in items if item["id"] == "task_downloadable")
         self.assertEqual(task["has_download"], True)
+        self.assertEqual(task["prompt_display"], "（未填写）")
+        self.assertEqual(task["final_prompt_display"], "（未填写）")
 
         unmarked_download = self.client.get("/api/tasks/task_downloadable/download")
         self.assertEqual(unmarked_download.status_code, 401, unmarked_download.text)
         marked_download = self.client.get("/api/tasks/task_downloadable/download?admin_console=1")
         self.assertEqual(marked_download.status_code, 200, marked_download.text)
         self.assertEqual(marked_download.content, b"demo-video")
+
+    def test_admin_task_list_surfaces_user_and_final_prompts(self):
+        now_ts = server._now_ts()
+        with db_module.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO tasks(
+                    id, user_id, type, status, input_json, output_json, error,
+                    runninghub_task_id, usage_json, cost_cents, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "task_prompt_visible",
+                    1,
+                    "persona_image",
+                    "success",
+                    json.dumps({"prompt": "性感美女穿着性感，喜欢穿低胸装。", "related_persona_id": "persona-1"}, ensure_ascii=False),
+                    json.dumps({"ok": True, "final_prompt": "appearance: 性感美女穿着性感，喜欢穿低胸装。, character reference sheet"}, ensure_ascii=False),
+                    "",
+                    "",
+                    "{}",
+                    0,
+                    now_ts,
+                    now_ts,
+                ),
+            )
+
+        login_resp = self.client.post(
+            "/api/auth/admin-login",
+            json={"username": "admin", "password": "admin123secure"},
+        )
+        self.assertEqual(login_resp.status_code, 200)
+        list_resp = self.client.get("/api/admin/tasks?limit=20")
+        self.assertEqual(list_resp.status_code, 200)
+        task = next(item for item in list_resp.json()["items"] if item["id"] == "task_prompt_visible")
+        self.assertEqual(task["user_prompt"], "性感美女穿着性感，喜欢穿低胸装。")
+        self.assertEqual(task["final_prompt"], "appearance: 性感美女穿着性感，喜欢穿低胸装。, character reference sheet")
+        self.assertEqual(task["prompt_display"], "性感美女穿着性感，喜欢穿低胸装。")
+
+        detail = self.client.get("/api/admin/tasks/task_prompt_visible/logs?limit=1")
+        self.assertEqual(detail.status_code, 200)
+        task_detail = detail.json()["task"]
+        self.assertEqual(task_detail["user_prompt"], "性感美女穿着性感，喜欢穿低胸装。")
+        self.assertEqual(task_detail["final_prompt_display"], "appearance: 性感美女穿着性感，喜欢穿低胸装。, character reference sheet")
 
     def test_admin_forced_password_change_keeps_admin_session_selected(self):
         expires_at = server._now_ts() + 3600

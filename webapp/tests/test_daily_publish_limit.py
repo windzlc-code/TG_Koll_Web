@@ -112,6 +112,10 @@ class DailyPublishLimitTests(unittest.TestCase):
         ):
             return social_automation_api.create_social_task(*args, **kwargs)
 
+    def _create_legacy_batch_item(self, payload):
+        with mock.patch.object(social_automation_api, "publish_batch_limit", return_value=2):
+            return self._create(payload)
+
     def test_customer_is_blocked_after_fifteen_across_social_accounts(self):
         for _ in range(15):
             self._create(self._payload())
@@ -391,6 +395,37 @@ class DailyPublishLimitTests(unittest.TestCase):
         self.assertEqual(rejected.exception.status_code, 400)
         self.assertIn("1", str(rejected.exception.detail))
 
+    def test_threads_automation_normal_publish_allows_only_one_post_per_batch(self):
+        payload = social_automation_api.SocialAutomationPlanPayload(
+            persona_id="persona-customer",
+            account_id="account-customer-1",
+            platform="threads",
+            items=[
+                social_automation_api.SocialAutomationPlanItemPayload(
+                    reservation_minutes=0,
+                    task_type="normal_publish",
+                    payload={"publish_count": 2},
+                )
+            ],
+        )
+        with self.assertRaises(HTTPException) as rejected:
+            social_automation_api.create_social_automation_plan(payload, user={"id": self.customer_id, "is_admin": 0})
+        self.assertEqual(rejected.exception.status_code, 400)
+        self.assertIn("1", str(rejected.exception.detail))
+
+    def test_threads_publish_task_rejects_a_two_item_batch(self):
+        payload = self._payload()
+        payload.payload.update({
+            "publish_batch_id": "threads-batch",
+            "publish_sequence_index": 1,
+            "publish_sequence_total": 2,
+            "publish_sequence_targets": ["draft-1", "draft-2"],
+        })
+        with self.assertRaises(HTTPException) as rejected:
+            self._create(payload)
+        self.assertEqual(rejected.exception.status_code, 400)
+        self.assertIn("1", str(rejected.exception.detail))
+
     def test_instagram_publish_task_rejects_a_two_item_batch(self):
         with sqlite3.connect(self.db_path) as conn:
             self._insert_account(conn, "account-customer-instagram", self.customer_id, "persona-customer", "instagram")
@@ -656,11 +691,11 @@ class DailyPublishLimitTests(unittest.TestCase):
             "publish_sequence_targets": ["发布第1篇", "发布第2篇"],
         })
 
-        first_task = self._create(first)
+        first_task = self._create_legacy_batch_item(first)
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
             self.assertIsNone(social_automation_api._claim_next_task())
 
-        second_task = self._create(second)
+        second_task = self._create_legacy_batch_item(second)
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
             claimed = social_automation_api._claim_next_task()
             self.assertEqual(claimed["payload"]["publish_sequence_index"], 1)
@@ -753,7 +788,7 @@ class DailyPublishLimitTests(unittest.TestCase):
                 "publish_sequence_index": index,
                 "publish_sequence_total": 2,
             })
-            tasks.append(self._create(payload))
+            tasks.append(self._create_legacy_batch_item(payload))
 
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
             first = social_automation_api._claim_next_task()
@@ -812,7 +847,7 @@ class DailyPublishLimitTests(unittest.TestCase):
                 "publish_sequence_index": index,
                 "publish_sequence_total": 2,
             })
-            tasks.append(self._create(payload))
+            tasks.append(self._create_legacy_batch_item(payload))
 
         with mock.patch.object(social_automation_api, "_now", return_value=self.now):
             first = social_automation_api._claim_next_task()
@@ -848,7 +883,7 @@ class DailyPublishLimitTests(unittest.TestCase):
             "publish_sequence_total": 2,
             "publish_sequence_targets": ["发布第1篇", "发布第2篇"],
         })
-        task = self._create(first)
+        task = self._create_legacy_batch_item(first)
 
         with (
             mock.patch.dict(

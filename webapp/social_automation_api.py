@@ -130,7 +130,7 @@ SOCIAL_TASK_REQUIRED_PLATFORM = {
 # Plan-only task type.  It is deliberately not a SOCIAL_TASK_TYPE: a normal
 # publish entry is expanded into real publish_post tasks before a worker sees it.
 AUTOMATION_PLAN_NORMAL_PUBLISH_TASK = "normal_publish"
-PUBLISH_BATCH_LIMITS = {"threads": 2, "instagram": 1}
+PUBLISH_BATCH_LIMITS = {"threads": 1, "instagram": 1}
 PUBLISH_DEFAULT_COOLDOWN_SECONDS = 30 * 60
 AUTOMATION_PLAN_NORMAL_PUBLISH_MAX_COUNT = max(PUBLISH_BATCH_LIMITS.values())
 _ADMIN_BILLING_WAIVED_PAYLOAD_IDS: set[int] = set()
@@ -3516,17 +3516,17 @@ def _proxy_live_browser_http(session_id: str, path: str, request: Request) -> Re
         static_response = _local_kasm_static_response(clean_path)
         if static_response is not None:
             return static_response
-    headers = {}
+    headers = {
+        "Cache-Control": "no-store",
+        "CDN-Cache-Control": "no-store",
+        "Pragma": "no-cache",
+    }
     content_type = upstream.headers.get("content-type")
     if content_type:
         headers["content-type"] = content_type
-    cache_control = upstream.headers.get("cache-control")
-    if cache_control:
-        headers["cache-control"] = cache_control
     content = upstream.content
     if clean_path in {"vnc.html", "index.html"} and "text/html" in str(content_type or "").lower():
         content = _brand_live_browser_html(content)
-        headers["cache-control"] = "no-store"
     return Response(content=content, status_code=upstream.status_code, headers=headers)
 
 

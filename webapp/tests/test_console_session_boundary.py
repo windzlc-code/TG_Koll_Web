@@ -48,6 +48,18 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('cancelSocialAutomationTask(cleanTaskId', self.source)
         self.assertIn("login-assistance-footer", self.styles)
 
+    def test_media_preview_cards_do_not_embed_full_video_files(self):
+        preview = self._function_source("renderMediaPreviewButton")
+        self.assertIn("persona-media-frame--video-poster", preview)
+        self.assertNotIn("<video class", preview)
+
+    def test_runninghub_balance_errors_are_localized_instead_of_raw_json(self):
+        self.assertIn("balance is insufficient", self.source)
+        self.assertIn("当前图片模型余额不足，请充值后再试。", self.source)
+        self.assertNotIn("请先给 RunningHub 账户充值后再试。", self.source)
+        self.assertIn("showToast(localizedError, false", self.source)
+        self.assertIn('errorCode["\']?\\s*:\\s*["\']?605\\b', self.source)
+
     def test_console_uses_vecto_site_navigation_without_replacing_workspace_navigation(self):
         self.assertIn('data-site-header data-site-page="console"', self.markup)
         self.assertIn('<a class="site-skip-link"', self.markup)
@@ -565,6 +577,36 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             );
             assert.strictEqual(code.kind, "verification_code");
             assert.strictEqual(code.title, "输入短信验证码");
+            const premature = loginAssistanceViewModel(
+              {{ id: "task-1", status: "running", account_id: "acc-1" }},
+              {{
+                account_id: "acc-1",
+                login_assistance: {{
+                  phase: "success",
+                  kind: "success",
+                  title: "登录成功",
+                  message: "账号登录状态已确认，可以开始使用。",
+                }},
+              }},
+            );
+            assert.strictEqual(premature.kind, "progress");
+            assert.strictEqual(premature.phase, "running");
+            assert.strictEqual(premature.title, "正在确认登录");
+            const finished = loginAssistanceViewModel(
+              {{ id: "task-1", status: "success", account_id: "acc-1" }},
+              {{
+                account_id: "acc-1",
+                login_assistance: {{
+                  phase: "success",
+                  kind: "success",
+                  title: "登录成功",
+                  message: "账号登录状态已确认，可以开始使用。",
+                }},
+              }},
+            );
+            assert.strictEqual(finished.kind, "success");
+            assert.strictEqual(finished.phase, "success");
+            assert.strictEqual(finished.title, "登录成功");
             """
         )
         self._run_node(harness)
@@ -1375,6 +1417,28 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         )
         self._run_node(harness)
 
+    def test_collector_admin_console_401_stays_on_login_not_admin_bounce(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            let consoleBoundaryNavigationActive = false;
+            let cleared = 0;
+            let target = "";
+            const ADMIN_CONSOLE_SESSION = true;
+            const COLLECTOR_DEPLOYMENT = true;
+            const window = {{ location: {{ pathname: "/admin-console.html", search: "", hash: "#operations", replace(value) {{ target = value; }} }} }};
+            function clearTenantInMemoryState() {{ cleared += 1; }}
+            function clearStoredAdminWorkspaceContext() {{}}
+            {self._function_source("handleSessionBoundary")}
+
+            assert.strictEqual(handleSessionBoundary(401), true);
+            assert.strictEqual(cleared, 1);
+            assert.ok(target.startsWith("/?login=1&return_url="), target);
+            assert.ok(!target.startsWith("/admin?"), target);
+            """
+        )
+        self._run_node(harness)
+
     def test_auth_clear_resets_tenant_collections_and_invalidates_requests(self):
         clear_state = self._function_source("clearTenantInMemoryState")
         self.assertIn("tenantStateGeneration += 1", clear_state)
@@ -1506,9 +1570,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         browser_fetch = self._function_source("refreshLiveBrowserSessionsOnly")
         panel_switch = self._function_source("setAccountBrowserPanel")
 
-        self.assertIn("}, 3000)", account_refresh)
+        self.assertIn("}, 8000)", account_refresh)
         self.assertIn("refreshLiveBrowserSessionsOnly().catch", browser_refresh)
-        self.assertIn("}, 2000)", browser_refresh)
+        self.assertIn("}, 8000)", browser_refresh)
         self.assertIn('state.accountBrowserPanel === "browsers"', self._function_source("shouldRefreshLiveBrowserSessions"))
         self.assertIn("state.liveBrowserSessionsFetch", browser_fetch)
         self.assertIn("syncLiveBrowserAutoRefresh()", panel_switch)
@@ -1544,7 +1608,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("publishAssistanceMinimized", self._function_source("openTaskAssistanceView"))
         self.assertIn('hasAttribute("data-login-assistance-close-after-stop")', self._function_source("openTaskAssistanceView"))
         self.assertIn("openLiveBrowserTaskView(cleanTaskId)", self._function_source("openTaskAssistanceView"))
-        self.assertIn("refreshSocialAccountsOnly({ force: true })", self._function_source("openTaskAssistanceView"))
+        self.assertIn("syncAccountsAfterLoginAssistance(cleanTaskId)", self._function_source("openTaskAssistanceView"))
+        self.assertIn("loginAssistanceStatusSettled(taskStatus)", self._function_source("openTaskAssistanceView"))
+        self.assertIn("updateAccountStatusViews()", self._function_source("openTaskAssistanceView"))
+        self.assertIn("continueAccountLoginSyncUntilSettled(cleanTaskId)", self._function_source("openTaskAssistanceView"))
+        self.assertIn("refreshSocialAccountsOnly({ force: true })", self._function_source("syncAccountsAfterLoginAssistance"))
         self.assertIn("login_assistance?.phase", self._function_source("openTaskAssistanceView"))
         self.assertIn("state.publishAssistanceDismissed = true", self._function_source("openTaskAssistanceView"))
         self.assertIn("is-publish-assistance", self._function_source("openTaskAssistanceView"))
@@ -3906,6 +3974,12 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn(".account-pool-card .account-pool-card-flags .status", self.styles)
         self.assertNotIn(".account-pool-card .account-totp-badge", self.styles)
         self.assertIn("font-size: 10px;", self.styles)
+        username_start = self.styles.index(".account-pool-card-copy strong {")
+        username_rule = self.styles[username_start:self.styles.index("}", username_start) + 1]
+        self.assertIn("line-height: 1.45;", username_rule)
+        self.assertIn("overflow-wrap: anywhere;", username_rule)
+        self.assertIn("white-space: normal;", username_rule)
+        self.assertNotIn("text-overflow: ellipsis;", username_rule)
 
     def test_account_clipboard_write_falls_back_when_permission_is_denied(self):
         copy_text = self._function_source("copyTextToClipboard")

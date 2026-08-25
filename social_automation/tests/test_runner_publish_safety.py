@@ -225,6 +225,11 @@ class LoginAssistancePresentationTests(unittest.TestCase):
             auto_login.index("if last_status.get(\"status\") == \"ready\""),
         )
         self.assertIn("_publish_login_assistance_state(page, context_control, last_status)", auto_login)
+        self.assertIn('if str(last_status.get("status") or "") != "ready":', auto_login)
+        self.assertLess(
+            auto_login.index("_confirm_platform_ready("),
+            auto_login.index("_publish_login_assistance_state(page, context_control, stable_status, handoff=True)"),
+        )
         self.assertIn('"status": "cancelled"', auto_login)
         self.assertIn('"status": "failed"', auto_login)
         self.assertIn('{"status": "manual_login_timeout"', wait_manual)

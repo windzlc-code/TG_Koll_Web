@@ -20,6 +20,12 @@ class AdminTaskTableFrontendTests(unittest.TestCase):
         self.assertIn("function renderTaskRow(task)", self.script)
         self.assertNotIn("function renderTaskCard(task)", self.script)
         self.assertIn("pageRows.map((task) => renderTaskRow(task))", self.script)
+        self.assertIn("function taskPromptDisplay(task", self.script)
+        self.assertIn('提示词：</span>${escapeHtml(taskPromptDisplay(task))}', self.script)
+        self.assertIn("inspectItem(\"用户提示词\", taskPromptDisplay(data))", self.script)
+        self.assertIn("inspectItem(\"发给模型的提示词\", taskPromptDisplay(data, { final: true }))", self.script)
+        self.assertIn(".page-admin .admin-task-prompt {", self.styles)
+        self.assertIn("生成编号 / 客户 / 类型 / 提示词 / 异常提示", self.html)
 
     def test_generation_table_has_scoped_column_layout(self):
         self.assertIn(".page-admin .admin-task-table {", self.styles)
