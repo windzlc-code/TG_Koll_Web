@@ -447,7 +447,18 @@ def _list_preview_fields(data: JsonDict) -> JsonDict:
         or evidence.get("content")
         or (data.get("detail") if isinstance(data.get("detail"), str) else "")
         or ""
-    ).strip()[:160]
+    ).strip()
+    if not text and nested:
+        bits = []
+        for key, label in (
+            ("published", "已发布"), ("submitted", "已提交"), ("processed", "已处理"),
+            ("replied", "已回复"), ("failed", "失败"), ("remaining", "剩余"), ("total", "总计"),
+        ):
+            value = nested.get(key)
+            if isinstance(value, (int, float)):
+                bits.append(f"{label} {int(value)}")
+        text = " · ".join(bits[:6])
+    text = text[:160]
     user = str(
         data.get("recipient")
         or data.get("recipient_username")

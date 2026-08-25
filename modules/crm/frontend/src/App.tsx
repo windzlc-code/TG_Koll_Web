@@ -492,16 +492,28 @@ function isReachRecord(item: Record<string, unknown>, view: ViewId) {
   return true;
 }
 
-function inspectPayload(detail: Record<string, unknown>) {
+function summaryFromDetail(detail: unknown, language: Language) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return "";
+  const row = detail as Record<string, unknown>;
+  const named = humanText(row.name || row.title || row.comment || row.content, "");
+  if (named && named !== "—") return named;
+  const labels: Array<[string, string]> = language === "zh-Hant"
+    ? [["published", "已發佈"], ["submitted", "已提交"], ["processed", "已處理"], ["replied", "已回覆"], ["failed", "失敗"], ["remaining", "剩餘"], ["total", "總計"]]
+    : [["published", "已发布"], ["submitted", "已提交"], ["processed", "已处理"], ["replied", "已回复"], ["failed", "失败"], ["remaining", "剩余"], ["total", "总计"]];
+  return labels.filter(([key]) => row[key] !== undefined && row[key] !== null && Number.isFinite(Number(row[key]))).map(([key, label]) => `${label} ${Number(row[key])}`).slice(0, 6).join(" · ");
+}
+
+function inspectPayload(detail: Record<string, unknown>, language: Language = "zh-Hans") {
   const nested = [detail.payload, detail.input, detail.result, detail.evidence].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
   const merged: Record<string, unknown> = { ...detail };
   for (const row of nested) Object.assign(merged, row);
   const deeper = [merged.detail, merged.evidence].filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)));
   for (const row of deeper) {
-    if (!merged.content) merged.content = row.content || row.comment || row.name || row.title;
+    if (!merged.content) merged.content = row.content || row.comment || row.name || row.title || summaryFromDetail(row, language);
     if (!merged.username) merged.username = row.username || row.display_name;
   }
   if (typeof merged.detail === "string" && !merged.content) merged.content = merged.detail;
+  if (!merged.content) merged.content = summaryFromDetail(merged.detail, language);
   return merged;
 }
 
@@ -618,7 +630,7 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
         <div className="crm-modal-head"><div><span className="crm-kicker">{messages.views[view][0]}</span><h2 id="crmRecordDetailTitle">{messages.recordDetail}</h2></div><button className="crm-icon-button" type="button" onClick={() => setInspect(null)} aria-label={messages.cancel}><Icon name="close" /></button></div>
         {inspectBusy ? <p className="crm-quiet-empty">{messages.loadingData}</p> : <dl className="crm-record-detail">
           {(() => {
-            const payload = inspectPayload(inspect);
+            const payload = inspectPayload(inspect, language);
             const kind = eventPreviewLabel(String(inspect.event_type || inspect.workflow_type || inspect.kind || inspect.type || ""), language) || itemTitle(inspect, messages.views[view][0], language);
             const target = humanText(payload.preview_user || payload.recipient || payload.recipient_username || payload.username || payload.display_name, "");
             const content = eventPreviewLabel(String(payload.preview_text || payload.content || payload.comment || payload.message || payload.instruction || payload.text || payload.source_text || ""), language)
