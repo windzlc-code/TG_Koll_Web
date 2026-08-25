@@ -4,11 +4,12 @@ import { catalog, localizedError, operationCatalog, readLanguage, type Messages 
 import { Icon } from "./icons";
 import { PlatformChip, PlatformLogo, platformLabel } from "./platform";
 import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
-import { humanText, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
+import { BarChart, DonutChart, LineChart } from "./charts";
+import { chartColor, dailyTrend, humanText, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
-import { animatePageSlide, applyDockPill, navigationDirection, prefersReducedMotion, useSegmentSlide } from "./segment-motion";
+import { animatePageSlide, applyDockPill, prefersReducedMotion, useSegmentSlide } from "./segment-motion";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -160,7 +161,7 @@ function StatusBadge({ status, messages }: { status?: string; messages: Messages
   return <span className={`crm-status crm-status--${statusTone(status)}`}><i aria-hidden="true" />{statusText(status, messages)}</span>;
 }
 
-function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId, options?: { direction?: number }) => void; label: string }) {
+function CompactTabs({ items, value, messages, navigate, label }: { items: ViewId[]; value: ViewId; messages: Messages; navigate: (view: ViewId) => void; label: string }) {
   const group = useRef<HTMLDivElement>(null);
   const segment = useSegmentSlide();
   const select = (next: ViewId, button?: HTMLButtonElement | null) => {
@@ -168,10 +169,8 @@ function CompactTabs({ items, value, messages, navigate, label }: { items: ViewI
     const node = group.current;
     const current = node?.querySelector<HTMLButtonElement>("button.is-active, button[aria-selected='true']");
     const target = button || node?.querySelector<HTMLButtonElement>(`#crm-tab-${next}`);
-    const buttons = node ? [...node.querySelectorAll<HTMLButtonElement>("button")] : [];
-    const direction = navigationDirection(buttons, current || null, target || null);
     segment.start(node, current || null, target || null, () => {
-      navigate(next, { direction });
+      navigate(next);
       window.requestAnimationFrame(() => document.getElementById(`crm-tab-${next}`)?.focus());
     });
   };
@@ -552,36 +551,38 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
   </section>;
 }
 
-function Overview({ bootstrap, tasks, messages, language, navigate, onCreate }: { bootstrap: BootstrapPayload; tasks: CrmTask[]; messages: Messages; language: Language; navigate: (view: ViewId) => void; onCreate: (view: ViewId) => void }) {
+function Overview({ bootstrap, tasks, messages, language }: { bootstrap: BootstrapPayload; tasks: CrmTask[]; messages: Messages; language: Language }) {
   const summary = bootstrap.summary || bootstrap.counts || {};
   const active = tasks.filter((task) => activeStatuses.has(String(task.status || "")));
   const manual = tasks.filter((task) => ["manual_required", "unknown"].includes(String(task.status || "")));
-  const completed = tasks.filter((task) => String(task.status || "") === "completed").length;
   const leadCount = Number(summary.leads ?? summary.lead_count ?? 0);
   const poolCount = Number(summary.pools ?? summary.pool_count ?? 0);
-  const flowValues = [leadCount, poolCount, active.length, manual.length, completed];
-  const flowGoes = [
-    () => onCreate("collect"),
-    () => navigate("collect"),
-    () => onCreate("public"),
-    () => navigate("tasks"),
-    () => navigate("tasks"),
-  ];
-  const actions = [
-    { id: "collect" as ViewId, title: messages.views.collect[0], hint: messages.pipelineCollectHint, run: () => onCreate("collect") },
-    { id: "outreach" as ViewId, title: messages.views.outreach[0], hint: messages.views.outreach[1], run: () => onCreate("outreach") },
-    { id: "public" as ViewId, title: messages.views.public[0], hint: messages.views.public[1], run: () => onCreate("public") },
-    { id: "groups" as ViewId, title: messages.views.groups[0], hint: messages.views.groups[1], run: () => onCreate("groups") },
-    { id: "tasks" as ViewId, title: messages.views.tasks[0], hint: messages.views.tasks[1], run: () => navigate("tasks") },
-  ];
-  const taskMix = mixParts(
-    Object.entries(tasks.reduce((counts, task) => {
+  const [analytics, setAnalytics] = useState<Record<string, unknown>>({});
+  useEffect(() => { void crmApi.analytics().then(setAnalytics).catch(() => setAnalytics({})); }, []);
+  const statusSource = Object.keys(analytics.workflow_statuses && typeof analytics.workflow_statuses === "object" ? analytics.workflow_statuses as object : {}).length
+    ? Object.entries((analytics.workflow_statuses || {}) as Record<string, number>).map(([key, count]) => [key, Number(count) || 0] as [string, number])
+    : Object.entries(tasks.reduce((counts, task) => {
       const status = String(task.status || "queued");
       counts[status] = (counts[status] || 0) + 1;
       return counts;
-    }, {} as Record<string, number>)),
+    }, {} as Record<string, number>));
+  const taskMix = mixParts(statusSource, language);
+  const funnelMix = mixParts(
+    ["submitted", "confirmed", "delivered", "read", "replied", "engaged", "clicked", "failed"]
+      .map((key) => [key, Number((analytics.funnel as Record<string, number> | undefined)?.[key] || 0)] as [string, number])
+      .filter(([, count]) => count > 0),
     language,
   );
+  const eventMix = mixParts(
+    Object.entries((analytics.event_types || {}) as Record<string, number>).map(([key, count]) => [key, Number(count) || 0] as [string, number]).filter(([, count]) => count > 0).slice(0, 8),
+    language,
+  );
+  const trend = dailyTrend(tasks as Array<Record<string, unknown>>);
+  const trendSeries = [
+    { key: "created", label: messages.chartCreated, color: chartColor(0, "complete"), values: trend.map((row) => row.created) },
+    { key: "completed", label: messages.chartCompleted, color: chartColor(1, "active"), values: trend.map((row) => row.completed) },
+    { key: "failed", label: messages.chartFailed, color: chartColor(4, "danger"), values: trend.map((row) => row.failed) },
+  ];
 
   return <>
     <section className="crm-overview-hero">
@@ -597,30 +598,11 @@ function Overview({ bootstrap, tasks, messages, language, navigate, onCreate }: 
       <Metric label={messages.metrics.active} value={summary.active_tasks ?? active.length} />
       <Metric label={messages.metrics.manual} value={summary.manual_required ?? manual.length} />
     </section>
-    <section className="crm-flow-board" aria-label={messages.flowKicker}>
-      <ol>
-        {messages.flowSteps.map((step, index) => <li key={step[0]}>
-          <button type="button" onClick={flowGoes[index]}>
-            <span>{String(index + 1).padStart(2, "0")}</span>
-            <div><strong>{step[0]}</strong><small>{step[1]}</small></div>
-            <b>{displayValue(flowValues[index])}</b>
-          </button>
-        </li>)}
-      </ol>
-    </section>
-    {taskMix.length > 0 && <MixBar title={messages.mixTasks} parts={taskMix} />}
-    <section className="crm-action-grid" aria-label={messages.acquisitionPath}>
-      {actions.map((step) => <button type="button" className="crm-action-card" key={step.id} onClick={step.run}>
-        <span className="crm-pipeline-icon" aria-hidden="true"><Icon name={step.id} /></span>
-        <strong>{step.title}</strong>
-        <small>{step.hint}</small>
-      </button>)}
-    </section>
-    <section className="crm-panel crm-priority-panel">
-      <div className="crm-panel-head"><div><h2>{messages.priority}</h2></div><button className="crm-text-button" onClick={() => navigate("tasks")}>{messages.viewTasks}<Icon name="arrow" /></button></div>
-      {!manual.length && !active.length ? <EmptyState messages={messages} view="tasks" /> : <div className="crm-compact-tasks">
-        {[...manual, ...active].slice(0, 5).map((task, index) => <button type="button" key={String(task.task_id || task.id || index)} onClick={() => navigate("tasks")}><span><strong>{taskTitle(task as Record<string, unknown>, messages.untitledTask, language)}</strong><small>{humanText(task.message, "") || localizedDate(task.updated_at || task.created_at, language)}</small></span><StatusBadge status={String(task.status || "queued")} messages={messages} /></button>)}
-      </div>}
+    <section className="crm-chart-grid" aria-label={messages.flowKicker}>
+      <LineChart title={messages.chartTrend} hint={messages.chartTrendHint} labels={trend.map((row) => row.date)} series={trendSeries} empty={messages.chartEmpty} />
+      <DonutChart title={messages.mixTasks} hint={messages.chartTasksHint} parts={taskMix} totalLabel={messages.chartTotal} empty={messages.chartEmpty} />
+      <DonutChart title={messages.chartFunnel} hint={messages.chartFunnelHint} parts={funnelMix} totalLabel={messages.chartTotal} empty={messages.chartEmpty} />
+      <BarChart title={messages.chartEvents} hint={messages.chartEventsHint} parts={eventMix} empty={messages.chartEmpty} />
     </section>
   </>;
 }
@@ -1035,7 +1017,7 @@ export function App() {
       {bootstrap.workspace?.managed_by_admin && <div className="crm-banner crm-banner--workspace" role="status"><Icon name="accounts" /><span><strong>{messages.managedWorkspace}</strong>{messages.managedWorkspaceDetail(bootstrap.workspace.username || String(bootstrap.workspace.user_id || "—"), bootstrap.workspace.user_id)}</span><a className="crm-secondary-button" href="/admin.html">{messages.exitWorkspace}</a></div>}
       {partial && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{messages.partial}</span><button type="button" onClick={() => { void loadBootstrap(); void refreshTasks(); }}><Icon name="refresh" />{messages.retry}</button></div>}
       {bootstrap.module?.degraded && <div className="crm-banner crm-banner--degraded" role="alert"><Icon name="signal" /><span><strong>{messages.degraded}</strong>{messages.degradedHint}</span></div>}
-      {view === "overview" && <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} language={language} navigate={navigate} onCreate={startWorkflow} />}
+      {view === "overview" && <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} language={language} />}
       {activeNav === "collect" && <>
         <div className="crm-module-toolbar">
           <h2>{messages.views.collect[0]}</h2>

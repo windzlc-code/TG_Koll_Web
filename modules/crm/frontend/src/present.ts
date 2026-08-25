@@ -86,6 +86,12 @@ export function metricLabel(key: string, language: "zh-Hans" | "zh-Hant") {
     hotspot: ["热点", "熱點"],
     lead: ["客户", "客戶"],
     pool: ["客户池", "客戶池"],
+    delivered: ["已送达", "已送達"],
+    read: ["已读", "已讀"],
+    replied: ["已回复", "已回覆"],
+    engaged: ["已互动", "已互動"],
+    clicked: ["已点击", "已點擊"],
+    created: ["新建", "新建"],
   };
   const pair = map[key];
   if (pair) return hant ? pair[1] : pair[0];
@@ -223,4 +229,50 @@ export function friendlyNotice(text: string) {
     .replace(/\s*[·•]\s*(crm_|pool_|task_|phc_|[0-9a-f]{12,}|\d{8,})[^\s]*/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+export const CHART_COLORS = ["#356b91", "#4b6478", "#253746", "#8a674d", "#9c5960", "#5c6f82", "#7b8a99"];
+
+export function chartColor(index: number, tone = "") {
+  if (tone === "complete") return "#356b91";
+  if (tone === "active") return "#4b6478";
+  if (tone === "warning") return "#8a674d";
+  if (tone === "danger") return "#9c5960";
+  if (tone === "neutral") return "#8b97a3";
+  return CHART_COLORS[index % CHART_COLORS.length];
+}
+
+function dayKey(value: unknown) {
+  if (value === null || value === undefined || value === "") return "";
+  const numeric = typeof value === "number" || /^\d+$/.test(String(value)) ? Number(value) : NaN;
+  const date = Number.isFinite(numeric) && numeric > 0
+    ? new Date(numeric < 10_000_000_000 ? numeric * 1000 : numeric)
+    : new Date(String(value));
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+export function dailyTrend(tasks: Array<Record<string, unknown>>, days = 14) {
+  const end = new Date();
+  end.setHours(0, 0, 0, 0);
+  const keys: string[] = [];
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const cursor = new Date(end);
+    cursor.setDate(end.getDate() - offset);
+    keys.push(cursor.toISOString().slice(0, 10));
+  }
+  const created: Record<string, number> = Object.fromEntries(keys.map((key) => [key, 0]));
+  const completed = { ...created };
+  const failed = { ...created };
+  for (const task of tasks) {
+    const opened = dayKey(task.created_at || task.updated_at);
+    if (opened && opened in created) created[opened] += 1;
+    const status = String(task.status || "");
+    const finished = dayKey(task.updated_at || task.created_at);
+    if (finished && finished in completed) {
+      if (status === "completed") completed[finished] += 1;
+      if (status === "failed") failed[finished] += 1;
+    }
+  }
+  return keys.map((date) => ({ date, created: created[date], completed: completed[date], failed: failed[date] }));
 }

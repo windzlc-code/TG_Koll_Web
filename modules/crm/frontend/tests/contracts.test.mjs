@@ -8,11 +8,18 @@ import { createSinglePollScheduler, isModulePolicyError, mergeCursorPage, mergeP
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path) => readFile(resolve(root, path), "utf8");
 
-test("CRM overview exposes a compact action grid", async () => {
+test("CRM overview exposes preview charts and no other-page task launchers", async () => {
   const app = await read("src/App.tsx");
   const i18n = await read("src/i18n.ts");
-  assert.match(app, /className="crm-action-grid"/);
-  assert.match(app, /messages\.pipelineCollectHint/);
+  const charts = await read("src/charts.tsx");
+  assert.match(app, /className="crm-chart-grid"/);
+  assert.match(app, /DonutChart/);
+  assert.match(app, /LineChart/);
+  assert.match(charts, /conic-gradient/);
+  assert.match(charts, /crm-line-chart/);
+  assert.doesNotMatch(app, /className="crm-action-grid"/);
+  assert.doesNotMatch(app, /crm-priority-panel/);
+  assert.doesNotMatch(app, /crm-flow-board/);
   assert.match(i18n, /pipelineCollect: "发现客户"/);
   assert.match(i18n, /navItems: \{ overview: "总览"/);
 });
@@ -151,12 +158,15 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.doesNotMatch(app, /crm-banner--login/);
   assert.doesNotMatch(app, /crm-task-strip/);
   assert.match(app, /from "\.\/present"/);
-  assert.match(app, /crm-flow-board/);
+  assert.match(app, /crm-chart-grid/);
   assert.match(app, /taskTitle\(/);
   assert.doesNotMatch(app, /task\.title \|\| task\.name \|\| task\.kind \|\| task\.task_id/);
-  assert.match(css, /\.crm-flow-board/);
+  assert.match(css, /\.crm-donut/);
+  assert.match(css, /\.crm-line-chart/);
   assert.match(css, /\.crm-mix-bar/);
   assert.match(css, /\.crm-member-grid/);
+  assert.match(app, /useSegmentSlide/);
+  assert.match(app, /navigate\(next\);/);
   assert.match(app, /cancelTaskConfirm/);
   assert.match(app, /role="progressbar"/);
   assert.match(css, /--crm-sidebar-width:\s*188px/);
