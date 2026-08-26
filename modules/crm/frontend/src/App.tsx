@@ -1294,11 +1294,10 @@ export function App() {
           <div className="crm-nav-page" aria-hidden={activeNav !== "collect"} inert={activeNav !== "collect" ? true : undefined}>
             <div className="crm-module-toolbar">
               <h2>{messages.views.collect[0]}</h2>
-              {viewEnabled("collect") && <button className="crm-primary-button" type="button" onClick={() => startWorkflow("collect")}><Icon name="collect" />{messages.create}</button>}
             </div>
             {!viewEnabled("collect") && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`}</span></div>}
             {viewAdvisory("collect") && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{viewAdvisory("collect")}</span></div>}
-            <PoolsView language={language} />
+            <PoolsView language={language} onCreate={viewEnabled("collect") ? () => startWorkflow("collect") : undefined} />
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "public"} inert={activeNav !== "public" ? true : undefined}>
             <CompactTabs items={engageTabs} value={engageTabs.includes(view) ? view : "public"} messages={messages} navigate={navigate} label={messages.navItems.public} />

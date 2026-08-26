@@ -229,6 +229,11 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(business, /memberDetail/);
   assert.match(business, /setInspecting/);
   assert.match(business, /crm-pool-settings/);
+  assert.match(business, /crm-pool-launch/);
+  assert.match(business, /createTask/);
+  assert.match(business, /setPoolOpen\(true\)/);
+  assert.match(business, /setOpcOpen\(true\)/);
+  assert.match(app, /PoolsView language=\{language\} onCreate=/);
   assert.doesNotMatch(business, /tags\.map\(\(tag\) => <span className="crm-chip"/);
 });
 

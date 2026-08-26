@@ -1428,8 +1428,25 @@ body.crm-page a.crm-account-card-action { text-decoration: none; }
 .crm-toast { position: fixed; z-index: 120; top: 98px; left: 50%; max-width: min(480px, calc(100vw - 36px)); padding: 11px 15px; color: var(--crm-on-dark); background: var(--crm-dark-raised); border: 1px solid rgba(215, 224, 231, 0.22); border-radius: 8px; box-shadow: var(--crm-shadow); font-size: 13px; font-weight: 700; transform: translateX(-50%); animation: crm-toast 4s both; }
 
 .crm-task-data-stack { display: grid; gap: 18px; }
-.crm-business-panel { min-height: 430px; }
+.crm-business-panel { min-height: 0; }
 .crm-business-head > div:first-child { max-width: 720px; }
+.crm-pool-launch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+.crm-pool-launch > button {
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+}
+.crm-pool-list.crm-master-list {
+  max-height: min(70vh, 640px);
+  border: 1px solid var(--crm-line);
+  border-right: 1px solid var(--crm-line);
+  border-radius: 9px;
+}
 .crm-business-actions { display: flex; align-items: center; gap: 8px; }
 .crm-business-actions :is(button, a) { display: inline-flex; align-items: center; gap: 7px; }
 .crm-business-actions svg { width: 15px; height: 15px; }
@@ -1744,6 +1761,7 @@ body.crm-page a.crm-account-card-action { text-decoration: none; }
   .crm-business-actions > * { justify-content: center; width: 100%; }
   .crm-split-workspace { grid-template-columns: 1fr; }
   .crm-master-list { max-height: 220px; border-right: 0; border-bottom: 1px solid var(--crm-line); }
+  .crm-pool-list.crm-master-list { max-height: min(70vh, 640px); border: 1px solid var(--crm-line); }
   .crm-detail-heading { flex-direction: column; }
   .crm-detail-pane { padding: 15px; }
   .crm-form-grid, .crm-schedule-create, .crm-analytics-grid { grid-template-columns: 1fr; }
