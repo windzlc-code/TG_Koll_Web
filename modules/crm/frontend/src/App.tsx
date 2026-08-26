@@ -1,15 +1,16 @@
 import { Children, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api";
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
 import { PlatformLogo, normalizePlatform, platformLabel } from "./platform";
 import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { BarChart, DonutChart, LineChart } from "./charts";
-import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
+import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, isTechnicalId, isTechnicalKey, metricLabel, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
-import { animatePageSlide, applyDockPill, applySegmentPill, prefersReducedMotion } from "./segment-motion";
+import { applyDockPill, applySegmentPill, prefersReducedMotion } from "./segment-motion";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -580,6 +581,37 @@ function inspectPayload(detail: Record<string, unknown>, language: Language = "z
   return merged;
 }
 
+function inspectDetailRows(inspect: Record<string, unknown>, view: ViewId, messages: Messages, language: Language): Array<[string, string]> {
+  const payload = inspectPayload(inspect, language);
+  const kind = eventPreviewLabel(String(inspect.event_type || inspect.workflow_type || inspect.kind || inspect.type || ""), language) || itemTitle(inspect, messages.views[view][0], language);
+  const target = humanText(payload.preview_user || payload.recipient || payload.recipient_username || payload.username || payload.display_name, "");
+  const content = eventPreviewLabel(String(payload.preview_text || payload.content || payload.comment || payload.message || payload.instruction || payload.text || payload.source_text || ""), language)
+    || humanText(payload.preview_text || payload.content || payload.comment || payload.message || payload.instruction || payload.text || payload.source_text, "");
+  const result = summaryFromDetail(payload.detail, language) || summaryFromDetail(payload, language);
+  const shown = new Set(["event_type", "workflow_type", "kind", "type", "status", "state", "preview_user", "preview_text", "content", "comment", "message", "instruction", "text", "source_text", "recipient", "recipient_username", "username", "display_name", "occurred_at", "updated_at", "created_at", "payload", "input", "result", "evidence", "detail", "steps", "actions"]);
+  const rows: Array<[string, string]> = [
+    [messages.views[view][0], kind],
+    [messages.recordTarget, target],
+    [messages.status, statusText(String(inspect.status || inspect.state || payload.status || ""), messages)],
+    [messages.recordTime, localizedDate(inspect.occurred_at || inspect.updated_at || inspect.created_at, language)],
+    [messages.recordContent, content && content !== "—" ? content : ""],
+    [messages.recordResult, result && result !== content ? result : ""],
+  ];
+  for (const [key, value] of Object.entries(payload)) {
+    if (shown.has(key) || isTechnicalKey(key)) continue;
+    if (value && typeof value === "object") {
+      const nested = summaryFromDetail(value as Record<string, unknown>, language);
+      if (nested) rows.push([metricLabel(key, language), nested]);
+      continue;
+    }
+    const text = eventPreviewLabel(String(value || ""), language) || humanText(value, "");
+    if (!text || text === "—" || isTechnicalId(text)) continue;
+    rows.push([metricLabel(key, language), text]);
+    shown.add(key);
+  }
+  return rows.filter(([, value]) => value && value !== "—");
+}
+
 function ResourceList({ view, messages, language, enabled, blockedHint, advisory, onCreate }: { view: ViewId; messages: Messages; language: Language; enabled: boolean; blockedHint: string; advisory?: string; onCreate: () => void }) {
   const resource = endpointByView[view];
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
@@ -632,6 +664,12 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
   }, [messages, resource]);
 
   useEffect(() => { void load(""); }, [load]);
+  useEffect(() => {
+    if (!inspect) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [inspect]);
 
   const visibleItems = useMemo(() => items.filter((item) => isReachRecord(item, view)), [items, view]);
   useEffect(() => {
@@ -688,29 +726,15 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
       </div>
     </>}
     {state === "ready" && nextCursor && visibleItems.length > 0 && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={() => void load(nextCursor)}>{loadingMore ? messages.loadingMore : messages.loadMore}</button></div>}
-    {inspect && <div className="crm-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setInspect(null); }}>
-      <div className="crm-modal" role="dialog" aria-modal="true" aria-labelledby="crmRecordDetailTitle">
+    {inspect && createPortal(<div className="crm-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setInspect(null); }}>
+      <div className="crm-modal crm-record-modal" role="dialog" aria-modal="true" aria-labelledby="crmRecordDetailTitle">
         <div className="crm-modal-head"><div><span className="crm-kicker">{messages.views[view][0]}</span><h2 id="crmRecordDetailTitle">{messages.recordDetail}</h2></div><button className="crm-icon-button" type="button" onClick={() => setInspect(null)} aria-label={messages.cancel}><Icon name="close" /></button></div>
         {inspectBusy ? <p className="crm-quiet-empty">{messages.loadingData}</p> : <dl className="crm-record-detail">
-          {(() => {
-            const payload = inspectPayload(inspect, language);
-            const kind = eventPreviewLabel(String(inspect.event_type || inspect.workflow_type || inspect.kind || inspect.type || ""), language) || itemTitle(inspect, messages.views[view][0], language);
-            const target = humanText(payload.preview_user || payload.recipient || payload.recipient_username || payload.username || payload.display_name, "");
-            const content = eventPreviewLabel(String(payload.preview_text || payload.content || payload.comment || payload.message || payload.instruction || payload.text || payload.source_text || ""), language)
-              || humanText(payload.preview_text || payload.content || payload.comment || payload.message || payload.instruction || payload.text || payload.source_text, "");
-            const rows = [
-              [messages.views[view][0], kind],
-              [messages.recordTarget, target],
-              [messages.status, statusText(String(inspect.status || inspect.state || payload.status || ""), messages)],
-              [messages.recordTime, localizedDate(inspect.occurred_at || inspect.updated_at || inspect.created_at, language)],
-              [messages.recordContent, content && content !== "—" ? content : messages.noRecordBody],
-            ].filter(([, value]) => value && value !== "—");
-            return rows.map(([label, value]) => <div key={String(label)}><dt>{label}</dt><dd>{value}</dd></div>);
-          })()}
+          {(inspectDetailRows(inspect, view, messages, language).length ? inspectDetailRows(inspect, view, messages, language) : [[messages.recordContent, messages.noRecordBody] as [string, string]]).map(([label, value]) => <div key={String(label)}><dt>{label}</dt><dd>{value}</dd></div>)}
         </dl>}
         <div className="crm-modal-actions"><button className="crm-primary-button" type="button" onClick={() => setInspect(null)}>{messages.cancel}</button></div>
       </div>
-    </div>}
+    </div>, document.body)}
   </section>;
 }
 
@@ -1164,14 +1188,6 @@ export function App() {
   };
 
   useLayoutEffect(() => {
-    const { direction, panel } = pageSlide.current;
-    if (!direction) return;
-    pageSlide.current = { direction: 0, panel: false };
-    if (panel) return;
-    animatePageSlide(viewStage.current, direction);
-  }, [view]);
-
-  useLayoutEffect(() => {
     if (bootstrapState !== "ready") return;
     const index = Math.max(0, navViews.indexOf(navViewOf(view)));
     applyDockPill(dockRef.current, dockPillRef.current, index, !dockPillReady.current);
@@ -1245,43 +1261,49 @@ export function App() {
       {bootstrap.workspace?.managed_by_admin && <div className="crm-banner crm-banner--workspace" role="status"><Icon name="accounts" /><span><strong>{messages.managedWorkspace}</strong>{messages.managedWorkspaceDetail(bootstrap.workspace.username || String(bootstrap.workspace.user_id || "—"), bootstrap.workspace.user_id)}</span><a className="crm-secondary-button" href="/admin.html">{messages.exitWorkspace}</a></div>}
       {partial && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{messages.partial}</span><button type="button" onClick={() => { void loadBootstrap(); void refreshTasks(); }}><Icon name="refresh" />{messages.retry}</button></div>}
       {bootstrap.module?.degraded && <div className="crm-banner crm-banner--degraded" role="alert"><Icon name="signal" /><span><strong>{messages.degraded}</strong>{messages.degradedHint}</span></div>}
-      {view === "overview" && <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} language={language} />}
-      {activeNav === "collect" && <>
-        <div className="crm-module-toolbar">
-          <h2>{messages.views.collect[0]}</h2>
-          {viewEnabled("collect") && <button className="crm-primary-button" type="button" onClick={() => startWorkflow("collect")}><Icon name="collect" />{messages.create}</button>}
+      <div className="crm-nav-clip">
+        <div className="crm-nav-strip" style={{ transform: `translate3d(${-Math.max(0, navViews.indexOf(activeNav)) * 100}%, 0, 0)` }}>
+          <div className="crm-nav-page" aria-hidden={activeNav !== "overview"} inert={activeNav !== "overview" ? true : undefined}>
+            <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} language={language} />
+          </div>
+          <div className="crm-nav-page" aria-hidden={activeNav !== "collect"} inert={activeNav !== "collect" ? true : undefined}>
+            <div className="crm-module-toolbar">
+              <h2>{messages.views.collect[0]}</h2>
+              {viewEnabled("collect") && <button className="crm-primary-button" type="button" onClick={() => startWorkflow("collect")}><Icon name="collect" />{messages.create}</button>}
+            </div>
+            {!viewEnabled("collect") && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`}</span></div>}
+            {viewAdvisory("collect") && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{viewAdvisory("collect")}</span></div>}
+            <PoolsView language={language} />
+          </div>
+          <div className="crm-nav-page" aria-hidden={activeNav !== "public"} inert={activeNav !== "public" ? true : undefined}>
+            <CompactTabs items={engageTabs} value={engageTabs.includes(view) ? view : "public"} messages={messages} navigate={navigate} label={messages.navItems.public} />
+            <SubpageStrip items={engageTabs} value={engageTabs.includes(view) ? view : "public"}>
+              <ResourceList view="public" messages={messages} language={language} enabled={viewEnabled("public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("public")} onCreate={() => startWorkflow("public")} />
+              <ResourceList view="outreach" messages={messages} language={language} enabled={viewEnabled("outreach")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("outreach")} onCreate={() => startWorkflow("outreach")} />
+              <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />
+            </SubpageStrip>
+          </div>
+          <div className="crm-nav-page" aria-hidden={activeNav !== "tasks"} inert={activeNav !== "tasks" ? true : undefined}>
+            <CompactTabs items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"} messages={messages} navigate={navigate} label={messages.views.tasks[0]} />
+            <SubpageStrip items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"}>
+              <>
+                <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} />
+                <details className="crm-analytics-fold"><summary>{language === "zh-Hant" ? "營運分析" : "运营分析"}</summary><AnalyticsView language={language} /></details>
+              </>
+              <SchedulesView language={language} onCreate={(workflow) => setWorkflowView(workflow)} />
+            </SubpageStrip>
+          </div>
+          <div className="crm-nav-page" aria-hidden={activeNav !== "settings"} inert={activeNav !== "settings" ? true : undefined}>
+            <CompactTabs items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"} messages={messages} navigate={navigate} label={messages.views.settings[0]} />
+            <SubpageStrip items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"}>
+              <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />
+              <TemplatesView language={language} />
+              <DestinationsView language={language} />
+              <ResourceList view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />
+            </SubpageStrip>
+          </div>
         </div>
-        {!viewEnabled("collect") && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`}</span></div>}
-        {viewAdvisory("collect") && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{viewAdvisory("collect")}</span></div>}
-        <PoolsView language={language} />
-      </>}
-      {activeNav === "public" && <>
-        <CompactTabs items={engageTabs} value={engageTabs.includes(view) ? view : "public"} messages={messages} navigate={navigate} label={messages.navItems.public} />
-        <SubpageStrip items={engageTabs} value={engageTabs.includes(view) ? view : "public"}>
-          <ResourceList view="public" messages={messages} language={language} enabled={viewEnabled("public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("public")} onCreate={() => startWorkflow("public")} />
-          <ResourceList view="outreach" messages={messages} language={language} enabled={viewEnabled("outreach")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("outreach")} onCreate={() => startWorkflow("outreach")} />
-          <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />
-        </SubpageStrip>
-      </>}
-      {activeNav === "tasks" && <>
-        <CompactTabs items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"} messages={messages} navigate={navigate} label={messages.views.tasks[0]} />
-        <SubpageStrip items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"}>
-          <>
-            <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} />
-            <details className="crm-analytics-fold"><summary>{language === "zh-Hant" ? "營運分析" : "运营分析"}</summary><AnalyticsView language={language} /></details>
-          </>
-          <SchedulesView language={language} onCreate={(workflow) => setWorkflowView(workflow)} />
-        </SubpageStrip>
-      </>}
-      {activeNav === "settings" && <>
-        <CompactTabs items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"} messages={messages} navigate={navigate} label={messages.views.settings[0]} />
-        <SubpageStrip items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"}>
-          <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />
-          <TemplatesView language={language} />
-          <DestinationsView language={language} />
-          <ResourceList view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />
-        </SubpageStrip>
-      </>}
+      </div>
       </div>
     </main>
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={() => { setToast(messages.submitted); void refreshTasks(); }} />

@@ -145,7 +145,7 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /--public-action-gradient/);
   assert.match(app, /applySegmentPill/);
   assert.match(app, /crm-compact-tabs-pill/);
-  assert.match(app, /animatePageSlide/);
+  assert.match(app, /crm-nav-strip/);
   assert.match(motion, /translate3d\(\$\{direction \* 100\}%, 0, 0\)/);
   assert.match(motion, /max-width: 980px/);
   assert.match(app, /messages\.viewRecord/);
@@ -190,8 +190,11 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(app, /navigate\(next, \{ direction, panel: true \}\)/);
   assert.match(app, /className="crm-view"/);
   assert.match(app, /className="crm-panel-strip"/);
-  assert.match(app, /if \(panel\) return/);
-  assert.match(app, /animatePageSlide\(viewStage\.current/);
+  assert.match(app, /className="crm-nav-strip"/);
+  assert.match(app, /createPortal/);
+  assert.match(app, /inspectDetailRows/);
+  assert.match(css, /\.crm-nav-strip/);
+  assert.match(css, /\.crm-record-modal/);
   assert.match(css, /\.crm-panel-clip/);
   assert.match(css, /\.crm-panel-strip/);
   assert.match(app, /account-status-icon/);

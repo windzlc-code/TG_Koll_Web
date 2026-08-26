@@ -193,7 +193,25 @@ body.crm-page button { color: inherit; }
 .crm-view {
   position: relative;
   left: 0;
+}
+.crm-nav-clip {
+  overflow: hidden;
+  min-width: 0;
+}
+.crm-nav-strip {
+  display: flex;
+  width: 100%;
   transform: translate3d(0, 0, 0);
+  will-change: transform;
+  transition: transform 180ms cubic-bezier(.2, .72, .2, 1);
+}
+.crm-nav-page {
+  flex: 0 0 100%;
+  min-width: 0;
+}
+.crm-nav-page[aria-hidden="true"] { pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .crm-nav-strip { transition: none; }
 }
 .crm-panel-clip {
   overflow: hidden;
@@ -1112,8 +1130,21 @@ body.crm-page a.crm-account-card-action { text-decoration: none; }
 .crm-task-strip > button > svg { width: 15px; height: 15px; }
 .crm-task-strip-pulse { width: 8px; height: 8px; background: #9fb3c2; border-radius: 50%; box-shadow: 0 0 0 4px rgba(159, 179, 194, 0.14); }
 
-.crm-modal-backdrop { position: fixed; z-index: 21000; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(16, 24, 32, 0.52); }
+.crm-modal-backdrop {
+  position: fixed;
+  z-index: 21000;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+  padding: 18px;
+  overflow: auto;
+  background: rgba(16, 24, 32, 0.52);
+}
 .crm-modal { width: min(560px, 100%); padding: 22px; background: var(--crm-paper); border: 1px solid var(--crm-line); border-radius: 10px; box-shadow: 0 30px 70px rgba(16, 24, 32, 0.24); }
+.crm-record-modal {
+  max-height: min(80dvh, calc(100dvh - var(--site-header-height, 68px) - 36px));
+  overflow-y: auto;
+}
 .crm-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .crm-modal h2 { font-size: 20px; }
 .crm-field { display: grid; gap: 7px; color: var(--crm-ink-soft); font-size: 13px; font-weight: 800; }
@@ -1573,6 +1604,8 @@ body.crm-page a.crm-account-card-action { text-decoration: none; }
   .crm-task-strip > button { grid-template-columns: 8px minmax(0, 1fr) 16px; }
   .crm-task-strip .crm-status { display: none; }
   .crm-modal { padding: 18px; }
+  .crm-modal-backdrop { padding: 12px 12px calc(var(--crm-mobile-dock-height) + 16px); }
+  .crm-record-modal { max-height: calc(100dvh - var(--site-header-height, 68px) - var(--crm-mobile-dock-height) - 28px); }
   .crm-toast { top: 76px; }
 }
 
