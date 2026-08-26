@@ -979,6 +979,8 @@ function TasksView({ tasks, pollError, messages, language, onAction, onChanged, 
 function WorkflowDialog({ view, messages, language, onClose, onCreated }: { view: ViewId | null; messages: Messages; language: Language; onClose: () => void; onCreated: (taskId: string) => void }) {
   const dialog = useRef<HTMLElement>(null);
   const idempotencyKey = useRef("");
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const [instruction, setInstruction] = useState("");
   const [consent, setConsent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -1007,7 +1009,7 @@ function WorkflowDialog({ view, messages, language, onClose, onCreated }: { view
     const node = dialog.current;
     node?.querySelector<HTMLElement>("select, input, textarea")?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
       if (event.key !== "Tab" || !node) return;
       const focusable = [...node.querySelectorAll<HTMLElement>('button:not([disabled]), select:not([disabled]), textarea:not([disabled]), input:not([disabled])')];
       if (!focusable.length) return;
@@ -1018,7 +1020,7 @@ function WorkflowDialog({ view, messages, language, onClose, onCreated }: { view
     };
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("keydown", onKey); previous?.focus(); };
-  }, [onClose, view]);
+  }, [view]);
   if (!view) return null;
   const submit = async () => {
     const workflowAction = view ? workflowActionByView[view] : undefined;

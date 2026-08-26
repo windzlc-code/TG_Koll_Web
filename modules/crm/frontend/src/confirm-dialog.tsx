@@ -83,6 +83,8 @@ export function ConsoleModal({
   dialogRef?: MutableRefObject<HTMLElement | null>;
 }) {
   const localRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const node = localRef.current;
@@ -92,7 +94,7 @@ export function ConsoleModal({
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -101,7 +103,7 @@ export function ConsoleModal({
       document.body.style.overflow = original;
       previous?.focus();
     };
-  }, [onClose]);
+  }, []);
   return createPortal(
     <div className="console-modal" role="presentation">
       <div className="console-modal-backdrop" onMouseDown={onClose} />

@@ -206,8 +206,14 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.doesNotMatch(css, /font-size:\s*(?:9|10|11)px|font:\s*(?:9|10|11)px/);
   const confirm = await read("src/confirm-dialog.tsx");
   const business = await read("src/BusinessViews.tsx");
+  const wizard = await read("src/WorkflowWizard.tsx");
   assert.match(confirm, /createPortal/);
   assert.match(confirm, /className="console-modal"/);
+  assert.match(confirm, /onCloseRef\.current = onClose/);
+  assert.doesNotMatch(confirm, /}, \[onClose\]\);/);
+  assert.match(wizard, /onCloseRef\.current = onClose/);
+  assert.doesNotMatch(wizard, /}, \[onClose, view\]\);/);
+  assert.doesNotMatch(app, /}, \[onClose, view\]\);/);
   assert.match(app, /requestConfirm/);
   assert.match(app, /ConfirmHost/);
   assert.doesNotMatch(app, /window\.confirm/);

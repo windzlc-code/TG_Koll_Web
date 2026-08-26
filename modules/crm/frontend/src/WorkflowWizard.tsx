@@ -121,6 +121,8 @@ export function WorkflowWizard({
   const t = copy[language];
   const dialog = useRef<HTMLElement>(null);
   const idempotency = useRef("");
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -246,7 +248,7 @@ export function WorkflowWizard({
     window.requestAnimationFrame(() => dialog.current?.querySelector<HTMLElement>("button, select, input, textarea")?.focus());
     const onKey = (event: KeyboardEvent) => {
       const node = dialog.current;
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") onCloseRef.current();
       if (event.key !== "Tab" || !node) return;
       const focusable = [...node.querySelectorAll<HTMLElement>('button:not([disabled]), select:not([disabled]), input:not([disabled]), textarea:not([disabled])')];
       if (!focusable.length) return;
@@ -256,7 +258,7 @@ export function WorkflowWizard({
     };
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("keydown", onKey); previous?.focus(); };
-  }, [onClose, view]);
+  }, [view]);
 
   if (!view) return null;
 
