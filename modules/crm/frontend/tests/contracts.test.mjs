@@ -328,11 +328,18 @@ test("OPC history, pool maintenance and takeover recovery have real API paths", 
   const app = await read("src/App.tsx");
   const views = await read("src/BusinessViews.tsx");
   const api = await read("src/api.ts");
+  const css = await read("src/styles.css");
   assert.match(api, /\/api\/crm\/v1\/opc\/history\/import/);
   assert.match(views, /crmApi\.queryOpcHistory/);
   assert.match(views, /crmApi\.importOpcHistory/);
   assert.match(views, /crmApi\.updateResource\("pools"/);
   assert.match(views, /crmApi\.deduplicatePoolMembers/);
+  assert.match(views, /setNotice\(t\.poolSaved\)/);
+  assert.match(views, /poolSaved:\s*"客户池已保存"/);
+  assert.match(views, /crm-panel-title-row/);
+  assert.match(views, /crm-icon-button[\s\S]*Icon name="refresh"/);
+  assert.match(css, /\.crm-panel-title-row/);
+  assert.match(css, /\.crm-inline-actions \.crm-primary-button/);
   for (const state of ["pending_login", "needs_login", "need_verification", "cookie_expired"]) assert.match(app, new RegExp(state));
   assert.match(app, /crmApi\.verifyAccount/);
   assert.match(app, /crmApi\.taskAction\(id,\s*"reconcile"\)/);
