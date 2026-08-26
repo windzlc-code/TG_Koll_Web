@@ -34,12 +34,12 @@ const viewAliases: Partial<Record<ViewId, ViewId>> = {
   pools: "collect",
   outreach: "public",
   groups: "public",
+  relationships: "public",
   schedules: "tasks",
   templates: "settings",
   accounts: "settings",
-  relationships: "settings",
 };
-const engageTabs: ViewId[] = ["public", "outreach", "groups"];
+const engageTabs: ViewId[] = ["public", "outreach", "groups", "relationships"];
 const taskTabs: ViewId[] = ["tasks", "schedules"];
 const settingTabs: ViewId[] = ["accounts", "templates"];
 
@@ -1309,6 +1309,7 @@ export function App() {
               <ResourceList view="public" messages={messages} language={language} enabled={viewEnabled("public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("public")} onCreate={() => startWorkflow("public")} />
               <ResourceList view="outreach" messages={messages} language={language} enabled={viewEnabled("outreach")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("outreach")} onCreate={() => startWorkflow("outreach")} />
               <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />
+              <ResourceList view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />
             </SubpageStrip>
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "tasks"} inert={activeNav !== "tasks" ? true : undefined}>
