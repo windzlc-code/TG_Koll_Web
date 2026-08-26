@@ -183,6 +183,7 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
   const [inspecting, setInspecting] = useState<Row | null>(null);
   const [platformFilter, setPlatformFilter] = useState<"threads" | "instagram">("threads");
   const [poolOpen, setPoolOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const loadPools = useCallback(async () => {
     setState("loading"); setError("");
@@ -218,7 +219,7 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
   const savePool = async () => {
     if (!selectedId || poolDraft.name.trim().length < 2) { setError(t.required); return; }
     setBusy("save-pool"); setError("");
-    try { await crmApi.updateResource("pools", selectedId, { name: poolDraft.name.trim(), tags: splitValues(poolDraft.tags).map((tag) => tag.slice(0, 64)).slice(0, 50) }); setNotice(t.poolSaved); await Promise.all([loadPools(), loadPool(selectedId)]); }
+    try { await crmApi.updateResource("pools", selectedId, { name: poolDraft.name.trim(), tags: splitValues(poolDraft.tags).map((tag) => tag.slice(0, 64)).slice(0, 50) }); setNotice(t.poolSaved); setEditOpen(false); await Promise.all([loadPools(), loadPool(selectedId)]); }
     catch (next) { setError(errorText(next, language)); }
     finally { setBusy(""); }
   };
@@ -254,11 +255,28 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
     <PageHeader title={t.pools} hint={t.poolHint} language={language} onRefresh={loadPools} />
     <div className="crm-pool-launch">
       <button className="crm-primary-button" type="button" onClick={() => setPoolOpen(true)}>{t.choosePool}</button>
-      <button className="crm-primary-button" type="button" onClick={() => setOpcOpen((current) => !current)}>{t.opcHistory}</button>
+      <button className="crm-primary-button" type="button" onClick={() => setOpcOpen(true)}>{t.opcHistory}</button>
       {onCreate && <button className="crm-primary-button" type="button" onClick={onCreate}><Icon name="collect" />{t.createTask}</button>}
     </div>
-    {error && <ErrorBox error={error} language={language} retry={loadPools} />}{notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
-    {opcOpen && <section className="crm-opc-history" aria-labelledby="crmOpcHistoryTitle"><header><div><span className="crm-kicker">OPC</span><h3 id="crmOpcHistoryTitle">{t.opcHistory}</h3><p>{t.opcHint}</p></div><button className="crm-icon-button" type="button" aria-label={t.close} onClick={() => setOpcOpen(false)}><Icon name="close" /></button></header><div className="crm-form-grid"><label className="crm-field crm-field--wide"><span>{t.searchHistory}</span><input value={opcFilter.search} onChange={(event) => setOpcFilter({ ...opcFilter, search: event.target.value })} /></label><label className="crm-field"><span>{t.keywords}</span><input value={opcFilter.keywords} onChange={(event) => setOpcFilter({ ...opcFilter, keywords: event.target.value })} /></label><label className="crm-field"><span>{t.platform}</span><select value={opcFilter.platform} onChange={(event) => setOpcFilter({ ...opcFilter, platform: event.target.value })}><option value="">{t.allPlatforms}</option><option value="threads">Threads</option><option value="instagram">Instagram</option></select></label><label className="crm-field"><span>{t.status}</span><select value={opcFilter.contact} onChange={(event) => setOpcFilter({ ...opcFilter, contact: event.target.value })}><option value="">{t.allContacts}</option><option value="new">{t.newContact}</option><option value="contacted">{t.contacted}</option><option value="failed">{t.failed}</option></select></label><label className="crm-field"><span>{t.poolName}</span><input value={opcFilter.category} onChange={(event) => setOpcFilter({ ...opcFilter, category: event.target.value })} /></label><label className="crm-consent"><input type="checkbox" checked={opcFilter.excludeExisting} onChange={(event) => setOpcFilter({ ...opcFilter, excludeExisting: event.target.checked })} /><span>{t.excludeExisting}</span></label><label className="crm-consent"><input type="checkbox" checked={opcFilter.excludeInteracted} onChange={(event) => setOpcFilter({ ...opcFilter, excludeInteracted: event.target.checked })} /><span>{t.excludeInteracted}</span></label></div><div className="crm-inline-actions"><button className="crm-secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void previewOpc()}>{busy === "opc-preview" ? t.previewing : t.preview}</button><button className="crm-primary-button" type="button" disabled={opcTotal === null || opcTotal < 1 || Boolean(busy)} onClick={() => void importOpc()}>{busy === "opc-import" ? t.importing : t.importPool}</button></div>{opcTotal !== null && <div className="crm-opc-summary" role="status"><strong>{t.matched} · {opcTotal}</strong><span>{opcRows.slice(0, 8).map((row) => `@${textOf(row.username)}`).join(" · ") || t.noMembers}</span></div>}</section>}
+    {error && !opcOpen && !editOpen && <ErrorBox error={error} language={language} retry={loadPools} />}
+    {notice && !opcOpen && !editOpen && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
+    {opcOpen && <ConsoleModal title={t.opcHistory} labelledBy="crmOpcHistoryTitle" onClose={() => setOpcOpen(false)} wide actions={<><button type="button" disabled={Boolean(busy)} onClick={() => void previewOpc()}>{busy === "opc-preview" ? t.previewing : t.preview}</button><button type="button" className="primary" disabled={opcTotal === null || opcTotal < 1 || Boolean(busy)} onClick={() => void importOpc()}>{busy === "opc-import" ? t.importing : t.importPool}</button></>}>
+      <p>{t.opcHint}</p>
+      {error && <ErrorBox error={error} language={language} retry={() => void previewOpc()} />}
+      {notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
+      <div className="crm-opc-history">
+        <div className="crm-form-grid">
+          <label className="crm-field crm-field--wide"><span>{t.searchHistory}</span><input value={opcFilter.search} onChange={(event) => setOpcFilter({ ...opcFilter, search: event.target.value })} /></label>
+          <label className="crm-field"><span>{t.keywords}</span><input value={opcFilter.keywords} onChange={(event) => setOpcFilter({ ...opcFilter, keywords: event.target.value })} /></label>
+          <label className="crm-field"><span>{t.platform}</span><select value={opcFilter.platform} onChange={(event) => setOpcFilter({ ...opcFilter, platform: event.target.value })}><option value="">{t.allPlatforms}</option><option value="threads">Threads</option><option value="instagram">Instagram</option></select></label>
+          <label className="crm-field"><span>{t.status}</span><select value={opcFilter.contact} onChange={(event) => setOpcFilter({ ...opcFilter, contact: event.target.value })}><option value="">{t.allContacts}</option><option value="new">{t.newContact}</option><option value="contacted">{t.contacted}</option><option value="failed">{t.failed}</option></select></label>
+          <label className="crm-field"><span>{t.poolName}</span><input value={opcFilter.category} onChange={(event) => setOpcFilter({ ...opcFilter, category: event.target.value })} /></label>
+          <label className="crm-consent"><input type="checkbox" checked={opcFilter.excludeExisting} onChange={(event) => setOpcFilter({ ...opcFilter, excludeExisting: event.target.checked })} /><span>{t.excludeExisting}</span></label>
+          <label className="crm-consent"><input type="checkbox" checked={opcFilter.excludeInteracted} onChange={(event) => setOpcFilter({ ...opcFilter, excludeInteracted: event.target.checked })} /><span>{t.excludeInteracted}</span></label>
+        </div>
+        {opcTotal !== null && <div className="crm-opc-summary" role="status"><strong>{t.matched} · {opcTotal}</strong><span>{opcRows.slice(0, 8).map((row) => `@${textOf(row.username)}`).join(" · ") || t.noMembers}</span></div>}
+      </div>
+    </ConsoleModal>}
     {state === "loading" && <Loading language={language} />}
     {state === "error" && <ErrorBox error={error} language={language} retry={loadPools} />}
     {state === "ready" && !pools.length && <div className="crm-empty"><Icon name="pools" /><strong>{t.noPools}</strong></div>}
@@ -270,7 +288,15 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
     </ConsoleModal>}
     {state === "ready" && detail && <>
           <header className="crm-detail-heading"><div><span className="crm-kicker">{t.poolDetails}</span><h3>{textOf(detail.name)}</h3><p>{textOf(detail.description, t.choosePoolHint)}</p></div></header>
-          <details className="crm-pool-settings"><summary>{t.editPool}</summary><div className="crm-pool-editor"><label className="crm-field"><span>{t.poolName}</span><input value={poolDraft.name} autoComplete="off" maxLength={120} onChange={(event) => setPoolDraft({ ...poolDraft, name: event.target.value })} /></label><label className="crm-field crm-field--wide"><span>{t.poolTags}</span><textarea rows={3} value={poolDraft.tags} autoComplete="off" onChange={(event) => setPoolDraft({ ...poolDraft, tags: event.target.value })} /></label><div className="crm-inline-actions"><button className="crm-primary-button" type="button" disabled={Boolean(busy) || poolDraft.name.trim().length < 2} onClick={() => void savePool()}>{busy === "save-pool" ? t.saving : t.savePool}</button><button className="crm-secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void deduplicate()}>{busy === "deduplicate" ? t.loading : t.deduplicate}</button></div></div></details>
+          <button className="crm-pool-settings" type="button" onClick={() => setEditOpen(true)}>{t.editPool}</button>
+          {editOpen && <ConsoleModal title={t.editPool} labelledBy="crm-pool-edit-title" onClose={() => setEditOpen(false)} wide actions={<><button type="button" disabled={Boolean(busy)} onClick={() => void deduplicate()}>{busy === "deduplicate" ? t.loading : t.deduplicate}</button><button type="button" className="primary" disabled={Boolean(busy) || poolDraft.name.trim().length < 2} onClick={() => void savePool()}>{busy === "save-pool" ? t.saving : t.savePool}</button></>}>
+            {error && <ErrorBox error={error} language={language} retry={() => void loadPool(selectedId)} />}
+            {notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
+            <div className="crm-pool-editor">
+              <label className="crm-field"><span>{t.poolName}</span><input value={poolDraft.name} autoComplete="off" maxLength={120} onChange={(event) => setPoolDraft({ ...poolDraft, name: event.target.value })} /></label>
+              <label className="crm-field crm-field--wide"><span>{t.poolTags}</span><textarea rows={8} value={poolDraft.tags} autoComplete="off" onChange={(event) => setPoolDraft({ ...poolDraft, tags: event.target.value })} /></label>
+            </div>
+          </ConsoleModal>}
           {insights.length > 0 && <dl className="crm-summary-grid crm-insight-grid">{insights.map((card) => <div key={card.label}><dt>{card.label}</dt><dd>{card.value}</dd></div>)}</dl>}
           {stageMix.length > 0 && <MixBar title={t.mixStages} parts={stageMix} />}
           <h3 className="crm-section-title">{t.members} <span>{members.length}</span></h3>
