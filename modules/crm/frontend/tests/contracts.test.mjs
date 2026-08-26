@@ -336,6 +336,9 @@ test("OPC history, pool maintenance and takeover recovery have real API paths", 
   assert.match(api, /\/api\/crm\/v1\/opc\/history\/import/);
   assert.match(views, /crmApi\.queryOpcHistory/);
   assert.match(views, /crmApi\.importOpcHistory/);
+  assert.match(views, /opcEmpty:\s*"没有匹配的历史客户"/);
+  assert.match(views, /opcTotal === 0/);
+  assert.match(css, /\.crm-opc-history \.crm-form-grid/);
   assert.match(views, /crmApi\.updateResource\("pools"/);
   assert.match(views, /crmApi\.deduplicatePoolMembers/);
   assert.match(views, /setNotice\(t\.poolSaved\)/);

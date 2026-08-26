@@ -13,7 +13,7 @@ const labels = {
   "zh-Hans": {
     pools: "客户池", poolHint: "查看分组快照和池内客户，成员来自服务端客户池关联表。", poolDetails: "客户池详情", members: "池内客户",
     groups: "群组运营", groupHint: "创建 Threads 邀请帖或 Instagram Direct 群聊，并在同一工作台复核状态、发帖、改名和补充成员。", newGroup: "创建群组流程", noGroups: "尚无已验证群组", groupMembers: "群成员", inspectStatus: "复核状态", inspectMembers: "复核成员", groupPost: "群内发帖", renameGroup: "修改群名", addMembers: "补充成员", manageGroup: "管理 Instagram 群组", conversationUrl: "Direct 会话", memberUsernames: "成员账号（最多 3 个，逗号分隔）", groupMessage: "群内消息", prepareAction: "执行预检", confirmAction: "确认并执行", actionPrepared: "预检完成，请再次确认目标和扣点。", readQueued: "只读复核任务已进入队列", writeQueued: "群组动作已进入队列", instagramUnavailable: "Instagram 群组管理尚未通过当前运行环境能力检查。",
-    noPools: "尚无客户池", choosePool: "选择客户池", choosePoolHint: "选择一个客户池查看成员", noMembers: "该客户池尚无成员", noPlatformMembers: "该平台暂无客户", member: "客户", platform: "平台", platformFilter: "平台", stage: "阶段", score: "评分", source: "来源", tags: "标签", handle: "账号", viewMember: "查看", memberDetail: "客户资料", createTask: "创建任务", mixStages: "跟进阶段", customerCount: "位客户", editPool: "编辑客户池", poolName: "客户池名称", poolTags: "标签（逗号或换行分隔，最多 50 个）", savePool: "保存", poolSaved: "客户池已保存", deduplicate: "去重", deduplicated: "已完成成员去重", removed: "移除重复", opcHistory: "OPC 历史客户", opcHint: "先预览筛选结果，再导入为新的客户池。", searchHistory: "搜索账号、内容或关键词", keywords: "关键词（逗号分隔）", allPlatforms: "全部平台", allContacts: "全部状态", newContact: "全新名单", contacted: "已触达", failed: "失败重试", preview: "预览匹配客户", previewing: "正在查询…", matched: "匹配客户", excludeExisting: "排除已在客户池中的账号", excludeInteracted: "排除已有互动记录", importPool: "导入为客户池", importing: "正在导入…", imported: "历史客户已导入",
+    noPools: "尚无客户池", choosePool: "选择客户池", choosePoolHint: "选择一个客户池查看成员", noMembers: "该客户池尚无成员", noPlatformMembers: "该平台暂无客户", member: "客户", platform: "平台", platformFilter: "平台", stage: "阶段", score: "评分", source: "来源", tags: "标签", handle: "账号", viewMember: "查看", memberDetail: "客户资料", createTask: "创建任务", mixStages: "跟进阶段", customerCount: "位客户", editPool: "编辑客户池", poolName: "客户池名称", poolTags: "标签（逗号或换行分隔，最多 50 个）", savePool: "保存", poolSaved: "客户池已保存", deduplicate: "去重", deduplicated: "已完成成员去重", removed: "移除重复", opcHistory: "OPC 历史客户", opcHint: "先预览筛选结果，再导入为新的客户池。", searchHistory: "搜索账号、内容或关键词", keywords: "关键词（逗号分隔）", allPlatforms: "全部平台", allContacts: "全部状态", newContact: "全新名单", contacted: "已触达", failed: "失败重试", preview: "预览匹配客户", previewing: "正在查询…", matched: "匹配客户", excludeExisting: "排除已在客户池中的账号", excludeInteracted: "排除已有互动记录", importPool: "导入为客户池", importing: "正在导入…", imported: "历史客户已导入", opcEmpty: "没有匹配的历史客户",
     templates: "消息模板", templateHint: "编辑可复用内容并关联已验证的媒体文件。", newTemplate: "新建模板", name: "名称", type: "类型", locale: "语言", content: "内容", defaultTemplate: "设为默认模板", media: "模板媒体", upload: "上传媒体", uploading: "正在上传…", save: "保存模板", saving: "正在保存…", edit: "编辑", delete: "删除", deleteConfirm: "确认删除这条记录？此操作会保留审计记录。", deleted: "记录已删除", noTemplates: "尚无模板", saved: "模板已保存", uploaded: "媒体已上传",
     destinations: "追踪目的地", destinationHint: "配置私信与活动使用的 HTTPS 白名单目的地；停用后旧链接不再跳转。", newDestination: "新增目的地", destinationUrl: "HTTPS 地址", noDestinations: "尚无追踪目的地",
     schedules: "自动排程", scheduleHint: "排程必须从完整客户、账号和动作流程创建；立即运行会重新预检。", newSchedule: "新建排程", workflowType: "工作流类型", cron: "Cron 表达式", timezone: "时区", enabled: "已启用", disabled: "已停用", nextRun: "下次运行", lastRun: "上次运行", createSchedule: "配置完整排程", runNow: "立即运行", running: "正在提交…", enable: "启用", disable: "停用", noSchedules: "尚无排程", taskCreated: "已创建父流程", stop: "安全停止", preflight: "执行预检", confirmRun: "确认并立即运行", preflightHint: "核对可执行目标和预计扣点后再运行。", allowed: "可执行", skipped: "跳过", points: "预计扣点", scheduleMissingActions: "该排程没有完整动作快照，请重新创建。",
@@ -23,7 +23,7 @@ const labels = {
   "zh-Hant": {
     pools: "客戶池", poolHint: "查看分組快照和池內客戶，成員來自服務端客戶池關聯表。", poolDetails: "客戶池詳情", members: "池內客戶",
     groups: "群組營運", groupHint: "建立 Threads 邀請貼文或 Instagram Direct 群聊，並在同一工作台複核狀態、發文、改名和補充成員。", newGroup: "建立群組流程", noGroups: "尚無已驗證群組", groupMembers: "群成員", inspectStatus: "複核狀態", inspectMembers: "複核成員", groupPost: "群內發文", renameGroup: "修改群名", addMembers: "補充成員", manageGroup: "管理 Instagram 群組", conversationUrl: "Direct 會話", memberUsernames: "成員帳號（最多 3 個，逗號分隔）", groupMessage: "群內訊息", prepareAction: "執行預檢", confirmAction: "確認並執行", actionPrepared: "預檢完成，請再次確認目標和扣點。", readQueued: "唯讀複核任務已進入佇列", writeQueued: "群組動作已進入佇列", instagramUnavailable: "Instagram 群組管理尚未通過目前執行環境能力檢查。",
-    noPools: "尚無客戶池", choosePool: "選擇客戶池", choosePoolHint: "選擇一個客戶池查看成員", noMembers: "該客戶池尚無成員", noPlatformMembers: "該平台暫無客戶", member: "客戶", platform: "平台", platformFilter: "平台", stage: "階段", score: "評分", source: "來源", tags: "標籤", handle: "帳號", viewMember: "查看", memberDetail: "客戶資料", createTask: "建立任務", mixStages: "跟進階段", customerCount: "位客戶", editPool: "編輯客戶池", poolName: "客戶池名稱", poolTags: "標籤（逗號或換行分隔，最多 50 個）", savePool: "儲存", poolSaved: "客戶池已儲存", deduplicate: "去重", deduplicated: "已完成成員去重", removed: "移除重複", opcHistory: "OPC 歷史客戶", opcHint: "先預覽篩選結果，再匯入為新的客戶池。", searchHistory: "搜尋帳號、內容或關鍵詞", keywords: "關鍵詞（逗號分隔）", allPlatforms: "全部平台", allContacts: "全部狀態", newContact: "全新名單", contacted: "已觸達", failed: "失敗重試", preview: "預覽匹配客戶", previewing: "正在查詢…", matched: "匹配客戶", excludeExisting: "排除已在客戶池中的帳號", excludeInteracted: "排除已有互動記錄", importPool: "匯入為客戶池", importing: "正在匯入…", imported: "歷史客戶已匯入",
+    noPools: "尚無客戶池", choosePool: "選擇客戶池", choosePoolHint: "選擇一個客戶池查看成員", noMembers: "該客戶池尚無成員", noPlatformMembers: "該平台暫無客戶", member: "客戶", platform: "平台", platformFilter: "平台", stage: "階段", score: "評分", source: "來源", tags: "標籤", handle: "帳號", viewMember: "查看", memberDetail: "客戶資料", createTask: "建立任務", mixStages: "跟進階段", customerCount: "位客戶", editPool: "編輯客戶池", poolName: "客戶池名稱", poolTags: "標籤（逗號或換行分隔，最多 50 個）", savePool: "儲存", poolSaved: "客戶池已儲存", deduplicate: "去重", deduplicated: "已完成成員去重", removed: "移除重複", opcHistory: "OPC 歷史客戶", opcHint: "先預覽篩選結果，再匯入為新的客戶池。", searchHistory: "搜尋帳號、內容或關鍵詞", keywords: "關鍵詞（逗號分隔）", allPlatforms: "全部平台", allContacts: "全部狀態", newContact: "全新名單", contacted: "已觸達", failed: "失敗重試", preview: "預覽匹配客戶", previewing: "正在查詢…", matched: "匹配客戶", excludeExisting: "排除已在客戶池中的帳號", excludeInteracted: "排除已有互動記錄", importPool: "匯入為客戶池", importing: "正在匯入…", imported: "歷史客戶已匯入", opcEmpty: "沒有匹配的歷史客戶",
     templates: "訊息範本", templateHint: "編輯可重用內容並關聯已驗證的媒體檔案。", newTemplate: "新增範本", name: "名稱", type: "類型", locale: "語言", content: "內容", defaultTemplate: "設為預設範本", media: "範本媒體", upload: "上傳媒體", uploading: "正在上傳…", save: "儲存範本", saving: "正在儲存…", edit: "編輯", delete: "刪除", deleteConfirm: "確認刪除這筆記錄？系統會保留稽核記錄。", deleted: "記錄已刪除", noTemplates: "尚無範本", saved: "範本已儲存", uploaded: "媒體已上傳",
     destinations: "追蹤目的地", destinationHint: "設定私訊與活動使用的 HTTPS 白名單目的地；停用後舊連結不再跳轉。", newDestination: "新增目的地", destinationUrl: "HTTPS 位址", noDestinations: "尚無追蹤目的地",
     schedules: "自動排程", scheduleHint: "排程必須從完整客戶、帳號和動作流程建立；立即執行會重新預檢。", newSchedule: "新增排程", workflowType: "工作流類型", cron: "Cron 表達式", timezone: "時區", enabled: "已啟用", disabled: "已停用", nextRun: "下次執行", lastRun: "上次執行", createSchedule: "配置完整排程", runNow: "立即執行", running: "正在提交…", enable: "啟用", disable: "停用", noSchedules: "尚無排程", taskCreated: "已建立父流程", stop: "安全停止", preflight: "執行預檢", confirmRun: "確認並立即執行", preflightHint: "核對可執行目標和預計扣點後再執行。", allowed: "可執行", skipped: "跳過", points: "預計扣點", scheduleMissingActions: "該排程沒有完整動作快照，請重新建立。",
@@ -209,6 +209,37 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
 
   useEffect(() => { void loadPools(); }, [loadPools]);
   useEffect(() => { void loadPool(selectedId); }, [loadPool, selectedId]);
+  useEffect(() => {
+    if (!opcOpen) return;
+    let cancelled = false;
+    setBusy("opc-preview");
+    setError("");
+    const payload = {
+      search: opcFilter.search.trim(),
+      keywords: [...new Set(opcFilter.keywords.split(/[，,\n]/).map((item) => item.trim()).filter(Boolean))],
+      platform: opcFilter.platform,
+      contact: opcFilter.contact,
+      limit: 30,
+      excludeExisting: opcFilter.excludeExisting,
+      excludeInteracted: opcFilter.excludeInteracted,
+      category: opcFilter.category.trim(),
+      locale: language,
+    };
+    void crmApi.queryOpcHistory(payload).then((result) => {
+      if (cancelled) return;
+      const rows = arrayOf(result.data ?? result.items).filter((item): item is Row => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+      const total = Number(result.total);
+      setOpcRows(rows);
+      setOpcTotal(Number.isFinite(total) ? total : rows.length);
+    }).catch((next) => {
+      if (cancelled) return;
+      setError(errorText(next, language));
+      setOpcTotal(null);
+    }).finally(() => {
+      if (!cancelled) setBusy("");
+    });
+    return () => { cancelled = true; };
+  }, [opcOpen]);
   const snapshot = objectOf(detail?.snapshot ?? detail?.snapshot_json);
   const tags = readableTags(arrayOf(detail?.tags ?? detail?.tags_json));
   const insights = detail ? poolInsightCards(detail, snapshot, members, tags, language) : [];
@@ -230,19 +261,29 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
     finally { setBusy(""); }
   };
   const opcPayload = () => ({ search: opcFilter.search.trim(), keywords: splitValues(opcFilter.keywords), platform: opcFilter.platform, contact: opcFilter.contact, limit: 30, excludeExisting: opcFilter.excludeExisting, excludeInteracted: opcFilter.excludeInteracted, category: opcFilter.category.trim(), locale: language });
+  const applyOpcResult = (result: Record<string, unknown>) => {
+    const rows = arrayOf(result.data ?? result.items).filter((item): item is Row => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+    const total = Number(result.total);
+    setOpcRows(rows);
+    setOpcTotal(Number.isFinite(total) ? total : rows.length);
+  };
   const previewOpc = async () => {
     setBusy("opc-preview"); setError("");
-    try { const result = await crmApi.queryOpcHistory(opcPayload()); setOpcRows(arrayOf(result.data).filter((item): item is Row => Boolean(item && typeof item === "object" && !Array.isArray(item)))); setOpcTotal(Number(result.total || 0)); }
-    catch (next) { setError(errorText(next, language)); }
+    try { applyOpcResult(await crmApi.queryOpcHistory(opcPayload())); }
+    catch (next) { setError(errorText(next, language)); setOpcTotal(null); }
     finally { setBusy(""); }
   };
   const importOpc = async () => {
-    if (opcTotal === null || opcTotal < 1 || opcFilter.category.trim().length < 2) { setError(t.required); return; }
+    if (opcFilter.category.trim().length < 2) { setError(t.required); return; }
+    if (opcTotal === 0) { setError(t.opcEmpty); return; }
     setBusy("opc-import"); setError("");
     try {
       const result = await crmApi.importOpcHistory({ ...opcPayload(), idempotencyKey: `crm-opc-import:${window.crypto.randomUUID()}`, tags: splitValues(opcFilter.keywords) });
       const pool = objectOf(result.pool); const importedId = idOf(pool); setNotice(`${t.imported} · ${Number(result.importedCount || pool.leadCount || 0)}`); setOpcOpen(false); setOpcRows([]); setOpcTotal(null); await loadPools(); if (importedId) setSelectedId(importedId);
-    } catch (next) { setError(errorText(next, language)); }
+    } catch (next) {
+      const empty = next instanceof CrmApiError && (next.status === 409 || /opc_history_empty|opcHistoryEmpty/i.test(`${next.body.code || ""} ${next.body.message_key || ""}`));
+      setError(empty ? t.opcEmpty : errorText(next, language));
+    }
     finally { setBusy(""); }
   };
 
@@ -260,21 +301,21 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
     </div>
     {error && !opcOpen && !editOpen && <ErrorBox error={error} language={language} retry={loadPools} />}
     {notice && !opcOpen && !editOpen && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
-    {opcOpen && <ConsoleModal title={t.opcHistory} labelledBy="crmOpcHistoryTitle" onClose={() => setOpcOpen(false)} wide actions={<><button type="button" disabled={Boolean(busy)} onClick={() => void previewOpc()}>{busy === "opc-preview" ? t.previewing : t.preview}</button><button type="button" className="primary" disabled={opcTotal === null || opcTotal < 1 || Boolean(busy)} onClick={() => void importOpc()}>{busy === "opc-import" ? t.importing : t.importPool}</button></>}>
+    {opcOpen && <ConsoleModal title={t.opcHistory} labelledBy="crmOpcHistoryTitle" onClose={() => setOpcOpen(false)} wide actions={<><button type="button" disabled={Boolean(busy)} onClick={() => void previewOpc()}>{busy === "opc-preview" ? t.previewing : t.preview}</button><button type="button" className="primary" disabled={Boolean(busy) || opcFilter.category.trim().length < 2 || opcTotal === 0} onClick={() => void importOpc()}>{busy === "opc-import" ? t.importing : t.importPool}</button></>}>
       <p>{t.opcHint}</p>
       {error && <ErrorBox error={error} language={language} retry={() => void previewOpc()} />}
       {notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
       <div className="crm-opc-history">
         <div className="crm-form-grid">
-          <label className="crm-field crm-field--wide"><span>{t.searchHistory}</span><input value={opcFilter.search} onChange={(event) => setOpcFilter({ ...opcFilter, search: event.target.value })} /></label>
-          <label className="crm-field"><span>{t.keywords}</span><input value={opcFilter.keywords} onChange={(event) => setOpcFilter({ ...opcFilter, keywords: event.target.value })} /></label>
+          <label className="crm-field crm-field--wide"><span>{t.searchHistory}</span><input value={opcFilter.search} autoComplete="off" onChange={(event) => setOpcFilter({ ...opcFilter, search: event.target.value })} /></label>
+          <label className="crm-field"><span>{t.keywords}</span><input value={opcFilter.keywords} autoComplete="off" onChange={(event) => setOpcFilter({ ...opcFilter, keywords: event.target.value })} /></label>
+          <label className="crm-field"><span>{t.poolName}</span><input value={opcFilter.category} autoComplete="off" maxLength={120} onChange={(event) => setOpcFilter({ ...opcFilter, category: event.target.value })} /></label>
           <label className="crm-field"><span>{t.platform}</span><select value={opcFilter.platform} onChange={(event) => setOpcFilter({ ...opcFilter, platform: event.target.value })}><option value="">{t.allPlatforms}</option><option value="threads">Threads</option><option value="instagram">Instagram</option></select></label>
           <label className="crm-field"><span>{t.status}</span><select value={opcFilter.contact} onChange={(event) => setOpcFilter({ ...opcFilter, contact: event.target.value })}><option value="">{t.allContacts}</option><option value="new">{t.newContact}</option><option value="contacted">{t.contacted}</option><option value="failed">{t.failed}</option></select></label>
-          <label className="crm-field"><span>{t.poolName}</span><input value={opcFilter.category} onChange={(event) => setOpcFilter({ ...opcFilter, category: event.target.value })} /></label>
           <label className="crm-consent"><input type="checkbox" checked={opcFilter.excludeExisting} onChange={(event) => setOpcFilter({ ...opcFilter, excludeExisting: event.target.checked })} /><span>{t.excludeExisting}</span></label>
           <label className="crm-consent"><input type="checkbox" checked={opcFilter.excludeInteracted} onChange={(event) => setOpcFilter({ ...opcFilter, excludeInteracted: event.target.checked })} /><span>{t.excludeInteracted}</span></label>
         </div>
-        {opcTotal !== null && <div className="crm-opc-summary" role="status"><strong>{t.matched} · {opcTotal}</strong><span>{opcRows.slice(0, 8).map((row) => `@${textOf(row.username)}`).join(" · ") || t.noMembers}</span></div>}
+        {opcTotal !== null && <div className="crm-opc-summary" role="status"><strong>{t.matched} · {opcTotal}</strong><span>{opcTotal > 0 ? opcRows.slice(0, 8).map((row) => `@${textOf(row.username)}`).join(" · ") : t.opcEmpty}</span></div>}
       </div>
     </ConsoleModal>}
     {state === "loading" && <Loading language={language} />}
@@ -294,7 +335,7 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
             {notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
             <div className="crm-pool-editor">
               <label className="crm-field"><span>{t.poolName}</span><input value={poolDraft.name} autoComplete="off" maxLength={120} onChange={(event) => setPoolDraft({ ...poolDraft, name: event.target.value })} /></label>
-              <label className="crm-field crm-field--wide"><span>{t.poolTags}</span><textarea rows={8} value={poolDraft.tags} autoComplete="off" onChange={(event) => setPoolDraft({ ...poolDraft, tags: event.target.value })} /></label>
+              <label className="crm-field crm-field--wide"><span>{t.poolTags}</span><textarea rows={6} value={poolDraft.tags} autoComplete="off" onChange={(event) => setPoolDraft({ ...poolDraft, tags: event.target.value })} /></label>
             </div>
           </ConsoleModal>}
           {insights.length > 0 && <dl className="crm-summary-grid crm-insight-grid">{insights.map((card) => <div key={card.label}><dt>{card.label}</dt><dd>{card.value}</dd></div>)}</dl>}
