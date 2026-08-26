@@ -3,6 +3,7 @@ import { crmApi, payloadItems } from "./api";
 import { localizedError, type Messages } from "./i18n";
 import { Icon } from "./icons";
 import { PlatformLogo } from "./platform";
+import { ConsoleModal } from "./confirm-dialog";
 import type { CrmAccount, Language, ViewId } from "./types";
 
 type Row = Record<string, unknown>;
@@ -118,7 +119,7 @@ export function WorkflowWizard({
   onCreated: (taskId: string) => void;
 }) {
   const t = copy[language];
-  const dialog = useRef<HTMLDivElement>(null);
+  const dialog = useRef<HTMLElement>(null);
   const idempotency = useRef("");
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState("");
@@ -421,9 +422,7 @@ export function WorkflowWizard({
     ? collectPlatforms
     : [collectMode === "hotspot" ? "threads" : platformFromUrl(collectInput)].filter((item): item is "threads" | "instagram" => Boolean(item));
 
-  return <div className="crm-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-    <div className="crm-modal crm-workflow-wizard" ref={dialog} role="dialog" aria-modal="true" aria-labelledby="crmWorkflowTitle">
-      <div className="crm-modal-head"><div><span className="crm-kicker">{t.step(step, totalSteps)}</span><h2 id="crmWorkflowTitle">{t.title} · {messages.views[view][0]}</h2></div><button className="crm-icon-button" type="button" onClick={onClose} aria-label={t.close}><Icon name="close" /></button></div>
+  return <ConsoleModal title={`${t.title} · ${messages.views[view][0]}`} labelledBy="crmWorkflowTitle" onClose={onClose} wide dialogRef={dialog} actions={<><button type="button" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => Math.max(1, current - 1)); }}>{step === 1 ? t.cancel : t.back}</button>{step < totalSteps && !(view === "collect" && step === 3) ? <button type="button" className="primary" disabled={Boolean(busy) || !canContinue()} onClick={next}>{busy === "prepare" ? t.prepare : t.next}</button> : <button type="button" className="primary" disabled={Boolean(busy) || !canContinue()} onClick={() => void submit()}>{busy === "submit" ? t.submitting : isWrite ? (preflightResult ? t.confirmAfterPreflight : t.runPreflight) : t.submit}</button>}</>}>
       <div className="crm-wizard-progress" aria-label={t.step(step, totalSteps)}>{stepNames.map((name, index) => <span className={index + 1 === step ? "is-current" : index + 1 < step ? "is-complete" : ""} key={name}><i>{index + 1 < step ? "✓" : index + 1}</i><b>{name}</b></span>)}</div>
       <aside className="crm-wizard-assistant"><Icon name="signal" /><span><strong>{t.assistant}</strong>{t.assistantHints[view]}</span></aside>
       <div className="crm-wizard-body">
@@ -457,7 +456,5 @@ export function WorkflowWizard({
         </section>}
       </div>
       {error && <div className="crm-inline-error" role="alert"><Icon name="warning" />{error}</div>}
-      <div className="crm-modal-actions crm-wizard-actions"><button className="crm-secondary-button" type="button" onClick={step === 1 ? onClose : () => { setError(""); setStep((current) => Math.max(1, current - 1)); }}>{step === 1 ? t.cancel : t.back}</button>{step < totalSteps && !(view === "collect" && step === 3) ? <button className="crm-primary-button" type="button" disabled={Boolean(busy) || !canContinue()} onClick={next}>{busy === "prepare" ? t.prepare : t.next}</button> : <button className="crm-primary-button" type="button" disabled={Boolean(busy) || !canContinue()} onClick={() => void submit()}>{busy === "submit" ? t.submitting : isWrite ? (preflightResult ? t.confirmAfterPreflight : t.runPreflight) : t.submit}</button>}</div>
-    </div>
-  </div>;
+    </ConsoleModal>;
 }

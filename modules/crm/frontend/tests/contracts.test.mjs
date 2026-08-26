@@ -191,10 +191,8 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(app, /className="crm-view"/);
   assert.match(app, /className="crm-panel-strip"/);
   assert.match(app, /className="crm-nav-strip"/);
-  assert.match(app, /createPortal/);
   assert.match(app, /inspectDetailRows/);
   assert.match(css, /\.crm-nav-strip/);
-  assert.match(css, /\.crm-record-modal/);
   assert.match(css, /\.crm-panel-clip/);
   assert.match(css, /\.crm-panel-strip/);
   assert.match(app, /account-status-icon/);
@@ -206,6 +204,20 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /--crm-sidebar-width:\s*188px/);
   assert.match(css, /@media \(max-width: 980px\)/);
   assert.doesNotMatch(css, /font-size:\s*(?:9|10|11)px|font:\s*(?:9|10|11)px/);
+  const confirm = await read("src/confirm-dialog.tsx");
+  const business = await read("src/BusinessViews.tsx");
+  assert.match(confirm, /createPortal/);
+  assert.match(confirm, /className="console-modal"/);
+  assert.match(app, /requestConfirm/);
+  assert.match(app, /ConfirmHost/);
+  assert.doesNotMatch(app, /window\.confirm/);
+  assert.doesNotMatch(business, /window\.confirm/);
+  assert.match(css, /\.console-modal \{/);
+  assert.match(css, /place-items:\s*center/);
+  assert.match(css, /\.crm-nav-page\[aria-hidden="true"\]/);
+  assert.match(css, /\.crm-member-card-meta/);
+  assert.match(business, /crm-member-card-meta/);
+  assert.match(business, /crm-pool-settings/);
 });
 
 test("each executable workflow view has an explicit action mapping", async () => {

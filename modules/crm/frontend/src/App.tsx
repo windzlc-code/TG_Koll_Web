@@ -1,5 +1,5 @@
 import { Children, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+
 import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api";
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
@@ -11,6 +11,7 @@ import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
 import { applyDockPill, applySegmentPill, prefersReducedMotion } from "./segment-motion";
+import { ConfirmHost, ConsoleModal, requestConfirm } from "./confirm-dialog";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -399,7 +400,13 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
     return () => window.clearInterval(timer);
   }, [detailOpen, id]);
   const removeTask = async () => {
-    if (!window.confirm(language === "zh-Hant" ? "確認刪除此終態任務？" : "确认删除这个终态任务？")) return;
+    if (!await requestConfirm({
+      title: messages.deleteTitle,
+      message: language === "zh-Hant" ? "確認刪除此終態任務？" : "确认删除这个终态任务？",
+      confirmText: messages.ok,
+      cancelText: messages.cancel,
+      danger: true,
+    })) return;
     setManualBusy("delete"); setManualError("");
     try { await crmApi.deleteTask(id, true); onChanged(); }
     catch (error) { setManualError(localizedError(error, messages)); }
@@ -434,7 +441,13 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
     if (!actionId) return;
     const reviewNote = String(reviewNotes[actionId] || "").trim();
     if (!reviewNote) return;
-    if (desired === "failed" && !window.confirm(messages.reviewFailedConfirm)) return;
+    if (desired === "failed" && !await requestConfirm({
+      title: messages.confirmTitle,
+      message: messages.reviewFailedConfirm,
+      confirmText: messages.ok,
+      cancelText: messages.cancel,
+      danger: true,
+    })) return;
     setManualBusy(actionId);
     setManualError("");
     try {
@@ -528,7 +541,10 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
       </section>;})}
       {["manual_required", "unknown"].includes(status) && !loginRequired && !unknownActions.length && <p>{messages.noManualAction}</p>}
     </div>}
-    {followup && <div className="crm-editor-sheet" role="dialog" aria-modal="true" aria-labelledby={`crm-followup-${id}`}><div className="crm-editor-head"><h3 id={`crm-followup-${id}`}>{language === "zh-Hant" ? "針對性跟進回覆" : "针对性跟进回复"}</h3><button className="crm-icon-button" type="button" aria-label={messages.cancel} onClick={() => setFollowup(null)}><Icon name="close" /></button></div><label className="crm-field"><span>{language === "zh-Hant" ? "可編輯草稿" : "可编辑草稿"}</span><textarea rows={6} value={followup.comment} onChange={(event) => { setFollowup({ ...followup, comment: event.target.value, preflight: undefined }); setFollowupConfirmed(false); }} /></label>{followup.preflight && <div className="crm-preflight-review"><dl><div><dt>{language === "zh-Hant" ? "可執行" : "可执行"}</dt><dd>{followup.preflight.allowed_count ?? followup.preflight.actions?.length ?? 0}</dd></div><div><dt>{language === "zh-Hant" ? "預計扣點" : "预计扣点"}</dt><dd>{followup.preflight.quote?.total_points ?? 0}</dd></div></dl><label className="crm-consent"><input type="checkbox" checked={followupConfirmed} onChange={(event) => setFollowupConfirmed(event.target.checked)} /><span>{language === "zh-Hant" ? "我已核對來源證據與補充內容" : "我已核对来源证据与补充内容"}</span></label></div>}<div className="crm-modal-actions"><button className="crm-secondary-button" type="button" onClick={() => setFollowup(null)}>{messages.cancel}</button><button className="crm-primary-button" type="button" disabled={Boolean(manualBusy) || !followup.comment.trim() || Boolean(followup.preflight && !followupConfirmed)} onClick={() => void submitFollowup()}>{followup.preflight ? (language === "zh-Hant" ? "確認並建立" : "确认并创建") : (language === "zh-Hant" ? "執行預檢" : "执行预检")}</button></div></div>}
+    {followup && <ConsoleModal title={language === "zh-Hant" ? "針對性跟進回覆" : "针对性跟进回复"} labelledBy={`crm-followup-${id}`} onClose={() => setFollowup(null)} actions={<><button type="button" onClick={() => setFollowup(null)}>{messages.cancel}</button><button type="button" className="primary" disabled={Boolean(manualBusy) || !followup.comment.trim() || Boolean(followup.preflight && !followupConfirmed)} onClick={() => void submitFollowup()}>{followup.preflight ? (language === "zh-Hant" ? "確認並建立" : "确认并创建") : (language === "zh-Hant" ? "執行預檢" : "执行预检")}</button></>}>
+      <label className="crm-field"><span>{language === "zh-Hant" ? "可編輯草稿" : "可编辑草稿"}</span><textarea rows={6} value={followup.comment} onChange={(event) => { setFollowup({ ...followup, comment: event.target.value, preflight: undefined }); setFollowupConfirmed(false); }} /></label>
+      {followup.preflight && <div className="crm-preflight-review"><dl><div><dt>{language === "zh-Hant" ? "可執行" : "可执行"}</dt><dd>{followup.preflight.allowed_count ?? followup.preflight.actions?.length ?? 0}</dd></div><div><dt>{language === "zh-Hant" ? "預計扣點" : "预计扣点"}</dt><dd>{followup.preflight.quote?.total_points ?? 0}</dd></div></dl><label className="crm-consent"><input type="checkbox" checked={followupConfirmed} onChange={(event) => setFollowupConfirmed(event.target.checked)} /><span>{language === "zh-Hant" ? "我已核對來源證據與補充內容" : "我已核对来源证据与补充内容"}</span></label></div>}
+    </ConsoleModal>}
   </article>;
 }
 
@@ -726,15 +742,11 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
       </div>
     </>}
     {state === "ready" && nextCursor && visibleItems.length > 0 && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={() => void load(nextCursor)}>{loadingMore ? messages.loadingMore : messages.loadMore}</button></div>}
-    {inspect && createPortal(<div className="crm-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setInspect(null); }}>
-      <div className="crm-modal crm-record-modal" role="dialog" aria-modal="true" aria-labelledby="crmRecordDetailTitle">
-        <div className="crm-modal-head"><div><span className="crm-kicker">{messages.views[view][0]}</span><h2 id="crmRecordDetailTitle">{messages.recordDetail}</h2></div><button className="crm-icon-button" type="button" onClick={() => setInspect(null)} aria-label={messages.cancel}><Icon name="close" /></button></div>
-        {inspectBusy ? <p className="crm-quiet-empty">{messages.loadingData}</p> : <dl className="crm-record-detail">
-          {(inspectDetailRows(inspect, view, messages, language).length ? inspectDetailRows(inspect, view, messages, language) : [[messages.recordContent, messages.noRecordBody] as [string, string]]).map(([label, value]) => <div key={String(label)}><dt>{label}</dt><dd>{value}</dd></div>)}
-        </dl>}
-        <div className="crm-modal-actions"><button className="crm-primary-button" type="button" onClick={() => setInspect(null)}>{messages.cancel}</button></div>
-      </div>
-    </div>, document.body)}
+    {inspect && <ConsoleModal title={messages.recordDetail} labelledBy="crmRecordDetailTitle" onClose={() => setInspect(null)} actions={<button type="button" className="primary" onClick={() => setInspect(null)}>{messages.cancel}</button>}>
+      {inspectBusy ? <p className="crm-quiet-empty">{messages.loadingData}</p> : <dl className="crm-record-detail">
+        {(inspectDetailRows(inspect, view, messages, language).length ? inspectDetailRows(inspect, view, messages, language) : [[messages.recordContent, messages.noRecordBody] as [string, string]]).map(([label, value]) => <div key={String(label)}><dt>{label}</dt><dd>{value}</dd></div>)}
+      </dl>}
+    </ConsoleModal>}
   </section>;
 }
 
@@ -898,7 +910,13 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
     const copy = language === "zh-Hant"
       ? "確認已完成人工關注或帳號處置，並重置此帳號的私訊輪換鎖定？"
       : "确认已完成人工关注或账号处置，并重置此账号的私信轮换锁定？";
-    if (!window.confirm(copy)) return;
+    if (!await requestConfirm({
+      title: messages.confirmTitle,
+      message: copy,
+      confirmText: messages.ok,
+      cancelText: messages.cancel,
+      danger: true,
+    })) return;
     setResetting(id);
     try {
       await crmApi.resetRotation(id);
@@ -959,7 +977,7 @@ function TasksView({ tasks, pollError, messages, language, onAction, onChanged, 
 }
 
 function WorkflowDialog({ view, messages, language, onClose, onCreated }: { view: ViewId | null; messages: Messages; language: Language; onClose: () => void; onCreated: (taskId: string) => void }) {
-  const dialog = useRef<HTMLDivElement>(null);
+  const dialog = useRef<HTMLElement>(null);
   const idempotencyKey = useRef("");
   const [instruction, setInstruction] = useState("");
   const [consent, setConsent] = useState(false);
@@ -1052,9 +1070,7 @@ function WorkflowDialog({ view, messages, language, onClose, onCreated }: { view
       setSubmitting(false);
     }
   };
-  return <div className="crm-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
-    <div className="crm-modal" ref={dialog} role="dialog" aria-modal="true" aria-labelledby="crmWorkflowTitle">
-      <div className="crm-modal-head"><div><span className="crm-kicker">{messages.views[view][0]}</span><h2 id="crmWorkflowTitle">{messages.workflowTitle}</h2></div><button className="crm-icon-button" type="button" onClick={onClose} aria-label={messages.cancel}><Icon name="close" /></button></div>
+  return <ConsoleModal title={messages.workflowTitle} labelledBy="crmWorkflowTitle" onClose={onClose} dialogRef={dialog} actions={<><button type="button" onClick={onClose}>{messages.cancel}</button><button type="button" className="primary" disabled={(view !== "relationships" && !instruction.trim()) || !target.trim() || !accountId || (Boolean(workflowActionByView[view]?.write) && !consent) || submitting} onClick={() => void submit()}>{submitting ? messages.submitting : messages.confirm}</button></>}>
       <label className="crm-field"><span>{labels.account}</span><select value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="">{labels.selectAccount}</option>{accounts.map((account) => <option key={String(account.id)} value={String(account.id)}>{account.display_name || account.username} · {account.platform}</option>)}</select></label>
       <label className="crm-field"><span>{labels.target}</span><input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={labels.targetPlaceholder} /></label>
       {view !== "relationships" && <label className="crm-field"><span>{messages.workflowInstruction}</span><textarea rows={5} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={messages.workflowPlaceholder} /></label>}
@@ -1069,9 +1085,7 @@ function WorkflowDialog({ view, messages, language, onClose, onCreated }: { view
       </section>
       {workflowActionByView[view]?.write && <label className="crm-consent"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} /><span>{messages.workflowConsent}</span></label>}
       {error && <div className="crm-inline-error" role="alert"><Icon name="warning" />{error}</div>}
-      <div className="crm-modal-actions"><button className="crm-secondary-button" type="button" onClick={onClose}>{messages.cancel}</button><button className="crm-primary-button" type="button" disabled={(view !== "relationships" && !instruction.trim()) || !target.trim() || !accountId || (Boolean(workflowActionByView[view]?.write) && !consent) || submitting} onClick={() => void submit()}>{submitting ? messages.submitting : messages.confirm}</button></div>
-    </div>
-  </div>;
+    </ConsoleModal>;
 }
 
 export function App() {
@@ -1228,8 +1242,19 @@ export function App() {
   const taskAction = async (task: CrmTask, action: "pause" | "resume" | "cancel" | "retry" | "confirm") => {
     const id = String(task.task_id || task.id || "");
     if (!id) return;
-    if (action === "cancel" && !window.confirm(messages.cancelTaskConfirm)) return;
-    if (action === "confirm" && !window.confirm(messages.confirmTaskConfirm)) return;
+    if (action === "cancel" && !await requestConfirm({
+      title: messages.confirmTitle,
+      message: messages.cancelTaskConfirm,
+      confirmText: messages.ok,
+      cancelText: messages.cancel,
+      danger: true,
+    })) return;
+    if (action === "confirm" && !await requestConfirm({
+      title: messages.confirmTask,
+      message: messages.confirmTaskConfirm,
+      confirmText: messages.ok,
+      cancelText: messages.cancel,
+    })) return;
     try {
       await crmApi.taskAction(id, action);
       await refreshTasks();
@@ -1307,6 +1332,7 @@ export function App() {
       </div>
     </main>
     <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={() => { setToast(messages.submitted); void refreshTasks(); }} />
+    <ConfirmHost titleLabel={messages.confirmTitle} okLabel={messages.ok} cancelLabel={messages.cancel} />
     {toast && <div className="crm-toast" role="status">{toast}</div>}
     <nav ref={dockRef} className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) }}>
       <span className="crm-mobile-dock-track" aria-hidden="true"><span ref={dockPillRef} className="crm-mobile-dock-pill" /></span>
