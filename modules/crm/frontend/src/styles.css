@@ -592,36 +592,7 @@ body.crm-page button { color: inherit; }
   gap: 8px;
 }
 .crm-member-card {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
   min-height: 0;
-  padding: 10px 12px;
-  background: #fbfcfd;
-  border: 1px solid var(--crm-surface);
-  border-radius: 8px;
-}
-.crm-member-card-id {
-  display: flex;
-  flex: 1 1 160px;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  min-width: 0;
-}
-.crm-member-card strong {
-  color: var(--crm-ink);
-  font-size: 14px;
-  overflow-wrap: anywhere;
-}
-.crm-member-card small { color: var(--crm-muted); font-size: 12px; overflow-wrap: anywhere; }
-.crm-member-card-meta {
-  display: flex;
-  flex: 1 1 auto;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
 }
 
 .crm-chart-grid {

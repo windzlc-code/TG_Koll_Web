@@ -215,9 +215,13 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /\.console-modal \{/);
   assert.match(css, /place-items:\s*center/);
   assert.match(css, /\.crm-nav-page\[aria-hidden="true"\]/);
-  assert.match(css, /\.crm-member-card-meta/);
-  assert.match(business, /crm-member-card-meta/);
+  assert.match(css, /\.crm-member-grid/);
+  assert.match(business, /crm-member-card/);
+  assert.match(business, /viewMember/);
+  assert.match(business, /memberDetail/);
+  assert.match(business, /setInspecting/);
   assert.match(business, /crm-pool-settings/);
+  assert.doesNotMatch(business, /tags\.map\(\(tag\) => <span className="crm-chip"/);
 });
 
 test("each executable workflow view has an explicit action mapping", async () => {

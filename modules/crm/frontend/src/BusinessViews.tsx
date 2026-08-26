@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CrmApiError, crmApi, payloadItems } from "./api";
 import { Icon } from "./icons";
-import { PlatformChip } from "./platform";
-import { cronFriendly, groupEventMix, humanText, isTechnicalId, metricLabel, mixFromValues, mixParts, mixTone, poolInsightCards, readableTags, workflowLabel, type MixPart } from "./present";
+import { PlatformChip, PlatformLogo, normalizePlatform, platformLabel } from "./platform";
+import { cronFriendly, groupEventMix, humanText, isTechnicalId, isTechnicalKey, metricLabel, mixFromValues, mixParts, mixTone, poolInsightCards, readableTags, workflowLabel, type MixPart } from "./present";
 import { ConsoleModal, requestConfirm } from "./confirm-dialog";
 import type { Language } from "./types";
 
@@ -13,7 +13,7 @@ const labels = {
   "zh-Hans": {
     pools: "客户池", poolHint: "查看分组快照和池内客户，成员来自服务端客户池关联表。", poolDetails: "客户池详情", members: "池内客户",
     groups: "群组运营", groupHint: "创建 Threads 邀请帖或 Instagram Direct 群聊，并在同一工作台复核状态、发帖、改名和补充成员。", newGroup: "创建群组流程", noGroups: "尚无已验证群组", groupMembers: "群成员", inspectStatus: "复核状态", inspectMembers: "复核成员", groupPost: "群内发帖", renameGroup: "修改群名", addMembers: "补充成员", manageGroup: "管理 Instagram 群组", conversationUrl: "Direct 会话", memberUsernames: "成员账号（最多 3 个，逗号分隔）", groupMessage: "群内消息", prepareAction: "执行预检", confirmAction: "确认并执行", actionPrepared: "预检完成，请再次确认目标和扣点。", readQueued: "只读复核任务已进入队列", writeQueued: "群组动作已进入队列", instagramUnavailable: "Instagram 群组管理尚未通过当前运行环境能力检查。",
-    noPools: "尚无客户池", choosePool: "选择一个客户池查看成员", noMembers: "该客户池尚无成员", member: "客户", platform: "平台", stage: "阶段", score: "评分", source: "来源", tags: "标签", mixStages: "跟进阶段", customerCount: "位客户", editPool: "编辑客户池", poolName: "客户池名称", poolTags: "标签（逗号或换行分隔）", savePool: "保存名称与标签", deduplicate: "检查并移除重复成员", deduplicated: "已完成成员去重", removed: "移除重复", opcHistory: "OPC 历史客户", opcHint: "先预览筛选结果，再导入为新的客户池。", searchHistory: "搜索账号、内容或关键词", keywords: "关键词（逗号分隔）", allPlatforms: "全部平台", allContacts: "全部状态", newContact: "全新名单", contacted: "已触达", failed: "失败重试", preview: "预览匹配客户", previewing: "正在查询…", matched: "匹配客户", excludeExisting: "排除已在客户池中的账号", excludeInteracted: "排除已有互动记录", importPool: "导入为客户池", importing: "正在导入…", imported: "历史客户已导入",
+    noPools: "尚无客户池", choosePool: "选择一个客户池查看成员", noMembers: "该客户池尚无成员", member: "客户", platform: "平台", stage: "阶段", score: "评分", source: "来源", tags: "标签", handle: "账号", viewMember: "查看详情", memberDetail: "客户资料", mixStages: "跟进阶段", customerCount: "位客户", editPool: "编辑客户池", poolName: "客户池名称", poolTags: "标签（逗号或换行分隔）", savePool: "保存名称与标签", deduplicate: "检查并移除重复成员", deduplicated: "已完成成员去重", removed: "移除重复", opcHistory: "OPC 历史客户", opcHint: "先预览筛选结果，再导入为新的客户池。", searchHistory: "搜索账号、内容或关键词", keywords: "关键词（逗号分隔）", allPlatforms: "全部平台", allContacts: "全部状态", newContact: "全新名单", contacted: "已触达", failed: "失败重试", preview: "预览匹配客户", previewing: "正在查询…", matched: "匹配客户", excludeExisting: "排除已在客户池中的账号", excludeInteracted: "排除已有互动记录", importPool: "导入为客户池", importing: "正在导入…", imported: "历史客户已导入",
     templates: "消息模板", templateHint: "编辑可复用内容并关联已验证的媒体文件。", newTemplate: "新建模板", name: "名称", type: "类型", locale: "语言", content: "内容", defaultTemplate: "设为默认模板", media: "模板媒体", upload: "上传媒体", uploading: "正在上传…", save: "保存模板", saving: "正在保存…", edit: "编辑", delete: "删除", deleteConfirm: "确认删除这条记录？此操作会保留审计记录。", deleted: "记录已删除", noTemplates: "尚无模板", saved: "模板已保存", uploaded: "媒体已上传",
     destinations: "追踪目的地", destinationHint: "配置私信与活动使用的 HTTPS 白名单目的地；停用后旧链接不再跳转。", newDestination: "新增目的地", destinationUrl: "HTTPS 地址", noDestinations: "尚无追踪目的地",
     schedules: "自动排程", scheduleHint: "排程必须从完整客户、账号和动作流程创建；立即运行会重新预检。", newSchedule: "新建排程", workflowType: "工作流类型", cron: "Cron 表达式", timezone: "时区", enabled: "已启用", disabled: "已停用", nextRun: "下次运行", lastRun: "上次运行", createSchedule: "配置完整排程", runNow: "立即运行", running: "正在提交…", enable: "启用", disable: "停用", noSchedules: "尚无排程", taskCreated: "已创建父流程", stop: "安全停止", preflight: "执行预检", confirmRun: "确认并立即运行", preflightHint: "核对可执行目标和预计扣点后再运行。", allowed: "可执行", skipped: "跳过", points: "预计扣点", scheduleMissingActions: "该排程没有完整动作快照，请重新创建。",
@@ -23,7 +23,7 @@ const labels = {
   "zh-Hant": {
     pools: "客戶池", poolHint: "查看分組快照和池內客戶，成員來自服務端客戶池關聯表。", poolDetails: "客戶池詳情", members: "池內客戶",
     groups: "群組營運", groupHint: "建立 Threads 邀請貼文或 Instagram Direct 群聊，並在同一工作台複核狀態、發文、改名和補充成員。", newGroup: "建立群組流程", noGroups: "尚無已驗證群組", groupMembers: "群成員", inspectStatus: "複核狀態", inspectMembers: "複核成員", groupPost: "群內發文", renameGroup: "修改群名", addMembers: "補充成員", manageGroup: "管理 Instagram 群組", conversationUrl: "Direct 會話", memberUsernames: "成員帳號（最多 3 個，逗號分隔）", groupMessage: "群內訊息", prepareAction: "執行預檢", confirmAction: "確認並執行", actionPrepared: "預檢完成，請再次確認目標和扣點。", readQueued: "唯讀複核任務已進入佇列", writeQueued: "群組動作已進入佇列", instagramUnavailable: "Instagram 群組管理尚未通過目前執行環境能力檢查。",
-    noPools: "尚無客戶池", choosePool: "選擇一個客戶池查看成員", noMembers: "該客戶池尚無成員", member: "客戶", platform: "平台", stage: "階段", score: "評分", source: "來源", tags: "標籤", mixStages: "跟進階段", customerCount: "位客戶", editPool: "編輯客戶池", poolName: "客戶池名稱", poolTags: "標籤（逗號或換行分隔）", savePool: "儲存名稱與標籤", deduplicate: "檢查並移除重複成員", deduplicated: "已完成成員去重", removed: "移除重複", opcHistory: "OPC 歷史客戶", opcHint: "先預覽篩選結果，再匯入為新的客戶池。", searchHistory: "搜尋帳號、內容或關鍵詞", keywords: "關鍵詞（逗號分隔）", allPlatforms: "全部平台", allContacts: "全部狀態", newContact: "全新名單", contacted: "已觸達", failed: "失敗重試", preview: "預覽匹配客戶", previewing: "正在查詢…", matched: "匹配客戶", excludeExisting: "排除已在客戶池中的帳號", excludeInteracted: "排除已有互動記錄", importPool: "匯入為客戶池", importing: "正在匯入…", imported: "歷史客戶已匯入",
+    noPools: "尚無客戶池", choosePool: "選擇一個客戶池查看成員", noMembers: "該客戶池尚無成員", member: "客戶", platform: "平台", stage: "階段", score: "評分", source: "來源", tags: "標籤", handle: "帳號", viewMember: "查看詳情", memberDetail: "客戶資料", mixStages: "跟進階段", customerCount: "位客戶", editPool: "編輯客戶池", poolName: "客戶池名稱", poolTags: "標籤（逗號或換行分隔）", savePool: "儲存名稱與標籤", deduplicate: "檢查並移除重複成員", deduplicated: "已完成成員去重", removed: "移除重複", opcHistory: "OPC 歷史客戶", opcHint: "先預覽篩選結果，再匯入為新的客戶池。", searchHistory: "搜尋帳號、內容或關鍵詞", keywords: "關鍵詞（逗號分隔）", allPlatforms: "全部平台", allContacts: "全部狀態", newContact: "全新名單", contacted: "已觸達", failed: "失敗重試", preview: "預覽匹配客戶", previewing: "正在查詢…", matched: "匹配客戶", excludeExisting: "排除已在客戶池中的帳號", excludeInteracted: "排除已有互動記錄", importPool: "匯入為客戶池", importing: "正在匯入…", imported: "歷史客戶已匯入",
     templates: "訊息範本", templateHint: "編輯可重用內容並關聯已驗證的媒體檔案。", newTemplate: "新增範本", name: "名稱", type: "類型", locale: "語言", content: "內容", defaultTemplate: "設為預設範本", media: "範本媒體", upload: "上傳媒體", uploading: "正在上傳…", save: "儲存範本", saving: "正在儲存…", edit: "編輯", delete: "刪除", deleteConfirm: "確認刪除這筆記錄？系統會保留稽核記錄。", deleted: "記錄已刪除", noTemplates: "尚無範本", saved: "範本已儲存", uploaded: "媒體已上傳",
     destinations: "追蹤目的地", destinationHint: "設定私訊與活動使用的 HTTPS 白名單目的地；停用後舊連結不再跳轉。", newDestination: "新增目的地", destinationUrl: "HTTPS 位址", noDestinations: "尚無追蹤目的地",
     schedules: "自動排程", scheduleHint: "排程必須從完整客戶、帳號和動作流程建立；立即執行會重新預檢。", newSchedule: "新增排程", workflowType: "工作流類型", cron: "Cron 表達式", timezone: "時區", enabled: "已啟用", disabled: "已停用", nextRun: "下次執行", lastRun: "上次執行", createSchedule: "配置完整排程", runNow: "立即執行", running: "正在提交…", enable: "啟用", disable: "停用", noSchedules: "尚無排程", taskCreated: "已建立父流程", stop: "安全停止", preflight: "執行預檢", confirmRun: "確認並立即執行", preflightHint: "核對可執行目標和預計扣點後再執行。", allowed: "可執行", skipped: "跳過", points: "預計扣點", scheduleMissingActions: "該排程沒有完整動作快照，請重新建立。",
@@ -68,6 +68,64 @@ function dateText(value: unknown, language: Language) {
   return Number.isNaN(date.getTime()) ? textOf(value) : new Intl.DateTimeFormat(language, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
+function memberLead(member: Row) {
+  return objectOf(member.lead || member.profile);
+}
+
+function memberHandle(member: Row) {
+  const lead = memberLead(member);
+  return textOf(member.username || lead.username, "").replace(/^@/, "");
+}
+
+function memberTitle(member: Row, fallback: string) {
+  const lead = memberLead(member);
+  const handle = memberHandle(member);
+  const name = textOf(member.display_name || lead.display_name || member.username || lead.username, fallback);
+  return handle || name;
+}
+
+function memberStageTone(stage: string) {
+  const value = stage.toLowerCase();
+  if (/fail|失败|失敗/.test(value)) return "abnormal";
+  if (/new|新|pending|待/.test(value)) return "pending_login";
+  return "ready";
+}
+
+function memberDetailRows(member: Row, t: { member: string; handle: string; platform: string; stage: string; score: string; source: string; tags: string }, language: Language): Array<[string, string]> {
+  const lead = memberLead(member);
+  const handle = memberHandle(member);
+  const name = textOf(member.display_name || lead.display_name, "");
+  const stage = String(member.stage || lead.stage || member.status || "");
+  const score = textOf(member.score ?? lead.score ?? member.priority ?? lead.priority, "");
+  const source = textOf(member.source ?? lead.source ?? member.origin ?? lead.origin, "");
+  const tags = readableTags(arrayOf(member.tags ?? lead.tags ?? member.tags_json ?? lead.tags_json));
+  const rows: Array<[string, string]> = [];
+  const push = (label: string, value: string) => {
+    if (value && value !== "—") rows.push([label, value]);
+  };
+  if (name && name !== handle) push(t.member, name);
+  push(t.handle, handle ? `@${handle}` : "");
+  push(t.platform, platformLabel(member.platform || lead.platform));
+  if (stage) push(t.stage, metricLabel(stage, language));
+  if (score && score !== "—") push(t.score, score);
+  if (source && source !== "—") push(t.source, source);
+  const shown = new Set(["username", "display_name", "platform", "stage", "status", "score", "priority", "source", "origin", "tags", "tags_json", "lead", "profile"]);
+  for (const tag of tags) {
+    const parts = tag.split(/[:：]/);
+    if (parts.length >= 2 && parts[0].trim().length <= 8) push(parts[0].trim(), parts.slice(1).join("：").trim());
+    else push(t.tags, tag);
+  }
+  for (const [key, value] of Object.entries({ ...lead, ...member })) {
+    if (shown.has(key) || isTechnicalKey(key) || /^(active|enabled|ok|schema_version|createdAt|updatedAt|lead_id|pool_id)$/i.test(key)) continue;
+    if (value && typeof value === "object") continue;
+    const text = textOf(value, "");
+    if (!text || text === "—" || isTechnicalId(text)) continue;
+    push(metricLabel(key, language), text);
+    shown.add(key);
+  }
+  return rows;
+}
+
 function PageHeader({ title, hint, language, onRefresh, action }: { title: string; hint: string; language?: Language; onRefresh: () => void; action?: React.ReactNode }) {
   const resolvedLanguage = language || (document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans");
   return <div className="crm-panel-head crm-business-head"><div><span className="crm-kicker">CRM</span><h2>{title}</h2><p>{hint}</p></div><div className="crm-business-actions"><button className="crm-secondary-button" type="button" onClick={onRefresh}><Icon name="refresh" />{labels[resolvedLanguage].refresh}</button>{action}</div></div>;
@@ -93,6 +151,7 @@ export function PoolsView({ language }: { language: Language }) {
   const [opcFilter, setOpcFilter] = useState({ search: "", keywords: "", platform: "", contact: "", category: "OPC 历史客户池", excludeExisting: true, excludeInteracted: true });
   const [opcRows, setOpcRows] = useState<Row[]>([]);
   const [opcTotal, setOpcTotal] = useState<number | null>(null);
+  const [inspecting, setInspecting] = useState<Row | null>(null);
 
   const loadPools = useCallback(async () => {
     setState("loading"); setError("");
@@ -172,25 +231,26 @@ export function PoolsView({ language }: { language: Language }) {
           {stageMix.length > 0 && <MixBar title={t.mixStages} parts={stageMix} />}
           <h3 className="crm-section-title">{t.members} <span>{members.length}</span></h3>
           {!members.length ? <p className="crm-quiet-empty">{t.noMembers}</p> : <div className="crm-member-grid">{members.map((member, index) => {
-            const lead = objectOf(member.lead || member.profile);
-            const name = textOf(member.display_name || lead.display_name || member.username || lead.username, t.member);
-            const handle = textOf(member.username || lead.username, "").replace(/^@/, "");
+            const lead = memberLead(member);
+            const platform = member.platform || lead.platform;
             const stage = String(member.stage || lead.stage || member.status || "");
-            const score = textOf(member.score ?? lead.score ?? member.priority ?? lead.priority, "");
-            const source = textOf(member.source ?? lead.source ?? member.origin ?? lead.origin, "");
-            const tags = readableTags(arrayOf(member.tags ?? lead.tags ?? member.tags_json ?? lead.tags_json));
-            return <article className="crm-member-card" key={String(member.lead_id || member.id || index)}>
-              <div className="crm-member-card-id"><strong>{name}</strong>{handle ? <small>@{handle}</small> : null}</div>
-              <div className="crm-member-card-meta">
-                <PlatformChip platform={member.platform || lead.platform} />
-                {stage ? <span className="crm-chip">{t.stage} {metricLabel(stage, language)}</span> : null}
-                {score && score !== "—" ? <span className="crm-chip">{t.score} {score}</span> : null}
-                {source && source !== "—" ? <span className="crm-chip">{t.source} {source}</span> : null}
-                {tags.map((tag) => <span className="crm-chip" key={tag}>{tag}</span>)}
+            return <article className="crm-account-card crm-member-card" data-account-platform={normalizePlatform(platform) || undefined} key={String(member.lead_id || member.id || index)}>
+              <div className="crm-account-card-main">
+                <span className="crm-account-card-platform"><PlatformLogo platform={platform} /><span>{platformLabel(platform) || t.platform}</span></span>
+                <strong>{memberTitle(member, t.member)}</strong>
+                {stage ? <span className={`status ${memberStageTone(stage)}`}>{metricLabel(stage, language)}</span> : null}
+              </div>
+              <div className="crm-account-card-actions">
+                <button className="crm-account-card-action" type="button" onClick={() => setInspecting(member)}>{t.viewMember}</button>
               </div>
             </article>;
           })}</div>}
           {memberCursor && <div className="crm-pagination"><button className="crm-secondary-button" type="button" onClick={() => void loadPool(selectedId, memberCursor)}>{t.loadMore}</button></div>}
+          {inspecting && <ConsoleModal title={t.memberDetail} labelledBy="crm-member-detail-title" onClose={() => setInspecting(null)} actions={<button type="button" className="primary" onClick={() => setInspecting(null)}>{t.close}</button>}>
+            <dl className="crm-record-detail">
+              {memberDetailRows(inspecting, t, language).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}
+            </dl>
+          </ConsoleModal>}
         </>}
       </div>
     </div>}
