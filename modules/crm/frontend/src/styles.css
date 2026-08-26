@@ -1441,6 +1441,7 @@ body.crm-page a.crm-account-card-action { text-decoration: none; }
   width: 100%;
   min-height: 44px;
 }
+.crm-pool-launch > button:first-child { grid-column: 1 / -1; }
 .crm-pool-list.crm-master-list {
   max-height: min(70vh, 640px);
   border: 1px solid var(--crm-line);
