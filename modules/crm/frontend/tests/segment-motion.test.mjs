@@ -66,7 +66,8 @@ test("CRM dock keeps a persistent pill so selected chrome never unmounts", async
   assert.doesNotMatch(motion, /pill\.animate\(/);
   const pillRule = css.slice(css.indexOf(".crm-mobile-dock-pill {"), css.indexOf(".crm-mobile-dock button {", css.indexOf(".crm-mobile-dock-pill {")));
   assert.doesNotMatch(pillRule, /100%/);
-  assert.match(pillRule, /transition:\s*none/);
+  assert.match(pillRule, /transition:\s*transform 180ms cubic-bezier\(\.2, \.72, \.2, 1\)/);
+  assert.doesNotMatch(pillRule.split("@media")[0], /transition:\s*none/);
   assert.match(css, /body\.crm-page \{[\s\S]*?overflow-x:\s*hidden;/);
   assert.match(css, /\.crm-mobile-dock button\.is-active \{[\s\S]*?background:\s*transparent;/);
   assert.doesNotMatch(css, /\.crm-mobile-dock\.is-segment-background-sliding/);

@@ -1523,7 +1523,10 @@ body.crm-page a.crm-account-card-action { text-decoration: none; }
     background-color: var(--public-cool-dark, #253746);
     background-image: var(--public-action-gradient, linear-gradient(#253746, #253746));
     transform: translate3d(0, 0, 0);
-    transition: none;
+    transition: transform 180ms cubic-bezier(.2, .72, .2, 1);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .crm-mobile-dock-pill { transition: none; }
   }
   .crm-mobile-dock button {
     position: relative;

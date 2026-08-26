@@ -51,8 +51,19 @@ export function applyDockPill(dock: HTMLElement | null, pill: HTMLElement | null
   const button = buttons[index];
   if (!button) return null;
   const box = pillBoxForButton(dock, button);
-  pill.getAnimations().forEach((animation) => animation.cancel());
-  placePill(pill, box);
+  const next = `translate3d(${box.x}px, ${box.y}px, 0)`;
+  pill.style.left = "0px";
+  pill.style.top = "0px";
+  pill.style.width = `${box.width}px`;
+  pill.style.height = `${box.height}px`;
+  if (instant || prefersReducedMotion()) {
+    pill.style.transition = "none";
+    pill.style.transform = next;
+    void pill.offsetWidth;
+    pill.style.removeProperty("transition");
+    return box;
+  }
+  pill.style.transform = next;
   return box;
 }
 
