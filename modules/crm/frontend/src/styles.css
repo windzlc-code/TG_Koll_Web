@@ -195,7 +195,8 @@ body.crm-page button { color: inherit; }
   left: 0;
 }
 .crm-nav-clip {
-  overflow: hidden;
+  overflow-x: clip;
+  overflow-y: visible;
   min-width: 0;
 }
 .crm-nav-strip {
@@ -220,7 +221,8 @@ body.crm-page button { color: inherit; }
   .crm-nav-strip { transition: none; }
 }
 .crm-panel-clip {
-  overflow: hidden;
+  overflow-x: clip;
+  overflow-y: visible;
   min-width: 0;
 }
 .crm-panel-strip {
@@ -671,45 +673,52 @@ body.crm-page button { color: inherit; }
   min-height: 28px;
   padding: 0 10px;
 }
-.crm-member-detail-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.crm-member-detail-facts > span {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  padding: 5px 8px;
-  color: var(--crm-ink);
-  background: var(--crm-surface-soft);
-  border-radius: 6px;
-  font-size: 12px;
-  line-height: 1.35;
-}
-.crm-member-detail-facts b {
-  color: var(--crm-muted);
-  font-weight: 800;
-}
-.crm-member-detail-notes {
+.crm-member-detail { display: grid; gap: 14px; }
+.crm-member-detail-section {
   display: grid;
   gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--crm-surface);
 }
-.crm-member-detail-notes p {
+.crm-member-detail-section:last-child { padding-bottom: 0; border-bottom: 0; }
+.crm-member-detail-section > h3 {
   margin: 0;
-  padding: 8px 10px;
   color: var(--crm-ink);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.crm-member-detail-dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+.crm-member-detail-dl > div { display: grid; gap: 3px; min-width: 0; }
+.crm-member-detail-dl dt,
+.crm-member-detail-block dt {
+  color: var(--crm-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.crm-member-detail-dl dd,
+.crm-member-detail-block dd {
+  margin: 0;
+  color: var(--crm-ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.crm-member-detail-blocks { display: grid; gap: 8px; }
+.crm-member-detail-block {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
   background: var(--crm-surface-soft);
   border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.45;
 }
-.crm-member-detail-notes b {
-  display: inline;
-  margin-right: 6px;
-  color: var(--crm-muted);
-  font-weight: 800;
-}
+.crm-member-detail-block dd { font-weight: 400; line-height: 1.65; }
 
 .crm-chart-grid {
   display: grid;

@@ -12,6 +12,38 @@ export type ConfirmRequest = {
 type ConfirmState = ConfirmRequest & { resolve: (ok: boolean) => void };
 
 let openConfirm: ((request: ConfirmRequest) => Promise<boolean>) | null = null;
+let pageScrollLocks = 0;
+let pageOverflow = "";
+let rootOverflow = "";
+
+export function lockPageScroll() {
+  if (pageScrollLocks === 0) {
+    pageOverflow = document.body.style.overflow;
+    rootOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+  }
+  pageScrollLocks += 1;
+}
+
+export function unlockPageScroll() {
+  pageScrollLocks = Math.max(0, pageScrollLocks - 1);
+  if (pageScrollLocks === 0) {
+    document.body.style.overflow = pageOverflow;
+    document.documentElement.style.overflow = rootOverflow;
+    pageOverflow = "";
+    rootOverflow = "";
+  }
+}
+
+export function clearPageScrollLock() {
+  if (document.querySelector(".console-modal")) return;
+  pageScrollLocks = 0;
+  pageOverflow = "";
+  rootOverflow = "";
+  document.body.style.overflow = "";
+  document.documentElement.style.overflow = "";
+}
 
 export function requestConfirm(request: ConfirmRequest): Promise<boolean> {
   if (!openConfirm) return Promise.resolve(false);
@@ -89,8 +121,7 @@ export function ConsoleModal({
     const previous = document.activeElement as HTMLElement | null;
     const node = localRef.current;
     node?.querySelector<HTMLElement>("input, select, textarea, button")?.focus();
-    const original = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    lockPageScroll();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -100,7 +131,7 @@ export function ConsoleModal({
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
-      document.body.style.overflow = original;
+      unlockPageScroll();
       previous?.focus();
     };
   }, []);

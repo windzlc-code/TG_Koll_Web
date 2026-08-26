@@ -11,7 +11,7 @@ import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
 import { applyDockPill, applySegmentPill, prefersReducedMotion } from "./segment-motion";
-import { ConfirmHost, ConsoleModal, requestConfirm } from "./confirm-dialog";
+import { ConfirmHost, ConsoleModal, clearPageScrollLock, requestConfirm } from "./confirm-dialog";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -682,12 +682,6 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
   }, [messages, resource]);
 
   useEffect(() => { void load(""); }, [load]);
-  useEffect(() => {
-    if (!inspect) return;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = previous; };
-  }, [inspect]);
 
   const visibleItems = useMemo(() => items.filter((item) => isReachRecord(item, view)), [items, view]);
   useEffect(() => {
@@ -1203,8 +1197,14 @@ export function App() {
     pageSlide.current = { direction: options?.direction || 0, panel: Boolean(options?.panel) };
     setView(next);
     setDrawerOpen(false);
+    clearPageScrollLock();
+    window.scrollTo(0, 0);
   };
 
+  useLayoutEffect(() => {
+    clearPageScrollLock();
+    window.scrollTo(0, 0);
+  }, [view]);
   useLayoutEffect(() => {
     if (bootstrapState !== "ready") return;
     const index = Math.max(0, navViews.indexOf(navViewOf(view)));

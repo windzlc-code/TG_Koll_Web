@@ -228,7 +228,11 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(business, /crm-member-card/);
   assert.match(business, /crm-member-tag/);
   assert.match(business, /crm-member-portrait/);
-  assert.match(business, /crm-member-detail-facts/);
+  assert.match(business, /crm-member-detail-section/);
+  assert.match(business, /crm-member-detail-block/);
+  assert.match(business, /detailIdentity/);
+  assert.match(app, /clearPageScrollLock/);
+  assert.match(css, /overflow-x:\s*clip/);
   assert.match(business, /localizeMemberKey/);
   assert.match(business, /isInternalTagKey/);
   assert.match(business, /isOpaqueUserValue/);

@@ -13,7 +13,7 @@ const labels = {
   "zh-Hans": {
     pools: "客户池", poolHint: "查看分组快照和池内客户，成员来自服务端客户池关联表。", poolDetails: "客户池详情", members: "池内客户",
     groups: "群组运营", groupHint: "创建 Threads 邀请帖或 Instagram Direct 群聊，并在同一工作台复核状态、发帖、改名和补充成员。", newGroup: "创建群组流程", noGroups: "尚无已验证群组", groupMembers: "群成员", inspectStatus: "复核状态", inspectMembers: "复核成员", groupPost: "群内发帖", renameGroup: "修改群名", addMembers: "补充成员", manageGroup: "管理 Instagram 群组", conversationUrl: "Direct 会话", memberUsernames: "成员账号（最多 3 个，逗号分隔）", groupMessage: "群内消息", prepareAction: "执行预检", confirmAction: "确认并执行", actionPrepared: "预检完成，请再次确认目标和扣点。", readQueued: "只读复核任务已进入队列", writeQueued: "群组动作已进入队列", instagramUnavailable: "Instagram 群组管理尚未通过当前运行环境能力检查。",
-    noPools: "尚无客户池", choosePool: "选择客户池", choosePoolHint: "选择一个客户池查看成员", noMembers: "该客户池尚无成员", noPlatformMembers: "该平台暂无客户", member: "客户", platform: "平台", platformFilter: "平台", stage: "阶段", score: "评分", source: "来源", tags: "标签", handle: "账号", viewMember: "查看", memberDetail: "客户资料", createTask: "创建任务", mixStages: "跟进阶段", customerCount: "位客户", editPool: "编辑客户池", poolName: "客户池名称", poolTags: "标签（逗号或换行分隔，最多 50 个）", savePool: "保存", poolSaved: "客户池已保存", deduplicate: "去重", deduplicated: "已完成成员去重", removed: "移除重复", opcHistory: "OPC 历史客户", opcHint: "先预览筛选结果，再导入为新的客户池。", searchHistory: "搜索账号、内容或关键词", keywords: "关键词（逗号分隔）", allPlatforms: "全部平台", allContacts: "全部状态", newContact: "全新名单", contacted: "已触达", failed: "失败重试", preview: "预览匹配客户", previewing: "正在查询…", matched: "匹配客户", excludeExisting: "排除已在客户池中的账号", excludeInteracted: "排除已有互动记录", importPool: "导入为客户池", importing: "正在导入…", imported: "历史客户已导入", opcEmpty: "没有匹配的历史客户",
+    noPools: "尚无客户池", choosePool: "选择客户池", choosePoolHint: "选择一个客户池查看成员", noMembers: "该客户池尚无成员", noPlatformMembers: "该平台暂无客户", member: "客户", platform: "平台", platformFilter: "平台", stage: "阶段", score: "评分", source: "来源", tags: "标签", handle: "账号", viewMember: "查看", memberDetail: "客户资料", detailIdentity: "基本信息", detailProfile: "客户概况", detailInsights: "客户洞察", detailSources: "来源", createTask: "创建任务", mixStages: "跟进阶段", customerCount: "位客户", editPool: "编辑客户池", poolName: "客户池名称", poolTags: "标签（逗号或换行分隔，最多 50 个）", savePool: "保存", poolSaved: "客户池已保存", deduplicate: "去重", deduplicated: "已完成成员去重", removed: "移除重复", opcHistory: "OPC 历史客户", opcHint: "先预览筛选结果，再导入为新的客户池。", searchHistory: "搜索账号、内容或关键词", keywords: "关键词（逗号分隔）", allPlatforms: "全部平台", allContacts: "全部状态", newContact: "全新名单", contacted: "已触达", failed: "失败重试", preview: "预览匹配客户", previewing: "正在查询…", matched: "匹配客户", excludeExisting: "排除已在客户池中的账号", excludeInteracted: "排除已有互动记录", importPool: "导入为客户池", importing: "正在导入…", imported: "历史客户已导入", opcEmpty: "没有匹配的历史客户",
     templates: "消息模板", templateHint: "编辑可复用内容并关联已验证的媒体文件。", newTemplate: "新建模板", name: "名称", type: "类型", locale: "语言", content: "内容", defaultTemplate: "设为默认模板", media: "模板媒体", upload: "上传媒体", uploading: "正在上传…", save: "保存模板", saving: "正在保存…", edit: "编辑", delete: "删除", deleteConfirm: "确认删除这条记录？此操作会保留审计记录。", deleted: "记录已删除", noTemplates: "尚无模板", saved: "模板已保存", uploaded: "媒体已上传",
     destinations: "追踪目的地", destinationHint: "配置私信与活动使用的 HTTPS 白名单目的地；停用后旧链接不再跳转。", newDestination: "新增目的地", destinationUrl: "HTTPS 地址", noDestinations: "尚无追踪目的地",
     schedules: "自动排程", scheduleHint: "排程必须从完整客户、账号和动作流程创建；立即运行会重新预检。", newSchedule: "新建排程", workflowType: "工作流类型", cron: "Cron 表达式", timezone: "时区", enabled: "已启用", disabled: "已停用", nextRun: "下次运行", lastRun: "上次运行", createSchedule: "配置完整排程", runNow: "立即运行", running: "正在提交…", enable: "启用", disable: "停用", noSchedules: "尚无排程", taskCreated: "已创建父流程", stop: "安全停止", preflight: "执行预检", confirmRun: "确认并立即运行", preflightHint: "核对可执行目标和预计扣点后再运行。", allowed: "可执行", skipped: "跳过", points: "预计扣点", scheduleMissingActions: "该排程没有完整动作快照，请重新创建。",
@@ -23,7 +23,7 @@ const labels = {
   "zh-Hant": {
     pools: "客戶池", poolHint: "查看分組快照和池內客戶，成員來自服務端客戶池關聯表。", poolDetails: "客戶池詳情", members: "池內客戶",
     groups: "群組營運", groupHint: "建立 Threads 邀請貼文或 Instagram Direct 群聊，並在同一工作台複核狀態、發文、改名和補充成員。", newGroup: "建立群組流程", noGroups: "尚無已驗證群組", groupMembers: "群成員", inspectStatus: "複核狀態", inspectMembers: "複核成員", groupPost: "群內發文", renameGroup: "修改群名", addMembers: "補充成員", manageGroup: "管理 Instagram 群組", conversationUrl: "Direct 會話", memberUsernames: "成員帳號（最多 3 個，逗號分隔）", groupMessage: "群內訊息", prepareAction: "執行預檢", confirmAction: "確認並執行", actionPrepared: "預檢完成，請再次確認目標和扣點。", readQueued: "唯讀複核任務已進入佇列", writeQueued: "群組動作已進入佇列", instagramUnavailable: "Instagram 群組管理尚未通過目前執行環境能力檢查。",
-    noPools: "尚無客戶池", choosePool: "選擇客戶池", choosePoolHint: "選擇一個客戶池查看成員", noMembers: "該客戶池尚無成員", noPlatformMembers: "該平台暫無客戶", member: "客戶", platform: "平台", platformFilter: "平台", stage: "階段", score: "評分", source: "來源", tags: "標籤", handle: "帳號", viewMember: "查看", memberDetail: "客戶資料", createTask: "建立任務", mixStages: "跟進階段", customerCount: "位客戶", editPool: "編輯客戶池", poolName: "客戶池名稱", poolTags: "標籤（逗號或換行分隔，最多 50 個）", savePool: "儲存", poolSaved: "客戶池已儲存", deduplicate: "去重", deduplicated: "已完成成員去重", removed: "移除重複", opcHistory: "OPC 歷史客戶", opcHint: "先預覽篩選結果，再匯入為新的客戶池。", searchHistory: "搜尋帳號、內容或關鍵詞", keywords: "關鍵詞（逗號分隔）", allPlatforms: "全部平台", allContacts: "全部狀態", newContact: "全新名單", contacted: "已觸達", failed: "失敗重試", preview: "預覽匹配客戶", previewing: "正在查詢…", matched: "匹配客戶", excludeExisting: "排除已在客戶池中的帳號", excludeInteracted: "排除已有互動記錄", importPool: "匯入為客戶池", importing: "正在匯入…", imported: "歷史客戶已匯入", opcEmpty: "沒有匹配的歷史客戶",
+    noPools: "尚無客戶池", choosePool: "選擇客戶池", choosePoolHint: "選擇一個客戶池查看成員", noMembers: "該客戶池尚無成員", noPlatformMembers: "該平台暫無客戶", member: "客戶", platform: "平台", platformFilter: "平台", stage: "階段", score: "評分", source: "來源", tags: "標籤", handle: "帳號", viewMember: "查看", memberDetail: "客戶資料", detailIdentity: "基本資訊", detailProfile: "客戶概況", detailInsights: "客戶洞察", detailSources: "來源", createTask: "建立任務", mixStages: "跟進階段", customerCount: "位客戶", editPool: "編輯客戶池", poolName: "客戶池名稱", poolTags: "標籤（逗號或換行分隔，最多 50 個）", savePool: "儲存", poolSaved: "客戶池已儲存", deduplicate: "去重", deduplicated: "已完成成員去重", removed: "移除重複", opcHistory: "OPC 歷史客戶", opcHint: "先預覽篩選結果，再匯入為新的客戶池。", searchHistory: "搜尋帳號、內容或關鍵詞", keywords: "關鍵詞（逗號分隔）", allPlatforms: "全部平台", allContacts: "全部狀態", newContact: "全新名單", contacted: "已觸達", failed: "失敗重試", preview: "預覽匹配客戶", previewing: "正在查詢…", matched: "匹配客戶", excludeExisting: "排除已在客戶池中的帳號", excludeInteracted: "排除已有互動記錄", importPool: "匯入為客戶池", importing: "正在匯入…", imported: "歷史客戶已匯入", opcEmpty: "沒有匹配的歷史客戶",
     templates: "訊息範本", templateHint: "編輯可重用內容並關聯已驗證的媒體檔案。", newTemplate: "新增範本", name: "名稱", type: "類型", locale: "語言", content: "內容", defaultTemplate: "設為預設範本", media: "範本媒體", upload: "上傳媒體", uploading: "正在上傳…", save: "儲存範本", saving: "正在儲存…", edit: "編輯", delete: "刪除", deleteConfirm: "確認刪除這筆記錄？系統會保留稽核記錄。", deleted: "記錄已刪除", noTemplates: "尚無範本", saved: "範本已儲存", uploaded: "媒體已上傳",
     destinations: "追蹤目的地", destinationHint: "設定私訊與活動使用的 HTTPS 白名單目的地；停用後舊連結不再跳轉。", newDestination: "新增目的地", destinationUrl: "HTTPS 位址", noDestinations: "尚無追蹤目的地",
     schedules: "自動排程", scheduleHint: "排程必須從完整客戶、帳號和動作流程建立；立即執行會重新預檢。", newSchedule: "新增排程", workflowType: "工作流類型", cron: "Cron 表達式", timezone: "時區", enabled: "已啟用", disabled: "已停用", nextRun: "下次執行", lastRun: "上次執行", createSchedule: "配置完整排程", runNow: "立即執行", running: "正在提交…", enable: "啟用", disable: "停用", noSchedules: "尚無排程", taskCreated: "已建立父流程", stop: "安全停止", preflight: "執行預檢", confirmRun: "確認並立即執行", preflightHint: "核對可執行目標和預計扣點後再執行。", allowed: "可執行", skipped: "跳過", points: "預計扣點", scheduleMissingActions: "該排程沒有完整動作快照，請重新建立。",
@@ -116,8 +116,19 @@ function memberPreview(member: Row, language: Language): { chips: string[]; port
   return { chips, portrait };
 }
 
-function isLongMemberField(key: string, value: string) {
-  return value.length > 18 || /^(画像|畫像|需求|痛点|痛點|来源|來源)$/.test(key);
+function memberFieldKind(label: string): "identity" | "profile" | "insight" | "source" {
+  if (/^(账号|帳號|客户|客戶|平台|阶段|階段)$/.test(label)) return "identity";
+  if (/^(画像|畫像|需求|痛点|痛點)$/.test(label)) return "insight";
+  if (/^(来源|來源)$/.test(label)) return "source";
+  return "profile";
+}
+
+function sortMemberFields(rows: Array<[string, string]>, order: string[]) {
+  return [...rows].sort((left, right) => {
+    const leftIndex = order.indexOf(left[0]);
+    const rightIndex = order.indexOf(right[0]);
+    return (leftIndex < 0 ? 99 : leftIndex) - (rightIndex < 0 ? 99 : rightIndex);
+  });
 }
 
 function localizeMemberKey(key: string, language: Language) {
@@ -147,7 +158,7 @@ function isInternalTagKey(key: string) {
   return /^(渠道|采集|採集|批次|验证|驗證|筛选|篩選|人设|人設)$/.test(key);
 }
 
-function memberDetailGroups(member: Row, t: { member: string; handle: string; platform: string; stage: string; score: string; source: string; tags: string }, language: Language): { facts: Array<[string, string]>; notes: Array<[string, string]> } {
+function memberDetailGroups(member: Row, t: { member: string; handle: string; platform: string; stage: string; score: string; source: string; tags: string }, language: Language): { identity: Array<[string, string]>; profile: Array<[string, string]>; insights: Array<[string, string]>; sources: string[] } {
   const lead = memberLead(member);
   const handle = memberHandle(member);
   const name = textOf(member.display_name || lead.display_name, "");
@@ -155,27 +166,35 @@ function memberDetailGroups(member: Row, t: { member: string; handle: string; pl
   const scoreRaw = member.score ?? lead.score ?? member.priority ?? lead.priority;
   const scoreNum = Number(scoreRaw);
   const score = Number.isFinite(scoreNum) && scoreNum === 0 ? "" : textOf(scoreRaw, "");
-  const facts: Array<[string, string]> = [];
-  const notes: Array<[string, string]> = [];
+  const buckets = {
+    identity: [] as Array<[string, string]>,
+    profile: [] as Array<[string, string]>,
+    insights: [] as Array<[string, string]>,
+    sources: [] as string[],
+  };
   const seen = new Set<string>();
   const dateLabels = /^(日期|时间|時間)$/;
   const push = (rawLabel: string, rawValue: string) => {
     const label = localizeMemberKey(rawLabel, language);
     const value = String(rawValue || "").trim();
     if (!label || !value || value === "—" || isInternalTagKey(rawLabel) || isOpaqueUserValue(value) || isEnglishMachineLabel(label) || isEnglishMachineLabel(value)) return;
+    const kind = memberFieldKind(label);
     if (dateLabels.test(label)) {
-      const existing = facts.findIndex(([key]) => dateLabels.test(key));
+      const existing = buckets.profile.findIndex(([key]) => dateLabels.test(key));
       if (existing >= 0) {
-        const current = facts[existing][1];
+        const current = buckets.profile[existing][1];
         if (/\d{4}-\d{2}-\d{2}/.test(current) || !/\d{4}-\d{2}-\d{2}/.test(value)) return;
-        facts[existing] = [label, value];
+        buckets.profile[existing] = [label, value];
         return;
       }
     }
     const fingerprint = `${label}:${value}`;
     if (seen.has(fingerprint)) return;
     seen.add(fingerprint);
-    (isLongMemberField(label, value) ? notes : facts).push([label, value]);
+    if (kind === "source") buckets.sources.push(value);
+    else if (kind === "identity") buckets.identity.push([label, value]);
+    else if (kind === "insight") buckets.insights.push([label, value]);
+    else buckets.profile.push([label, value]);
   };
   if (name && name !== handle) push(t.member, name);
   push(t.handle, handle ? `@${handle}` : "");
@@ -194,7 +213,12 @@ function memberDetailGroups(member: Row, t: { member: string; handle: string; pl
     push(metricLabel(key, language), text);
     shown.add(key);
   }
-  return { facts, notes };
+  return {
+    identity: sortMemberFields(buckets.identity, language === "zh-Hant" ? ["客戶", "帳號", "平台", "階段"] : ["客户", "账号", "平台", "阶段"]),
+    profile: sortMemberFields(buckets.profile, language === "zh-Hant" ? ["日期", "時間", "意向", "行為", "關鍵詞", "分類", "評分"] : ["日期", "时间", "意向", "行为", "关键词", "分类", "评分"]),
+    insights: sortMemberFields(buckets.insights, language === "zh-Hant" ? ["畫像", "需求", "痛點"] : ["画像", "需求", "痛点"]),
+    sources: buckets.sources,
+  };
 }
 
 function PageHeader({ title, hint, language, onRefresh, action }: { title: string; hint: string; language?: Language; onRefresh: () => void; action?: React.ReactNode }) {
@@ -404,8 +428,12 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
           })}</div>}
           {memberCursor && <div className="crm-pagination"><button className="crm-secondary-button" type="button" onClick={() => void loadPool(selectedId, memberCursor)}>{t.loadMore}</button></div>}
           {inspecting && inspectingDetail && <ConsoleModal title={t.memberDetail} labelledBy="crm-member-detail-title" onClose={() => setInspecting(null)} actions={<button type="button" className="primary" onClick={() => setInspecting(null)}>{t.close}</button>}>
-            {inspectingDetail.facts.length > 0 && <div className="crm-member-detail-facts">{inspectingDetail.facts.map(([label, value]) => <span key={`${label}:${value}`}><b>{label}</b>{value}</span>)}</div>}
-            {inspectingDetail.notes.length > 0 && <div className="crm-member-detail-notes">{inspectingDetail.notes.map(([label, value]) => <p key={`${label}:${value}`}><b>{label}</b>{value}</p>)}</div>}
+            <div className="crm-member-detail">
+              {inspectingDetail.identity.length > 0 && <section className="crm-member-detail-section"><h3>{t.detailIdentity}</h3><dl className="crm-member-detail-dl">{inspectingDetail.identity.map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section>}
+              {inspectingDetail.profile.length > 0 && <section className="crm-member-detail-section"><h3>{t.detailProfile}</h3><dl className="crm-member-detail-dl">{inspectingDetail.profile.map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></section>}
+              {inspectingDetail.insights.length > 0 && <section className="crm-member-detail-section"><h3>{t.detailInsights}</h3><div className="crm-member-detail-blocks">{inspectingDetail.insights.map(([label, value]) => <div className="crm-member-detail-block" key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}</div></section>}
+              {inspectingDetail.sources.length > 0 && <section className="crm-member-detail-section"><h3>{t.detailSources}</h3><div className="crm-member-detail-blocks">{inspectingDetail.sources.map((value) => <div className="crm-member-detail-block" key={value}><dd>{value}</dd></div>)}</div></section>}
+            </div>
           </ConsoleModal>}
         </>}
   </section>;
