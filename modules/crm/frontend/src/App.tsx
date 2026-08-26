@@ -4,7 +4,7 @@ import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api"
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
 import { PlatformLogo, normalizePlatform, platformLabel } from "./platform";
-import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
+import { AnalyticsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { BarChart, DonutChart, LineChart } from "./charts";
 import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, isEnglishMachineLabel, isOpaqueUserValue, isTechnicalId, isTechnicalKey, metricLabel, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
@@ -41,7 +41,7 @@ const viewAliases: Partial<Record<ViewId, ViewId>> = {
 };
 const engageTabs: ViewId[] = ["public", "outreach", "groups"];
 const taskTabs: ViewId[] = ["tasks", "schedules"];
-const settingTabs: ViewId[] = ["accounts", "templates", "settings", "relationships"];
+const settingTabs: ViewId[] = ["accounts", "templates"];
 
 const endpointByView: Partial<Record<ViewId, string>> = {
   collect: "hotspots",
@@ -1326,8 +1326,6 @@ export function App() {
             <SubpageStrip items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"}>
               <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />
               <TemplatesView language={language} />
-              <DestinationsView language={language} />
-              <ResourceList view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />
             </SubpageStrip>
           </div>
         </div>

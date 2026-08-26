@@ -255,6 +255,9 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(business, /title=\{t\.opcHistory\}/);
   assert.doesNotMatch(business, /<details className="crm-pool-settings"/);
   assert.match(app, /PoolsView language=\{language\} onCreate=/);
+  assert.match(app, /settingTabs: ViewId\[\] = \["accounts", "templates"\]/);
+  assert.doesNotMatch(app, /<DestinationsView/);
+  assert.doesNotMatch(app, /view="relationships"/);
   assert.doesNotMatch(business, /tags\.map\(\(tag\) => <span className="crm-chip"/);
 });
 
