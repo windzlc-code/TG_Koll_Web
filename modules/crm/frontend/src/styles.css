@@ -589,10 +589,72 @@ body.crm-page button { color: inherit; }
 .crm-member-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 8px;
+  gap: 6px;
 }
 .crm-member-card {
-  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 6px 10px;
+  background: var(--crm-paper);
+  border: 1px solid var(--crm-line);
+  border-radius: 8px;
+}
+.crm-member-card[data-account-platform="threads"] { border-color: #111; }
+.crm-member-card[data-account-platform="instagram"] {
+  border: 1px solid transparent;
+  background: linear-gradient(var(--crm-paper), var(--crm-paper)) padding-box, var(--instagram-platform-gradient) border-box;
+}
+.crm-member-card-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.crm-member-card-main .platform-brand-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+.crm-member-card-main > strong {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--crm-ink);
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crm-member-card-tags {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+.crm-member-tag {
+  flex: 0 0 auto;
+  max-width: 9em;
+  overflow: hidden;
+  padding: 3px 8px;
+  color: var(--status-success-ink);
+  background: var(--status-success-bg);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crm-member-card .crm-account-card-action {
+  min-height: 28px;
+  padding: 0 10px;
 }
 
 .crm-chart-grid {
@@ -866,6 +928,7 @@ body.crm-page button { color: inherit; }
 .crm-live-indicator i { width: 6px; height: 6px; background: currentColor; border-radius: 50%; animation: crm-live 1.6s ease-out infinite; }
 .crm-live-indicator.is-offline { color: var(--crm-warning); background: var(--crm-warning-soft); }
 
+.crm-detail-pane .crm-account-platforms { margin: 0 0 10px; }
 .crm-account-platforms {
   display: flex;
   gap: 6px;
