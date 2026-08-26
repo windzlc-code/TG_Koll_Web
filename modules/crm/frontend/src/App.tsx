@@ -598,7 +598,7 @@ function inspectDetailRows(inspect: Record<string, unknown>, view: ViewId, messa
     [messages.recordResult, result && result !== content ? result : ""],
   ];
   for (const [key, value] of Object.entries(payload)) {
-    if (shown.has(key) || isTechnicalKey(key)) continue;
+    if (shown.has(key) || isTechnicalKey(key) || /^(active|enabled|ok|schema_version|createdAt|updatedAt)$/i.test(key)) continue;
     if (value && typeof value === "object") {
       const nested = summaryFromDetail(value as Record<string, unknown>, language);
       if (nested) rows.push([metricLabel(key, language), nested]);
