@@ -594,10 +594,13 @@ body.crm-page button { color: inherit; }
 .crm-member-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "head action"
+    "meta action";
   align-items: center;
-  gap: 8px;
-  min-height: 48px;
-  padding: 6px 10px;
+  gap: 4px 8px;
+  min-height: 0;
+  padding: 8px 10px;
   background: var(--crm-paper);
   border: 1px solid var(--crm-line);
   border-radius: 8px;
@@ -607,41 +610,38 @@ body.crm-page button { color: inherit; }
   border: 1px solid transparent;
   background: linear-gradient(var(--crm-paper), var(--crm-paper)) padding-box, var(--instagram-platform-gradient) border-box;
 }
-.crm-member-card-main {
+.crm-member-card-head {
+  grid-area: head;
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
-.crm-member-card-main .platform-brand-icon {
+.crm-member-card-head .platform-brand-icon {
   width: 14px;
   height: 14px;
   flex: 0 0 14px;
 }
-.crm-member-card-main > strong {
-  flex: 0 1 auto;
+.crm-member-card-head > strong {
   min-width: 0;
   overflow: hidden;
   color: var(--crm-ink);
   font-size: 14px;
   font-weight: 800;
-  line-height: 1.2;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.crm-member-card-tags {
+.crm-member-card-meta {
+  grid-area: meta;
   display: flex;
-  flex: 1 1 auto;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 4px 6px;
   min-width: 0;
-  overflow: hidden;
 }
 .crm-member-tag {
   flex: 0 0 auto;
-  max-width: 9em;
-  overflow: hidden;
   padding: 3px 8px;
   color: var(--status-success-ink);
   background: var(--status-success-bg);
@@ -649,12 +649,63 @@ body.crm-page button { color: inherit; }
   font-size: 12px;
   font-weight: 800;
   line-height: 1.2;
+  white-space: nowrap;
+}
+.crm-member-portrait {
+  flex: 1 1 12em;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--crm-ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .crm-member-card .crm-account-card-action {
+  grid-area: action;
+  align-self: center;
   min-height: 28px;
   padding: 0 10px;
+}
+.crm-member-detail-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.crm-member-detail-facts > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 5px 8px;
+  color: var(--crm-ink);
+  background: var(--crm-surface-soft);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.crm-member-detail-facts b {
+  color: var(--crm-muted);
+  font-weight: 800;
+}
+.crm-member-detail-notes {
+  display: grid;
+  gap: 8px;
+}
+.crm-member-detail-notes p {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--crm-ink);
+  background: var(--crm-surface-soft);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.crm-member-detail-notes b {
+  display: inline;
+  margin-right: 6px;
+  color: var(--crm-muted);
+  font-weight: 800;
 }
 
 .crm-chart-grid {

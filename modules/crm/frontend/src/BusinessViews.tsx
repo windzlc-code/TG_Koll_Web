@@ -84,36 +84,54 @@ function memberTitle(member: Row, fallback: string) {
   return handle || name;
 }
 
-function memberPreviewChips(member: Row, language: Language): string[] {
+function memberTagEntries(member: Row): Array<[string, string]> {
   const lead = memberLead(member);
-  const chips: string[] = [];
-  const stage = String(member.stage || lead.stage || member.status || "");
-  if (stage) chips.push(metricLabel(stage, language));
-  const previewKey = /^(意向|分类|分類|关键词|關鍵詞|人设|人設|筛选|篩選)$/;
-  const longKey = /^(痛点|痛點|需求|画像|畫像|来源|來源|批次|日期|采集|採集|渠道|验证|驗證|行为|行為)$/;
+  const rows: Array<[string, string]> = [];
   for (const tag of readableTags(arrayOf(member.tags ?? lead.tags ?? member.tags_json ?? lead.tags_json))) {
     const parts = tag.split(/[:：]/);
     const key = parts[0].trim();
     const value = parts.slice(1).join("：").trim();
-    if (!value || longKey.test(key) || !previewKey.test(key)) continue;
-    const short = value.length > 8 ? `${value.slice(0, 8)}…` : value;
-    chips.push(`${key} ${short}`);
-    if (chips.length >= 3) break;
+    if (key && value) rows.push([key, value]);
+    else if (tag) rows.push(["", tag]);
   }
-  return chips;
+  return rows;
 }
 
-function memberDetailRows(member: Row, t: { member: string; handle: string; platform: string; stage: string; score: string; source: string; tags: string }, language: Language): Array<[string, string]> {
+function memberTimeLabel(member: Row): string {
+  const dates = memberTagEntries(member).filter(([key]) => /^(日期|时间|時間)$/.test(key)).map(([, value]) => value);
+  return dates.find((value) => /\d{4}-\d{2}-\d{2}/.test(value)) || dates[0] || "";
+}
+
+function memberPreview(member: Row, language: Language): { chips: string[]; portrait: string } {
+  const lead = memberLead(member);
+  const entries = memberTagEntries(member);
+  const chips: string[] = [];
+  const stage = String(member.stage || lead.stage || member.status || "");
+  if (stage) chips.push(metricLabel(stage, language));
+  const intent = entries.find(([key]) => key === "意向")?.[1];
+  if (intent) chips.push(`意向 ${intent}`);
+  const time = memberTimeLabel(member);
+  if (time) chips.push(time);
+  const portrait = entries.find(([key]) => /^(画像|畫像)$/.test(key))?.[1] || "";
+  return { chips, portrait };
+}
+
+function isLongMemberField(key: string, value: string) {
+  return value.length > 18 || /^(画像|畫像|需求|痛点|痛點|来源|來源)$/.test(key);
+}
+
+function memberDetailGroups(member: Row, t: { member: string; handle: string; platform: string; stage: string; score: string; source: string; tags: string }, language: Language): { facts: Array<[string, string]>; notes: Array<[string, string]> } {
   const lead = memberLead(member);
   const handle = memberHandle(member);
   const name = textOf(member.display_name || lead.display_name, "");
   const stage = String(member.stage || lead.stage || member.status || "");
   const score = textOf(member.score ?? lead.score ?? member.priority ?? lead.priority, "");
   const source = textOf(member.source ?? lead.source ?? member.origin ?? lead.origin, "");
-  const tags = readableTags(arrayOf(member.tags ?? lead.tags ?? member.tags_json ?? lead.tags_json));
-  const rows: Array<[string, string]> = [];
+  const facts: Array<[string, string]> = [];
+  const notes: Array<[string, string]> = [];
   const push = (label: string, value: string) => {
-    if (value && value !== "—") rows.push([label, value]);
+    if (!value || value === "—") return;
+    (isLongMemberField(label, value) ? notes : facts).push([label, value]);
   };
   if (name && name !== handle) push(t.member, name);
   push(t.handle, handle ? `@${handle}` : "");
@@ -122,10 +140,9 @@ function memberDetailRows(member: Row, t: { member: string; handle: string; plat
   if (score && score !== "—") push(t.score, score);
   if (source && source !== "—") push(t.source, source);
   const shown = new Set(["username", "display_name", "platform", "stage", "status", "score", "priority", "source", "origin", "tags", "tags_json", "lead", "profile"]);
-  for (const tag of tags) {
-    const parts = tag.split(/[:：]/);
-    if (parts.length >= 2 && parts[0].trim().length <= 8) push(parts[0].trim(), parts.slice(1).join("：").trim());
-    else push(t.tags, tag);
+  for (const [key, value] of memberTagEntries(member)) {
+    if (/^(渠道|采集|採集|批次|验证|驗證)$/.test(key)) continue;
+    push(key || t.tags, value);
   }
   for (const [key, value] of Object.entries({ ...lead, ...member })) {
     if (shown.has(key) || isTechnicalKey(key) || /^(active|enabled|ok|schema_version|createdAt|updatedAt|lead_id|pool_id)$/i.test(key)) continue;
@@ -135,7 +152,7 @@ function memberDetailRows(member: Row, t: { member: string; handle: string; plat
     push(metricLabel(key, language), text);
     shown.add(key);
   }
-  return rows;
+  return { facts, notes };
 }
 
 function PageHeader({ title, hint, language, onRefresh, action }: { title: string; hint: string; language?: Language; onRefresh: () => void; action?: React.ReactNode }) {
@@ -195,6 +212,7 @@ export function PoolsView({ language }: { language: Language }) {
   const insights = detail ? poolInsightCards(detail, snapshot, members, tags, language) : [];
   const stageMix = mixFromValues(members.map((member) => member.stage || objectOf(member.lead || member.profile).stage || member.status), language);
   const visibleMembers = members.filter((member) => normalizePlatform(member.platform || memberLead(member).platform) === platformFilter);
+  const inspectingDetail = inspecting ? memberDetailGroups(inspecting, t, language) : null;
   const splitValues = (value: string) => [...new Set(value.split(/[，,\n]/).map((item) => item.trim()).filter(Boolean))];
   const savePool = async () => {
     if (!selectedId || poolDraft.name.trim().length < 2) { setError(t.required); return; }
@@ -250,20 +268,23 @@ export function PoolsView({ language }: { language: Language }) {
           </div>
           {!members.length ? <p className="crm-quiet-empty">{t.noMembers}</p> : !visibleMembers.length ? <p className="crm-quiet-empty">{t.noPlatformMembers}</p> : <div className="crm-member-grid">{visibleMembers.map((member, index) => {
             const platform = member.platform || memberLead(member).platform;
+            const preview = memberPreview(member, language);
             return <article className="crm-member-card" data-account-platform={normalizePlatform(platform) || undefined} key={String(member.lead_id || member.id || index)}>
-              <div className="crm-member-card-main">
+              <div className="crm-member-card-head">
                 <PlatformLogo platform={platform} />
                 <strong>{memberTitle(member, t.member)}</strong>
-                <div className="crm-member-card-tags">{memberPreviewChips(member, language).map((chip) => <span className="crm-member-tag" key={chip}>{chip}</span>)}</div>
+              </div>
+              <div className="crm-member-card-meta">
+                {preview.chips.map((chip) => <span className="crm-member-tag" key={chip}>{chip}</span>)}
+                {preview.portrait ? <span className="crm-member-portrait">{preview.portrait}</span> : null}
               </div>
               <button className="crm-account-card-action" type="button" onClick={() => setInspecting(member)}>{t.viewMember}</button>
             </article>;
           })}</div>}
           {memberCursor && <div className="crm-pagination"><button className="crm-secondary-button" type="button" onClick={() => void loadPool(selectedId, memberCursor)}>{t.loadMore}</button></div>}
-          {inspecting && <ConsoleModal title={t.memberDetail} labelledBy="crm-member-detail-title" onClose={() => setInspecting(null)} actions={<button type="button" className="primary" onClick={() => setInspecting(null)}>{t.close}</button>}>
-            <dl className="crm-record-detail">
-              {memberDetailRows(inspecting, t, language).map(([label, value]) => <div key={`${label}:${value}`}><dt>{label}</dt><dd>{value}</dd></div>)}
-            </dl>
+          {inspecting && inspectingDetail && <ConsoleModal title={t.memberDetail} labelledBy="crm-member-detail-title" onClose={() => setInspecting(null)} actions={<button type="button" className="primary" onClick={() => setInspecting(null)}>{t.close}</button>}>
+            {inspectingDetail.facts.length > 0 && <div className="crm-member-detail-facts">{inspectingDetail.facts.map(([label, value]) => <span key={`${label}:${value}`}><b>{label}</b>{value}</span>)}</div>}
+            {inspectingDetail.notes.length > 0 && <div className="crm-member-detail-notes">{inspectingDetail.notes.map(([label, value]) => <p key={`${label}:${value}`}><b>{label}</b>{value}</p>)}</div>}
           </ConsoleModal>}
         </>}
       </div>

@@ -220,9 +220,11 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(css, /--status-success-bg/);
   assert.match(business, /crm-member-card/);
   assert.match(business, /crm-member-tag/);
+  assert.match(business, /crm-member-portrait/);
+  assert.match(business, /crm-member-detail-facts/);
   assert.match(business, /crm-account-platforms/);
   assert.match(business, /platformFilter/);
-  assert.match(business, /memberPreviewChips/);
+  assert.match(business, /memberPreview\(/);
   assert.match(business, /viewMember/);
   assert.match(business, /memberDetail/);
   assert.match(business, /setInspecting/);
