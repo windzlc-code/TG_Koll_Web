@@ -9,11 +9,31 @@ export function isTechnicalId(value: unknown) {
 }
 
 export function isTechnicalKey(key: string) {
-  return /^(id|task_id|pool_id|lead_id|account_id|content_hash|snapshot|payload|idempotency|preflight|sku|workflow_id|legacy_id|social_task_id|request_id)$/i.test(key)
+  return /^(id|task_id|pool_id|lead_id|account_id|content_hash|snapshot|payload|idempotency|preflight|sku|workflow_id|legacy_id|social_task_id|request_id|platform_user_key|schema_version|contact_status|import_batch)$/i.test(key)
     || /(^|_)id$/i.test(key)
     || /Id$/.test(key)
     || /_json$/i.test(key)
-    || /Hash$/i.test(key);
+    || /Hash$/i.test(key)
+    || /_at$/i.test(key)
+    || /At$/.test(key)
+    || /_key$/i.test(key)
+    || /Key$/.test(key);
+}
+
+export function isOpaqueUserValue(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text || text === "—") return true;
+  if (isTechnicalId(text)) return true;
+  if (/^[a-z]+(?:_[a-z0-9]+)+$/i.test(text)) return true;
+  if (/^[\d,.\s]+$/.test(text)) {
+    const numeric = Number(text.replace(/,/g, ""));
+    if (Number.isFinite(numeric) && numeric > 1e9) return true;
+  }
+  return false;
+}
+
+export function isEnglishMachineLabel(label: string) {
+  return /^[a-z][a-z0-9]*(?:[ _-][a-z0-9]+)+$/i.test(String(label || "").trim());
 }
 
 export function humanText(value: unknown, fallback = "—"): string {

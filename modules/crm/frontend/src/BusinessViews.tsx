@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CrmApiError, crmApi, payloadItems } from "./api";
 import { Icon } from "./icons";
 import { PlatformChip, PlatformLogo, normalizePlatform, platformLabel } from "./platform";
-import { cronFriendly, groupEventMix, humanText, isTechnicalId, isTechnicalKey, metricLabel, mixFromValues, mixParts, mixTone, poolInsightCards, readableTags, workflowLabel, type MixPart } from "./present";
+import { cronFriendly, groupEventMix, humanText, isEnglishMachineLabel, isOpaqueUserValue, isTechnicalId, isTechnicalKey, metricLabel, mixFromValues, mixParts, mixTone, poolInsightCards, readableTags, workflowLabel, type MixPart } from "./present";
 import { ConsoleModal, requestConfirm } from "./confirm-dialog";
 import type { Language } from "./types";
 
@@ -120,35 +120,77 @@ function isLongMemberField(key: string, value: string) {
   return value.length > 18 || /^(画像|畫像|需求|痛点|痛點|来源|來源)$/.test(key);
 }
 
+function localizeMemberKey(key: string, language: Language) {
+  const hant = language === "zh-Hant";
+  const table: Record<string, [string, string]> = {
+    画像: ["画像", "畫像"], 畫像: ["画像", "畫像"],
+    需求: ["需求", "需求"],
+    痛点: ["痛点", "痛點"], 痛點: ["痛点", "痛點"],
+    来源: ["来源", "來源"], 來源: ["来源", "來源"],
+    关键词: ["关键词", "關鍵詞"], 關鍵詞: ["关键词", "關鍵詞"], 關鍵字: ["关键词", "關鍵詞"],
+    分类: ["分类", "分類"], 分類: ["分类", "分類"],
+    意向: ["意向", "意向"],
+    日期: ["日期", "日期"],
+    时间: ["时间", "時間"], 時間: ["时间", "時間"],
+    行为: ["行为", "行為"], 行為: ["行为", "行為"],
+    账号: ["账号", "帳號"], 帳號: ["账号", "帳號"],
+    平台: ["平台", "平台"],
+    阶段: ["阶段", "階段"], 階段: ["阶段", "階段"],
+    评分: ["评分", "評分"], 評分: ["评分", "評分"],
+    客户: ["客户", "客戶"], 客戶: ["客户", "客戶"],
+  };
+  const pair = table[key];
+  return pair ? (hant ? pair[1] : pair[0]) : key;
+}
+
+function isInternalTagKey(key: string) {
+  return /^(渠道|采集|採集|批次|验证|驗證|筛选|篩選|人设|人設)$/.test(key);
+}
+
 function memberDetailGroups(member: Row, t: { member: string; handle: string; platform: string; stage: string; score: string; source: string; tags: string }, language: Language): { facts: Array<[string, string]>; notes: Array<[string, string]> } {
   const lead = memberLead(member);
   const handle = memberHandle(member);
   const name = textOf(member.display_name || lead.display_name, "");
   const stage = String(member.stage || lead.stage || member.status || "");
-  const score = textOf(member.score ?? lead.score ?? member.priority ?? lead.priority, "");
-  const source = textOf(member.source ?? lead.source ?? member.origin ?? lead.origin, "");
+  const scoreRaw = member.score ?? lead.score ?? member.priority ?? lead.priority;
+  const scoreNum = Number(scoreRaw);
+  const score = Number.isFinite(scoreNum) && scoreNum === 0 ? "" : textOf(scoreRaw, "");
   const facts: Array<[string, string]> = [];
   const notes: Array<[string, string]> = [];
-  const push = (label: string, value: string) => {
-    if (!value || value === "—") return;
+  const seen = new Set<string>();
+  const dateLabels = /^(日期|时间|時間)$/;
+  const push = (rawLabel: string, rawValue: string) => {
+    const label = localizeMemberKey(rawLabel, language);
+    const value = String(rawValue || "").trim();
+    if (!label || !value || value === "—" || isInternalTagKey(rawLabel) || isOpaqueUserValue(value) || isEnglishMachineLabel(label) || isEnglishMachineLabel(value)) return;
+    if (dateLabels.test(label)) {
+      const existing = facts.findIndex(([key]) => dateLabels.test(key));
+      if (existing >= 0) {
+        const current = facts[existing][1];
+        if (/\d{4}-\d{2}-\d{2}/.test(current) || !/\d{4}-\d{2}-\d{2}/.test(value)) return;
+        facts[existing] = [label, value];
+        return;
+      }
+    }
+    const fingerprint = `${label}:${value}`;
+    if (seen.has(fingerprint)) return;
+    seen.add(fingerprint);
     (isLongMemberField(label, value) ? notes : facts).push([label, value]);
   };
   if (name && name !== handle) push(t.member, name);
   push(t.handle, handle ? `@${handle}` : "");
   push(t.platform, platformLabel(member.platform || lead.platform));
   if (stage) push(t.stage, metricLabel(stage, language));
-  if (score && score !== "—") push(t.score, score);
-  if (source && source !== "—") push(t.source, source);
+  if (score) push(t.score, score);
   const shown = new Set(["username", "display_name", "platform", "stage", "status", "score", "priority", "source", "origin", "tags", "tags_json", "lead", "profile"]);
   for (const [key, value] of memberTagEntries(member)) {
-    if (/^(渠道|采集|採集|批次|验证|驗證)$/.test(key)) continue;
     push(key || t.tags, value);
   }
   for (const [key, value] of Object.entries({ ...lead, ...member })) {
-    if (shown.has(key) || isTechnicalKey(key) || /^(active|enabled|ok|schema_version|createdAt|updatedAt|lead_id|pool_id)$/i.test(key)) continue;
+    if (shown.has(key) || isTechnicalKey(key) || /^(active|enabled|ok|status)$/i.test(key)) continue;
     if (value && typeof value === "object") continue;
     const text = textOf(value, "");
-    if (!text || text === "—" || isTechnicalId(text)) continue;
+    if (!text) continue;
     push(metricLabel(key, language), text);
     shown.add(key);
   }

@@ -6,7 +6,7 @@ import { Icon } from "./icons";
 import { PlatformLogo, normalizePlatform, platformLabel } from "./platform";
 import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { BarChart, DonutChart, LineChart } from "./charts";
-import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, isTechnicalId, isTechnicalKey, metricLabel, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
+import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, isEnglishMachineLabel, isOpaqueUserValue, isTechnicalId, isTechnicalKey, metricLabel, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
 import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
@@ -614,15 +614,17 @@ function inspectDetailRows(inspect: Record<string, unknown>, view: ViewId, messa
     [messages.recordResult, result && result !== content ? result : ""],
   ];
   for (const [key, value] of Object.entries(payload)) {
-    if (shown.has(key) || isTechnicalKey(key) || /^(active|enabled|ok|schema_version|createdAt|updatedAt)$/i.test(key)) continue;
+    if (shown.has(key) || isTechnicalKey(key) || /^(active|enabled|ok|schema_version)$/i.test(key)) continue;
     if (value && typeof value === "object") {
       const nested = summaryFromDetail(value as Record<string, unknown>, language);
-      if (nested) rows.push([metricLabel(key, language), nested]);
+      const nestedLabel = metricLabel(key, language);
+      if (nested && !isOpaqueUserValue(nested) && !isEnglishMachineLabel(nestedLabel)) rows.push([nestedLabel, nested]);
       continue;
     }
     const text = eventPreviewLabel(String(value || ""), language) || humanText(value, "");
-    if (!text || text === "—" || isTechnicalId(text)) continue;
-    rows.push([metricLabel(key, language), text]);
+    const label = metricLabel(key, language);
+    if (!text || text === "—" || isTechnicalId(text) || isOpaqueUserValue(text) || isEnglishMachineLabel(label) || isEnglishMachineLabel(text)) continue;
+    rows.push([label, text]);
     shown.add(key);
   }
   return rows.filter(([, value]) => value && value !== "—");

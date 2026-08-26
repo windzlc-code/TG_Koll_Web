@@ -207,6 +207,7 @@ test("frontend document supplements are represented by accessible, persistent UI
   const confirm = await read("src/confirm-dialog.tsx");
   const business = await read("src/BusinessViews.tsx");
   const wizard = await read("src/WorkflowWizard.tsx");
+  const present = await read("src/present.ts");
   assert.match(confirm, /createPortal/);
   assert.match(confirm, /className="console-modal"/);
   assert.match(confirm, /onCloseRef\.current = onClose/);
@@ -228,6 +229,11 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(business, /crm-member-tag/);
   assert.match(business, /crm-member-portrait/);
   assert.match(business, /crm-member-detail-facts/);
+  assert.match(business, /localizeMemberKey/);
+  assert.match(business, /isInternalTagKey/);
+  assert.match(business, /isOpaqueUserValue/);
+  assert.match(present, /platform_user_key/);
+  assert.match(present, /isEnglishMachineLabel/);
   assert.match(business, /crm-account-platforms/);
   assert.match(business, /platformFilter/);
   assert.match(business, /memberPreview\(/);
