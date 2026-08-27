@@ -55,8 +55,13 @@ export function humanText(value: unknown, fallback = "—"): string {
   return text;
 }
 
+function hasBareEnglishPhrase(text: string) {
+  return /[A-Za-z]{4,}/.test(text) && !/[\u3400-\u9fff]/.test(text);
+}
+
 export function metricLabel(key: string, language: "zh-Hans" | "zh-Hant") {
   const hant = language === "zh-Hant";
+  const normalized = String(key || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
   const map: Record<string, [string, string]> = {
     completed: ["已完成", "已完成"],
     queued: ["排队中", "排隊中"],
@@ -100,6 +105,15 @@ export function metricLabel(key: string, language: "zh-Hans" | "zh-Hant") {
     instagram_group_settings_update: ["修改群名", "修改群名"],
     instagram_group_members_add: ["补充成员", "補充成員"],
     instagram_group_create: ["创建群聊", "建立群聊"],
+    open_login: ["账号登录", "帳號登入"],
+    account_check: ["账号核验", "帳號核驗"],
+    collection_sample_inspection: ["采集样本检查", "採集樣本檢查"],
+    collection_samples: ["采集样本", "採集樣本"],
+    legacy_opc_daily_run: ["历史每日采集", "歷史每日採集"],
+    legacy_opc_daily_collection: ["历史每日采集", "歷史每日採集"],
+    legacy_opc_collection: ["历史采集", "歷史採集"],
+    legacy_schedule: ["历史定时任务", "歷史定時任務"],
+    opc_history_import: ["历史资料导入", "歷史資料匯入"],
     collect_profile: ["主页采集", "主頁採集"],
     collect_feed: ["信息流采集", "動態牆採集"],
     event: ["运营事件", "營運事件"],
@@ -119,13 +133,29 @@ export function metricLabel(key: string, language: "zh-Hans" | "zh-Hant") {
     pool_tags_updated: ["客户池标签已更新", "客戶池標籤已更新"],
     task_manual_attention_recorded: ["任务需要处理", "任務需要處理"],
   };
-  const pair = map[key];
+  const pair = map[normalized] || map[key];
   if (pair) return hant ? pair[1] : pair[0];
-  if (/^[a-z0-9_]+$/i.test(key) && key.includes("_")) {
-    const spaced = key.replace(/_/g, " ");
-    return humanText(spaced, key);
-  }
   return key;
+}
+
+export function localizeStoredTitle(raw: string, language: "zh-Hans" | "zh-Hant") {
+  const hant = language === "zh-Hant";
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  const login = text.match(/^login\s+@(.+)$/i);
+  if (login) return `${hant ? "登入" : "登录"} @${login[1].trim()}`;
+  const samples = text.match(/^collection samples\s*[·•]\s*(.+?)\s*[·•]\s*(\d+)\s*$/i);
+  if (samples) {
+    return hant
+      ? `採集樣本 · ${samples[1].trim()} · ${samples[2]} 條`
+      : `采集样本 · ${samples[1].trim()} · ${samples[2]} 条`;
+  }
+  if (/^scheduled crm workflow\b/i.test(text)) return hant ? "定時任務" : "定时任务";
+  if (/^instagram relationship verification$/i.test(text)) return hant ? "Instagram 關係核驗" : "Instagram 关系核验";
+  if (/^crm account verification$/i.test(text)) return hant ? "帳號核驗" : "账号核验";
+  const mapped = metricLabel(text, language);
+  if (mapped && mapped !== text && !hasBareEnglishPhrase(mapped)) return mapped;
+  return text;
 }
 
 export function workflowLabel(type: string, language: "zh-Hans" | "zh-Hant") {
@@ -185,10 +215,15 @@ export function groupEventMix(entries: Array<[string, number]>, language: "zh-Ha
 export function taskTitle(task: Record<string, unknown>, fallback: string, language: "zh-Hans" | "zh-Hant") {
   for (const candidate of [task.title, task.name, task.label, task.subject]) {
     const text = humanText(candidate, "");
-    if (text && text !== "—") return text;
+    if (!text || text === "—") continue;
+    const localized = localizeStoredTitle(text, language);
+    if (localized && !hasBareEnglishPhrase(localized)) return localized;
   }
   const kind = String(task.kind || task.workflow_type || task.type || "");
-  if (kind) return workflowLabel(kind, language);
+  if (kind) {
+    const label = workflowLabel(kind, language);
+    if (label && !hasBareEnglishPhrase(label)) return label;
+  }
   return fallback;
 }
 

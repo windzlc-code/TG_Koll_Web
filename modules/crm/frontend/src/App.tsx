@@ -4,14 +4,15 @@ import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api"
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
 import { PlatformLogo, normalizePlatform, platformLabel } from "./platform";
-import { AnalyticsView, GroupsView, MixBar, PoolsView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
+import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, PublicEngageView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { BarChart, DonutChart, LineChart } from "./charts";
-import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, isEnglishMachineLabel, isOpaqueUserValue, isTechnicalId, isTechnicalKey, metricLabel, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
+import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, isEnglishMachineLabel, isOpaqueUserValue, isTechnicalId, isTechnicalKey, localizeStoredTitle, metricLabel, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
-import { WorkflowWizard, type WizardView } from "./WorkflowWizard";
+import { WorkflowWizard, type WizardView, type WorkflowSeed } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
 import { applyDockPill, applySegmentPill, prefersReducedMotion } from "./segment-motion";
 import { ConfirmHost, ConsoleModal, clearPageScrollLock, requestConfirm } from "./confirm-dialog";
+import { SelectMenu } from "./select-menu";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -25,7 +26,7 @@ declare global {
 
 const viewIds: ViewId[] = [
   "overview", "collect", "pools", "public", "outreach", "groups",
-  "relationships", "tasks", "schedules", "templates", "accounts", "settings",
+  "relationships", "tasks", "analytics", "schedules", "templates", "destinations", "accounts", "settings",
 ];
 
 type NavViewId = "overview" | "collect" | "public" | "tasks" | "settings";
@@ -35,13 +36,16 @@ const viewAliases: Partial<Record<ViewId, ViewId>> = {
   outreach: "public",
   groups: "public",
   relationships: "public",
-  schedules: "tasks",
+  analytics: "tasks",
+  schedules: "settings",
   templates: "settings",
+  destinations: "settings",
   accounts: "settings",
 };
+const collectTabs: ViewId[] = ["collect"];
 const engageTabs: ViewId[] = ["public", "outreach", "groups", "relationships"];
-const taskTabs: ViewId[] = ["tasks", "schedules"];
-const settingTabs: ViewId[] = ["accounts", "templates"];
+const taskTabs: ViewId[] = ["tasks", "analytics"];
+const settingTabs: ViewId[] = ["accounts", "templates", "destinations", "schedules"];
 
 const endpointByView: Partial<Record<ViewId, string>> = {
   collect: "hotspots",
@@ -52,6 +56,7 @@ const endpointByView: Partial<Record<ViewId, string>> = {
   relationships: "relationships",
   schedules: "schedules",
   templates: "templates",
+  destinations: "destinations",
   settings: "destinations",
 };
 
@@ -77,8 +82,9 @@ function navViewOf(view: ViewId): NavViewId {
 }
 
 function hashView(): ViewId {
-  const value = window.location.hash.replace(/^#\/?/, "") as ViewId;
-  return viewIds.includes(value) ? value : "overview";
+  const value = window.location.hash.replace(/^#\/?/, "");
+  if (value === "ai") return "collect";
+  return viewIds.includes(value as ViewId) ? value as ViewId : "overview";
 }
 
 function displayValue(value: unknown): string {
@@ -168,8 +174,17 @@ function Metric({ label, value, note }: { label: string; value: unknown; note?: 
   </article>;
 }
 
+function statusChipTone(status = "") {
+  const tone = statusTone(status);
+  if (tone === "complete") return "is-success";
+  if (tone === "danger") return "is-error";
+  if (tone === "warning") return "is-manual";
+  if (tone === "active") return String(status).toLowerCase() === "queued" ? "is-queued" : "is-running";
+  return "is-muted";
+}
+
 function StatusBadge({ status, messages }: { status?: string; messages: Messages }) {
-  return <span className={`crm-status crm-status--${statusTone(status)}`}><i aria-hidden="true" />{statusText(status, messages)}</span>;
+  return <span className={`task-status-text ${statusChipTone(status)}`}>{statusText(status, messages)}</span>;
 }
 
 function AccountHealthIcon({ tone }: { tone: "healthy" | "warning" | "danger" }) {
@@ -237,95 +252,36 @@ function CompactTabs({ items, value, messages, navigate, label }: { items: ViewI
   </div>;
 }
 
-function safeBrowserTarget(rawUrl: string) {
-  const url = new URL(rawUrl, window.location.origin);
-  if (url.origin !== window.location.origin) throw new Error("crm.errors.browserSessionInvalid");
-  return `${url.pathname}${url.search}${url.hash}`;
+function consoleAccountsHref(accountId = "") {
+  const context = adminWorkspaceContext();
+  const query = new URLSearchParams();
+  query.set("view", "accounts");
+  if (accountId) query.set("open_login", accountId);
+  if (context.isAdmin) query.set("admin_console", "1");
+  if (context.workspaceId) query.set("admin_workspace_user_id", context.workspaceId);
+  return `/console.html?${query}`;
 }
 
-async function openLoginSession(accountId: string, language: Language) {
-  const popup = window.open("about:blank", "_blank");
-  if (popup) popup.opener = null;
-  try {
-    const result = await crmApi.openLogin(accountId);
-    const immediate = result.live_browser_url || result.session_url;
-    if (immediate) {
-      const target = safeBrowserTarget(immediate);
-      if (popup) popup.location.replace(target);
-      else window.location.assign(target);
-      return;
-    }
-    if (!result.task_id) throw new Error(operationCatalog[language].browserTimeout);
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const detail = await crmApi.task(result.task_id);
-      const steps = Array.isArray(detail.steps) ? detail.steps as Array<Record<string, unknown>> : [];
-      const socialIds = new Set(steps.map((step) => String(step.social_task_id || "")).filter(Boolean));
-      const sessions = (await crmApi.browserSessions()).sessions || [];
-      const session = sessions.find((item) => socialIds.has(String(item.task_id || "")) && item.browser_ready !== false);
-      const sessionId = String(session?.id || session?.session_id || "");
-      if (sessionId) {
-        const context = adminWorkspaceContext();
-        const query = new URLSearchParams();
-        if (context.isAdmin) query.set("admin_console", "1");
-        if (context.workspaceId) query.set("admin_workspace_user_id", context.workspaceId);
-        const target = `/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(sessionId)}/kasm/${query.size ? `?${query}` : ""}`;
-        if (popup) popup.location.replace(target);
-        else window.location.assign(target);
-        return;
-      }
-      await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-    }
-    throw new Error(operationCatalog[language].browserTimeout);
-  } catch (error) {
-    popup?.close();
-    throw error;
-  }
+function consoleOpenLoginHref(accountId: string) {
+  return consoleAccountsHref(accountId);
+}
+
+async function confirmOpenConsoleLogin(accountId: string, messages: Messages) {
+  const id = String(accountId || "").trim();
+  if (!id) return;
+  if (!await requestConfirm({
+    title: messages.openLogin,
+    message: messages.openLoginConfirm,
+    confirmText: messages.openLoginGo,
+    cancelText: messages.cancel,
+  })) return;
+  window.location.assign(consoleOpenLoginHref(id));
 }
 
 const takeoverAccountStates = new Set(["pending_login", "needs_login", "need_verification", "cookie_expired", "expired", "abnormal"]);
 
 function accountNeedsTakeover(account: CrmAccount) {
   return Boolean(account.needs_login) || takeoverAccountStates.has(String(account.status || "").toLowerCase()) || takeoverAccountStates.has(String(account.health_status || "").toLowerCase());
-}
-
-function accountIsReady(account: CrmAccount | undefined) {
-  if (!account || accountNeedsTakeover(account)) return false;
-  return String(account.status || "").toLowerCase() === "ready" && !["banned", "disabled"].includes(String(account.health_status || "").toLowerCase());
-}
-
-type AccountTrack = {
-  accountId: string;
-  kind: "open_login" | "account_check";
-  taskId: string;
-  status: string;
-  phase: "queued" | "running" | "ready" | "done" | "failed";
-  browserUrl?: string;
-};
-
-function accountTrackPhase(kind: AccountTrack["kind"], status: string, browserUrl?: string): AccountTrack["phase"] {
-  if (["completed", "confirmed"].includes(status)) return "done";
-  if (["failed", "cancelled", "unknown"].includes(status)) return "failed";
-  if (kind === "open_login" && browserUrl) return "ready";
-  if (status === "running" || status === "manual_required") return "running";
-  return "queued";
-}
-
-function liveBrowserHref(sessionId: string) {
-  const context = adminWorkspaceContext();
-  const query = new URLSearchParams();
-  if (context.isAdmin) query.set("admin_console", "1");
-  if (context.workspaceId) query.set("admin_workspace_user_id", context.workspaceId);
-  return `/api/persona_dashboard/automation/browser_sessions/${encodeURIComponent(sessionId)}/kasm/${query.size ? `?${query}` : ""}`;
-}
-
-async function waitForWorkflow(taskId: string, attempts = 90) {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const task = await crmApi.task(taskId);
-    const status = String(task.status || "");
-    if (["completed", "failed", "cancelled", "manual_required", "unknown"].includes(status)) return task;
-    await new Promise((resolve) => window.setTimeout(resolve, 1_000));
-  }
-  throw new Error("crm.errors.browserTimeout");
 }
 
 function taskDetailActions(detail: Record<string, unknown> | null): CrmAction[] {
@@ -365,7 +321,7 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
   const [manualBusy, setManualBusy] = useState("");
   const [manualError, setManualError] = useState("");
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
-  const [followup, setFollowup] = useState<{ action: CrmAction; comment: string; sourceUrl: string; preflight?: Awaited<ReturnType<typeof crmApi.preflight>> } | null>(null);
+  const [followup, setFollowup] = useState<{ action: CrmAction; kind: "followup_reply" | "nurture_reply"; comment: string; sourceUrl: string; preflight?: Awaited<ReturnType<typeof crmApi.preflight>> } | null>(null);
   const [followupConfirmed, setFollowupConfirmed] = useState(false);
   const hasRealProgress = typeof task.progress === "number" || (typeof task.processed === "number" && typeof task.total === "number" && task.total > 0);
   const progress = typeof task.progress === "number" ? task.progress : task.total ? Math.round(((task.processed || 0) / task.total) * 100) : null;
@@ -412,13 +368,13 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
     catch (error) { setManualError(localizedError(error, messages)); }
     finally { setManualBusy(""); }
   };
-  const prepareFollowupDraft = async (action: CrmAction) => {
+  const prepareFollowupDraft = async (action: CrmAction, kind: "followup_reply" | "nurture_reply") => {
     const actionId = String(action.id || action.action_id || ""); if (!actionId) return;
     setManualBusy(`followup:${actionId}`); setManualError("");
     try {
       const result = await crmApi.generateFollowupDraft({ taskId: id, itemId: actionId, mentionSourceAuthor: true, locale: language });
       const draft = (result.draft && typeof result.draft === "object" ? result.draft : {}) as Record<string, unknown>;
-      setFollowup({ action, comment: String(draft.comment || ""), sourceUrl: String(draft.sourcePostUrl || action.target_key || action.payload?.target_url || "") });
+      setFollowup({ action, kind, comment: String(draft.comment || ""), sourceUrl: String(draft.sourcePostUrl || action.target_key || action.payload?.target_url || "") });
       setFollowupConfirmed(false);
     } catch (error) { setManualError(localizedError(error, messages)); }
     finally { setManualBusy(""); }
@@ -426,12 +382,15 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
   const submitFollowup = async () => {
     if (!followup || followup.comment.trim().length < 2) return;
     const sourceActionId = String(followup.action.id || followup.action.action_id || "");
-    const action = { action_type: "followup_reply", account_id: String(followup.action.account_id || ""), target_key: followup.sourceUrl, content: followup.comment.trim(), payload: { target_url: followup.sourceUrl, content: followup.comment.trim(), parent_workflow_id: id, source_action_id: sourceActionId, lead_id: followup.action.payload?.lead_id || "" } };
+    const action = { action_type: followup.kind, account_id: String(followup.action.account_id || ""), target_key: followup.sourceUrl, content: followup.comment.trim(), payload: { target_url: followup.sourceUrl, content: followup.comment.trim(), parent_workflow_id: id, source_action_id: sourceActionId, lead_id: followup.action.payload?.lead_id || "" } };
     setManualBusy("followup-submit"); setManualError("");
     try {
       if (!followup.preflight) { const preflight = await crmApi.preflight({ workflow_type: "followup", actions: [action] }); setFollowup({ ...followup, preflight }); setFollowupConfirmed(false); return; }
       if (!followupConfirmed) return;
-      await crmApi.createWorkflow({ workflow_type: "followup", title: language === "zh-Hant" ? "針對性跟進回覆" : "针对性跟进回复", idempotency_key: `crm-followup:${sourceActionId}:${window.crypto.randomUUID()}`, input: { parent_workflow_id: id, source_action_id: sourceActionId }, actions: followup.preflight.actions?.length ? followup.preflight.actions : [action], preflight_token: followup.preflight.preflight_token, confirmed: true });
+      const workflowTitle = followup.kind === "nurture_reply"
+        ? (language === "zh-Hant" ? "持續互動培育" : "持续互动培育")
+        : (language === "zh-Hant" ? "針對性跟進回覆" : "针对性跟进回复");
+      await crmApi.createWorkflow({ workflow_type: followup.kind, title: workflowTitle, idempotency_key: `crm-${followup.kind}:${sourceActionId}:${window.crypto.randomUUID()}`, input: { parent_workflow_id: id, source_action_id: sourceActionId }, actions: followup.preflight.actions?.length ? followup.preflight.actions : [action], preflight_token: followup.preflight.preflight_token, confirmed: true });
       setFollowup(null); setFollowupConfirmed(false); onChanged();
     } catch (error) { setManualError(localizedError(error, messages)); }
     finally { setManualBusy(""); }
@@ -461,12 +420,8 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
     }
   };
   const restoreAfterLogin = async () => {
-    if (!accountId) return;
     setManualBusy("restore"); setManualError("");
     try {
-      const verification = await crmApi.verifyAccount(accountId);
-      const verified = await waitForWorkflow(verification.task_id);
-      if (String(verified.status || "") !== "completed") throw new Error(String(verified.error_detail || verified.error_code || "crm.errors.accountNeedsLogin"));
       await crmApi.taskAction(id, "reconcile");
       setDetail(await crmApi.task(id));
       onChanged();
@@ -478,24 +433,31 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
   const detailSteps = taskDetailSteps(detail);
   const accountId = manualAccountId(detail);
   const loginRequired = needsLoginTakeover(detail) && Boolean(accountId);
+  const title = taskTitle(task as Record<string, unknown>, messages.untitledTask, language);
+  const username = humanText(task.account_username, "");
+  const when = localizedDate(task.updated_at || task.created_at, language);
+  const showUsername = Boolean(username && username !== "—" && !title.includes(username.replace(/^@/, "")));
+  const meta = [when, showUsername ? (username.startsWith("@") ? username : `@${username}`) : ""].filter(Boolean).join(" · ");
+  const rawMessage = String(task.message || "").trim();
+  const message = rawMessage ? localizeStoredTitle(rawMessage, language) : "";
+  const showMessage = Boolean(message && message !== title && /[\u3400-\u9fff]/.test(message));
   return <article className="crm-task-card">
     <div className="crm-task-card-head">
-      <div><strong>{taskTitle(task as Record<string, unknown>, messages.untitledTask, language)}</strong><small>{humanText(task.account_username, "") || localizedDate(task.updated_at || task.created_at, language)}</small></div>
+      <div><strong>{title}</strong><small>{meta}</small></div>
       <StatusBadge status={status} messages={messages} />
     </div>
-    {task.message && <p>{task.message}</p>}
+    {showMessage && <p>{message}</p>}
     {hasRealProgress && progress !== null && <div className="crm-progress" role="progressbar" aria-label={messages.taskProgress} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.max(0, Math.min(100, progress))}><span style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div>}
     <div className="crm-task-foot">
-      <span>{task.account_username || localizedDate(task.updated_at || task.created_at, language) || messages.noSimulatedProgress}</span>
-      <span className="crm-inline-actions">
+      <div className="row-actions">
         {status === "running" && <button type="button" onClick={() => onAction(task, "pause")}>{messages.pause}</button>}
         {status.startsWith("paused") && <button type="button" onClick={() => onAction(task, "resume")}>{messages.resume}</button>}
         {status === "failed" && <button type="button" onClick={() => onAction(task, "retry")}>{messages.retryAction}</button>}
         {status === "awaiting_confirmation" && <button type="button" onClick={() => onAction(task, "confirm")}>{messages.confirmTask}</button>}
         <button type="button" disabled={manualBusy === "detail"} aria-expanded={detailOpen} onClick={() => detailOpen ? setDetailOpen(false) : void loadDetail()}>{detailOpen ? messages.hideTaskDetails : messages.inspectTask}</button>
-        {["awaiting_confirmation", "queued", "running", "manual_required", "paused_by_user", "paused_by_policy"].includes(status) && <button type="button" onClick={() => onAction(task, "cancel")}>{messages.cancel}</button>}
-        {["completed", "failed", "cancelled"].includes(status) && <button type="button" disabled={manualBusy === "delete"} onClick={() => void removeTask()}>{language === "zh-Hant" ? "刪除" : "删除"}</button>}
-      </span>
+        {["awaiting_confirmation", "queued", "running", "manual_required", "paused_by_user", "paused_by_policy"].includes(status) && <button type="button" className="muted" onClick={() => onAction(task, "cancel")}>{messages.cancel}</button>}
+        {["completed", "failed", "cancelled"].includes(status) && <button type="button" className="danger unified-action-icon-button" disabled={manualBusy === "delete"} title={language === "zh-Hant" ? "刪除" : "删除"} aria-label={language === "zh-Hant" ? "刪除" : "删除"} onClick={() => void removeTask()}><Icon name="trash" className="ui-trash-icon" /></button>}
+      </div>
     </div>
     {manualError && <div className="crm-inline-error" role="alert"><Icon name="warning" />{manualError}</div>}
     {detailOpen && <div className="crm-manual-panel">
@@ -518,11 +480,14 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
         <strong>{operationText(action.action_type, messages)}</strong>
         <span><StatusBadge status={action.state} messages={messages} /></span>
         <StructuredEvidence evidence={action.evidence || {}} language={language} />
-        {action.state === "confirmed" && ["public_comment", "public_reply"].includes(String(action.action_type || "")) && <button className="crm-secondary-button" type="button" disabled={manualBusy === `followup:${String(action.id || action.action_id || "")}`} onClick={() => void prepareFollowupDraft(action)}>{language === "zh-Hant" ? "AI 針對性補充" : "AI 针对性补充"}</button>}
+        {action.state === "confirmed" && ["public_comment", "public_reply"].includes(String(action.action_type || "")) && <div className="crm-inline-actions">
+          <button className="crm-secondary-button" type="button" disabled={manualBusy === `followup:${String(action.id || action.action_id || "")}`} onClick={() => void prepareFollowupDraft(action, "followup_reply")}>{language === "zh-Hant" ? "針對性跟進" : "针对性跟进"}</button>
+          <button className="crm-secondary-button" type="button" disabled={manualBusy === `followup:${String(action.id || action.action_id || "")}`} onClick={() => void prepareFollowupDraft(action, "nurture_reply")}>{language === "zh-Hant" ? "持續互動" : "持续互动"}</button>
+        </div>}
       </section>)}
       {loginRequired && <button className="crm-secondary-button" type="button" disabled={manualBusy === "login"} onClick={() => {
         setManualBusy("login");
-        void openLoginSession(accountId, language).catch((error) => setManualError(localizedError(error, messages))).finally(() => setManualBusy(""));
+        void confirmOpenConsoleLogin(accountId, messages).finally(() => setManualBusy(""));
       }}><Icon name="external" />{messages.openAccountLogin}</button>}
       {loginRequired && <button className="crm-primary-button" type="button" disabled={manualBusy === "restore"} onClick={() => void restoreAfterLogin()}><Icon name="refresh" />{manualBusy === "restore" ? messages.restoringTask : messages.restoreOriginalTask}</button>}
       {unknownActions.map((action) => {
@@ -541,7 +506,7 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
       </section>;})}
       {["manual_required", "unknown"].includes(status) && !loginRequired && !unknownActions.length && <p>{messages.noManualAction}</p>}
     </div>}
-    {followup && <ConsoleModal title={language === "zh-Hant" ? "針對性跟進回覆" : "针对性跟进回复"} labelledBy={`crm-followup-${id}`} onClose={() => setFollowup(null)} actions={<><button type="button" onClick={() => setFollowup(null)}>{messages.cancel}</button><button type="button" className="primary" disabled={Boolean(manualBusy) || !followup.comment.trim() || Boolean(followup.preflight && !followupConfirmed)} onClick={() => void submitFollowup()}>{followup.preflight ? (language === "zh-Hant" ? "確認並建立" : "确认并创建") : (language === "zh-Hant" ? "執行預檢" : "执行预检")}</button></>}>
+    {followup && <ConsoleModal title={followup.kind === "nurture_reply" ? (language === "zh-Hant" ? "持續互動培育" : "持续互动培育") : (language === "zh-Hant" ? "針對性跟進回覆" : "针对性跟进回复")} labelledBy={`crm-followup-${id}`} onClose={() => setFollowup(null)} actions={<><button type="button" onClick={() => setFollowup(null)}>{messages.cancel}</button><button type="button" className="primary" disabled={Boolean(manualBusy) || !followup.comment.trim() || Boolean(followup.preflight && !followupConfirmed)} onClick={() => void submitFollowup()}>{followup.preflight ? (language === "zh-Hant" ? "確認並建立" : "确认并创建") : (language === "zh-Hant" ? "檢查目標與計費" : "检查目标与计费")}</button></>}>
       <label className="crm-field"><span>{language === "zh-Hant" ? "可編輯草稿" : "可编辑草稿"}</span><textarea rows={6} value={followup.comment} onChange={(event) => { setFollowup({ ...followup, comment: event.target.value, preflight: undefined }); setFollowupConfirmed(false); }} /></label>
       {followup.preflight && <div className="crm-preflight-review"><dl><div><dt>{language === "zh-Hant" ? "可執行" : "可执行"}</dt><dd>{followup.preflight.allowed_count ?? followup.preflight.actions?.length ?? 0}</dd></div><div><dt>{language === "zh-Hant" ? "預計扣點" : "预计扣点"}</dt><dd>{followup.preflight.quote?.total_points ?? 0}</dd></div></dl><label className="crm-consent"><input type="checkbox" checked={followupConfirmed} onChange={(event) => setFollowupConfirmed(event.target.checked)} /><span>{language === "zh-Hant" ? "我已核對來源證據與補充內容" : "我已核对来源证据与补充内容"}</span></label></div>}
     </ConsoleModal>}
@@ -713,7 +678,7 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
     {state === "ready" && loadError && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{loadError.message}</span><button type="button" onClick={() => void load(nextCursor)}><Icon name="refresh" />{messages.retry}</button></div>}
     {state === "ready" && visibleItems.length > 0 && <div className="crm-filter-bar" role="search" aria-label={messages.filterRecords}>
       <label><span>{messages.search}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={messages.searchPlaceholder} /></label>
-      <label><span>{messages.status}</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">{messages.allStatuses}</option>{statuses.map((status) => <option key={status} value={status}>{statusText(status, messages)}</option>)}</select></label>
+      <label><span>{messages.status}</span><SelectMenu value={statusFilter} onChange={setStatusFilter} placeholder={messages.allStatuses} options={[{ value: "", label: messages.allStatuses }, ...statuses.map((status) => ({ value: status, label: statusText(status, messages) }))]} /></label>
       {filtersActive && <button className="crm-secondary-button" type="button" onClick={clearFilters}>{messages.clearFilters}</button>}
     </div>}
     {state === "ready" && !visibleItems.length && <EmptyState messages={messages} view={view} actionLabel={writeViews.has(view) && enabled ? messages.create : undefined} onAction={writeViews.has(view) && enabled ? onCreate : undefined} />}
@@ -807,11 +772,8 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
   const [platformFilter, setPlatformFilter] = useState<"threads" | "instagram">("threads");
   const [loading, setLoading] = useState(!seedAccounts.length);
   const [opening, setOpening] = useState("");
-  const [verifying, setVerifying] = useState("");
   const [resetting, setResetting] = useState("");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
-  const [track, setTrack] = useState<AccountTrack | null>(null);
   const visibleAccounts = accounts.filter((account) => normalizePlatform(account.platform) === platformFilter);
   const loadAccounts = useCallback(async () => {
     const payload = await crmApi.list("accounts");
@@ -821,16 +783,29 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
   }, []);
   useEffect(() => {
     let active = true;
-    void crmApi.list("accounts").then((payload) => {
-      if (!active) return;
-      setAccounts(payloadItems(payload) as CrmAccount[]);
-      setLoading(false);
-    }).catch((nextError) => {
-      if (!active) return;
-      setError(localizedError(nextError, messages));
-      setLoading(false);
-    });
-    return () => { active = false; };
+    const tick = async () => {
+      try {
+        const payload = await crmApi.list("accounts");
+        if (!active) return;
+        setAccounts(payloadItems(payload) as CrmAccount[]);
+        setLoading(false);
+      } catch (nextError) {
+        if (!active) return;
+        setError(localizedError(nextError, messages));
+        setLoading(false);
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => { void tick(); }, 3_000);
+    const onVisible = () => { if (document.visibilityState === "visible") void tick(); };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [messages.dataError]);
   useEffect(() => {
     if (!accounts.length) return;
@@ -838,67 +813,16 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
     const fallback = normalizePlatform(accounts[0]?.platform) === "instagram" ? "instagram" : "threads";
     if (fallback !== platformFilter) setPlatformFilter(fallback);
   }, [accounts, platformFilter, visibleAccounts.length]);
-  useEffect(() => {
-    if (!track?.taskId) return;
-    const taskId = track.taskId;
-    const kind = track.kind;
-    let cancelled = false;
-    let timer = 0;
-    const tick = async () => {
-      try {
-        const detail = await crmApi.task(taskId);
-        if (cancelled) return;
-        const status = String(detail.status || "queued");
-        let foundUrl = "";
-        if (kind === "open_login") {
-          const steps = taskDetailSteps(detail);
-          const socialIds = new Set(steps.map((step) => String(step.social_task_id || "")).filter(Boolean));
-          const sessions = (await crmApi.browserSessions()).sessions || [];
-          const session = sessions.find((item) => (socialIds.has(String(item.task_id || "")) || String(item.task_id || "") === taskId) && item.browser_ready !== false);
-          const sessionId = String(session?.id || session?.session_id || "");
-          if (sessionId) foundUrl = liveBrowserHref(sessionId);
-        }
-        setTrack((current) => {
-          if (!current || current.taskId !== taskId) return current;
-          const browserUrl = current.browserUrl || foundUrl;
-          return { ...current, status, browserUrl, phase: accountTrackPhase(kind, status, browserUrl) };
-        });
-        if (["completed", "failed", "cancelled", "unknown"].includes(status)) {
-          await loadAccounts();
-          if (status === "completed") setNotice(messages.loginVerified);
-          return;
-        }
-        timer = window.setTimeout(() => { void tick(); }, 1_000);
-      } catch (nextError) {
-        if (!cancelled) setError(localizedError(nextError, messages));
-      }
-    };
-    timer = window.setTimeout(() => { void tick(); }, 200);
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [track?.taskId, track?.kind, loadAccounts, messages]);
   const openLogin = async (account: CrmAccount) => {
     const id = String(account.id || "");
     if (!id) return;
     setOpening(id);
-    setError(""); setNotice("");
+    setError("");
     try {
-      const result = await crmApi.openLogin(id);
-      if (!result.task_id) throw new Error(operationCatalog[language].browserTimeout);
-      setTrack({ accountId: id, kind: "open_login", taskId: result.task_id, status: "queued", phase: "queued" });
-    } catch (nextError) {
-      setError(localizedError(nextError, messages));
+      await confirmOpenConsoleLogin(id, messages);
     } finally {
       setOpening("");
     }
-  };
-  const verifyLogin = async (account: CrmAccount) => {
-    const id = String(account.id || ""); if (!id) return;
-    setVerifying(id); setError(""); setNotice("");
-    try {
-      const result = await crmApi.verifyAccount(id);
-      setTrack({ accountId: id, kind: "account_check", taskId: result.task_id, status: result.status || "queued", phase: "queued" });
-    } catch (nextError) { setError(localizedError(nextError, messages)); }
-    finally { setVerifying(""); }
   };
   const resetRotation = async (account: CrmAccount) => {
     const id = String(account.id || "");
@@ -924,7 +848,20 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
     }
   };
   return <section className="crm-panel">
-    <div className="crm-panel-head"><div><span className="crm-kicker">{messages.accountHealth}</span><h2>{messages.views.accounts[0]}</h2></div></div>
+    <div className="crm-panel-head"><div><span className="crm-kicker">{messages.accountHealth}</span><h2>{messages.views.accounts[0]}</h2><p>{messages.addAccountHint}</p></div><button className="crm-secondary-button" type="button" onClick={() => void requestConfirm({ title: messages.addAccountConsole, message: messages.addAccountConfirm, confirmText: messages.addAccountConsole, cancelText: messages.cancel }).then((ok) => { if (ok) window.location.assign(consoleAccountsHref()); })}>{messages.addAccountConsole}</button></div>
+    {accounts.length > 0 && <div className="crm-account-summary" aria-label={messages.accountHealth}>
+      <span><b>{new Set(accounts.map((item) => String(item.username || item.id || "").replace(/^@/, "").toLowerCase()).filter(Boolean)).size}</b><small>{messages.accountTotal}</small></span>
+      <span><b>{Array.from(accounts.reduce((map, item) => {
+        const key = String(item.username || "").replace(/^@/, "").toLowerCase();
+        if (!key) return map;
+        const current = map.get(key) || { threads: false, instagram: false };
+        if (normalizePlatform(item.platform) === "instagram") current.instagram = !accountNeedsTakeover(item);
+        else current.threads = !accountNeedsTakeover(item);
+        map.set(key, current);
+        return map;
+      }, new Map<string, { threads: boolean; instagram: boolean }>()).values()).filter((item) => item.threads && item.instagram).length}</b><small>{messages.accountDualReady}</small></span>
+      <span><b>{accounts.filter((item) => accountNeedsTakeover(item)).length}</b><small>{messages.accountNeedsAction}</small></span>
+    </div>}
     <div className="crm-account-platforms" role="tablist" aria-label={messages.platformFilter}>
       <button type="button" role="tab" aria-selected={platformFilter === "threads"} className={platformFilter === "threads" ? "is-active" : ""} data-account-platform="threads" onClick={() => setPlatformFilter("threads")}><PlatformLogo platform="threads" /><strong>Threads</strong></button>
       <button type="button" role="tab" aria-selected={platformFilter === "instagram"} className={platformFilter === "instagram" ? "is-active" : ""} data-account-platform="instagram" onClick={() => setPlatformFilter("instagram")}><PlatformLogo platform="instagram" /><strong>Instagram</strong></button>
@@ -934,6 +871,11 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
       const needsLogin = accountNeedsTakeover(account);
       const username = account.username || account.display_name || `${messages.accountFallback} ${index + 1}`;
       const platformName = platformLabel(account.platform) || messages.platformFallback;
+      const handle = String(account.username || "").replace(/^@/, "").toLowerCase();
+      const dualReady = Boolean(handle) && accounts.some((item) => {
+        const otherHandle = String(item.username || "").replace(/^@/, "").toLowerCase();
+        return otherHandle === handle && normalizePlatform(item.platform) !== normalizePlatform(account.platform) && !accountNeedsTakeover(item) && !needsLogin;
+      });
       return <article className="crm-account-card" data-account-platform={String(account.platform || "").toLowerCase()} key={String(account.id || account.username || index)}>
         <div className="crm-account-card-main">
           <span className="crm-account-card-platform">
@@ -941,33 +883,39 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
             <span>{platformName}</span>
           </span>
           <strong title={username}>{username}</strong>
+          {dualReady && <span className="crm-chip">{messages.dualPlatform}</span>}
           <AccountStatusChip account={account} messages={messages} />
         </div>
         <div className="crm-account-card-actions">
-          {needsLogin && <button className="crm-account-card-action crm-account-card-action--login" type="button" disabled={opening === String(account.id) || verifying === String(account.id) || track?.accountId === String(account.id)} onClick={() => void openLogin(account)}><Icon name="external" />{opening === String(account.id) ? messages.submitting : messages.openLogin}</button>}
-          <button className="crm-account-card-action" type="button" disabled={verifying === String(account.id) || opening === String(account.id) || track?.accountId === String(account.id)} onClick={() => void verifyLogin(account)}><Icon name="refresh" />{verifying === String(account.id) ? messages.verifyingLogin : messages.verifyLogin}</button>
-          {account.rotation?.locked && <button className="crm-account-card-action" type="button" disabled={resetting === String(account.id)} onClick={() => void resetRotation(account)}><Icon name="refresh" />{resetting === String(account.id) ? messages.submitting : (language === "zh-Hant" ? "重置私訊輪換" : "重置私信轮换")}</button>}
+          <button className="crm-account-card-action crm-account-card-action--login" type="button" disabled={opening === String(account.id)} onClick={() => void openLogin(account)}><Icon name="external" />{opening === String(account.id) ? messages.submitting : messages.openLogin}</button>
+          {Boolean(account.rotation?.locked) && !needsLogin && <button className="crm-account-card-action" type="button" disabled={resetting === String(account.id)} title={messages.resetRotationHint} onClick={() => void resetRotation(account)}><Icon name="refresh" />{resetting === String(account.id) ? messages.submitting : messages.resetRotation}</button>}
         </div>
-        {track?.accountId === String(account.id) && <div className="crm-account-track" role="status">
-          <strong>{track.kind === "open_login" ? messages.loginAssistant : messages.verifyAssistant}</strong>
-          <small>{messages.accountTrack[track.phase]}</small>
-          <div className={`crm-progress ${track.phase === "failed" ? "is-failed" : ""}`} role="progressbar" aria-label={messages.taskProgress}><span className={track.phase === "done" || track.phase === "failed" ? "is-settled" : "is-live"} /></div>
-          <div className="crm-account-track-actions">
-            {track.browserUrl && <a className="crm-account-card-action crm-account-card-action--login" href={track.browserUrl} target="_blank" rel="noopener noreferrer">{messages.openLiveView}</a>}
-            <button className="crm-account-card-action" type="button" onClick={() => { window.location.hash = "tasks"; }}>{messages.viewLoginTask}</button>
-            {(track.phase === "done" || track.phase === "failed") && <button className="crm-account-card-action" type="button" onClick={() => setTrack(null)}>{messages.cancel}</button>}
-          </div>
-        </div>}
       </article>;
     })}</div>}
-    {notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
   </section>;
 }
 
 function TasksView({ tasks, pollError, messages, language, onAction, onChanged, hasMore, loadingMore, onLoadMore }: { tasks: CrmTask[]; pollError: boolean; messages: Messages; language: Language; onAction: (task: CrmTask, action: "pause" | "resume" | "cancel" | "retry" | "confirm") => void; onChanged: () => void; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const statuses = useMemo(() => [...new Set(tasks.map((task) => String(task.status || "")).filter(Boolean))], [tasks]);
+  const visibleTasks = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    return tasks.filter((task) => {
+      if (statusFilter && String(task.status || "") !== statusFilter) return false;
+      if (!normalized) return true;
+      return [task.title, task.name, task.task_id, task.id, task.kind, task.account_username]
+        .some((value) => String(value || "").toLowerCase().includes(normalized));
+    });
+  }, [query, statusFilter, tasks]);
   return <section className="crm-panel">
-    <div className="crm-panel-head"><div><span className="crm-kicker">{messages.liveOrchestration}</span><h2>{messages.views.tasks[0]}</h2><p>{messages.noSimulatedProgress}</p></div><span className={`crm-live-indicator ${pollError ? "is-offline" : ""}`}><i />{pollError ? messages.partial : messages.live}</span></div>
-    {!tasks.length ? <EmptyState messages={messages} view="tasks" /> : <div className="crm-task-list">{tasks.map((task, index) => <TaskCard task={task} messages={messages} language={language} onAction={onAction} onChanged={onChanged} key={String(task.task_id || task.id || index)} />)}</div>}
+    <div className="crm-panel-head crm-task-panel-head"><div><h2>{messages.views.tasks[0]}</h2><p>{messages.noSimulatedProgress}</p></div><span className={`crm-live-indicator ${pollError ? "is-offline" : ""}`}><i />{pollError ? messages.partial : messages.live}</span></div>
+    {tasks.length > 0 && <div className="crm-filter-bar" role="search" aria-label={messages.filterRecords}>
+      <label><span>{messages.search}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={messages.searchPlaceholder} /></label>
+      <label><span>{messages.status}</span><SelectMenu value={statusFilter} onChange={setStatusFilter} placeholder={messages.allStatuses} options={[{ value: "", label: messages.allStatuses }, ...statuses.map((status) => ({ value: status, label: statusText(status, messages) }))]} /></label>
+      {(query || statusFilter) && <button className="crm-secondary-button" type="button" onClick={() => { setQuery(""); setStatusFilter(""); }}>{messages.clearFilters}</button>}
+    </div>}
+    {!tasks.length ? <EmptyState messages={messages} view="tasks" /> : !visibleTasks.length ? <EmptyState messages={messages} view="tasks" filtered /> : <div className="crm-task-list">{visibleTasks.map((task, index) => <TaskCard task={task} messages={messages} language={language} onAction={onAction} onChanged={onChanged} key={String(task.task_id || task.id || index)} />)}</div>}
     {hasMore && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={onLoadMore}>{loadingMore ? messages.loadingMore : messages.loadMore}</button></div>}
   </section>;
 }
@@ -1069,7 +1017,7 @@ function WorkflowDialog({ view, messages, language, onClose, onCreated }: { view
     }
   };
   return <ConsoleModal title={messages.workflowTitle} labelledBy="crmWorkflowTitle" onClose={onClose} dialogRef={dialog} actions={<><button type="button" onClick={onClose}>{messages.cancel}</button><button type="button" className="primary" disabled={(view !== "relationships" && !instruction.trim()) || !target.trim() || !accountId || (Boolean(workflowActionByView[view]?.write) && !consent) || submitting} onClick={() => void submit()}>{submitting ? messages.submitting : messages.confirm}</button></>}>
-      <label className="crm-field"><span>{labels.account}</span><select value={accountId} onChange={(event) => setAccountId(event.target.value)}><option value="">{labels.selectAccount}</option>{accounts.map((account) => <option key={String(account.id)} value={String(account.id)}>{account.display_name || account.username} · {account.platform}</option>)}</select></label>
+      <label className="crm-field"><span>{labels.account}</span><SelectMenu value={accountId} onChange={setAccountId} placeholder={labels.selectAccount} options={[{ value: "", label: labels.selectAccount }, ...accounts.map((account) => ({ value: String(account.id), label: `${account.display_name || account.username} · ${account.platform}` }))]} /></label>
       <label className="crm-field"><span>{labels.target}</span><input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={labels.targetPlaceholder} /></label>
       {view !== "relationships" && <label className="crm-field"><span>{messages.workflowInstruction}</span><textarea rows={5} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={messages.workflowPlaceholder} /></label>}
       <section className="crm-confirmation-summary" aria-labelledby="crmConfirmationTitle">
@@ -1103,6 +1051,7 @@ export function App() {
   const [bootstrapState, setBootstrapState] = useState<"loading" | "ready" | "forbidden" | "maintenance" | "error">("loading");
   const [bootstrap, setBootstrap] = useState<BootstrapPayload>({});
   const [workflowView, setWorkflowView] = useState<WizardView | null>(null);
+  const [workflowSeed, setWorkflowSeed] = useState<WorkflowSeed | null>(null);
   const [toast, setToast] = useState("");
 
   const loadBootstrap = useCallback(async () => {
@@ -1128,7 +1077,7 @@ export function App() {
   }, []);
   const handlePolicyFailure = useCallback(() => { void loadBootstrap(); }, [loadBootstrap]);
   const { tasks, pollError, refresh: refreshTasks, loadMore: loadMoreTasks, hasMore: hasMoreTasks, loadingMore: loadingMoreTasks } = useTaskPolling(bootstrap.tasks, handlePolicyFailure, bootstrapState === "ready");
-  const closeWorkflow = useCallback(() => setWorkflowView(null), []);
+  const closeWorkflow = useCallback(() => { setWorkflowView(null); setWorkflowSeed(null); }, []);
 
   useEffect(() => { void loadBootstrap(); }, [loadBootstrap]);
   useEffect(() => {
@@ -1273,14 +1222,17 @@ export function App() {
   if (bootstrapState === "error") return <StatePage title={messages.unavailable} description={messages.loadingHint} action={<button className="crm-primary-button" type="button" onClick={() => void loadBootstrap()}><Icon name="refresh" />{messages.retry}</button>} />;
 
   const activeNav = navViewOf(view);
-  const startWorkflow = (next: ViewId) => {
-    if (viewEnabled(next) && ["collect", "public", "outreach", "groups", "relationships"].includes(next)) setWorkflowView(next as WizardView);
+  const startWorkflow = (next: ViewId, seed?: WorkflowSeed | null) => {
+    if (viewEnabled(next) && ["collect", "public", "outreach", "groups", "relationships"].includes(next)) {
+      setWorkflowSeed(seed || null);
+      setWorkflowView(next as WizardView);
+    }
   };
 
   return <div className="crm-app">
     <div className={`crm-sidebar-backdrop ${drawerOpen ? "is-open" : ""}`} aria-hidden={!drawerOpen} onClick={() => setDrawerOpen(false)} />
     <aside ref={sidebar} id="crmSidebar" className={`crm-sidebar ${drawerOpen ? "is-open" : ""}`} aria-label={messages.product} aria-hidden={isCompact && !drawerOpen ? "true" : undefined} inert={isCompact && !drawerOpen ? true : undefined}>
-      <div className="crm-sidebar-head"><div className="crm-monogram">CRM</div><strong>{messages.productShort}</strong><button className="crm-icon-button crm-sidebar-close" type="button" onClick={() => setDrawerOpen(false)} aria-label={messages.closeNav}><Icon name="close" /></button></div>
+      <div className="crm-sidebar-head"><div className="crm-monogram">CRM</div><strong>{messages.productShort}</strong><button className="unified-action-icon-button crm-sidebar-close" type="button" onClick={() => setDrawerOpen(false)} aria-label={messages.closeNav} title={messages.closeNav}><Icon name="close" className="ui-action-icon" /></button></div>
       <nav className="crm-nav">
         {navViews.map((id) => <button type="button" key={id} className={activeNav === id ? "is-active" : ""} aria-current={activeNav === id ? "page" : undefined} onClick={() => navigate(id === "settings" ? "accounts" : id)}><Icon name={id} /><span>{messages.navItems[id]}</span></button>)}
       </nav>
@@ -1296,30 +1248,29 @@ export function App() {
             <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} language={language} />
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "collect"} inert={activeNav !== "collect" ? true : undefined}>
-            <div className="crm-module-toolbar">
-              <h2>{messages.views.collect[0]}</h2>
-            </div>
-            {!viewEnabled("collect") && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`}</span></div>}
-            {viewAdvisory("collect") && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{viewAdvisory("collect")}</span></div>}
-            <PoolsView language={language} onCreate={viewEnabled("collect") ? () => startWorkflow("collect") : undefined} />
+            <CompactTabs items={collectTabs} value={collectTabs.includes(view) ? view : "collect"} messages={messages} navigate={navigate} label={messages.navItems.collect} />
+            <SubpageStrip items={collectTabs} value={collectTabs.includes(view) ? view : "collect"}>
+              <div>
+                {!viewEnabled("collect") && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`}</span></div>}
+                {viewAdvisory("collect") && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{viewAdvisory("collect")}</span></div>}
+                <PoolsView language={language} onCollectMode={viewEnabled("collect") ? (mode) => startWorkflow("collect", { collectMode: mode }) : undefined} onEngage={() => navigate("public")} />
+              </div>
+            </SubpageStrip>
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "public"} inert={activeNav !== "public" ? true : undefined}>
             <CompactTabs items={engageTabs} value={engageTabs.includes(view) ? view : "public"} messages={messages} navigate={navigate} label={messages.navItems.public} />
             <SubpageStrip items={engageTabs} value={engageTabs.includes(view) ? view : "public"}>
-              <ResourceList view="public" messages={messages} language={language} enabled={viewEnabled("public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("public")} onCreate={() => startWorkflow("public")} />
+              <PublicEngageView language={language} enabled={viewEnabled("public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} onRefreshTasks={() => void refreshTasks()} onStart={(seed) => startWorkflow("public", seed)} />
               <ResourceList view="outreach" messages={messages} language={language} enabled={viewEnabled("outreach")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("outreach")} onCreate={() => startWorkflow("outreach")} />
               <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />
               <ResourceList view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />
             </SubpageStrip>
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "tasks"} inert={activeNav !== "tasks" ? true : undefined}>
-            <CompactTabs items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"} messages={messages} navigate={navigate} label={messages.views.tasks[0]} />
-            <SubpageStrip items={taskTabs} value={view === "schedules" ? "schedules" : "tasks"}>
-              <>
-                <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} />
-                <details className="crm-analytics-fold"><summary>{language === "zh-Hant" ? "營運分析" : "运营分析"}</summary><AnalyticsView language={language} /></details>
-              </>
-              <SchedulesView language={language} onCreate={(workflow) => setWorkflowView(workflow)} />
+            <CompactTabs items={taskTabs} value={taskTabs.includes(view) ? view : "tasks"} messages={messages} navigate={navigate} label={messages.navItems.tasks} />
+            <SubpageStrip items={taskTabs} value={taskTabs.includes(view) ? view : "tasks"}>
+              <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} />
+              <AnalyticsView language={language} />
             </SubpageStrip>
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "settings"} inert={activeNav !== "settings" ? true : undefined}>
@@ -1327,13 +1278,15 @@ export function App() {
             <SubpageStrip items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"}>
               <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />
               <TemplatesView language={language} />
+              <DestinationsView language={language} />
+              <SchedulesView language={language} onCreate={(workflow) => startWorkflow(workflow, { execution: "schedule" })} />
             </SubpageStrip>
           </div>
         </div>
       </div>
       </div>
     </main>
-    <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} onClose={closeWorkflow} onCreated={() => { setToast(messages.submitted); void refreshTasks(); }} />
+    <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} seed={workflowSeed} onClose={closeWorkflow} onCreated={() => { setToast(messages.submitted); void refreshTasks(); }} />
     <ConfirmHost titleLabel={messages.confirmTitle} okLabel={messages.ok} cancelLabel={messages.cancel} />
     {toast && <div className="crm-toast" role="status">{toast}</div>}
     <nav ref={dockRef} className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) }}>

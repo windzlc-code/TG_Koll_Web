@@ -28,7 +28,7 @@ test("CRM overview exposes preview charts and no other-page task launchers", asy
 
 test("CRM exposes the twelve required work views", async () => {
   const app = await read("src/App.tsx");
-  const expected = ["overview", "collect", "pools", "public", "outreach", "groups", "relationships", "tasks", "schedules", "templates", "accounts", "settings"];
+  const expected = ["overview", "collect", "pools", "public", "outreach", "groups", "relationships", "tasks", "analytics", "schedules", "templates", "destinations", "accounts", "settings"];
   for (const view of expected) assert.match(app, new RegExp(`"${view}"`));
   assert.match(app, /window\.location\.hash/);
 });
@@ -182,10 +182,24 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(app, /crm-account-card-platform/);
   assert.match(app, /crm-account-platforms/);
   assert.doesNotMatch(app, /data-account-platform="all"/);
-  assert.match(app, /crm-account-track/);
-  assert.match(app, /loginAssistant/);
+  assert.match(app, /consoleOpenLoginHref/);
+  assert.match(app, /confirmOpenConsoleLogin/);
+  assert.doesNotMatch(app, /AiAnalysisView/);
+  assert.match(app, /collectTabs: ViewId\[\] = \["collect"\]/);
+  assert.match(app, /if \(value === "ai"\) return "collect"/);
+  assert.match(app, /settingTabs/);
+  assert.match(app, /onCollectMode/);
+  assert.match(app, /crm-account-card-action--login/);
+  assert.match(app, /rotation\?\.locked/);
+  assert.match(app, /!needsLogin/);
+  assert.match(app, /open_login/);
+  assert.match(app, /\/console.html/);
+  assert.doesNotMatch(app, /verifyLogin/);
+  assert.doesNotMatch(app, /crm-live-browser/);
+  const api = await read("src/api.ts");
+  assert.doesNotMatch(api, /crm-open-login:/);
+  assert.doesNotMatch(api, /account_check/);
   assert.match(css, /\.crm-account-platforms/);
-  assert.match(css, /\.crm-account-track/);
   assert.match(css, /body\.crm-page \.crm-account-card-action--login/);
   assert.match(app, /navigate\(next, \{ direction, panel: true \}\)/);
   assert.match(app, /className="crm-view"/);
@@ -206,7 +220,17 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.doesNotMatch(css, /font-size:\s*(?:9|10|11)px|font:\s*(?:9|10|11)px/);
   const confirm = await read("src/confirm-dialog.tsx");
   const business = await read("src/BusinessViews.tsx");
+  assert.doesNotMatch(business, /export function AiAnalysisView/);
+  assert.match(business, /crm-collect-modes/);
+  assert.match(css, /\.crm-collect-modes\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
+  assert.doesNotMatch(css, /\.crm-collect-modes\s*\{[^}]*repeat\(3,/s);
+  assert.match(business, /crm-template-media/);
+  assert.match(business, /crmApi\.mediaContent/);
+  assert.match(api, /mediaContent:/);
+  assert.match(api, /requestBlob/);
+  assert.match(css, /\.crm-template-thumb/);
   const wizard = await read("src/WorkflowWizard.tsx");
+  assert.match(wizard, /crmApi\.analyzeDemand/);
   const present = await read("src/present.ts");
   assert.match(confirm, /createPortal/);
   assert.match(confirm, /className="console-modal"/);
@@ -248,17 +272,47 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.match(business, /setEditOpen\(true\)/);
   assert.match(business, /title=\{t\.editPool\}/);
   assert.match(business, /crm-pool-launch/);
-  assert.match(business, /createTask/);
+  assert.doesNotMatch(business, /createTask/);
   assert.match(business, /choosePool/);
   assert.match(business, /pickPool/);
   assert.match(business, /crm-opc-history/);
   assert.match(business, /title=\{t\.opcHistory\}/);
   assert.doesNotMatch(business, /<details className="crm-pool-settings"/);
-  assert.match(app, /PoolsView language=\{language\} onCreate=/);
-  assert.match(app, /settingTabs: ViewId\[\] = \["accounts", "templates"\]/);
+  assert.match(app, /PoolsView language=\{language\} onCollectMode=/);
+  assert.doesNotMatch(app, /PoolsView language=\{language\} onCreate=/);
+  assert.match(app, /settingTabs: ViewId\[\] = \["accounts", "templates", "destinations", "schedules"\]/);
   assert.match(app, /engageTabs: ViewId\[\] = \["public", "outreach", "groups", "relationships"\]/);
+  assert.match(app, /taskTabs: ViewId\[\] = \["tasks", "analytics"\]/);
+  assert.doesNotMatch(app, /crm-analytics-fold/);
+  assert.match(app, /SelectMenu/);
+  assert.match(wizard, /SelectMenu/);
+  assert.match(business, /SelectMenu/);
+  assert.match(css, /\.crm-select-panel/);
+  assert.match(css, /-webkit-line-clamp:\s*2/);
+  assert.doesNotMatch(business, /<select value=\{poolId\}/);
+  assert.match(app, /startWorkflow\(workflow, \{ execution: "schedule" \}\)/);
+  assert.match(app, /messages\.dualPlatform/);
+  assert.match(business, /\["collect", "public", "outreach", "groups"\]/);
+  assert.match(wizard, /collectExecution|data-collect-execution/);
+  assert.match(wizard, /execution === "schedule"/);
+  const icons = await read("src/icons.tsx");
+  assert.match(icons, /"back"/);
+  assert.match(icons, /m15 19-7-7 7-7/);
+  assert.match(confirm, /onBack\?: \(\) => void/);
+  assert.match(confirm, /name="back"/);
+  assert.match(confirm, /unified-action-icon-button/);
+  assert.match(wizard, /onBack=\{step > 1 \? goBack : undefined\}/);
+  assert.doesNotMatch(wizard, /t\.switchMode/);
+  assert.match(wizard, /platformHint\(collectPlatformNames\)/);
+  assert.match(wizard, /days === 1 \? "今天" : `近\$\{days\}天`/);
+  assert.match(css, /\.crm-platform-fieldset > button\.is-active/);
+  assert.doesNotMatch(css, /crm-platform-fieldset > button\[data-account-platform="instagram"\]\.is-active/);
+  assert.doesNotMatch(css, /crm-platform-fieldset > button\[data-account-platform="threads"\]\.is-active/);
+  assert.doesNotMatch(css, /\.crm-wizard-assistant \{[^}]*border-left:\s*3px/);
+  assert.doesNotMatch(css, /\.crm-wizard-progress > span \{ display: none/);
+  assert.match(css, /\.crm-wizard-hint/);
   assert.match(app, /relationships:\s*"public"/);
-  assert.doesNotMatch(app, /<DestinationsView/);
+  assert.match(app, /<DestinationsView/);
   assert.doesNotMatch(business, /tags\.map\(\(tag\) => <span className="crm-chip"/);
 });
 
@@ -273,10 +327,14 @@ test("dedicated CRM business views use real REST contracts", async () => {
   const app = await read("src/App.tsx");
   const api = await read("src/api.ts");
   const views = await read("src/BusinessViews.tsx");
-  for (const component of ["PoolsView", "TemplatesView", "SchedulesView", "AnalyticsView", "StructuredEvidence"]) {
+  const wizard = await read("src/WorkflowWizard.tsx");
+  for (const component of ["PoolsView", "TemplatesView", "SchedulesView", "AnalyticsView", "StructuredEvidence", "PublicEngageView"]) {
     assert.match(app, new RegExp(component));
     assert.match(views, new RegExp(`function ${component}`));
   }
+  assert.match(api, /comments\/progress/);
+  assert.match(app, /onEngage=/);
+  assert.match(wizard, /WorkflowSeed/);
   assert.match(api, /pools\/\$\{encodeURIComponent\(poolId\)\}\/members/);
   assert.match(api, /method: "PATCH"/);
   assert.match(api, /\/api\/crm\/v1\/media/);
@@ -308,6 +366,14 @@ test("business views preserve bilingual, responsive, no-green UI", async () => {
   assert.match(present, /export function mixParts/);
   assert.match(present, /export function eventPreviewLabel/);
   assert.match(present, /public_comment_reply_monitor_started/);
+  assert.match(present, /export function localizeStoredTitle/);
+  assert.match(present, /历史每日采集/);
+  assert.match(present, /\^login\\s\+@/);
+  assert.match(css, /\.crm-task-card \{[\s\S]*?min-height:\s*54px/);
+  assert.match(css, /body\.crm-page \.row-actions button[\s\S]*?min-height:\s*32px/);
+  assert.match(css, /body\.crm-page \.unified-action-icon-button/);
+  assert.match(css, /\.task-status-text \{/);
+  assert.match(css, /\.crm-compact-tabs button \{[\s\S]*?min-height:\s*30px/);
 });
 
 test("workflow wizard preserves the legacy prepare-review-confirm operation order", async () => {
@@ -318,7 +384,7 @@ test("workflow wizard preserves the legacy prepare-review-confirm operation orde
   }
   assert.match(wizard, /selectedLeadIds/);
   assert.match(wizard, /instagram_group_create/);
-  assert.match(wizard, /run_once:\s*true/);
+  assert.match(wizard, /run_once:\s*!daily/);
   assert.match(api, /\/api\/crm\/v1\/comments\/drafts/);
   assert.match(api, /\/api\/crm\/v1\/hotspots\/search/);
   assert.doesNotMatch(wizard, /fakeProgress|simulated|setInterval/i);
@@ -340,7 +406,7 @@ test("schedule creation and manual runs preserve complete actions and fresh appr
   const wizard = await read("src/WorkflowWizard.tsx");
   const views = await read("src/BusinessViews.tsx");
   const api = await read("src/api.ts");
-  assert.match(wizard, /payload:\s*\{\s*run_once:\s*true,[\s\S]+actions:\s*executableActions/);
+  assert.match(wizard, /payload:\s*\{\s*run_once:\s*!daily,[\s\S]+actions:\s*executableActions/);
   assert.match(wizard, /account_id:\s*accountId/);
   assert.doesNotMatch(views, /createResource\("schedules",\s*\{[\s\S]{0,180}payload:\s*\{\s*\}/);
   assert.match(views, /const preflight = await crmApi\.preflight/);
@@ -364,11 +430,11 @@ test("OPC history, pool maintenance and takeover recovery have real API paths", 
   assert.match(views, /setNotice\(t\.poolSaved\)/);
   assert.match(views, /poolSaved:\s*"客户池已保存"/);
   assert.match(views, /crm-panel-title-row/);
-  assert.match(views, /crm-icon-button[\s\S]*Icon name="refresh"/);
+  assert.match(views, /unified-action-icon-button[\s\S]*Icon name="refresh"/);
   assert.match(css, /\.crm-panel-title-row/);
   assert.match(css, /\.crm-inline-actions \.crm-primary-button/);
   for (const state of ["pending_login", "needs_login", "need_verification", "cookie_expired"]) assert.match(app, new RegExp(state));
-  assert.match(app, /crmApi\.verifyAccount/);
+  assert.match(app, /confirmOpenConsoleLogin/);
   assert.match(app, /crmApi\.taskAction\(id,\s*"reconcile"\)/);
 });
 
@@ -386,4 +452,35 @@ test("legacy public follow-up and Instagram group management are reachable from 
   }
   assert.match(views, /crmApi\.preflight/);
   assert.match(views, /preflight_token:\s*preflight\.preflight_token/);
+});
+
+test("streamlined CRM keeps the user-visible core flow without unsafe legacy controls", async () => {
+  const app = await read("src/App.tsx");
+  const wizard = await read("src/WorkflowWizard.tsx");
+  const views = await read("src/BusinessViews.tsx");
+  const css = await read("src/styles.css");
+  assert.match(wizard, /trustFirstTitle/);
+  assert.match(wizard, /trust_first:\s*true/);
+  assert.match(wizard, /question_hook/);
+  assert.match(wizard, /offer_hook/);
+  assert.match(wizard, /group_invite/);
+  assert.match(wizard, /scheduleCadence === "daily"/);
+  assert.match(wizard, /schedule_cadence:\s*daily \? "daily" : "once"/);
+  assert.doesNotMatch(wizard, /destination_id:\s*destinationId/);
+  assert.doesNotMatch(views, /runMode|一键连续分批|一鍵連續分批/);
+  assert.match(app, /followup\.kind/);
+  assert.match(app, /nurture_reply/);
+  assert.match(app, /visibleTasks/);
+  assert.match(css, /\.crm-wizard-policy-card/);
+  assert.match(css, /\.crm-strategy-cards/);
+  assert.match(wizard, /collectInput\?: string/);
+  assert.doesNotMatch(views, /aiContinue|带入采集设置|帶入採集設定/);
+  assert.match(wizard, /hasPersonaAnalysis/);
+  for (const field of ["targetPersona", "customerIntent", "mainNeed", "painPoint", "segments", "scenarios"]) assert.match(wizard, new RegExp(field));
+  assert.match(wizard, /analysisGroups/);
+  assert.match(wizard, /collectSteps:\s*\["填写设置", "确认启动"\]/);
+  assert.match(wizard, /view === "collect" \? 2/);
+  assert.doesNotMatch(wizard, /crm-wizard-choices|crm-wizard-choice/);
+  assert.doesNotMatch(css, /\.crm-wizard-choices|\.crm-wizard-choice/);
+  assert.doesNotMatch(views, /服务器分析可用|伺服器分析可用|未配置模型时使用本机规则备援|未配置模型時使用本機規則備援/);
 });

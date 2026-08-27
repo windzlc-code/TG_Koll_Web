@@ -80,6 +80,26 @@ export async function request<T>(path: string, init: CrmRequestInit = {}): Promi
   return payload as T;
 }
 
+async function requestBlob(path: string): Promise<Blob> {
+  const response = await fetch(path, {
+    credentials: "include",
+    cache: "no-store",
+    headers: requestHeaders(),
+  });
+  if (response.status === 401) {
+    loginRedirect();
+    throw new CrmApiError(response.status, { code: "crm_session_expired" });
+  }
+  if (!response.ok) {
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json")
+      ? await response.json().catch(() => ({}))
+      : { message: await response.text().catch(() => "") };
+    throw new CrmApiError(response.status, payload as CrmErrorBody);
+  }
+  return response.blob();
+}
+
 export const crmApi = {
   me: () => request<Record<string, unknown>>("/api/auth/me"),
   bootstrap: () => request<BootstrapPayload>("/api/crm/v1/bootstrap"),
@@ -87,6 +107,14 @@ export const crmApi = {
     "/api/crm/v1/demand/analyze",
     { method: "POST", body: payload },
   ),
+  commentProgress: (poolId: string, tags: string[] = [], batchSize = 10) => {
+    const query = new URLSearchParams({
+      pool_id: poolId,
+      batch_size: String(batchSize),
+    });
+    if (tags.length) query.set("tags", tags.join(","));
+    return request<Record<string, unknown>>(`/api/crm/v1/comments/progress?${query}`);
+  },
   generateCommentDrafts: (payload: Record<string, unknown>) => request<Record<string, unknown>>(
     "/api/crm/v1/comments/drafts",
     { method: "POST", body: payload },
@@ -133,6 +161,7 @@ export const crmApi = {
     body.append("upload", upload, upload.name);
     return request<Record<string, unknown>>("/api/crm/v1/media", { method: "POST", body });
   },
+  mediaContent: (mediaId: string) => requestBlob(`/api/crm/v1/media/${encodeURIComponent(mediaId)}/content`),
   importOpcHistory: (payload: Record<string, unknown>) => request<Record<string, unknown>>(
     "/api/crm/v1/opc/history/import",
     { method: "POST", body: payload },
@@ -187,7 +216,7 @@ export const crmApi = {
     if (action === "retry") removeSessionValue(storageKey);
     return result;
   },
-  openLogin: (accountId: string) => request<{ session_url?: string; live_browser_url?: string; task_id?: string }>(`/api/crm/v1/accounts/${encodeURIComponent(accountId)}/open-login`, { method: "POST", body: {} }),
+
   verifyRelationships: (payload: { account_id: string; lead_ids: string[]; idempotency_key: string }) => request<{ task_id: string; status: string }>(
     "/api/crm/v1/relationships/verify",
     { method: "POST", body: payload },
@@ -200,20 +229,7 @@ export const crmApi = {
     `/api/crm/v1/pools/${encodeURIComponent(poolId)}/members/deduplicate`,
     { method: "POST", body: {} },
   ),
-  verifyAccount: (accountId: string) => request<{ task_id: string; status: string }>(
-    "/api/crm/v1/tasks",
-    {
-      method: "POST",
-      body: {
-        workflow_type: "account_check",
-        title: "CRM account verification",
-        idempotency_key: `crm-account-check:${accountId}:${window.crypto.randomUUID()}`,
-        input: { account_id: accountId },
-        actions: [{ action_type: "account_check", account_id: accountId, target_key: `account:${accountId}`, payload: { account_id: accountId } }],
-        confirmed: true,
-      },
-    },
-  ),
+
   reviewAction: (taskId: string, actionId: string, state: "confirmed" | "failed", evidence: Record<string, unknown> = {}) => request<Record<string, unknown>>(
     `/api/crm/v1/tasks/${encodeURIComponent(taskId)}/actions/${encodeURIComponent(actionId)}/review`,
     { method: "POST", body: { state, evidence } },

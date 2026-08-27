@@ -9,8 +9,10 @@ export type ViewId =
   | "groups"
   | "relationships"
   | "tasks"
+  | "analytics"
   | "schedules"
   | "templates"
+  | "destinations"
   | "accounts"
   | "settings";
 
@@ -122,6 +124,7 @@ export type BrowserSession = {
   id?: string;
   session_id?: string;
   task_id?: string;
+  account_id?: string;
   browser_ready?: boolean;
   task_status?: string;
 };

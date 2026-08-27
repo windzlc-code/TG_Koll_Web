@@ -4,6 +4,7 @@ import { Icon } from "./icons";
 import { PlatformChip, PlatformLogo, normalizePlatform, platformLabel } from "./platform";
 import { cronFriendly, groupEventMix, humanText, isEnglishMachineLabel, isOpaqueUserValue, isTechnicalId, isTechnicalKey, metricLabel, mixFromValues, mixParts, mixTone, poolInsightCards, readableTags, workflowLabel, type MixPart } from "./present";
 import { ConsoleModal, requestConfirm } from "./confirm-dialog";
+import { SelectMenu } from "./select-menu";
 import type { Language } from "./types";
 
 type Row = Record<string, unknown>;
@@ -12,22 +13,24 @@ type PageState = "loading" | "ready" | "error";
 const labels = {
   "zh-Hans": {
     pools: "客户池", poolHint: "查看分组快照和池内客户，成员来自服务端客户池关联表。", poolDetails: "客户池详情", members: "池内客户",
-    groups: "群组运营", groupHint: "创建 Threads 邀请帖或 Instagram Direct 群聊，并在同一工作台复核状态、发帖、改名和补充成员。", newGroup: "创建群组流程", noGroups: "尚无已验证群组", groupMembers: "群成员", inspectStatus: "复核状态", inspectMembers: "复核成员", groupPost: "群内发帖", renameGroup: "修改群名", addMembers: "补充成员", manageGroup: "管理 Instagram 群组", conversationUrl: "Direct 会话", memberUsernames: "成员账号（最多 3 个，逗号分隔）", groupMessage: "群内消息", prepareAction: "执行预检", confirmAction: "确认并执行", actionPrepared: "预检完成，请再次确认目标和扣点。", readQueued: "只读复核任务已进入队列", writeQueued: "群组动作已进入队列", instagramUnavailable: "Instagram 群组管理尚未通过当前运行环境能力检查。",
-    noPools: "尚无客户池", choosePool: "选择客户池", choosePoolHint: "选择一个客户池查看成员", noMembers: "该客户池尚无成员", noPlatformMembers: "该平台暂无客户", member: "客户", platform: "平台", platformFilter: "平台", stage: "阶段", score: "评分", source: "来源", tags: "标签", handle: "账号", viewMember: "查看", memberDetail: "客户资料", detailIdentity: "基本信息", detailProfile: "客户概况", detailInsights: "客户洞察", detailSources: "来源", createTask: "创建任务", mixStages: "跟进阶段", customerCount: "位客户", editPool: "编辑客户池", poolName: "客户池名称", poolTags: "标签（逗号或换行分隔，最多 50 个）", savePool: "保存", poolSaved: "客户池已保存", deduplicate: "去重", deduplicated: "已完成成员去重", removed: "移除重复", opcHistory: "OPC 历史客户", opcHint: "先预览筛选结果，再导入为新的客户池。", searchHistory: "搜索账号、内容或关键词", keywords: "关键词（逗号分隔）", allPlatforms: "全部平台", allContacts: "全部状态", newContact: "全新名单", contacted: "已触达", failed: "失败重试", preview: "预览匹配客户", previewing: "正在查询…", matched: "匹配客户", excludeExisting: "排除已在客户池中的账号", excludeInteracted: "排除已有互动记录", importPool: "导入为客户池", importing: "正在导入…", imported: "历史客户已导入", opcEmpty: "没有匹配的历史客户",
-    templates: "消息模板", templateHint: "编辑可复用内容并关联已验证的媒体文件。", newTemplate: "新建模板", name: "名称", type: "类型", locale: "语言", content: "内容", defaultTemplate: "设为默认模板", media: "模板媒体", upload: "上传媒体", uploading: "正在上传…", save: "保存模板", saving: "正在保存…", edit: "编辑", delete: "删除", deleteConfirm: "确认删除这条记录？此操作会保留审计记录。", deleted: "记录已删除", noTemplates: "尚无模板", saved: "模板已保存", uploaded: "媒体已上传",
-    destinations: "追踪目的地", destinationHint: "配置私信与活动使用的 HTTPS 白名单目的地；停用后旧链接不再跳转。", newDestination: "新增目的地", destinationUrl: "HTTPS 地址", noDestinations: "尚无追踪目的地",
-    schedules: "自动排程", scheduleHint: "排程必须从完整客户、账号和动作流程创建；立即运行会重新预检。", newSchedule: "新建排程", workflowType: "工作流类型", cron: "Cron 表达式", timezone: "时区", enabled: "已启用", disabled: "已停用", nextRun: "下次运行", lastRun: "上次运行", createSchedule: "配置完整排程", runNow: "立即运行", running: "正在提交…", enable: "启用", disable: "停用", noSchedules: "尚无排程", taskCreated: "已创建父流程", stop: "安全停止", preflight: "执行预检", confirmRun: "确认并立即运行", preflightHint: "核对可执行目标和预计扣点后再运行。", allowed: "可执行", skipped: "跳过", points: "预计扣点", scheduleMissingActions: "该排程没有完整动作快照，请重新创建。",
-    analytics: "运营分析", analyticsHint: "所有指标来自 CRM 事件、动作账本和父流程状态，不使用前端估算。", workflowStatuses: "任务状态", eventTypes: "事件类型", actionStates: "平台动作状态", confirmedActions: "已确认动作类型", funnel: "互动转化漏斗", totalWorkflows: "工作流总数", totalEvents: "事件总数", totalConfirmed: "已确认平台动作", noAnalytics: "尚无可分析的数据",
+    groups: "拉群邀请", groupHint: "创建 Threads 邀请帖或 Instagram Direct 群聊，并在同一工作台检查状态、发帖、改名和补充成员。", newGroup: "创建拉群任务", noGroups: "尚无已验证群组", groupMembers: "群成员", inspectStatus: "检查群组状态", inspectMembers: "检查群成员", groupPost: "群内发帖", renameGroup: "修改群名", addMembers: "补充成员", manageGroup: "管理 Instagram 群组", conversationUrl: "Direct 会话", memberUsernames: "成员账号（最多 3 个，逗号分隔）", groupMessage: "群内消息", prepareAction: "检查目标与计费", confirmAction: "确认并执行", actionPrepared: "检查完成，请确认目标、跳过原因和预计扣点。", readQueued: "检查任务已进入队列", writeQueued: "群组任务已进入队列", instagramUnavailable: "当前环境暂不支持 Instagram 群组管理。",
+    noPools: "尚无客户池", choosePool: "选择客户池", choosePoolHint: "选择一个客户池查看成员", noMembers: "该客户池尚无成员", noPlatformMembers: "该平台暂无客户", member: "客户", platform: "平台", platformFilter: "平台", stage: "阶段", score: "评分", source: "来源", tags: "标签", handle: "账号", viewMember: "查看", memberDetail: "客户资料", detailIdentity: "基本信息", detailProfile: "客户概况", detailInsights: "客户洞察", detailSources: "来源", mixStages: "跟进阶段", customerCount: "位客户", editPool: "编辑客户池", poolName: "客户池名称", poolTags: "标签（逗号或换行分隔，最多 50 个）", savePool: "保存", poolSaved: "客户池已保存", deduplicate: "去重", deduplicated: "已完成成员去重", removed: "移除重复", opcHistory: "OPC 历史客户", opcHint: "先预览筛选结果，再导入为新的客户池。", searchHistory: "搜索账号、内容或关键词", keywords: "关键词（逗号分隔）", allPlatforms: "全部平台", allContacts: "全部状态", newContact: "全新名单", contacted: "已触达", failed: "失败重试", preview: "预览匹配客户", previewing: "正在查询…", matched: "匹配客户", excludeExisting: "排除已在客户池中的账号", excludeInteracted: "排除已有互动记录", importPool: "导入为客户池", importing: "正在导入…", imported: "历史客户已导入", opcEmpty: "没有匹配的历史客户",
+    templates: "触达模板", templateHint: "管理公开互动、私信和拉群任务可复用的文字与媒体。", newTemplate: "新建模板", name: "模板名称", type: "使用场景", locale: "内容语言", content: "模板内容", defaultTemplate: "设为默认模板", media: "图片附件", upload: "上传图片", uploading: "正在上传…", save: "保存模板", saving: "正在保存…", edit: "编辑", delete: "删除", deleteConfirm: "确认删除这条模板？历史任务和审计记录不会删除。", deleted: "模板已删除", noTemplates: "尚无触达模板", saved: "模板已保存", uploaded: "图片已上传",
+    destinations: "客户资料链接", destinationHint: "管理客户明确同意后可发送的官网、预约页或活动页；首次私信不会附加链接。", newDestination: "新增资料链接", destinationUrl: "HTTPS 链接", noDestinations: "尚无客户资料链接",
+    schedules: "任务排程", scheduleHint: "集中管理定时采集和触达任务；立即运行前会重新检查目标与计费。", newSchedule: "新建排程", workflowType: "任务类型", cron: "执行周期", timezone: "时区", enabled: "已启用", disabled: "已停用", nextRun: "下次运行", lastRun: "上次运行", createSchedule: "创建排程", runNow: "立即运行", running: "正在提交…", enable: "启用", disable: "停用", noSchedules: "尚无任务排程", taskCreated: "任务已创建", stop: "停止后续运行", preflight: "运行前检查", confirmRun: "确认并立即运行", preflightHint: "确认可执行目标、跳过原因和预计扣点后再运行。", allowed: "可执行", skipped: "已跳过", points: "预计扣点", scheduleMissingActions: "该排程缺少完整任务快照，请重新创建。",
+    analytics: "任务与转化数据", analyticsHint: "数据来自实际任务和平台确认结果，不使用模拟进度。", workflowStatuses: "任务进度", eventTypes: "互动记录", actionStates: "平台执行结果", confirmedActions: "已完成操作", funnel: "互动转化", totalWorkflows: "任务总数", totalEvents: "互动记录", totalConfirmed: "已完成平台操作", noAnalytics: "尚无可分析的数据",
+    collectModes: "采集方式", collectPersona: "依需求定向采集", collectPersonaHint: "输入用户画像、产品或营销方案", collectHotspot: "热点推文全域采集", collectHotspotHint: "抓取热门贴文的按赞与留言用户", collectLink: "账号／贴文链接采集", collectLinkHint: "依指定链接精准采集互动或粉丝",
     refresh: "刷新", retry: "重试", loading: "正在读取…", loadMore: "加载更多", close: "关闭", cancel: "取消", ok: "确定", confirmTitle: "确认操作", required: "请填写必填字段", requestFailed: "请求失败", selectFile: "选择 JPG、PNG、WebP 或 GIF，最大容量由服务端验证。", active: "有效", unknown: "未知", status: "状态",
   },
   "zh-Hant": {
     pools: "客戶池", poolHint: "查看分組快照和池內客戶，成員來自服務端客戶池關聯表。", poolDetails: "客戶池詳情", members: "池內客戶",
-    groups: "群組營運", groupHint: "建立 Threads 邀請貼文或 Instagram Direct 群聊，並在同一工作台複核狀態、發文、改名和補充成員。", newGroup: "建立群組流程", noGroups: "尚無已驗證群組", groupMembers: "群成員", inspectStatus: "複核狀態", inspectMembers: "複核成員", groupPost: "群內發文", renameGroup: "修改群名", addMembers: "補充成員", manageGroup: "管理 Instagram 群組", conversationUrl: "Direct 會話", memberUsernames: "成員帳號（最多 3 個，逗號分隔）", groupMessage: "群內訊息", prepareAction: "執行預檢", confirmAction: "確認並執行", actionPrepared: "預檢完成，請再次確認目標和扣點。", readQueued: "唯讀複核任務已進入佇列", writeQueued: "群組動作已進入佇列", instagramUnavailable: "Instagram 群組管理尚未通過目前執行環境能力檢查。",
-    noPools: "尚無客戶池", choosePool: "選擇客戶池", choosePoolHint: "選擇一個客戶池查看成員", noMembers: "該客戶池尚無成員", noPlatformMembers: "該平台暫無客戶", member: "客戶", platform: "平台", platformFilter: "平台", stage: "階段", score: "評分", source: "來源", tags: "標籤", handle: "帳號", viewMember: "查看", memberDetail: "客戶資料", detailIdentity: "基本資訊", detailProfile: "客戶概況", detailInsights: "客戶洞察", detailSources: "來源", createTask: "建立任務", mixStages: "跟進階段", customerCount: "位客戶", editPool: "編輯客戶池", poolName: "客戶池名稱", poolTags: "標籤（逗號或換行分隔，最多 50 個）", savePool: "儲存", poolSaved: "客戶池已儲存", deduplicate: "去重", deduplicated: "已完成成員去重", removed: "移除重複", opcHistory: "OPC 歷史客戶", opcHint: "先預覽篩選結果，再匯入為新的客戶池。", searchHistory: "搜尋帳號、內容或關鍵詞", keywords: "關鍵詞（逗號分隔）", allPlatforms: "全部平台", allContacts: "全部狀態", newContact: "全新名單", contacted: "已觸達", failed: "失敗重試", preview: "預覽匹配客戶", previewing: "正在查詢…", matched: "匹配客戶", excludeExisting: "排除已在客戶池中的帳號", excludeInteracted: "排除已有互動記錄", importPool: "匯入為客戶池", importing: "正在匯入…", imported: "歷史客戶已匯入", opcEmpty: "沒有匹配的歷史客戶",
-    templates: "訊息範本", templateHint: "編輯可重用內容並關聯已驗證的媒體檔案。", newTemplate: "新增範本", name: "名稱", type: "類型", locale: "語言", content: "內容", defaultTemplate: "設為預設範本", media: "範本媒體", upload: "上傳媒體", uploading: "正在上傳…", save: "儲存範本", saving: "正在儲存…", edit: "編輯", delete: "刪除", deleteConfirm: "確認刪除這筆記錄？系統會保留稽核記錄。", deleted: "記錄已刪除", noTemplates: "尚無範本", saved: "範本已儲存", uploaded: "媒體已上傳",
-    destinations: "追蹤目的地", destinationHint: "設定私訊與活動使用的 HTTPS 白名單目的地；停用後舊連結不再跳轉。", newDestination: "新增目的地", destinationUrl: "HTTPS 位址", noDestinations: "尚無追蹤目的地",
-    schedules: "自動排程", scheduleHint: "排程必須從完整客戶、帳號和動作流程建立；立即執行會重新預檢。", newSchedule: "新增排程", workflowType: "工作流類型", cron: "Cron 表達式", timezone: "時區", enabled: "已啟用", disabled: "已停用", nextRun: "下次執行", lastRun: "上次執行", createSchedule: "配置完整排程", runNow: "立即執行", running: "正在提交…", enable: "啟用", disable: "停用", noSchedules: "尚無排程", taskCreated: "已建立父流程", stop: "安全停止", preflight: "執行預檢", confirmRun: "確認並立即執行", preflightHint: "核對可執行目標和預計扣點後再執行。", allowed: "可執行", skipped: "跳過", points: "預計扣點", scheduleMissingActions: "該排程沒有完整動作快照，請重新建立。",
-    analytics: "營運分析", analyticsHint: "所有指標來自 CRM 事件、動作帳本和父流程狀態，不使用前端估算。", workflowStatuses: "任務狀態", eventTypes: "事件類型", actionStates: "平台動作狀態", confirmedActions: "已確認動作類型", funnel: "互動轉化漏斗", totalWorkflows: "工作流總數", totalEvents: "事件總數", totalConfirmed: "已確認平台動作", noAnalytics: "尚無可分析的資料",
+    groups: "拉群邀請", groupHint: "建立 Threads 邀請貼文或 Instagram Direct 群聊，並在同一工作台檢查狀態、發文、改名和補充成員。", newGroup: "建立拉群任務", noGroups: "尚無已驗證群組", groupMembers: "群成員", inspectStatus: "檢查群組狀態", inspectMembers: "檢查群成員", groupPost: "群內發文", renameGroup: "修改群名", addMembers: "補充成員", manageGroup: "管理 Instagram 群組", conversationUrl: "Direct 會話", memberUsernames: "成員帳號（最多 3 個，逗號分隔）", groupMessage: "群內訊息", prepareAction: "檢查目標與計費", confirmAction: "確認並執行", actionPrepared: "檢查完成，請確認目標、略過原因和預計扣點。", readQueued: "檢查任務已進入佇列", writeQueued: "群組任務已進入佇列", instagramUnavailable: "目前環境暫不支援 Instagram 群組管理。",
+    noPools: "尚無客戶池", choosePool: "選擇客戶池", choosePoolHint: "選擇一個客戶池查看成員", noMembers: "該客戶池尚無成員", noPlatformMembers: "該平台暫無客戶", member: "客戶", platform: "平台", platformFilter: "平台", stage: "階段", score: "評分", source: "來源", tags: "標籤", handle: "帳號", viewMember: "查看", memberDetail: "客戶資料", detailIdentity: "基本資訊", detailProfile: "客戶概況", detailInsights: "客戶洞察", detailSources: "來源", mixStages: "跟進階段", customerCount: "位客戶", editPool: "編輯客戶池", poolName: "客戶池名稱", poolTags: "標籤（逗號或換行分隔，最多 50 個）", savePool: "儲存", poolSaved: "客戶池已儲存", deduplicate: "去重", deduplicated: "已完成成員去重", removed: "移除重複", opcHistory: "OPC 歷史客戶", opcHint: "先預覽篩選結果，再匯入為新的客戶池。", searchHistory: "搜尋帳號、內容或關鍵詞", keywords: "關鍵詞（逗號分隔）", allPlatforms: "全部平台", allContacts: "全部狀態", newContact: "全新名單", contacted: "已觸達", failed: "失敗重試", preview: "預覽匹配客戶", previewing: "正在查詢…", matched: "匹配客戶", excludeExisting: "排除已在客戶池中的帳號", excludeInteracted: "排除已有互動記錄", importPool: "匯入為客戶池", importing: "正在匯入…", imported: "歷史客戶已匯入", opcEmpty: "沒有匹配的歷史客戶",
+    templates: "觸達範本", templateHint: "管理公開互動、私訊和拉群任務可重用的文字與媒體。", newTemplate: "新增範本", name: "範本名稱", type: "使用場景", locale: "內容語言", content: "範本內容", defaultTemplate: "設為預設範本", media: "圖片附件", upload: "上傳圖片", uploading: "正在上傳…", save: "儲存範本", saving: "正在儲存…", edit: "編輯", delete: "刪除", deleteConfirm: "確認刪除這個範本？歷史任務和稽核記錄不會刪除。", deleted: "範本已刪除", noTemplates: "尚無觸達範本", saved: "範本已儲存", uploaded: "圖片已上傳",
+    destinations: "客戶資料連結", destinationHint: "管理客戶明確同意後可發送的官網、預約頁或活動頁；首次私訊不會附加連結。", newDestination: "新增資料連結", destinationUrl: "HTTPS 連結", noDestinations: "尚無客戶資料連結",
+    schedules: "任務排程", scheduleHint: "集中管理定時採集和觸達任務；立即執行前會重新檢查目標與計費。", newSchedule: "新增排程", workflowType: "任務類型", cron: "執行週期", timezone: "時區", enabled: "已啟用", disabled: "已停用", nextRun: "下次執行", lastRun: "上次執行", createSchedule: "建立排程", runNow: "立即執行", running: "正在提交…", enable: "啟用", disable: "停用", noSchedules: "尚無任務排程", taskCreated: "任務已建立", stop: "停止後續執行", preflight: "執行前檢查", confirmRun: "確認並立即執行", preflightHint: "確認可執行目標、略過原因和預計扣點後再執行。", allowed: "可執行", skipped: "已略過", points: "預計扣點", scheduleMissingActions: "該排程缺少完整任務快照，請重新建立。",
+    analytics: "任務與轉化資料", analyticsHint: "資料來自實際任務和平台確認結果，不使用模擬進度。", workflowStatuses: "任務進度", eventTypes: "互動記錄", actionStates: "平台執行結果", confirmedActions: "已完成操作", funnel: "互動轉化", totalWorkflows: "任務總數", totalEvents: "互動記錄", totalConfirmed: "已完成平台操作", noAnalytics: "尚無可分析的資料",
+    collectModes: "採集方式", collectPersona: "依需求定向採集", collectPersonaHint: "輸入用戶畫像、產品或行銷方案", collectHotspot: "熱點推文全域採集", collectHotspotHint: "抓取熱門貼文的按讚與留言用戶", collectLink: "帳號／貼文連結採集", collectLinkHint: "依指定連結精準採集互動或粉絲",
     refresh: "重新整理", retry: "重試", loading: "正在讀取…", loadMore: "載入更多", close: "關閉", cancel: "取消", ok: "確定", confirmTitle: "確認操作", required: "請填寫必填欄位", requestFailed: "請求失敗", selectFile: "選擇 JPG、PNG、WebP 或 GIF，最大容量由服務端驗證。", active: "有效", unknown: "未知", status: "狀態",
   },
 } as const;
@@ -223,13 +226,13 @@ function memberDetailGroups(member: Row, t: { member: string; handle: string; pl
 
 function PageHeader({ title, hint, language, onRefresh, action }: { title: string; hint: string; language?: Language; onRefresh: () => void; action?: React.ReactNode }) {
   const resolvedLanguage = language || (document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans");
-  return <div className="crm-panel-head crm-business-head"><div><span className="crm-kicker">CRM</span><div className="crm-panel-title-row"><h2>{title}</h2><button className="crm-icon-button" type="button" aria-label={labels[resolvedLanguage].refresh} onClick={onRefresh}><Icon name="refresh" /></button></div><p>{hint}</p></div>{action ? <div className="crm-business-actions">{action}</div> : null}</div>;
+  return <div className="crm-panel-head crm-business-head"><div><span className="crm-kicker">CRM</span><div className="crm-panel-title-row"><h2>{title}</h2><button className="unified-action-icon-button" type="button" aria-label={labels[resolvedLanguage].refresh} title={labels[resolvedLanguage].refresh} onClick={onRefresh}><Icon name="refresh" className="ui-action-icon" /></button></div><p>{hint}</p></div>{action ? <div className="crm-business-actions">{action}</div> : null}</div>;
 }
 
 function Loading({ language }: { language: Language }) { return <div className="crm-list-skeleton" aria-live="polite"><span>{labels[language].loading}</span><i /><i /><i /></div>; }
 function ErrorBox({ error, language, retry }: { error: string; language: Language; retry: () => void }) { return <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{error}</span><button type="button" onClick={retry}><Icon name="refresh" />{labels[language].retry}</button></div>; }
 
-export function PoolsView({ language, onCreate }: { language: Language; onCreate?: () => void }) {
+export function PoolsView({ language, onEngage, onCollectMode }: { language: Language; onEngage?: () => void; onCollectMode?: (mode: "persona" | "hotspot" | "link") => void }) {
   const t = labels[language];
   const [state, setState] = useState<PageState>("loading");
   const [pools, setPools] = useState<Row[]>([]);
@@ -359,11 +362,22 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
   };
 
   return <section className="crm-panel crm-business-panel" aria-busy={state === "loading" || detailState === "loading"}>
-    <PageHeader title={t.pools} hint={t.poolHint} language={language} onRefresh={loadPools} />
-    <div className="crm-pool-launch">
+    <PageHeader title={t.pools} hint={language === "zh-Hant" ? "採集完成的客戶會進入客戶池，再到互動頁繼續留言。" : "采集完成的客户会进入客户池，再到互动页继续留言。"} language={language} onRefresh={loadPools} />
+    {onCollectMode && <div className="crm-collect-modes" role="group" aria-label={t.collectModes}>
+      {([
+        ["persona", t.collectPersona, t.collectPersonaHint, "collect"],
+        ["hotspot", t.collectHotspot, t.collectHotspotHint, "signal"],
+        ["link", t.collectLink, t.collectLinkHint, "external"],
+      ] as const).map(([mode, title, hint, icon]) => (
+        <button className="crm-collect-mode" type="button" key={mode} onClick={() => onCollectMode(mode)}>
+          <Icon name={icon} /><span><strong>{title}</strong><small>{hint}</small></span>
+        </button>
+      ))}
+    </div>}
+    <div className="crm-pool-launch crm-pool-launch--pool">
       <button className="crm-primary-button" type="button" onClick={() => setPoolOpen(true)}>{t.choosePool}</button>
       <button className="crm-primary-button" type="button" onClick={() => setOpcOpen(true)}>{t.opcHistory}</button>
-      {onCreate && <button className="crm-primary-button" type="button" onClick={onCreate}><Icon name="collect" />{t.createTask}</button>}
+      {onEngage && <button className="crm-secondary-button" type="button" onClick={onEngage}>{language === "zh-Hant" ? "去互動" : "去互动"}</button>}
     </div>
     {error && !opcOpen && !editOpen && <ErrorBox error={error} language={language} retry={loadPools} />}
     {notice && !opcOpen && !editOpen && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
@@ -376,8 +390,8 @@ export function PoolsView({ language, onCreate }: { language: Language; onCreate
           <label className="crm-field crm-field--wide"><span>{t.searchHistory}</span><input value={opcFilter.search} autoComplete="off" onChange={(event) => setOpcFilter({ ...opcFilter, search: event.target.value })} /></label>
           <label className="crm-field"><span>{t.keywords}</span><input value={opcFilter.keywords} autoComplete="off" onChange={(event) => setOpcFilter({ ...opcFilter, keywords: event.target.value })} /></label>
           <label className="crm-field"><span>{t.poolName}</span><input value={opcFilter.category} autoComplete="off" maxLength={120} onChange={(event) => setOpcFilter({ ...opcFilter, category: event.target.value })} /></label>
-          <label className="crm-field"><span>{t.platform}</span><select value={opcFilter.platform} onChange={(event) => setOpcFilter({ ...opcFilter, platform: event.target.value })}><option value="">{t.allPlatforms}</option><option value="threads">Threads</option><option value="instagram">Instagram</option></select></label>
-          <label className="crm-field"><span>{t.status}</span><select value={opcFilter.contact} onChange={(event) => setOpcFilter({ ...opcFilter, contact: event.target.value })}><option value="">{t.allContacts}</option><option value="new">{t.newContact}</option><option value="contacted">{t.contacted}</option><option value="failed">{t.failed}</option></select></label>
+          <label className="crm-field"><span>{t.platform}</span><SelectMenu value={opcFilter.platform} onChange={(platform) => setOpcFilter({ ...opcFilter, platform })} placeholder={t.allPlatforms} options={[{ value: "", label: t.allPlatforms }, { value: "threads", label: "Threads" }, { value: "instagram", label: "Instagram" }]} /></label>
+          <label className="crm-field"><span>{t.status}</span><SelectMenu value={opcFilter.contact} onChange={(contact) => setOpcFilter({ ...opcFilter, contact })} placeholder={t.allContacts} options={[{ value: "", label: t.allContacts }, { value: "new", label: t.newContact }, { value: "contacted", label: t.contacted }, { value: "failed", label: t.failed }]} /></label>
           <label className="crm-consent"><input type="checkbox" checked={opcFilter.excludeExisting} onChange={(event) => setOpcFilter({ ...opcFilter, excludeExisting: event.target.checked })} /><span>{t.excludeExisting}</span></label>
           <label className="crm-consent"><input type="checkbox" checked={opcFilter.excludeInteracted} onChange={(event) => setOpcFilter({ ...opcFilter, excludeInteracted: event.target.checked })} /><span>{t.excludeInteracted}</span></label>
         </div>
@@ -532,21 +546,59 @@ const emptyTemplate = (language: Language): TemplateDraft => ({ id: "", name: ""
 export function TemplatesView({ language }: { language: Language }) {
   const t = labels[language];
   const [templates, setTemplates] = useState<Row[]>([]);
+  const [media, setMedia] = useState<Row[]>([]);
+  const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
+  const [previewMediaId, setPreviewMediaId] = useState("");
   const [state, setState] = useState<PageState>("loading");
   const [draft, setDraft] = useState<TemplateDraft>(() => emptyTemplate(language));
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const load = useCallback(async () => { setState("loading"); setError(""); try { setTemplates(payloadItems(await crmApi.list("templates", "", 200))); setState("ready"); } catch (next) { setError(errorText(next, language)); setState("error"); } }, [language]);
+  const load = useCallback(async () => { setState("loading"); setError(""); try { const [templatePayload, mediaPayload] = await Promise.all([crmApi.list("templates", "", 200), crmApi.list("media", "", 200)]); setTemplates(payloadItems(templatePayload)); setMedia(payloadItems(mediaPayload)); setState("ready"); } catch (next) { setError(errorText(next, language)); setState("error"); } }, [language]);
   useEffect(() => { void load(); }, [load]);
+  const referencedMediaIds = useMemo(() => [...new Set([
+    ...templates.flatMap((item) => arrayOf(item.media_ids ?? item.media_ids_json).map(String)),
+    ...draft.media_ids,
+  ].filter(Boolean))], [templates, draft.media_ids]);
+  useEffect(() => {
+    let active = true;
+    const createdUrls: string[] = [];
+    const loadPreviews = async () => {
+      const entries = await Promise.all(referencedMediaIds.map(async (mediaId) => {
+        try {
+          const blob = await crmApi.mediaContent(mediaId);
+          const url = URL.createObjectURL(blob);
+          createdUrls.push(url);
+          return [mediaId, url] as const;
+        } catch {
+          return [mediaId, ""] as const;
+        }
+      }));
+      if (active) setPreviewUrls(Object.fromEntries(entries));
+    };
+    void loadPreviews();
+    return () => {
+      active = false;
+      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [referencedMediaIds]);
+  const mediaById = useMemo(() => new Map(media.map((item) => [idOf(item), item])), [media]);
+  const mediaName = (mediaId: string) => textOf(mediaById.get(mediaId)?.original_name, language === "zh-Hant" ? "已保存圖片" : "已保存图片");
+  const mediaThumbs = (mediaIds: string[], removable = false) => <div className="crm-template-media" aria-label={t.media}>{mediaIds.map((mediaId) => <article key={mediaId}>
+    <button className="crm-template-thumb" type="button" disabled={!previewUrls[mediaId]} onClick={() => setPreviewMediaId(mediaId)} aria-label={`${language === "zh-Hant" ? "預覽" : "预览"} ${mediaName(mediaId)}`}>
+      {previewUrls[mediaId] ? <img src={previewUrls[mediaId]} alt={mediaName(mediaId)} loading="lazy" /> : <span><Icon name="templates" />{language === "zh-Hant" ? "圖片讀取中" : "图片读取中"}</span>}
+    </button>
+    <small title={mediaName(mediaId)}>{mediaName(mediaId)}</small>
+    {removable && <button className="crm-template-media-remove" type="button" onClick={() => setDraft((current) => ({ ...current, media_ids: current.media_ids.filter((item) => item !== mediaId) }))}>{language === "zh-Hant" ? "移除" : "移除"}</button>}
+  </article>)}</div>;
   const edit = (row?: Row) => {
     setDraft(row ? { id: idOf(row), name: textOf(row.name, ""), template_type: textOf(row.template_type, "message"), locale: textOf(row.locale, language), content: textOf(row.content, ""), media_ids: arrayOf(row.media_ids ?? row.media_ids_json).map(String), is_default: Boolean(row.is_default) } : emptyTemplate(language));
     setEditing(true); setError(""); setNotice("");
   };
   const upload = async (file?: File) => {
     if (!file) return; setBusy("upload"); setError("");
-    try { const media = await crmApi.uploadMedia(file); const mediaId = idOf(media); if (mediaId) setDraft((current) => ({ ...current, media_ids: [...new Set([...current.media_ids, mediaId])] })); setNotice(t.uploaded); }
+    try { const uploadedMedia = await crmApi.uploadMedia(file); const mediaId = idOf(uploadedMedia); if (mediaId) { setMedia((current) => [...current.filter((item) => idOf(item) !== mediaId), uploadedMedia]); setDraft((current) => ({ ...current, media_ids: [...new Set([...current.media_ids, mediaId])] })); } setNotice(t.uploaded); }
     catch (next) { setError(errorText(next, language)); } finally { setBusy(""); }
   };
   const save = async () => {
@@ -567,8 +619,9 @@ export function TemplatesView({ language }: { language: Language }) {
     <PageHeader title={t.templates} hint={t.templateHint} language={language} onRefresh={load} action={<button className="crm-primary-button" type="button" onClick={() => edit()}>{t.newTemplate}</button>} />
     {error && <ErrorBox error={error} language={language} retry={load} />}{notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
     {state === "loading" && <Loading language={language} />}{state === "ready" && !templates.length && <p className="crm-quiet-empty">{t.noTemplates}</p>}
-    {state === "ready" && templates.length > 0 && <div className="crm-template-grid">{templates.map((item) => <article key={idOf(item)} className="crm-template-card"><header><div><strong>{textOf(item.name)}</strong><small>{textOf(item.template_type)} · {textOf(item.locale)}</small></div>{Boolean(item.is_default) && <span className="crm-chip">{t.defaultTemplate}</span>}</header><p>{textOf(item.content)}</p><footer><span>{t.media}: {arrayOf(item.media_ids ?? item.media_ids_json).length}</span><span className="crm-inline-actions"><button className="crm-secondary-button" type="button" onClick={() => edit(item)}>{t.edit}</button><button type="button" disabled={busy === `delete:${idOf(item)}`} onClick={() => void remove(item)}>{t.delete}</button></span></footer></article>)}</div>}
-    {editing && <ConsoleModal title={draft.id ? t.edit : t.newTemplate} labelledBy="crm-template-editor" onClose={() => setEditing(false)} actions={<><button type="button" onClick={() => setEditing(false)}>{t.cancel}</button><button type="button" className="primary" disabled={Boolean(busy)} onClick={() => void save()}>{busy === "save" ? t.saving : t.save}</button></>}><div className="crm-form-grid"><label className="crm-field"><span>{t.name}</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label className="crm-field"><span>{t.type}</span><select value={draft.template_type} onChange={(event) => setDraft({ ...draft, template_type: event.target.value })}><option value="message">message</option><option value="comment">comment</option><option value="reply">reply</option><option value="group_invite">group_invite</option></select></label><label className="crm-field"><span>{t.locale}</span><select value={draft.locale} onChange={(event) => setDraft({ ...draft, locale: event.target.value })}><option value="zh-Hans">简体中文</option><option value="zh-Hant">繁體中文</option></select></label><label className="crm-field crm-field--wide"><span>{t.content}</span><textarea rows={8} value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} /></label><label className="crm-file-field crm-field--wide"><span>{t.media}</span><input type="file" accept="image/jpeg,image/png,image/webp,image/gif" disabled={busy === "upload"} onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} /><small>{busy === "upload" ? t.uploading : t.selectFile}</small></label>{draft.media_ids.length > 0 && <div className="crm-chip-row crm-field--wide">{draft.media_ids.map((id) => <button type="button" key={id} onClick={() => setDraft((current) => ({ ...current, media_ids: current.media_ids.filter((item) => item !== id) }))}>{id} ×</button>)}</div>}<label className="crm-consent crm-field--wide"><input type="checkbox" checked={draft.is_default} onChange={(event) => setDraft({ ...draft, is_default: event.target.checked })} /><span>{t.defaultTemplate}</span></label></div></ConsoleModal>}
+    {state === "ready" && templates.length > 0 && <div className="crm-template-grid">{templates.map((item) => { const mediaIds = arrayOf(item.media_ids ?? item.media_ids_json).map(String); return <article key={idOf(item)} className="crm-template-card"><header><div><strong>{textOf(item.name)}</strong><small>{textOf(item.template_type)} · {textOf(item.locale)}</small></div>{Boolean(item.is_default) && <span className="crm-chip">{t.defaultTemplate}</span>}</header>{mediaIds.length > 0 && mediaThumbs(mediaIds)}<p>{textOf(item.content)}</p><footer><span>{t.media}: {mediaIds.length}</span><span className="row-actions"><button type="button" onClick={() => edit(item)}>{t.edit}</button><button type="button" className="danger unified-action-icon-button" disabled={busy === `delete:${idOf(item)}`} title={t.delete} aria-label={t.delete} onClick={() => void remove(item)}><Icon name="trash" className="ui-trash-icon" /></button></span></footer></article>; })}</div>}
+    {editing && <ConsoleModal title={draft.id ? t.edit : t.newTemplate} labelledBy="crm-template-editor" onClose={() => setEditing(false)} actions={<><button type="button" onClick={() => setEditing(false)}>{t.cancel}</button><button type="button" className="primary" disabled={Boolean(busy)} onClick={() => void save()}>{busy === "save" ? t.saving : t.save}</button></>}><div className="crm-form-grid"><label className="crm-field"><span>{t.name}</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label className="crm-field"><span>{t.type}</span><SelectMenu value={draft.template_type} onChange={(template_type) => setDraft({ ...draft, template_type })} options={[{ value: "message", label: language === "zh-Hant" ? "私訊／通用" : "私信／通用" }, { value: "comment", label: language === "zh-Hant" ? "公開留言" : "公开留言" }, { value: "reply", label: language === "zh-Hant" ? "回覆" : "回复" }, { value: "group_invite", label: language === "zh-Hant" ? "拉群邀請" : "拉群邀请" }]} /></label><label className="crm-field"><span>{t.locale}</span><SelectMenu value={draft.locale} onChange={(locale) => setDraft({ ...draft, locale })} options={[{ value: "zh-Hans", label: "简体中文" }, { value: "zh-Hant", label: "繁體中文" }]} /></label><label className="crm-field crm-field--wide"><span>{t.content}</span><textarea rows={8} value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} /></label><label className="crm-file-field crm-field--wide"><span>{t.media}</span><input type="file" accept="image/jpeg,image/png,image/webp,image/gif" disabled={busy === "upload"} onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} /><small>{busy === "upload" ? t.uploading : t.selectFile}</small></label>{draft.media_ids.length > 0 && <div className="crm-field--wide">{mediaThumbs(draft.media_ids, true)}</div>}<label className="crm-consent crm-field--wide"><input type="checkbox" checked={draft.is_default} onChange={(event) => setDraft({ ...draft, is_default: event.target.checked })} /><span>{t.defaultTemplate}</span></label></div></ConsoleModal>}
+    {previewMediaId && previewUrls[previewMediaId] && <ConsoleModal title={mediaName(previewMediaId)} labelledBy="crm-template-media-preview" onClose={() => setPreviewMediaId("")} actions={<button type="button" className="primary" onClick={() => setPreviewMediaId("")}>{t.close}</button>}><div className="crm-template-media-preview"><img src={previewUrls[previewMediaId]} alt={mediaName(previewMediaId)} /></div></ConsoleModal>}
   </section>;
 }
 
@@ -594,19 +647,19 @@ export function DestinationsView({ language }: { language: Language }) {
   return <section className="crm-panel crm-business-panel"><PageHeader title={t.destinations} hint={t.destinationHint} language={language} onRefresh={load} action={<button className="crm-primary-button" type="button" onClick={() => open()}>{t.newDestination}</button>} />
     {error && <ErrorBox error={error} language={language} retry={load} />}{notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
     {state === "loading" && <Loading language={language} />}{state === "ready" && !rows.length && <p className="crm-quiet-empty">{t.noDestinations}</p>}
-    {state === "ready" && rows.length > 0 && <div className="crm-template-grid">{rows.map((row) => <article className="crm-template-card" key={idOf(row)}><header><div><strong>{textOf(row.name)}</strong><small>{textOf(row.url)}</small></div><span className="crm-chip">{Boolean(row.enabled) ? t.enabled : t.disabled}</span></header><footer><span>HTTPS</span><span className="crm-inline-actions"><button type="button" onClick={() => open(row)}>{t.edit}</button><button type="button" disabled={busy === `delete:${idOf(row)}`} onClick={() => void remove(row)}>{t.delete}</button></span></footer></article>)}</div>}
+    {state === "ready" && rows.length > 0 && <div className="crm-template-grid">{rows.map((row) => <article className="crm-template-card" key={idOf(row)}><header><div><strong>{textOf(row.name)}</strong><small>{textOf(row.url)}</small></div><span className="crm-chip">{Boolean(row.enabled) ? t.enabled : t.disabled}</span></header><footer><span>HTTPS</span><span className="row-actions"><button type="button" onClick={() => open(row)}>{t.edit}</button><button type="button" className="danger unified-action-icon-button" disabled={busy === `delete:${idOf(row)}`} title={t.delete} aria-label={t.delete} onClick={() => void remove(row)}><Icon name="trash" className="ui-trash-icon" /></button></span></footer></article>)}</div>}
     {editing && <ConsoleModal title={draft.id ? t.edit : t.newDestination} labelledBy="crm-destination-editor" onClose={() => setEditing(false)} actions={<><button type="button" onClick={() => setEditing(false)}>{t.cancel}</button><button type="button" className="primary" disabled={Boolean(busy)} onClick={() => void save()}>{busy ? t.saving : t.save}</button></>}><div className="crm-form-grid"><label className="crm-field"><span>{t.name}</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label><label className="crm-field crm-field--wide"><span>{t.destinationUrl}</span><input type="url" placeholder="https://" value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} /></label><label className="crm-consent crm-field--wide"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>{t.enabled}</span></label></div></ConsoleModal>}
   </section>;
 }
 
-export function SchedulesView({ language, onCreate }: { language: Language; onCreate: (workflow: "public" | "outreach" | "groups") => void }) {
+export function SchedulesView({ language, onCreate }: { language: Language; onCreate: (workflow: "collect" | "public" | "outreach" | "groups") => void }) {
   const t = labels[language];
   const [rows, setRows] = useState<Row[]>([]);
   const [state, setState] = useState<PageState>("loading");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
-  const [workflowType, setWorkflowType] = useState<"public" | "outreach" | "groups">("public");
+  const [workflowType, setWorkflowType] = useState<"collect" | "public" | "outreach" | "groups">("collect");
   const [pendingRun, setPendingRun] = useState<{ row: Row; preflight: Awaited<ReturnType<typeof crmApi.preflight>> } | null>(null);
   const [runConfirmed, setRunConfirmed] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Row | null>(null);
@@ -651,10 +704,10 @@ export function SchedulesView({ language, onCreate }: { language: Language; onCr
   return <section className="crm-panel crm-business-panel">
     <PageHeader title={t.schedules} hint={t.scheduleHint} onRefresh={load} />
     {error && <ErrorBox error={error} language={language} retry={load} />}{notice && <div className="crm-success-note" role="status"><Icon name="check" />{notice}</div>}
-    <div className="crm-schedule-create"><label className="crm-field"><span>{t.workflowType}</span><select value={workflowType} onChange={(event) => setWorkflowType(event.target.value as typeof workflowType)}><option value="public">{workflowLabel("public", language)}</option><option value="outreach">{workflowLabel("outreach", language)}</option><option value="groups">{workflowLabel("groups", language)}</option></select></label><p>{t.preflightHint}</p><button className="crm-primary-button" type="button" onClick={() => onCreate(workflowType)}>{t.createSchedule}</button></div>
+    <div className="crm-schedule-create"><label className="crm-field"><span>{t.workflowType}</span><SelectMenu value={workflowType} onChange={(next) => setWorkflowType(next as typeof workflowType)} options={(["collect", "public", "outreach", "groups"] as const).map((item) => ({ value: item, label: workflowLabel(item, language) }))} /></label><p>{t.preflightHint}</p><button className="crm-primary-button" type="button" onClick={() => onCreate(workflowType)}>{t.createSchedule}</button></div>
     {pendingRun && <ConsoleModal title={t.preflight} labelledBy="crmSchedulePreflightTitle" onClose={() => setPendingRun(null)} actions={<><button type="button" onClick={() => setPendingRun(null)}>{t.cancel}</button><button type="button" className="primary" disabled={!runConfirmed || Boolean(busy)} onClick={() => void confirmRun()}>{t.confirmRun}</button></>}><dl className="crm-summary-grid"><div><dt>{t.allowed}</dt><dd>{pendingRun.preflight.allowed_count ?? pendingRun.preflight.actions?.length ?? 0}</dd></div><div><dt>{t.skipped}</dt><dd>{(pendingRun.preflight.duplicate_count ?? 0) + (pendingRun.preflight.blocked_count ?? 0)}</dd></div><div><dt>{t.points}</dt><dd>{pendingRun.preflight.quote?.total_points ?? 0}</dd></div></dl><label className="crm-consent"><input type="checkbox" checked={runConfirmed} onChange={(event) => setRunConfirmed(event.target.checked)} /><span>{t.preflightHint}</span></label></ConsoleModal>}
     {editingSchedule && <ConsoleModal title={`${t.edit} · ${workflowLabel(String(editingSchedule.workflow_type || ""), language)}`} labelledBy="crmScheduleEditor" onClose={() => setEditingSchedule(null)} actions={<><button type="button" onClick={() => setEditingSchedule(null)}>{t.cancel}</button><button type="button" className="primary" disabled={Boolean(busy)} onClick={() => void saveSchedule()}>{t.save}</button></>}><label className="crm-field"><span>{t.nextRun}</span><input type="datetime-local" value={scheduleAt} onChange={(event) => setScheduleAt(event.target.value)} /></label></ConsoleModal>}
-    {state === "loading" && <Loading language={language} />}{state === "ready" && !rows.length && <p className="crm-quiet-empty">{t.noSchedules}</p>}{state === "ready" && rows.length > 0 && <div className="crm-schedule-list">{rows.map((row) => { const id = idOf(row); const enabled = Boolean(row.enabled); return <article key={id}><div><strong>{workflowLabel(String(row.workflow_type || ""), language)}</strong><small>{cronFriendly(row.cron_expression, language)}</small></div><span className={`crm-status crm-status--${enabled ? "complete" : "default"}`}><i />{enabled ? t.enabled : t.disabled}</span><dl><div><dt>{t.nextRun}</dt><dd>{dateText(row.next_run_at, language)}</dd></div><div><dt>{t.lastRun}</dt><dd>{dateText(row.last_run_at, language)}</dd></div></dl><div className="crm-inline-actions"><button type="button" disabled={Boolean(busy)} onClick={() => void toggle(row)}>{enabled ? t.disable : t.enable}</button><button type="button" disabled={Boolean(busy)} onClick={() => editSchedule(row)}>{t.edit}</button><button type="button" disabled={Boolean(busy)} onClick={() => void prepareRun(row)}>{busy === `preflight:${id}` ? t.running : t.runNow}</button><button type="button" disabled={Boolean(busy)} onClick={() => void stop(row)}>{busy === `stop:${id}` ? t.running : t.stop}</button></div></article>; })}</div>}
+    {state === "loading" && <Loading language={language} />}{state === "ready" && !rows.length && <p className="crm-quiet-empty">{t.noSchedules}</p>}{state === "ready" && rows.length > 0 && <div className="crm-schedule-list">{rows.map((row) => { const id = idOf(row); const enabled = Boolean(row.enabled); return <article key={id}><div><strong>{workflowLabel(String(row.workflow_type || ""), language)}</strong><small>{cronFriendly(row.cron_expression, language)}</small></div><span className={`task-status-text ${enabled ? "is-success" : "is-muted"}`}>{enabled ? t.enabled : t.disabled}</span><dl><div><dt>{t.nextRun}</dt><dd>{dateText(row.next_run_at, language)}</dd></div><div><dt>{t.lastRun}</dt><dd>{dateText(row.last_run_at, language)}</dd></div></dl><div className="row-actions"><button type="button" disabled={Boolean(busy)} onClick={() => void toggle(row)}>{enabled ? t.disable : t.enable}</button><button type="button" disabled={Boolean(busy)} onClick={() => editSchedule(row)}>{t.edit}</button><button type="button" disabled={Boolean(busy)} onClick={() => void prepareRun(row)}>{busy === `preflight:${id}` ? t.running : t.runNow}</button><button type="button" disabled={Boolean(busy)} onClick={() => void stop(row)}>{busy === `stop:${id}` ? t.running : t.stop}</button></div></article>; })}</div>}
   </section>;
 }
 
@@ -683,4 +736,163 @@ export function StructuredEvidence({ evidence, language }: { evidence: Row; lang
   const visible = fields.filter(([, value]) => value !== undefined && value !== null && value !== "" && textOf(value, "") !== "");
   if (!visible.length && !platformUrl && !screenshotUrl) return <p className="crm-quiet-empty">{language === "zh-Hant" ? "已保留平台證據" : "已保留平台证据"}</p>;
   return <div className="crm-structured-evidence">{screenshotUrl && <a href={screenshotUrl} target="_blank" rel="noreferrer"><img src={screenshotUrl} alt={t.media} loading="lazy" /></a>}<dl>{visible.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{key.includes("时间") || key.includes("時間") ? dateText(value, language) : textOf(value)}</dd></div>)}</dl>{platformUrl && <a className="crm-secondary-button" href={platformUrl} target="_blank" rel="noreferrer"><Icon name="external" />{t.active}</a>}</div>;
+}
+
+const engageCopy = {
+  "zh-Hans": {
+    title: "公开互动",
+    hint: "先查看可互动人数，再准备当前批次；完成后可继续下一批。",
+    choosePool: "选择客户池",
+    poolReady: "有原文且通过需求过滤的客户才会进入互动。",
+    total: "名单总数",
+    unique: "不重复",
+    eligible: "可互动",
+    excluded: "已排除",
+    qualified: "合格数",
+    processed: "已处理",
+    remaining: "待互动",
+    batchLimit: "每批人数",
+    why: "为什么不是全部名单",
+    missing: "缺少原文",
+    duplicate: "重复原文",
+    noReason: "没有排除项目",
+    tags: "按采集标签筛选",
+    tagsHint: "未选时使用全部可互动客户",
+    allTags: "全选",
+    clearTags: "清除",
+    start: "开始这一批互动",
+    continueNext: "继续下一批",
+    empty: "这个客户池还没有可互动的客户。请先完成采集，或换一个池。",
+    loading: "正在读取可互动名单…",
+    batchNote: "每次按 5、10 或 20 人准备一个批次；完成后再继续下一批。",
+  },
+  "zh-Hant": {
+    title: "公開互動",
+    hint: "先查看可互動人數，再準備目前批次；完成後可繼續下一批。",
+    choosePool: "選擇客戶池",
+    poolReady: "有原文且通過需求過濾的客戶才會進入互動。",
+    total: "名單總數",
+    unique: "不重複",
+    eligible: "可互動",
+    excluded: "已排除",
+    qualified: "合格數",
+    processed: "已處理",
+    remaining: "待互動",
+    batchLimit: "每批人數",
+    why: "為什麼不是全部名單",
+    missing: "缺少原文",
+    duplicate: "重複原文",
+    noReason: "沒有排除項目",
+    tags: "按採集標籤篩選",
+    tagsHint: "未選時使用全部可互動客戶",
+    allTags: "全選",
+    clearTags: "清除",
+    start: "開始這一批互動",
+    continueNext: "繼續下一批",
+    empty: "這個客戶池還沒有可互動的客戶。請先完成採集，或換一個池。",
+    loading: "正在讀取可互動名單…",
+    batchNote: "每次按 5、10 或 20 人準備一個批次；完成後再繼續下一批。",
+  },
+} as const;
+
+type EngageStart = {
+  poolId: string;
+  leadIds: string[];
+  leads: Row[];
+  batchSize: 5 | 10 | 20;
+};
+
+export function PublicEngageView({
+  language,
+  enabled,
+  blockedHint,
+  onStart,
+  onRefreshTasks,
+}: {
+  language: Language;
+  enabled: boolean;
+  blockedHint?: string;
+  onStart: (seed: EngageStart) => void;
+  onRefreshTasks?: () => void;
+}) {
+  const t = engageCopy[language];
+  const [pools, setPools] = useState<Row[]>([]);
+  const [poolId, setPoolId] = useState("");
+  const [progress, setProgress] = useState<Row | null>(null);
+  const [state, setState] = useState<PageState>("loading");
+  const [error, setError] = useState("");
+  const [batchSize, setBatchSize] = useState<5 | 10 | 20>(10);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
+  const loadPools = useCallback(async () => {
+    setState("loading"); setError("");
+    try {
+      const payload = await crmApi.list("pools", "", 200);
+      const rows = payloadItems(payload);
+      setPools(rows);
+      setPoolId((current) => current || idOf(rows[0] || {}));
+      setState("ready");
+    } catch (next) {
+      setError(errorText(next, language));
+      setState("error");
+    }
+  }, [language]);
+
+  const loadProgress = useCallback(async (targetId: string, tags: string[], size: 5 | 10 | 20) => {
+    if (!targetId) { setProgress(null); return; }
+    setError("");
+    try {
+      setProgress(await crmApi.commentProgress(targetId, tags, size));
+    } catch (next) {
+      setError(errorText(next, language));
+      setProgress(null);
+    }
+  }, [language]);
+
+  useEffect(() => { void loadPools(); }, [loadPools]);
+  useEffect(() => { void loadProgress(poolId, selectedTags, batchSize); }, [batchSize, loadProgress, poolId, selectedTags]);
+
+  const eligibility = objectOf(progress?.eligibility);
+  const tagOptions = arrayOf(progress?.tagOptions).filter((item): item is Row => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  const remaining = Number(progress?.remaining || 0);
+  const nextLeadIds = arrayOf(progress?.nextLeadIds).map(String).filter(Boolean);
+  const nextLeads = arrayOf(progress?.nextLeads).filter((item): item is Row => Boolean(item && typeof item === "object" && !Array.isArray(item)));
+  const exclusionEntries = Object.entries(objectOf(eligibility.exclusionReasons)).filter(([, count]) => Number(count) > 0);
+  const whyParts = [
+    ...exclusionEntries.map(([reason, count]) => `${reason} ${Number(count)}`),
+    Number(eligibility.missingSourcePost || 0) ? `${t.missing} ${Number(eligibility.missingSourcePost)}` : "",
+    Number(eligibility.duplicateSourcePost || 0) ? `${t.duplicate} ${Number(eligibility.duplicateSourcePost)}` : "",
+  ].filter(Boolean);
+  const start = () => {
+    if (!poolId || !nextLeadIds.length) return;
+    onStart({ poolId, leadIds: nextLeadIds, leads: nextLeads, batchSize });
+  };
+
+  return <section className="crm-panel crm-business-panel" aria-busy={state === "loading"}>
+    <PageHeader title={t.title} hint={t.hint} language={language} onRefresh={() => { void loadPools(); void loadProgress(poolId, selectedTags, batchSize); onRefreshTasks?.(); }} />
+    {!enabled && blockedHint && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{blockedHint}</span></div>}
+    {error && <ErrorBox error={error} language={language} retry={() => { void loadPools(); void loadProgress(poolId, selectedTags, batchSize); }} />}
+    {state === "loading" && !pools.length && <p className="crm-quiet-empty">{t.loading}</p>}
+    {enabled && <>
+      <label className="crm-field"><span>{t.choosePool}</span><SelectMenu value={poolId} onChange={(next) => { setPoolId(next); setSelectedTags([]); }} placeholder={t.choosePool} searchPlaceholder={language === "zh-Hant" ? "篩選客戶池" : "筛选客户池"} emptyLabel={language === "zh-Hant" ? "沒有匹配的客戶池" : "没有匹配的客户池"} options={pools.map((pool) => ({ value: idOf(pool), label: textOf(pool.name, idOf(pool)) }))} /><small>{progress?.poolName ? `${textOf(progress.poolName)} · ${t.poolReady}` : t.poolReady}</small></label>
+      <div className="crm-engage-metrics">
+        <div><b>{Number(eligibility.poolLeads || 0)}</b><span>{t.total}</span></div>
+        <div><b>{Number(eligibility.uniqueSourcePosts || 0)}</b><span>{t.unique}</span></div>
+        <div><b>{Number(eligibility.eligible || 0)}</b><span>{t.eligible}</span></div>
+        <div><b>{Number(eligibility.excluded || 0)}</b><span>{t.excluded}</span></div>
+        <div><b>{Number(progress?.total || 0)}</b><span>{t.qualified}</span></div>
+        <div><b>{Number(progress?.processed || 0)}</b><span>{t.processed}</span></div>
+        <div><b>{remaining}</b><span>{t.remaining}</span></div>
+        <div><b>{Number(progress?.batchSize || batchSize)}</b><span>{t.batchLimit}</span></div>
+      </div>
+      <div className="crm-engage-note"><strong>{t.why}</strong><span>{whyParts.join("、") || t.noReason}</span></div>
+      <div className="crm-engage-note"><span>{t.batchNote}</span></div>
+      <div className="crm-engage-batch">{([5, 10, 20] as const).map((size) => <button type="button" className={batchSize === size ? "is-active" : ""} key={size} onClick={() => setBatchSize(size)}>{size}</button>)}</div>
+      <div className="crm-engage-tags">
+        <div className="crm-wizard-selection-head"><strong>{t.tags}</strong><small>{selectedTags.length ? `${selectedTags.length}/${tagOptions.length}` : t.tagsHint}</small><div><button type="button" disabled={!tagOptions.length} onClick={() => setSelectedTags(tagOptions.map((item) => textOf(item.tag)).filter(Boolean))}>{t.allTags}</button><button type="button" onClick={() => setSelectedTags([])}>{t.clearTags}</button></div></div>
+        <div className="crm-chip-row">{tagOptions.map((item) => { const tag = textOf(item.tag); const active = selectedTags.includes(tag); return <button type="button" className={active ? "is-active" : ""} key={tag} onClick={() => setSelectedTags((current) => current.includes(tag) ? current.filter((value) => value !== tag) : [...current, tag])}>{tag} {Number(item.count || 0)}</button>; })}</div>
+      </div>
+      {!remaining ? <p className="crm-quiet-empty">{t.empty}</p> : <div className="crm-pool-launch"><button className="crm-primary-button" type="button" onClick={start}>{Number(progress?.processed || 0) > 0 ? t.continueNext : t.start} · {nextLeadIds.length}</button></div>}
+    </>}
+  </section>;
 }

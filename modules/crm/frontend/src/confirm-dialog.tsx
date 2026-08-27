@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { Icon } from "./icons";
 
 export type ConfirmRequest = {
   title?: string;
@@ -101,6 +102,8 @@ export function ConsoleModal({
   title,
   labelledBy,
   onClose,
+  onBack,
+  backLabel,
   children,
   actions,
   wide = false,
@@ -109,6 +112,8 @@ export function ConsoleModal({
   title: ReactNode;
   labelledBy: string;
   onClose: () => void;
+  onBack?: () => void;
+  backLabel?: string;
   children: ReactNode;
   actions?: ReactNode;
   wide?: boolean;
@@ -149,6 +154,11 @@ export function ConsoleModal({
         aria-labelledby={labelledBy}
       >
         <div className="console-modal-head">
+          {onBack ? (
+            <button type="button" className="unified-action-icon-button" onClick={onBack} aria-label={backLabel || "返回"} title={backLabel || "返回"}>
+              <Icon name="back" className="ui-action-icon" />
+            </button>
+          ) : null}
           <strong id={labelledBy}>{title}</strong>
           <button type="button" className="console-modal-close" onClick={onClose} aria-label="关闭">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12" /><path d="m18 6-12 12" /></svg>
