@@ -282,7 +282,14 @@ test("frontend document supplements are represented by accessible, persistent UI
   assert.doesNotMatch(app, /PoolsView language=\{language\} onCreate=/);
   assert.match(app, /settingTabs: ViewId\[\] = \["accounts", "templates", "destinations", "schedules"\]/);
   assert.match(app, /engageTabs: ViewId\[\] = \["public", "outreach", "groups", "relationships"\]/);
-  assert.match(app, /taskTabs: ViewId\[\] = \["tasks", "analytics"\]/);
+  assert.doesNotMatch(app, /taskTabs:/);
+  assert.doesNotMatch(app, /<AnalyticsView/);
+  assert.match(app, /crm-task-overview-grid/);
+  assert.match(app, /crm-task-detail-page/);
+  assert.match(app, /taskFilterGroup/);
+  assert.match(app, /taskSortCreated/);
+  assert.match(app, /onOpen=\{\(\) => openTask/);
+  assert.match(app, /window\.scrollTo\(\{ top: 0, behavior: "auto" \}\)/);
   assert.doesNotMatch(app, /crm-analytics-fold/);
   assert.match(app, /SelectMenu/);
   assert.match(wizard, /SelectMenu/);
@@ -328,10 +335,11 @@ test("dedicated CRM business views use real REST contracts", async () => {
   const api = await read("src/api.ts");
   const views = await read("src/BusinessViews.tsx");
   const wizard = await read("src/WorkflowWizard.tsx");
-  for (const component of ["PoolsView", "TemplatesView", "SchedulesView", "AnalyticsView", "StructuredEvidence", "PublicEngageView"]) {
+  for (const component of ["PoolsView", "TemplatesView", "SchedulesView", "StructuredEvidence", "PublicEngageView"]) {
     assert.match(app, new RegExp(component));
     assert.match(views, new RegExp(`function ${component}`));
   }
+  assert.match(views, /function AnalyticsView/);
   assert.match(api, /comments\/progress/);
   assert.match(app, /onEngage=/);
   assert.match(wizard, /WorkflowSeed/);

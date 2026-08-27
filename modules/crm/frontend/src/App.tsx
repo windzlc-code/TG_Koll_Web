@@ -4,7 +4,7 @@ import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api"
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
 import { PlatformLogo, normalizePlatform, platformLabel } from "./platform";
-import { AnalyticsView, DestinationsView, GroupsView, MixBar, PoolsView, PublicEngageView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
+import { DestinationsView, GroupsView, MixBar, PoolsView, PublicEngageView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { BarChart, DonutChart, LineChart } from "./charts";
 import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, isEnglishMachineLabel, isOpaqueUserValue, isTechnicalId, isTechnicalKey, localizeStoredTitle, metricLabel, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
@@ -44,7 +44,6 @@ const viewAliases: Partial<Record<ViewId, ViewId>> = {
 };
 const collectTabs: ViewId[] = ["collect"];
 const engageTabs: ViewId[] = ["public", "outreach", "groups", "relationships"];
-const taskTabs: ViewId[] = ["tasks", "analytics"];
 const settingTabs: ViewId[] = ["accounts", "templates", "destinations", "schedules"];
 
 const endpointByView: Partial<Record<ViewId, string>> = {
@@ -313,11 +312,11 @@ function needsLoginTakeover(detail: Record<string, unknown> | null) {
   return Boolean(detail.needs_login) || diagnostic.includes("needs_login") || diagnostic.includes("account_needs_login") || diagnostic.includes("open_login");
 }
 
-function TaskCard({ task, messages, language, onAction, onChanged }: { task: CrmTask; messages: Messages; language: Language; onAction: (task: CrmTask, action: "pause" | "resume" | "cancel" | "retry" | "confirm") => void; onChanged: () => void }) {
+function TaskCard({ task, messages, language, onAction, onChanged, detailMode = false, onOpen, onDeleted }: { task: CrmTask; messages: Messages; language: Language; onAction: (task: CrmTask, action: "pause" | "resume" | "cancel" | "retry" | "confirm") => void; onChanged: () => void; detailMode?: boolean; onOpen?: () => void; onDeleted?: () => void }) {
   const id = String(task.task_id || task.id || "");
   const status = String(task.status || "queued");
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(detailMode);
   const [manualBusy, setManualBusy] = useState("");
   const [manualError, setManualError] = useState("");
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
@@ -355,16 +354,21 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
     const timer = window.setInterval(() => { void loadDetail(false); }, 5_000);
     return () => window.clearInterval(timer);
   }, [detailOpen, id]);
+  useEffect(() => {
+    if (!detailMode) return;
+    setDetailOpen(true);
+    void loadDetail();
+  }, [detailMode, id]);
   const removeTask = async () => {
     if (!await requestConfirm({
       title: messages.deleteTitle,
-      message: language === "zh-Hant" ? "確認刪除此終態任務？" : "确认删除这个终态任务？",
+      message: messages.taskDeleteHint,
       confirmText: messages.ok,
       cancelText: messages.cancel,
       danger: true,
     })) return;
     setManualBusy("delete"); setManualError("");
-    try { await crmApi.deleteTask(id, true); onChanged(); }
+    try { await crmApi.deleteTask(id, true); onChanged(); onDeleted?.(); }
     catch (error) { setManualError(localizedError(error, messages)); }
     finally { setManualBusy(""); }
   };
@@ -441,26 +445,32 @@ function TaskCard({ task, messages, language, onAction, onChanged }: { task: Crm
   const rawMessage = String(task.message || "").trim();
   const message = rawMessage ? localizeStoredTitle(rawMessage, language) : "";
   const showMessage = Boolean(message && message !== title && /[\u3400-\u9fff]/.test(message));
-  return <article className="crm-task-card">
+  const processed = Number(task.processed || 0);
+  const total = Number(task.total || 0);
+  return <article className={`crm-task-card${detailMode ? " crm-task-card--detail" : ""}`}>
     <div className="crm-task-card-head">
       <div><strong>{title}</strong><small>{meta}</small></div>
       <StatusBadge status={status} messages={messages} />
     </div>
     {showMessage && <p>{message}</p>}
     {hasRealProgress && progress !== null && <div className="crm-progress" role="progressbar" aria-label={messages.taskProgress} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.max(0, Math.min(100, progress))}><span style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div>}
+    {(total > 0 || Number(task.evidence_count || 0) > 0) && <div className="crm-task-card-summary">
+      {total > 0 && <span>{messages.taskProgressSummary(processed, total)}</span>}
+      {Number(task.evidence_count || 0) > 0 && <span>{messages.evidenceAvailable} {Number(task.evidence_count)}</span>}
+    </div>}
     <div className="crm-task-foot">
       <div className="row-actions">
-        {status === "running" && <button type="button" onClick={() => onAction(task, "pause")}>{messages.pause}</button>}
-        {status.startsWith("paused") && <button type="button" onClick={() => onAction(task, "resume")}>{messages.resume}</button>}
-        {status === "failed" && <button type="button" onClick={() => onAction(task, "retry")}>{messages.retryAction}</button>}
-        {status === "awaiting_confirmation" && <button type="button" onClick={() => onAction(task, "confirm")}>{messages.confirmTask}</button>}
-        <button type="button" disabled={manualBusy === "detail"} aria-expanded={detailOpen} onClick={() => detailOpen ? setDetailOpen(false) : void loadDetail()}>{detailOpen ? messages.hideTaskDetails : messages.inspectTask}</button>
-        {["awaiting_confirmation", "queued", "running", "manual_required", "paused_by_user", "paused_by_policy"].includes(status) && <button type="button" className="muted" onClick={() => onAction(task, "cancel")}>{messages.cancel}</button>}
+        {detailMode && status === "running" && <button type="button" onClick={() => onAction(task, "pause")}>{messages.pause}</button>}
+        {detailMode && status.startsWith("paused") && <button type="button" onClick={() => onAction(task, "resume")}>{messages.resume}</button>}
+        {detailMode && status === "failed" && <button type="button" onClick={() => onAction(task, "retry")}>{messages.retryAction}</button>}
+        {detailMode && status === "awaiting_confirmation" && <button type="button" onClick={() => onAction(task, "confirm")}>{messages.confirmTask}</button>}
+        {!detailMode && onOpen && <button type="button" onClick={onOpen}>{messages.inspectTask}</button>}
+        {detailMode && ["awaiting_confirmation", "queued", "running", "manual_required", "paused_by_user", "paused_by_policy"].includes(status) && <button type="button" className="muted" onClick={() => onAction(task, "cancel")}>{messages.cancel}</button>}
         {["completed", "failed", "cancelled"].includes(status) && <button type="button" className="danger unified-action-icon-button" disabled={manualBusy === "delete"} title={language === "zh-Hant" ? "刪除" : "删除"} aria-label={language === "zh-Hant" ? "刪除" : "删除"} onClick={() => void removeTask()}><Icon name="trash" className="ui-trash-icon" /></button>}
       </div>
     </div>
     {manualError && <div className="crm-inline-error" role="alert"><Icon name="warning" />{manualError}</div>}
-    {detailOpen && <div className="crm-manual-panel">
+    {detailMode && detailOpen && <div className="crm-manual-panel">
       <section className="crm-evidence-timeline" aria-labelledby={`crm-evidence-${id}`}>
         <h3 id={`crm-evidence-${id}`}>{messages.evidenceTimeline}</h3>
         {!detailSteps.length && !detailActions.length ? <p>{messages.noEvidence}</p> : <ol>
@@ -895,27 +905,73 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
   </section>;
 }
 
+type TaskFilter = "" | "attention" | "active" | "completed" | "failed";
+
+function taskFilterGroup(statusValue: unknown): Exclude<TaskFilter, ""> {
+  const status = String(statusValue || "queued");
+  if (["queued", "running"].includes(status)) return "active";
+  if (status === "completed") return "completed";
+  if (["failed", "cancelled"].includes(status)) return "failed";
+  return "attention";
+}
+
 function TasksView({ tasks, pollError, messages, language, onAction, onChanged, hasMore, loadingMore, onLoadMore }: { tasks: CrmTask[]; pollError: boolean; messages: Messages; language: Language; onAction: (task: CrmTask, action: "pause" | "resume" | "cancel" | "retry" | "confirm") => void; onChanged: () => void; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
   const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
-  const statuses = useMemo(() => [...new Set(tasks.map((task) => String(task.status || "")).filter(Boolean))], [tasks]);
+  const [statusFilter, setStatusFilter] = useState<TaskFilter>("");
+  const [sortOrder, setSortOrder] = useState<"created" | "updated">("created");
+  const [selectedTaskId, setSelectedTaskId] = useState("");
+  const selectedTask = tasks.find((task) => String(task.task_id || task.id || "") === selectedTaskId);
+  const openTask = (taskId: string) => {
+    setSelectedTaskId(taskId);
+    window.scrollTo({ top: 0, behavior: "auto" });
+  };
+  const closeTask = () => {
+    setSelectedTaskId("");
+    window.scrollTo({ top: 0, behavior: "auto" });
+  };
+  const counts = useMemo(() => ({
+    total: tasks.length,
+    active: tasks.filter((task) => taskFilterGroup(task.status) === "active").length,
+    attention: tasks.filter((task) => taskFilterGroup(task.status) === "attention").length,
+    completed: tasks.filter((task) => taskFilterGroup(task.status) === "completed").length,
+  }), [tasks]);
   const visibleTasks = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return tasks.filter((task) => {
-      if (statusFilter && String(task.status || "") !== statusFilter) return false;
+      if (statusFilter && taskFilterGroup(task.status) !== statusFilter) return false;
       if (!normalized) return true;
       return [task.title, task.name, task.task_id, task.id, task.kind, task.account_username]
         .some((value) => String(value || "").toLowerCase().includes(normalized));
+    }).sort((left, right) => {
+      const leftValue = sortOrder === "updated" ? left.updated_at || left.created_at : left.created_at || left.updated_at;
+      const rightValue = sortOrder === "updated" ? right.updated_at || right.created_at : right.created_at || right.updated_at;
+      return (Date.parse(String(rightValue || "")) || 0) - (Date.parse(String(leftValue || "")) || 0);
     });
-  }, [query, statusFilter, tasks]);
+  }, [query, sortOrder, statusFilter, tasks]);
+  if (selectedTask) return <section className="crm-panel crm-task-detail-page">
+    <div className="crm-task-detail-toolbar">
+      <button className="crm-secondary-button" type="button" onClick={closeTask}><Icon name="back" />{messages.backToTasks}</button>
+      <div><h2>{messages.taskDetailTitle}</h2><span className={`crm-live-indicator ${pollError ? "is-offline" : ""}`}><i />{pollError ? messages.partial : messages.live}</span></div>
+    </div>
+    <TaskCard task={selectedTask} messages={messages} language={language} onAction={onAction} onChanged={onChanged} onDeleted={closeTask} detailMode />
+  </section>;
   return <section className="crm-panel">
     <div className="crm-panel-head crm-task-panel-head"><div><h2>{messages.views.tasks[0]}</h2><p>{messages.noSimulatedProgress}</p></div><span className={`crm-live-indicator ${pollError ? "is-offline" : ""}`}><i />{pollError ? messages.partial : messages.live}</span></div>
-    {tasks.length > 0 && <div className="crm-filter-bar" role="search" aria-label={messages.filterRecords}>
-      <label><span>{messages.search}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={messages.searchPlaceholder} /></label>
-      <label><span>{messages.status}</span><SelectMenu value={statusFilter} onChange={setStatusFilter} placeholder={messages.allStatuses} options={[{ value: "", label: messages.allStatuses }, ...statuses.map((status) => ({ value: status, label: statusText(status, messages) }))]} /></label>
-      {(query || statusFilter) && <button className="crm-secondary-button" type="button" onClick={() => { setQuery(""); setStatusFilter(""); }}>{messages.clearFilters}</button>}
+    {tasks.length > 0 && <div className="crm-task-overview-grid" aria-label={messages.views.tasks[0]}>
+      <div><strong>{counts.total}</strong><span>{messages.taskTotal}</span></div>
+      <div><strong>{counts.active}</strong><span>{messages.taskActive}</span></div>
+      <div><strong>{counts.attention}</strong><span>{messages.taskAttention}</span></div>
+      <div><strong>{counts.completed}</strong><span>{messages.taskCompleted}</span></div>
     </div>}
-    {!tasks.length ? <EmptyState messages={messages} view="tasks" /> : !visibleTasks.length ? <EmptyState messages={messages} view="tasks" filtered /> : <div className="crm-task-list">{visibleTasks.map((task, index) => <TaskCard task={task} messages={messages} language={language} onAction={onAction} onChanged={onChanged} key={String(task.task_id || task.id || index)} />)}</div>}
+    {tasks.length > 0 && <div className="crm-task-section-head"><h3>{messages.realTimeTasks}</h3><span>{tasks.length}</span></div>}
+    {tasks.length > 0 && <div className="crm-filter-bar crm-task-filter-bar" role="search" aria-label={messages.filterRecords}>
+      <label><span>{messages.search}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={messages.searchPlaceholder} /></label>
+      <label><span>{messages.taskFilter}</span><SelectMenu value={statusFilter} onChange={(value) => setStatusFilter(value as TaskFilter)} placeholder={messages.taskFilterAll} options={[{ value: "", label: messages.taskFilterAll }, { value: "attention", label: messages.taskFilterAttention }, { value: "active", label: messages.taskFilterActive }, { value: "completed", label: messages.taskFilterCompleted }, { value: "failed", label: messages.taskFilterFailed }]} /></label>
+      <label><span>{messages.taskSort}</span><SelectMenu value={sortOrder} onChange={(value) => setSortOrder(value as "created" | "updated")} options={[{ value: "created", label: messages.taskSortCreated }, { value: "updated", label: messages.taskSortUpdated }]} /></label>
+      {(query || statusFilter || sortOrder !== "created") && <button className="crm-secondary-button" type="button" onClick={() => { setQuery(""); setStatusFilter(""); setSortOrder("created"); }}>{messages.clearFilters}</button>}
+    </div>}
+    {tasks.length > 0 && <p className="crm-task-result-count">{messages.taskResultCount(visibleTasks.length, tasks.length)}</p>}
+    {!tasks.length ? <EmptyState messages={messages} view="tasks" /> : !visibleTasks.length ? <EmptyState messages={messages} view="tasks" filtered /> : <div className="crm-task-list">{visibleTasks.map((task, index) => <TaskCard task={task} messages={messages} language={language} onAction={onAction} onChanged={onChanged} onOpen={() => openTask(String(task.task_id || task.id || ""))} key={String(task.task_id || task.id || index)} />)}</div>}
     {hasMore && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={onLoadMore}>{loadingMore ? messages.loadingMore : messages.loadMore}</button></div>}
   </section>;
 }
@@ -1267,11 +1323,7 @@ export function App() {
             </SubpageStrip>
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "tasks"} inert={activeNav !== "tasks" ? true : undefined}>
-            <CompactTabs items={taskTabs} value={taskTabs.includes(view) ? view : "tasks"} messages={messages} navigate={navigate} label={messages.navItems.tasks} />
-            <SubpageStrip items={taskTabs} value={taskTabs.includes(view) ? view : "tasks"}>
-              <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} />
-              <AnalyticsView language={language} />
-            </SubpageStrip>
+            <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} />
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "settings"} inert={activeNav !== "settings" ? true : undefined}>
             <CompactTabs items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"} messages={messages} navigate={navigate} label={messages.views.settings[0]} />
