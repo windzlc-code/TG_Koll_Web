@@ -81,18 +81,57 @@ export function resolvePersonaImageRoute(
   };
 }
 
-const SHEET_VISUAL_SLOTS: Array<{ id: string; pattern: RegExp }> = [
+export type PersonaVisualField =
+  | "region"
+  | "gender"
+  | "age"
+  | "hair"
+  | "temperament"
+  | "clothing"
+  | "face"
+  | "body"
+  | "accessories"
+  | "background"
+  | "pose"
+  | "look";
+
+export interface PersonaReferenceSheetFieldPolicy {
+  explicitFields?: PersonaVisualField[];
+  supplementPrompt?: string;
+}
+
+const SHEET_VISUAL_SLOTS: Array<{ id: PersonaVisualField; pattern: RegExp }> = [
+  { id: "region", pattern: /中国(?:人|女性|男性|地区特征)|中國(?:人|女性|男性|地區特徵)|台湾(?:人|女性|男性)|台灣(?:人|女性|男性)|日本(?:人|女性|男性)|欧美(?:人|女性|男性)|歐美(?:人|女性|男性)|印尼(?:人|女性|男性)|泰国(?:人|女性|男性)|泰國(?:人|女性|男性)|马来西亚(?:人|女性|男性)|馬來西亞(?:人|女性|男性)|国籍|國籍|地区特征|地區特徵|Chinese|Taiwanese|Japanese|Indonesian|Thai|Malaysian|Western/i },
   { id: "clothing", pattern: /穿|衣服|裙|西装|西裝|制服|外套|针织|針織|大衣|衬衫|襯衫|裤|褲|帽|鞋|低胸|黑丝|黑絲|丝袜|絲襪|袜|襪|吊带|吊帶|露肩|紧身|緊身|hoodie|jacket|dress|suit|cardigan|outfit|服装|服裝|衣着|衣著|毛衣|连衣|連衣|stockings|pantyhose|tights/i },
   { id: "hair", pattern: /发|髮|短发|长发|卷发|直发|发型|劉海|刘海|hair|bangs/i },
   { id: "gender", pattern: /女性|男性|女人|男人|女生|男生|woman|women|female|man|men|male/i },
+  { id: "temperament", pattern: /气质|氣質|神态|神態|亲和|親和|干练|幹練|优雅|優雅|知性|活力|甜美|冷感|沉稳|沉穩|大气|大氣|阳光|陽光|精英|潮流|妩媚|嫵媚|temperament|demeanor/i },
   { id: "face", pattern: /脸|臉|五官|妆|妝|肤色|膚色|皮肤|皮膚|网红脸|網紅臉|面容|face|makeup|skin/i },
   { id: "body", pattern: /身材|胸|腰|臀|手|瘦|胖|高挑|矮|凹凸|爆乳|性感|诱惑|誘惑|身形|body|figure|hands?|slim|curvy/i },
   { id: "accessories", pattern: /眼镜|眼鏡|墨镜|墨鏡|耳环|耳環|项链|項鍊|手表|手錶|包|glasses|earring|necklace/i },
   { id: "age", pattern: /岁|歲|年龄|年齡|twenty|thirty|forty|\d+\s*year/i },
   { id: "background", pattern: /背景|办公室|辦公室|海边|海邊|室内|室內|场景|場景|background|office|beach/i },
   { id: "pose", pattern: /姿势|姿勢|坐着|站着|pose|sitting|standing/i },
-  { id: "look", pattern: /风格|風格|气质|氣質|神态|神態|赛博|賽博|写实|寫實|动漫|動漫|电影|電影|氛围|氛圍|质感|質感|temperament|mood/i },
+  { id: "look", pattern: /风格|風格|赛博|賽博|写实|寫實|动漫|動漫|电影|電影|氛围|氛圍|质感|質感|mood/i },
 ];
+
+const SELECTABLE_PERSONA_FIELDS: PersonaVisualField[] = [
+  "region",
+  "gender",
+  "age",
+  "hair",
+  "temperament",
+  "clothing",
+];
+
+const PERSONA_FIELD_LABELS: Partial<Record<PersonaVisualField, string>> = {
+  region: "地区",
+  gender: "性别",
+  age: "年龄",
+  hair: "发型",
+  temperament: "气质",
+  clothing: "服饰",
+};
 
 function splitVisualClauses(text: string): string[] {
   return String(text || "")
@@ -101,8 +140,29 @@ function splitVisualClauses(text: string): string[] {
     .filter(Boolean);
 }
 
-function clauseVisualSlots(clause: string): string[] {
+function clauseVisualSlots(clause: string): PersonaVisualField[] {
   return SHEET_VISUAL_SLOTS.filter((item) => item.pattern.test(clause)).map((item) => item.id);
+}
+
+function normalizePersonaVisualFields(fields?: readonly string[]): PersonaVisualField[] {
+  const allowed = new Set<PersonaVisualField>(SHEET_VISUAL_SLOTS.map((item) => item.id));
+  return [...new Set((fields || []).filter((field): field is PersonaVisualField => allowed.has(field as PersonaVisualField)))];
+}
+
+function inferredVisualFields(text?: string): PersonaVisualField[] {
+  return [...new Set(splitVisualClauses(text || "").flatMap(clauseVisualSlots))];
+}
+
+function filterPersonaClauses(
+  text: string,
+  replacedFields: ReadonlySet<PersonaVisualField>,
+  keepUnclassified: boolean,
+): string {
+  return splitVisualClauses(text).filter((clause) => {
+    const fields = clauseVisualSlots(clause);
+    if (!fields.length) return keepUnclassified;
+    return !fields.some((field) => replacedFields.has(field));
+  }).join(", ");
 }
 
 function refineSheetVisualRequest(customPrompt?: string): string {
@@ -112,23 +172,21 @@ function refineSheetVisualRequest(customPrompt?: string): string {
 export function applyUserVisualReplacements(
   baseText: string,
   userPrompt?: string,
-  options?: { mode?: "merge" | "strip" },
+  options?: { mode?: "merge" | "strip"; replacedFields?: PersonaVisualField[] },
 ): string {
   const request = refineSheetVisualRequest(userPrompt);
   const base = String(baseText || "").replace(/\s+/g, " ").trim();
   if (!request) return base;
-  const replacedSlots = new Set(splitVisualClauses(request).flatMap(clauseVisualSlots));
-  if (!replacedSlots.size) replacedSlots.add("look");
-  const baseClauses = splitVisualClauses(base);
-  const kept = baseClauses.filter((clause) => {
-    const slots = clauseVisualSlots(clause);
-    if (!slots.length) return options?.mode !== "strip";
-    return !slots.some((slot) => replacedSlots.has(slot));
-  });
+  const hasStructuredFields = Array.isArray(options?.replacedFields);
+  const replacedFields = new Set<PersonaVisualField>(hasStructuredFields
+    ? normalizePersonaVisualFields(options?.replacedFields)
+    : inferredVisualFields(request));
+  if (!hasStructuredFields && !replacedFields.size) replacedFields.add("look");
+  const kept = filterPersonaClauses(base, replacedFields, options?.mode !== "strip");
   if (options?.mode === "strip") {
-    return kept.length === baseClauses.length ? base : kept.join(", ");
+    return kept;
   }
-  return [...kept, request].filter(Boolean).join(", ");
+  return [kept, request].filter(Boolean).join(", ");
 }
 
 function resolveSheetGender(setup: DramaSetup, customPrompt?: string): string {
@@ -140,7 +198,12 @@ function resolveSheetGender(setup: DramaSetup, customPrompt?: string): string {
   return setup.personaGender || "女性";
 }
 
-export function buildReferenceSheetPrompt(setup: DramaSetup, personaContent: string, customPrompt?: string): string {
+export function buildReferenceSheetPrompt(
+  setup: DramaSetup,
+  personaContent: string,
+  customPrompt?: string,
+  fieldPolicy?: PersonaReferenceSheetFieldPolicy,
+): string {
   const request = refineSheetVisualRequest(customPrompt);
   const nationality = setup.personaNationality || "";
   const gender = request
@@ -159,12 +222,30 @@ export function buildReferenceSheetPrompt(setup: DramaSetup, personaContent: str
     ].filter(Boolean).join(", ");
   }
 
+  const supplementFields = inferredVisualFields(refineSheetVisualRequest(fieldPolicy?.supplementPrompt));
+  const explicitFields = fieldPolicy
+    ? normalizePersonaVisualFields([...(fieldPolicy.explicitFields || []), ...supplementFields])
+    : inferredVisualFields(request);
+  const explicitFieldSet = new Set<PersonaVisualField>(explicitFields);
+  const automaticFields = fieldPolicy
+    ? SELECTABLE_PERSONA_FIELDS.filter((field) => !explicitFieldSet.has(field))
+    : [];
   const visualBase = String(setup.personaAppearance || "").replace(/\s+/g, " ").trim();
-  const keptVisual = applyUserVisualReplacements(visualBase, request, { mode: "strip" });
+  const keptVisual = applyUserVisualReplacements(visualBase, request, {
+    mode: "strip",
+    replacedFields: fieldPolicy ? explicitFields : undefined,
+  });
+  const contextBase = String(setup.personaDescription || personaContent || "").replace(/\s+/g, " ").trim().slice(0, 600);
+  const automaticContextCandidate = fieldPolicy && automaticFields.length && contextBase
+    ? filterPersonaClauses(contextBase, explicitFieldSet, true).slice(0, 240)
+    : "";
+  const automaticContext = automaticContextCandidate === keptVisual ? "" : automaticContextCandidate;
+  const automaticFieldLabels = automaticFields.map((field) => PERSONA_FIELD_LABELS[field]).filter(Boolean).join("、");
   const appearance = [request, keptVisual].filter(Boolean).join(", ");
   return [
     "three-view character sheet: front, side, back; same person",
     appearance ? `appearance: ${appearance}` : "",
+    automaticContext ? `自动项参考（${automaticFieldLabels}）：${automaticContext}；仅补全这些自动项` : "",
     `photorealistic adult ${gender}, full body, white studio`,
     "same face, body, hair and outfit; no text, no watermark",
   ].filter(Boolean).join(", ");
@@ -433,9 +514,10 @@ export async function generateReferenceSheet(
   model: string,
   runtimeOptions?: PersonaImageRuntimeOptions,
   customPrompt?: string,
+  fieldPolicy?: PersonaReferenceSheetFieldPolicy,
 ): Promise<{ ok: boolean; url?: string; error?: string; timings?: unknown }> {
   if (!imageAPI?.generate) return { ok: false, error: "image API 不可用" };
-  const prompt = buildReferenceSheetPrompt(setup, personaContent, customPrompt);
+  const prompt = buildReferenceSheetPrompt(setup, personaContent, customPrompt, fieldPolicy);
   const result = await callClosedModel(imageAPI, prompt, model, "1:1", undefined, undefined, runtimeOptions, {
     runningHubNewPersonaMode: "text-to-image",
   });

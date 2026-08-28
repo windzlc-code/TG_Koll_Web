@@ -115,7 +115,44 @@ class BillingTaskRegressionTests(unittest.TestCase):
         self.assertLess(len(prompt), 180)
         self.assertNotIn("adult_glamour", prompt)
         self.assertNotIn("intimate_glamour_female", prompt)
+        self.assertEqual(
+            runner.call_args.kwargs["persona_field_policy"],
+            {
+                "explicitFields": ["region", "gender", "age", "hair", "temperament", "clothing"],
+                "supplementPrompt": "暖色室内环境",
+            },
+        )
         self.assertEqual(output["user_prompt"], "暖色室内环境")
+
+    def test_persona_image_task_marks_only_non_auto_options_as_explicit_fields(self):
+        result = {
+            "generation": {"image_url": "/uploads/persona-auto.png"},
+            "saved_item_id": "saved-auto-1",
+        }
+        with mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner:
+            server._run_persona_image_task(
+                "task-auto-1",
+                {
+                    "related_persona_id": "persona-1",
+                    "supplement_prompt": "",
+                    "persona_image_options": {
+                        "digital_human_character_region": "china",
+                        "character_gender": "female",
+                        "character_age": "23_27",
+                        "character_hairstyle": "",
+                        "character_temperament": "",
+                        "character_clothing": "",
+                    },
+                },
+            )
+
+        self.assertEqual(
+            runner.call_args.kwargs["persona_field_policy"],
+            {
+                "explicitFields": ["region", "gender", "age"],
+                "supplementPrompt": "",
+            },
+        )
 
     def test_persona_image_regeneration_keeps_standard_reference_sheet_chain(self):
         archive = {
@@ -223,6 +260,10 @@ class BillingTaskRegressionTests(unittest.TestCase):
             result = server._run_persona_image_cli_for_web(
                 "persona-1",
                 prompt="把西装改成红色连衣裙",
+                persona_field_policy={
+                    "explicitFields": ["clothing"],
+                    "supplementPrompt": "把西装改成红色连衣裙",
+                },
             )
 
         cli_payload = json.loads(run.call_args.args[0][4])
@@ -230,6 +271,13 @@ class BillingTaskRegressionTests(unittest.TestCase):
         self.assertNotIn("editExistingImage", cli_payload)
         self.assertIsNone(cli_payload["referenceImageUrl"])
         self.assertEqual(cli_payload["customPrompt"], "把西装改成红色连衣裙")
+        self.assertEqual(
+            cli_payload["personaFieldPolicy"],
+            {
+                "explicitFields": ["clothing"],
+                "supplementPrompt": "把西装改成红色连衣裙",
+            },
+        )
         self.assertEqual(cli_payload["content"], "测试人设正文")
         self.assertEqual(cli_payload["setup"], archive["setup"])
         self.assertEqual(result["generation"]["image_url"], "/generated-reference.jpg")

@@ -228,6 +228,96 @@ describe("persona image production", () => {
     expect(prompt).not.toContain(" or ");
   });
 
+  it("uses the persona introduction to fill only automatic fields", () => {
+    const request = "中国人，自然上镜，23至27岁的成年女性，自然身材比例";
+    const prompt = buildReferenceSheetPrompt(
+      nonWorkflowSetup({
+        personaAppearance: "",
+        personaDescription: "金融理财顾问，长直发，佩戴金色耳环，日常穿正式西装，商务干练气质",
+        personaNationality: "中国",
+      }),
+      "专注金融理财内容的职业女性",
+      request,
+      {
+        explicitFields: ["region", "gender", "age"],
+        supplementPrompt: "",
+      },
+    );
+
+    expect(prompt).toContain(`appearance: ${request}`);
+    expect(prompt).toContain("长直发");
+    expect(prompt).toContain("金色耳环");
+    expect(prompt).toContain("自动项参考（发型、气质、服饰）");
+    expect(prompt).toContain("金融理财顾问");
+    expect(prompt).toContain("日常穿正式西装");
+    expect(prompt).toContain("商务干练气质");
+  });
+
+  it("replaces only explicitly selected fields and keeps other persona fields automatic", () => {
+    const request = "中国人，23至27岁的成年女性，性感福利风格，明显露肤、清凉妩媚";
+    const prompt = buildReferenceSheetPrompt(
+      nonWorkflowSetup({
+        personaAppearance: "28岁中国女性，微卷长发，佩戴金色耳环，正式西装，商务干练气质",
+        personaDescription: "金融理财顾问，日常穿正式西装，商务干练气质",
+      }),
+      "专注金融理财内容的职业女性",
+      request,
+      {
+        explicitFields: ["region", "gender", "age", "clothing"],
+        supplementPrompt: "",
+      },
+    );
+
+    expect(prompt).toContain("性感福利风格");
+    expect(prompt).not.toContain("正式西装");
+    expect(prompt).toContain("微卷长发");
+    expect(prompt).toContain("金色耳环");
+    expect(prompt).toContain("商务干练气质");
+    expect(prompt).toContain("金融理财顾问");
+    expect(prompt).toContain("自动项参考（发型、气质）");
+  });
+
+  it("treats supplement prompt fields as explicit overrides", () => {
+    const request = "中国人，23至27岁的成年女性，红色连衣裙";
+    const prompt = buildReferenceSheetPrompt(
+      nonWorkflowSetup({
+        personaAppearance: "28岁中国女性，长直发，正式西装，商务干练气质",
+        personaDescription: "金融理财顾问，日常穿正式西装，商务干练气质",
+      }),
+      "专注金融理财内容的职业女性",
+      request,
+      {
+        explicitFields: ["region", "gender", "age"],
+        supplementPrompt: "红色连衣裙",
+      },
+    );
+
+    expect(prompt).toContain("红色连衣裙");
+    expect(prompt).not.toContain("正式西装");
+    expect(prompt).toContain("长直发");
+    expect(prompt).toContain("商务干练气质");
+    expect(prompt).toContain("自动项参考（发型、气质）");
+  });
+
+  it("keeps non-visual introduction context when appearance and description share one source", () => {
+    const prompt = buildReferenceSheetPrompt(
+      nonWorkflowSetup({
+        personaAppearance: "金融理财顾问，长直发",
+        personaDescription: "金融理财顾问，长直发",
+      }),
+      "金融理财顾问，长直发",
+      "中国人，23至27岁的成年女性",
+      {
+        explicitFields: ["region", "gender", "age"],
+        supplementPrompt: "",
+      },
+    );
+
+    expect(prompt).toContain("长直发");
+    expect(prompt).toContain("金融理财顾问");
+    expect(prompt).toContain("自动项参考（发型、气质、服饰）");
+  });
+
   it("keeps unmentioned visual details and still gives the user outfit request priority", () => {
     const prompt = buildReferenceSheetPrompt(
       nonWorkflowSetup({ personaNationality: "" }),

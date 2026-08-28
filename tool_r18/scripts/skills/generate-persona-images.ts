@@ -5,6 +5,7 @@ import {
   generatePersonaImage,
   generateReferenceSheet,
   type PersonaImageGenerationMode,
+  type PersonaReferenceSheetFieldPolicy,
   type PersonaImageReferenceMode,
 } from "@/lib/persona-image-production";
 import { compressImage } from "@/lib/image-compress";
@@ -18,6 +19,7 @@ export interface GeneratePersonaImagesInput {
   setup: DramaSetup;
   content: string;
   customPrompt?: string;
+  personaFieldPolicy?: PersonaReferenceSheetFieldPolicy;
   styleHint?: string;
   model?: string;
   aspectRatio?: string;
@@ -331,12 +333,13 @@ async function main() {
     ? await (async () => {
         const refStartedAt = Date.now();
         const result = await generateReferenceSheet(
-        unsupportedImageApi,
-        input.setup,
-        input.content,
-        model,
-        runtimeOptions,
-        input.customPrompt,
+          unsupportedImageApi,
+          input.setup,
+          input.content,
+          model,
+          runtimeOptions,
+          input.customPrompt,
+          input.personaFieldPolicy,
         );
         referenceSheetMs = Date.now() - refStartedAt;
         return result;

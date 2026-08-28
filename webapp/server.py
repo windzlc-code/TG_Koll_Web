@@ -11283,6 +11283,30 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     }
 
 
+_PERSONA_IMAGE_OPTION_FIELDS = (
+    ("digital_human_character_region", "region"),
+    ("character_gender", "gender"),
+    ("character_age", "age"),
+    ("character_hairstyle", "hair"),
+    ("character_temperament", "temperament"),
+    ("character_clothing", "clothing"),
+)
+
+
+def _persona_image_field_policy(image_options: Any, supplement_prompt: str = "") -> dict[str, Any] | None:
+    if not isinstance(image_options, dict):
+        return None
+    explicit_fields = [
+        field
+        for option_key, field in _PERSONA_IMAGE_OPTION_FIELDS
+        if str(image_options.get(option_key) or "").strip()
+    ]
+    return {
+        "explicitFields": explicit_fields,
+        "supplementPrompt": str(supplement_prompt or "").strip(),
+    }
+
+
 def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     archive_id = str(payload.get("related_persona_id") or payload.get("archive_id") or "").strip()
     if not archive_id:
@@ -11306,6 +11330,7 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
         result = _run_persona_image_cli_for_web(
             archive_id,
             prompt=generation_prompt,
+            persona_field_policy=_persona_image_field_policy(image_options, supplement_prompt),
             aspect_ratio=str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1",
             mode=str(payload.get("mode") or "person").strip() or "person",
         )
@@ -20183,7 +20208,14 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
     return data
 
 
-def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_ratio: str = "1:1", mode: str = "person") -> dict[str, Any]:
+def _run_persona_image_cli_for_web(
+    archive_id: str,
+    *,
+    prompt: str = "",
+    persona_field_policy: dict[str, Any] | None = None,
+    aspect_ratio: str = "1:1",
+    mode: str = "person",
+) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
@@ -20197,6 +20229,7 @@ def _run_persona_image_cli_for_web(archive_id: str, *, prompt: str = "", aspect_
         "setup": setup,
         "content": str(archive.get("content") or ""),
         "customPrompt": user_prompt or None,
+        "personaFieldPolicy": persona_field_policy,
         "aspectRatio": str(aspect_ratio or "1:1").strip() or "1:1",
         "mode": str(mode or "person").strip() or "person",
         "referenceImageUrl": None,
