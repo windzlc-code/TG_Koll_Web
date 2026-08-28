@@ -181,18 +181,13 @@ def digital_human_character_region_prompt(region: Any, label: Any = "") -> str:
     region_key = _text(region).lower()
     label_text = _text(label)
     mapping = {
-        "china": "中国成年人，东亚面部骨相，真实肤色，真实五官",
-        "western": "欧美成年人，欧美面部骨相，真实肤色，真实五官",
-        "europe_america": "欧美成年人，欧美面部骨相，真实肤色，真实五官",
-        "indonesia": "印尼成年人，东南亚印尼面部特征，真实肤色，真实五官",
-        "thailand": "泰国成年人，东南亚泰国面部特征，真实肤色，真实五官",
-        "japan": "日本成年人，东亚日本面部特征，真实肤色，真实五官",
-        "malaysia": "马来西亚成年人，东南亚马来西亚面部特征，真实肤色，真实五官",
+        "china": "中国人", "western": "欧美人", "europe_america": "欧美人",
+        "indonesia": "印尼人", "thailand": "泰国人", "japan": "日本人", "malaysia": "马来西亚人",
     }
-    return mapping.get(region_key) or (
-        f"{label_text}成年人，真实肤色，真实五官"
-        if label_text
-        else "真实成年人物"
+    identity = mapping.get(region_key) or (f"{label_text}人" if label_text else "真实人物")
+    return (
+        f"{identity}，自然上镜，脸型精致，五官协调，现代写实审美，"
+        "避免刻板化、脸谱化或夸张地域特征"
     )
 
 
@@ -208,20 +203,6 @@ _DIGITAL_HUMAN_TEMPERAMENT_LABELS = {
     "lively": "活力外向", "sweet": "清新甜美", "cool": "高级冷感",
     "calm": "沉稳大气", "sunny": "阳光亲和", "elite": "精英专业",
     "street": "潮流自信", "adult_glamour": "妩媚性感",
-}
-
-_DIGITAL_HUMAN_TEMPERAMENT_PROMPTS = {
-    "gentle": "亲和自然气质，放松神态，淡妆，自然姿态",
-    "business": "商务干练气质，自信神态，利落妆容，挺拔姿态",
-    "elegant": "优雅知性气质，从容神态，精致妆容，舒展姿态",
-    "lively": "活力外向气质，明朗神态，清透妆容，轻快姿态",
-    "sweet": "清新甜美气质，柔和神态，清透妆容，自然姿态",
-    "cool": "高级冷感气质，克制神态，干净妆容，利落姿态",
-    "calm": "沉稳大气气质，平静神态，端庄妆容，稳定姿态",
-    "sunny": "阳光亲和气质，开朗神态，清爽妆容，自然姿态",
-    "elite": "精英专业气质，专注神态，利落妆容，挺拔姿态",
-    "street": "潮流自信气质，松弛神态，个性妆容，自然姿态",
-    "adult_glamour": "妩媚性感气质，成熟自信神态，精致妆容，自然舒展姿态",
 }
 
 _DIGITAL_HUMAN_CLOTHING_LABELS = {
@@ -244,25 +225,9 @@ _DIGITAL_HUMAN_CLOTHING_LABELS = {
 
 
 def _selected_clothing_style_prompt(clothing_key: str, clothing: str) -> str:
-    clothing_direction = clothing.removesuffix("套装")
-    style_direction = (
-        "明确成年女性的福利诱惑风格，以性感、清凉、妩媚和高级写真感为核心"
-        if clothing_key == "intimate_glamour_female"
-        else f"{clothing_direction}风格"
-    )
-    parts = [
-        f"服装必须采用{style_direction}",
-        "具体服装造型、版型、材质和配色由模型依据该风格自主设计",
-        (
-            "此处用户选择的服装风格具有最高服装优先级，人物职业、身份、行业、生活方式和人设简介"
-            "均不得参与服装决策，不得替换、弱化或覆盖该风格"
-        ),
-    ]
     if clothing_key == "intimate_glamour_female":
-        parts.append("不得自动转为职业装或通勤装")
-        parts.append("必须为明确成年人，禁止未成年感，禁止全裸，胸部与私密部位必须完整遮盖")
-    parts.append("三视图服装完全一致")
-    return "；".join(parts)
+        return "福利诱惑风格，性感、清凉、妩媚、高级写真感，服装由模型自主设计，衣着完整"
+    return f"{clothing.removesuffix('套装')}风格，服装由模型自主设计"
 
 
 def build_digital_human_character_selection_prompt(payload: Mapping[str, Any] | None) -> str:
@@ -287,15 +252,15 @@ def build_digital_human_character_selection_prompt(payload: Mapping[str, Any] | 
         "56_plus": "56岁以上的成熟",
     }.get(age, "")
     if gender or age_label:
-        parts.append(f"{age_label}{gender_label}，真实年龄感，自然身材比例")
+        parts.append(f"{age_label or '成年'}{gender_label}，自然身材比例")
 
     hairstyle = _DIGITAL_HUMAN_HAIRSTYLE_LABELS.get(_text(source.get("character_hairstyle")).lower())
     if hairstyle:
-        parts.append(f"{hairstyle}发型，发型轮廓清晰，发丝真实")
+        parts.append(hairstyle)
     temperament_key = _text(source.get("character_temperament")).lower()
     temperament = _DIGITAL_HUMAN_TEMPERAMENT_LABELS.get(temperament_key)
     if temperament:
-        parts.append(_DIGITAL_HUMAN_TEMPERAMENT_PROMPTS.get(temperament_key, f"{temperament}气质，神态和姿态清晰一致"))
+        parts.append(f"{temperament}气质")
     clothing_key = _text(source.get("character_clothing")).lower()
     clothing = _DIGITAL_HUMAN_CLOTHING_LABELS.get(clothing_key)
     if clothing:

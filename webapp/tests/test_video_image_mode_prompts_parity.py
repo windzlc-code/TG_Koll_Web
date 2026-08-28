@@ -10,6 +10,7 @@ from video_core.image_mode_prompts import (
     SUBJECT_REPLACE_DEFAULT_USER_PROMPT,
     THREE_VIEW_DEFAULT_PROMPT,
     apply_product_only_prompt_constraints,
+    build_digital_human_character_selection_prompt,
     build_image_mode_prompt,
     build_subject_replace_prompt,
     build_three_view_prompt,
@@ -64,7 +65,10 @@ def test_digital_human_reference_has_priority_over_region_and_user_text() -> Non
         }
     )
 
-    assert "日本成年人" in prompt
+    assert "日本人" in prompt
+    assert "自然上镜，脸型精致，五官协调，现代写实审美" in prompt
+    assert "避免刻板化、脸谱化或夸张地域特征" in prompt
+    assert "东亚日本面部特征" not in prompt
     assert "不得被表单预设、地区特征或补充文字覆盖" in prompt
     assert "必须综合所有参考图保持同一人物身份、发型、服装结构、正侧背一致性和体型比例" in prompt
     assert "不得用这些文字改变参考人物身份、性别、年龄段或核心气质" in prompt
@@ -73,59 +77,35 @@ def test_digital_human_reference_has_priority_over_region_and_user_text() -> Non
 
 
 def test_digital_human_options_expand_to_model_instructions_instead_of_raw_values() -> None:
-    prompt = build_image_mode_prompt(
-        {
-            "mode": "digital_human_character",
-            "prompt": "暖色卧室氛围",
-            "digital_human_character_region": "europe_america",
-            "character_gender": "female",
-            "character_age": "23_27",
-            "character_hairstyle": "soft_wave",
-            "character_temperament": "adult_glamour",
-            "character_clothing": "intimate_glamour_female",
-            "persona_clothing_context": "肥宅游戏玩家，长期居家，偏好宽松舒适的生活方式",
-        }
-    )
+    payload = {
+        "mode": "digital_human_character",
+        "prompt": "暖色卧室氛围",
+        "digital_human_character_region": "europe_america",
+        "character_gender": "female",
+        "character_age": "23_27",
+        "character_hairstyle": "soft_wave",
+        "character_temperament": "adult_glamour",
+        "character_clothing": "intimate_glamour_female",
+        "persona_clothing_context": "肥宅游戏玩家，长期居家，偏好宽松舒适的生活方式",
+    }
+    prompt = build_image_mode_prompt(payload)
+    selection_prompt = build_digital_human_character_selection_prompt(payload)
 
-    assert "欧美成年人" in prompt
+    assert "欧美人" in prompt
+    assert "欧美面部骨相" not in prompt
     assert "23至27岁的成年女性" in prompt
-    assert "微卷发发型，发型轮廓清晰" in prompt
-    assert "妩媚性感气质，成熟自信神态" in prompt
+    assert "微卷发" in prompt
+    assert "妩媚性感气质" in prompt
     assert "人设核心：肥宅游戏玩家" not in prompt
-    assert "明确成年女性的福利诱惑风格" in prompt
-    assert "具体服装造型、版型、材质和配色由模型依据该风格自主设计" in prompt
-    assert "用户选择的服装风格具有最高服装优先级" in prompt
-    assert "人物职业、身份、行业、生活方式和人设简介均不得参与服装决策" in prompt
-    assert "不得替换、弱化或覆盖该风格" in prompt
-    assert "不得自动转为职业装或通勤装" in prompt
+    assert "福利诱惑风格，性感、清凉、妩媚、高级写真感，服装由模型自主设计，衣着完整" in prompt
     for fixed_item in ("吊带", "短裤", "短裙", "大腿", "肚脐", "蕾丝", "缎面"):
         assert fixed_item not in prompt
     assert "暖色卧室氛围" in prompt
-    for redundant in ("大方向", "不固定", "用户补充要求"):
+    for redundant in ("最高服装优先级", "不得参与", "不得替换", "禁止", "三视图服装"):
         assert redundant not in prompt
+    assert len(selection_prompt) < 130
     for raw_value in ("europe_america", "23_27", "soft_wave", "adult_glamour", "intimate_glamour_female"):
         assert raw_value not in prompt
-
-
-def test_intimate_glamour_outfit_is_not_overridden_by_professional_persona() -> None:
-    prompt = build_image_mode_prompt(
-        {
-            "mode": "digital_human_character",
-            "character_gender": "female",
-            "character_age": "33_38",
-            "character_temperament": "elegant",
-            "character_clothing": "intimate_glamour_female",
-            "persona_clothing_context": "气质高雅的钢琴老师，具备金融理财能力，成熟专业",
-        }
-    )
-
-    assert "钢琴老师" not in prompt
-    assert "金融理财" not in prompt
-    assert "成熟专业" not in prompt
-    assert "福利诱惑风格" in prompt
-    assert "用户选择的服装风格具有最高服装优先级" in prompt
-    assert "人物职业、身份、行业、生活方式和人设简介均不得参与服装决策" in prompt
-    assert "不得自动转为职业装或通勤装" in prompt
 
 
 @pytest.mark.parametrize("clothing_key", sorted(_DIGITAL_HUMAN_CLOTHING_LABELS))
@@ -145,8 +125,7 @@ def test_every_selected_clothing_style_ignores_persona_context(clothing_key: str
     assert "钢琴老师" not in with_professional_persona
     assert "金融理财" not in with_professional_persona
     assert "商务职业装" not in with_professional_persona
-    assert "用户选择的服装风格具有最高服装优先级" in with_professional_persona
-    assert "人物职业、身份、行业、生活方式和人设简介均不得参与服装决策" in with_professional_persona
+    assert "服装由模型自主设计" in with_professional_persona
 
 
 def test_three_view_replaces_generic_poster_prompt_and_keeps_structure_rules() -> None:

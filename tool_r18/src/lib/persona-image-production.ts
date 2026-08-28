@@ -163,11 +163,10 @@ export function buildReferenceSheetPrompt(setup: DramaSetup, personaContent: str
   const keptVisual = applyUserVisualReplacements(visualBase, request, { mode: "strip" });
   const appearance = [request, keptVisual].filter(Boolean).join(", ");
   return [
-    `character reference sheet, three views: front view, side view, back view, same person all three angles, consistent appearance`,
-    appearance ? `mandatory appearance: ${appearance}` : "",
-    "show every selected age, facial, hairstyle, temperament, clothing and body attribute clearly",
-    `photorealistic adult ${gender}, soft even studio light`,
-    "pure white seamless background, full-body standing pose, no text, no watermark, identical face, hair, body proportions and outfit in all three views",
+    "three-view character sheet: front, side, back; same person",
+    appearance ? `appearance: ${appearance}` : "",
+    `photorealistic adult ${gender}, full body, white studio`,
+    "same face, body, hair and outfit; no text, no watermark",
   ].filter(Boolean).join(", ");
 }
 
