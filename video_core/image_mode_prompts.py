@@ -226,7 +226,7 @@ _DIGITAL_HUMAN_CLOTHING_LABELS = {
 
 def _selected_clothing_style_prompt(clothing_key: str, clothing: str) -> str:
     if clothing_key == "intimate_glamour_female":
-        return "福利诱惑风格，性感、清凉、妩媚、高级写真感，服装由模型自主设计，衣着完整"
+        return "性感福利风格，明显露肤、清凉妩媚、高级写真感，服装款式由模型自主设计"
     return f"{clothing.removesuffix('套装')}风格，服装由模型自主设计"
 
 

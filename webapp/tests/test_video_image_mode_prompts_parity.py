@@ -97,7 +97,7 @@ def test_digital_human_options_expand_to_model_instructions_instead_of_raw_value
     assert "微卷发" in prompt
     assert "妩媚性感气质" in prompt
     assert "人设核心：肥宅游戏玩家" not in prompt
-    assert "福利诱惑风格，性感、清凉、妩媚、高级写真感，服装由模型自主设计，衣着完整" in prompt
+    assert "性感福利风格，明显露肤、清凉妩媚、高级写真感，服装款式由模型自主设计" in prompt
     for fixed_item in ("吊带", "短裤", "短裙", "大腿", "肚脐", "蕾丝", "缎面"):
         assert fixed_item not in prompt
     assert "暖色卧室氛围" in prompt
@@ -125,7 +125,7 @@ def test_every_selected_clothing_style_ignores_persona_context(clothing_key: str
     assert "钢琴老师" not in with_professional_persona
     assert "金融理财" not in with_professional_persona
     assert "商务职业装" not in with_professional_persona
-    assert "服装由模型自主设计" in with_professional_persona
+    assert "模型自主设计" in with_professional_persona
 
 
 def test_three_view_replaces_generic_poster_prompt_and_keeps_structure_rules() -> None:

@@ -106,7 +106,7 @@ class BillingTaskRegressionTests(unittest.TestCase):
         self.assertNotIn("欧美面部骨相", prompt)
         self.assertIn("妩媚性感气质", prompt)
         self.assertNotIn("人设核心：肥宅游戏玩家", prompt)
-        self.assertIn("福利诱惑风格，性感、清凉、妩媚、高级写真感，服装由模型自主设计，衣着完整", prompt)
+        self.assertIn("性感福利风格，明显露肤、清凉妩媚、高级写真感，服装款式由模型自主设计", prompt)
         for fixed_item in ("吊带", "短裤", "短裙", "大腿", "肚脐", "蕾丝", "缎面"):
             self.assertNotIn(fixed_item, prompt)
         self.assertIn("暖色室内环境", prompt)
