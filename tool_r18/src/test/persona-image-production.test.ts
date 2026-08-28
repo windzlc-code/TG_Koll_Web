@@ -93,9 +93,10 @@ describe("persona image production", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].runningHubNewPersonaMode).toBe("text-to-image");
     expect(calls[0].prompt).toContain(userPrompt);
-    expect(calls[0].prompt).toContain(`appearance: ${userPrompt}`);
+    expect(calls[0].prompt).toContain(`mandatory appearance: ${userPrompt}`);
     expect(calls[0].prompt.split(userPrompt).length - 1).toBe(1);
-    expect(calls[0].prompt).toContain("user appearance has highest priority and must be visible");
+    expect(calls[0].prompt).toContain("show every selected age, facial, hairstyle, temperament, clothing and body attribute clearly");
+    expect(calls[0].prompt).not.toContain(" or ");
     expect(calls[0].prompt).not.toContain("obey this request:");
     expect(calls[0].prompt).not.toContain("appearance: 深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。");
     expect(calls[0].prompt).not.toContain("融資顧問");
@@ -159,10 +160,10 @@ describe("persona image production", () => {
       "爆乳美女，身材非常的好，会十分的性感诱惑。",
     );
 
-    expect(prompt).toContain("appearance: 爆乳美女，身材非常的好，会十分的性感诱惑。");
+    expect(prompt).toContain("mandatory appearance: 爆乳美女，身材非常的好，会十分的性感诱惑。");
     expect(prompt).not.toContain("appearance: 深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。");
     expect(prompt.split("爆乳美女，身材非常的好，会十分的性感诱惑。").length - 1).toBe(1);
-    expect(prompt).toContain("user appearance has highest priority and must be visible");
+    expect(prompt).toContain("show every selected age, facial, hairstyle, temperament, clothing and body attribute clearly");
     expect(prompt).not.toContain("obey this request:");
     expect(prompt).not.toContain("expression mood:");
     expect(prompt).not.toContain("溫柔細膩");
@@ -188,9 +189,9 @@ describe("persona image production", () => {
       "性感美女喜欢穿低胸装，配上黑丝。",
     );
 
-    expect(prompt).toContain("appearance: 性感美女喜欢穿低胸装，配上黑丝。");
+    expect(prompt).toContain("mandatory appearance: 性感美女喜欢穿低胸装，配上黑丝。");
     expect(prompt.split("性感美女喜欢穿低胸装，配上黑丝。").length - 1).toBe(1);
-    expect(prompt).toContain("user appearance has highest priority and must be visible");
+    expect(prompt).toContain("show every selected age, facial, hairstyle, temperament, clothing and body attribute clearly");
     expect(prompt).not.toContain("obey this request:");
     expect(prompt).not.toContain("expression mood:");
     expect(prompt).not.toContain("專業、沉穩、高雅、值得信賴的智囊");
@@ -203,15 +204,36 @@ describe("persona image production", () => {
     expect(prompt).not.toContain("do not default to office suit");
   });
 
+  it("keeps selected visual attributes free of stale persona appearance directions", () => {
+    const request = "中国成年人，18至22岁的成年女性，马尾发型，妩媚性感气质，贴身缎面吊带睡裙";
+    const prompt = buildReferenceSheetPrompt(
+      nonWorkflowSetup({
+        personaAppearance: "职业女性，正式西装，商务干练气质，专业房地产顾问",
+        personaDescription: "专业房地产顾问",
+        personaNationality: "中国",
+      }),
+      "专业房地产顾问",
+      request,
+    );
+
+    expect(prompt).toContain(`mandatory appearance: ${request}`);
+    expect(prompt.split(request).length - 1).toBe(1);
+    expect(prompt).not.toContain("职业女性");
+    expect(prompt).not.toContain("正式西装");
+    expect(prompt).not.toContain("商务干练气质");
+    expect(prompt).not.toContain("房地产顾问");
+    expect(prompt).not.toContain(" or ");
+  });
+
   it("keeps unmentioned visual details and still gives the user outfit request priority", () => {
     const prompt = buildReferenceSheetPrompt(
       nonWorkflowSetup({ personaNationality: "" }),
       "日常生活观察者，simple cream cardigan",
       "穿红色连衣裙",
     );
-    expect(prompt).toContain("appearance: 穿红色连衣裙, twenty-something Taiwanese woman, fair skin, neat soft hands");
+    expect(prompt).toContain("mandatory appearance: 穿红色连衣裙, twenty-something Taiwanese woman, fair skin, neat soft hands");
     expect(prompt.split("穿红色连衣裙").length - 1).toBe(1);
-    expect(prompt).toContain("user appearance has highest priority and must be visible");
+    expect(prompt).toContain("show every selected age, facial, hairstyle, temperament, clothing and body attribute clearly");
     expect(prompt).not.toContain("obey this request:");
     expect(prompt).not.toContain("appearance: twenty-something Taiwanese woman, fair skin, neat soft hands, simple cream cardigan");
     expect(prompt).not.toContain("naturally blend in these extra visual traits");

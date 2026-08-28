@@ -63,7 +63,7 @@ def test_digital_human_reference_has_priority_over_region_and_user_text() -> Non
         }
     )
 
-    assert "日本地区特征" in prompt
+    assert "日本成年人" in prompt
     assert "不得被表单预设、地区特征或补充文字覆盖" in prompt
     assert "必须综合所有参考图保持同一人物身份、发型、服装结构、正侧背一致性和体型比例" in prompt
     assert "不得用这些文字改变参考人物身份、性别、年龄段或核心气质" in prompt
@@ -82,20 +82,48 @@ def test_digital_human_options_expand_to_model_instructions_instead_of_raw_value
             "character_hairstyle": "soft_wave",
             "character_temperament": "adult_glamour",
             "character_clothing": "intimate_glamour_female",
+            "persona_clothing_context": "肥宅游戏玩家，长期居家，偏好宽松舒适的生活方式",
         }
     )
 
-    assert "欧美地区特征" in prompt
+    assert "欧美成年人" in prompt
     assert "23至27岁的成年女性" in prompt
-    assert "发型大方向为“微卷发”" in prompt
-    assert "成年女性的妩媚性感" in prompt
-    assert "成年女性的私密写真套装" in prompt
-    assert "具体表情、妆容和姿态由模型结合人物自然设计" in prompt
-    assert "具体单品、版型、材质、配色和细节由模型结合整体人设设计" in prompt
-    assert "不固定为某一件服装" in prompt
-    assert "用户补充要求（最高优先级）：暖色卧室氛围" in prompt
+    assert "微卷发发型，发型轮廓清晰" in prompt
+    assert "妩媚性感气质，成熟自信神态" in prompt
+    assert "人设核心：肥宅游戏玩家，长期居家，偏好宽松舒适的生活方式" in prompt
+    assert "服装采用福利诱惑风格" in prompt
+    assert "符合人物身份、年龄、体型、生活方式和审美" in prompt
+    assert "吊带睡裙" not in prompt
+    assert "暖色卧室氛围" in prompt
+    for redundant in ("大方向", "具体", "由模型", "不固定", "用户选择", "用户补充要求", "或"):
+        assert redundant not in prompt
     for raw_value in ("europe_america", "23_27", "soft_wave", "adult_glamour", "intimate_glamour_female"):
         assert raw_value not in prompt
+
+
+def test_clothing_style_is_a_persona_aware_direction_not_a_fixed_outfit() -> None:
+    base = {
+        "mode": "digital_human_character",
+        "character_gender": "female",
+        "character_clothing": "sporty_female",
+    }
+    homebody_prompt = build_image_mode_prompt({
+        **base,
+        "persona_clothing_context": "肥宅游戏玩家，长期居家，重视宽松舒适",
+    })
+    runner_prompt = build_image_mode_prompt({
+        **base,
+        "persona_clothing_context": "城市跑者，长期户外训练，重视轻便利落",
+    })
+
+    assert "服装采用运动休闲风格" in homebody_prompt
+    assert "符合人物身份、年龄、体型、生活方式和审美" in homebody_prompt
+    assert "肥宅游戏玩家" in homebody_prompt
+    assert "城市跑者" in runner_prompt
+    assert homebody_prompt != runner_prompt
+    for fixed_item in ("紧身衣", "瑜伽裤", "运动背心", "跑鞋"):
+        assert fixed_item not in homebody_prompt
+        assert fixed_item not in runner_prompt
 
 
 def test_three_view_replaces_generic_poster_prompt_and_keeps_structure_rules() -> None:

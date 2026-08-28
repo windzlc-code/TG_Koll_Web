@@ -84,13 +84,14 @@ export function resolvePersonaImageRoute(
 const SHEET_VISUAL_SLOTS: Array<{ id: string; pattern: RegExp }> = [
   { id: "clothing", pattern: /穿|衣服|裙|西装|西裝|制服|外套|针织|針織|大衣|衬衫|襯衫|裤|褲|帽|鞋|低胸|黑丝|黑絲|丝袜|絲襪|袜|襪|吊带|吊帶|露肩|紧身|緊身|hoodie|jacket|dress|suit|cardigan|outfit|服装|服裝|衣着|衣著|毛衣|连衣|連衣|stockings|pantyhose|tights/i },
   { id: "hair", pattern: /发|髮|短发|长发|卷发|直发|发型|劉海|刘海|hair|bangs/i },
-  { id: "face", pattern: /脸|臉|五官|妆|妝|网红脸|網紅臉|面容|face|makeup/i },
-  { id: "body", pattern: /身材|胸|腰|臀|瘦|胖|高挑|矮|凹凸|爆乳|性感|诱惑|誘惑|身形|body|figure|slim|curvy/i },
+  { id: "gender", pattern: /女性|男性|女人|男人|女生|男生|woman|women|female|man|men|male/i },
+  { id: "face", pattern: /脸|臉|五官|妆|妝|肤色|膚色|皮肤|皮膚|网红脸|網紅臉|面容|face|makeup|skin/i },
+  { id: "body", pattern: /身材|胸|腰|臀|手|瘦|胖|高挑|矮|凹凸|爆乳|性感|诱惑|誘惑|身形|body|figure|hands?|slim|curvy/i },
   { id: "accessories", pattern: /眼镜|眼鏡|墨镜|墨鏡|耳环|耳環|项链|項鍊|手表|手錶|包|glasses|earring|necklace/i },
   { id: "age", pattern: /岁|歲|年龄|年齡|twenty|thirty|forty|\d+\s*year/i },
   { id: "background", pattern: /背景|办公室|辦公室|海边|海邊|室内|室內|场景|場景|background|office|beach/i },
   { id: "pose", pattern: /姿势|姿勢|坐着|站着|pose|sitting|standing/i },
-  { id: "look", pattern: /风格|風格|赛博|賽博|写实|寫實|动漫|動漫|电影|電影|氛围|氛圍|质感|質感/i },
+  { id: "look", pattern: /风格|風格|气质|氣質|神态|神態|赛博|賽博|写实|寫實|动漫|動漫|电影|電影|氛围|氛圍|质感|質感|temperament|mood/i },
 ];
 
 function splitVisualClauses(text: string): string[] {
@@ -121,7 +122,7 @@ export function applyUserVisualReplacements(
   const baseClauses = splitVisualClauses(base);
   const kept = baseClauses.filter((clause) => {
     const slots = clauseVisualSlots(clause);
-    if (!slots.length) return true;
+    if (!slots.length) return options?.mode !== "strip";
     return !slots.some((slot) => replacedSlots.has(slot));
   });
   if (options?.mode === "strip") {
@@ -163,10 +164,10 @@ export function buildReferenceSheetPrompt(setup: DramaSetup, personaContent: str
   const appearance = [request, keptVisual].filter(Boolean).join(", ");
   return [
     `character reference sheet, three views: front view, side view, back view, same person all three angles, consistent appearance`,
-    appearance ? `appearance: ${appearance}` : "",
-    "user appearance has highest priority and must be visible",
-    `${nationality ? nationality + " " : ""}${gender}, photorealistic, natural lighting`,
-    "white or neutral background, full body or half body, no text, no watermark, high detail, consistent face and outfit across all three views",
+    appearance ? `mandatory appearance: ${appearance}` : "",
+    "show every selected age, facial, hairstyle, temperament, clothing and body attribute clearly",
+    `photorealistic adult ${gender}, soft even studio light`,
+    "pure white seamless background, full-body standing pose, no text, no watermark, identical face, hair, body proportions and outfit in all three views",
   ].filter(Boolean).join(", ");
 }
 

@@ -75,7 +75,10 @@ class BillingTaskRegressionTests(unittest.TestCase):
             "generation": {"image_url": "/uploads/persona-options.png"},
             "saved_item_id": "saved-options-1",
         }
-        with mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner:
+        with (
+            mock.patch.object(server, "_persona_image_core_description", return_value="肥宅游戏玩家，长期居家，偏好宽松舒适的生活方式"),
+            mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner,
+        ):
             output = server._run_persona_image_task(
                 "task-options-1",
                 {
@@ -94,10 +97,15 @@ class BillingTaskRegressionTests(unittest.TestCase):
             )
 
         prompt = runner.call_args.kwargs["prompt"]
-        self.assertIn("欧美地区特征", prompt)
-        self.assertIn("妩媚性感", prompt)
-        self.assertIn("私密写真套装", prompt)
-        self.assertIn("用户补充要求（最高优先级）：暖色室内环境", prompt)
+        self.assertIn("欧美成年人", prompt)
+        self.assertIn("妩媚性感气质", prompt)
+        self.assertIn("人设核心：肥宅游戏玩家，长期居家，偏好宽松舒适的生活方式", prompt)
+        self.assertIn("服装采用福利诱惑风格", prompt)
+        self.assertIn("符合人物身份、年龄、体型、生活方式和审美", prompt)
+        self.assertNotIn("吊带睡裙", prompt)
+        self.assertIn("暖色室内环境", prompt)
+        for redundant in ("大方向", "具体", "由模型", "不固定", "用户选择", "用户补充要求", "或"):
+            self.assertNotIn(redundant, prompt)
         self.assertNotIn("adult_glamour", prompt)
         self.assertNotIn("intimate_glamour_female", prompt)
         self.assertEqual(output["user_prompt"], "暖色室内环境")
