@@ -70,6 +70,38 @@ class BillingTaskRegressionTests(unittest.TestCase):
         self.assertEqual(output["user_prompt"], "穿深色西装，办公室暖光，半身构图")
         self.assertEqual(output["prompt"], "穿深色西装，办公室暖光，半身构图")
 
+    def test_persona_image_task_expands_shared_character_options_before_generation(self):
+        result = {
+            "generation": {"image_url": "/uploads/persona-options.png"},
+            "saved_item_id": "saved-options-1",
+        }
+        with mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner:
+            output = server._run_persona_image_task(
+                "task-options-1",
+                {
+                    "related_persona_id": "persona-1",
+                    "prompt": "暖色室内环境",
+                    "supplement_prompt": "暖色室内环境",
+                    "persona_image_options": {
+                        "digital_human_character_region": "europe_america",
+                        "character_gender": "female",
+                        "character_age": "23_27",
+                        "character_hairstyle": "soft_wave",
+                        "character_temperament": "adult_glamour",
+                        "character_clothing": "intimate_glamour_female",
+                    },
+                },
+            )
+
+        prompt = runner.call_args.kwargs["prompt"]
+        self.assertIn("欧美地区特征", prompt)
+        self.assertIn("妩媚性感", prompt)
+        self.assertIn("私密写真套装", prompt)
+        self.assertIn("用户补充要求（最高优先级）：暖色室内环境", prompt)
+        self.assertNotIn("adult_glamour", prompt)
+        self.assertNotIn("intimate_glamour_female", prompt)
+        self.assertEqual(output["user_prompt"], "暖色室内环境")
+
     def test_persona_image_regeneration_keeps_standard_reference_sheet_chain(self):
         archive = {
             "id": "persona-1",

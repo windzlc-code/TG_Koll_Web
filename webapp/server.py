@@ -11287,10 +11287,25 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
     archive_id = str(payload.get("related_persona_id") or payload.get("archive_id") or "").strip()
     if not archive_id:
         raise RuntimeError("人设图生成缺少人设 ID。")
+    supplement_prompt = str(payload.get("supplement_prompt") or payload.get("prompt") or "").strip()
+    image_options = payload.get("persona_image_options")
+    generation_prompt = supplement_prompt
+    if isinstance(image_options, dict) and image_options:
+        from video_core.image_mode_prompts import build_digital_human_character_selection_prompt
+
+        selection_prompt = build_digital_human_character_selection_prompt(image_options)
+        generation_prompt = "。".join(
+            part
+            for part in (
+                f"用户选择的人设大方向：{selection_prompt}" if selection_prompt else "",
+                f"用户补充要求（最高优先级）：{supplement_prompt}" if supplement_prompt else "",
+            )
+            if part
+        )
     try:
         result = _run_persona_image_cli_for_web(
             archive_id,
-            prompt=str(payload.get("prompt") or "").strip(),
+            prompt=generation_prompt,
             aspect_ratio=str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1",
             mode=str(payload.get("mode") or "person").strip() or "person",
         )
@@ -11298,7 +11313,7 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
         raise RuntimeError(str(exc.detail or "人设图生成失败。")) from exc
     generation = result.get("generation") if isinstance(result.get("generation"), dict) else {}
     image_url = str(generation.get("image_url") or result.get("current_reference_url") or "").strip()
-    user_prompt = str(payload.get("prompt") or generation.get("user_prompt") or "").strip()
+    user_prompt = supplement_prompt or str(generation.get("user_prompt") or "").strip()
     final_prompt = str(generation.get("final_prompt") or "").strip()
     return {
         "ok": True,

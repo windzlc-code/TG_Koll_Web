@@ -76,19 +76,19 @@
     male: [AUTOMATIC_OPTION, { value: "short_clean", label: "利落短发" }, { value: "side_part", label: "偏分短发" }, { value: "crew_cut", label: "寸头" }, { value: "textured_short", label: "纹理短发" }, { value: "slick_back", label: "背头" }, { value: "medium_layered", label: "中短层次发" }],
   };
   const CHARACTER_TEMPERAMENTS = {
-    default: [AUTOMATIC_OPTION, { value: "gentle", label: "亲和自然" }, { value: "business", label: "商务干练" }, { value: "elegant", label: "优雅知性" }, { value: "lively", label: "活力外向" }],
-    female: [AUTOMATIC_OPTION, { value: "elegant", label: "优雅知性" }, { value: "gentle", label: "亲和自然" }, { value: "sweet", label: "清新亲切" }, { value: "cool", label: "高级冷感" }, { value: "business", label: "干练专业" }],
-    female_young: [AUTOMATIC_OPTION, { value: "sweet", label: "清新甜美" }, { value: "lively", label: "活力外向" }, { value: "gentle", label: "亲和自然" }, { value: "cool", label: "高级冷感" }, { value: "elegant", label: "优雅知性" }],
-    female_mature: [AUTOMATIC_OPTION, { value: "elegant", label: "优雅知性" }, { value: "business", label: "商务干练" }, { value: "gentle", label: "亲和自然" }, { value: "cool", label: "高级冷感" }, { value: "calm", label: "沉稳大气" }],
+    default: [AUTOMATIC_OPTION, { value: "gentle", label: "亲和自然" }, { value: "business", label: "商务干练" }, { value: "elegant", label: "优雅知性" }, { value: "lively", label: "活力外向" }, { value: "adult_glamour", label: "妩媚性感" }],
+    female: [AUTOMATIC_OPTION, { value: "elegant", label: "优雅知性" }, { value: "gentle", label: "亲和自然" }, { value: "sweet", label: "清新亲切" }, { value: "cool", label: "高级冷感" }, { value: "business", label: "干练专业" }, { value: "adult_glamour", label: "妩媚性感" }],
+    female_young: [AUTOMATIC_OPTION, { value: "sweet", label: "清新甜美" }, { value: "lively", label: "活力外向" }, { value: "gentle", label: "亲和自然" }, { value: "cool", label: "高级冷感" }, { value: "elegant", label: "优雅知性" }, { value: "adult_glamour", label: "妩媚性感" }],
+    female_mature: [AUTOMATIC_OPTION, { value: "elegant", label: "优雅知性" }, { value: "business", label: "商务干练" }, { value: "gentle", label: "亲和自然" }, { value: "cool", label: "高级冷感" }, { value: "calm", label: "沉稳大气" }, { value: "adult_glamour", label: "妩媚性感" }],
     male: [AUTOMATIC_OPTION, { value: "business", label: "干练专业" }, { value: "calm", label: "沉稳大气" }, { value: "sunny", label: "阳光亲和" }, { value: "elite", label: "精英专业" }, { value: "elegant", label: "儒雅稳重" }],
     male_young: [AUTOMATIC_OPTION, { value: "lively", label: "活力外向" }, { value: "business", label: "商务干练" }, { value: "sunny", label: "阳光亲和" }, { value: "cool", label: "高级冷感" }, { value: "street", label: "潮流自信" }],
     male_mature: [AUTOMATIC_OPTION, { value: "business", label: "商务干练" }, { value: "calm", label: "沉稳大气" }, { value: "gentle", label: "亲和自然" }, { value: "elite", label: "精英专业" }, { value: "elegant", label: "儒雅稳重" }],
   };
   const CHARACTER_CLOTHING = {
-    default: [AUTOMATIC_OPTION, { value: "formal_suit", label: "正式西装套装" }, { value: "smart_casual_set", label: "通勤休闲套装" }, { value: "soft_knit_set", label: "针织舒适套装" }, { value: "casual_jacket_set", label: "休闲夹克套装" }, { value: "sporty", label: "运动套装" }],
-    female: [AUTOMATIC_OPTION, { value: "tailored_suit_female", label: "女士西装套装" }, { value: "business_dress_female", label: "轻商务裙装套装" }, { value: "elegant_commute_female", label: "优雅通勤套装" }, { value: "soft_knit_set_female", label: "温柔针织套装" }, { value: "sporty_female", label: "运动休闲套装" }],
-    female_young: [AUTOMATIC_OPTION, { value: "blazer_dress_female", label: "轻商务连衣裙套装" }, { value: "shirt_skirt_female", label: "学院感半裙套装" }, { value: "knit_jeans_female", label: "针织休闲套装" }, { value: "sweet_female", label: "清新甜美裙装套装" }, { value: "sporty_female", label: "运动休闲套装" }],
-    female_mature: [AUTOMATIC_OPTION, { value: "tailored_suit_female", label: "修身西装套装" }, { value: "silk_blouse_trousers_female", label: "高级通勤套装" }, { value: "elegant_female", label: "优雅知性裙装套装" }, { value: "knit_cardigan_female", label: "温柔针织裙装套装" }, { value: "daily_female", label: "简洁日常套装" }],
+    default: [AUTOMATIC_OPTION, { value: "formal_suit", label: "正式西装套装" }, { value: "smart_casual_set", label: "通勤休闲套装" }, { value: "soft_knit_set", label: "针织舒适套装" }, { value: "casual_jacket_set", label: "休闲夹克套装" }, { value: "sporty", label: "运动套装" }, { value: "intimate_glamour_female", label: "私密写真套装" }],
+    female: [AUTOMATIC_OPTION, { value: "tailored_suit_female", label: "女士西装套装" }, { value: "business_dress_female", label: "轻商务裙装套装" }, { value: "elegant_commute_female", label: "优雅通勤套装" }, { value: "soft_knit_set_female", label: "温柔针织套装" }, { value: "sporty_female", label: "运动休闲套装" }, { value: "intimate_glamour_female", label: "私密写真套装" }],
+    female_young: [AUTOMATIC_OPTION, { value: "blazer_dress_female", label: "轻商务连衣裙套装" }, { value: "shirt_skirt_female", label: "学院感半裙套装" }, { value: "knit_jeans_female", label: "针织休闲套装" }, { value: "sweet_female", label: "清新甜美裙装套装" }, { value: "sporty_female", label: "运动休闲套装" }, { value: "intimate_glamour_female", label: "私密写真套装" }],
+    female_mature: [AUTOMATIC_OPTION, { value: "tailored_suit_female", label: "修身西装套装" }, { value: "silk_blouse_trousers_female", label: "高级通勤套装" }, { value: "elegant_female", label: "优雅知性裙装套装" }, { value: "knit_cardigan_female", label: "温柔针织裙装套装" }, { value: "daily_female", label: "简洁日常套装" }, { value: "intimate_glamour_female", label: "私密写真套装" }],
     male: [AUTOMATIC_OPTION, { value: "dark_suit_male", label: "男士西装套装" }, { value: "smart_commute_male", label: "商务通勤套装" }, { value: "polo_casual_male", label: "商务休闲套装" }, { value: "casual_jacket_male", label: "成熟休闲套装" }, { value: "sporty_male", label: "运动休闲套装" }],
     male_young: [AUTOMATIC_OPTION, { value: "shirt_chinos_male", label: "清爽通勤套装" }, { value: "polo_chinos_male", label: "轻商务休闲套装" }, { value: "street_male", label: "潮流街头套装" }, { value: "knit_male", label: "简约针织套装" }, { value: "sporty_male", label: "运动休闲套装" }],
     male_mature: [AUTOMATIC_OPTION, { value: "dark_suit_male", label: "深色商务西装" }, { value: "shirt_trousers_male", label: "稳重通勤套装" }, { value: "polo_casual_male", label: "商务休闲套装" }, { value: "casual_jacket_male", label: "成熟休闲套装" }, { value: "knit_cardigan_male", label: "温和针织套装" }],
@@ -2478,7 +2478,7 @@
       if (!String(values.prompt || "").trim()) {
         values.prompt = product
           ? "综合多个角度还原产品形态，保持包装细节，生成白底三视图"
-          : [values.digital_human_character_region, values.character_gender, values.character_age, values.character_hairstyle, values.character_temperament, values.character_clothing].filter(Boolean).join("，") || "生成自然真实的数字人人设三视图";
+          : "请根据已选择的人设方向生成自然真实的数字人人设三视图";
       }
     }
     return values;

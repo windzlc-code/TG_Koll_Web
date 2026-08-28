@@ -71,6 +71,33 @@ def test_digital_human_reference_has_priority_over_region_and_user_text() -> Non
     assert "不要出现文字、标签、箭头、尺寸线、Logo、水印" in prompt
 
 
+def test_digital_human_options_expand_to_model_instructions_instead_of_raw_values() -> None:
+    prompt = build_image_mode_prompt(
+        {
+            "mode": "digital_human_character",
+            "prompt": "暖色卧室氛围",
+            "digital_human_character_region": "europe_america",
+            "character_gender": "female",
+            "character_age": "23_27",
+            "character_hairstyle": "soft_wave",
+            "character_temperament": "adult_glamour",
+            "character_clothing": "intimate_glamour_female",
+        }
+    )
+
+    assert "欧美地区特征" in prompt
+    assert "23至27岁的成年女性" in prompt
+    assert "发型大方向为“微卷发”" in prompt
+    assert "成年女性的妩媚性感" in prompt
+    assert "成年女性的私密写真套装" in prompt
+    assert "具体表情、妆容和姿态由模型结合人物自然设计" in prompt
+    assert "具体单品、版型、材质、配色和细节由模型结合整体人设设计" in prompt
+    assert "不固定为某一件服装" in prompt
+    assert "用户补充要求（最高优先级）：暖色卧室氛围" in prompt
+    for raw_value in ("europe_america", "23_27", "soft_wave", "adult_glamour", "intimate_glamour_female"):
+        assert raw_value not in prompt
+
+
 def test_three_view_replaces_generic_poster_prompt_and_keeps_structure_rules() -> None:
     prompt = build_three_view_prompt(IMAGE_EDIT_DEFAULT_PROMPT)
 

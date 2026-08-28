@@ -11388,6 +11388,43 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   justify-content: flex-start;
 }
 
+.persona-image-generation-options {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.persona-image-generation-options legend {
+  padding: 0 6px;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.persona-image-generation-options-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.persona-image-generation-options-grid label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.persona-image-generation-options-grid label > span {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.persona-image-generation-options-grid select {
+  width: 100%;
+  min-width: 0;
+}
+
 .persona-image-prompt-field {
   display: grid;
   gap: 6px;
@@ -11417,6 +11454,12 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   display: block;
   margin-bottom: 6px;
   font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .persona-image-generation-options-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .persona-summary-meta .persona-generate-status-text {

@@ -342,6 +342,8 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn('{ value: "character", label: "数字人生成" }', subject_generate)
         self.assertIn('{ value: "product", label: "产品图生成" }', subject_generate)
         self.assertIn('default: "character"', subject_generate)
+        self.assertIn('{ value: "adult_glamour", label: "妩媚性感" }', self.workbench_js)
+        self.assertIn('{ value: "intimate_glamour_female", label: "私密写真套装" }', self.workbench_js)
 
     def test_segment_regeneration_and_failed_task_resume_contract(self):
         self.assertIn("endpointIndex: index + 1", self.workbench_js)

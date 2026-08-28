@@ -183,6 +183,7 @@ def digital_human_character_region_prompt(region: Any, label: Any = "") -> str:
     mapping = {
         "china": "中国地区特征，东亚面部骨相，真实自然的中文数字人气质，避免刻板符号化。",
         "western": "欧美地区特征，欧美面部骨相，国际化数字人气质，避免夸张刻板印象。",
+        "europe_america": "欧美地区特征，欧美面部骨相，国际化数字人气质，避免夸张刻板印象。",
         "indonesia": "印尼地区特征，东南亚印尼人群面部气质，肤色和五官自然真实，避免刻板符号化。",
         "thailand": "泰国地区特征，东南亚泰国人群面部气质，肤色和五官自然真实，避免刻板符号化。",
         "japan": "日本地区特征，东亚日本人群面部气质，妆容、发型和服装真实自然，避免刻板符号化。",
@@ -195,6 +196,81 @@ def digital_human_character_region_prompt(region: Any, label: Any = "") -> str:
     )
 
 
+_DIGITAL_HUMAN_HAIRSTYLE_LABELS = {
+    "short_clean": "利落短发", "shoulder_length": "中长发", "long_straight": "长直发",
+    "bob": "波波头", "soft_wave": "微卷发", "ponytail": "马尾", "bun": "盘发",
+    "air_bangs_long": "刘海长发", "side_part": "偏分短发", "crew_cut": "寸头",
+    "textured_short": "纹理短发", "slick_back": "背头", "medium_layered": "中短层次发",
+}
+
+_DIGITAL_HUMAN_TEMPERAMENT_LABELS = {
+    "gentle": "亲和自然", "business": "商务干练", "elegant": "优雅知性",
+    "lively": "活力外向", "sweet": "清新甜美", "cool": "高级冷感",
+    "calm": "沉稳大气", "sunny": "阳光亲和", "elite": "精英专业",
+    "street": "潮流自信", "adult_glamour": "妩媚性感",
+}
+
+_DIGITAL_HUMAN_CLOTHING_LABELS = {
+    "formal_suit": "正式西装套装", "smart_casual_set": "通勤休闲套装",
+    "soft_knit_set": "针织舒适套装", "casual_jacket_set": "休闲夹克套装", "sporty": "运动套装",
+    "tailored_suit_female": "女士西装套装", "business_dress_female": "轻商务裙装套装",
+    "elegant_commute_female": "优雅通勤套装", "soft_knit_set_female": "温柔针织套装",
+    "sporty_female": "运动休闲套装", "blazer_dress_female": "轻商务连衣裙套装",
+    "shirt_skirt_female": "学院感半裙套装", "knit_jeans_female": "针织休闲套装",
+    "sweet_female": "清新甜美裙装套装", "silk_blouse_trousers_female": "高级通勤套装",
+    "elegant_female": "优雅知性裙装套装", "knit_cardigan_female": "温柔针织裙装套装",
+    "daily_female": "简洁日常套装", "intimate_glamour_female": "私密写真套装",
+    "dark_suit_male": "男士西装套装", "smart_commute_male": "商务通勤套装",
+    "polo_casual_male": "商务休闲套装", "casual_jacket_male": "成熟休闲套装",
+    "sporty_male": "运动休闲套装", "shirt_chinos_male": "清爽通勤套装",
+    "polo_chinos_male": "轻商务休闲套装", "street_male": "潮流街头套装",
+    "knit_male": "简约针织套装", "shirt_trousers_male": "稳重通勤套装",
+    "knit_cardigan_male": "温和针织套装",
+}
+
+
+def build_digital_human_character_selection_prompt(payload: Mapping[str, Any] | None) -> str:
+    """Expand broad UI choices into model-facing visual directions."""
+    source = payload or {}
+    parts: list[str] = []
+    region = _text(source.get("digital_human_character_region"))
+    region_label = _text(source.get("digital_human_character_region_label"))
+    if region or region_label:
+        parts.append(digital_human_character_region_prompt(region, region_label).rstrip("。"))
+
+    gender = _text(source.get("character_gender")).lower()
+    age = _text(source.get("character_age")).lower()
+    gender_label = {"female": "女性", "male": "男性"}.get(gender, "人物")
+    age_label = {
+        "18_22": "18至22岁的成年",
+        "23_27": "23至27岁的成年",
+        "28_32": "28至32岁的成年",
+        "33_38": "33至38岁的成年",
+        "39_45": "39至45岁的成熟",
+        "46_55": "46至55岁的成熟",
+        "56_plus": "56岁以上的成熟",
+    }.get(age, "")
+    if gender or age_label:
+        parts.append(f"{age_label}{gender_label}，年龄感、面部状态和身材比例自然真实")
+
+    hairstyle = _DIGITAL_HUMAN_HAIRSTYLE_LABELS.get(_text(source.get("character_hairstyle")).lower())
+    if hairstyle:
+        parts.append(f"发型大方向为“{hairstyle}”，具体长度、层次和造型细节由模型自然设计")
+    temperament_key = _text(source.get("character_temperament")).lower()
+    temperament = _DIGITAL_HUMAN_TEMPERAMENT_LABELS.get(temperament_key)
+    if temperament:
+        temperament_direction = f"成年女性的{temperament}" if temperament_key == "adult_glamour" else temperament
+        parts.append(f"整体气质大方向为“{temperament_direction}”，具体表情、妆容和姿态由模型结合人物自然设计")
+    clothing_key = _text(source.get("character_clothing")).lower()
+    clothing = _DIGITAL_HUMAN_CLOTHING_LABELS.get(clothing_key)
+    if clothing:
+        clothing_direction = f"成年女性的{clothing}" if clothing_key == "intimate_glamour_female" else clothing
+        parts.append(
+            f"服装风格大方向为“{clothing_direction}”，具体单品、版型、材质、配色和细节由模型结合整体人设设计，不固定为某一件服装"
+        )
+    return "；".join(parts)
+
+
 def build_digital_human_character_prompt(payload: Mapping[str, Any] | None) -> str:
     source = payload or {}
     user_prompt = _text(source.get("prompt") or source.get("prompt_text") or source.get("message"))
@@ -205,10 +281,7 @@ def build_digital_human_character_prompt(payload: Mapping[str, Any] | None) -> s
         *[_text(item) for item in (source.get("character_reference_image_local_paths") or []) if _text(item)],
     ]
     has_reference = bool({item for item in reference_values if item})
-    region_text = digital_human_character_region_prompt(
-        source.get("digital_human_character_region"),
-        source.get("digital_human_character_region_label"),
-    )
+    selection_text = build_digital_human_character_selection_prompt(source)
     if has_reference:
         reference_clause = (
             "输入图是用户上传的人设参考图。"
@@ -217,21 +290,22 @@ def build_digital_human_character_prompt(payload: Mapping[str, Any] | None) -> s
             "如果输入为多张或三视图参考图，必须综合所有参考图保持同一人物身份、发型、服装结构、正侧背一致性和体型比例。"
             "如果用户明确调整发型或服装，只允许在保持参考人物身份、性别、年龄段、脸型、五官和核心气质不变的前提下应用这些调整。"
         )
+        allowed_directions = f"用户选择的大方向：{selection_text}。" if selection_text else ""
+        supplement = f"用户补充要求（最高优先级）：{user_prompt}。" if user_prompt else ""
         character_clause = (
-            f"用户允许的可变项/补充细节：{user_prompt}。不得用这些文字改变参考人物身份、性别、年龄段或核心气质。"
-            if user_prompt
+            f"{allowed_directions}{supplement}不得用这些文字改变参考人物身份、性别、年龄段或核心气质。"
+            if allowed_directions or supplement
             else "未指定发型或服装调整时，发型、服装、妆容和气质均跟随参考图。"
         )
     else:
         reference_clause = ""
-        character_clause = (
-            f"用户指定人设特征：{user_prompt}。"
-            if user_prompt
-            else "AI 自动生成一个适合商业口播、直播带货、品牌短视频使用的数字人人设，包含清晰年龄段、职业感、气质、发型、服装和妆容。"
+        selected_directions = f"用户选择的人设大方向：{selection_text}。" if selection_text else ""
+        supplement = f"用户补充要求（最高优先级）：{user_prompt}。" if user_prompt else ""
+        character_clause = selected_directions + supplement or (
+            "AI 自动生成一个适合商业口播、直播带货、品牌短视频使用的数字人人设，包含清晰年龄段、职业感、气质、发型、服装和妆容。"
         )
     return (
         "生成一张数字人人设三视图设定图。"
-        f"{region_text}"
         f"{reference_clause}"
         f"{character_clause}"
         "画面必须是同一个角色的三视图，正面、左侧面、背面并排展示，角色身份、脸型、发型、身材比例、服装完全一致。"
@@ -391,6 +465,7 @@ __all__ = [
     "append_once",
     "apply_product_only_prompt_constraints",
     "build_digital_human_character_prompt",
+    "build_digital_human_character_selection_prompt",
     "build_image_generate_prompt",
     "build_image_mode_prompt",
     "build_poster_translate_prompt",

@@ -1876,16 +1876,50 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         submit = self.console_script[submit_start:submit_end]
 
         self.assertIn('data-persona-image-prompt', prompt_field)
-        self.assertIn('根据提示词${baseGenerateLabel}', panel)
+        self.assertIn('根据选项与提示词${baseGenerateLabel}', panel)
+        self.assertIn('根据选项${baseGenerateLabel}', panel)
         self.assertNotIn("source_image_id", submit)
         self.assertNotIn("editImageId", submit)
         self.assertIn("if (promptInput) syncPersonaImagePromptState(promptInput)", submit)
         self.assertIn("#consoleModal [data-persona-image-prompt]", submit)
         self.assertIn("promptInput?.value || imageForm.prompt", submit)
+        self.assertIn("const prompt = personaImageGenerationPrompt(imageForm);", submit)
+        self.assertIn("supplement_prompt: supplementPrompt", submit)
+        self.assertIn("persona_image_options: imageOptions", submit)
         self.assertIn('function syncPersonaImagePromptState(input)', self.console_script)
         self.assertIn('data-persona-image-generate-label', panel)
         self.assertNotIn('data-persona-image-reference-mode', panel)
         self.assertNotIn('图生图', panel)
+
+    def test_persona_image_generation_clones_subject_content_options(self):
+        prompt_start = self.console_script.index("function renderPersonaImagePromptField(")
+        prompt_end = self.console_script.index("\nfunction renderPersonaImagePanel(", prompt_start)
+        prompt_field = self.console_script[prompt_start:prompt_end]
+        source_start = self.console_script.index("const PERSONA_IMAGE_REGION_OPTIONS")
+        source_end = self.console_script.index("\nfunction syncPersonaImagePromptState", source_start)
+        source = self.console_script[source_start:source_end]
+
+        for key in (
+            "digital_human_character_region",
+            "character_gender",
+            "character_age",
+            "character_hairstyle",
+            "character_temperament",
+            "character_clothing",
+        ):
+            self.assertIn(f'data-persona-image-option="{key}"', prompt_field)
+        for label in ("地区特征", "性别", "年龄段", "发型", "气质风格", "服装风格"):
+            self.assertIn(label, prompt_field)
+        self.assertIn('{ value: "china", label: "中国" }', source)
+        self.assertIn('{ value: "europe_america", label: "欧美" }', source)
+        self.assertIn('{ value: "adult_glamour", label: "妩媚性感" }', source)
+        self.assertIn('{ value: "intimate_glamour_female", label: "私密写真套装" }', source)
+        self.assertIn('function personaImageCharacterProfile(values = {})', source)
+        self.assertIn('imageForm.character_hairstyle = "";', source)
+        self.assertIn('return String(imageForm.prompt || "").trim();', source)
+        self.assertIn(".persona-image-generation-options-grid {", self.styles)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
+        self.assertIn("grid-template-columns: minmax(0, 1fr);", self.styles)
 
     def test_persona_image_prompt_uses_text_generation_without_reference_controls(self):
         panel_start = self.console_script.index("function renderPersonaImagePromptField(")
@@ -1895,7 +1929,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         submit_end = self.console_script.index("\nasync function applyPersonaReferenceImage", submit_start)
         submit = self.console_script[submit_start:submit_end]
 
-        self.assertIn("填写后只替换提示词里提到的外貌、服装等内容", prompt_field)
+        self.assertIn("填写后会与上方选项一起生成，补充内容优先", prompt_field)
         self.assertNotIn("图生图", prompt_field)
         self.assertNotIn("图片局部修改提示词", prompt_field)
         self.assertNotIn("reference_image_id", submit)

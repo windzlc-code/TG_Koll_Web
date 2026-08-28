@@ -11348,6 +11348,130 @@ function renderPersonaContentOverview(persona, account, profile) {
     </div>`;
 }
 
+const PERSONA_IMAGE_REGION_OPTIONS = [
+  { value: "china", label: "中国" },
+  { value: "europe_america", label: "欧美" },
+  { value: "indonesia", label: "印尼" },
+  { value: "thailand", label: "泰国" },
+  { value: "japan", label: "日本" },
+  { value: "malaysia", label: "马来西亚" },
+];
+const PERSONA_IMAGE_GENDER_OPTIONS = [
+  { value: "", label: "自动" },
+  { value: "female", label: "女性" },
+  { value: "male", label: "男性" },
+];
+const PERSONA_IMAGE_AGE_OPTIONS = [
+  { value: "", label: "自动" },
+  { value: "18_22", label: "18-22岁" },
+  { value: "23_27", label: "23-27岁" },
+  { value: "28_32", label: "28-32岁" },
+  { value: "33_38", label: "33-38岁" },
+  { value: "39_45", label: "39-45岁" },
+  { value: "46_55", label: "46-55岁" },
+  { value: "56_plus", label: "56岁以上" },
+];
+const PERSONA_IMAGE_AUTOMATIC_OPTION = { value: "", label: "自动" };
+const PERSONA_IMAGE_HAIRSTYLE_OPTIONS = {
+  default: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "short_clean", label: "利落短发" }, { value: "shoulder_length", label: "中长发" }, { value: "long_straight", label: "长直发" }],
+  female: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "bob", label: "波波头" }, { value: "shoulder_length", label: "中长发" }, { value: "long_straight", label: "长直发" }, { value: "soft_wave", label: "微卷发" }, { value: "ponytail", label: "马尾" }, { value: "bun", label: "盘发" }, { value: "air_bangs_long", label: "刘海长发" }],
+  male: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "short_clean", label: "利落短发" }, { value: "side_part", label: "偏分短发" }, { value: "crew_cut", label: "寸头" }, { value: "textured_short", label: "纹理短发" }, { value: "slick_back", label: "背头" }, { value: "medium_layered", label: "中短层次发" }],
+};
+const PERSONA_IMAGE_TEMPERAMENT_OPTIONS = {
+  default: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "gentle", label: "亲和自然" }, { value: "business", label: "商务干练" }, { value: "elegant", label: "优雅知性" }, { value: "lively", label: "活力外向" }, { value: "adult_glamour", label: "妩媚性感" }],
+  female: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "elegant", label: "优雅知性" }, { value: "gentle", label: "亲和自然" }, { value: "sweet", label: "清新亲切" }, { value: "cool", label: "高级冷感" }, { value: "business", label: "干练专业" }, { value: "adult_glamour", label: "妩媚性感" }],
+  female_young: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "sweet", label: "清新甜美" }, { value: "lively", label: "活力外向" }, { value: "gentle", label: "亲和自然" }, { value: "cool", label: "高级冷感" }, { value: "elegant", label: "优雅知性" }, { value: "adult_glamour", label: "妩媚性感" }],
+  female_mature: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "elegant", label: "优雅知性" }, { value: "business", label: "商务干练" }, { value: "gentle", label: "亲和自然" }, { value: "cool", label: "高级冷感" }, { value: "calm", label: "沉稳大气" }, { value: "adult_glamour", label: "妩媚性感" }],
+  male: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "business", label: "干练专业" }, { value: "calm", label: "沉稳大气" }, { value: "sunny", label: "阳光亲和" }, { value: "elite", label: "精英专业" }, { value: "elegant", label: "儒雅稳重" }],
+  male_young: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "lively", label: "活力外向" }, { value: "business", label: "商务干练" }, { value: "sunny", label: "阳光亲和" }, { value: "cool", label: "高级冷感" }, { value: "street", label: "潮流自信" }],
+  male_mature: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "business", label: "商务干练" }, { value: "calm", label: "沉稳大气" }, { value: "gentle", label: "亲和自然" }, { value: "elite", label: "精英专业" }, { value: "elegant", label: "儒雅稳重" }],
+};
+const PERSONA_IMAGE_CLOTHING_OPTIONS = {
+  default: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "formal_suit", label: "正式西装套装" }, { value: "smart_casual_set", label: "通勤休闲套装" }, { value: "soft_knit_set", label: "针织舒适套装" }, { value: "casual_jacket_set", label: "休闲夹克套装" }, { value: "sporty", label: "运动套装" }, { value: "intimate_glamour_female", label: "私密写真套装" }],
+  female: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "tailored_suit_female", label: "女士西装套装" }, { value: "business_dress_female", label: "轻商务裙装套装" }, { value: "elegant_commute_female", label: "优雅通勤套装" }, { value: "soft_knit_set_female", label: "温柔针织套装" }, { value: "sporty_female", label: "运动休闲套装" }, { value: "intimate_glamour_female", label: "私密写真套装" }],
+  female_young: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "blazer_dress_female", label: "轻商务连衣裙套装" }, { value: "shirt_skirt_female", label: "学院感半裙套装" }, { value: "knit_jeans_female", label: "针织休闲套装" }, { value: "sweet_female", label: "清新甜美裙装套装" }, { value: "sporty_female", label: "运动休闲套装" }, { value: "intimate_glamour_female", label: "私密写真套装" }],
+  female_mature: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "tailored_suit_female", label: "修身西装套装" }, { value: "silk_blouse_trousers_female", label: "高级通勤套装" }, { value: "elegant_female", label: "优雅知性裙装套装" }, { value: "knit_cardigan_female", label: "温柔针织裙装套装" }, { value: "daily_female", label: "简洁日常套装" }, { value: "intimate_glamour_female", label: "私密写真套装" }],
+  male: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "dark_suit_male", label: "男士西装套装" }, { value: "smart_commute_male", label: "商务通勤套装" }, { value: "polo_casual_male", label: "商务休闲套装" }, { value: "casual_jacket_male", label: "成熟休闲套装" }, { value: "sporty_male", label: "运动休闲套装" }],
+  male_young: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "shirt_chinos_male", label: "清爽通勤套装" }, { value: "polo_chinos_male", label: "轻商务休闲套装" }, { value: "street_male", label: "潮流街头套装" }, { value: "knit_male", label: "简约针织套装" }, { value: "sporty_male", label: "运动休闲套装" }],
+  male_mature: [PERSONA_IMAGE_AUTOMATIC_OPTION, { value: "dark_suit_male", label: "深色商务西装" }, { value: "shirt_trousers_male", label: "稳重通勤套装" }, { value: "polo_casual_male", label: "商务休闲套装" }, { value: "casual_jacket_male", label: "成熟休闲套装" }, { value: "knit_cardigan_male", label: "温和针织套装" }],
+};
+
+function personaImageCharacterProfile(values = {}) {
+  const gender = ["female", "male"].includes(String(values.character_gender || "")) ? String(values.character_gender) : "";
+  const age = String(values.character_age || "");
+  if (!gender) return "default";
+  if (["18_22", "23_27", "28_32"].includes(age)) return `${gender}_young`;
+  if (age) return `${gender}_mature`;
+  return gender;
+}
+
+function personaImageOptionState(imageForm = {}) {
+  return {
+    digital_human_character_region: String(imageForm.digital_human_character_region || "china"),
+    character_gender: String(imageForm.character_gender || ""),
+    character_age: String(imageForm.character_age || ""),
+    character_hairstyle: String(imageForm.character_hairstyle || ""),
+    character_temperament: String(imageForm.character_temperament || ""),
+    character_clothing: String(imageForm.character_clothing || ""),
+  };
+}
+
+function personaImageSelectOptions(options, selectedValue = "") {
+  return options.map((option) => `<option value="${esc(option.value)}" ${String(option.value) === String(selectedValue) ? "selected" : ""}>${esc(option.label)}</option>`).join("");
+}
+
+function personaImageOptionLabel(options, value) {
+  return String(options.find((option) => String(option.value) === String(value || ""))?.label || "").trim();
+}
+
+function personaImageOptionPromptParts(imageForm = {}) {
+  const values = personaImageOptionState(imageForm);
+  const profile = personaImageCharacterProfile(values);
+  return [
+    ["地区特征", personaImageOptionLabel(PERSONA_IMAGE_REGION_OPTIONS, values.digital_human_character_region)],
+    ["性别", personaImageOptionLabel(PERSONA_IMAGE_GENDER_OPTIONS, values.character_gender)],
+    ["年龄段", personaImageOptionLabel(PERSONA_IMAGE_AGE_OPTIONS, values.character_age)],
+    ["发型", personaImageOptionLabel(PERSONA_IMAGE_HAIRSTYLE_OPTIONS[values.character_gender] || PERSONA_IMAGE_HAIRSTYLE_OPTIONS.default, values.character_hairstyle)],
+    ["气质风格", personaImageOptionLabel(PERSONA_IMAGE_TEMPERAMENT_OPTIONS[profile] || PERSONA_IMAGE_TEMPERAMENT_OPTIONS.default, values.character_temperament)],
+    ["服装风格", personaImageOptionLabel(PERSONA_IMAGE_CLOTHING_OPTIONS[profile] || PERSONA_IMAGE_CLOTHING_OPTIONS.default, values.character_clothing)],
+  ].filter(([, label]) => label && label !== "自动").map(([label, value]) => `${label}：${value}`);
+}
+
+function personaImageGenerationPrompt(imageForm = {}) {
+  return String(imageForm.prompt || "").trim();
+}
+
+function syncPersonaImageOptionState(input) {
+  const persona = selectedPersona();
+  const key = String(input?.dataset?.personaImageOption || "").trim();
+  if (!persona || !key) return false;
+  const imageForm = personaFormState(persona.id).images;
+  imageForm[key] = String(input.value || "");
+  if (["character_gender", "character_age"].includes(key)) {
+    imageForm.character_hairstyle = "";
+    imageForm.character_temperament = "";
+    imageForm.character_clothing = "";
+    return true;
+  }
+  return false;
+}
+
+function syncPersonaImageDynamicOptionControls(root = document) {
+  const persona = selectedPersona();
+  if (!persona || !root) return;
+  const imageForm = personaFormState(persona.id).images;
+  const values = personaImageOptionState(imageForm);
+  const profile = personaImageCharacterProfile(values);
+  [
+    ["character_hairstyle", PERSONA_IMAGE_HAIRSTYLE_OPTIONS[values.character_gender] || PERSONA_IMAGE_HAIRSTYLE_OPTIONS.default],
+    ["character_temperament", PERSONA_IMAGE_TEMPERAMENT_OPTIONS[profile] || PERSONA_IMAGE_TEMPERAMENT_OPTIONS.default],
+    ["character_clothing", PERSONA_IMAGE_CLOTHING_OPTIONS[profile] || PERSONA_IMAGE_CLOTHING_OPTIONS.default],
+  ].forEach(([key, options]) => {
+    const select = root.querySelector(`[data-persona-image-option="${key}"]`);
+    if (select) select.innerHTML = personaImageSelectOptions(options, imageForm[key]);
+  });
+}
+
 function syncPersonaImagePromptState(input) {
   const persona = selectedPersona();
   if (!persona || !input) return;
@@ -11365,12 +11489,29 @@ function syncPersonaImagePromptState(input) {
     || "重新生成人设图";
   button.disabled = Boolean(busy);
   if (busy) return;
-  button.textContent = value.trim() ? `根据提示词${baseLabel}` : baseLabel;
+  const hasPrompt = Boolean(value.trim());
+  const hasOptions = personaImageOptionPromptParts(form.images).length > 0;
+  button.textContent = hasPrompt
+    ? `根据选项与提示词${baseLabel}`
+    : (hasOptions ? `根据选项${baseLabel}` : baseLabel);
 }
 
 function renderPersonaImagePromptField(imageForm) {
-  const placeholder = "留空按人设默认生成；填写后只替换提示词里提到的外貌、服装等内容，未提及的人设信息保持不变。";
+  const values = personaImageOptionState(imageForm);
+  const profile = personaImageCharacterProfile(values);
+  const placeholder = "可留空；填写后会与上方选项一起生成，补充内容优先。";
   return `
+    <fieldset class="persona-image-generation-options">
+      <legend>生成内容</legend>
+      <div class="persona-image-generation-options-grid">
+        <label><span>地区特征</span><select data-persona-image-option="digital_human_character_region">${personaImageSelectOptions(PERSONA_IMAGE_REGION_OPTIONS, values.digital_human_character_region)}</select></label>
+        <label><span>性别</span><select data-persona-image-option="character_gender">${personaImageSelectOptions(PERSONA_IMAGE_GENDER_OPTIONS, values.character_gender)}</select></label>
+        <label><span>年龄段</span><select data-persona-image-option="character_age">${personaImageSelectOptions(PERSONA_IMAGE_AGE_OPTIONS, values.character_age)}</select></label>
+        <label><span>发型</span><select data-persona-image-option="character_hairstyle">${personaImageSelectOptions(PERSONA_IMAGE_HAIRSTYLE_OPTIONS[values.character_gender] || PERSONA_IMAGE_HAIRSTYLE_OPTIONS.default, values.character_hairstyle)}</select></label>
+        <label><span>气质风格</span><select data-persona-image-option="character_temperament">${personaImageSelectOptions(PERSONA_IMAGE_TEMPERAMENT_OPTIONS[profile] || PERSONA_IMAGE_TEMPERAMENT_OPTIONS.default, values.character_temperament)}</select></label>
+        <label><span>服装风格</span><select data-persona-image-option="character_clothing">${personaImageSelectOptions(PERSONA_IMAGE_CLOTHING_OPTIONS[profile] || PERSONA_IMAGE_CLOTHING_OPTIONS.default, values.character_clothing)}</select></label>
+      </div>
+    </fieldset>
     <div class="persona-image-prompt-field">
       <span class="persona-image-prompt-label">补充提示词（可选）</span>
       <span class="persona-media-prompt-input-shell">
@@ -11398,9 +11539,13 @@ function renderPersonaImagePanel(persona, { embedded = false } = {}) {
   const baseGenerateLabel = imageBusy
     ? "正在生成..."
     : (hasCurrentReference ? "重新生成人设图" : "生成人设图");
-  const generateLabel = !imageBusy && String(imageForm.prompt || "").trim()
-    ? `根据提示词${baseGenerateLabel}`
-    : baseGenerateLabel;
+  const hasSupplementPrompt = Boolean(String(imageForm.prompt || "").trim());
+  const hasGenerationOptions = personaImageOptionPromptParts(imageForm).length > 0;
+  const generateLabel = imageBusy
+    ? baseGenerateLabel
+    : (hasSupplementPrompt
+      ? `根据选项与提示词${baseGenerateLabel}`
+      : (hasGenerationOptions ? `根据选项${baseGenerateLabel}` : baseGenerateLabel));
   const promptField = renderPersonaImagePromptField(imageForm);
   const generateDisabled = Boolean(imageBusy);
   if (!hasImages) {
@@ -17349,6 +17494,12 @@ async function openPersonaProfileEditorModalWithOptions({ immediate = false } = 
     if (event.target?.matches?.("[data-persona-image-prompt]")) syncPersonaImagePromptState(event.target);
   });
   modal?.addEventListener("change", (event) => {
+    if (event.target?.matches?.("[data-persona-image-option]")) {
+      const shouldRerender = syncPersonaImageOptionState(event.target);
+      if (shouldRerender) syncPersonaImageDynamicOptionControls(modal);
+      syncPersonaImagePromptState(modal.querySelector("[data-persona-image-prompt]"));
+      return;
+    }
     const input = event.target?.matches?.("[data-persona-upload-image-file]") ? event.target : null;
     if (!input) return;
     const file = input.files?.[0] || null;
@@ -23273,7 +23424,10 @@ async function submitPersonaImageGeneration() {
     || document.querySelector("[data-persona-image-prompt]");
   if (promptInput) syncPersonaImagePromptState(promptInput);
   const imageForm = personaFormState(persona.id).images || {};
-  const prompt = String(promptInput?.value || imageForm.prompt || "").trim();
+  const supplementPrompt = String(promptInput?.value || imageForm.prompt || "").trim();
+  imageForm.prompt = supplementPrompt;
+  const imageOptions = personaImageOptionState(imageForm);
+  const prompt = personaImageGenerationPrompt(imageForm);
   const lockParts = ["persona", persona.id, "image_generate"];
   if (isActionLocked(...lockParts)) {
     showMsg("commandMsg", "当前人设图正在生成，请等待本次生成完成。", false);
@@ -23294,6 +23448,8 @@ async function submitPersonaImageGeneration() {
     body.append("params_json", JSON.stringify({
       related_persona_id: persona.id,
       prompt,
+      supplement_prompt: supplementPrompt,
+      persona_image_options: imageOptions,
       aspect_ratio: "1:1",
       mode: "person",
     }));
@@ -36561,6 +36717,13 @@ function bindEvents() {
     }
     if (["personaGenerateCount", "personaWritingLocale"].includes(event.target?.id || "")) {
       snapshotPersonaCurrentForm();
+      renderConfirmSummary();
+      return;
+    }
+    if (event.target?.matches?.("[data-persona-image-option]")) {
+      const shouldRerender = syncPersonaImageOptionState(event.target);
+      if (shouldRerender) syncPersonaImageDynamicOptionControls($("moduleBody"));
+      syncPersonaImagePromptState(document.querySelector("[data-persona-image-prompt]"));
       renderConfirmSummary();
       return;
     }
