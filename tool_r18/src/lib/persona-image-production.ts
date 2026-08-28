@@ -238,6 +238,7 @@ export function buildPersonaImagePrompt(
       prompt: [
         buildPersonaSocialImagePrompt(content, setup, signals),
         hint ? `third-person scene: ${hint}` : "",
+        buildLifestyleCameraDirection(true, `${content}|${hint}`),
         "third-person candid documentary photo of the same person inside the real environment from the post, three-quarter or full body, not a selfie, not a mirror self-portrait, not looking into the camera, not a studio half-body cutout against a fake backdrop, environment must remain readable",
         referencePrompt,
       ].filter(Boolean).join(", "),
@@ -251,7 +252,8 @@ export function buildPersonaImagePrompt(
       prompt: [
         buildPersonaSocialImagePrompt(content, setup, signals),
         hint ? `portrait direction: ${hint}` : "",
-        "photorealistic portrait or half-body lifestyle photo, consistent same person, natural body language, no text, no watermark",
+        buildLifestyleCameraDirection(false, `${content}|${hint}`),
+        "photorealistic everyday lifestyle social photo, consistent same person, natural body language, no text, no watermark",
         referencePrompt,
       ].filter(Boolean).join(", "),
       mode,
@@ -316,6 +318,96 @@ function callClosedModel(
 
 function normalizePromptCue(text: string) {
   return text.replace(/\s+/g, " ").trim();
+}
+
+const PERSON_LIFESTYLE_CAMERA_SETUPS = [
+  "slightly high-angle handheld selfie, torso placed diagonally, relaxed shoulders, gaze just beside the lens, irregular close crop",
+  "close wide-angle phone selfie from slightly below eye level, one shoulder nearer the lens, asymmetric crop, casual hand position",
+  "off-center mirror snapshot, body turned three-quarter, phone partly visible, relaxed weight shift, room depth visible behind the person",
+  "side or three-quarter seated moment, upper body naturally leaning, gaze toward the surrounding activity rather than a formal camera pose",
+  "waist-up or full-body phone snapshot caught mid-step, clothing and hair responding naturally to movement, environment extending around the person",
+  "slightly low camera from a nearby seat or table height, relaxed bent posture, foreground object creating natural depth",
+  "over-the-shoulder turning moment, face still recognizable, background activity readable, imperfect spontaneous timing",
+  "top-down casual sitting or reclining moment, limbs placed naturally, frame rotated slightly instead of squared to the body",
+  "close transit-stop selfie with part of the face near the crop edge, city traffic softly blurred behind, spontaneous waiting expression",
+  "high-angle close wide-lens frame while the person leans toward the phone, full posture still readable, playful perspective distortion",
+  "hands-behind-back forward lean, shoulders and head at slightly different angles, candid expression, street depth behind the person",
+  "one-arm-extended outdoor selfie from above, body moving through the frame, strong daylight and irregular pavement shadows",
+  "window-side seated back or side view followed by a small head turn, room and window depth carrying as much detail as the person",
+  "casual standing frame with one hip or shoulder resting against a wall or railing, uneven weight distribution, gaze away from center",
+  "mid-laugh shopping or errand moment, one hand carrying an everyday bag or object, body caught between steps instead of frozen",
+  "direct but imperfect phone snapshot near a textured wall or public artwork, slight head tilt, loose arms, non-symmetrical framing",
+  "close casual food or drink moment at a cafe table, one hand lifting a small snack or cup, face and ordinary table clutter both visible",
+  "high overhead full-body phone angle from a step, landing, or standing companion, person looking up with relaxed uneven posture",
+  "busy street-market snapshot with pedestrians and scooters close behind, person reacting with a hand near the cheek instead of posing alone",
+  "casual class, rehearsal, or group-activity moment with other people naturally continuing the activity in the background",
+  "diagonal arm-extended bed snapshot while sitting, reclining, or turning on rumpled bedding, relaxed limbs and an imperfect overhead crop",
+  "casual bedroom outfit-check near a mirror or window, body turned to show how the clothes sit, phone reflection and room edges left naturally visible",
+  "tight golden-hour coastal close-up with wind moving loose hair across the face, warm horizon blur and an intentionally imperfect edge crop",
+  "outdoor exercise check-in caught mid-walk or mid-jog, one arm holding the phone and the other making a small natural gesture, mildly flushed rather than posed",
+  "at-home hobby moment while actually holding or using a guitar, book, perfume, cosmetic, or other everyday object, hands engaged with the action rather than displaying a product",
+  "window-side mood snapshot with a small pout, side glance, hand-on-hip, or folded-arm reaction, expression candid and body placement uneven",
+];
+
+const THIRD_PERSON_LIFESTYLE_CAMERA_SETUPS = [
+  "off-center three-quarter environmental medium shot, person occupied with the moment rather than presenting to the camera",
+  "side-profile candid shot with foreground depth, natural weight shift, gaze following the surrounding activity",
+  "over-the-shoulder observation angle, face partly turned and recognizable, real background action kept readable",
+  "slightly high-angle seated or leaning moment, asymmetric body placement, ordinary objects surrounding the person",
+  "slightly low-angle full-body moment caught mid-step, natural movement in clothing and hair, street or room depth visible",
+  "medium-long candid frame from several steps away, person interacting with the place instead of posing against it",
+  "street-corner candid while carrying a small shopping bag, laugh or conversation caught between steps, storefront depth behind",
+  "full-body waiting moment beside a railing, bus stop, or station edge, one leg relaxed, attention directed toward the street",
+  "front three-quarter frame as the person leans slightly toward a companion or nearby phone, spontaneous expression and uneven crop",
+  "back or side view seated near a window, bed, bench, or cafe table, with a small head turn that keeps identity recognizable",
+  "bright outdoor snapshot with folded or loosely crossed arms, real midday shadows, residential or neighborhood details visible",
+  "night street candid from the side as the person turns or laughs, practical shop lighting, signs and passing traffic softly out of focus",
+  "close table-side candid while the person tastes a snack or lifts a drink, shot between bites with cafe details and foreground objects visible",
+  "high overhead full-body frame from a stair, balcony, or standing companion, person glancing upward without flattening the environment",
+  "crowded market-lane candid with people, scooters, stalls, and uneven daylight surrounding the person instead of a clean empty backdrop",
+  "group class or rehearsal-room candid where the person remains the subject while classmates continue naturally in the deeper background",
+  "bedroom candid from beside or above the bed while the person reclines, turns, or adjusts clothing, with rumpled bedding and furniture edges kept in frame",
+  "natural outfit-check captured near a mirror or bright window, full or three-quarter body visible with the phone, reflection, and room depth treated as ordinary context",
+  "coastal golden-hour portrait caught between poses, loose hair crossing the face and the horizon or promenade remaining softly readable",
+  "home hobby candid while the person plays an instrument, reads, applies fragrance, or handles an everyday object without turning the moment into a product advertisement",
+];
+
+const LIFESTYLE_BACKGROUND_FALLBACKS = [
+  "a lived-in bedroom corner with rumpled bedding, curtains, shelves, soft toys or ordinary personal items and window light",
+  "a city sidewalk or transit waiting area with railing, curb, passing traffic, pavement texture and distant pedestrians",
+  "a residential lane with garden edges, low walls, utility shadows, neighboring buildings and uneven afternoon sunlight",
+  "a convenience-store, cafe or casual storefront edge with real shelves, signs, reflections and people moving in the distance",
+  "a night-market or evening street with scooters, shop lights, small signs, mixed practical lighting and soft background motion",
+  "a home mirror, vanity or window-side area with furniture edges, everyday clutter, fabric texture and natural room depth",
+  "a public corridor, mural wall or textured building entrance with imperfect surfaces and ambient pedestrian context",
+  "a bus, train or station-adjacent setting with seats, windows, handrails, route lighting and ordinary commuter detail",
+  "a busy daytime market lane with produce stalls, scooters, awnings, shoppers and narrow pedestrian depth",
+  "a casual restaurant or cafe table with cups, small plates, condiment jars, chairs and warm practical room light",
+  "a dance, fitness, workshop or rehearsal room with mirrors, benches, equipment and other participants in soft background focus",
+  "a neighborhood playground or small public park with railings, benches, paving, trees and families moving farther behind",
+  "a breezy shoreline, riverside path or coastal promenade at golden hour with a soft horizon, railing and passing walkers",
+  "a compact bedroom outfit-check area with a standing mirror, bright window, rumpled bedding, open shelves and ordinary clothing nearby",
+];
+
+function selectStableCameraSetup(key: string, candidates: string[]): string {
+  let hash = 0;
+  for (const character of key) hash = ((hash * 31) + character.codePointAt(0)!) >>> 0;
+  return candidates[hash % candidates.length];
+}
+
+function buildLifestyleCameraDirection(thirdPerson: boolean, selectionKey: string): string {
+  const candidates = thirdPerson ? THIRD_PERSON_LIFESTYLE_CAMERA_SETUPS : PERSON_LIFESTYLE_CAMERA_SETUPS;
+  const selectedCameraSetup = selectStableCameraSetup(selectionKey, candidates);
+  const selectedBackgroundFallback = selectStableCameraSetup(`${selectionKey}|background`, LIFESTYLE_BACKGROUND_FALLBACKS);
+  return [
+    "output one single candid social-media photo with one instance of the person, never a character sheet, multi-view layout, pose lineup, collage, or studio cutout",
+    "if the persona reference is a three-view sheet, use it only to preserve face and identity; do not copy its straight standing pose, eye-level camera, white or neutral background, or side-by-side presentation",
+    `use this specific camera and pose setup for this post: ${selectedCameraSetup}`,
+    "do not default to a centered eye-level front-facing half-body pose; vary camera height, shot distance, body orientation, gaze direction, hand placement, weight shift, crop, and foreground depth across different posts and selected style hints",
+    `when the post does not name a location, use this fallback lived-in setting: ${selectedBackgroundFallback}`,
+    "if the post explicitly names a location, action, weather, time or event, it overrides any conflicting camera, pose, or fallback setting; keep the named action mandatory and adapt the selected setup around it, then enrich the real context with ordinary background detail, depth, small asymmetries, mild perspective distortion, and natural available light",
+    "keep posture relaxed and physically plausible rather than symmetrical, mannequin-like, commercially posed, or excessively polished",
+  ].join(", ");
 }
 
 export function buildPersonaCardImageDirection(setup: DramaSetup, signals?: PersonaImageSignals): string {

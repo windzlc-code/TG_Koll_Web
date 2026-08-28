@@ -3714,11 +3714,10 @@ function personaMediaTaskCanRun({ content = "", prompt = "", modifyItem = null }
   return hasContent || hasPrompt;
 }
 
-function personaMediaTaskRunBlockedReason({ content = "", prompt = "", modifyItem = null, videoSelected = false, hasImageStyle = false } = {}) {
+function personaMediaTaskRunBlockedReason({ content = "", prompt = "", modifyItem = null, videoSelected = false } = {}) {
   if (videoSelected) return "视频文件不支持重生成图片";
   if (modifyItem && !String(prompt || "").trim()) return "请输入对选中图片的局部修改要求";
   if (!personaMediaTaskCanRun({ content, prompt, modifyItem })) return "请先输入推文正文或补充提示词";
-  if (!modifyItem && !hasImageStyle) return "请先生成并选择一种配图风格";
   return "";
 }
 
@@ -3740,8 +3739,7 @@ function syncPersonaMediaTaskRunButton(options = {}) {
     ?? ""
   ).trim();
   const content = personaMediaTaskGenerationContent(persona, post, source);
-  const hasImageStyle = Boolean(persona && post && selectedPersonaImageStyle(persona.id, post.id));
-  const blocked = personaMediaTaskRunBlockedReason({ content, prompt, modifyItem, videoSelected, hasImageStyle });
+  const blocked = personaMediaTaskRunBlockedReason({ content, prompt, modifyItem, videoSelected });
   button.disabled = Boolean(blocked);
   if (blocked) button.title = blocked;
   else button.removeAttribute("title");
@@ -4073,13 +4071,6 @@ function personaImageStyleCaption(style) {
   if (!label) return kindLabel;
   if (label.startsWith(kindLabel)) return label;
   return `${kindLabel} · ${label}`;
-}
-
-function defaultPersonaImageStyleKey(styles = []) {
-  const rows = Array.isArray(styles) ? styles : [];
-  const person = rows.find((item) => item?.kind === "person");
-  const chosen = person || rows[0];
-  return chosen ? personaImageStyleKey(chosen) : "";
 }
 
 function personaFallbackImageStyles(title = "", content = "") {
@@ -4512,7 +4503,7 @@ function renderPersonaImageStylePicker(persona, post, disabled = false) {
     : (hasStyles ? `${renderRefreshIcon()}<span>换一批</span>` : "生成风格");
   return `<section class="persona-post-direction-panel persona-image-style-panel" aria-label="推文配图风格" data-persona-image-style-post="${esc(postId)}">
     <div class="persona-image-style-head">
-      <strong>选择配图风格</strong>
+      <strong>选择配图风格（可选）</strong>
       <button type="button" class="primary persona-image-style-action" data-persona-generate-image-styles ${stylesLocked || disabled ? "disabled" : ""} aria-busy="${stylesLocked ? "true" : "false"}" aria-label="${esc(actionLabel)}">${actionContent}</button>
     </div>
     ${hasStyles ? `<div class="persona-image-style-tags">
@@ -4521,7 +4512,7 @@ function renderPersonaImageStylePicker(persona, post, disabled = false) {
         const active = key === selectedKey;
         return `<button type="button" class="persona-post-direction-tag persona-image-style-tag ${active ? "is-selected" : ""}" data-persona-image-style-index="${esc(index)}" data-persona-image-style-post="${esc(postId)}" data-persona-image-style-kind="${esc(style.kind)}" data-persona-image-style-label="${esc(style.label)}" aria-pressed="${active ? "true" : "false"}" ${stylesLocked ? "disabled" : ""}>${esc(personaImageStyleCaption(style))}</button>`;
       }).join("")}
-    </div>` : `<p class="persona-image-style-empty">先生成风格标签，选中后再设置张数和比例生成配图。</p>`}
+    </div>` : `<p class="persona-image-style-empty">可直接按推文生成生活化人物自拍，也可生成标签后选择其他配图方向。</p>`}
   </section>`;
 }
 
@@ -22077,7 +22068,7 @@ async function preparePersonaImageStyles() {
     }
     const targetState = personaImageStyleState(persona.id, post.id);
     targetState.styles = imageStyles;
-    targetState.selectedKey = defaultPersonaImageStyleKey(imageStyles);
+    targetState.selectedKey = "";
     targetState.sourceFingerprint = requestSourceFingerprint;
     clearPersonaStepOperationKey(operationStep, operationKey);
     showMsg("commandMsg", withBillingChargeMessage("已生成配图风格，请单选一种后再生成配图。", result), true);
@@ -23884,10 +23875,6 @@ async function submitPersonaMediaTask() {
     );
     return;
   }
-  if (!modifyItem && post && !selectedPersonaImageStyle(persona.id, post.id)) {
-    showMsg("commandMsg", "请先生成并选择一种配图风格。", false);
-    return;
-  }
   if (!post) {
     try {
       post = await ensurePersonaDraftForMediaTask({ content: generationContent, prompt, modifyItem });
@@ -23957,7 +23944,7 @@ async function submitPersonaMediaTask() {
       draft_source_text: draftSourceText,
       aspect_ratio: taskType === "persona_post_image" ? String(form.aspectRatio || "auto") : undefined,
       image_mode: taskType === "persona_post_image"
-        ? String(selectedPersonaImageStyle(persona.id, post.id)?.kind || "auto")
+        ? String(selectedPersonaImageStyle(persona.id, post.id)?.kind || "person")
         : undefined,
       image_style_label: taskType === "persona_post_image"
         ? String(selectedPersonaImageStyle(persona.id, post.id)?.label || "")
@@ -26443,8 +26430,7 @@ function renderPersonaMediaTaskResult(personaId, postId, { mediaBusy = false, me
   const { source, post } = personaMediaTargetPost(persona);
   const prompt = String(persona ? personaFormState(persona.id).media?.prompt || "" : "").trim();
   const content = personaMediaTaskGenerationContent(persona, post, source);
-  const hasImageStyle = Boolean(persona && post && selectedPersonaImageStyle(persona.id, post.id));
-  const blockedReason = personaMediaTaskRunBlockedReason({ content, prompt, modifyItem, videoSelected, hasImageStyle });
+  const blockedReason = personaMediaTaskRunBlockedReason({ content, prompt, modifyItem, videoSelected });
   const runDisabled = Boolean(mediaBusy || blockedReason);
   const runButton = `<button type="button" class="primary" data-persona-run-media-task data-persona-media-action="${actionKind}" aria-busy="${mediaBusy ? "true" : "false"}" ${runDisabled ? "disabled" : ""} ${blockedReason ? `title="${esc(blockedReason)}"` : ""}>${mediaBusy ? renderBusyButtonContent("配图任务执行中", true, mediaBusyStartedAt) : (imageModifying ? "重生成图片" : (taskState?.taskId ? "重新生成" : "生成预览"))}</button>`;
   if (!taskState?.taskId) return `
@@ -35492,7 +35478,7 @@ function bindEvents() {
       const styleKey = personaImageStyleKey(style);
       if (!styleKey) return;
       const styleState = personaImageStyleState(persona.id, postId);
-      styleState.selectedKey = styleKey;
+      styleState.selectedKey = styleState.selectedKey === styleKey ? "" : styleKey;
       renderPersonaDetail();
       return;
     }

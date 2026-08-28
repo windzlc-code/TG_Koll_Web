@@ -154,7 +154,12 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert "选择配图风格" in script
     assert "image_mode" in script
     assert "image_style_label" in script
-    assert "defaultPersonaImageStyleKey" in script
+    assert "选择配图风格（可选）" in script
+    assert "可直接按推文生成生活化人物自拍" in script
+    assert '?.kind || "person"' in script
+    assert "请先生成并选择一种配图风格" not in script
+    assert 'targetState.selectedKey = ""' in script
+    assert 'styleState.selectedKey === styleKey ? "" : styleKey' in script
     assert "160000" in script
     assert "换一批" in script
     assert "handlePersonaGeneratePrimaryAction" in script
@@ -389,3 +394,13 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
     assert result["ok"] is True
     assert captured["payload"]["mode"] == "scene"
     assert captured["payload"]["styleHint"] == "便利店夜景"
+
+    default_result = server._run_persona_post_image_task("task-2", {
+        "related_persona_id": "persona-1",
+        "related_post_id": "post-1",
+        "image_count": 1,
+    })
+
+    assert default_result["ok"] is True
+    assert captured["payload"]["mode"] == "person"
+    assert captured["payload"]["styleHint"] is None

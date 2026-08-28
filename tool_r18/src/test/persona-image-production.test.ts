@@ -552,6 +552,102 @@ describe("persona image production", () => {
     expect(built.withAvatar).toBe(true);
     expect(built.prompt).toContain("third-person candid documentary photo");
     expect(built.prompt).toContain("not a selfie");
+    expect(built.prompt).toContain("use this specific camera and pose setup for this post");
+    expect(built.prompt).toContain("never a character sheet, multi-view layout");
     expect(built.prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
+  });
+
+  it("builds varied lived-in camera direction for persona tweet images", () => {
+    const built = buildPersonaImagePrompt(
+      "下班回家躺在床上，终于可以放松一下",
+      nonWorkflowSetup(),
+      "person",
+      "none",
+      "卧室随手拍",
+    );
+    const alternate = buildPersonaImagePrompt(
+      "下班回家躺在床上，终于可以放松一下",
+      nonWorkflowSetup(),
+      "person",
+      "none",
+      "街头走动抓拍",
+    );
+    expect(built.mode).toBe("closed-person");
+    expect(built.withAvatar).toBe(true);
+    expect(built.prompt).toContain("卧室随手拍");
+    expect(built.prompt).toContain("use this specific camera and pose setup for this post");
+    expect(built.prompt).toContain("do not default to a centered eye-level front-facing half-body pose");
+    expect(built.prompt).toContain("when the post does not name a location, use this fallback lived-in setting");
+    expect(built.prompt).toContain("it overrides any conflicting camera, pose, or fallback setting");
+    expect(built.prompt).toContain("keep the named action mandatory and adapt the selected setup around it");
+    expect(built.prompt).toContain("use it only to preserve face and identity");
+    expect(alternate.prompt).not.toBe(built.prompt);
+    expect(built.prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
+    expect(built.prompt).not.toContain("avoid a generic portrait, generic selfie");
+  });
+
+  it("keeps the no-tag default content-led and lifestyle-oriented", () => {
+    const built = buildPersonaImagePrompt(
+      "下班路过便利店买了杯冰美式，站在店外吹风",
+      nonWorkflowSetup(),
+      "person",
+    );
+
+    expect(built.mode).toBe("closed-person");
+    expect(built.withAvatar).toBe(true);
+    expect(built.prompt).toContain("下班路过便利店买了杯冰美式");
+    expect(built.prompt).toContain("use this specific camera and pose setup for this post");
+    expect(built.prompt).toContain("candid iPhone-style capture");
+    expect(built.prompt).not.toContain("portrait direction:");
+  });
+
+  it("rotates through a broad camera and background sample pool", () => {
+    const styleHints = [
+      "卧室随手拍", "街头走动抓拍", "窗边侧拍", "镜前自拍", "通勤等待", "夜间闲逛",
+      "靠墙抓拍", "俯拍近景", "购物途中", "坐姿回头", "户外阳光", "咖啡店日常",
+    ];
+    const prompts = styleHints.map((styleHint) => buildPersonaImagePrompt(
+      "记录今天很普通但很开心的一刻",
+      nonWorkflowSetup(),
+      "person",
+      "none",
+      styleHint,
+    ).prompt);
+    const cameraSetups = new Set(prompts.map((prompt) => (
+      prompt.match(/use this specific camera and pose setup for this post: (.+?), do not default/)?.[1] || ""
+    )));
+    const backgroundSetups = new Set(prompts.map((prompt) => (
+      prompt.match(/use this fallback lived-in setting: (.+?), if the post explicitly/)?.[1] || ""
+    )));
+    expect(cameraSetups.has("")).toBe(false);
+    expect(backgroundSetups.has("")).toBe(false);
+    expect(cameraSetups.size).toBeGreaterThanOrEqual(9);
+    expect(backgroundSetups.size).toBeGreaterThanOrEqual(6);
+
+    const coveragePrompts = Array.from({ length: 200 }, (_, index) => buildPersonaImagePrompt(
+      "记录今天很普通但很开心的一刻",
+      nonWorkflowSetup(),
+      "person",
+      "none",
+      `audit-${index}`,
+    ).prompt).join("\n");
+    [
+      "close casual food or drink moment",
+      "high overhead full-body phone angle",
+      "busy street-market snapshot",
+      "casual class, rehearsal, or group-activity moment",
+      "a busy daytime market lane",
+      "a casual restaurant or cafe table",
+      "a dance, fitness, workshop or rehearsal room",
+      "a neighborhood playground or small public park",
+      "diagonal arm-extended bed snapshot",
+      "casual bedroom outfit-check",
+      "tight golden-hour coastal close-up",
+      "outdoor exercise check-in",
+      "at-home hobby moment",
+      "window-side mood snapshot",
+      "a breezy shoreline, riverside path or coastal promenade",
+      "a compact bedroom outfit-check area",
+    ].forEach((cue) => expect(coveragePrompts).toContain(cue));
   });
 });

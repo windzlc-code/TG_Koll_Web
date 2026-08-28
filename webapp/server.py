@@ -11168,8 +11168,8 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         raise RuntimeError(str(exc)) from exc
     _persist_persona_post_image_aspect_ratio(task_id, aspect_ratio)
     aspect_ratio_ms = round((time.perf_counter() - aspect_started_at) * 1000, 1)
-    image_mode = _normalize_persona_post_image_mode(payload.get("image_mode") or payload.get("mode"))
     style_hint = str(payload.get("image_style_label") or payload.get("style_hint") or payload.get("styleHint") or "").strip()[:24]
+    image_mode = _normalize_persona_post_image_mode(payload.get("image_mode") or payload.get("mode") or ("auto" if style_hint else "person"))
     cli_payload = {
         "setup": archive.get("setup") if isinstance(archive.get("setup"), dict) else {},
         "content": source_content or prompt,

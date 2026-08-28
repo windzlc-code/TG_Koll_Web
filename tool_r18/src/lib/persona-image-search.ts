@@ -252,7 +252,7 @@ export function buildPersonaSocialImagePrompt(
     ...sceneHints,
     cleanedContent,
     theme ? `subtle theme cues: ${theme}` : "",
-    "the image must make the persona type, core field, personality, and recurring visual world recognizable at first glance; avoid a generic portrait, generic selfie, generic street photo, or interchangeable influencer image",
+    "the image must make the persona type, core field, personality, and recurring visual world recognizable at first glance; avoid a generic centered portrait, repetitive straight-on selfie, empty generic street photo, or interchangeable influencer image",
     "personal social media post photo, candid iPhone-style capture, realistic skin texture, natural lighting, non-commercial everyday scene, imperfect timing, unpolished framing, looks like a real post someone uploaded seconds after the incident",
     SOCIAL_PHOTO_NEGATIVE_TOKENS.join(", "),
   ].filter(Boolean).join(", ");
