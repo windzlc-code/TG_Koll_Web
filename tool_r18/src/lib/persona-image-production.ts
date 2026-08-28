@@ -161,17 +161,11 @@ export function buildReferenceSheetPrompt(setup: DramaSetup, personaContent: str
   const visualBase = String(setup.personaAppearance || "").replace(/\s+/g, " ").trim();
   const keptVisual = applyUserVisualReplacements(visualBase, request, { mode: "strip" });
   const appearance = [request, keptVisual].filter(Boolean).join(", ");
-  const moodHint = applyUserVisualReplacements(
-    String(setup.personaPersonality || "").replace(/\s+/g, " ").trim(),
-    request,
-    { mode: "strip" },
-  ).slice(0, 80);
   return [
     `character reference sheet, three views: front view, side view, back view, same person all three angles, consistent appearance`,
     appearance ? `appearance: ${appearance}` : "",
     "user appearance has highest priority and must be visible",
     `${nationality ? nationality + " " : ""}${gender}, photorealistic, natural lighting`,
-    moodHint ? `expression mood: ${moodHint}` : "",
     "white or neutral background, full body or half body, no text, no watermark, high detail, consistent face and outfit across all three views",
   ].filter(Boolean).join(", ");
 }

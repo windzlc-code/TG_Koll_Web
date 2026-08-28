@@ -100,7 +100,8 @@ describe("persona image production", () => {
     expect(calls[0].prompt).not.toContain("appearance: 深耕日本高端不動產12年的台籍專屬融資顧問，台灣富豪圈的置產軍師。");
     expect(calls[0].prompt).not.toContain("融資顧問");
     expect(calls[0].prompt).not.toContain("do not default to office suit");
-    expect(calls[0].prompt).toContain("expression mood: 溫柔細膩");
+    expect(calls[0].prompt).not.toContain("expression mood:");
+    expect(calls[0].prompt).not.toContain("溫柔細膩");
     expect(calls[0].prompt).not.toContain("台灣繁體中文日常分享");
     expect(calls[0].prompt).not.toContain("persona identity context");
   });
@@ -163,16 +164,16 @@ describe("persona image production", () => {
     expect(prompt.split("爆乳美女，身材非常的好，会十分的性感诱惑。").length - 1).toBe(1);
     expect(prompt).toContain("user appearance has highest priority and must be visible");
     expect(prompt).not.toContain("obey this request:");
-    expect(prompt).toContain("expression mood: 溫柔細膩");
+    expect(prompt).not.toContain("expression mood:");
+    expect(prompt).not.toContain("溫柔細膩");
     expect(prompt).not.toContain("台灣繁體中文日常分享");
     expect(prompt).not.toContain("persona identity context");
-    expect(prompt.indexOf("appearance: 爆乳美女，身材非常的好，会十分的性感诱惑。")).toBeLessThan(prompt.indexOf("expression mood"));
     expect(prompt).not.toContain("naturally blend in these extra visual traits");
     expect(prompt).not.toContain("融資顧問");
     expect(prompt).not.toContain("do not default to office suit");
   });
 
-  it("blocks occupation identity and writing style when the user prompt exists, but keeps short personality mood", () => {
+  it("blocks persona identity, writing style, and personality when the user prompt exists", () => {
     const prompt = buildReferenceSheetPrompt(
       {
         ...nonWorkflowSetup({
@@ -191,7 +192,8 @@ describe("persona image production", () => {
     expect(prompt.split("性感美女喜欢穿低胸装，配上黑丝。").length - 1).toBe(1);
     expect(prompt).toContain("user appearance has highest priority and must be visible");
     expect(prompt).not.toContain("obey this request:");
-    expect(prompt).toContain("expression mood: 專業、沉穩、高雅、值得信賴的智囊");
+    expect(prompt).not.toContain("expression mood:");
+    expect(prompt).not.toContain("專業、沉穩、高雅、值得信賴的智囊");
     expect(prompt).not.toContain("商務顧問");
     expect(prompt).not.toContain("專業數據");
     expect(prompt).not.toContain("融資顧問");
