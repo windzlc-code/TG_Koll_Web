@@ -243,8 +243,26 @@ _DIGITAL_HUMAN_CLOTHING_LABELS = {
 }
 
 
-def _persona_clothing_context(value: Any) -> str:
-    return " ".join(_text(value).split())[:180].rstrip("，。；; ")
+def _selected_clothing_style_prompt(clothing_key: str, clothing: str) -> str:
+    clothing_direction = clothing.removesuffix("套装")
+    style_direction = (
+        "明确成年女性的福利诱惑风格，以性感、清凉、妩媚和高级写真感为核心"
+        if clothing_key == "intimate_glamour_female"
+        else f"{clothing_direction}风格"
+    )
+    parts = [
+        f"服装必须采用{style_direction}",
+        "具体服装造型、版型、材质和配色由模型依据该风格自主设计",
+        (
+            "此处用户选择的服装风格具有最高服装优先级，人物职业、身份、行业、生活方式和人设简介"
+            "均不得参与服装决策，不得替换、弱化或覆盖该风格"
+        ),
+    ]
+    if clothing_key == "intimate_glamour_female":
+        parts.append("不得自动转为职业装或通勤装")
+        parts.append("必须为明确成年人，禁止未成年感，禁止全裸，胸部与私密部位必须完整遮盖")
+    parts.append("三视图服装完全一致")
+    return "；".join(parts)
 
 
 def build_digital_human_character_selection_prompt(payload: Mapping[str, Any] | None) -> str:
@@ -281,13 +299,7 @@ def build_digital_human_character_selection_prompt(payload: Mapping[str, Any] | 
     clothing_key = _text(source.get("character_clothing")).lower()
     clothing = _DIGITAL_HUMAN_CLOTHING_LABELS.get(clothing_key)
     if clothing:
-        clothing_direction = clothing.removesuffix("套装")
-        persona_context = _persona_clothing_context(source.get("persona_clothing_context"))
-        if persona_context:
-            parts.append(f"人设核心：{persona_context}")
-        parts.append(
-            f"服装采用{clothing_direction}风格，款式、版型、材质和配色符合人物身份、年龄、体型、生活方式和审美，整体真实自然"
-        )
+        parts.append(_selected_clothing_style_prompt(clothing_key, clothing))
     return "，".join(parts)
 
 

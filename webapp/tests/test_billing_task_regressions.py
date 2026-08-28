@@ -76,7 +76,11 @@ class BillingTaskRegressionTests(unittest.TestCase):
             "saved_item_id": "saved-options-1",
         }
         with (
-            mock.patch.object(server, "_persona_image_core_description", return_value="肥宅游戏玩家，长期居家，偏好宽松舒适的生活方式"),
+            mock.patch.object(
+                server,
+                "_persona_archive_source_for_write",
+                side_effect=AssertionError("已选择服装风格时不应读取人设简介参与服装决策"),
+            ),
             mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner,
         ):
             output = server._run_persona_image_task(
@@ -99,12 +103,17 @@ class BillingTaskRegressionTests(unittest.TestCase):
         prompt = runner.call_args.kwargs["prompt"]
         self.assertIn("欧美成年人", prompt)
         self.assertIn("妩媚性感气质", prompt)
-        self.assertIn("人设核心：肥宅游戏玩家，长期居家，偏好宽松舒适的生活方式", prompt)
-        self.assertIn("服装采用福利诱惑风格", prompt)
-        self.assertIn("符合人物身份、年龄、体型、生活方式和审美", prompt)
-        self.assertNotIn("吊带睡裙", prompt)
+        self.assertNotIn("人设核心：肥宅游戏玩家", prompt)
+        self.assertIn("明确成年女性的福利诱惑风格", prompt)
+        self.assertIn("具体服装造型、版型、材质和配色由模型依据该风格自主设计", prompt)
+        self.assertIn("用户选择的服装风格具有最高服装优先级", prompt)
+        self.assertIn("人物职业、身份、行业、生活方式和人设简介均不得参与服装决策", prompt)
+        self.assertIn("不得替换、弱化或覆盖该风格", prompt)
+        self.assertIn("不得自动转为职业装或通勤装", prompt)
+        for fixed_item in ("吊带", "短裤", "短裙", "大腿", "肚脐", "蕾丝", "缎面"):
+            self.assertNotIn(fixed_item, prompt)
         self.assertIn("暖色室内环境", prompt)
-        for redundant in ("大方向", "具体", "由模型", "不固定", "用户选择", "用户补充要求", "或"):
+        for redundant in ("大方向", "不固定", "用户补充要求"):
             self.assertNotIn(redundant, prompt)
         self.assertNotIn("adult_glamour", prompt)
         self.assertNotIn("intimate_glamour_female", prompt)

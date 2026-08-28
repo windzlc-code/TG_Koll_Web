@@ -11283,16 +11283,6 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     }
 
 
-def _persona_image_core_description(archive_id: str) -> str:
-    _, _, archives = _persona_archive_source_for_write(archive_id)
-    archive = _find_persona_archive(archives, archive_id)
-    if not archive:
-        return ""
-    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-    description = str(setup.get("personaDescription") or archive.get("content") or "").strip()
-    return " ".join(description.split())[:180].rstrip("，。；; ")
-
-
 def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     archive_id = str(payload.get("related_persona_id") or payload.get("archive_id") or "").strip()
     if not archive_id:
@@ -11303,12 +11293,7 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
     if isinstance(image_options, dict) and image_options:
         from video_core.image_mode_prompts import build_digital_human_character_selection_prompt
 
-        prompt_options = dict(image_options)
-        if str(prompt_options.get("character_clothing") or "").strip():
-            persona_context = _persona_image_core_description(archive_id)
-            if persona_context:
-                prompt_options["persona_clothing_context"] = persona_context
-        selection_prompt = build_digital_human_character_selection_prompt(prompt_options)
+        selection_prompt = build_digital_human_character_selection_prompt(dict(image_options))
         generation_prompt = "，".join(
             part
             for part in (
