@@ -102,6 +102,27 @@
     if (age) return `${gender}_mature`;
     return gender;
   }
+
+  function videoCharacterOptionIsAvailable(options, value) {
+    const current = String(value || "");
+    return !current || options.some((option) => String(option.value) === current);
+  }
+
+  function reconcileVideoCharacterOptions(values, changedKey) {
+    if (!["character_gender", "character_age"].includes(changedKey)) return false;
+    const profile = characterProfile(values);
+    const dependentOptions = [
+      ...(changedKey === "character_gender"
+        ? [["character_hairstyle", CHARACTER_HAIRSTYLES[values.character_gender] || CHARACTER_HAIRSTYLES.default]]
+        : []),
+      ["character_temperament", CHARACTER_TEMPERAMENTS[profile] || CHARACTER_TEMPERAMENTS.default],
+      ["character_clothing", CHARACTER_CLOTHING[profile] || CHARACTER_CLOTHING.default],
+    ];
+    dependentOptions.forEach(([key, options]) => {
+      if (!videoCharacterOptionIsAvailable(options, values[key])) values[key] = "";
+    });
+    return true;
+  }
   const SPEAKER_OPTIONS = ["Aiden", "Dylan", "Eric", "Ono_anna", "Ryan", "Serena", "Sohee", "Uncle_fu", "Vivian", "zhenzhen"];
   const text = (key, label, extra = {}) => ({ key, label, type: "text", ...extra });
   const textarea = (key, label, extra = {}) => ({ key, label, type: "textarea", ...extra });
@@ -2060,14 +2081,7 @@
       draft.values.video_language_script_analyzed = false;
       draft.values.video_language_script_confirmed = false;
     }
-    if (field.key === "character_gender") {
-      draft.values.character_hairstyle = "";
-      draft.values.character_temperament = "";
-      draft.values.character_clothing = "";
-    } else if (field.key === "character_age") {
-      draft.values.character_temperament = "";
-      draft.values.character_clothing = "";
-    }
+    reconcileVideoCharacterOptions(draft.values, field.key);
     saveDraft(module.id);
     if (isPillSelectField(field) || DYNAMIC_SELECT_KEYS.has(field.key)) render();
   }

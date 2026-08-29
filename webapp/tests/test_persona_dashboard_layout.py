@@ -1,4 +1,6 @@
+import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1915,11 +1917,75 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('{ value: "adult_glamour", label: "妩媚性感" }', source)
         self.assertIn('{ value: "intimate_glamour_female", label: "福利诱惑套装" }', source)
         self.assertIn('function personaImageCharacterProfile(values = {})', source)
-        self.assertIn('imageForm.character_hairstyle = "";', source)
+        self.assertIn('function reconcilePersonaImageDependentOptions(imageForm, changedKey)', source)
         self.assertIn('return String(imageForm.prompt || "").trim();', source)
         self.assertIn(".persona-image-generation-options-grid {", self.styles)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
         self.assertIn("grid-template-columns: minmax(0, 1fr);", self.styles)
+
+    def test_persona_image_option_switches_preserve_compatible_selections(self):
+        source_start = self.console_script.index("const PERSONA_IMAGE_AUTOMATIC_OPTION")
+        source_end = self.console_script.index("\nfunction syncPersonaImagePromptState", source_start)
+        option_source = self.console_script[source_start:source_end]
+        script = f"""
+const PERSONA_IMAGE_REGION_OPTIONS = [];
+const PERSONA_IMAGE_GENDER_OPTIONS = [];
+const PERSONA_IMAGE_AGE_OPTIONS = [];
+let imageForm = {{}};
+function selectedPersona() {{ return {{ id: "persona-1" }}; }}
+function personaFormState() {{ return {{ images: imageForm }}; }}
+{option_source}
+function apply(key, value) {{
+  syncPersonaImageOptionState({{ dataset: {{ personaImageOption: key }}, value }});
+  return {{ ...imageForm }};
+}}
+const sameBucket = (() => {{
+  imageForm = {{ character_gender: "female", character_age: "18_22", character_hairstyle: "long_straight", character_temperament: "adult_glamour", character_clothing: "intimate_glamour_female" }};
+  return apply("character_age", "23_27");
+}})();
+const invalidAcrossBucket = (() => {{
+  imageForm = {{ character_gender: "female", character_age: "23_27", character_hairstyle: "long_straight", character_temperament: "sweet", character_clothing: "blazer_dress_female" }};
+  return apply("character_age", "33_38");
+}})();
+const compatibleAcrossBucket = (() => {{
+  imageForm = {{ character_gender: "female", character_age: "23_27", character_hairstyle: "long_straight", character_temperament: "adult_glamour", character_clothing: "intimate_glamour_female" }};
+  return apply("character_age", "33_38");
+}})();
+const genderChange = (() => {{
+  imageForm = {{ character_gender: "female", character_age: "23_27", character_hairstyle: "long_straight", character_temperament: "adult_glamour", character_clothing: "intimate_glamour_female" }};
+  return apply("character_gender", "male");
+}})();
+const independent = (() => {{
+  imageForm = {{ digital_human_character_region: "china", character_gender: "female", character_age: "23_27", character_hairstyle: "long_straight", character_temperament: "adult_glamour", character_clothing: "intimate_glamour_female" }};
+  apply("digital_human_character_region", "japan");
+  return apply("character_hairstyle", "soft_wave");
+}})();
+console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossBucket, genderChange, independent }}));
+"""
+        completed = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["sameBucket"]["character_hairstyle"], "long_straight")
+        self.assertEqual(result["sameBucket"]["character_temperament"], "adult_glamour")
+        self.assertEqual(result["sameBucket"]["character_clothing"], "intimate_glamour_female")
+        self.assertEqual(result["invalidAcrossBucket"]["character_hairstyle"], "long_straight")
+        self.assertEqual(result["invalidAcrossBucket"]["character_temperament"], "")
+        self.assertEqual(result["invalidAcrossBucket"]["character_clothing"], "")
+        self.assertEqual(result["compatibleAcrossBucket"]["character_temperament"], "adult_glamour")
+        self.assertEqual(result["compatibleAcrossBucket"]["character_clothing"], "intimate_glamour_female")
+        self.assertEqual(result["genderChange"]["character_hairstyle"], "")
+        self.assertEqual(result["genderChange"]["character_temperament"], "")
+        self.assertEqual(result["genderChange"]["character_clothing"], "")
+        self.assertEqual(result["independent"]["digital_human_character_region"], "japan")
+        self.assertEqual(result["independent"]["character_hairstyle"], "soft_wave")
+        self.assertEqual(result["independent"]["character_temperament"], "adult_glamour")
+        self.assertEqual(result["independent"]["character_clothing"], "intimate_glamour_female")
 
     def test_persona_image_prompt_uses_text_generation_without_reference_controls(self):
         panel_start = self.console_script.index("function renderPersonaImagePromptField(")

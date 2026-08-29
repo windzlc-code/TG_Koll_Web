@@ -11432,19 +11432,35 @@ function personaImageGenerationPrompt(imageForm = {}) {
   return String(imageForm.prompt || "").trim();
 }
 
+function personaImageOptionIsAvailable(options, value) {
+  const current = String(value || "");
+  return !current || options.some((option) => String(option.value) === current);
+}
+
+function reconcilePersonaImageDependentOptions(imageForm, changedKey) {
+  if (!["character_gender", "character_age"].includes(changedKey)) return false;
+  const values = personaImageOptionState(imageForm);
+  const profile = personaImageCharacterProfile(values);
+  const dependentOptions = [
+    ...(changedKey === "character_gender"
+      ? [["character_hairstyle", PERSONA_IMAGE_HAIRSTYLE_OPTIONS[values.character_gender] || PERSONA_IMAGE_HAIRSTYLE_OPTIONS.default]]
+      : []),
+    ["character_temperament", PERSONA_IMAGE_TEMPERAMENT_OPTIONS[profile] || PERSONA_IMAGE_TEMPERAMENT_OPTIONS.default],
+    ["character_clothing", PERSONA_IMAGE_CLOTHING_OPTIONS[profile] || PERSONA_IMAGE_CLOTHING_OPTIONS.default],
+  ];
+  dependentOptions.forEach(([key, options]) => {
+    if (!personaImageOptionIsAvailable(options, imageForm[key])) imageForm[key] = "";
+  });
+  return true;
+}
+
 function syncPersonaImageOptionState(input) {
   const persona = selectedPersona();
   const key = String(input?.dataset?.personaImageOption || "").trim();
   if (!persona || !key) return false;
   const imageForm = personaFormState(persona.id).images;
   imageForm[key] = String(input.value || "");
-  if (["character_gender", "character_age"].includes(key)) {
-    imageForm.character_hairstyle = "";
-    imageForm.character_temperament = "";
-    imageForm.character_clothing = "";
-    return true;
-  }
-  return false;
+  return reconcilePersonaImageDependentOptions(imageForm, key);
 }
 
 function syncPersonaImageDynamicOptionControls(root = document) {

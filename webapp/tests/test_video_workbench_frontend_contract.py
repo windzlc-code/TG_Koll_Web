@@ -1,4 +1,6 @@
+import json
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -52,6 +54,44 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         order_match = re.search(r"const MODULE_ORDER = \[(.*?)\];", self.workbench_js, re.S)
         self.assertIsNotNone(order_match)
         self.assertEqual(order_match.group(1).count('"'), len(VIDEO_MODULES) * 2)
+
+    def test_character_option_switches_preserve_compatible_values(self):
+        source_start = self.workbench_js.index("const AUTOMATIC_OPTION")
+        source_end = self.workbench_js.index("\n  const SPEAKER_OPTIONS", source_start)
+        option_source = self.workbench_js[source_start:source_end]
+        script = f"""
+{option_source}
+const sameBucket = {{ character_gender: "female", character_age: "18_22", character_hairstyle: "long_straight", character_temperament: "adult_glamour", character_clothing: "intimate_glamour_female" }};
+sameBucket.character_age = "23_27";
+reconcileVideoCharacterOptions(sameBucket, "character_age");
+const invalidAcrossBucket = {{ character_gender: "female", character_age: "33_38", character_hairstyle: "long_straight", character_temperament: "sweet", character_clothing: "blazer_dress_female" }};
+reconcileVideoCharacterOptions(invalidAcrossBucket, "character_age");
+const compatibleAcrossBucket = {{ character_gender: "female", character_age: "33_38", character_hairstyle: "long_straight", character_temperament: "adult_glamour", character_clothing: "intimate_glamour_female" }};
+reconcileVideoCharacterOptions(compatibleAcrossBucket, "character_age");
+const genderChange = {{ character_gender: "male", character_age: "23_27", character_hairstyle: "long_straight", character_temperament: "adult_glamour", character_clothing: "intimate_glamour_female" }};
+reconcileVideoCharacterOptions(genderChange, "character_gender");
+console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossBucket, genderChange }}));
+"""
+        completed = subprocess.run(
+            ["node", "-e", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["sameBucket"]["character_hairstyle"], "long_straight")
+        self.assertEqual(result["sameBucket"]["character_temperament"], "adult_glamour")
+        self.assertEqual(result["sameBucket"]["character_clothing"], "intimate_glamour_female")
+        self.assertEqual(result["invalidAcrossBucket"]["character_hairstyle"], "long_straight")
+        self.assertEqual(result["invalidAcrossBucket"]["character_temperament"], "")
+        self.assertEqual(result["invalidAcrossBucket"]["character_clothing"], "")
+        self.assertEqual(result["compatibleAcrossBucket"]["character_temperament"], "adult_glamour")
+        self.assertEqual(result["compatibleAcrossBucket"]["character_clothing"], "intimate_glamour_female")
+        self.assertEqual(result["genderChange"]["character_hairstyle"], "")
+        self.assertEqual(result["genderChange"]["character_temperament"], "")
+        self.assertEqual(result["genderChange"]["character_clothing"], "")
 
     def test_deep_link_and_navigation_contract_is_present(self):
         self.assertIn('const VIDEO_WORKBENCH_ENABLED = ADMIN_CONSOLE_SESSION', self.console_js)
