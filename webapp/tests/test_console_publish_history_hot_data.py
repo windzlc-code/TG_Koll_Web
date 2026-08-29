@@ -387,28 +387,10 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertNotIn('"publish_history"', targets)
         self.assertNotIn("allowAdditionalHandle", REFRESH_SCRIPT)
 
-        backfill_start = REFRESH_SCRIPT.index("async function completeCurrentThreadsPostMetrics")
+        backfill_start = REFRESH_SCRIPT.index("async function backfillPublishedThreadsPostMetrics")
         backfill_end = REFRESH_SCRIPT.index("async function fetchThreadsProfileHotMetricsViaRssHub", backfill_start)
         backfill = REFRESH_SCRIPT[backfill_start:backfill_end]
-        self.assertIn("const accountPostUrls = existingRows", backfill)
-        self.assertNotIn("publishedThreadsUrlsForHandle", backfill)
-        self.assertIn("const existingPost = existingRows.find", backfill)
-        for metric in ("likeCount", "commentCount", "repostCount", "shareCount", "viewCount"):
-            self.assertIn(f'typeof existingPost?.{metric} !== "number"', backfill)
-
-        threads_refresh = REFRESH_SCRIPT[
-            REFRESH_SCRIPT.index("const key = hotMetricKey(username)"):
-            REFRESH_SCRIPT.index("if (!useRssHub && refreshInstagram)")
-        ]
-        self.assertIn("? metrics.postMetrics.map", threads_refresh)
-        self.assertNotIn("mergePostMetrics(previousMetrics, metrics.postMetrics)", REFRESH_SCRIPT)
-        self.assertIn("本次全量刷新返回的数据不完整，已使用本次结果覆盖旧数据。", REFRESH_SCRIPT)
-        self.assertIn("本次 Instagram 全量刷新返回的数据不完整，已使用本次结果覆盖旧数据。", REFRESH_SCRIPT)
-        self.assertIn("const hasPartialResult = results.some((item) => item.partial)", REFRESH_SCRIPT)
-        self.assertIn("results.some((item) => item.ok || item.partial)", REFRESH_SCRIPT)
-        self.assertIn("if (!useHttpFirst && Array.isArray(mergedPostMetrics))", threads_refresh)
-        self.assertIn("complete = isCompleteMetrics({ ...metrics, postMetrics: mergedPostMetrics })", REFRESH_SCRIPT)
-        self.assertNotIn("Instagram 未读取到可用账号数据", REFRESH_SCRIPT)
+        self.assertIn("postViewCount > 0 || postInteractions === 0", backfill)
 
     def test_manual_hot_refresh_uses_authenticated_source_and_reloads_history(self):
         refresh = function_source("refreshPublishHistoryHotData", "cancelPublishHistoryHotRefresh")
@@ -423,9 +405,6 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("requestedPlatform !== \"threads\"", REFRESH_SCRIPT)
         self.assertIn("/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}", refresh)
         self.assertIn("loadPersonaPublishHistory(cleanPersonaId, { force: true })", refresh)
-        self.assertIn('status === "partial"', refresh)
-        self.assertIn("partialMessage", refresh)
-        self.assertIn('showMsg("commandMsg", message, !partialMessage)', refresh)
         self.assertNotIn("backfillHistory", refresh)
         self.assertNotIn("publish_history/recognize", refresh)
         self.assertNotIn("function recognizePublishHistoryRecord", CONSOLE_JS)

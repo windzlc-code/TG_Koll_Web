@@ -7623,13 +7623,13 @@ export function parseThreadsPostViewCountFromText(text: string): number | undefi
   );
 }
 
-async function readThreadsViewCountFromLoadedPostPage(page: any, sourceUrl: string): Promise<number | undefined> {
+async function readThreadsViewCountFromLoadedPostPage(page: any): Promise<number | undefined> {
   await page.waitForFunction(() => {
     const text = String(document.body?.innerText || "");
     return /(\d+(?:[.,]\d+)?\s*(?:K|M|萬|万)?)\s*(次瀏覽|次浏览|瀏覽|浏览|views?)/i.test(text);
   }, undefined, { timeout: 8_000 }).catch(() => null);
-  const scope = await readThreadsBrowserPostDetailScopeFromPage(page, sourceUrl);
-  return scope ? parseThreadsPostViewCountFromText(scope.text) : undefined;
+  const text = await page.locator("body").innerText({ timeout: 6_000 }).catch(() => "");
+  return parseThreadsPostViewCountFromText(text);
 }
 
 async function readThreadsPublicViewCountFallback(page: any, sourceUrl: string): Promise<number | undefined> {
@@ -7646,7 +7646,7 @@ async function readThreadsPublicViewCountFallback(page: any, sourceUrl: string):
       waitUntil: "domcontentloaded",
       timeout: 25_000,
     }).catch(() => null);
-    return await readThreadsViewCountFromLoadedPostPage(publicPage, sourceUrl);
+    return await readThreadsViewCountFromLoadedPostPage(publicPage);
   } finally {
     await context.close().catch(() => null);
   }
@@ -7660,7 +7660,7 @@ async function readThreadsViewCountFromPostPage(args: {
     waitUntil: "domcontentloaded",
     timeout: 25_000,
   }).catch(() => null);
-  const viewCount = await readThreadsViewCountFromLoadedPostPage(args.page, args.sourceUrl);
+  const viewCount = await readThreadsViewCountFromLoadedPostPage(args.page);
   return typeof viewCount === "number"
     ? viewCount
     : readThreadsPublicViewCountFallback(args.page, args.sourceUrl);
@@ -7756,8 +7756,12 @@ async function buildThreadsProfileAggregateMetricsFromBrowserPage(args: {
       timeout: 25_000,
     }).catch(() => null);
     await args.page.waitForTimeout(2200);
-    const scope = await readThreadsBrowserPostDetailScopeFromPage(args.page, sourceUrl);
-    const detail = scope ? parseThreadsBrowserPostDetailMetrics(scope) : null;
+    const detailText = await args.page.locator("body").innerText({ timeout: 8_000 }).catch(() => "");
+    const actionTexts = await args.page.$$eval("[role=button],button,a", (items: any[]) => items
+      .map((item: any) => (item.textContent || "").trim())
+      .filter(Boolean)
+      .slice(0, 120)).catch(() => []);
+    const detail = parseThreadsBrowserPostDetailMetrics({ text: detailText, actionTexts });
     const engagement = detail?.engagement || {};
     const metrics = detail?.metrics || {};
     likes += typeof engagement.likeCount === "number" ? engagement.likeCount : 0;
@@ -9582,66 +9586,6 @@ export function parseThreadsBrowserPostDetailMetrics(args: {
   };
 }
 
-export function selectThreadsBrowserPostDetailScope(args: {
-  sourceUrl: string;
-  scopes: Array<{ sourceUrl: string; text: string; actionTexts: string[]; depth?: number }>;
-}): { sourceUrl: string; text: string; actionTexts: string[]; depth?: number } | null {
-  const targetUrl = normalizeThreadsPostUrl(args.sourceUrl);
-  const targetCode = targetUrl.match(/\/post\/([^/?#\s]+)/i)?.[1]?.toLowerCase() || "";
-  if (!targetUrl || !targetCode) return null;
-  const candidates = (Array.isArray(args.scopes) ? args.scopes : [])
-    .filter((scope) => {
-      const scopeUrl = normalizeThreadsPostUrl(scope?.sourceUrl);
-      const scopeCode = scopeUrl.match(/\/post\/([^/?#\s]+)/i)?.[1]?.toLowerCase() || "";
-      return scopeUrl === targetUrl || (scopeCode && scopeCode === targetCode);
-    });
-  const byDepth = (left: { depth?: number }, right: { depth?: number }) => (
-    Number(left.depth ?? Number.MAX_SAFE_INTEGER) - Number(right.depth ?? Number.MAX_SAFE_INTEGER)
-  );
-  const viewScope = candidates
-    .filter((scope) => typeof parseThreadsPostViewCountFromText(scope.text) === "number")
-    .sort(byDepth)[0];
-  const actionScope = candidates
-    .filter((scope) => Boolean(findThreadsActionMetricSequence(scope.actionTexts)))
-    .sort(byDepth)[0];
-  if (!viewScope && !actionScope) return null;
-  return {
-    sourceUrl: viewScope?.sourceUrl || actionScope?.sourceUrl || targetUrl,
-    text: viewScope?.text || actionScope?.text || "",
-    actionTexts: actionScope?.actionTexts || [],
-    depth: Math.min(
-      Number(viewScope?.depth ?? Number.MAX_SAFE_INTEGER),
-      Number(actionScope?.depth ?? Number.MAX_SAFE_INTEGER),
-    ),
-  };
-}
-
-async function readThreadsBrowserPostDetailScopeFromPage(page: any, sourceUrl: string) {
-  const scopes = await page.$$eval("a[href*='/post/']", (anchors: any[], targetSourceUrl: string) => {
-    const normalizeText = (value: unknown) => String(value || "").replace(/\s+/g, " ").trim();
-    const postCode = (value: unknown) => String(value || "").match(/\/post\/([^/?#\s]+)/i)?.[1]?.toLowerCase() || "";
-    const targetCode = postCode(targetSourceUrl);
-    const rows: Array<{ sourceUrl: string; text: string; actionTexts: string[]; depth: number }> = [];
-    for (const anchor of anchors) {
-      const href = String(anchor?.href || anchor?.getAttribute?.("href") || "");
-      if (!href || !targetCode || postCode(href) !== targetCode) continue;
-      let node: any = anchor;
-      for (let depth = 0; node && depth <= 10; depth += 1) {
-        const text = String(node.innerText || node.textContent || "").trim();
-        const actionTexts = Array.from(node.querySelectorAll?.("[role=button],button") || [])
-          .map((item: any) => normalizeText(item.getAttribute?.("aria-label") || item.textContent || ""))
-          .filter(Boolean);
-        const hasMetricContent = actionTexts.length > 0
-          || /(?:Thread\s+\d+(?:[.,]\d+)?\s*(?:K|M|萬|万)?\s+views|\d+(?:[.,]\d+)?\s*(?:K|M|萬|万)?\s*次瀏覽)/i.test(text);
-        if (hasMetricContent) rows.push({ sourceUrl: href, text, actionTexts, depth });
-        node = node.parentElement;
-      }
-    }
-    return rows;
-  }, sourceUrl).catch(() => []);
-  return selectThreadsBrowserPostDetailScope({ sourceUrl, scopes });
-}
-
 async function readThreadsBrowserDetailMetricsFromPage(page: any, sourceUrl: string) {
   await page.goto(sourceUrl, {
     waitUntil: "domcontentloaded",
@@ -9652,8 +9596,11 @@ async function readThreadsBrowserDetailMetricsFromPage(page: any, sourceUrl: str
     return /Thread\s+\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?\s+views/i.test(text)
       || /\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?\s*次瀏覽/i.test(text);
   }, undefined, { timeout: 4_500 }).catch(() => null);
-  const scope = await readThreadsBrowserPostDetailScopeFromPage(page, sourceUrl);
-  const detail = scope ? parseThreadsBrowserPostDetailMetrics(scope) : null;
+  const detailText = await page.locator("body").innerText({ timeout: 6_000 }).catch(() => "");
+  const actionTexts = await page.$$eval("[role=button],button", (items: any[]) => items
+    .map((item) => (item.textContent || "").trim())
+    .filter(Boolean)).catch(() => []);
+  const detail = parseThreadsBrowserPostDetailMetrics({ text: detailText, actionTexts });
   if (typeof detail?.engagement?.viewCount === "number") return detail;
   const viewCount = await readThreadsPublicViewCountFallback(page, sourceUrl);
   if (typeof viewCount !== "number") return detail;
@@ -9757,8 +9704,11 @@ export async function lookupThreadsPublishedPostFromBrowserProfile(args: {
       timeout: 35_000,
     }).catch(() => null);
     await page.waitForTimeout(6500);
-    const scope = await readThreadsBrowserPostDetailScopeFromPage(page, matched.sourceUrl);
-    const detailMetrics = scope ? parseThreadsBrowserPostDetailMetrics(scope) : null;
+    const detailText = await page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
+    const actionTexts = await page.$$eval("[role=button],button", (items) => items
+      .map((item) => (item.textContent || "").trim())
+      .filter(Boolean)).catch(() => []);
+    const detailMetrics = parseThreadsBrowserPostDetailMetrics({ text: detailText, actionTexts });
     if (!detailMetrics) return matched;
     return {
       ...matched,

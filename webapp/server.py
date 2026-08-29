@@ -22790,9 +22790,7 @@ def _persona_dashboard_refresh_worker_v2(
             parsed["recognition"] = recognition
         parsed_message = str(parsed.get("message") or "").strip() if isinstance(parsed, dict) else ""
         refresh_message = parsed_message or "刷新完成，缓存数据与趋势快照已更新。"
-        if status == "partial":
-            refresh_message = parsed_message or "本次刷新数据不完整，已使用本次结果覆盖旧数据。"
-        elif status == "success":
+        if status in {"success", "partial"}:
             added_count = int(recognition.get("added_count") or 0)
             updated_count = int(recognition.get("updated_count") or 0)
             failed_count = int(recognition.get("failed_count") or 0)

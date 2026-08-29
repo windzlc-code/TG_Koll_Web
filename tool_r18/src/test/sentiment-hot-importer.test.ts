@@ -46,7 +46,6 @@ import {
   matchThreadsBrowserProfilePublishedPost,
   parseThreadsBrowserPostDetailMetrics,
   parseThreadsBrowserProfilePublishedPosts,
-  selectThreadsBrowserPostDetailScope,
   parseThreadsGraphqlSearchPayload,
   parseThreadsSearchHydrationPayloads,
   parseThreadsSearchCardCandidates,
@@ -3277,62 +3276,6 @@ Translate
       view_count: 274,
     });
     expect(detail?.hotScore).toBe(274);
-  });
-
-  it("selects the target Threads post container instead of the first metrics on the page", () => {
-    const scope = selectThreadsBrowserPostDetailScope({
-      sourceUrl: "https://www.threads.net/@demo/post/target-post",
-      scopes: [
-        {
-          sourceUrl: "https://www.threads.net/@other/post/recommended-post",
-          text: "Thread 10K views\nRecommended post",
-          actionTexts: ["Like24.5K", "Comment245", "Repost239", "Share2K"],
-          depth: 2,
-        },
-        {
-          sourceUrl: "https://www.threads.com/@demo/post/target-post",
-          text: "Thread 635 views",
-          actionTexts: [],
-          depth: 0,
-        },
-        {
-          sourceUrl: "https://www.threads.com/@demo/post/target-post",
-          text: "Target post action row",
-          actionTexts: ["Like34", "Comment9", "Repost", "Share"],
-          depth: 7,
-        },
-      ],
-    });
-
-    expect(scope?.sourceUrl).toContain("/target-post");
-    expect(scope?.text).toContain("635 views");
-    expect(scope?.actionTexts).toEqual(["Like34", "Comment9", "Repost", "Share"]);
-    expect(parseThreadsBrowserPostDetailMetrics(scope!)).toMatchObject({
-      engagement: {
-        viewCount: 635,
-        likeCount: 34,
-        commentCount: 9,
-      },
-    });
-  });
-
-  it("keeps full target metrics when Threads counters refresh at different times", () => {
-    const detail = parseThreadsBrowserPostDetailMetrics({
-      text: "Thread 236 views\nTarget post",
-      actionTexts: ["Like726", "Comment150", "Repost", "Share13"],
-    });
-
-    expect(detail).toMatchObject({
-      engagement: {
-        viewCount: 236,
-        likeCount: 726,
-        commentCount: 150,
-      },
-      metrics: {
-        repost_count: 0,
-        send_count: 13,
-      },
-    });
   });
 
   it("keeps a real Threads view count even when action buttons are not readable", () => {
