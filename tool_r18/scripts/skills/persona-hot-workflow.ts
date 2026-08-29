@@ -518,8 +518,14 @@ export async function refreshProfileMetrics(input: RefreshProfileMetricsInput) {
   }
   const metrics = platform === "instagram"
     ? await fetchInstagramProfileHotMetrics(username, Array.isArray(input.publishedUrls) ? input.publishedUrls : [])
-    : await fetchThreadsProfileHotMetrics(username);
-  const failed = !metrics || String(metrics.method || "").toLowerCase() === "failed";
+    : await fetchThreadsProfileHotMetrics(username, { authenticatedOnly: true });
+  const authenticatedThreadsSnapshot = platform !== "threads" || (
+    String(metrics?.scope || "") === "authenticated_full_profile"
+    && (metrics?.postSetComplete === true || metrics?.complete === true)
+  );
+  const failed = !metrics
+    || String(metrics.method || "").toLowerCase() === "failed"
+    || !authenticatedThreadsSnapshot;
   return {
     ok: !failed,
     archiveId,
@@ -527,7 +533,7 @@ export async function refreshProfileMetrics(input: RefreshProfileMetricsInput) {
     platform,
     outputOnly: true,
     metrics,
-    ...(failed ? { error: String(metrics?.error || "profile metrics fetch failed") } : {}),
+    ...(failed ? { error: String(metrics?.error || "Threads 未取得登录态完整帖子快照。") } : {}),
   };
 }
 

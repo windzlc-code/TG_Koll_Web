@@ -667,6 +667,8 @@ export type ThreadsProfileHotMetrics = {
   scannedPosts?: number;
   refreshedAt: string;
   method: "http" | "browser" | "reader" | "failed";
+  /** The authenticated paginated profile feed reached its end. */
+  postSetComplete?: boolean;
   complete?: boolean;
   scope?: "authenticated_full_profile" | "public_partial" | "reader_public_partial" | "profile_visible_light" | "failed";
   lightRefreshedAt?: string;
@@ -8203,7 +8205,15 @@ export async function fetchThreadsProfileIdentityMetrics(usernameInput: string):
   }
 }
 
-async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<ThreadsProfileHotMetrics> {
+type ThreadsProfileHotMetricsFetchOptions = {
+  /** Do not fall back to an anonymous profile page for an authoritative refresh. */
+  authenticatedOnly?: boolean;
+};
+
+async function fetchThreadsProfileHotMetricsHttp(
+  username: string,
+  options: ThreadsProfileHotMetricsFetchOptions = {},
+): Promise<ThreadsProfileHotMetrics> {
   const refreshedAt = new Date().toISOString();
   const cookies = readSentimentBrowserAuthCookies("threads");
   const hasSession = hasThreadsProfileLoginSessionCookie(cookies);
@@ -8212,16 +8222,22 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
     let response: Awaited<ReturnType<typeof requestSessionHttpText>> | null = null;
     let readerText = "";
     let authenticatedProfile = false;
-    const attempts = hasSession ? [
-      {
+    const attempts: Array<{ cookies: any[]; authenticated: boolean; userAgent: string }> = [];
+    if (hasSession) {
+      attempts.push({
         cookies,
         authenticated: true,
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-      },
-      { cookies: [] as any[], authenticated: false, userAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" },
-    ] : [
-      { cookies: [] as any[], authenticated: false, userAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" },
-    ];
+      });
+    }
+    if (!options.authenticatedOnly) {
+      attempts.push({
+        cookies: [],
+        authenticated: false,
+        userAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+      });
+    }
+    let activeCookies: any[] = [];
     for (const attempt of attempts) {
       const candidate = await requestSessionHttpText({
         url: profileUrl,
@@ -8252,6 +8268,7 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       response = candidate;
       readerText = candidateText;
       authenticatedProfile = attempt.authenticated;
+      activeCookies = attempt.cookies;
       break;
     }
     if (!response) throw new Error("Threads HTTP 登录态不可用。");
@@ -8275,7 +8292,7 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       const extra = await paginateThreadsProfileGraphqlPages({
         username,
         html: response.text,
-        cookies,
+        cookies: activeCookies,
         initialCursor,
         hasNextPage: true,
       }).catch(() => ({ posts: [] as ThreadsGraphqlProfilePostAggregate[], reachedEnd: false }));
@@ -8328,6 +8345,7 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       postMetrics,
       refreshedAt,
       method: "http",
+      postSetComplete: profilePostSetComplete,
       complete,
       scope: profilePostSetComplete ? "authenticated_full_profile" : "public_partial",
       error: complete
@@ -8431,7 +8449,10 @@ export async function fetchThreadsProfileLightMetrics(usernameInput: string): Pr
   return buildThreadsProfileIncompleteMetrics(username, refreshedAt, "failed");
 }
 
-export async function fetchThreadsProfileHotMetrics(usernameInput: string): Promise<ThreadsProfileHotMetrics> {
+export async function fetchThreadsProfileHotMetrics(
+  usernameInput: string,
+  options: ThreadsProfileHotMetricsFetchOptions = {},
+): Promise<ThreadsProfileHotMetrics> {
   const username = String(usernameInput || "").replace(/^@+/, "").trim();
   const refreshedAt = new Date().toISOString();
   if (!username) {
@@ -8447,9 +8468,9 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
   const cookies = readSentimentBrowserAuthCookies("threads");
   let bestHttpMetrics: ThreadsProfileHotMetrics | null = null;
   if (!process.env.VITEST_WORKER_ID) {
-    bestHttpMetrics = await fetchThreadsProfileHotMetricsHttp(username);
-    if (bestHttpMetrics.complete === true) return bestHttpMetrics;
-    if (profileMetricsHttpOnly()) return bestHttpMetrics;
+    bestHttpMetrics = await fetchThreadsProfileHotMetricsHttp(username, options);
+    if (bestHttpMetrics.complete === true || (options.authenticatedOnly && bestHttpMetrics.postSetComplete === true)) return bestHttpMetrics;
+    if (options.authenticatedOnly || profileMetricsHttpOnly()) return bestHttpMetrics;
     const hasLoginSessionCookie = hasThreadsProfileLoginSessionCookie(cookies);
     const cookieAttempts = hasLoginSessionCookie
       ? [cookies, []]

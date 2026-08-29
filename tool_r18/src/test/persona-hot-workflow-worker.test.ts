@@ -238,6 +238,8 @@ describe("persona hot workflow remote worker snapshots", () => {
       username: "sherryjim68",
       method: "http",
       complete: true,
+      postSetComplete: true,
+      scope: "authenticated_full_profile",
       scannedPosts: 6,
     });
 
@@ -249,7 +251,7 @@ describe("persona hot workflow remote worker snapshots", () => {
       outputOnly: true,
     });
 
-    expect(mocks.fetchThreadsProfileHotMetrics).toHaveBeenCalledWith("sherryjim68");
+    expect(mocks.fetchThreadsProfileHotMetrics).toHaveBeenCalledWith("sherryjim68", { authenticatedOnly: true });
     expect(mocks.loadPersonaArchive).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       ok: true,
@@ -258,6 +260,56 @@ describe("persona hot workflow remote worker snapshots", () => {
       platform: "threads",
       metrics: { complete: true, scannedPosts: 6 },
     });
+  });
+
+  it("rejects a public Threads snapshot so the console never overwrites data from an anonymous page", async () => {
+    mocks.fetchThreadsProfileHotMetrics.mockResolvedValue({
+      platform: "threads",
+      username: "sherryjim68",
+      method: "http",
+      complete: false,
+      scope: "public_partial",
+      scannedPosts: 15,
+      error: "Threads HTTP 已读取账号快照，但认证 GraphQL 游标尚未完整。",
+    });
+
+    const result = await refreshProfileMetrics({
+      action: "refresh-profile-metrics",
+      archiveId: "persona-1",
+      username: "sherryjim68",
+      platform: "threads",
+      outputOnly: true,
+    });
+
+    expect(mocks.fetchThreadsProfileHotMetrics).toHaveBeenCalledWith("sherryjim68", { authenticatedOnly: true });
+    expect(result).toMatchObject({
+      ok: false,
+      outputOnly: true,
+      error: "Threads HTTP 已读取账号快照，但认证 GraphQL 游标尚未完整。",
+    });
+  });
+
+  it("accepts a complete authenticated post set when one optional view value is unavailable", async () => {
+    mocks.fetchThreadsProfileHotMetrics.mockResolvedValue({
+      platform: "threads",
+      username: "sherryjim68",
+      method: "http",
+      complete: false,
+      postSetComplete: true,
+      scope: "authenticated_full_profile",
+      scannedPosts: 16,
+      viewMissingPosts: 1,
+    });
+
+    const result = await refreshProfileMetrics({
+      action: "refresh-profile-metrics",
+      archiveId: "persona-1",
+      username: "sherryjim68",
+      platform: "threads",
+      outputOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: true, metrics: { postSetComplete: true, scannedPosts: 16 } });
   });
 
   it("hydrates an already imported draft with downloaded local media and does not recreate the post", async () => {
