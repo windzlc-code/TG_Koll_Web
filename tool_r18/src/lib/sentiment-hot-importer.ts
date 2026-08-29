@@ -7265,39 +7265,42 @@ export function parseThreadsGraphqlProfilePagePayload(args: {
   const edges = Array.isArray(mediaData?.edges) ? mediaData.edges : [];
   const posts: ThreadsGraphqlProfilePostAggregate[] = [];
   for (const edge of edges) {
-    const post = edge?.node?.thread_items?.[0]?.post;
-    if (!isThreadsGraphqlProfileOwnedPost(args.username, post)) continue;
-    if (isThreadsGraphqlProfileRepostOrQuote(post)) continue;
-    const pk = cleanText(post?.pk);
-    const sourceUrl = buildThreadsGraphqlProfileSourceUrl(args.username, post);
-    const content = cleanText(post?.caption?.text || post?.text_post_app_info?.share_text || post?.text_post_app_info?.text || "");
-    const publishedAt = normalizeThreadsTimestamp(
-      post?.taken_at
-        ?? post?.taken_at_timestamp
-        ?? post?.created_at
-        ?? post?.caption?.created_at,
-    );
-    const rawViewCount = [
-      post?.text_post_app_info?.view_count,
-      post?.text_post_app_info?.viewCount,
-      post?.view_count,
-      post?.viewCount,
-      post?.play_count,
-      post?.playCount,
-    ].find((value) => value !== null && value !== undefined && value !== "");
-    if (!pk || !sourceUrl) continue;
-    posts.push({
-      pk,
-      code: cleanText(post?.code),
-      sourceUrl,
-      ...(content ? { content } : {}),
-      ...(publishedAt ? { publishedAt } : {}),
-      likeCount: Math.max(0, Number(post?.like_count) || 0),
-      commentCount: Math.max(0, Number(post?.text_post_app_info?.direct_reply_count) || 0),
-      repostCount: Math.max(0, Number(post?.text_post_app_info?.repost_count) || 0),
-      shareCount: Math.max(0, Number(post?.text_post_app_info?.reshare_count) || 0),
-      ...(rawViewCount === undefined ? {} : { viewCount: Math.max(0, Number(rawViewCount) || 0) }),
-    });
+    const threadItems = Array.isArray(edge?.node?.thread_items) ? edge.node.thread_items : [];
+    for (const threadItem of threadItems) {
+      const post = threadItem?.post;
+      if (!isThreadsGraphqlProfileOwnedPost(args.username, post)) continue;
+      if (isThreadsGraphqlProfileRepostOrQuote(post)) continue;
+      const pk = cleanText(post?.pk);
+      const sourceUrl = buildThreadsGraphqlProfileSourceUrl(args.username, post);
+      const content = cleanText(post?.caption?.text || post?.text_post_app_info?.share_text || post?.text_post_app_info?.text || "");
+      const publishedAt = normalizeThreadsTimestamp(
+        post?.taken_at
+          ?? post?.taken_at_timestamp
+          ?? post?.created_at
+          ?? post?.caption?.created_at,
+      );
+      const rawViewCount = [
+        post?.text_post_app_info?.view_count,
+        post?.text_post_app_info?.viewCount,
+        post?.view_count,
+        post?.viewCount,
+        post?.play_count,
+        post?.playCount,
+      ].find((value) => value !== null && value !== undefined && value !== "");
+      if (!pk || !sourceUrl) continue;
+      posts.push({
+        pk,
+        code: cleanText(post?.code),
+        sourceUrl,
+        ...(content ? { content } : {}),
+        ...(publishedAt ? { publishedAt } : {}),
+        likeCount: Math.max(0, Number(post?.like_count) || 0),
+        commentCount: Math.max(0, Number(post?.text_post_app_info?.direct_reply_count) || 0),
+        repostCount: Math.max(0, Number(post?.text_post_app_info?.repost_count) || 0),
+        shareCount: Math.max(0, Number(post?.text_post_app_info?.reshare_count) || 0),
+        ...(rawViewCount === undefined ? {} : { viewCount: Math.max(0, Number(rawViewCount) || 0) }),
+      });
+    }
   }
   return {
     posts,

@@ -3862,6 +3862,49 @@ Instagram
     expect(parsed.hasNextPage).toBe(true);
   });
 
+  it("keeps every owned post in a profile thread edge, including an attached poll post", () => {
+    const parsed = parseThreadsGraphqlProfilePagePayload({
+      username: "chenyating119",
+      payload: {
+        data: {
+          mediaData: {
+            edges: [{
+              node: {
+                thread_items: [
+                  {
+                    post: {
+                      pk: "3973492785394827329",
+                      code: "DckrqLHCUBB",
+                      user: { username: "chenyating119" },
+                      caption: { text: "下午要喝什麼呢" },
+                      canonical_url: "https://www.threads.com/@chenyating119/post/DckrqLHCUBB",
+                      like_count: 18,
+                      text_post_app_info: { direct_reply_count: 2, repost_count: 0, reshare_count: 0 },
+                    },
+                  },
+                  {
+                    post: {
+                      pk: "3973493097056823191",
+                      code: "DckrutXieeX",
+                      user: { username: "chenyating119" },
+                      caption: null,
+                      canonical_url: "https://www.threads.com/@chenyating119/post/DckrutXieeX",
+                      like_count: 2,
+                      text_post_app_info: { direct_reply_count: 0, repost_count: 0, reshare_count: 0 },
+                    },
+                  },
+                ],
+              },
+            }],
+            page_info: { end_cursor: "", has_next_page: false },
+          },
+        },
+      },
+    });
+
+    expect(parsed.posts.map((post) => post.code)).toEqual(["DckrqLHCUBB", "DckrutXieeX"]);
+  });
+
   it("skips Threads GraphQL profile posts owned by another author", () => {
     const parsed = parseThreadsGraphqlProfilePagePayload({
       username: "stevie875443",
