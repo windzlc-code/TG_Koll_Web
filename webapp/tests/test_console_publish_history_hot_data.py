@@ -406,6 +406,7 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("本次 Instagram 全量刷新返回的数据不完整，已使用本次结果覆盖旧数据。", REFRESH_SCRIPT)
         self.assertIn("const hasPartialResult = results.some((item) => item.partial)", REFRESH_SCRIPT)
         self.assertIn("results.some((item) => item.ok || item.partial)", REFRESH_SCRIPT)
+        self.assertIn("if (!useHttpFirst && Array.isArray(mergedPostMetrics))", threads_refresh)
         self.assertIn("complete = isCompleteMetrics({ ...metrics, postMetrics: mergedPostMetrics })", REFRESH_SCRIPT)
         self.assertNotIn("Instagram 未读取到可用账号数据", REFRESH_SCRIPT)
 

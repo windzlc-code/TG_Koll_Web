@@ -837,7 +837,7 @@ async function main() {
         let mergedPostMetrics = Array.isArray(metrics.postMetrics)
           ? metrics.postMetrics.map((post: any) => ({ ...post }))
           : [];
-        if (Array.isArray(mergedPostMetrics)) {
+        if (!useHttpFirst && Array.isArray(mergedPostMetrics)) {
           mergedPostMetrics = await completeCurrentThreadsPostMetrics({
             postMetrics: mergedPostMetrics,
             targetProfileDir: target.profileDir,
