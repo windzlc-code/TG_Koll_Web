@@ -15518,6 +15518,7 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
     if (!taskId) throw new Error("刷新任务未返回任务 ID");
     state.publishHistoryRefreshTaskId = taskId;
     let cancelled = false;
+    let partialMessage = "";
     while (state.publishHistoryRefreshTaskId === taskId) {
       const current = await api(`/api/persona_dashboard/refresh/${encodeURIComponent(taskId)}`);
       state.publishHistoryRefreshStatus = {
@@ -15538,6 +15539,13 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
           showMsg("commandMsg", "已取消刷新。", true);
           break;
         }
+        if (status === "partial") {
+          partialMessage = chineseRefreshMessage(
+            current?.message,
+            "本次刷新数据不完整，已使用本次结果覆盖旧数据。",
+          );
+          break;
+        }
         if (status !== "success") throw new Error(chineseRefreshMessage(current?.message, "热点数据刷新失败"));
         break;
       }
@@ -15547,9 +15555,9 @@ async function refreshPublishHistoryHotData(persona = selectedPersona()) {
       await loadPersonas().catch(() => {});
       await loadPersonaPublishHistory(cleanPersonaId, { force: true });
       await loadPersonaDashboardOverview({ force: true }).catch(() => null);
-      const message = "刷新完成，平台推文与互动数据已同步。";
+      const message = partialMessage || "刷新完成，平台推文与互动数据已同步。";
       state.publishHistoryRefreshStatus = { progress: 100, message };
-      showMsg("commandMsg", message, true);
+      showMsg("commandMsg", message, !partialMessage);
     }
   } catch (error) {
     state.publishHistoryRefreshStatus = {

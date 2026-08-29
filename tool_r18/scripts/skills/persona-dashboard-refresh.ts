@@ -480,23 +480,22 @@ function postMetricMatchesUrl(post: any, sourceUrl: string): boolean {
   );
 }
 
-async function backfillPublishedThreadsPostMetrics(args: {
-  archive: any;
-  username: string;
+async function completeCurrentThreadsPostMetrics(args: {
   postMetrics: any[];
   targetProfileDir?: string;
   capturedAt: string;
 }): Promise<any[]> {
-  const publishedUrls = publishedThreadsUrlsForHandle(args.archive, args.username);
-  if (!publishedUrls.length) return args.postMetrics;
   const existingRows = Array.isArray(args.postMetrics) ? args.postMetrics : [];
-  const missingUrls = publishedUrls.filter((url) => !existingRows.some((post) => {
-    if (!postMetricMatchesUrl(post, url)) return false;
-    const postViewCount = Number(post?.viewCount || 0);
-    const postInteractions = [post?.likeCount, post?.commentCount, post?.repostCount, post?.shareCount]
-      .reduce((sum, value) => sum + Math.max(0, Number(value || 0)), 0);
-    return postViewResolved(post) && (postViewCount > 0 || postInteractions === 0);
-  }));
+  const accountPostUrls = existingRows
+    .map((post) => normalizeThreadsPostUrl(post?.sourceUrl || post?.source_url))
+    .filter(Boolean);
+  const targetUrls = [...new Set(accountPostUrls)];
+  if (!targetUrls.length) return existingRows;
+  const fields = ["likeCount", "commentCount", "repostCount", "shareCount", "viewCount"];
+  const missingUrls = targetUrls.filter((url) => !existingRows.some((post) => (
+    postMetricMatchesUrl(post, url)
+    && fields.every((field) => typeof post?.[field] === "number")
+  )));
   if (!missingUrls.length) return existingRows;
   const previousProfileDir = process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR;
   try {
@@ -530,18 +529,19 @@ async function backfillPublishedThreadsPostMetrics(args: {
       const key = normalizeThreadsPostUrl(sourceUrl);
       const detail = detailRows.get(key);
       if (!detail) return [];
+      const existingPost = existingRows.find((post) => postMetricMatchesUrl(post, sourceUrl));
       const engagement = detail.engagement || {};
       const metrics = detail.metrics || {};
       return [{
         code: threadsPostCodeFromUrl(sourceUrl),
         sourceUrl: normalizeThreadsPostUrl(sourceUrl),
-        likeCount: typeof engagement.likeCount === "number" ? engagement.likeCount : undefined,
-        commentCount: typeof engagement.commentCount === "number" ? engagement.commentCount : undefined,
-        repostCount: typeof metrics.repost_count === "number" ? metrics.repost_count : undefined,
-        shareCount: typeof metrics.send_count === "number" ? metrics.send_count : undefined,
-        viewCount: typeof engagement.viewCount === "number" ? engagement.viewCount : undefined,
-        capturedAt: args.capturedAt,
-        method: "browser_detail_backfill",
+        likeCount: typeof existingPost?.likeCount !== "number" && typeof engagement.likeCount === "number" ? engagement.likeCount : undefined,
+        commentCount: typeof existingPost?.commentCount !== "number" && typeof engagement.commentCount === "number" ? engagement.commentCount : undefined,
+        repostCount: typeof existingPost?.repostCount !== "number" && typeof metrics.repost_count === "number" ? metrics.repost_count : undefined,
+        shareCount: typeof existingPost?.shareCount !== "number" && typeof metrics.send_count === "number" ? metrics.send_count : undefined,
+        viewCount: typeof existingPost?.viewCount !== "number" && typeof engagement.viewCount === "number" ? engagement.viewCount : undefined,
+        capturedAt: existingPost ? undefined : args.capturedAt,
+        method: existingPost ? undefined : "browser_detail_backfill",
       }];
     });
     return backfilled.length ? mergePostMetrics({ postMetrics: existingRows }, backfilled) : existingRows;
@@ -670,6 +670,10 @@ function isCompleteMetrics(metrics: any): boolean {
     && scannedPosts > 0
     && Array.isArray(metrics?.postMetrics)
     && metrics.postMetrics.length >= scannedPosts
+    && metrics.postMetrics.every((post: any) => (
+      ["likeCount", "commentCount", "repostCount", "shareCount", "viewCount"]
+        .every((field) => typeof post?.[field] === "number")
+    ))
     && Number.isFinite(Date.parse(refreshedAt));
 }
 
@@ -829,25 +833,25 @@ async function main() {
         const existingHotMetrics = setup.hotMetrics || {};
         const previousMetrics = existingHotMetrics[key] || {};
         const usable = hasUsableMetrics(metrics);
-        const complete = refreshAttempt.complete;
+        let complete = refreshAttempt.complete;
         let mergedPostMetrics = Array.isArray(metrics.postMetrics)
-          ? mergePostMetrics(previousMetrics, metrics.postMetrics)
-          : Array.isArray(previousMetrics.postMetrics) ? previousMetrics.postMetrics : [];
+          ? metrics.postMetrics.map((post: any) => ({ ...post }))
+          : [];
         if (Array.isArray(mergedPostMetrics)) {
-          mergedPostMetrics = await backfillPublishedThreadsPostMetrics({
-            archive,
-            username,
+          mergedPostMetrics = await completeCurrentThreadsPostMetrics({
             postMetrics: mergedPostMetrics,
             targetProfileDir: target.profileDir,
             capturedAt: metrics.refreshedAt || new Date().toISOString(),
           });
+        }
+        if (!useRssHub) {
+          complete = isCompleteMetrics({ ...metrics, postMetrics: mergedPostMetrics });
         }
         const mergedRows = Array.isArray(mergedPostMetrics) ? mergedPostMetrics : [];
         const mergedResolvedViews = mergedRows.filter(postViewResolved).length;
         const mergedTotalViews = mergedRows.reduce((sum: number, post: any) => sum + (typeof post?.viewCount === "number" ? post.viewCount : 0), 0);
         const nextMetric = complete
           ? {
-              ...previousMetrics,
               platform: "threads",
               username: metrics.username || username,
               accountId: target.accountId,
@@ -862,7 +866,7 @@ async function main() {
               shares: metrics.shares,
               views: mergedResolvedViews > 0
                 ? mergedTotalViews
-                : typeof metrics.views === "number" ? metrics.views : previousMetrics.views,
+                : typeof metrics.views === "number" ? metrics.views : undefined,
               viewResolvedPosts: mergedResolvedViews,
               viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
               scannedPosts: useRssHub ? mergedRows.length : Math.max(Number(metrics.scannedPosts || 0), mergedRows.length),
@@ -874,7 +878,6 @@ async function main() {
               error: undefined,
             }
           : {
-              ...previousMetrics,
               platform: "threads",
               username: metrics.username || username,
               accountId: target.accountId,
@@ -882,21 +885,25 @@ async function main() {
               method: metrics.method,
               feedUrl: metrics.feedUrl,
               ...profileIdentityMetricPatch(metrics, mergedTotalViews),
+              ...(typeof metrics.likes === "number" ? { likes: metrics.likes } : {}),
+              ...(typeof metrics.comments === "number" ? { comments: metrics.comments } : {}),
+              ...(typeof metrics.reposts === "number" ? { reposts: metrics.reposts } : {}),
+              ...(typeof metrics.shares === "number" ? { shares: metrics.shares } : {}),
               complete: false,
               scope: metrics.scope,
-              refreshedAt: previousMetrics.refreshedAt,
+              refreshedAt: metrics.refreshedAt,
               attemptedAt: metrics.refreshedAt,
               posts: mergedRows.length ? Math.max(Number(metrics.posts || 0), mergedRows.length) : metrics.posts,
               scannedPosts: mergedRows.length ? Math.max(Number(metrics.scannedPosts || 0), mergedRows.length) : metrics.scannedPosts,
-              ...(mergedRows.length ? {
-                postMetrics: mergedPostMetrics,
-                views: mergedResolvedViews > 0
-                  ? mergedTotalViews
-                  : typeof metrics.views === "number" ? metrics.views : previousMetrics.views,
-                viewResolvedPosts: mergedResolvedViews,
-                viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
-              } : {}),
-              error: metrics.error || (usable ? "本次只读取到局部资料，未覆盖为完整热点数据。" : "未读取到可用热点数据。"),
+              postMetrics: mergedPostMetrics,
+              views: mergedResolvedViews > 0
+                ? mergedTotalViews
+                : typeof metrics.views === "number" ? metrics.views : undefined,
+              viewResolvedPosts: mergedResolvedViews,
+              viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
+              error: metrics.error || (usable
+                ? "本次全量刷新返回的数据不完整，已使用本次结果覆盖旧数据。"
+                : "本次未读取到完整数据，已清空旧快照并写入本次结果。"),
             };
         if (complete) nextMetric.snapshots = mergeCompletedMetricSnapshots(previousMetrics, nextMetric);
         const updatedAt = new Date().toISOString();
@@ -1004,23 +1011,11 @@ async function main() {
               delete process.env.PERSONA_DASHBOARD_INSTAGRAM_PROXY_URL;
             }
           }
-          const usable = hasUsableMetrics(metrics);
-          if (!usable) {
-            results.push({
-              archiveId: archive.id,
-              name: archive.name,
-              platform: "instagram",
-              username,
-              ok: false,
-              message: metrics?.error || "Instagram 未读取到可用账号数据。",
-            });
-            continue;
-          }
           const key = instagramHotMetricKey(username);
           const previousMetrics = setup?.hotMetrics?.[key] || {};
           const mergedPostMetrics = Array.isArray(metrics.postMetrics)
-            ? mergePostMetrics(previousMetrics, metrics.postMetrics)
-            : Array.isArray(previousMetrics.postMetrics) ? previousMetrics.postMetrics : [];
+            ? metrics.postMetrics.map((post: any) => ({ ...post }))
+            : [];
           const totalViews = mergedPostMetrics.reduce(
             (sum: number, post: any) => sum + (typeof post?.viewCount === "number" ? post.viewCount : 0),
             0,
@@ -1029,7 +1024,6 @@ async function main() {
           const complete = refreshAttempt.complete;
           const instagramRecentViews = recentViewsWithPostFallback(metrics, totalViews);
           const nextMetric = {
-            ...previousMetrics,
             platform: "instagram",
             username: metrics.username || username,
             accountId: target.accountId,
@@ -1045,16 +1039,18 @@ async function main() {
             ...(typeof metrics.shares === "number" ? { shares: metrics.shares } : {}),
             views: resolvedViewPosts > 0
               ? totalViews
-              : typeof metrics.views === "number" ? metrics.views : previousMetrics.views,
+              : typeof metrics.views === "number" ? metrics.views : undefined,
             viewResolvedPosts: resolvedViewPosts,
             viewMissingPosts: Math.max(0, mergedPostMetrics.length - resolvedViewPosts),
             scannedPosts: Number(metrics.scannedPosts || mergedPostMetrics.length),
             postMetrics: mergedPostMetrics,
             complete,
             scope: metrics.scope,
-            refreshedAt: complete ? metrics.refreshedAt : previousMetrics.refreshedAt,
+            refreshedAt: metrics.refreshedAt,
             attemptedAt: metrics.refreshedAt,
-            error: metrics.error,
+            error: complete
+              ? undefined
+              : metrics.error || "本次 Instagram 全量刷新返回的数据不完整，已使用本次结果覆盖旧数据。",
           };
           if (complete) nextMetric.snapshots = mergeCompletedMetricSnapshots(previousMetrics, nextMetric);
           const saved = updatePersonaArchivePlatformHotMetrics({
@@ -1077,7 +1073,9 @@ async function main() {
             attempts: refreshAttempt.attempts,
             scannedPosts: Number(metrics.scannedPosts || 0),
             postMetrics: Array.isArray(metrics.postMetrics) ? metrics.postMetrics.length : 0,
-            message: metrics.complete === true ? "Instagram 刷新完成" : metrics.error || "Instagram 近期数据已刷新。",
+            message: complete
+              ? "Instagram 刷新完成"
+              : metrics.error || "本次 Instagram 全量刷新返回的数据不完整，已使用本次结果覆盖旧数据。",
           });
         } catch (error: any) {
           results.push({ archiveId: archive.id, name: archive.name, platform: "instagram", username, ok: false, message: /[\u4e00-\u9fff]/.test(String(error?.message || error || "")) ? String(error?.message || error) : "Instagram 热点数据刷新失败，请稍后重试。" });
@@ -1100,6 +1098,7 @@ async function main() {
     .filter(Boolean)
     .slice(0, 2);
   const skippedOnly = results.length > 0 && results.every((item) => item.skipped);
+  const hasPartialResult = results.some((item) => item.partial);
   const skippedReason = results
     .map((item) => String(item.message || "").trim())
     .find((item) => item);
@@ -1107,15 +1106,17 @@ async function main() {
     ? skippedReason
     : (fullyRefreshed
     ? `全量同步完成：${requiredResults.length} 个账号的数据与时间快照已更新。`
-    : (results.some((item) => item.ok)
-      ? `部分同步完成：${requiredResults.length - failed.length}/${requiredResults.length || 0} 个账号已更新；其余账号已局部重试一次。`
-      : `同步未完成：${failed.length}/${requiredResults.length || 0} 个账号未取得完整新快照。${failedReasons.length ? ` ${failedReasons.join("；")}` : ""}`));
+    : (hasPartialResult
+      ? `本次全量刷新返回的数据不完整，已使用本次结果覆盖旧数据。${failedReasons.length ? ` ${failedReasons.join("；")}` : ""}`
+      : results.some((item) => item.ok)
+        ? `部分同步完成：${requiredResults.length - failed.length}/${requiredResults.length || 0} 个账号已更新。`
+        : `同步未完成：${failed.length}/${requiredResults.length || 0} 个账号未取得完整新快照。${failedReasons.length ? ` ${failedReasons.join("；")}` : ""}`));
   console.log(JSON.stringify({
-    ok: results.some((item) => item.ok),
+    ok: results.some((item) => item.ok || item.partial),
     complete: fullyRefreshed,
-    status: fullyRefreshed ? "success" : (results.some((item) => item.ok) ? "partial" : "failed"),
+    status: fullyRefreshed ? "success" : (results.some((item) => item.ok || item.partial) ? "partial" : "failed"),
     message,
-    refreshed: results.filter((item) => item.ok).length,
+    refreshed: results.filter((item) => item.ok || item.partial).length,
     partial: results.filter((item) => item.partial).length,
     skipped: results.filter((item) => item.skipped).length,
     total: results.length,
