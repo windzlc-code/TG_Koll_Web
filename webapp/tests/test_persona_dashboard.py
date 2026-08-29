@@ -1913,8 +1913,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("function profileMetricsHttpOnly()", importer)
         self.assertIn("cookies,\n        authenticated: true", importer)
         self.assertIn("candidateProfilePath !== expectedProfilePath", importer)
-        self.assertIn("const postSetComplete = authenticatedProfile", importer)
-        self.assertIn("const complete = postSetComplete && resolvedViews === postMetrics.length", importer)
+        self.assertIn("const profilePostSetComplete = authenticatedProfile", importer)
+        self.assertIn("const complete = profilePostSetComplete && resolvedViews === postMetrics.length", importer)
         self.assertNotIn("cookies: [],\n      headers: profileHeaders", importer)
 
     def test_http_first_dashboard_refresh_does_not_lease_browser(self):
@@ -3484,7 +3484,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 "accountId": "threads-current",
                 "username": "history",
                 "complete": False,
-                "postSetComplete": True,
                 "scope": "authenticated_full_profile",
                 "scannedPosts": 2,
                 "postMetrics": [

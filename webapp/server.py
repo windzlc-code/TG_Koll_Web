@@ -17905,49 +17905,6 @@ def _publish_record_matches_profile_identity(
     return bool(current_account_id and record_account_id and current_account_id == record_account_id)
 
 
-def _sync_publish_record_profile_identity(
-    record: dict[str, Any],
-    platform: str,
-    identity: dict[str, str],
-) -> bool:
-    changed = False
-    account_id = str(identity.get("account_id") or "").strip()
-    username = str(identity.get("username") or "").strip().lstrip("@")
-    if platform and str(record.get("platform") or "").strip().lower() != platform:
-        record["platform"] = platform
-        changed = True
-    for key in ("sourceMeta", "publishedMeta"):
-        meta = record.get(key) if isinstance(record.get(key), dict) else {}
-        next_meta = dict(meta)
-        if account_id and str(next_meta.get("accountId") or "").strip() != account_id:
-            next_meta["accountId"] = account_id
-        if username and str(next_meta.get("username") or "").strip().lstrip("@").lower() != username.lower():
-            next_meta["username"] = username
-        if platform and str(next_meta.get("platform") or "").strip().lower() != platform:
-            next_meta["platform"] = platform
-        if next_meta != meta:
-            record[key] = next_meta
-            changed = True
-    for target in record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []:
-        if not isinstance(target, dict):
-            continue
-        if platform and str(target.get("platform") or "").strip().lower() != platform:
-            target["platform"] = platform
-            changed = True
-        target_meta = target.get("publishedMeta") if isinstance(target.get("publishedMeta"), dict) else {}
-        next_target_meta = dict(target_meta)
-        if account_id and str(next_target_meta.get("accountId") or "").strip() != account_id:
-            next_target_meta["accountId"] = account_id
-        if username and str(next_target_meta.get("username") or "").strip().lstrip("@").lower() != username.lower():
-            next_target_meta["username"] = username
-        if platform and str(next_target_meta.get("platform") or "").strip().lower() != platform:
-            next_target_meta["platform"] = platform
-        if next_target_meta != target_meta:
-            target["publishedMeta"] = next_target_meta
-            changed = True
-    return changed
-
-
 @_persona_archive_write_locked
 def _auto_recognize_persona_publish_records(archive_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
@@ -17967,10 +17924,6 @@ def _auto_recognize_persona_publish_records(archive_id: str) -> dict[str, Any]:
     for platform_key, platform_metric in hot_metrics.items():
         if (
             not isinstance(platform_metric, dict)
-            or not (
-                platform_metric.get("complete") is True
-                or platform_metric.get("postSetComplete") is True
-            )
             or str(platform_metric.get("scope") or "").strip() != "authenticated_full_profile"
         ):
             continue
@@ -17997,8 +17950,21 @@ def _auto_recognize_persona_publish_records(archive_id: str) -> dict[str, Any]:
             if existing_url and existing_url not in snapshot_rows:
                 removed_count += 1
                 continue
-            if existing_url and _sync_publish_record_profile_identity(item, platform_name, identity):
-                updated_count += 1
+            if existing_url:
+                next_identity = {
+                    "platform": platform_name,
+                    "accountId": str(identity.get("account_id") or "").strip(),
+                    "username": str(identity.get("username") or "").strip().lstrip("@"),
+                }
+                changed = False
+                for meta_key in ("sourceMeta", "publishedMeta"):
+                    current_meta = item.get(meta_key) if isinstance(item.get(meta_key), dict) else {}
+                    merged_meta = {**current_meta, **{key: value for key, value in next_identity.items() if value}}
+                    if merged_meta != current_meta:
+                        item[meta_key] = merged_meta
+                        changed = True
+                if changed:
+                    updated_count += 1
             reconciled_history.append(item)
         history = reconciled_history
     seen_urls: set[str] = set()

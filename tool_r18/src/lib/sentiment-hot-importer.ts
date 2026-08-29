@@ -668,7 +668,6 @@ export type ThreadsProfileHotMetrics = {
   refreshedAt: string;
   method: "http" | "browser" | "reader" | "failed";
   complete?: boolean;
-  postSetComplete?: boolean;
   scope?: "authenticated_full_profile" | "public_partial" | "reader_public_partial" | "profile_visible_light" | "failed";
   lightRefreshedAt?: string;
   postMetrics?: ThreadsProfilePostHotMetrics[];
@@ -8305,10 +8304,10 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
     } satisfies ThreadsProfilePostHotMetrics));
     const resolvedViews = postMetrics.filter((post) => typeof post.viewCount === "number").length;
     const declaredPosts = typeof parsed.posts === "number" ? parsed.posts : postMetrics.length;
-    const postSetComplete = authenticatedProfile
+    const profilePostSetComplete = authenticatedProfile
       && reachedEnd
       && postMetrics.length >= declaredPosts;
-    const complete = postSetComplete && resolvedViews === postMetrics.length;
+    const complete = profilePostSetComplete && resolvedViews === postMetrics.length;
     return {
       platform: "threads",
       username,
@@ -8330,11 +8329,10 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       refreshedAt,
       method: "http",
       complete,
-      postSetComplete,
-      scope: postSetComplete ? "authenticated_full_profile" : "public_partial",
+      scope: profilePostSetComplete ? "authenticated_full_profile" : "public_partial",
       error: complete
         ? undefined
-        : postSetComplete
+        : profilePostSetComplete
           ? `Threads 已读取完整帖子列表，但仍有 ${Math.max(0, postMetrics.length - resolvedViews)} 条浏览量暂不可用。`
           : "Threads HTTP 已读取账号快照，但认证 GraphQL 游标尚未完整。",
     };
