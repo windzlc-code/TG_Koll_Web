@@ -7243,6 +7243,12 @@ async function openAccountPublicUrl(url, accountId = "", { kind = "post" } = {})
     showMsg("commandMsg", kind === "homepage" ? "当前平台尚未绑定可打开的账号。" : "没有可打开的推文链接。", false);
     return;
   }
+  // A publication is public content, not an account-health probe.  Checking it
+  // through the bound account made one stale post block every valid post link.
+  if (kind === "post") {
+    window.open(safeUrl, "_blank", "noopener,noreferrer");
+    return;
+  }
   const account = selectedSocialAccount(cleanAccountId);
   const status = accountEffectiveStatus(account);
   if (["risk_control", "disabled", "banned"].includes(status)) {

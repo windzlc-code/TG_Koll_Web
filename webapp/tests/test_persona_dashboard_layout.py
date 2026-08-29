@@ -1614,6 +1614,16 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('appearance: none;', self.styles)
         self.assertIn('.persona-profile-editor-launch svg,', self.styles)
 
+    def test_published_post_links_do_not_probe_or_change_account_status(self):
+        public_url_start = self.console_script.index("async function openAccountPublicUrl(")
+        public_url_end = self.console_script.index("\nfunction openPersonaAccountHomepage()", public_url_start)
+        public_url = self.console_script[public_url_start:public_url_end]
+
+        post_start = public_url.index('if (kind === "post")')
+        account_probe = public_url.index("const account = selectedSocialAccount(cleanAccountId);")
+        self.assertLess(post_start, account_probe)
+        self.assertIn('window.open(safeUrl, "_blank", "noopener,noreferrer");', public_url[post_start:account_probe])
+
     def test_persona_create_keyword_limit_and_running_exit_confirmation_are_explicit(self):
         create_start = self.console_script.index("function renderPersonaCreateWorkbench()")
         create_end = self.console_script.index("\nfunction isPersonaCreateModalOpen()", create_start)
