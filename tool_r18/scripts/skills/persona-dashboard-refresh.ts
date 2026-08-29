@@ -830,7 +830,7 @@ async function main() {
         const previousMetrics = existingHotMetrics[key] || {};
         const usable = hasUsableMetrics(metrics);
         const complete = refreshAttempt.complete;
-        const hasFreshPostMetrics = Array.isArray(metrics.postMetrics);
+        const hasFreshPostMetrics = complete && Array.isArray(metrics.postMetrics);
         const mergedPostMetrics = hasFreshPostMetrics
           ? metrics.postMetrics.map((row: any) => ({ ...row }))
           : Array.isArray(previousMetrics.postMetrics) ? previousMetrics.postMetrics : [];
@@ -868,30 +868,10 @@ async function main() {
             }
           : {
               ...previousMetrics,
-              platform: "threads",
-              username: metrics.username || username,
-              accountId: target.accountId,
-              targetSource: target.source,
-              method: metrics.method,
-              feedUrl: metrics.feedUrl,
-              ...profileIdentityMetricPatch(metrics, mergedTotalViews),
               complete: false,
               scope: metrics.scope,
-              refreshedAt: metrics.refreshedAt,
               attemptedAt: metrics.refreshedAt,
-              posts: hasFreshPostMetrics ? mergedRows.length : metrics.posts,
-              likes: metrics.likes,
-              comments: metrics.comments,
-              reposts: metrics.reposts,
-              shares: metrics.shares,
-              scannedPosts: hasFreshPostMetrics ? mergedRows.length : metrics.scannedPosts,
-              ...(hasFreshPostMetrics ? {
-                postMetrics: mergedPostMetrics,
-                views: refreshedViews,
-                viewResolvedPosts: mergedResolvedViews,
-                viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
-              } : {}),
-              error: metrics.error || (usable ? "本次仅取得部分平台快照，已按本次结果更新；未清理平台外旧发布记录。" : "未读取到可用热点数据。"),
+              error: metrics.error || (usable ? "未取得完整账号帖子集合，本次未更新帖子数据。" : "未读取到可用热点数据。"),
             };
         if (complete) nextMetric.snapshots = mergeCompletedMetricSnapshots(previousMetrics, nextMetric);
         const updatedAt = new Date().toISOString();

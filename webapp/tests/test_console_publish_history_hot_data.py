@@ -395,12 +395,12 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         threads_refresh_start = REFRESH_SCRIPT.index("const key = hotMetricKey(username)")
         threads_refresh_end = REFRESH_SCRIPT.index("if (complete) nextMetric.snapshots", threads_refresh_start)
         threads_refresh = REFRESH_SCRIPT[threads_refresh_start:threads_refresh_end]
-        self.assertIn("const hasFreshPostMetrics = Array.isArray(metrics.postMetrics);", threads_refresh)
+        self.assertIn("const hasFreshPostMetrics = complete && Array.isArray(metrics.postMetrics);", threads_refresh)
         self.assertIn("metrics.postMetrics.map((row: any) => ({ ...row }))", threads_refresh)
         self.assertNotIn("mergePostMetrics(previousMetrics, metrics.postMetrics)", threads_refresh)
         self.assertNotIn("await backfillPublishedThreadsPostMetrics", threads_refresh)
         self.assertIn("refreshedAt: metrics.refreshedAt", threads_refresh)
-        self.assertIn("已按本次结果更新", threads_refresh)
+        self.assertIn("未更新帖子数据", threads_refresh)
         self.assertIn("ok: usable", REFRESH_SCRIPT)
 
     def test_manual_hot_refresh_uses_authenticated_source_and_reloads_history(self):
