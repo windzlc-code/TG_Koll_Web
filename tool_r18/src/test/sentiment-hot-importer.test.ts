@@ -3862,7 +3862,7 @@ Instagram
     expect(parsed.hasNextPage).toBe(true);
   });
 
-  it("keeps every owned post in a profile thread edge, including an attached poll post", () => {
+  it("counts only the top-level profile post when an attached poll shares the same thread edge", () => {
     const parsed = parseThreadsGraphqlProfilePagePayload({
       username: "chenyating119",
       payload: {
@@ -3902,7 +3902,52 @@ Instagram
       },
     });
 
-    expect(parsed.posts.map((post) => post.code)).toEqual(["DckrqLHCUBB", "DckrutXieeX"]);
+    expect(parsed.posts.map((post) => post.code)).toEqual(["DckrqLHCUBB"]);
+  });
+
+  it("keeps profile post media together with the complete metric row", () => {
+    const parsed = parseThreadsGraphqlProfilePagePayload({
+      username: "chenyating119",
+      payload: {
+        data: {
+          mediaData: {
+            edges: [{
+              node: {
+                thread_items: [{
+                  post: {
+                    pk: "post-with-media",
+                    code: "MediaPost1",
+                    user: { username: "chenyating119" },
+                    caption: { text: "带图片的推文" },
+                    canonical_url: "https://www.threads.com/@chenyating119/post/MediaPost1",
+                    like_count: 9,
+                    image_versions2: {
+                      candidates: [
+                        { url: "https://cdn.example/small.jpg", width: 320 },
+                        { url: "https://cdn.example/large.jpg", width: 1080 },
+                      ],
+                    },
+                    text_post_app_info: {
+                      direct_reply_count: 2,
+                      repost_count: 1,
+                      reshare_count: 3,
+                      view_count: 42,
+                    },
+                  },
+                }],
+              },
+            }],
+            page_info: { end_cursor: "", has_next_page: false },
+          },
+        },
+      },
+    });
+
+    expect(parsed.posts).toEqual([expect.objectContaining({
+      code: "MediaPost1",
+      viewCount: 42,
+      mediaItems: [{ type: "image", url: "https://cdn.example/large.jpg" }],
+    })]);
   });
 
   it("skips Threads GraphQL profile posts owned by another author", () => {

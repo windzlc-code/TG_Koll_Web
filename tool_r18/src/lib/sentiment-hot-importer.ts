@@ -647,6 +647,7 @@ export type ThreadsProfilePostHotMetrics = {
   repostCount?: number;
   shareCount?: number;
   viewCount?: number;
+  mediaItems?: SentimentHotMedia[];
   capturedAt?: string;
 };
 
@@ -7146,6 +7147,7 @@ type ThreadsGraphqlProfilePostAggregate = {
   repostCount: number;
   shareCount: number;
   viewCount?: number;
+  mediaItems?: SentimentHotMedia[];
 };
 
 function normalizeThreadsProfileUsername(value: unknown): string {
@@ -7265,7 +7267,8 @@ export function parseThreadsGraphqlProfilePagePayload(args: {
   const edges = Array.isArray(mediaData?.edges) ? mediaData.edges : [];
   const posts: ThreadsGraphqlProfilePostAggregate[] = [];
   for (const edge of edges) {
-    const threadItems = Array.isArray(edge?.node?.thread_items) ? edge.node.thread_items : [];
+    // One profile edge is one top-level thread. Later items are attachments.
+    const threadItems = Array.isArray(edge?.node?.thread_items) ? edge.node.thread_items.slice(0, 1) : [];
     for (const threadItem of threadItems) {
       const post = threadItem?.post;
       if (!isThreadsGraphqlProfileOwnedPost(args.username, post)) continue;
@@ -7288,6 +7291,7 @@ export function parseThreadsGraphqlProfilePagePayload(args: {
         post?.playCount,
       ].find((value) => value !== null && value !== undefined && value !== "");
       if (!pk || !sourceUrl) continue;
+      const mediaItems = extractThreadsGraphqlPostMedia(post);
       posts.push({
         pk,
         code: cleanText(post?.code),
@@ -7299,6 +7303,7 @@ export function parseThreadsGraphqlProfilePagePayload(args: {
         repostCount: Math.max(0, Number(post?.text_post_app_info?.repost_count) || 0),
         shareCount: Math.max(0, Number(post?.text_post_app_info?.reshare_count) || 0),
         ...(rawViewCount === undefined ? {} : { viewCount: Math.max(0, Number(rawViewCount) || 0) }),
+        ...(mediaItems.length ? { mediaItems } : {}),
       });
     }
   }
@@ -8270,13 +8275,15 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       repostCount: post.repostCount,
       shareCount: post.shareCount,
       ...(typeof post.viewCount === "number" ? { viewCount: post.viewCount } : {}),
+      ...(post.mediaItems?.length ? { mediaItems: post.mediaItems } : {}),
       capturedAt: refreshedAt,
     } satisfies ThreadsProfilePostHotMetrics));
     const resolvedViews = postMetrics.filter((post) => typeof post.viewCount === "number").length;
     const declaredPosts = typeof parsed.posts === "number" ? parsed.posts : postMetrics.length;
     const complete = hasSession
       && reachedEnd
-      && postMetrics.length >= declaredPosts;
+      && postMetrics.length >= declaredPosts
+      && resolvedViews === postMetrics.length;
     return {
       platform: "threads",
       username,
@@ -8290,7 +8297,9 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       comments: postMetrics.reduce((sum, post) => sum + Number(post.commentCount || 0), 0),
       reposts: postMetrics.reduce((sum, post) => sum + Number(post.repostCount || 0), 0),
       shares: postMetrics.reduce((sum, post) => sum + Number(post.shareCount || 0), 0),
-      views: postMetrics.reduce((sum, post) => sum + Number(post.viewCount || 0), 0),
+      ...(resolvedViews === postMetrics.length
+        ? { views: postMetrics.reduce((sum, post) => sum + Number(post.viewCount || 0), 0) }
+        : {}),
       viewResolvedPosts: resolvedViews,
       viewMissingPosts: Math.max(0, postMetrics.length - resolvedViews),
       scannedPosts: postMetrics.length,
@@ -8546,12 +8555,25 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
           const key = resolveThreadsProfilePostMergeKey(post);
           if (key) seededPosts.set(key, { ...(seededPosts.get(key) || {}), ...post });
         }
-        const allPosts = [...seededPosts.values()].sort((a, b) => {
-          const bTime = b.publishedAt ? Date.parse(b.publishedAt) : 0;
-          const aTime = a.publishedAt ? Date.parse(a.publishedAt) : 0;
-          if (bTime !== aTime) return bTime - aTime;
-          return String(b.pk || "").localeCompare(String(a.pk || ""));
-        });
+        const attachedPostCodes = new Set<string>();
+        for (const { payload } of capturedGraphqlPages.values()) {
+          const edges = Array.isArray(payload?.data?.mediaData?.edges) ? payload.data.mediaData.edges : [];
+          for (const edge of edges) {
+            const items = Array.isArray(edge?.node?.thread_items) ? edge.node.thread_items : [];
+            for (const item of items.slice(1)) {
+              const code = cleanText(item?.post?.code);
+              if (code) attachedPostCodes.add(code);
+            }
+          }
+        }
+        const allPosts = [...seededPosts.values()]
+          .filter((post) => !post.code || !attachedPostCodes.has(post.code))
+          .sort((a, b) => {
+            const bTime = b.publishedAt ? Date.parse(b.publishedAt) : 0;
+            const aTime = a.publishedAt ? Date.parse(a.publishedAt) : 0;
+            if (bTime !== aTime) return bTime - aTime;
+            return String(b.pk || "").localeCompare(String(a.pk || ""));
+          });
         if (allPosts.length) {
           const views = await collectThreadsViewCountsFromPostPages({
             context,
@@ -8570,6 +8592,7 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
               repostCount: post.repostCount,
               shareCount: post.shareCount,
               viewCount: typeof viewsByUrl[post.sourceUrl] === "number" ? viewsByUrl[post.sourceUrl] : post.viewCount,
+              ...(post.mediaItems?.length ? { mediaItems: post.mediaItems } : {}),
               capturedAt: refreshedAt,
             }))
             .filter((post) => !isSuspiciousThreadsProfileMetricMix(post));
@@ -8618,14 +8641,7 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
         && (parsed as any).postMetrics.length >= parsed.scannedPosts
         && Number((parsed as any).viewMissingPosts || 0) === 0
         && (parsed as any).profileReachedEnd === true;
-      const visibleProfileComplete = !hasLoginSessionCookie
-        && !attemptCookies.length
-        && threadsProfileHotMetricsHasValue(parsed)
-        && typeof parsed.scannedPosts === "number"
-        && parsed.scannedPosts > 0
-        && typeof parsed.views === "number"
-        && (parsed as any).profileReachedEnd === true;
-      const complete = authenticatedProfileComplete || visibleProfileComplete;
+      const complete = authenticatedProfileComplete;
       if (threadsProfileHotMetricsHasValue(parsed)) {
         const { profileReachedEnd: _profileReachedEnd, ...publicParsed } = parsed as any;
         const browserMetrics: ThreadsProfileHotMetrics = {
@@ -8635,7 +8651,7 @@ export async function fetchThreadsProfileHotMetrics(usernameInput: string): Prom
           refreshedAt,
           method: "browser",
           complete,
-          scope: complete && attemptCookies.length ? "authenticated_full_profile" : complete ? "profile_visible_light" : "public_partial",
+          scope: complete ? "authenticated_full_profile" : "public_partial",
           rawText: visible.rawText.slice(0, 4000),
           error: complete ? undefined : "Threads live login was not verified or profile pagination did not reach the end; only partial public profile data was read, so this result cannot be treated as full account metrics.",
         };
