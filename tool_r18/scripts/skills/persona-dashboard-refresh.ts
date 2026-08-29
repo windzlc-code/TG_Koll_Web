@@ -665,7 +665,7 @@ async function fillMissingProfileIdentityMetrics(username: string, metrics: any)
 function isCompleteMetrics(metrics: any): boolean {
   const scannedPosts = Number(metrics?.scannedPosts || 0);
   const refreshedAt = String(metrics?.refreshedAt || "").trim();
-  return (metrics?.postSetComplete === true || metrics?.complete === true)
+  return metrics?.complete === true
     && metrics?.scope === "authenticated_full_profile"
     && scannedPosts > 0
     && Array.isArray(metrics?.postMetrics)
@@ -804,7 +804,7 @@ async function main() {
           refreshAttempt = await retryIncompleteMetricFetch(
             () => useRssHub
               ? fetchThreadsProfileHotMetricsViaRssHub(username)
-              : fetchThreadsProfileHotMetrics(username, { authenticatedOnly: true }),
+              : fetchThreadsProfileHotMetrics(username),
             (candidate) => useRssHub
               ? candidate?.complete === true && Number.isFinite(Date.parse(String(candidate?.refreshedAt || "")))
               : isCompleteMetrics(candidate),

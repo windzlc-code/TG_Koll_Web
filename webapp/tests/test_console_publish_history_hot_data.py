@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CONSOLE_JS = (ROOT / "webapp" / "static" / "assets" / "console.js").read_text(encoding="utf-8")
 CONSOLE_CSS = (ROOT / "webapp" / "static" / "assets" / "console.css").read_text(encoding="utf-8")
 REFRESH_SCRIPT = (ROOT / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(encoding="utf-8")
+HOT_IMPORTER = (ROOT / "tool_r18" / "src" / "lib" / "sentiment-hot-importer.ts").read_text(encoding="utf-8")
 ARCHIVE_STORE = (ROOT / "tool_r18" / "src" / "runtime" / "node" / "persona-archive-store.ts").read_text(encoding="utf-8")
 
 
@@ -16,6 +17,17 @@ def function_source(name: str, next_name: str) -> str:
 
 
 class ConsolePublishHistoryHotDataTests(unittest.TestCase):
+    def test_threads_full_profile_keeps_public_bootstrap_and_authenticated_cursor_pagination(self):
+        start = HOT_IMPORTER.index("async function fetchThreadsProfileHotMetricsHttp")
+        end = HOT_IMPORTER.index("export async function fetchThreadsProfileLightMetrics", start)
+        fetcher = HOT_IMPORTER[start:end]
+
+        self.assertIn("cookies: []", fetcher)
+        self.assertIn("paginateThreadsProfileGraphqlPages", fetcher)
+        self.assertIn("cookies,\n        initialCursor", fetcher)
+        self.assertIn("const complete = hasSession", fetcher)
+        self.assertNotIn("activeCookies", fetcher)
+
     def test_post_order_badges_share_the_scaled_mobile_size(self):
         publish_index = CONSOLE_CSS[
             CONSOLE_CSS.index(".publish-post-card-index {"):
