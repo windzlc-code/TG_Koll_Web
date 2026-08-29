@@ -9030,7 +9030,8 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--danger, #b42318);
 }
 
-.persona-history-recognize,
+.persona-history-select-all,
+.persona-history-clear-selection,
 .persona-history-delete-selected {
   display: inline-flex;
   align-items: center;

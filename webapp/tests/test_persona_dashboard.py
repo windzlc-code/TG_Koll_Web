@@ -1400,6 +1400,58 @@ class PersonaDashboardApiTests(unittest.TestCase):
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         self.assertEqual(archives[0]["setup"].get("hotMetrics") or {}, {})
 
+    def test_dashboard_auto_refresh_defaults_to_twelve_hours(self):
+        with mock.patch.dict(
+            os.environ,
+            {
+                "PERSONA_DASHBOARD_RSSHUB_POLL_SECONDS": "",
+                "PERSONA_DASHBOARD_AUTO_REFRESH_SECONDS": "",
+            },
+        ):
+            self.assertEqual(server._persona_dashboard_monitor_interval_seconds(), 12 * 60 * 60)
+
+    def test_successful_dashboard_refresh_runs_publish_history_recognition(self):
+        self._write_archives()
+        process = mock.Mock()
+        process.poll.return_value = 0
+        process.returncode = 0
+        process.wait.return_value = 0
+        task_id = "pdr_recognize_after_refresh"
+
+        def start_process(*_args, **kwargs):
+            kwargs["stdout"].write(json.dumps({"ok": True, "message": "refresh ok"}))
+            kwargs["stdout"].flush()
+            return process
+
+        with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+            server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {
+                "id": task_id,
+                "status": "queued",
+                "user_id": 0,
+                "platform": "threads",
+            }
+        try:
+            with mock.patch.object(server.subprocess, "Popen", side_effect=start_process), \
+                 mock.patch.object(
+                     server,
+                     "_auto_recognize_persona_publish_records",
+                     return_value={"added_count": 2, "updated_count": 1},
+                 ) as recognize:
+                server._persona_dashboard_refresh_worker_v2(
+                    task_id,
+                    archive_id="persona-1",
+                    source="http_first",
+                )
+        finally:
+            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+                task = dict(server.PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {}))
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(task_id, None)
+
+        recognize.assert_called_once_with("persona-1")
+        self.assertEqual(task.get("status"), "success")
+        self.assertEqual((task.get("result") or {}).get("recognition", {}).get("added_count"), 2)
+        self.assertIn("识别 2 条平台推文", task.get("message") or "")
+
     def test_refresh_drops_stale_username_metrics_when_current_account_is_valid(self):
         self._write_archives()
         self._insert_social_account(

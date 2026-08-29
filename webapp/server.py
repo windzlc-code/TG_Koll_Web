@@ -22573,7 +22573,8 @@ def _persona_dashboard_refresh_worker_v2(
         refresh_task = PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {})
         refresh_user_id = int(refresh_task.get("user_id") or 0)
         refresh_platform = _persona_dashboard_refresh_platform(refresh_task.get("platform"))
-    for purge_id in _persona_dashboard_refresh_purge_archive_ids(archive_id, archive_ids):
+    refresh_archive_ids = _persona_dashboard_refresh_purge_archive_ids(archive_id, archive_ids)
+    for purge_id in refresh_archive_ids:
         _purge_unbound_persona_hot_metrics(purge_id, refresh_platform)
     # http_first stays on the collector HTTP path. Browser leases remain for
     # the explicit browser source and RSSHub detail backfill only.
@@ -22759,8 +22760,49 @@ def _persona_dashboard_refresh_worker_v2(
                 parsed = {"raw": stdout[-4000:]}
         partial = proc.returncode == 0 and isinstance(parsed, dict) and parsed.get("status") == "partial"
         status = "partial" if partial else ("success" if proc.returncode == 0 and isinstance(parsed, dict) and parsed.get("ok") else "failed")
+        recognition = {
+            "archive_count": 0,
+            "added_count": 0,
+            "updated_count": 0,
+            "failed_count": 0,
+        }
+        if status in {"success", "partial"}:
+            with PERSONA_DASHBOARD_REFRESH_LOCK:
+                PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
+                    "step": "识别平台推文",
+                    "progress": 96,
+                    "message": "热点数据已更新，正在识别平台上新增的推文...",
+                })
+            for refreshed_archive_id in refresh_archive_ids:
+                try:
+                    recognized = _auto_recognize_persona_publish_records(refreshed_archive_id)
+                    recognition["archive_count"] += 1
+                    recognition["added_count"] += int(recognized.get("added_count") or 0)
+                    recognition["updated_count"] += int(recognized.get("updated_count") or 0)
+                except Exception as exc:
+                    recognition["failed_count"] += 1
+                    logger.warning(
+                        "persona dashboard publish history recognition failed: archive=%s error=%s",
+                        refreshed_archive_id,
+                        exc,
+                    )
+            parsed = dict(parsed)
+            parsed["recognition"] = recognition
         parsed_message = str(parsed.get("message") or "").strip() if isinstance(parsed, dict) else ""
         refresh_message = parsed_message or "刷新完成，缓存数据与趋势快照已更新。"
+        if status in {"success", "partial"}:
+            added_count = int(recognition.get("added_count") or 0)
+            updated_count = int(recognition.get("updated_count") or 0)
+            failed_count = int(recognition.get("failed_count") or 0)
+            if added_count or updated_count:
+                refresh_message = (
+                    f"刷新完成，已识别 {added_count} 条平台推文"
+                    f"{f'，补齐 {updated_count} 条发布记录' if updated_count else ''}。"
+                )
+            elif failed_count:
+                refresh_message = f"热点数据已刷新，但有 {failed_count} 个人设的发布记录识别失败，请稍后重试。"
+            else:
+                refresh_message = "刷新完成，平台推文与互动数据已同步。"
         if status not in {"success", "partial"}:
             refresh_message = _persona_dashboard_refresh_user_message(
                 parsed_message,
@@ -22891,15 +22933,15 @@ def _matrix_publish_browser_pressure_active() -> bool:
 
 
 def _persona_dashboard_monitor_interval_seconds() -> int:
-    raw = os.getenv("PERSONA_DASHBOARD_RSSHUB_POLL_SECONDS") or os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_SECONDS") or "86400"
+    raw = os.getenv("PERSONA_DASHBOARD_RSSHUB_POLL_SECONDS") or os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_SECONDS") or "43200"
     try:
         return max(60, int(float(raw)))
     except Exception:
-        return 86400
+        return 43200
 
 
 def _persona_dashboard_monitor_enabled() -> bool:
-    # Dashboard data refresh is a low-frequency (24-hour by default) task.
+    # Dashboard data refresh is a low-frequency (12-hour by default) task.
     # It must not start a persona-level hot-capture workflow.
     return str(os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
