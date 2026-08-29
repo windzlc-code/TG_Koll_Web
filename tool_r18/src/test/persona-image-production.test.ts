@@ -367,8 +367,9 @@ describe("persona image production", () => {
     expect(result.ok).toBe(true);
     expect(calls[0].prompt).toContain("球场训练");
     expect(calls[0].prompt).toContain("盖帽");
-    expect(calls[0].prompt).toContain("Use the attached persona reference image as the source");
-    expect(calls[0].prompt).toContain("unless the current request explicitly asks to change the face or identity");
+    expect(calls[0].prompt).toContain("Use the attached persona reference only to preserve the same face, apparent age, gender");
+    expect(calls[0].prompt).toContain("Do not copy the reference sheet's white studio background");
+    expect(calls[0].prompt).not.toContain("Preserve every area and detail");
     expect(calls[0].prompt).toContain("篮球大佬");
     expect(calls[0].prompt).not.toContain("adult woman");
     expect(calls[0].prompt).not.toContain("adult lifestyle social-photo leaning");
@@ -602,6 +603,32 @@ describe("persona image production", () => {
     expect(calls[0].runningHubNewPersonaMode).toBe("text-to-image");
     expect(calls[0].prompt).toContain("gender: 女性");
     expect(calls[0].prompt).toContain("neat soft hands");
+  });
+
+  it("anchors POV hands to age and gender from the active persona reference", async () => {
+    const calls: any[] = [];
+    const imageAPI = {
+      generate: async (payload: any) => {
+        calls.push(payload);
+        return { ok: true, url: "https://example.com/pov.png" };
+      },
+    };
+
+    await generatePersonaImage(
+      imageAPI,
+      nonWorkflowSetup({
+        personaAppearance: "",
+        personaReferenceIdentity: "中国地区特征，18至22岁的成年女性",
+      }),
+      "坐在咖啡店看盘，第一人称视角，只露出握手机的手",
+      "pov",
+      "gemini-3.1-flash-image-preview",
+      "1:1",
+    );
+
+    expect(calls[0].prompt).toContain("reference identity: 中国地区特征，18至22岁的成年女性");
+    expect(calls[0].prompt).toContain("same adult woman");
+    expect(calls[0].prompt).toContain("no broad masculine palm");
   });
 
   it("exposes a route result for non-workflow missing references", () => {

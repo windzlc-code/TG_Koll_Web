@@ -377,16 +377,26 @@ export function shouldUseWorkflowPersonaImage(content: string, setup?: DramaSetu
 }
 
 function buildPovHandPersonaHint(setup: DramaSetup, signals: PersonaImageSignals): string {
+  const referenceIdentity = sanitizeSocialPromptText(setup.personaReferenceIdentity || "");
   const cues = [
+    referenceIdentity ? `reference identity: ${referenceIdentity}` : "",
     setup.personaGender ? `gender: ${setup.personaGender}` : "",
     setup.personaNationality ? `region or ethnicity cue: ${setup.personaNationality}` : "",
     setup.personaPersonality ? `personality cue: ${setup.personaPersonality}` : "",
     setup.personaStyle ? `style cue: ${setup.personaStyle}` : "",
     setup.personaAppearance || signals.appearanceHint ? `appearance cue: ${setup.personaAppearance || signals.appearanceHint}` : "",
   ].filter(Boolean).join("; ");
+  const identityText = [referenceIdentity, setup.personaGender || "", setup.personaAppearance || signals.appearanceHint || ""]
+    .join(" ")
+    .toLowerCase();
+  const handIdentity = /女性|女生|女人|女孩|female|woman|girl/.test(identityText)
+    ? "the visible hand and forearm must unmistakably belong to the same adult woman: feminine hand proportions, slender wrist and fingers, age-matched skin, no broad masculine palm, thick wrist, coarse arm hair, or elderly hand"
+    : /男性|男生|男人|男孩|male|man|boy/.test(identityText)
+      ? "the visible hand and forearm must unmistakably belong to the same adult man, with age-matched masculine proportions and skin"
+      : "the visible hand and forearm must match the persona gender and apparent age";
   return cues
-    ? `if hands or forearms are visible, they must match the persona identity cues (${cues}), natural skin texture, correct gender presentation and age impression, no mismatched hand model`
-    : "if hands or forearms are visible, keep them natural and consistent with the persona gender and age impression";
+    ? `${handIdentity}; exact persona identity cues: ${cues}; natural skin texture, no mismatched hand model`
+    : `${handIdentity}; natural skin texture, no mismatched hand model`;
 }
 
 export function buildSceneOnlyImagePrompt(content: string, setup: DramaSetup, signals: PersonaImageSignals): string {

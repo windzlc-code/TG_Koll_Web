@@ -262,6 +262,7 @@ export interface DramaSetup {
   // Persona image consistency
   personaAvatarUrl?: string;   // base64 data URL of uploaded reference image
   personaAppearance?: string;  // AI-extracted appearance description for image generation/search
+  personaReferenceIdentity?: string; // concise age/gender/region cue from the active reference image
   // Meme persona (梗圖/段子型): image-first, short text hooks, meme images from pool
   isMemePersona?: boolean;
   memeImagePool?: string[];    // scraped image URLs from source account posts

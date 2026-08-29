@@ -564,11 +564,18 @@ export async function generatePersonaImage(
   const withAvatar = Boolean(referenceImageUrl?.trim()) || built.withAvatar;
   const customCue = customPrompt?.trim();
   const finalPrompt = withAvatar
+    ? explicitReferenceUrl
       ? [
         "Use the attached persona reference image as the source. Preserve every area and detail that the current request does not explicitly ask to change; do not replace it with an unrelated image.",
         "Keep the recognizable face and identity unchanged unless the current request explicitly asks to change the face or identity. Clothing, pose, scene, action, camera angle, lighting, and props should follow the current visual request instead of copying the source image unchanged.",
         customCue ? `Highest priority current visual request: ${customCue}` : "",
         "If the base persona description conflicts with the current visual request, obey the current visual request for scene/outfit/action, while preserving the reference face identity.",
+        prompt,
+      ].filter(Boolean).join("\n")
+      : [
+        "Use the attached persona reference only to preserve the same face, apparent age, gender, ethnicity, hair, skin tone, and body proportions.",
+        "Create a completely new candid everyday photo from the current request. Do not copy the reference sheet's white studio background, straight standing pose, side-by-side views, outfit, polished skin, flat studio lighting, or model-sheet composition.",
+        customCue ? `Highest priority current visual request: ${customCue}` : "",
         prompt,
       ].filter(Boolean).join("\n")
     : [prompt, customCue || ""].filter(Boolean).join(", ");

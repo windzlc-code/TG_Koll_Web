@@ -368,6 +368,12 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
         "name": "加班观察者",
         "content": "记录加班后的便利店瞬间",
         "setup": {},
+        "personaReferenceSheet": "/data/persona/current.png",
+        "personaImageLibrary": [{
+            "id": "image-1",
+            "imageUrl": "/data/persona/current.png",
+            "prompt": "中国地区特征，18至22岁的成年女性，马尾，真实自然",
+        }],
         "posts": [{"id": "post-1", "content": "路过便利店买了杯冰美式"}],
     }
     monkeypatch.setattr(server, "_persona_archive_source_for_write", lambda _archive_id: (tmp_path / "unused.json", {}, [archive]))
@@ -394,6 +400,7 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
     assert result["ok"] is True
     assert captured["payload"]["mode"] == "scene"
     assert captured["payload"]["styleHint"] == "便利店夜景"
+    assert captured["payload"]["setup"]["personaReferenceIdentity"] == "中国地区特征，18至22岁的成年女性"
 
     default_result = server._run_persona_post_image_task("task-2", {
         "related_persona_id": "persona-1",

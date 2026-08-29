@@ -774,6 +774,12 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("function clearPersonaMediaTransientSelection", self.script)
         self.assertIn("replace_existing: false", self.script)
         self.assertIn("draft.mediaItems = personaEditablePostMediaItems", self.script)
+        attach = self.script.split("async function attachPersonaTaskMediaToPost", 1)[1].split(
+            "function setPersonaTaskMediaModifySource", 1
+        )[0]
+        self.assertIn("const taskGroups = new Map();", attach)
+        self.assertIn("media_indexes: taskItems.map((item) => Number(item.sourceIndex))", attach)
+        self.assertNotIn("media_indexes: [Number(item.sourceIndex)]", attach)
 
     def test_image_edit_flow_uses_textarea_box_and_preserves_label_fill(self):
         shared_border_selector = ".persona-media-prompt-field.is-image-editing .persona-media-prompt-input-shell::before {"

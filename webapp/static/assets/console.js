@@ -24048,26 +24048,32 @@ async function attachPersonaTaskMediaToPost() {
   showMsg("commandMsg", "正在把任务结果写回草稿媒体...", true);
   const attachedKeys = [];
   try {
-    for (const item of selectedItems) {
-      if (item.replacementFile) {
-        await savePersonaPostMediaFiles({
-          persona,
-          postId: post.id,
-          source: "posts",
-          files: [item.replacementFile],
-          replaceExisting: false,
-        });
-      } else {
-        await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts/${encodeURIComponent(post.id)}/media/from_task`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            task_id: item.taskId,
-            replace_existing: false,
-            media_indexes: [Number(item.sourceIndex)],
-          }),
-        });
-      }
+    const taskGroups = new Map();
+    for (const item of selectedItems.filter((row) => !row.replacementFile)) {
+      const taskId = String(item.taskId || "").trim();
+      if (!taskGroups.has(taskId)) taskGroups.set(taskId, []);
+      taskGroups.get(taskId).push(item);
+    }
+    for (const [taskId, taskItems] of taskGroups.entries()) {
+      await api(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/posts/${encodeURIComponent(post.id)}/media/from_task`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: taskId,
+          replace_existing: false,
+          media_indexes: taskItems.map((item) => Number(item.sourceIndex)),
+        }),
+      });
+      taskItems.forEach((item) => attachedKeys.push(personaTaskMediaKey(item)));
+    }
+    for (const item of selectedItems.filter((row) => row.replacementFile)) {
+      await savePersonaPostMediaFiles({
+        persona,
+        postId: post.id,
+        source: "posts",
+        files: [item.replacementFile],
+        replaceExisting: false,
+      });
       attachedKeys.push(personaTaskMediaKey(item));
     }
   } catch (error) {

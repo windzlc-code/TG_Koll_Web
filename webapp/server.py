@@ -11121,6 +11121,38 @@ def _persist_persona_post_image_aspect_ratio(task_id: str, aspect_ratio: str) ->
         )
 
 
+def _persona_reference_identity_hint(archive: dict[str, Any]) -> str:
+    """Return only age/gender/region identity cues from the active reference prompt."""
+    reference_url = _persona_reference_image_url_from_archive(archive)
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    item = next((
+        row for row in library
+        if isinstance(row, dict) and str(row.get("imageUrl") or "").strip() == reference_url
+    ), None)
+    if not item:
+        return ""
+    prompt = " ".join(str(item.get("prompt") or item.get("finalPrompt") or "").split())
+    if not prompt:
+        return ""
+    patterns = (
+        r"(?:中国台湾|台湾|中国|日本|韩国|东亚|東亞|东南亚|東南亞|欧美|歐美)(?:地区|地區)?(?:特征|特徵|面部骨相|面孔)?",
+        r"\d{1,2}\s*(?:至|到|[-~～—])\s*\d{1,2}\s*岁(?:的)?(?:成年)?(?:女性|男性)?",
+        r"\d{1,2}\s*岁(?:的)?(?:成年)?(?:女性|男性)?",
+        r"(?:年轻|年輕|成年)?(?:女性|男性|女人|男人)",
+    )
+    cues: list[str] = []
+    matched_spans: list[tuple[int, int]] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, prompt, re.I):
+            if any(match.start() < end and match.end() > start for start, end in matched_spans):
+                continue
+            cue = " ".join(match.group(0).split()).strip()
+            if cue and cue not in cues:
+                cues.append(cue)
+                matched_spans.append(match.span())
+    return "，".join(cues)[:120]
+
+
 def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     started_at = time.perf_counter()
     archive_id = str(payload.get("related_persona_id") or "").strip()
@@ -11170,8 +11202,12 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     aspect_ratio_ms = round((time.perf_counter() - aspect_started_at) * 1000, 1)
     style_hint = str(payload.get("image_style_label") or payload.get("style_hint") or payload.get("styleHint") or "").strip()[:24]
     image_mode = _normalize_persona_post_image_mode(payload.get("image_mode") or payload.get("mode") or ("auto" if style_hint else "person"))
+    cli_setup = dict(archive.get("setup") if isinstance(archive.get("setup"), dict) else {})
+    reference_identity = _persona_reference_identity_hint(archive)
+    if reference_identity:
+        cli_setup["personaReferenceIdentity"] = reference_identity
     cli_payload = {
-        "setup": archive.get("setup") if isinstance(archive.get("setup"), dict) else {},
+        "setup": cli_setup,
         "content": source_content or prompt,
         "customPrompt": prompt or None,
         "styleHint": style_hint or None,
