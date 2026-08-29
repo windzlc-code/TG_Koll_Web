@@ -17886,6 +17886,68 @@ def _hot_metric_matches_bound_identity(
     return (not has_current_identity) or matches
 
 
+def _publish_record_matches_profile_identity(
+    record: dict[str, Any],
+    platform: str,
+    identity: dict[str, str],
+) -> bool:
+    record_platform, record_account_id, record_username = _publish_record_account_identity(record)
+    if record_platform and record_platform != platform:
+        return False
+    current_account_id = str(identity.get("account_id") or "").strip()
+    current_username = str(identity.get("username") or "").strip().lstrip("@").lower()
+    if current_username:
+        record_url = _confirmed_archive_publish_url(record) or _published_record_url(record)
+        if platform == "threads" and _threads_username_from_published_url(record_url).lower() == current_username:
+            return True
+        if record_username and record_username.strip().lstrip("@").lower() == current_username:
+            return True
+    return bool(current_account_id and record_account_id and current_account_id == record_account_id)
+
+
+def _sync_publish_record_profile_identity(
+    record: dict[str, Any],
+    platform: str,
+    identity: dict[str, str],
+) -> bool:
+    changed = False
+    account_id = str(identity.get("account_id") or "").strip()
+    username = str(identity.get("username") or "").strip().lstrip("@")
+    if platform and str(record.get("platform") or "").strip().lower() != platform:
+        record["platform"] = platform
+        changed = True
+    for key in ("sourceMeta", "publishedMeta"):
+        meta = record.get(key) if isinstance(record.get(key), dict) else {}
+        next_meta = dict(meta)
+        if account_id and str(next_meta.get("accountId") or "").strip() != account_id:
+            next_meta["accountId"] = account_id
+        if username and str(next_meta.get("username") or "").strip().lstrip("@").lower() != username.lower():
+            next_meta["username"] = username
+        if platform and str(next_meta.get("platform") or "").strip().lower() != platform:
+            next_meta["platform"] = platform
+        if next_meta != meta:
+            record[key] = next_meta
+            changed = True
+    for target in record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []:
+        if not isinstance(target, dict):
+            continue
+        if platform and str(target.get("platform") or "").strip().lower() != platform:
+            target["platform"] = platform
+            changed = True
+        target_meta = target.get("publishedMeta") if isinstance(target.get("publishedMeta"), dict) else {}
+        next_target_meta = dict(target_meta)
+        if account_id and str(next_target_meta.get("accountId") or "").strip() != account_id:
+            next_target_meta["accountId"] = account_id
+        if username and str(next_target_meta.get("username") or "").strip().lstrip("@").lower() != username.lower():
+            next_target_meta["username"] = username
+        if platform and str(next_target_meta.get("platform") or "").strip().lower() != platform:
+            next_target_meta["platform"] = platform
+        if next_target_meta != target_meta:
+            target["publishedMeta"] = next_target_meta
+            changed = True
+    return changed
+
+
 @_persona_archive_write_locked
 def _auto_recognize_persona_publish_records(archive_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
@@ -17897,6 +17959,48 @@ def _auto_recognize_persona_publish_records(archive_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="人设不存在。")
     identities = _persona_bound_account_identities(clean_id, archive)
     history = [item for item in (archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []) if item is not None]
+    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
+    hot_metrics = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
+    new_records: list[dict[str, Any]] = []
+    updated_count = 0
+    removed_count = 0
+    for platform_key, platform_metric in hot_metrics.items():
+        if (
+            not isinstance(platform_metric, dict)
+            or not (
+                platform_metric.get("complete") is True
+                or platform_metric.get("postSetComplete") is True
+            )
+            or str(platform_metric.get("scope") or "").strip() != "authenticated_full_profile"
+        ):
+            continue
+        platform_name = _normalize_persona_content_platform(platform_metric.get("platform") or platform_key)
+        if platform_name not in {"threads", "instagram"}:
+            continue
+        if not _hot_metric_matches_bound_identity(platform_name, platform_metric, identities):
+            continue
+        identity = identities.get(platform_name) if isinstance(identities.get(platform_name), dict) else {}
+        snapshot_rows: dict[str, dict[str, Any]] = {}
+        for row in _deduplicated_dashboard_post_metrics(platform_metric.get("postMetrics")):
+            parsed = _hot_metric_row_canonical_permalink(row)
+            if not parsed or parsed[0] != platform_name:
+                continue
+            url_key = _normalized_dashboard_post_url(parsed[1])
+            if url_key:
+                snapshot_rows[url_key] = row
+        reconciled_history: list[Any] = []
+        for item in history:
+            if not isinstance(item, dict) or not _publish_record_matches_profile_identity(item, platform_name, identity):
+                reconciled_history.append(item)
+                continue
+            existing_url = _normalized_dashboard_post_url(_confirmed_archive_publish_url(item))
+            if existing_url and existing_url not in snapshot_rows:
+                removed_count += 1
+                continue
+            if existing_url and _sync_publish_record_profile_identity(item, platform_name, identity):
+                updated_count += 1
+            reconciled_history.append(item)
+        history = reconciled_history
     seen_urls: set[str] = set()
     for item in history:
         if not isinstance(item, dict):
@@ -17904,10 +18008,6 @@ def _auto_recognize_persona_publish_records(archive_id: str) -> dict[str, Any]:
         existing_url = _normalized_dashboard_post_url(_confirmed_archive_publish_url(item))
         if existing_url:
             seen_urls.add(existing_url)
-    setup = archive.get("setup") if isinstance(archive.get("setup"), dict) else {}
-    hot_metrics = setup.get("hotMetrics") if isinstance(setup.get("hotMetrics"), dict) else {}
-    new_records: list[dict[str, Any]] = []
-    updated_count = 0
     for platform_key, platform_metric in hot_metrics.items():
         if not isinstance(platform_metric, dict):
             continue
@@ -17955,12 +18055,13 @@ def _auto_recognize_persona_publish_records(archive_id: str) -> dict[str, Any]:
             ).strip() or "自动识别的已发布推文"
             new_records.append(_publish_record_from_profile_post(platform, canonical_url, content, identity, row))
             seen_urls.add(url_key)
-    if new_records or updated_count:
+    if new_records or updated_count or removed_count:
         _write_persona_archive_publish_history(clean_id, [*new_records, *history])
     return {
         "ok": True,
         "added_count": len(new_records),
         "updated_count": updated_count,
+        "removed_count": removed_count,
         "publish_history": _list_persona_archive_publish_history(clean_id),
     }
 
@@ -22764,6 +22865,7 @@ def _persona_dashboard_refresh_worker_v2(
             "archive_count": 0,
             "added_count": 0,
             "updated_count": 0,
+            "removed_count": 0,
             "failed_count": 0,
         }
         if status in {"success", "partial"}:
@@ -22779,6 +22881,7 @@ def _persona_dashboard_refresh_worker_v2(
                     recognition["archive_count"] += 1
                     recognition["added_count"] += int(recognized.get("added_count") or 0)
                     recognition["updated_count"] += int(recognized.get("updated_count") or 0)
+                    recognition["removed_count"] += int(recognized.get("removed_count") or 0)
                 except Exception as exc:
                     recognition["failed_count"] += 1
                     logger.warning(
@@ -22793,11 +22896,13 @@ def _persona_dashboard_refresh_worker_v2(
         if status in {"success", "partial"}:
             added_count = int(recognition.get("added_count") or 0)
             updated_count = int(recognition.get("updated_count") or 0)
+            removed_count = int(recognition.get("removed_count") or 0)
             failed_count = int(recognition.get("failed_count") or 0)
-            if added_count or updated_count:
+            if added_count or updated_count or removed_count:
                 refresh_message = (
                     f"刷新完成，已识别 {added_count} 条平台推文"
                     f"{f'，补齐 {updated_count} 条发布记录' if updated_count else ''}。"
+                    f"{f' 已清理 {removed_count} 条平台已不存在的旧记录。' if removed_count else ''}"
                 )
             elif failed_count:
                 refresh_message = f"热点数据已刷新，但有 {failed_count} 个人设的发布记录识别失败，请稍后重试。"

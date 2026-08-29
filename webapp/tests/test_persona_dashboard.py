@@ -1911,6 +1911,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn('env["TG_THREADS_PROFILE_HTTP_ONLY"] = "1"', worker)
         self.assertIn("first: 50", importer)
         self.assertIn("function profileMetricsHttpOnly()", importer)
+        self.assertIn("cookies,\n        authenticated: true", importer)
+        self.assertIn("candidateProfilePath !== expectedProfilePath", importer)
+        self.assertIn("const postSetComplete = authenticatedProfile", importer)
+        self.assertIn("const complete = postSetComplete && resolvedViews === postMetrics.length", importer)
+        self.assertNotIn("cookies: [],\n      headers: profileHeaders", importer)
 
     def test_http_first_dashboard_refresh_does_not_lease_browser(self):
         task_id = "pdr_http_only_no_browser"
@@ -2019,13 +2024,14 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/threads/accounts/example/sync").status_code, 404)
         self.assertEqual(self.client.post("/api/instagram/accounts/example/sync").status_code, 404)
 
-    def test_full_refresh_requires_every_target_and_keeps_stale_timestamp_on_partial_data(self):
+    def test_full_refresh_requires_every_target_and_updates_partial_snapshot_timestamp(self):
         script = (server.ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(encoding="utf-8")
 
         self.assertIn("const fullyRefreshed = requiredResults.length > 0 && requiredResults.every((item) => item.ok && !item.partial && !item.skipped);", script)
-        self.assertIn("refreshedAt: previousMetrics.refreshedAt,", script)
+        self.assertIn("refreshedAt: metrics.refreshedAt,", script)
         self.assertIn("attemptedAt: metrics.refreshedAt", script)
         self.assertIn("const complete = refreshAttempt.complete;", script)
+        self.assertIn("已按本次结果更新", script)
 
     def test_refresh_retries_only_incomplete_accounts_and_reports_partial_completion(self):
         script = (server.ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(encoding="utf-8")
@@ -3461,6 +3467,93 @@ class PersonaDashboardApiTests(unittest.TestCase):
             json={},
         )
         self.assertEqual(missing_url.status_code, 400)
+
+    def test_complete_profile_post_set_replaces_stale_history_and_rebinds_live_posts(self):
+        self._write_archives()
+        self._insert_social_account(
+            account_id="threads-current",
+            persona_id="persona-1",
+            platform="threads",
+            username="history",
+        )
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"] = {
+            "threads:history": {
+                "platform": "threads",
+                "accountId": "threads-current",
+                "username": "history",
+                "complete": False,
+                "postSetComplete": True,
+                "scope": "authenticated_full_profile",
+                "scannedPosts": 2,
+                "postMetrics": [
+                    {
+                        "sourceUrl": "https://www.threads.com/@history/post/abc",
+                        "content": "post",
+                        "likeCount": 10,
+                    },
+                    {
+                        "sourceUrl": "https://www.threads.com/@history/post/live-old-binding",
+                        "content": "still live",
+                        "likeCount": 4,
+                    },
+                ],
+            }
+        }
+        archives[0]["publishHistory"].extend([
+            {
+                "id": "old-live",
+                "platform": "threads",
+                "publishedUrl": "https://www.threads.net/@history/post/live-old-binding",
+                "content": "still live",
+                "sourceMeta": {"platform": "threads", "accountId": "threads-old", "username": "history"},
+                "publishedMeta": {"platform": "threads", "accountId": "threads-old", "username": "history"},
+            },
+            {
+                "id": "old-deleted",
+                "platform": "threads",
+                "publishedUrl": "https://www.threads.net/@history/post/deleted-on-platform",
+                "content": "deleted",
+                "sourceMeta": {"platform": "threads", "accountId": "threads-current", "username": "history"},
+                "publishedMeta": {"platform": "threads", "accountId": "threads-current", "username": "history"},
+            },
+        ])
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        result = server._auto_recognize_persona_publish_records("persona-1")
+
+        self.assertEqual(result["removed_count"], 1)
+        self.assertEqual(result["added_count"], 0)
+        saved = json.loads(path.read_text(encoding="utf-8"))[0]["publishHistory"]
+        self.assertNotIn("old-deleted", {row.get("id") for row in saved})
+        rebound = next(row for row in saved if row.get("id") == "old-live")
+        self.assertEqual(rebound["sourceMeta"]["accountId"], "threads-current")
+        self.assertEqual(rebound["publishedMeta"]["accountId"], "threads-current")
+
+    def test_partial_profile_refresh_does_not_delete_unseen_history(self):
+        self._write_archives()
+        self._insert_social_account(
+            account_id="threads-current",
+            persona_id="persona-1",
+            platform="threads",
+            username="history",
+        )
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"]["threads"].update({
+            "accountId": "threads-current",
+            "complete": False,
+            "scope": "public_partial",
+            "postMetrics": [],
+        })
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        result = server._auto_recognize_persona_publish_records("persona-1")
+
+        self.assertEqual(result["removed_count"], 0)
+        saved = json.loads(path.read_text(encoding="utf-8"))[0]["publishHistory"]
+        self.assertEqual([row.get("id") for row in saved], ["pub-1"])
 
     def test_persona_publish_history_lists_visible_records(self):
         self._write_archives()

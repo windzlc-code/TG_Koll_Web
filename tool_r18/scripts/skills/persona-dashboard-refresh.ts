@@ -830,21 +830,16 @@ async function main() {
         const previousMetrics = existingHotMetrics[key] || {};
         const usable = hasUsableMetrics(metrics);
         const complete = refreshAttempt.complete;
-        let mergedPostMetrics = Array.isArray(metrics.postMetrics)
-          ? mergePostMetrics(previousMetrics, metrics.postMetrics)
+        const hasFreshPostMetrics = Array.isArray(metrics.postMetrics);
+        const mergedPostMetrics = hasFreshPostMetrics
+          ? metrics.postMetrics.map((row: any) => ({ ...row }))
           : Array.isArray(previousMetrics.postMetrics) ? previousMetrics.postMetrics : [];
-        if (Array.isArray(mergedPostMetrics)) {
-          mergedPostMetrics = await backfillPublishedThreadsPostMetrics({
-            archive,
-            username,
-            postMetrics: mergedPostMetrics,
-            targetProfileDir: target.profileDir,
-            capturedAt: metrics.refreshedAt || new Date().toISOString(),
-          });
-        }
         const mergedRows = Array.isArray(mergedPostMetrics) ? mergedPostMetrics : [];
         const mergedResolvedViews = mergedRows.filter(postViewResolved).length;
         const mergedTotalViews = mergedRows.reduce((sum: number, post: any) => sum + (typeof post?.viewCount === "number" ? post.viewCount : 0), 0);
+        const refreshedViews = mergedResolvedViews > 0
+          ? mergedTotalViews
+          : typeof metrics.views === "number" ? metrics.views : (hasFreshPostMetrics ? undefined : previousMetrics.views);
         const nextMetric = complete
           ? {
               ...previousMetrics,
@@ -855,20 +850,19 @@ async function main() {
               method: metrics.method,
               feedUrl: metrics.feedUrl,
               ...profileIdentityMetricPatch(metrics, mergedTotalViews),
-              posts: useRssHub ? mergedRows.length : Math.max(Number(metrics.posts || 0), mergedRows.length),
+              posts: hasFreshPostMetrics ? mergedRows.length : Number(metrics.posts || 0),
               likes: metrics.likes,
               comments: metrics.comments,
               reposts: metrics.reposts,
               shares: metrics.shares,
-              views: mergedResolvedViews > 0
-                ? mergedTotalViews
-                : typeof metrics.views === "number" ? metrics.views : previousMetrics.views,
+              views: refreshedViews,
               viewResolvedPosts: mergedResolvedViews,
               viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
-              scannedPosts: useRssHub ? mergedRows.length : Math.max(Number(metrics.scannedPosts || 0), mergedRows.length),
+              scannedPosts: hasFreshPostMetrics ? mergedRows.length : Number(metrics.scannedPosts || 0),
               postMetrics: mergedPostMetrics,
               complete: true,
-              scope: useRssHub ? "rsshub_feed_monitor" : "authenticated_full_profile",
+              postSetComplete: metrics.postSetComplete === true || complete,
+              scope: metrics.scope || (useRssHub ? "rsshub_feed_monitor" : "authenticated_full_profile"),
               refreshedAt: metrics.refreshedAt,
               attemptedAt: metrics.refreshedAt,
               error: undefined,
@@ -883,20 +877,23 @@ async function main() {
               feedUrl: metrics.feedUrl,
               ...profileIdentityMetricPatch(metrics, mergedTotalViews),
               complete: false,
+              postSetComplete: metrics.postSetComplete === true,
               scope: metrics.scope,
-              refreshedAt: previousMetrics.refreshedAt,
+              refreshedAt: metrics.refreshedAt,
               attemptedAt: metrics.refreshedAt,
-              posts: mergedRows.length ? Math.max(Number(metrics.posts || 0), mergedRows.length) : metrics.posts,
-              scannedPosts: mergedRows.length ? Math.max(Number(metrics.scannedPosts || 0), mergedRows.length) : metrics.scannedPosts,
-              ...(mergedRows.length ? {
+              posts: hasFreshPostMetrics ? mergedRows.length : metrics.posts,
+              likes: metrics.likes,
+              comments: metrics.comments,
+              reposts: metrics.reposts,
+              shares: metrics.shares,
+              scannedPosts: hasFreshPostMetrics ? mergedRows.length : metrics.scannedPosts,
+              ...(hasFreshPostMetrics ? {
                 postMetrics: mergedPostMetrics,
-                views: mergedResolvedViews > 0
-                  ? mergedTotalViews
-                  : typeof metrics.views === "number" ? metrics.views : previousMetrics.views,
+                views: refreshedViews,
                 viewResolvedPosts: mergedResolvedViews,
                 viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
               } : {}),
-              error: metrics.error || (usable ? "本次只读取到局部资料，未覆盖为完整热点数据。" : "未读取到可用热点数据。"),
+              error: metrics.error || (usable ? "本次仅取得部分平台快照，已按本次结果更新；未清理平台外旧发布记录。" : "未读取到可用热点数据。"),
             };
         if (complete) nextMetric.snapshots = mergeCompletedMetricSnapshots(previousMetrics, nextMetric);
         const updatedAt = new Date().toISOString();
@@ -937,7 +934,7 @@ async function main() {
           archiveId: archive.id,
           name: archive.name,
           username,
-          ok: complete,
+          ok: usable,
           partial: !complete,
           targetSource: target.source,
           attempts: refreshAttempt.attempts,

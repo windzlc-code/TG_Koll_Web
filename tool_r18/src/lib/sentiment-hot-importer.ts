@@ -668,6 +668,7 @@ export type ThreadsProfileHotMetrics = {
   refreshedAt: string;
   method: "http" | "browser" | "reader" | "failed";
   complete?: boolean;
+  postSetComplete?: boolean;
   scope?: "authenticated_full_profile" | "public_partial" | "reader_public_partial" | "profile_visible_light" | "failed";
   lightRefreshedAt?: string;
   postMetrics?: ThreadsProfilePostHotMetrics[];
@@ -8209,20 +8210,52 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
   const hasSession = hasThreadsProfileLoginSessionCookie(cookies);
   const profileUrl = buildThreadsProfileUrl(username);
   try {
-    const profileHeaders = {
-      accept: "text/html,application/xhtml+xml",
-      "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-    };
-    const response = await requestSessionHttpText({
-      url: profileUrl,
-      cookies: [],
-      headers: profileHeaders,
-      timeoutMs: 8_000,
-    });
-    const readerText = spiderHtmlToReaderText(response.text, profileUrl);
-    if (!response.ok || /\/login(?:[/?]|$)/i.test(response.url) || detectThreadsProfileLoginWall(readerText)) {
-      throw new Error(`Threads HTTP 登录态不可用（HTTP ${response.status || 0}）。`);
+    let response: Awaited<ReturnType<typeof requestSessionHttpText>> | null = null;
+    let readerText = "";
+    let authenticatedProfile = false;
+    const attempts = hasSession ? [
+      {
+        cookies,
+        authenticated: true,
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+      },
+      { cookies: [] as any[], authenticated: false, userAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" },
+    ] : [
+      { cookies: [] as any[], authenticated: false, userAgent: "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" },
+    ];
+    for (const attempt of attempts) {
+      const candidate = await requestSessionHttpText({
+        url: profileUrl,
+        cookies: attempt.cookies,
+        headers: {
+          accept: "text/html,application/xhtml+xml",
+          "user-agent": attempt.userAgent,
+        },
+        timeoutMs: 8_000,
+      }).catch(() => null);
+      const candidateText = candidate ? spiderHtmlToReaderText(candidate.text, profileUrl) : "";
+      const candidateProfilePath = (() => {
+        try {
+          return decodeURIComponent(new URL(candidate?.url || "").pathname).replace(/\/+$/, "").toLowerCase();
+        } catch {
+          return "";
+        }
+      })();
+      const expectedProfilePath = `/@${username.toLowerCase()}`;
+      if (
+        !candidate?.ok
+        || candidateProfilePath !== expectedProfilePath
+        || /\/login(?:[/?]|$)/i.test(candidate.url)
+        || detectThreadsProfileLoginWall(candidateText)
+      ) {
+        continue;
+      }
+      response = candidate;
+      readerText = candidateText;
+      authenticatedProfile = attempt.authenticated;
+      break;
     }
+    if (!response) throw new Error("Threads HTTP 登录态不可用。");
     const byKey = new Map<string, ThreadsGraphqlProfilePostAggregate>();
     let reachedEnd = false;
     let initialCursor = "";
@@ -8272,9 +8305,10 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
     } satisfies ThreadsProfilePostHotMetrics));
     const resolvedViews = postMetrics.filter((post) => typeof post.viewCount === "number").length;
     const declaredPosts = typeof parsed.posts === "number" ? parsed.posts : postMetrics.length;
-    const complete = hasSession
+    const postSetComplete = authenticatedProfile
       && reachedEnd
       && postMetrics.length >= declaredPosts;
+    const complete = postSetComplete && resolvedViews === postMetrics.length;
     return {
       platform: "threads",
       username,
@@ -8296,8 +8330,13 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       refreshedAt,
       method: "http",
       complete,
-      scope: complete ? "authenticated_full_profile" : "public_partial",
-      error: complete ? undefined : "Threads HTTP 已读取账号快照，但 GraphQL 游标尚未完整。",
+      postSetComplete,
+      scope: postSetComplete ? "authenticated_full_profile" : "public_partial",
+      error: complete
+        ? undefined
+        : postSetComplete
+          ? `Threads 已读取完整帖子列表，但仍有 ${Math.max(0, postMetrics.length - resolvedViews)} 条浏览量暂不可用。`
+          : "Threads HTTP 已读取账号快照，但认证 GraphQL 游标尚未完整。",
     };
   } catch (error: any) {
     return {
