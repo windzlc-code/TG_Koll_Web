@@ -72,6 +72,8 @@ import {
   extractThreadsProfileHttpPayloads,
   extractThreadsProfileUserId,
   extractThreadsProfileUserStats,
+  extractThreadsInsightsDateRange,
+  parseThreadsHomepageRecentViewsPayload,
   isThreadsAuthenticatedProfileResponse,
   paginateThreadsProfileGraphqlPages,
   buildSpiderSearchMarkdownFromHotCandidates,
@@ -3727,6 +3729,37 @@ Instagram
 
     expect(visible.parsed.recentViews).toBe(61000);
     expect(visible.parsed.views).toBeUndefined();
+  });
+
+  it("parses the homepage recent views from the authenticated Threads insights response", () => {
+    const payload = {
+      data: {
+        xigTextAppViewer: {
+          text_app_account_insights: {
+            status: "AVAILABLE",
+            data: {
+              engagement_summary: {
+                views: [
+                  { label: "ALL", value: 65402 },
+                  { label: "FOLLOWER", value: 1292 },
+                  { label: "NON_FOLLOWER", value: 64110 },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(parseThreadsHomepageRecentViewsPayload(payload)).toBe(65402);
+    expect(parseThreadsHomepageRecentViewsPayload({ data: {} })).toBeUndefined();
+  });
+
+  it("uses the same date range rendered by the Threads insights page", () => {
+    expect(extractThreadsInsightsDateRange(`{"dateRange":{"startDate":"2026-07-31","endDate":"2026-08-29"}}`)).toEqual({
+      startDate: "2026-07-31",
+      endDate: "2026-08-29",
+    });
   });
 
   it("builds a domain-scoped cookie header without leaking cross-platform sessions", () => {

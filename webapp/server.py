@@ -17416,7 +17416,7 @@ def _serve_persona_archive_post_media_thumbnail(archive_id: str, post_id: str, i
     return _proxy_remote_persona_media(remote_url)
 
 
-def _persona_archive_publish_history_media_path(archive_id: str, history_id: str, index: int) -> Path:
+def _persona_archive_publish_history_media_source(archive_id: str, history_id: str, index: int) -> tuple[Path | None, str]:
     clean_archive_id = str(archive_id or "").strip()
     clean_history_id = str(history_id or "").strip()
     if not clean_archive_id or not clean_history_id:
@@ -17441,14 +17441,39 @@ def _persona_archive_publish_history_media_path(archive_id: str, history_id: str
     raw_url = str((media_items[index] or {}).get("url") or "").strip()
     if not raw_url:
         raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    if re.match(r"^https?://", raw_url, re.I):
+        return None, raw_url
     path = Path(raw_url).expanduser().resolve()
     if not path.is_file() or not _is_allowed_dashboard_media_path(path):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
-    return path
+    return path, ""
 
 
-def _serve_persona_archive_publish_history_media(archive_id: str, history_id: str, index: int) -> FileResponse:
-    return _serve_persona_media_file(_persona_archive_publish_history_media_path(archive_id, history_id, index))
+def _persona_archive_publish_history_media_path(archive_id: str, history_id: str, index: int) -> Path:
+    local_path, _ = _persona_archive_publish_history_media_source(archive_id, history_id, index)
+    if local_path:
+        return local_path
+    raise HTTPException(status_code=404, detail="媒体尚未缓存到本地。")
+
+
+def _serve_persona_archive_publish_history_media(
+    archive_id: str,
+    history_id: str,
+    index: int,
+    *,
+    range_header: str = "",
+) -> Response:
+    local_path, remote_url = _persona_archive_publish_history_media_source(archive_id, history_id, index)
+    if local_path:
+        return _serve_persona_media_file(local_path)
+    return _proxy_remote_persona_media(remote_url, range_header=range_header)
+
+
+def _serve_persona_archive_publish_history_media_thumbnail(archive_id: str, history_id: str, index: int) -> Response:
+    local_path, remote_url = _persona_archive_publish_history_media_source(archive_id, history_id, index)
+    if local_path:
+        return _serve_persona_media_thumbnail(local_path)
+    return _proxy_remote_persona_media(remote_url)
 
 
 def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any]]:
@@ -21666,13 +21691,19 @@ def _previewable_persona_media_items(
             else:
                 reason = "原始媒体文件不存在"
         elif archive_id and history_id:
-            path = Path(url).expanduser().resolve()
-            if path.is_file():
+            is_remote = bool(re.match(r"^https?://", url, re.I))
+            path = None if is_remote else Path(url).expanduser().resolve()
+            if is_remote or (path is not None and path.is_file()):
                 base_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/publish_history/{quote(str(history_id).strip(), safe='')}/media/{index}"
-                version = _persona_media_cache_token(path)
-                preview_url = f"{base_url}?v={version}"
-                if path.suffix.lower() in IMAGE_EXTS or path.suffix.lower() in VIDEO_EXTS:
-                    thumbnail_url = f"{base_url}/thumbnail?v={version}"
+                if path is not None and path.is_file():
+                    version = _persona_media_cache_token(path)
+                    preview_url = f"{base_url}?v={version}"
+                    if path.suffix.lower() in IMAGE_EXTS or path.suffix.lower() in VIDEO_EXTS:
+                        thumbnail_url = f"{base_url}/thumbnail?v={version}"
+                else:
+                    preview_url = base_url
+                    incoming_thumb = str((item or {}).get("thumbnail_url") or (item or {}).get("thumbnailUrl") or "").strip()
+                    thumbnail_url = incoming_thumb if incoming_thumb and incoming_thumb != url else f"{base_url}/thumbnail"
             else:
                 reason = "原始媒体文件不存在"
         elif re.match(r"^(?:/|[A-Za-z]:[\\/]|~[\\/])", url):
@@ -27550,12 +27581,12 @@ def create_app() -> FastAPI:
         return {"ok": True, "publish_history": _list_persona_archive_publish_history(archive_id)}
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/media/{index}")
-    def api_persona_dashboard_persona_publish_history_media(archive_id: str, history_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _serve_persona_archive_publish_history_media(archive_id, history_id, index)
+    def api_persona_dashboard_persona_publish_history_media(archive_id: str, history_id: str, index: int, request: Request, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _serve_persona_archive_publish_history_media(archive_id, history_id, index, range_header=str(request.headers.get("range") or ""))
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/media/{index}/thumbnail")
     def api_persona_dashboard_persona_publish_history_media_thumbnail(archive_id: str, history_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _serve_persona_media_thumbnail(_persona_archive_publish_history_media_path(archive_id, history_id, index))
+        return _serve_persona_archive_publish_history_media_thumbnail(archive_id, history_id, index)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/requeue")
     def api_persona_dashboard_persona_publish_history_requeue(archive_id: str, history_id: str, user: dict[str, Any] = Depends(require_persona_owner)):

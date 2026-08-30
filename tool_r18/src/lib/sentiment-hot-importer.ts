@@ -8062,6 +8062,23 @@ export function extractThreadsProfileUserStats(html: string, usernameInput: stri
   return out;
 }
 
+export function extractThreadsInsightsDateRange(html: string): { startDate: string; endDate: string } | undefined {
+  const match = String(html || "").match(/"dateRange":\{"startDate":"(\d{4}-\d{2}-\d{2})","endDate":"(\d{4}-\d{2}-\d{2})"\}/);
+  if (!match?.[1] || !match?.[2]) return undefined;
+  return { startDate: match[1], endDate: match[2] };
+}
+
+export function parseThreadsHomepageRecentViewsPayload(payload: any): number | undefined {
+  const insights = payload?.data?.xigTextAppViewer?.text_app_account_insights;
+  if (cleanText(insights?.status).toUpperCase() !== "AVAILABLE") return undefined;
+  const views = Array.isArray(insights?.data?.engagement_summary?.views)
+    ? insights.data.engagement_summary.views
+    : [];
+  const total = views.find((row: any) => cleanText(row?.label).toUpperCase() === "ALL")?.value;
+  const value = Number(total);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 export function extractThreadsProfileHttpPayloads(html: string): any[] {
   const payloads: any[] = [];
   const seen = new Set<string>();
@@ -8090,6 +8107,7 @@ export function extractThreadsProfileHttpPayloads(html: string): any[] {
 }
 
 const THREADS_PROFILE_TAB_DOC_ID = "27090536597286483";
+const THREADS_ACCOUNT_INSIGHTS_DOC_ID = "27865891553051869";
 const THREADS_PROFILE_TAB_RELAY_FLAGS = [
   "__relay_internal__pv__BarcelonaIsLoggedInrelayprovider",
   "__relay_internal__pv__BarcelonaHasProfileSelfReplyContextrelayprovider",
@@ -8156,6 +8174,68 @@ function cookieValueByName(cookies: any[], name: string): string {
     cleanText(cookie?.name).toLowerCase() === wanted
   ));
   return cleanText(found?.value);
+}
+
+function threadsInsightsTimeZoneId(): string {
+  const name = cleanText(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+  if (!name || name.toUpperCase() === "UTC") return "UTC";
+  return name.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+}
+
+async function fetchThreadsHomepageRecentViews(cookies: any[]): Promise<number | undefined> {
+  if (!hasThreadsProfileLoginSessionCookie(cookies)) return undefined;
+  const insightsUrl = "https://www.threads.com/insights";
+  const page = await requestSessionHttpText({
+    url: insightsUrl,
+    cookies,
+    headers: {
+      accept: "text/html,application/xhtml+xml",
+      "user-agent": "Mozilla/5.0",
+    },
+    timeoutMs: 8_000,
+  }).catch(() => null);
+  if (!page?.ok || /\/login(?:[/?]|$)/i.test(page.url)) return undefined;
+  const dateRange = extractThreadsInsightsDateRange(page.text);
+  const lsd = extractThreadsHtmlBootToken(page.text, "LSD");
+  const csrf = cookieValueByName(cookies, "csrftoken");
+  if (!dateRange || !lsd || !csrf) return undefined;
+  const dtsg = extractThreadsHtmlBootToken(page.text, "DTSGInitialData");
+  const body = new URLSearchParams({
+    lsd,
+    doc_id: THREADS_ACCOUNT_INSIGHTS_DOC_ID,
+    variables: JSON.stringify({
+      startDate: dateRange.startDate,
+      endDate: dateRange.endDate,
+      timeZoneID: threadsInsightsTimeZoneId(),
+    }),
+    fb_api_caller_class: "RelayModern",
+    fb_api_req_friendly_name: "BarcelonaInsightsPageAccountInsightsQuery",
+    server_timestamps: "true",
+    ...(dtsg ? { fb_dtsg: dtsg } : {}),
+  }).toString();
+  const response = await requestSessionHttpText({
+    url: "https://www.threads.com/api/graphql",
+    cookies,
+    method: "POST",
+    body,
+    headers: {
+      accept: "*/*",
+      "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
+      "user-agent": "Mozilla/5.0",
+      "x-fb-lsd": lsd,
+      "x-csrftoken": csrf,
+      "x-fb-friendly-name": "BarcelonaInsightsPageAccountInsightsQuery",
+      "x-ig-app-id": "238260118351668",
+      origin: "https://www.threads.com",
+      referer: insightsUrl,
+      "sec-fetch-site": "same-origin",
+      "sec-fetch-mode": "cors",
+      "sec-fetch-dest": "empty",
+    },
+    timeoutMs: 8_000,
+  }).catch(() => null);
+  if (!response?.ok) return undefined;
+  return parseThreadsHomepageRecentViewsPayload(safeJson(response.text));
 }
 
 function threadsProfileTabRelayVariables(args: {
@@ -8317,6 +8397,9 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
     if (!response.ok || /\/login(?:[/?]|$)/i.test(response.url) || detectThreadsProfileLoginWall(readerText)) {
       throw new Error(`Threads HTTP 页面不可用（HTTP ${response.status || 0}）。`);
     }
+    const homepageRecentViewsPromise = authenticatedProfile
+      ? fetchThreadsHomepageRecentViews(cookies)
+      : Promise.resolve(undefined);
     const byKey = new Map<string, ThreadsGraphqlProfilePostAggregate>();
     let reachedEnd = false;
     let initialCursor = "";
@@ -8358,6 +8441,7 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
     const posts = [...byKey.values()];
     if (!posts.length) throw new Error("Threads HTTP 页面未返回可识别的账号帖子。");
     const viewsByUrl = await collectThreadsViewCountsFromPostHttpPages(posts);
+    const homepageRecentViews = await homepageRecentViewsPromise;
     const postMetrics = posts.map((post) => ({
       pk: post.pk,
       code: post.code,
@@ -8389,7 +8473,13 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       ...userStats,
       ...(typeof parsed.followers === "number" ? { followers: parsed.followers } : {}),
       ...(typeof parsed.following === "number" ? { following: parsed.following } : {}),
-      ...(typeof parsed.recentViews === "number" ? { recentViews: parsed.recentViews } : {}),
+      ...(typeof homepageRecentViews === "number"
+        ? { recentViews: homepageRecentViews }
+        : typeof userStats.recentViews === "number"
+          ? { recentViews: userStats.recentViews }
+          : typeof parsed.recentViews === "number"
+            ? { recentViews: parsed.recentViews }
+            : {}),
       posts: Math.max(declaredPosts, postMetrics.length),
       likes: postMetrics.reduce((sum, post) => sum + Number(post.likeCount || 0), 0),
       comments: postMetrics.reduce((sum, post) => sum + Number(post.commentCount || 0), 0),

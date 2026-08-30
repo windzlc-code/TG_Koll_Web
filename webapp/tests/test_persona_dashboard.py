@@ -3579,6 +3579,43 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(media_resp.headers["content-type"], "image/png")
         self.assertEqual(media_resp.headers["cache-control"], "public, max-age=31536000, immutable")
 
+    def test_persona_publish_history_proxies_remote_platform_media(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        remote_url = "https://scontent.cdninstagram.com/v/t51.2885-15/remote-history.jpg"
+        archives[0]["publishHistory"][0]["publishedMeta"]["mediaItems"] = [
+            {"url": remote_url, "type": "image", "label": "platform-history"}
+        ]
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        listed = self.client.get("/api/persona_dashboard/personas/persona-1/publish_history")
+
+        self.assertEqual(listed.status_code, 200)
+        item = next(
+            row
+            for row in listed.json()["publish_history"][0]["media_items"]
+            if row.get("url") == remote_url
+        )
+        self.assertFalse(item["unavailable"])
+        self.assertTrue(item["preview_url"].startswith(
+            "/api/persona_dashboard/personas/persona-1/publish_history/pub-1/media/"
+        ))
+        self.assertEqual(item["thumbnail_url"], f'{item["preview_url"]}/thumbnail')
+
+        with mock.patch.object(
+            server,
+            "_proxy_remote_persona_media",
+            return_value=server.Response(content=b"remote", media_type="image/jpeg"),
+        ) as proxy:
+            media_resp = self.client.get(item["preview_url"], headers={"Range": "bytes=0-15"})
+            thumbnail_resp = self.client.get(item["thumbnail_url"])
+
+        self.assertEqual(media_resp.status_code, 200)
+        self.assertEqual(thumbnail_resp.status_code, 200)
+        self.assertEqual(proxy.call_args_list[0], mock.call(remote_url, range_header="bytes=0-15"))
+        self.assertEqual(proxy.call_args_list[1], mock.call(remote_url))
+
     def test_persona_publish_history_counts_a_permalink_once(self):
         self._write_archives()
         path = self.tool_runtime_dir / "persona_archives.json"
