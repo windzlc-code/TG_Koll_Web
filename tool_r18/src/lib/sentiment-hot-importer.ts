@@ -7846,6 +7846,30 @@ type SessionHttpResult = {
   text: string;
 };
 
+export function isThreadsAuthenticatedProfileResponse(args: {
+  ok: boolean;
+  url: string;
+  html: string;
+  targetUsername: string;
+}): boolean {
+  let hostname = "";
+  let pathname = "";
+  try {
+    const parsed = new URL(args.url || "");
+    hostname = parsed.hostname.toLowerCase();
+    pathname = decodeURIComponent(parsed.pathname).replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return false;
+  }
+  const expectedPath = `/@${String(args.targetUsername || "").replace(/^@+/, "").trim().toLowerCase()}`;
+  return Boolean(
+    args.ok
+    && (hostname === "threads.com" || hostname === "www.threads.com")
+    && pathname === expectedPath
+    && extractThreadsAuthenticatedViewerUsername(args.html),
+  );
+}
+
 function platformProxyUrl(platform: "threads" | "instagram"): string {
   return cleanText(
     platform === "threads"
@@ -8154,7 +8178,7 @@ function threadsProfileTabRelayVariables(args: {
   return variables;
 }
 
-async function paginateThreadsProfileGraphqlPages(args: {
+export async function paginateThreadsProfileGraphqlPages(args: {
   username: string;
   html: string;
   cookies: any[];
@@ -8260,8 +8284,9 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
   const profileUrl = buildThreadsProfileUrl(username);
   try {
     let authenticatedProfile = false;
+    let authenticatedResponse: SessionHttpResult | null = null;
     if (hasSession) {
-      const authenticatedResponse = await requestSessionHttpText({
+      authenticatedResponse = await requestSessionHttpText({
         url: profileUrl,
         cookies,
         headers: {
@@ -8270,29 +8295,24 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
         },
         timeoutMs: 8_000,
       }).catch(() => null);
-      const authenticatedProfilePath = (() => {
-        try {
-          return decodeURIComponent(new URL(authenticatedResponse?.url || "").pathname).replace(/\/+$/, "").toLowerCase();
-        } catch {
-          return "";
-        }
-      })();
-      const expectedProfilePath = `/@${username.toLowerCase()}`;
-      authenticatedProfile = Boolean(
-        authenticatedResponse?.ok
-        && authenticatedProfilePath === expectedProfilePath
-        && extractThreadsAuthenticatedViewerUsername(authenticatedResponse.text) === username.toLowerCase(),
-      );
+      authenticatedProfile = Boolean(authenticatedResponse && isThreadsAuthenticatedProfileResponse({
+        ok: authenticatedResponse.ok,
+        url: authenticatedResponse.url,
+        html: authenticatedResponse.text,
+        targetUsername: username,
+      }));
     }
-    const response = await requestSessionHttpText({
-      url: profileUrl,
-      cookies: [],
-      headers: {
-        accept: "text/html,application/xhtml+xml",
-        "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-      },
-      timeoutMs: 8_000,
-    });
+    const response = authenticatedProfile && authenticatedResponse
+      ? authenticatedResponse
+      : await requestSessionHttpText({
+          url: profileUrl,
+          cookies: [],
+          headers: {
+            accept: "text/html,application/xhtml+xml",
+            "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+          },
+          timeoutMs: 8_000,
+        });
     const readerText = spiderHtmlToReaderText(response.text, profileUrl);
     if (!response.ok || /\/login(?:[/?]|$)/i.test(response.url) || detectThreadsProfileLoginWall(readerText)) {
       throw new Error(`Threads HTTP 页面不可用（HTTP ${response.status || 0}）。`);

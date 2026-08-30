@@ -17,12 +17,14 @@ def function_source(name: str, next_name: str) -> str:
 
 
 class ConsolePublishHistoryHotDataTests(unittest.TestCase):
-    def test_threads_full_profile_keeps_public_bootstrap_and_authenticated_cursor_pagination(self):
+    def test_threads_full_profile_uses_authenticated_bootstrap_and_cursor_pagination(self):
         start = HOT_IMPORTER.index("async function fetchThreadsProfileHotMetricsHttp")
         end = HOT_IMPORTER.index("export async function fetchThreadsProfileLightMetrics", start)
         fetcher = HOT_IMPORTER[start:end]
 
-        self.assertIn("cookies: []", fetcher)
+        self.assertIn("const response = authenticatedProfile && authenticatedResponse", fetcher)
+        self.assertIn("cookies,", fetcher)
+        self.assertIn("cookies: [],", fetcher)
         self.assertIn("paginateThreadsProfileGraphqlPages", fetcher)
         self.assertIn("cookies,\n        proxyUrl: platformProxyUrl(\"threads\"),\n        initialCursor", fetcher)
         self.assertIn("const profilePostSetComplete = authenticatedProfile", fetcher)

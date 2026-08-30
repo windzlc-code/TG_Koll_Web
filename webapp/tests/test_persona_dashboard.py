@@ -1911,8 +1911,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn('env["TG_THREADS_PROFILE_HTTP_ONLY"] = "1"', worker)
         self.assertIn("first: 50", importer)
         self.assertIn("function profileMetricsHttpOnly()", importer)
-        self.assertIn("extractThreadsAuthenticatedViewerUsername(authenticatedResponse.text) === username.toLowerCase()", importer)
-        self.assertIn("authenticatedProfilePath === expectedProfilePath", importer)
+        self.assertIn("isThreadsAuthenticatedProfileResponse", importer)
+        self.assertIn("pathname === expectedPath", importer)
         self.assertIn("const profilePostSetComplete = authenticatedProfile", importer)
         self.assertIn("const complete = profilePostSetComplete && resolvedViews === postMetrics.length", importer)
         self.assertNotIn("cookies: [],\n      headers: profileHeaders", importer)
@@ -3496,6 +3496,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                         "sourceUrl": "https://www.threads.com/@history/post/live-old-binding",
                         "content": "still live",
                         "likeCount": 4,
+                        "mediaItems": [{"url": "https://cdn.example/live.jpg", "type": "image"}],
                     },
                 ],
             }
@@ -3529,6 +3530,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
         rebound = next(row for row in saved if row.get("id") == "old-live")
         self.assertEqual(rebound["sourceMeta"]["accountId"], "threads-current")
         self.assertEqual(rebound["publishedMeta"]["accountId"], "threads-current")
+        listed = server._list_persona_archive_publish_history("persona-1")
+        rebound_compact = next(row for row in listed if row.get("id") == "old-live")
+        self.assertEqual(rebound_compact["media_items"][0]["url"], "https://cdn.example/live.jpg")
 
     def test_partial_profile_refresh_does_not_delete_unseen_history(self):
         self._write_archives()

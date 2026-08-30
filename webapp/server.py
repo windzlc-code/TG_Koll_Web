@@ -17953,20 +17953,13 @@ def _auto_recognize_persona_publish_records(archive_id: str) -> dict[str, Any]:
                 removed_count += 1
                 continue
             if existing_url:
-                next_identity = {
-                    "platform": platform_name,
-                    "accountId": str(identity.get("account_id") or "").strip(),
-                    "username": str(identity.get("username") or "").strip().lstrip("@"),
-                }
-                changed = False
-                for meta_key in ("sourceMeta", "publishedMeta"):
-                    current_meta = item.get(meta_key) if isinstance(item.get(meta_key), dict) else {}
-                    merged_meta = {**current_meta, **{key: value for key, value in next_identity.items() if value}}
-                    if merged_meta != current_meta:
-                        item[meta_key] = merged_meta
-                        changed = True
-                if changed:
-                    updated_count += 1
+                snapshot_row = snapshot_rows.get(existing_url)
+                parsed_row = _hot_metric_row_canonical_permalink(snapshot_row) if snapshot_row else None
+                if parsed_row:
+                    before = copy.deepcopy(item)
+                    _attach_permalink_to_publish_record(item, platform_name, parsed_row[1], identity, snapshot_row)
+                    if item != before:
+                        updated_count += 1
             reconciled_history.append(item)
         history = reconciled_history
     seen_urls: set[str] = set()

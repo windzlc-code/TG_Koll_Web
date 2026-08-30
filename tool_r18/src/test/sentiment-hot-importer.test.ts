@@ -72,6 +72,8 @@ import {
   extractThreadsProfileHttpPayloads,
   extractThreadsProfileUserId,
   extractThreadsProfileUserStats,
+  isThreadsAuthenticatedProfileResponse,
+  paginateThreadsProfileGraphqlPages,
   buildSpiderSearchMarkdownFromHotCandidates,
   parseThreadsDetailEngagementMarkdown,
   parseThreadsDetailMediaMarkdown,
@@ -3762,6 +3764,77 @@ Instagram
   it("extracts a Threads profile user id without using the target account's own login", () => {
     const html = `{"username":"sherryjim68","pk":"43951714650","full_name":"SherryJim"}`;
     expect(extractThreadsProfileUserId(html, "sherryjim68")).toBe("43951714650");
+  });
+
+  it("accepts a logged-in collector viewer when it opens another Threads profile", () => {
+    const html = `<script>{"viewer":{"fbid":"1","id":"2","username":"collector_account"}}</script>`;
+    expect(isThreadsAuthenticatedProfileResponse({
+      ok: true,
+      url: "https://www.threads.com/@target_account",
+      html,
+      targetUsername: "target_account",
+    })).toBe(true);
+    expect(isThreadsAuthenticatedProfileResponse({
+      ok: true,
+      url: "https://www.threads.com/login",
+      html,
+      targetUsername: "target_account",
+    })).toBe(false);
+  });
+
+  it("paginates Threads profile GraphQL with the same authenticated cookies and advancing cursor", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          mediaData: {
+            edges: [{ node: { thread_items: [{ post: {
+              pk: "post-2",
+              code: "PostTwo",
+              user: { username: "target_account" },
+              canonical_url: "https://www.threads.com/@target_account/post/PostTwo",
+            } }] } }],
+            page_info: { end_cursor: "cursor-2", has_next_page: true },
+          },
+        },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          mediaData: {
+            edges: [{ node: { thread_items: [{ post: {
+              pk: "post-3",
+              code: "PostThree",
+              user: { username: "target_account" },
+              canonical_url: "https://www.threads.com/@target_account/post/PostThree",
+            } }] } }],
+            page_info: { end_cursor: "", has_next_page: false },
+          },
+        },
+      }), { status: 200 }));
+
+    const html = `
+      <script>["LSD",[],{"token":"lsd-token"}]</script>
+      <script>{"username":"target_account","pk":"43951714650"}</script>
+    `;
+    const result = await paginateThreadsProfileGraphqlPages({
+      username: "target_account",
+      html,
+      cookies: [
+        { name: "sessionid", value: "session-value", domain: ".threads.com" },
+        { name: "csrftoken", value: "csrf-value", domain: ".threads.com" },
+      ],
+      initialCursor: "cursor-1",
+      hasNextPage: true,
+    });
+
+    expect(result.reachedEnd).toBe(true);
+    expect(result.posts.map((post) => post.code)).toEqual(["PostTwo", "PostThree"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const secondInit = fetchMock.mock.calls[1]?.[1] as RequestInit;
+    expect(String((firstInit.headers as Record<string, string>).cookie)).toContain("sessionid=session-value");
+    expect(String((secondInit.headers as Record<string, string>).cookie)).toContain("csrftoken=csrf-value");
+    expect(new URLSearchParams(String(firstInit.body)).get("variables")).toContain('"after":"cursor-1"');
+    expect(new URLSearchParams(String(secondInit.body)).get("variables")).toContain('"after":"cursor-2"');
   });
 
   it("extracts public Threads follower and profile view counts from embedded profile JSON", () => {
