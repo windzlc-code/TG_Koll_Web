@@ -213,6 +213,17 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         self.assertNotIn('<a class="button" href="/pricing.html">查看订阅中心</a>', self.console_markup)
         self.assertIn('window.location.assign("/pricing.html")', events)
 
+    def test_insufficient_points_uses_the_shared_purchase_choice_modal(self):
+        self.assertIn('boundaryCode === "INSUFFICIENT_POINTS"', self.console_script)
+        self.assertIn('function showBillingInsufficientPrompt()', self.console_script)
+        self.assertIn('title: "算力点已用完"', self.console_script)
+        self.assertIn('{ value: "credits", text: "购买算力", primary: true }', self.console_script)
+        self.assertIn('{ value: "membership", text: "续费 / 购买会员" }', self.console_script)
+        self.assertIn('window.location.assign("/pricing.html#packages")', self.console_script)
+        self.assertIn('window.location.assign("/pricing.html#plans")', self.console_script)
+        self.assertIn('id="packages"', self.pricing_markup)
+        self.assertIn('id="plans"', self.pricing_markup)
+
     def test_billing_dashboard_has_console_and_mobile_layouts(self):
         dashboard_styles = self.console_styles[
             self.console_styles.index("/* Billing command center */"):

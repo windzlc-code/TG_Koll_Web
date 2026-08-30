@@ -869,11 +869,11 @@ class AccountGovernanceTests(unittest.TestCase):
         self.assertEqual(balances[selected_ids[1]], 2.5 * server.commercial_billing.POINT_SCALE)
         self.assertEqual(
             balances[int(untouched["id"])],
-            5 * server.commercial_billing.POINT_SCALE,
+            20 * server.commercial_billing.POINT_SCALE,
         )
         self.assertEqual(
             [int(row["amount_units"]) for row in adjustments],
-            [-2.5 * server.commercial_billing.POINT_SCALE] * 2,
+            [-17.5 * server.commercial_billing.POINT_SCALE] * 2,
         )
         self.assertEqual(len(notices), 2)
         self.assertTrue(all(str(row["title"]) == "Vecto 算力已更新" for row in notices))
@@ -955,7 +955,7 @@ class AccountGovernanceTests(unittest.TestCase):
                 "SELECT COUNT(*) AS count FROM billing_ledger WHERE user_id = ? AND event_type = 'admin_adjustment'",
                 (user_id,),
             ).fetchone()
-        self.assertEqual(int(wallet["credit_units"]), 5 * server.commercial_billing.POINT_SCALE)
+        self.assertEqual(int(wallet["credit_units"]), 20 * server.commercial_billing.POINT_SCALE)
         self.assertEqual(int(adjustments["count"]), 0)
 
     def test_batch_credit_replay_uses_idempotency_key_without_double_grant(self):

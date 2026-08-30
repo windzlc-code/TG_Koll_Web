@@ -181,8 +181,8 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(user["approval_status"], "approved")
         self.assertEqual(int(user["is_disabled"]), 0)
-        self.assertEqual(int(wallet["credit_units"]), 5 * server.commercial_billing.POINT_SCALE)
-        self.assertIn("5", str(welcome["title"]))
+        self.assertEqual(int(wallet["credit_units"]), 20 * server.commercial_billing.POINT_SCALE)
+        self.assertIn("20", str(welcome["title"]))
         self.assertEqual(user["full_name"], "Verified Email User")
         self.assertEqual(user["phone"], "")
         self.assertEqual(user["company"], "Vecto QA")
@@ -410,7 +410,7 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
                 "SELECT title FROM user_notifications WHERE user_id = ? AND source_key = 'welcome-credit-v1'",
                 (int(google_user["id"]),),
             ).fetchone()
-        self.assertEqual(int(wallet["credit_units"]), 5 * server.commercial_billing.POINT_SCALE)
+        self.assertEqual(int(wallet["credit_units"]), 20 * server.commercial_billing.POINT_SCALE)
         self.assertIsNotNone(welcome)
 
         delivered = {}

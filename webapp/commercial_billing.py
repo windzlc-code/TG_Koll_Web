@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 POINT_SCALE = 100
-NEW_USER_WELCOME_POINTS = 5
+NEW_USER_WELCOME_POINTS = 20
 LEGACY_R18_ACTION_SKUS = {
     "ad_video_480p_second",
     "ad_video_720p_second",

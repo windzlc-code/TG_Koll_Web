@@ -5891,9 +5891,9 @@ def _initialize_new_customer_benefits(
         conn,
         user_id=int(user_id),
         category="official",
-        title="新用户赠送 5 点算力点",
+        title="新用户赠送 20 点算力点",
         body=(
-            "欢迎加入 Vecto。系统已赠送 5 点算力点，可用于 AI 内容生成等需要算力点的功能；"
+            "欢迎加入 Vecto。系统已赠送 20 点算力点，可用于 AI 内容生成等需要算力点的功能；"
             "其他基础功能免费开放。"
         ),
         source_key="welcome-credit-v1",

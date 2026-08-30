@@ -484,6 +484,10 @@
       payload = { detail: raw };
     }
     if (!response.ok) {
+      const code = String(payload?.detail?.code || payload?.code || "").trim();
+      if (response.status === 402 && code === "INSUFFICIENT_POINTS") {
+        window.dispatchEvent(new CustomEvent("vecto:billing-insufficient", { detail: { code } }));
+      }
       const detail = payload?.detail?.message || payload?.detail || payload?.message || `请求失败（${response.status}）`;
       const error = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
       error.status = response.status;

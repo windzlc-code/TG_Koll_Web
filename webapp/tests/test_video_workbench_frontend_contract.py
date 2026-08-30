@@ -116,6 +116,11 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn('body.append("params_json"', self.workbench_js)
         self.assertIn('body.append("video_module", module.id)', self.workbench_js)
 
+    def test_video_requests_reuse_the_shared_insufficient_points_modal(self):
+        self.assertIn('code === "INSUFFICIENT_POINTS"', self.workbench_js)
+        self.assertIn('new CustomEvent("vecto:billing-insufficient"', self.workbench_js)
+        self.assertIn('window.addEventListener("vecto:billing-insufficient"', self.console_js)
+
     def test_oral_copy_preview_restores_three_candidate_selection(self):
         self.assertIn("function chooseSpeechCandidate(preview)", self.workbench_js)
         self.assertIn("preview?.speech_candidates", self.workbench_js)

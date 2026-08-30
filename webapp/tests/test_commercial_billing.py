@@ -108,8 +108,8 @@ class CommercialBillingTests(unittest.TestCase):
                 "SELECT COUNT(*) AS count FROM billing_ledger WHERE idempotency_key = ?",
                 (f"welcome-credit-v1:{self.user_id}",),
             ).fetchone()
-        self.assertEqual(first["credit_units"], 5 * commercial_billing.POINT_SCALE)
-        self.assertEqual(second["credit_units"], 5 * commercial_billing.POINT_SCALE)
+        self.assertEqual(first["credit_units"], 20 * commercial_billing.POINT_SCALE)
+        self.assertEqual(second["credit_units"], 20 * commercial_billing.POINT_SCALE)
         self.assertEqual(int(entries["count"]), 1)
 
     def test_billing_enforcement_defaults_to_enabled_and_blocks_zero_point_wallets(self):

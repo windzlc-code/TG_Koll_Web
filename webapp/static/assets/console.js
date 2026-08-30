@@ -1748,6 +1748,35 @@ function safeExternalHttpUrl(value) {
   }
 }
 
+let billingInsufficientPrompt = null;
+
+function showBillingInsufficientPrompt() {
+  if (billingInsufficientPrompt) return billingInsufficientPrompt;
+  billingInsufficientPrompt = openConsoleModal({
+    title: "算力点已用完",
+    message: "当前可用算力点不足。请选择购买算力，或续费 / 购买会员后继续使用。",
+    showConfirm: false,
+    cancelText: "稍后处理",
+    extraActions: [
+      { value: "credits", text: "购买算力", primary: true },
+      { value: "membership", text: "续费 / 购买会员" },
+    ],
+    modalKey: "billing-insufficient-points",
+    stack: true,
+  }).then((action) => {
+    if (action === "credits") window.location.assign("/pricing.html#packages");
+    if (action === "membership") window.location.assign("/pricing.html#plans");
+    return action;
+  }).finally(() => {
+    billingInsufficientPrompt = null;
+  });
+  return billingInsufficientPrompt;
+}
+
+window.addEventListener("vecto:billing-insufficient", () => {
+  void showBillingInsufficientPrompt();
+});
+
 async function api(path, options = {}) {
   const requestGeneration = tenantStateGeneration;
   let response;
@@ -1762,6 +1791,9 @@ async function api(path, options = {}) {
   try { data = text ? JSON.parse(text) : {}; } catch { data = { detail: text }; }
   if (!response.ok) {
     const boundaryCode = String(data?.detail?.code || data?.code || "").trim();
+    if (response.status === 402 && boundaryCode === "INSUFFICIENT_POINTS") {
+      void showBillingInsufficientPrompt();
+    }
     if (response.status === 428 && boundaryCode === "mfa_setup_required") {
       handleSessionBoundary({ status: response.status, code: boundaryCode });
     } else {
@@ -1845,6 +1877,9 @@ function localizeConsoleMessage(text, status = 0) {
   }
   if (text && typeof text === "object") {
     if (Array.isArray(text.detail)) return localizeConsoleMessage(text.detail, status);
+    if (String(text.code || "").trim() === "INSUFFICIENT_POINTS") {
+      return "算力点不足，请选择购买算力或续费会员。";
+    }
     return localizeConsoleMessage(text.detail || text.message || text.msg || JSON.stringify(text), status);
   }
   const raw = String(text || "").trim();
