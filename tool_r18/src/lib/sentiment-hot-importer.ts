@@ -8325,8 +8325,10 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
     for (const payload of extractThreadsProfileHttpPayloads(response.text)) {
       const page = parseThreadsGraphqlProfilePagePayload({ username, payload });
       if (page.pageInfoResolved) initialPageInfoResolved = true;
-      if (page.hasNextPage && page.endCursor) {
+      if (page.pageInfoResolved && page.hasNextPage) {
         initialHasNext = true;
+      }
+      if (page.hasNextPage && page.endCursor) {
         initialCursor = page.endCursor;
       }
       for (const post of page.posts) {
@@ -8348,7 +8350,7 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
         if (key) byKey.set(key, { ...(byKey.get(key) || {}), ...post });
       }
       if (extra.reachedEnd) reachedEnd = true;
-    } else if (initialPageInfoResolved) {
+    } else if (initialPageInfoResolved && !initialHasNext) {
       reachedEnd = true;
     }
     const parsed = parseThreadsProfileHotMetricsText(readerText);

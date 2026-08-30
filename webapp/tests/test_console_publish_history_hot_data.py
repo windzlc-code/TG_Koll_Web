@@ -32,6 +32,8 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("cookies: [],", fetcher)
         self.assertIn("paginateThreadsProfileGraphqlPages", fetcher)
         self.assertIn("cookies,\n        proxyUrl: platformProxyUrl(\"threads\"),\n        initialCursor", fetcher)
+        self.assertIn("if (page.pageInfoResolved && page.hasNextPage)", fetcher)
+        self.assertIn("else if (initialPageInfoResolved && !initialHasNext)", fetcher)
         self.assertIn("const profilePostSetComplete = authenticatedProfile", fetcher)
         self.assertIn("const complete = profilePostSetComplete && resolvedViews === postMetrics.length", fetcher)
         self.assertNotIn("activeCookies", fetcher)
