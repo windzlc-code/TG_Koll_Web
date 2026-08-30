@@ -8291,7 +8291,7 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
         cookies,
         headers: {
           accept: "text/html,application/xhtml+xml",
-          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+          "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
         },
         timeoutMs: 8_000,
       }).catch(() => null);

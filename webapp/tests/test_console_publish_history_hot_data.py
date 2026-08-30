@@ -21,8 +21,13 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         start = HOT_IMPORTER.index("async function fetchThreadsProfileHotMetricsHttp")
         end = HOT_IMPORTER.index("export async function fetchThreadsProfileLightMetrics", start)
         fetcher = HOT_IMPORTER[start:end]
+        authenticated_bootstrap = fetcher[
+            fetcher.index("authenticatedResponse = await requestSessionHttpText"):
+            fetcher.index("authenticatedProfile = Boolean", fetcher.index("authenticatedResponse = await requestSessionHttpText"))
+        ]
 
         self.assertIn("const response = authenticatedProfile && authenticatedResponse", fetcher)
+        self.assertIn("Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)", authenticated_bootstrap)
         self.assertIn("cookies,", fetcher)
         self.assertIn("cookies: [],", fetcher)
         self.assertIn("paginateThreadsProfileGraphqlPages", fetcher)
