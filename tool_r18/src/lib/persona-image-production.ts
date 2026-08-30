@@ -257,6 +257,7 @@ export function buildPersonaImagePrompt(
   requestedMode: PersonaImageGenerationMode = "auto",
   referenceMode: PersonaImageReferenceMode = "none",
   styleHint?: string,
+  variationKey?: string,
 ): { prompt: string; mode: PersonaImageClosedMode; withAvatar: boolean } {
   const signals = getPersonaImageSignals(setup, content);
   const mode = resolvePersonaImageMode(content, setup, requestedMode);
@@ -319,7 +320,7 @@ export function buildPersonaImagePrompt(
       prompt: [
         buildPersonaSocialImagePrompt(content, setup, signals),
         hint ? `third-person scene: ${hint}` : "",
-        buildLifestyleCameraDirection(true, `${content}|${hint}`),
+        buildLifestyleCameraDirection(true, `${content}|${hint}|${variationKey || ""}`),
         "third-person candid documentary photo of the same person inside the real environment from the post, three-quarter or full body, not a selfie, not a mirror self-portrait, not looking into the camera, not a studio half-body cutout against a fake backdrop, environment must remain readable",
         referencePrompt,
       ].filter(Boolean).join(", "),
@@ -333,7 +334,7 @@ export function buildPersonaImagePrompt(
       prompt: [
         buildPersonaSocialImagePrompt(content, setup, signals),
         hint ? `portrait direction: ${hint}` : "",
-        buildLifestyleCameraDirection(false, `${content}|${hint}`),
+        buildLifestyleCameraDirection(false, `${content}|${hint}|${variationKey || ""}`),
         "photorealistic everyday lifestyle social photo, consistent same person, natural body language, no text, no watermark",
         referencePrompt,
       ].filter(Boolean).join(", "),
@@ -487,6 +488,9 @@ function buildLifestyleCameraDirection(thirdPerson: boolean, selectionKey: strin
     "do not default to a centered eye-level front-facing half-body pose; vary camera height, shot distance, body orientation, gaze direction, hand placement, weight shift, crop, and foreground depth across different posts and selected style hints",
     `when the post does not name a location, use this fallback lived-in setting: ${selectedBackgroundFallback}`,
     "if the post explicitly names a location, action, weather, time or event, it overrides any conflicting camera, pose, or fallback setting; keep the named action mandatory and adapt the selected setup around it, then enrich the real context with ordinary background detail, depth, small asymmetries, mild perspective distortion, and natural available light",
+    "make it look captured by an ordinary phone in available light: realistic shadow falloff, locally uneven exposure and white balance, subtle sensor grain or motion softness, and natural depth instead of studio key light, rim light, HDR glow, or cinematic grading",
+    "retain pores, fine facial texture, flyaway hair, fabric creases, small surface wear, reflections, and ordinary background clutter; no beauty-filter smoothing, waxy skin, CGI-clean materials, or artificially spotless surroundings",
+    "people and props must be caught in use or between actions rather than squared to the lens like an advertisement or product presentation",
     "keep posture relaxed and physically plausible rather than symmetrical, mannequin-like, commercially posed, or excessively polished",
   ].join(", ");
 }
@@ -541,6 +545,7 @@ export async function generatePersonaImage(
   runtimeOptions?: PersonaImageRuntimeOptions,
   customPrompt?: string,
   styleHint?: string,
+  variationKey?: string,
 ): Promise<{ ok: boolean; url?: string; mode: PersonaImageResolvedMode; error?: string; timings?: unknown }> {
   if (!imageAPI?.generate) return { ok: false, mode: "closed-scene", error: "image API 不可用" };
 
@@ -556,7 +561,7 @@ export async function generatePersonaImage(
     };
   }
 
-  const built = buildPersonaImagePrompt(content, setup, requestedMode, referenceMode, styleHint);
+  const built = buildPersonaImagePrompt(content, setup, requestedMode, referenceMode, styleHint, variationKey);
   // An explicitly selected library image always means image-to-image editing.
   // Keep the normal scene/POV classifier for text-only generation, but do not
   // discard the user's source image just because the edit prompt describes a scene.

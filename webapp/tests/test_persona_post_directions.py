@@ -386,6 +386,7 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
 
     def fake_run(command, **_kwargs):
         captured["payload"] = __import__("json").loads(command[-1])
+        captured.setdefault("payloads", []).append(captured["payload"])
         return type("Completed", (), {"returncode": 0, "stdout": '{"ok": true, "imageResult": {"url": "data:image/png;base64,ZmFrZQ=="}}', "stderr": ""})()
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)
@@ -400,6 +401,7 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
     assert result["ok"] is True
     assert captured["payload"]["mode"] == "scene"
     assert captured["payload"]["styleHint"] == "便利店夜景"
+    assert captured["payload"]["variationKey"] == "task-1:1:1"
     assert captured["payload"]["setup"]["personaReferenceIdentity"] == "中国地区特征，18至22岁的成年女性"
 
     default_result = server._run_persona_post_image_task("task-2", {
@@ -411,3 +413,16 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
     assert default_result["ok"] is True
     assert captured["payload"]["mode"] == "person"
     assert captured["payload"]["styleHint"] is None
+
+    captured["payloads"].clear()
+    multi_result = server._run_persona_post_image_task("task-3", {
+        "related_persona_id": "persona-1",
+        "related_post_id": "post-1",
+        "image_count": 2,
+    })
+
+    assert multi_result["ok"] is True
+    assert {payload["variationKey"] for payload in captured["payloads"]} == {
+        "task-3:1:2",
+        "task-3:2:2",
+    }

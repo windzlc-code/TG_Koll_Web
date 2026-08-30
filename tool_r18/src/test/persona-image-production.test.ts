@@ -740,7 +740,33 @@ describe("persona image production", () => {
     expect(built.prompt).toContain("下班路过便利店买了杯冰美式");
     expect(built.prompt).toContain("use this specific camera and pose setup for this post");
     expect(built.prompt).toContain("candid iPhone-style capture");
+    expect(built.prompt).toContain("ordinary phone in available light");
+    expect(built.prompt).toContain("no beauty-filter smoothing");
+    expect(built.prompt).toContain("between actions rather than squared to the lens");
     expect(built.prompt).not.toContain("portrait direction:");
+  });
+
+  it("uses the task image variation key to avoid duplicate default framing", () => {
+    const first = buildPersonaImagePrompt(
+      "下班路过便利店买了杯冰美式，站在店外吹风",
+      nonWorkflowSetup(),
+      "person",
+      "none",
+      undefined,
+      "task-1:1:2",
+    );
+    const second = buildPersonaImagePrompt(
+      "下班路过便利店买了杯冰美式，站在店外吹风",
+      nonWorkflowSetup(),
+      "person",
+      "none",
+      undefined,
+      "task-1:2:2",
+    );
+
+    expect(first.prompt).not.toBe(second.prompt);
+    expect(first.prompt).toContain("use this specific camera and pose setup for this post");
+    expect(second.prompt).toContain("use this specific camera and pose setup for this post");
   });
 
   it("rotates through a broad camera and background sample pool", () => {

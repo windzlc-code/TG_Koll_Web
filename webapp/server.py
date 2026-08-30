@@ -11221,10 +11221,12 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     config_started_at = time.perf_counter()
     _sync_tool_r18_api_config_for_persona_workflow()
     config_sync_ms = round((time.perf_counter() - config_started_at) * 1000, 1)
-    command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(cli_payload, ensure_ascii=False)]
     media_base_url = f"/api/tasks/{quote(str(task_id).strip(), safe='')}/media"
 
     def generate_image(index: int) -> tuple[int, str, str, dict[str, Any]]:
+        indexed_cli_payload = dict(cli_payload)
+        indexed_cli_payload["variationKey"] = f"{task_id}:{index}:{image_count}"
+        command = ["node", "--import", "tsx", "scripts/skills/generate-persona-images.ts", json.dumps(indexed_cli_payload, ensure_ascii=False)]
         provider_started_at = time.perf_counter()
         try:
             with _PERSONA_POST_IMAGE_SEMAPHORE:

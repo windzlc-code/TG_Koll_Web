@@ -21,6 +21,7 @@ export interface GeneratePersonaImagesInput {
   customPrompt?: string;
   personaFieldPolicy?: PersonaReferenceSheetFieldPolicy;
   styleHint?: string;
+  variationKey?: string;
   model?: string;
   aspectRatio?: string;
   mode?: PersonaImageGenerationMode;
@@ -383,6 +384,7 @@ async function main() {
     runtimeOptions,
     input.customPrompt,
     input.styleHint,
+    input.variationKey,
   );
 
   printJson({
