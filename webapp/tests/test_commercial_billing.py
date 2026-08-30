@@ -158,12 +158,12 @@ class CommercialBillingTests(unittest.TestCase):
                 for sku, item in subscriptions.items()
             },
             {
-                "vanguard_personal_quarterly": (6000, 3, 1),
-                "vanguard_personal_half_year": (12000, 6, 1),
-                "vanguard_personal_annual": (24000, 12, 1),
-                "vanguard_enterprise_quarterly": (18000, 3, 3),
-                "vanguard_enterprise_half_year": (36000, 6, 3),
-                "vanguard_enterprise_annual": (72000, 12, 3),
+                "vanguard_personal_quarterly": (8940, 3, 1),
+                "vanguard_personal_half_year": (17880, 6, 1),
+                "vanguard_personal_annual": (35760, 12, 1),
+                "vanguard_enterprise_quarterly": (17940, 3, 3),
+                "vanguard_enterprise_half_year": (35880, 6, 3),
+                "vanguard_enterprise_annual": (71760, 12, 3),
             },
         )
         self.assertTrue(all(item["monthly_free_images"] == 10 for item in subscriptions.values()))
@@ -247,6 +247,76 @@ class CommercialBillingTests(unittest.TestCase):
             actions = {str(item.get("sku") or ""): item for item in catalog_value["actions"]}
             self.assertEqual(actions["tweet_generation"]["points"], 0.5)
             self.assertEqual(actions["hot_tweet_fetch"]["points"], 0.5)
+        self.assertEqual(marker["updated_drafts"], 1)
+        self.assertEqual(versions_after, versions_before + 1)
+
+        db_module.init_db()
+        with db_module.db() as conn:
+            self.assertEqual(
+                int(conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]),
+                versions_after,
+            )
+
+    def test_v11_pdf_subscription_prices_change_only_prices(self):
+        with db_module.db() as conn:
+            active_row = conn.execute(
+                "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+            ).fetchone()
+            self.assertIsNotNone(active_row)
+            catalog = json.loads(str(active_row["catalog_json"]))
+            for item in catalog["subscriptions"]:
+                item["price_ntd"] = int(item["period_months"]) * 1111
+                item["monthly_price_ntd"] = 1111
+                item["migration_sentinel"] = "preserved"
+            catalog["subscription"]["price_ntd"] = 3333
+            catalog["subscription"]["monthly_price_ntd"] = 1111
+            catalog["subscription"]["migration_sentinel"] = "preserved"
+            old_json = json.dumps(catalog, ensure_ascii=False, separators=(",", ":"))
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (old_json, str(active_row["id"])),
+            )
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES ('catalog_v11_draft', ?, 'draft', ?, 0, 0, 100, 0)
+                """,
+                (next_version, old_json),
+            )
+            conn.execute(
+                "DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v11_pdf_subscription_prices'"
+            )
+            versions_before = int(
+                conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]
+            )
+
+        db_module.init_db()
+        with db_module.db() as conn:
+            active = commercial_billing.get_active_catalog(conn)
+            draft_row = conn.execute(
+                "SELECT catalog_json FROM billing_catalog_versions WHERE id = 'catalog_v11_draft'"
+            ).fetchone()
+            draft = json.loads(str(draft_row["catalog_json"]))
+            marker = json.loads(str(conn.execute(
+                "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v11_pdf_subscription_prices'"
+            ).fetchone()["value_json"]))
+            versions_after = int(
+                conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]
+            )
+
+        expected_monthly = {"vanguard_personal_": 2980, "vanguard_enterprise_": 5980}
+        for catalog_value in (active, draft):
+            for item in catalog_value["subscriptions"]:
+                monthly = next(value for prefix, value in expected_monthly.items() if item["sku"].startswith(prefix))
+                self.assertEqual(item["monthly_price_ntd"], monthly)
+                self.assertEqual(item["price_ntd"], monthly * int(item["period_months"]))
+                self.assertEqual(item["migration_sentinel"], "preserved")
+            self.assertEqual(catalog_value["subscription"]["migration_sentinel"], "preserved")
         self.assertEqual(marker["updated_drafts"], 1)
         self.assertEqual(versions_after, versions_before + 1)
 

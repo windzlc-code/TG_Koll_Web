@@ -101,8 +101,8 @@ DEFAULT_CATALOG: dict[str, Any] = {
     "subscription": {
         "sku": "vanguard_enterprise_quarterly",
         "name": "Vecto Vanguard OPC 企业版（季缴）",
-        "price_ntd": 18000,
-        "monthly_price_ntd": 6000,
+        "price_ntd": 17940,
+        "monthly_price_ntd": 5980,
         "period_months": 3,
         "threads_accounts": 3,
         "monthly_free_images": 10,
@@ -113,12 +113,12 @@ DEFAULT_CATALOG: dict[str, Any] = {
         ],
     },
     "subscriptions": [
-        {"sku": "vanguard_personal_quarterly", "name": "Vecto Vanguard OPC 个人轻量版（季缴）", "price_ntd": 6000, "monthly_price_ntd": 2000, "period_months": 3, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
-        {"sku": "vanguard_personal_half_year", "name": "Vecto Vanguard OPC 个人轻量版（半年缴）", "price_ntd": 12000, "monthly_price_ntd": 2000, "period_months": 6, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
-        {"sku": "vanguard_personal_annual", "name": "Vecto Vanguard OPC 个人轻量版（年缴）", "price_ntd": 24000, "monthly_price_ntd": 2000, "period_months": 12, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
-        {"sku": "vanguard_enterprise_quarterly", "name": "Vecto Vanguard OPC 企业版（季缴）", "price_ntd": 18000, "monthly_price_ntd": 6000, "period_months": 3, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
-        {"sku": "vanguard_enterprise_half_year", "name": "Vecto Vanguard OPC 企业版（半年缴）", "price_ntd": 36000, "monthly_price_ntd": 6000, "period_months": 6, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
-        {"sku": "vanguard_enterprise_annual", "name": "Vecto Vanguard OPC 企业版（年缴）", "price_ntd": 72000, "monthly_price_ntd": 6000, "period_months": 12, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_personal_quarterly", "name": "Vecto Vanguard OPC 个人轻量版（季缴）", "price_ntd": 8940, "monthly_price_ntd": 2980, "period_months": 3, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_personal_half_year", "name": "Vecto Vanguard OPC 个人轻量版（半年缴）", "price_ntd": 17880, "monthly_price_ntd": 2980, "period_months": 6, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_personal_annual", "name": "Vecto Vanguard OPC 个人轻量版（年缴）", "price_ntd": 35760, "monthly_price_ntd": 2980, "period_months": 12, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_enterprise_quarterly", "name": "Vecto Vanguard OPC 企业版（季缴）", "price_ntd": 17940, "monthly_price_ntd": 5980, "period_months": 3, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_enterprise_half_year", "name": "Vecto Vanguard OPC 企业版（半年缴）", "price_ntd": 35880, "monthly_price_ntd": 5980, "period_months": 6, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
+        {"sku": "vanguard_enterprise_annual", "name": "Vecto Vanguard OPC 企业版（年缴）", "price_ntd": 71760, "monthly_price_ntd": 5980, "period_months": 12, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
     ],
     "actions": [
         {"sku": "threads_text_publish", "name": "Threads 纯文字推文发布", "points": 0, "unit": "次", "implemented": True},
@@ -277,6 +277,36 @@ def _with_social_content_action_catalog(catalog: dict[str, Any]) -> dict[str, An
         else:
             current.update(desired)
     result["actions"] = actions
+    return result
+
+
+def _with_pdf_subscription_prices(catalog: dict[str, Any]) -> dict[str, Any]:
+    """Update only subscription prices from the current public price sheet."""
+    result = _loads(_dumps(catalog), {})
+    subscriptions = result.get("subscriptions") if isinstance(result, dict) else None
+    if not isinstance(subscriptions, list):
+        return result
+    by_sku: dict[str, dict[str, Any]] = {}
+    for item in subscriptions:
+        if not isinstance(item, dict):
+            continue
+        sku = str(item.get("sku") or "")
+        monthly_price = 2980 if sku.startswith("vanguard_personal_") else (
+            5980 if sku.startswith("vanguard_enterprise_") else 0
+        )
+        period_months = int(item.get("period_months") or 0)
+        if monthly_price and period_months > 0:
+            item["monthly_price_ntd"] = monthly_price
+            item["price_ntd"] = monthly_price * period_months
+        if sku:
+            by_sku[sku] = item
+    default_subscription = result.get("subscription")
+    if isinstance(default_subscription, dict):
+        sku = str(default_subscription.get("sku") or "")
+        matched = by_sku.get(sku)
+        if matched is not None:
+            default_subscription["monthly_price_ntd"] = matched["monthly_price_ntd"]
+            default_subscription["price_ntd"] = matched["price_ntd"]
     return result
 
 
@@ -784,6 +814,51 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
             updated_drafts += 1
         conn.execute(
             "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v10_social_content_rates', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
+        )
+
+    pdf_subscription_prices_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v11_pdf_subscription_prices'"
+    ).fetchone()
+    if pdf_subscription_prices_migration is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        upgraded_catalog = _with_pdf_subscription_prices(active_catalog) if active_row else active_catalog
+        changed = bool(active_row) and upgraded_catalog != active_catalog
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            validate_catalog(upgraded_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(upgraded_catalog), current, current, current),
+            )
+        updated_drafts = 0
+        draft_rows = conn.execute(
+            "SELECT id, catalog_json FROM billing_catalog_versions WHERE status = 'draft'"
+        ).fetchall()
+        for draft_row in draft_rows:
+            draft_catalog = _loads(draft_row["catalog_json"], {})
+            upgraded_draft = _with_pdf_subscription_prices(draft_catalog)
+            if upgraded_draft == draft_catalog:
+                continue
+            validate_catalog(upgraded_draft)
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (_dumps(upgraded_draft), str(draft_row["id"])),
+            )
+            updated_drafts += 1
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v11_pdf_subscription_prices', ?, ?)",
             (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
         )
 

@@ -4234,8 +4234,8 @@ function renderBillingCatalogForm(catalog, version) {
   subscriptionList?.replaceChildren();
   const subscriptionGroups = new Map();
   [
-    ["personal", "个人轻量版", "1 个综合账号 · 月标准价 NT$2,000"],
-    ["enterprise", "企业版", "3 个分工账号 · 月标准价 NT$6,000"],
+    ["personal", "个人轻量版", "1 个综合账号 · 月标准价 NT$2,980"],
+    ["enterprise", "企业版", "3 个分工账号 · 月标准价 NT$5,980"],
   ].forEach(([key, label, description]) => {
     const group = document.createElement("section");
     group.className = "admin-billing-subscription-group";

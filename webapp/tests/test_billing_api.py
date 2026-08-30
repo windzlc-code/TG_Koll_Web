@@ -349,7 +349,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
     def test_online_application_stays_pending_until_admin_approval(self):
         catalog = self.customer.get("/api/billing/catalog")
         self.assertEqual(catalog.status_code, 200, catalog.text)
-        self.assertEqual(catalog.json()["subscription"]["price_ntd"], 18000)
+        self.assertEqual(catalog.json()["subscription"]["price_ntd"], 17940)
         self.assertEqual(catalog.json()["timezone"], "Asia/Shanghai")
         self.assertEqual(
             [item["key"] for item in catalog.json()["automation_modules"]],
