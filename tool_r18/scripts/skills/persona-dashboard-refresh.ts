@@ -628,18 +628,17 @@ function hasUsableMetrics(metrics: any): boolean {
     .some((field) => typeof metrics?.[field] === "number");
 }
 
-function recentViewsWithPostFallback(metrics: any, postViews: number): number | undefined {
+function homepageViewsMetric(metrics: any): number | undefined {
   if (typeof metrics?.recentViews === "number" && metrics.recentViews > 0) return metrics.recentViews;
-  if (postViews > 0) return postViews;
   if (typeof metrics?.recentViews === "number") return metrics.recentViews;
   return undefined;
 }
 
-function profileIdentityMetricPatch(metrics: any, postViews = 0): Record<string, number> {
+function profileIdentityMetricPatch(metrics: any): Record<string, number> {
   const patch: Record<string, number> = {};
   if (typeof metrics?.followers === "number") patch.followers = metrics.followers;
   if (typeof metrics?.following === "number") patch.following = metrics.following;
-  const recentViews = recentViewsWithPostFallback(metrics, postViews);
+  const recentViews = homepageViewsMetric(metrics);
   if (typeof recentViews === "number") patch.recentViews = recentViews;
   return patch;
 }
@@ -861,7 +860,7 @@ async function main() {
               targetSource: target.source,
               method: metrics.method,
               feedUrl: metrics.feedUrl,
-              ...profileIdentityMetricPatch(metrics, mergedTotalViews),
+              ...profileIdentityMetricPatch(metrics),
               posts: hasFreshPostMetrics ? mergedRows.length : Number(metrics.posts || 0),
               likes: metrics.likes,
               comments: metrics.comments,
@@ -1014,7 +1013,7 @@ async function main() {
           );
           const resolvedViewPosts = mergedPostMetrics.filter(postViewResolved).length;
           const complete = refreshAttempt.complete;
-          const instagramRecentViews = recentViewsWithPostFallback(metrics, totalViews);
+          const instagramRecentViews = homepageViewsMetric(metrics);
           const nextMetric = {
             ...previousMetrics,
             platform: "instagram",

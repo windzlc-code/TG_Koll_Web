@@ -2556,11 +2556,8 @@ def _sum_numbers(*values: Any) -> int:
     return sum(_number(value, 0) for value in values)
 
 
-def _homepage_views_or_post_fallback(recent_views: Any, post_views: Any) -> int:
-    homepage_views = _number(recent_views, 0)
-    if homepage_views > 0:
-        return homepage_views
-    return _number(post_views, 0)
+def _homepage_views(recent_views: Any) -> int:
+    return _number(recent_views, 0)
 
 
 def _read_dotenv_values(path: Path | None = None) -> dict[str, str]:
@@ -23332,7 +23329,7 @@ def _build_persona_dashboard_overview(
                     _metric_value(row, "viewCount", "view_count")
                     for row in resolved_view_rows
                 )
-            platform_recent_views = _homepage_views_or_post_fallback(platform_recent_views, platform_post_views)
+            platform_recent_views = _homepage_views(platform_recent_views)
             platform_hot_score = _sum_numbers(platform_likes, platform_comments, platform_shares, platform_reposts, platform_post_views)
             persona_hot["likes"] += platform_likes
             persona_hot["comments"] += platform_comments
@@ -23706,10 +23703,7 @@ def _build_persona_dashboard_console_overview(
             persona_hot["comments"] += platform_comments
             persona_hot["shares"] += platform_shares
             persona_hot["reposts"] += platform_reposts
-            persona_hot["recent_views"] += _homepage_views_or_post_fallback(
-                metric_value.get("recentViews"),
-                platform_post_views,
-            )
+            persona_hot["recent_views"] += _homepage_views(metric_value.get("recentViews"))
             persona_hot["post_views"] += platform_post_views
             persona_hot["hot_score"] += _sum_numbers(
                 platform_likes,

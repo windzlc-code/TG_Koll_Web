@@ -11030,7 +11030,7 @@ function personaPlatformMetricSummary(persona = selectedPersona()) {
   return {
     platform,
     followers,
-    hot_views: postViews || recentViews,
+    hot_views: recentViews,
     interactions,
     // Platform snapshots report the account's historical post total.  The
     // profile's “发布” counter must instead match the verified publication

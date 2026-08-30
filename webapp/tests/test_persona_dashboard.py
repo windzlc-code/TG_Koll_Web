@@ -875,7 +875,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(persona["post_metrics"][0]["media_items"][0]["url"], "data:image/png;base64,abc123")
         self.assertIn("浏览", persona["hot_score_formula"])
 
-    def test_missing_homepage_views_fall_back_to_published_post_views(self):
+    def test_missing_homepage_views_do_not_fall_back_to_published_post_views(self):
         self._write_archives()
         path = self.tool_runtime_dir / "persona_archives.json"
         archives = json.loads(path.read_text(encoding="utf-8"))
@@ -886,8 +886,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         data = resp.json()
         self.assertEqual(data["personas"][0]["hot"]["post_views"], 300)
-        self.assertEqual(data["personas"][0]["hot"]["recent_views"], 300)
-        self.assertEqual(data["summary"]["recent_views"], 300)
+        self.assertEqual(data["personas"][0]["hot"]["recent_views"], 0)
+        self.assertEqual(data["summary"]["recent_views"], 0)
         self.assertEqual(data["summary"]["post_views"], 300)
 
     def test_post_metadata_keeps_reposts_and_shares_as_independent_metrics(self):
@@ -3934,6 +3934,40 @@ class PersonaDashboardApiTests(unittest.TestCase):
             sorted(row["view_count"] for row in persona["post_metrics"]),
             [900, 4409],
         )
+
+    def test_overview_keeps_account_views_separate_from_top_level_post_rows(self):
+        self._write_archives()
+        self._insert_social_account(
+            account_id="threads-current",
+            persona_id="persona-1",
+            platform="threads",
+            username="current_user",
+        )
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["setup"]["hotMetrics"] = {
+            "threads:current_user": {
+                "platform": "threads",
+                "accountId": "threads-current",
+                "username": "current_user",
+                "recentViews": 65000,
+                "views": 51220,
+                "postMetrics": [{
+                    "sourceUrl": "https://www.threads.com/@current_user/post/ParentPost",
+                    "code": "ParentPost",
+                    "viewCount": 51220,
+                }],
+            },
+        }
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        resp = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(resp.status_code, 200)
+        persona = resp.json()["personas"][0]
+        self.assertEqual(persona["hot"]["recent_views"], 65000)
+        self.assertEqual(persona["hot"]["post_views"], 51220)
+        self.assertEqual(len(persona["post_metrics"]), 1)
 
     def test_publish_history_matches_equivalent_instagram_post_routes_by_shortcode(self):
         archive = {

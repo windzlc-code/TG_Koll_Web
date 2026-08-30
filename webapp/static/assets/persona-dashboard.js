@@ -725,7 +725,7 @@ function pdRenderSummary(visiblePersonas) {
     { label: "帖子", value: summary.post_count, hint: "当前平台归档帖子" },
     { label: "发布", value: summary.published_count, hint: "当前平台发布归档" },
     { label: "互动", value: summary.total_interactions, hint: "点赞、评论、转发、分享" },
-    { label: "主页浏览", value: summary.recent_views, hint: "账号主页浏览；没有时用已发布推文浏览加总" },
+    { label: "主页浏览", value: summary.recent_views, hint: "账号主页显示的最近浏览次数" },
     { label: "逐帖浏览", value: summary.post_views, hint: "逐帖浏览，不与主页浏览合并" },
     { label: "热度", value: summary.hot_score, hint: "逐帖浏览 + 点赞 + 评论 + 分享 + 转发" },
   ];
