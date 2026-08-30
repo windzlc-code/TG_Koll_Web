@@ -24,8 +24,9 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
 
         self.assertIn("cookies: []", fetcher)
         self.assertIn("paginateThreadsProfileGraphqlPages", fetcher)
-        self.assertIn("cookies,\n        initialCursor", fetcher)
-        self.assertIn("const complete = hasSession", fetcher)
+        self.assertIn("cookies,\n        proxyUrl: platformProxyUrl(\"threads\"),\n        initialCursor", fetcher)
+        self.assertIn("const profilePostSetComplete = authenticatedProfile", fetcher)
+        self.assertIn("const complete = profilePostSetComplete && resolvedViews === postMetrics.length", fetcher)
         self.assertNotIn("activeCookies", fetcher)
 
     def test_post_order_badges_share_the_scaled_mobile_size(self):
@@ -388,6 +389,11 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("PERSONA_DASHBOARD_PREFETCHED_METRICS_B64", REFRESH_SCRIPT)
         self.assertIn("prefetchedProfileMetrics", REFRESH_SCRIPT)
         self.assertIn('prefetchedProfileMetrics("threads", username)', REFRESH_SCRIPT)
+        self.assertIn("prefetched && isCompleteMetrics(prefetched)", REFRESH_SCRIPT)
+        self.assertIn("const localMetrics = await fetchThreadsProfileHotMetrics(username);", REFRESH_SCRIPT)
+        self.assertIn("postMetrics.length === scannedPosts", REFRESH_SCRIPT)
+        self.assertIn("resolvedViews === postMetrics.length", REFRESH_SCRIPT)
+        self.assertIn("Number(metrics?.viewMissingPosts || 0) === 0", REFRESH_SCRIPT)
         self.assertIn("fillMissingProfileIdentityMetrics", REFRESH_SCRIPT)
         self.assertIn("profileIdentityMetricPatch", REFRESH_SCRIPT)
         self.assertIn("fetchThreadsProfileIdentityMetrics", REFRESH_SCRIPT)

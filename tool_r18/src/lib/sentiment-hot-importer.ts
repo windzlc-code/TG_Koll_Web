@@ -7631,6 +7631,48 @@ export function parseThreadsPostViewCountFromText(text: string): number | undefi
   );
 }
 
+export function parseThreadsPostViewCountFromHtml(html: string): number | undefined {
+  const match = String(html || "").match(/"view_counts"\s*:\s*(\d+(?:\.\d+)?)/i);
+  return match?.[1] ? parseMetricNumberLoose(match[1]) : undefined;
+}
+
+export function extractThreadsAuthenticatedViewerUsername(html: string): string {
+  return cleanText(
+    String(html || "").match(/"viewer"\s*:\s*\{[\s\S]{0,1200}?"username"\s*:\s*"([^"]+)"/i)?.[1],
+  ).replace(/^@+/, "").toLowerCase();
+}
+
+async function collectThreadsViewCountsFromPostHttpPages(
+  posts: ThreadsGraphqlProfilePostAggregate[],
+): Promise<Record<string, number>> {
+  const pending = posts.filter((post) => typeof post.viewCount !== "number" && post.sourceUrl);
+  if (!pending.length) return {};
+  const viewsByUrl: Record<string, number> = {};
+  let cursor = 0;
+  const workerCount = Math.min(6, pending.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < pending.length) {
+      const post = pending[cursor++];
+      const response = await requestSessionHttpText({
+        url: post.sourceUrl,
+        cookies: [],
+        headers: {
+          accept: "text/html,application/xhtml+xml",
+          "user-agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        },
+        timeoutMs: 8_000,
+      }).catch(() => null);
+      if (!response?.ok) continue;
+      const expectedCode = cleanText(post.code).toLowerCase();
+      const responseCode = cleanText(response.url.match(/\/post\/([^/?#]+)/i)?.[1]).toLowerCase();
+      if (expectedCode && responseCode !== expectedCode) continue;
+      const viewCount = parseThreadsPostViewCountFromHtml(response.text);
+      if (typeof viewCount === "number") viewsByUrl[post.sourceUrl] = viewCount;
+    }
+  }));
+  return viewsByUrl;
+}
+
 async function readThreadsViewCountFromLoadedPostPage(page: any): Promise<number | undefined> {
   await page.waitForFunction(() => {
     const text = String(document.body?.innerText || "");
@@ -8217,6 +8259,31 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
   const hasSession = hasThreadsProfileLoginSessionCookie(cookies);
   const profileUrl = buildThreadsProfileUrl(username);
   try {
+    let authenticatedProfile = false;
+    if (hasSession) {
+      const authenticatedResponse = await requestSessionHttpText({
+        url: profileUrl,
+        cookies,
+        headers: {
+          accept: "text/html,application/xhtml+xml",
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        },
+        timeoutMs: 8_000,
+      }).catch(() => null);
+      const authenticatedProfilePath = (() => {
+        try {
+          return decodeURIComponent(new URL(authenticatedResponse?.url || "").pathname).replace(/\/+$/, "").toLowerCase();
+        } catch {
+          return "";
+        }
+      })();
+      const expectedProfilePath = `/@${username.toLowerCase()}`;
+      authenticatedProfile = Boolean(
+        authenticatedResponse?.ok
+        && authenticatedProfilePath === expectedProfilePath
+        && extractThreadsAuthenticatedViewerUsername(authenticatedResponse.text) === username.toLowerCase(),
+      );
+    }
     const response = await requestSessionHttpText({
       url: profileUrl,
       cookies: [],
@@ -8234,9 +8301,10 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
     let reachedEnd = false;
     let initialCursor = "";
     let initialHasNext = false;
+    let initialPageInfoResolved = false;
     for (const payload of extractThreadsProfileHttpPayloads(response.text)) {
       const page = parseThreadsGraphqlProfilePagePayload({ username, payload });
-      if (page.pageInfoResolved && page.hasNextPage !== true) reachedEnd = true;
+      if (page.pageInfoResolved) initialPageInfoResolved = true;
       if (page.hasNextPage && page.endCursor) {
         initialHasNext = true;
         initialCursor = page.endCursor;
@@ -8246,11 +8314,12 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
         if (key) byKey.set(key, { ...(byKey.get(key) || {}), ...post });
       }
     }
-    if (!reachedEnd && initialHasNext && initialCursor) {
+    if (authenticatedProfile && initialHasNext && initialCursor) {
       const extra = await paginateThreadsProfileGraphqlPages({
         username,
         html: response.text,
         cookies,
+        proxyUrl: platformProxyUrl("threads"),
         initialCursor,
         hasNextPage: true,
       }).catch(() => ({ posts: [] as ThreadsGraphqlProfilePostAggregate[], reachedEnd: false }));
@@ -8259,11 +8328,14 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
         if (key) byKey.set(key, { ...(byKey.get(key) || {}), ...post });
       }
       if (extra.reachedEnd) reachedEnd = true;
+    } else if (initialPageInfoResolved) {
+      reachedEnd = true;
     }
     const parsed = parseThreadsProfileHotMetricsText(readerText);
     const userStats = extractThreadsProfileUserStats(response.text, username);
     const posts = [...byKey.values()];
     if (!posts.length) throw new Error("Threads HTTP 页面未返回可识别的账号帖子。");
+    const viewsByUrl = await collectThreadsViewCountsFromPostHttpPages(posts);
     const postMetrics = posts.map((post) => ({
       pk: post.pk,
       code: post.code,
@@ -8274,16 +8346,20 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       commentCount: post.commentCount,
       repostCount: post.repostCount,
       shareCount: post.shareCount,
-      ...(typeof post.viewCount === "number" ? { viewCount: post.viewCount } : {}),
+      ...(typeof post.viewCount === "number"
+        ? { viewCount: post.viewCount }
+        : typeof viewsByUrl[post.sourceUrl] === "number"
+          ? { viewCount: viewsByUrl[post.sourceUrl] }
+          : {}),
       ...(post.mediaItems?.length ? { mediaItems: post.mediaItems } : {}),
       capturedAt: refreshedAt,
     } satisfies ThreadsProfilePostHotMetrics));
     const resolvedViews = postMetrics.filter((post) => typeof post.viewCount === "number").length;
     const declaredPosts = typeof parsed.posts === "number" ? parsed.posts : postMetrics.length;
-    const complete = hasSession
+    const profilePostSetComplete = authenticatedProfile
       && reachedEnd
-      && postMetrics.length >= declaredPosts
-      && resolvedViews === postMetrics.length;
+      && postMetrics.length >= declaredPosts;
+    const complete = profilePostSetComplete && resolvedViews === postMetrics.length;
     return {
       platform: "threads",
       username,
@@ -8307,8 +8383,12 @@ async function fetchThreadsProfileHotMetricsHttp(username: string): Promise<Thre
       refreshedAt,
       method: "http",
       complete,
-      scope: complete ? "authenticated_full_profile" : "public_partial",
-      error: complete ? undefined : "Threads HTTP 已读取账号快照，但登录态 GraphQL 游标尚未完整。",
+      scope: profilePostSetComplete ? "authenticated_full_profile" : "public_partial",
+      error: complete
+        ? undefined
+        : profilePostSetComplete
+          ? `Threads 已读取完整帖子列表，但仍有 ${Math.max(0, postMetrics.length - resolvedViews)} 条浏览量暂不可用。`
+          : "Threads HTTP 已读取账号快照，但认证 GraphQL 游标尚未完整。",
     };
   } catch (error: any) {
     return {

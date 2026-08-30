@@ -58,6 +58,8 @@ import {
   orderSentimentHotCandidatesForLegacyFallback,
   isSentimentHotCandidateRepeatEligible,
   parseThreadsPostViewCountFromText,
+  parseThreadsPostViewCountFromHtml,
+  extractThreadsAuthenticatedViewerUsername,
   parseThreadsReaderSearchMarkdownCandidates,
   persistSentimentReaderMarkdown,
   resolveSentimentHotCandidateOrigin,
@@ -4155,6 +4157,19 @@ stevie875443
 Thread
 6.1萬 views
     `)).toBe(61000);
+  });
+
+  it("parses the exact permalink view count from Threads page data", () => {
+    expect(parseThreadsPostViewCountFromHtml(`
+      ["BarcelonaLoggedOutExpansionGating",[],{"enable_view_counts":false,"view_counts":175},7623]
+    `)).toBe(175);
+    expect(parseThreadsPostViewCountFromHtml("<html>no target view count</html>")).toBeUndefined();
+  });
+
+  it("verifies the authenticated Threads viewer instead of trusting cookie presence", () => {
+    const html = `<script>{"viewer":{"fbid":"1","id":"2","username":"hiro504522"}}</script>`;
+    expect(extractThreadsAuthenticatedViewerUsername(html)).toBe("hiro504522");
+    expect(extractThreadsAuthenticatedViewerUsername("<html>logged out</html>")).toBe("");
   });
 
   it("does not treat a visible Threads profile as a login wall just because login CTA text is present", () => {

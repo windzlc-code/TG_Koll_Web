@@ -665,11 +665,14 @@ async function fillMissingProfileIdentityMetrics(username: string, metrics: any)
 function isCompleteMetrics(metrics: any): boolean {
   const scannedPosts = Number(metrics?.scannedPosts || 0);
   const refreshedAt = String(metrics?.refreshedAt || "").trim();
+  const postMetrics = Array.isArray(metrics?.postMetrics) ? metrics.postMetrics : [];
+  const resolvedViews = postMetrics.filter((post: any) => typeof post?.viewCount === "number").length;
   return metrics?.complete === true
     && metrics?.scope === "authenticated_full_profile"
     && scannedPosts > 0
-    && Array.isArray(metrics?.postMetrics)
-    && metrics.postMetrics.length >= scannedPosts
+    && postMetrics.length === scannedPosts
+    && resolvedViews === postMetrics.length
+    && Number(metrics?.viewMissingPosts || 0) === 0
     && Number.isFinite(Date.parse(refreshedAt));
 }
 
@@ -782,15 +785,6 @@ async function main() {
         let metrics: any;
         let refreshAttempt: { metrics: any; attempts: number; complete: boolean };
         try {
-          const prefetched = !useRssHub ? prefetchedProfileMetrics("threads", username) : null;
-          if (prefetched) {
-            refreshAttempt = {
-              metrics: prefetched,
-              attempts: 1,
-              complete: isCompleteMetrics(prefetched),
-            };
-            metrics = refreshAttempt.metrics;
-          } else {
           if (target.profileDir) {
             process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR = target.profileDir;
           } else {
@@ -801,15 +795,33 @@ async function main() {
           } else {
             delete process.env.PERSONA_DASHBOARD_THREADS_PROXY_URL;
           }
-          refreshAttempt = await retryIncompleteMetricFetch(
-            () => useRssHub
-              ? fetchThreadsProfileHotMetricsViaRssHub(username)
-              : fetchThreadsProfileHotMetrics(username),
-            (candidate) => useRssHub
-              ? candidate?.complete === true && Number.isFinite(Date.parse(String(candidate?.refreshedAt || "")))
-              : isCompleteMetrics(candidate),
-          );
-          metrics = refreshAttempt.metrics;
+          const prefetched = !useRssHub ? prefetchedProfileMetrics("threads", username) : null;
+          if (prefetched && isCompleteMetrics(prefetched)) {
+            refreshAttempt = {
+              metrics: prefetched,
+              attempts: 1,
+              complete: true,
+            };
+            metrics = refreshAttempt.metrics;
+          } else {
+            if (prefetched) {
+              const localMetrics = await fetchThreadsProfileHotMetrics(username);
+              refreshAttempt = {
+                metrics: localMetrics,
+                attempts: 2,
+                complete: isCompleteMetrics(localMetrics),
+              };
+            } else {
+              refreshAttempt = await retryIncompleteMetricFetch(
+                () => useRssHub
+                  ? fetchThreadsProfileHotMetricsViaRssHub(username)
+                  : fetchThreadsProfileHotMetrics(username),
+                (candidate) => useRssHub
+                  ? candidate?.complete === true && Number.isFinite(Date.parse(String(candidate?.refreshedAt || "")))
+                  : isCompleteMetrics(candidate),
+              );
+            }
+            metrics = refreshAttempt.metrics;
           }
           metrics = await fillMissingProfileIdentityMetrics(username, metrics);
           refreshAttempt = { ...refreshAttempt, metrics };
