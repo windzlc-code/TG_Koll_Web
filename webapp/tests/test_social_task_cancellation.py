@@ -1288,7 +1288,7 @@ class SocialTaskCancellationTests(unittest.TestCase):
         self.assertEqual(self._status("preparing-task"), "cancelled")
         stop.assert_called_once_with("preparing-task")
 
-    def test_force_stop_closes_registered_browser_manager(self):
+    def test_force_stop_signals_owner_thread_without_cross_thread_playwright_close(self):
         self._insert_task("force-manager-task", "running")
         cancel_event = threading.Event()
         context = mock.MagicMock()
@@ -1307,8 +1307,8 @@ class SocialTaskCancellationTests(unittest.TestCase):
 
         self.assertTrue(stopped)
         self.assertTrue(cancel_event.is_set())
-        context.close.assert_called_once_with()
-        manager.__exit__.assert_called_once_with(None, None, None)
+        context.close.assert_not_called()
+        manager.__exit__.assert_not_called()
         stop_live_browser.assert_called_once()
 
     def test_retry_publish_task_detaches_from_failed_batch(self):

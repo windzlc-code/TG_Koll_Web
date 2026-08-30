@@ -10929,17 +10929,9 @@ def _force_stop_running_task(
     with _RUNNING_TASK_CONTROLS_LOCK:
         control = _RUNNING_TASK_CONTROLS.get(str(task_id))
         cancel_event = control.get("cancel_event") if control else None
-        context = control.get("context") if control else None
-        manager = control.get("manager") if control else None
     if cancel_event is not None:
         with contextlib.suppress(Exception):
             _signal_publish_cancellation(control)
-    if context is not None:
-        with contextlib.suppress(Exception):
-            context.close()
-    if manager is not None:
-        with contextlib.suppress(Exception):
-            manager.__exit__(None, None, None)
     with contextlib.suppress(Exception):
         from social_automation.live_browser import stop_live_browser_sessions_for_task
 
@@ -10949,7 +10941,7 @@ def _force_stop_running_task(
         stop_live_browser_sessions_for_task(task_id, timeout_seconds=remaining)
     with contextlib.suppress(Exception):
         with db() as conn:
-            _insert_log(conn, task_id, "warn", "force_stop", "已发送强制停止信号并关闭浏览器上下文", {})
+            _insert_log(conn, task_id, "warn", "force_stop", "已发送停止信号，等待浏览器工作线程关闭上下文", {})
 
 
     return cancellation_persisted

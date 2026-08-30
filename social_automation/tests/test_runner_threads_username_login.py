@@ -109,7 +109,19 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
         anchor = mock.Mock()
         anchor.evaluate.return_value = True
         target = mock.Mock()
-        page.locator.return_value.first = target
+        missing_link = mock.Mock()
+        missing_link.count.return_value = 0
+
+        def locate(selector):
+            result = mock.Mock()
+            result.first = (
+                missing_link
+                if selector == 'a[href^="/login"][href*="show_choice_screen=false"]'
+                else target
+            )
+            return result
+
+        page.locator.side_effect = locate
 
         with (
             mock.patch.object(
@@ -124,13 +136,44 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
         self.assertTrue(clicked)
         find_anchor.assert_called_once_with(page, abort_if=None)
         anchor.evaluate.assert_called_once()
-        page.locator.assert_called_once_with('[data-vecto-threads-username-entry="1"]')
+        page.locator.assert_any_call('[data-vecto-threads-username-entry="1"]')
         human_click.assert_called_once_with(
             page,
             target,
             mock.ANY,
             "threads_login_username_structure",
             abort_if=None,
+        )
+
+    def test_structure_entry_uses_official_login_href_without_instagram_anchor(self):
+        page = mock.Mock()
+        page.url = "https://www.threads.com/"
+        login_link = mock.Mock()
+        login_link.count.return_value = 1
+        login_link.is_visible.return_value = True
+        login_link.get_attribute.return_value = "/login?show_choice_screen=false"
+        page.locator.return_value.first = login_link
+
+        with (
+            mock.patch.object(
+                runner,
+                "_find_threads_login_card_anchor",
+                return_value=None,
+            ),
+            mock.patch.object(runner, "_goto") as goto,
+        ):
+            opened = runner._click_threads_username_entry_by_structure(page, _Logger())
+
+        self.assertTrue(opened)
+        page.locator.assert_called_once_with(
+            'a[href^="/login"][href*="show_choice_screen=false"]'
+        )
+        goto.assert_called_once_with(
+            page,
+            "https://www.threads.com/login?show_choice_screen=false",
+            mock.ANY,
+            "threads_login_username_structure",
+            timeout_ms=15000,
         )
 
     def test_home_without_form_clicks_login_on_home_instead_of_opening_login_url(self):

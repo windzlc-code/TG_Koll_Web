@@ -10893,6 +10893,29 @@ def _click_threads_username_entry_by_structure(
     """Click the secondary username login control within the Threads login card."""
     if abort_if is not None and abort_if():
         return False
+    try:
+        login_link = page.locator(
+            'a[href^="/login"][href*="show_choice_screen=false"]'
+        ).first
+        if login_link.count() and login_link.is_visible(timeout=800):
+            href = str(login_link.get_attribute("href") or "").strip()
+            if href:
+                _goto(
+                    page,
+                    urljoin(str(page.url or THREADS_HOME), href),
+                    logger,
+                    "threads_login_username_structure",
+                    timeout_ms=15000,
+                )
+                logger.log(
+                    "info",
+                    "threads_login_username_structure",
+                    "Threads 用户名登录入口已通过官方登录链接结构识别。",
+                    {"evidence": "official_login_href", "url": _safe_navigation_url(page.url)},
+                )
+                return True
+    except Exception:
+        pass
     anchor = _find_threads_login_card_anchor(page, abort_if=abort_if)
     if anchor is None:
         return False
