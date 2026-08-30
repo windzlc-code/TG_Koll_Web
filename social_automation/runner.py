@@ -10898,20 +10898,24 @@ def _click_threads_username_entry_by_structure(
             'a[href^="/login"][href*="show_choice_screen=false"]'
         ).first
         if login_link.count() and login_link.is_visible(timeout=800):
-            href = str(login_link.get_attribute("href") or "").strip()
-            if href:
-                _goto(
-                    page,
-                    urljoin(str(page.url or THREADS_HOME), href),
-                    logger,
-                    "threads_login_username_structure",
-                    timeout_ms=15000,
-                )
+            # Threads can place its Instagram choice dialog over the real
+            # username link. Dismiss that native dialog first, then keep the
+            # existing fingerprint-browser pointer interaction path.
+            with contextlib.suppress(Exception):
+                page.keyboard.press("Escape")
+            _sleep_between(0.2, 0.5)
+            if _human_click(
+                page,
+                login_link,
+                logger,
+                "threads_login_username_structure",
+                abort_if=abort_if,
+            ):
                 logger.log(
                     "info",
                     "threads_login_username_structure",
-                    "Threads 用户名登录入口已通过官方登录链接结构识别。",
-                    {"evidence": "official_login_href", "url": _safe_navigation_url(page.url)},
+                    "Threads 用户名登录入口已通过官方链接结构和浏览器点击进入。",
+                    {"evidence": "official_login_href_visual_click", "url": _safe_navigation_url(page.url)},
                 )
                 return True
     except Exception:

@@ -145,7 +145,7 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
             abort_if=None,
         )
 
-    def test_structure_entry_uses_official_login_href_without_instagram_anchor(self):
+    def test_structure_entry_clicks_official_login_href_without_instagram_anchor(self):
         page = mock.Mock()
         page.url = "https://www.threads.com/"
         login_link = mock.Mock()
@@ -160,6 +160,8 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
                 "_find_threads_login_card_anchor",
                 return_value=None,
             ),
+            mock.patch.object(runner, "_human_click", return_value=True) as human_click,
+            mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner, "_goto") as goto,
         ):
             opened = runner._click_threads_username_entry_by_structure(page, _Logger())
@@ -168,13 +170,15 @@ class ThreadsUsernameLoginEntryTests(unittest.TestCase):
         page.locator.assert_called_once_with(
             'a[href^="/login"][href*="show_choice_screen=false"]'
         )
-        goto.assert_called_once_with(
+        page.keyboard.press.assert_called_once_with("Escape")
+        human_click.assert_called_once_with(
             page,
-            "https://www.threads.com/login?show_choice_screen=false",
+            login_link,
             mock.ANY,
             "threads_login_username_structure",
-            timeout_ms=15000,
+            abort_if=None,
         )
+        goto.assert_not_called()
 
     def test_home_without_form_clicks_login_on_home_instead_of_opening_login_url(self):
         page = mock.Mock()
