@@ -48,7 +48,7 @@
 
   const copy = {
     "zh-Hans": {
-      brandLocal: "维拓 / 维图",
+      brandLocal: "维拓",
       homeLabel: "Vecto 首页",
       navigationLabel: "站内导航",
       closeNavigation: "关闭导航",
@@ -150,7 +150,7 @@
       logoutCancel: "暂不退出", logoutIncomplete: "退出未完成",
     },
     "zh-Hant": {
-      brandLocal: "維拓 / 維圖",
+      brandLocal: "維拓",
       homeLabel: "Vecto 首頁",
       navigationLabel: "站內導覽",
       closeNavigation: "關閉導覽",
