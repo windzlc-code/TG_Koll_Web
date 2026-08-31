@@ -4488,6 +4488,12 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual("".join(type_page.keyboard.typed), "typed body")
         self.assertFalse(any("navigator.clipboard" in script for script, _value in type_page.evaluations))
 
+    def test_publish_body_typing_speed_is_reduced_by_one_quarter(self):
+        self.assertAlmostEqual(runner._THREADS_PUBLISH_TEXT_DELAYS[0] * 0.75, 0.07)
+        self.assertAlmostEqual(runner._THREADS_PUBLISH_TEXT_DELAYS[1] * 0.75, 0.16)
+        self.assertAlmostEqual(runner._INSTAGRAM_PUBLISH_TEXT_DELAYS[0] * 0.75, 0.08)
+        self.assertAlmostEqual(runner._INSTAGRAM_PUBLISH_TEXT_DELAYS[1] * 0.75, 0.18)
+
     def test_threads_permalink_accepts_posts_and_rejects_profiles(self):
         permalink = "https://www.threads.net/@alice/post/ABC123?x=1#fragment"
         self.assertEqual(

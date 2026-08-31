@@ -2007,6 +2007,12 @@ def _normalize_text_input_mode(value: Any) -> str:
     return "type"
 
 
+# Typing at 75% of the former speed requires 1 / 0.75 of the former delay.
+_PUBLISH_TEXT_SPEED_RATIO = 0.75
+_THREADS_PUBLISH_TEXT_DELAYS = (0.07 / _PUBLISH_TEXT_SPEED_RATIO, 0.16 / _PUBLISH_TEXT_SPEED_RATIO)
+_INSTAGRAM_PUBLISH_TEXT_DELAYS = (0.08 / _PUBLISH_TEXT_SPEED_RATIO, 0.18 / _PUBLISH_TEXT_SPEED_RATIO)
+
+
 def _type_text(
     page,
     text: str,
@@ -11700,6 +11706,8 @@ def _clear_and_type(
     locator,
     text: str,
     *,
+    min_delay: float = 0.07,
+    max_delay: float = 0.16,
     mode: str = "type",
     logger: AutomationLogger | None = None,
     stage: str = "text_input",
@@ -11727,8 +11735,8 @@ def _clear_and_type(
     _type_text(
         page,
         text,
-        min_delay=0.07,
-        max_delay=0.16,
+        min_delay=min_delay,
+        max_delay=max_delay,
         mode=mode,
         logger=logger,
         stage=stage,
@@ -13796,12 +13804,30 @@ def _run_threads_publish_post(
     if caption:
         text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "type"))
         logger.log("info", "threads_publish_text_input", "正在填写 Threads 帖子正文。", {"mode": text_input_mode, "chars": len(caption)})
-        _clear_and_type(page, compose, caption, mode=text_input_mode, logger=logger, stage="threads_publish_text_input")
+        _clear_and_type(
+            page,
+            compose,
+            caption,
+            min_delay=_THREADS_PUBLISH_TEXT_DELAYS[0],
+            max_delay=_THREADS_PUBLISH_TEXT_DELAYS[1],
+            mode=text_input_mode,
+            logger=logger,
+            stage="threads_publish_text_input",
+        )
         _sleep_between(0.8, 1.4)
         dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
             compose = _threads_dialog_compose_box(page) or compose
-            _clear_and_type(page, compose, caption, mode="type", logger=logger, stage="threads_publish_text_input_retry")
+            _clear_and_type(
+                page,
+                compose,
+                caption,
+                min_delay=_THREADS_PUBLISH_TEXT_DELAYS[0],
+                max_delay=_THREADS_PUBLISH_TEXT_DELAYS[1],
+                mode="type",
+                logger=logger,
+                stage="threads_publish_text_input_retry",
+            )
             _sleep_between(0.8, 1.4)
             dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
@@ -14451,7 +14477,15 @@ def _run_publish_post(
         _human_click(page, caption_box, logger, "publish_caption_focus")
         text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "type"))
         logger.log("info", "publish_text_input", "正在填写 Instagram 帖子正文。", {"mode": text_input_mode, "chars": len(caption)})
-        _type_text(page, caption, mode=text_input_mode, logger=logger, stage="publish_text_input")
+        _type_text(
+            page,
+            caption,
+            min_delay=_INSTAGRAM_PUBLISH_TEXT_DELAYS[0],
+            max_delay=_INSTAGRAM_PUBLISH_TEXT_DELAYS[1],
+            mode=text_input_mode,
+            logger=logger,
+            stage="publish_text_input",
+        )
     confirmation_state = {
         "phase": "confirm_only",
         "platform": "instagram",
