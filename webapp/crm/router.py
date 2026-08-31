@@ -23,6 +23,7 @@ from webapp.db import db
 from webapp.governance import record_audit
 
 from .errors import CRMError
+from .media_sanitize import sanitize_crm_image
 from .capabilities import public_capabilities
 from .account_rotation import (
     evaluate_sender_rotation_sequence,
@@ -1492,14 +1493,14 @@ def create_crm_router(
                     digest.update(chunk)
                     stream.write(chunk)
             try:
-                from PIL import Image
-
-                with Image.open(temp_path) as image:
-                    image.verify()
+                cleaned, content_type, suffix = sanitize_crm_image(temp_path)
             except CRMError:
                 raise
             except Exception as exc:
                 raise CRMError("crm_media_decode_failed", "crm.errors.mediaDecodeFailed", status_code=422) from exc
+            temp_path.write_bytes(cleaned)
+            size = len(cleaned)
+            digest = hashlib.sha256(cleaned)
             sha256 = digest.hexdigest()
             final_path = target_dir / f"{sha256}{suffix}"
             relative_path = final_path.relative_to(data_dir).as_posix()

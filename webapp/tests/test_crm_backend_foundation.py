@@ -1264,9 +1264,16 @@ class CRMBackendFoundationTests(unittest.TestCase):
         self.assertEqual(uploaded.status_code, 201, uploaded.text)
         stored = self.root / uploaded.json()["storage_path"]
         self.assertTrue(stored.is_file())
+        self.assertEqual(uploaded.json()["mime_type"], "image/jpeg")
+        self.assertTrue(str(uploaded.json()["storage_path"]).endswith(".jpg"))
         content = client.get(f"/api/crm/v1/media/{uploaded.json()['id']}/content")
         self.assertEqual(content.status_code, 200, content.text)
-        self.assertEqual(content.content, png)
+        self.assertNotEqual(content.content, png)
+        from PIL import Image
+        from io import BytesIO
+        cleaned = Image.open(BytesIO(content.content))
+        self.assertEqual(cleaned.format, "JPEG")
+        self.assertFalse(cleaned.getexif())
         self.assertEqual(content.headers["x-content-type-options"], "nosniff")
         deleted_media = client.delete(f"/api/crm/v1/media/{uploaded.json()['id']}")
         self.assertEqual(deleted_media.status_code, 200, deleted_media.text)
