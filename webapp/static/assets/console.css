@@ -2185,15 +2185,33 @@ button.primary,
   }
 
   .persona-dashboard-view .persona-line-chart text {
-    font-size: 13px;
+    font-size: 18px;
   }
 
   .persona-dashboard-view .persona-line-legend span {
-    font-size: 12px;
+    font-size: 14px;
+  }
+
+  .persona-dashboard-view .persona-line-legend {
+    gap: 6px 12px;
+  }
+
+  .persona-dashboard-view .persona-line-legend i {
+    width: 22px;
+    height: 4px;
+  }
+
+  .persona-dashboard-view .persona-line-chart path {
+    stroke-width: 4px;
+  }
+
+  .persona-dashboard-view .persona-line-chart circle {
+    r: 5.5px;
+    stroke-width: 2.5;
   }
 
   .persona-dashboard-view .persona-line-chart {
-    height: 190px;
+    height: 220px;
   }
 
   .persona-dashboard-view .persona-chart-head {

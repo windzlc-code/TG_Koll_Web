@@ -485,7 +485,11 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("grid-template-columns: 1fr;", footer_rule)
         self.assertIn("justify-items: center;", footer_rule)
         self.assertIn("justify-content: center;", legend_rule)
-        self.assertIn("font-size: 12px;", self.styles)
+        self.assertIn('stroke-width="3"', chart)
+        self.assertIn('r="3.5"', chart)
+        self.assertIn("font-size: 18px;", self.styles)
+        self.assertIn("font-size: 14px;", self.styles)
+        self.assertIn("r: 5.5px;", self.styles)
 
     def test_trend_aggregation_keeps_real_periods_and_uses_latest_snapshot(self):
         chart_start = self.dashboard_script.index(
