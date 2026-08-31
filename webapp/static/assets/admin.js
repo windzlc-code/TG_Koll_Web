@@ -3584,7 +3584,7 @@ async function saveSocialAutomationPolicy() {
         standby_seconds: Number(currentBrowserSettings.standby_seconds || 0),
         auto_close_seconds: Number(currentBrowserSettings.auto_close_seconds || 30),
         max_concurrency: globalConcurrency,
-        text_input_mode: currentBrowserSettings.text_input_mode || "paste",
+        text_input_mode: "type",
       }),
     }),
   ]);

@@ -175,7 +175,9 @@ class BrowserPreferencesTests(unittest.TestCase):
             )
 
         self.assertEqual(social_automation_api.get_live_browser_settings()["max_concurrency"], 3)
+        self.assertEqual(social_automation_api.get_live_browser_settings()["text_input_mode"], "type")
         self.assertEqual(social_automation_api.get_user_browser_preferences(1)["requested_concurrency"], 2)
+        self.assertEqual(social_automation_api.get_user_browser_preferences(1)["text_input_mode"], "type")
 
     def test_scheduler_queues_third_task_for_same_customer(self):
         social_automation_api.set_live_browser_settings(
@@ -737,6 +739,7 @@ class BrowserPreferencesTests(unittest.TestCase):
         self.assertEqual(response.json()["preferences"]["manual_timeout_seconds"], 600)
         self.assertEqual(response.json()["preferences"]["standby_seconds"], 120)
         self.assertEqual(response.json()["preferences"]["auto_close_seconds"], 600)
+        self.assertEqual(response.json()["preferences"]["text_input_mode"], "type")
         self.assertEqual(social_automation_api.get_user_browser_preferences(2)["manual_timeout_seconds"], 300)
 
     def test_auto_configure_uses_server_recommendation(self):
@@ -796,7 +799,7 @@ class BrowserPreferencesTests(unittest.TestCase):
         self.assertEqual(payload["live_browser_standby_seconds"], 0)
         self.assertEqual(payload["live_browser_auto_close_seconds"], 10)
         self.assertEqual(payload["manual_login_timeout_seconds"], 900)
-        self.assertEqual(payload["text_input_mode"], "paste")
+        self.assertEqual(payload["text_input_mode"], "type")
 
     def test_runtime_preferences_reach_browser_cleanup_control(self):
         social_automation_api.set_user_browser_preferences(
@@ -869,6 +872,7 @@ class BrowserPreferencesTests(unittest.TestCase):
 
         self.assertEqual(saved["standby_seconds"], 300)
         self.assertEqual(saved["auto_close_seconds"], 1800)
+        self.assertEqual(saved["text_input_mode"], "type")
 
     def test_legacy_schema_migrates_review_hold_to_auto_close(self):
         current_path = os.environ["APP_DB_PATH"]

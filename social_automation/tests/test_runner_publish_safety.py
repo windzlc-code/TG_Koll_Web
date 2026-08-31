@@ -4456,7 +4456,6 @@ class RunnerPublishSafetyTests(unittest.TestCase):
 
         with (
             mock.patch.object(runner, "_visible_first", side_effect=[username_input, password_input]),
-            mock.patch.object(runner, "_paste_text", side_effect=AssertionError("credentials reached clipboard")),
             mock.patch.object(runner, "_sleep_between"),
             mock.patch.object(runner.time, "sleep"),
             mock.patch.object(runner, "_screenshot", return_value=""),
@@ -4475,11 +4474,13 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertEqual("".join(page.keyboard.typed), "account@example.comsecret-value")
         self.assertFalse(any("navigator.clipboard" in script for script, _value in page.evaluations))
 
-    def test_body_text_still_supports_paste_and_type_modes(self):
+    def test_all_body_text_modes_use_per_character_typing(self):
         paste_page = _Page()
-        runner._type_text(paste_page, "post body", mode="paste")
-        self.assertTrue(any("navigator.clipboard" in script for script, _value in paste_page.evaluations))
-        self.assertIn("Control+V", paste_page.keyboard.pressed)
+        with mock.patch.object(runner.time, "sleep"):
+            runner._type_text(paste_page, "post body", mode="paste")
+        self.assertEqual("".join(paste_page.keyboard.typed), "post body")
+        self.assertFalse(any("navigator.clipboard" in script for script, _value in paste_page.evaluations))
+        self.assertNotIn("Control+V", paste_page.keyboard.pressed)
 
         type_page = _Page()
         with mock.patch.object(runner.time, "sleep"):
@@ -5363,7 +5364,7 @@ class RunnerPublishSafetyTests(unittest.TestCase):
         self.assertTrue(capture_baseline.call_args.kwargs["skip"])
         background_page.assert_not_called()
         self.assertEqual(clear_and_type.call_count, 2)
-        self.assertEqual(clear_and_type.call_args_list[0].kwargs["mode"], "paste")
+        self.assertEqual(clear_and_type.call_args_list[0].kwargs["mode"], "type")
         self.assertEqual(clear_and_type.call_args_list[1].kwargs["mode"], "type")
         start_barrier.assert_not_called()
 

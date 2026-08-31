@@ -3073,6 +3073,12 @@ Title: Instagram
     expect(normalizeRequestedHotPlatform("both")).toBeUndefined();
   });
 
+  it("types hotspot browser searches character by character", () => {
+    const source = fs.readFileSync(path.resolve("src/lib/sentiment-hot-importer.ts"), "utf8");
+    expect(source).not.toContain("input.fill(query");
+    expect(source.match(/keyboard\.type\(query, \{ delay: 25 \}\)/g)).toHaveLength(2);
+  });
+
   it("keeps the full hotspot keyword-generation specification", () => {
     const source = fs.readFileSync(path.resolve("src/lib/sentiment-hot-importer.ts"), "utf8");
     expect(source).toContain("你是 Threads / Instagram 热点搜索策略模型");

@@ -186,6 +186,15 @@ def _locator_visible(locator, timeout: int = 1000) -> bool:
         return False
 
 
+def _type_locator_text(page, locator, value: Any) -> None:
+    locator.click(timeout=5000)
+    page.keyboard.press("Control+A")
+    page.keyboard.press("Backspace")
+    for character in str(value or ""):
+        page.keyboard.type(character)
+        time.sleep(0.025)
+
+
 def _click_first(locators: Iterable[Any], *, timeout: int = 3000) -> bool:
     for group in locators:
         try:
@@ -369,7 +378,7 @@ def _send_message(page, message: str, *, force_submit: bool = False) -> bool:
         if composer is None:
             return False
         try:
-            composer.fill(message)
+            _type_locator_text(page, composer, message)
         except Exception:
             return False
     if _click_first([page.get_by_role("button", name=re.compile(r"^(Send|傳送|发送|送出)$", re.I))]):
@@ -538,7 +547,7 @@ def run_instagram_group_task(
             if search is None:
                 results.append({"username": username, "visible_match": None, "status": "unknown", "reason_code": "recipient_search_unavailable", "matched_texts": []})
                 continue
-            search.fill(username)
+            _type_locator_text(page, search, username)
             _wait(page, 900)
             evidence = _candidate_evidence(page, username)
             matched = [str(value)[:300] for value in evidence.get("matchedTexts", [])]
@@ -547,7 +556,7 @@ def run_instagram_group_task(
                 {"visible_match": "visibleMatch", "matched_texts": "matchedTexts"},
             ))
             try:
-                search.fill("")
+                _type_locator_text(page, search, "")
             except Exception:
                 pass
         evidence_path = shot("instagram_group_candidates_inspected")
@@ -586,14 +595,14 @@ def run_instagram_group_task(
             if search is None:
                 skipped.append({"username": username, "reason": "recipient_search_unavailable"})
                 continue
-            search.fill(username)
+            _type_locator_text(page, search, username)
             _wait(page, 900)
             if _select_recipient(page, username):
                 selected.append(username)
             else:
                 skipped.append({"username": username, "reason": "not_selectable"})
             try:
-                search.fill("")
+                _type_locator_text(page, search, "")
             except Exception:
                 pass
         if len(selected) < 2:
@@ -680,7 +689,7 @@ def run_instagram_group_task(
         name_input = page.locator('input[name="change-group-name"], input[aria-label="Group name"], input[aria-label="群組名稱"], input[aria-label="群组名称"]').last
         if not _locator_visible(name_input, timeout=1500):
             raise RuntimeError("Instagram group-name input was not visible.")
-        name_input.fill(clean["group_name"])
+        _type_locator_text(page, name_input, clean["group_name"])
 
         def save_click() -> bool:
             return _click_first([page.get_by_role("button", name=re.compile(r"^(Save|儲存|保存)$", re.I))])
@@ -715,7 +724,7 @@ def run_instagram_group_task(
             if search is None:
                 skipped.append({"username": username, "reason": "recipient_search_unavailable"})
                 continue
-            search.fill(username)
+            _type_locator_text(page, search, username)
             _wait(page, 800)
             if not _select_recipient(page, username):
                 skipped.append({"username": username, "reason": "not_selectable"})

@@ -23,8 +23,11 @@ class _Locator:
     def last(self):
         return self
 
-    def fill(self, value: str) -> None:
-        self.values.append(value)
+    def click(self, **_kwargs) -> None:
+        return None
+
+    def press(self, *_args, **_kwargs) -> None:
+        return None
 
     def filter(self, **_kwargs):
         return self
@@ -34,6 +37,7 @@ class _Page:
     def __init__(self, url: str = instagram_groups.INSTAGRAM_INBOX_URL) -> None:
         self.url = url
         self.input = _Locator()
+        self.keyboard = mock.Mock()
 
     def locator(self, *_args, **_kwargs):
         return self.input

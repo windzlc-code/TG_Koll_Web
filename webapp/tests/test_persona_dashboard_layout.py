@@ -1542,24 +1542,18 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("renderMobileNavToggleIcon(showPageBack)", toolbar)
         self.assertIn('.mobile-page-toolbar > .mobile-nav-toggle[hidden]', self.styles)
 
-    def test_console_settings_mobile_back_and_input_mode_avoid_full_page_rerender(self):
+    def test_console_settings_mobile_back_remains_and_removed_controls_have_no_handlers(self):
         navigation_start = self.console_script.index("function bindMobileNavigation()")
         navigation_end = self.console_script.index("\nfunction setPersonaMobileSidebarOpen", navigation_start)
         navigation = self.console_script[navigation_start:navigation_end]
-        preference_start = self.console_script.index("function setBrowserPreferenceChoice(")
-        preference_end = self.console_script.index("\nfunction refreshConsoleSettingsDependents()", preference_start)
-        preferences = self.console_script[preference_start:preference_end]
-        click_start = self.console_script.index('const inputMode = event.target.closest("[data-browser-text-input-mode]");')
-        click_end = self.console_script.index("\n    if (event.target.closest(\"[data-browser-recommendation-refresh]\"))", click_start)
-        input_mode_click = self.console_script[click_start:click_end]
 
         self.assertIn("const pageBackTarget = mobilePageBackTarget();", navigation)
         self.assertIn('if (pageBackTarget === "live-browser")', navigation)
         self.assertIn("setView(pageBackTarget);", navigation)
-        self.assertIn('{ render = true } = {}', preferences)
-        self.assertIn('if (render) renderConsoleSettingsPage();', preferences)
-        self.assertIn('commit: () => setBrowserPreferenceChoice("text_input_mode", mode, { render: false })', input_mode_click)
-        self.assertIn("syncBrowserTextInputModeTabs(mode);", input_mode_click)
+        self.assertNotIn("function setBrowserPreferenceChoice(", self.console_script)
+        self.assertNotIn("function syncBrowserTextInputModeTabs(", self.console_script)
+        self.assertNotIn("data-browser-completion-policy", self.console_script)
+        self.assertNotIn("data-browser-text-input-mode", self.console_script)
 
     def test_persona_create_uses_the_shared_modal_and_merges_create_paths(self):
         create_start = self.console_script.index(

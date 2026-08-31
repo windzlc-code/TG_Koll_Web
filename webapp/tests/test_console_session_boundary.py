@@ -4862,19 +4862,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         load = self._function_source("loadBrowserPolicySettings")
         auto_configure = self._function_source("autoConfigureBrowserPreferences")
 
-        for field in (
-            "completion_policy",
-            "standby_seconds",
-            "auto_close_seconds",
-            "manual_timeout_seconds",
-            "text_input_mode",
-        ):
+        for field in ("standby_seconds", "auto_close_seconds", "manual_timeout_seconds"):
             self.assertIn(field, render)
+        self.assertNotIn("任务完成后", render)
+        self.assertNotIn("发布正文输入方式", render)
+        self.assertNotIn("data-browser-completion-policy", render)
+        self.assertNotIn("data-browser-text-input-mode", render)
         self.assertNotIn("settingsRequestedConcurrency", render)
         self.assertNotIn("发布保护参数", render)
         self.assertNotIn("savePublishPolicySettings", self.source)
         self.assertIn("review_hold_seconds", self._function_source("normalizeBrowserPreferences"))
-        self.assertIn("仅供检查，不提升速度", render)
+        self.assertNotIn("仅供检查，不提升速度", render)
         self.assertIn("resource_level", self._function_source("renderBrowserRecommendationCard"))
         self.assertIn("effective_limits", self._function_source("renderBrowserRecommendationCard"))
         self.assertIn("hiddenConcurrencyLimits", self._function_source("renderBrowserRecommendationCard"))
@@ -4932,7 +4930,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
                 auto_close_seconds: 10,
                 manual_timeout_seconds: 750,
                 requested_concurrency: 12,
-                text_input_mode: "paste",
+                text_input_mode: "type",
               }},
             );
             """

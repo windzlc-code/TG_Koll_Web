@@ -5197,10 +5197,9 @@ async function fetchThreadsBrowserSearchCandidates(args: {
             const visible = await input.isVisible({ timeout: 600 }).catch(() => false);
             if (!visible) continue;
             await input.click({ timeout: 800 }).catch(() => undefined);
-            await input.fill(query, { timeout: 1_000 }).catch(async () => {
-              await searchPage.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => undefined);
-              await searchPage.keyboard.type(query, { delay: 8 }).catch(() => undefined);
-            });
+            await searchPage.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => undefined);
+            await searchPage.keyboard.press("Backspace").catch(() => undefined);
+            await searchPage.keyboard.type(query, { delay: 25 });
             await input.press("Enter", { timeout: 1_000 }).catch(() => searchPage.keyboard.press("Enter").catch(() => undefined));
             await searchPage.waitForTimeout(Math.min(THREADS_MANUAL_SEARCH_TRIGGER_WAIT_MS, remainingSentimentDeadlineMs(args.deadlineAt, THREADS_MANUAL_SEARCH_TRIGGER_WAIT_MS))).catch(() => undefined);
             console.info(`[sentiment_hot_browser_search] archiveId=${args.archiveId} source=threads_manual_search query=${JSON.stringify(query)} url=${JSON.stringify(String(searchPage.url?.() || ""))}`);
@@ -6639,10 +6638,9 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
           const visible = await input.isVisible({ timeout: 400 }).catch(() => false);
           if (!visible) continue;
           await input.click({ timeout: 800 }).catch(() => undefined);
-          await input.fill(query, { timeout: 1_000 }).catch(async () => {
-            await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => undefined);
-            await page.keyboard.type(query, { delay: 8 }).catch(() => undefined);
-          });
+          await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A").catch(() => undefined);
+          await page.keyboard.press("Backspace").catch(() => undefined);
+          await page.keyboard.type(query, { delay: 25 });
           await page.waitForTimeout(Math.min(900, remainingSentimentDeadlineMs(args.deadlineAt, 900))).catch(() => undefined);
           await input.press("Enter", { timeout: 800 }).catch(() => page.keyboard.press("Enter").catch(() => undefined));
           await page.waitForTimeout(Math.min(900, remainingSentimentDeadlineMs(args.deadlineAt, 900))).catch(() => undefined);

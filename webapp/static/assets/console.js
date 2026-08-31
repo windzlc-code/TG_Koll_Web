@@ -18583,7 +18583,7 @@ function normalizeBrowserPreferences(value) {
     auto_close_seconds: autoCloseSeconds,
     manual_timeout_seconds: manualTimeout,
     requested_concurrency: requestedConcurrency,
-    text_input_mode: String(raw.text_input_mode || "paste") === "type" ? "type" : "paste",
+    text_input_mode: "type",
   };
 }
 
@@ -19096,14 +19096,6 @@ function renderConsoleSettingsPage() {
           <span>这些设置跟随当前用户，用于控制任务完成、人工接管和并发行为。</span>
         </div>
         <div class="console-settings-grid browser-policy-grid">
-          <div class="console-setting-card console-setting-card-wide">
-            <span>任务完成后</span>
-            <div class="automation-capsule-tabs console-input-mode-tabs" aria-label="任务完成策略">
-              <button type="button" class="${preferences.completion_policy === "immediate_close" ? "is-active" : ""}" data-browser-completion-policy="immediate_close">立即关闭</button>
-              <button type="button" class="${preferences.completion_policy === "review_hold" ? "is-active" : ""}" data-browser-completion-policy="review_hold">保留检查</button>
-            </div>
-            <em>保留检查仅供检查，不提升速度。</em>
-          </div>
           <label class="console-setting-card ${preferences.completion_policy === "review_hold" ? "" : "is-disabled"}">
             <span>完成后待机时间</span>
             <div class="browser-duration-control">
@@ -19143,13 +19135,6 @@ function renderConsoleSettingsPage() {
             </div>
             <em>可自定义 5 到 30 分钟内的任意秒数。</em>
           </label>
-          <div class="console-setting-card">
-            <span>发布正文输入方式</span>
-            <div class="automation-capsule-tabs console-input-mode-tabs" aria-label="发布正文输入方式">
-              <button type="button" class="${preferences.text_input_mode === "paste" ? "is-active" : ""}" data-browser-text-input-mode="paste">复制粘贴</button>
-              <button type="button" class="${preferences.text_input_mode === "type" ? "is-active" : ""}" data-browser-text-input-mode="type">逐字输入</button>
-            </div>
-          </div>
           ${renderBrowserRecommendationCard()}
         </div>
       </section>
@@ -19186,19 +19171,6 @@ function updateBrowserPreferencesDraft() {
   });
   state.browserPreferencesDirty = true;
   return state.browserPreferences;
-}
-
-function setBrowserPreferenceChoice(field, value, { render = true } = {}) {
-  const current = updateBrowserPreferencesDraft();
-  state.browserPreferences = normalizeBrowserPreferences({ ...current, [field]: value });
-  state.browserPreferencesDirty = true;
-  if (render) renderConsoleSettingsPage();
-}
-
-function syncBrowserTextInputModeTabs(mode) {
-  document.querySelectorAll("[data-browser-text-input-mode]").forEach((button) => {
-    button.classList.toggle("is-active", button.dataset.browserTextInputMode === mode);
-  });
 }
 
 function refreshConsoleSettingsDependents() {
@@ -37534,28 +37506,6 @@ function bindEvents() {
       else if (action === "email-2fa") await togglePersonalEmailTwoFactor();
       else if (action === "password") await changePersonalPassword();
       else if (action === "delete-account") await deletePersonalAccount();
-      return;
-    }
-    const completionPolicy = event.target.closest("[data-browser-completion-policy]");
-    if (completionPolicy) {
-      const policy = completionPolicy.dataset.browserCompletionPolicy || "immediate_close";
-      event.__vectoSegmentSlideHandled = true;
-      await slideSegmentedButtonBackground(completionPolicy, {
-        commit: () => setBrowserPreferenceChoice("completion_policy", policy),
-        resolveButton: () => document.querySelector(
-          `[data-browser-completion-policy="${CSS.escape(policy)}"]`
-        ),
-      });
-      return;
-    }
-    const inputMode = event.target.closest("[data-browser-text-input-mode]");
-    if (inputMode) {
-      const mode = inputMode.dataset.browserTextInputMode || "paste";
-      event.__vectoSegmentSlideHandled = true;
-      await slideSegmentedButtonBackground(inputMode, {
-        commit: () => setBrowserPreferenceChoice("text_input_mode", mode, { render: false }),
-      });
-      syncBrowserTextInputModeTabs(mode);
       return;
     }
     if (event.target.closest("[data-browser-recommendation-refresh]")) {

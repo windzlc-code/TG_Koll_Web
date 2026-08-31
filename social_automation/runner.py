@@ -2004,30 +2004,7 @@ def _human_type(
 
 
 def _normalize_text_input_mode(value: Any) -> str:
-    mode = str(value or "").strip().lower()
-    return mode if mode in {"paste", "type"} else "paste"
-
-
-def _paste_text(page, text: str) -> bool:
-    clean_text = str(text or "")
-    try:
-        origin = ""
-        with contextlib.suppress(Exception):
-            parsed = urlparse(str(page.url or ""))
-            if parsed.scheme and parsed.netloc:
-                origin = f"{parsed.scheme}://{parsed.netloc}"
-        with contextlib.suppress(Exception):
-            page.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=origin or None)
-        page.evaluate(
-            """async (value) => {
-                await navigator.clipboard.writeText(value);
-            }""",
-            clean_text,
-        )
-        page.keyboard.press("Control+V")
-        return True
-    except Exception:
-        return False
+    return "type"
 
 
 def _type_text(
@@ -2036,7 +2013,7 @@ def _type_text(
     min_delay: float = 0.08,
     max_delay: float = 0.18,
     *,
-    mode: str = "paste",
+    mode: str = "type",
     logger: AutomationLogger | None = None,
     stage: str = "text_input",
     abort_if: Callable[[], bool] | None = None,
@@ -2044,31 +2021,8 @@ def _type_text(
     clean_text = str(text or "")
     if abort_if is not None and abort_if():
         return
-    input_mode = _normalize_text_input_mode(mode or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
-    if input_mode == "type":
-        if logger is not None:
-            logger.log("info", stage, "正在使用逐字输入方式填写内容。", {"mode": "type", "chars": len(clean_text)})
-        _human_type(page, clean_text, min_delay=min_delay, max_delay=max_delay, abort_if=abort_if)
-        return
-    if abort_if is not None and abort_if():
-        return
-    if clean_text and _paste_text(page, clean_text):
-        if logger is not None:
-            logger.log("info", stage, "正在使用剪贴板粘贴方式填写内容。", {"mode": "paste", "chars": len(clean_text)})
-        return
     if logger is not None:
-        logger.log("warn", stage, "剪贴板粘贴失败，已改用直接文本输入。", {"mode": "paste", "chars": len(clean_text)})
-    insert_enabled = str(os.getenv("SOCIAL_AUTOMATION_FAST_TEXT_INPUT", "1")).strip().lower() not in {"0", "false", "no", "off"}
-    if insert_enabled and len(clean_text) >= 12:
-        try:
-            page.keyboard.insert_text(clean_text)
-            if logger is not None:
-                logger.log("info", stage, "Text input used direct browser insertion fallback.", {"mode": "insert_text", "chars": len(clean_text)})
-            return
-        except Exception:
-            pass
-    if logger is not None:
-        logger.log("info", stage, "Text input used per-character fallback.", {"mode": "type_fallback", "chars": len(clean_text)})
+        logger.log("info", stage, "正在使用逐字输入方式填写内容。", {"mode": "type", "chars": len(clean_text)})
     _human_type(page, clean_text, min_delay=min_delay, max_delay=max_delay, abort_if=abort_if)
 
 
@@ -11746,7 +11700,7 @@ def _clear_and_type(
     locator,
     text: str,
     *,
-    mode: str = "paste",
+    mode: str = "type",
     logger: AutomationLogger | None = None,
     stage: str = "text_input",
     abort_if: Callable[[], bool] | None = None,
@@ -13840,15 +13794,14 @@ def _run_threads_publish_post(
     _set_manual_takeover_waiting_for(context_control, "threads_text_ready")
     compose = _focus_threads_compose(page, compose, logger)
     if caption:
-        text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
+        text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "type"))
         logger.log("info", "threads_publish_text_input", "正在填写 Threads 帖子正文。", {"mode": text_input_mode, "chars": len(caption)})
         _clear_and_type(page, compose, caption, mode=text_input_mode, logger=logger, stage="threads_publish_text_input")
         _sleep_between(0.8, 1.4)
         dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
             compose = _threads_dialog_compose_box(page) or compose
-            retry_input_mode = "type" if text_input_mode == "paste" else text_input_mode
-            _clear_and_type(page, compose, caption, mode=retry_input_mode, logger=logger, stage="threads_publish_text_input_retry")
+            _clear_and_type(page, compose, caption, mode="type", logger=logger, stage="threads_publish_text_input_retry")
             _sleep_between(0.8, 1.4)
             dialog_text = _threads_active_dialog_text(page)
         if caption not in dialog_text:
@@ -14496,7 +14449,7 @@ def _run_publish_post(
         caption_box = page.locator('textarea, [contenteditable="true"]').last
         caption_box.wait_for(state="visible", timeout=30000)
         _human_click(page, caption_box, logger, "publish_caption_focus")
-        text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste"))
+        text_input_mode = _normalize_text_input_mode(payload.get("text_input_mode") or os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "type"))
         logger.log("info", "publish_text_input", "正在填写 Instagram 帖子正文。", {"mode": text_input_mode, "chars": len(caption)})
         _type_text(page, caption, mode=text_input_mode, logger=logger, stage="publish_text_input")
     confirmation_state = {
@@ -15022,20 +14975,15 @@ def _fill_direct_message_composer(
         abort_if=lambda: _manual_takeover_requested(context_control),
     ):
         return False
-    try:
-        composer.fill(message, timeout=5000)
-    except Exception:
-        with contextlib.suppress(Exception):
-            page.keyboard.press("Control+A")
-        _type_text(
-            page,
-            message,
-            min_delay=0.02,
-            max_delay=0.06,
-            logger=logger,
-            stage="direct_message_text",
-            abort_if=lambda: _manual_takeover_requested(context_control),
-        )
+    _clear_and_type(
+        page,
+        composer,
+        message,
+        mode="type",
+        logger=logger,
+        stage="direct_message_text",
+        abort_if=lambda: _manual_takeover_requested(context_control),
+    )
     return _direct_message_composer(page, timeout_ms=800) is not None
 
 
@@ -15116,10 +15064,15 @@ def _open_direct_message_conversation(
     if search is None:
         return {"opened": False, "recipient_verified": False, "method": "", "profile_url": profile_url}
     _human_click(page, search, logger, "direct_message_recipient_search")
-    try:
-        search.fill(recipient, timeout=5000)
-    except Exception:
-        _type_text(page, recipient, min_delay=0.03, max_delay=0.07)
+    _clear_and_type(
+        page,
+        search,
+        recipient,
+        mode="type",
+        logger=logger,
+        stage="direct_message_recipient_search_input",
+        abort_if=lambda: _manual_takeover_requested(context_control),
+    )
     if not _wait_interruptibly(1.2, cancel_event, context_control):
         return {"opened": False, "recipient_verified": False, "method": "", "profile_url": profile_url}
     target = None

@@ -1626,7 +1626,7 @@ def init_db() -> None:
                 CHECK(manual_timeout_seconds BETWEEN 300 AND 1800),
               requested_concurrency INTEGER NOT NULL DEFAULT 1
                 CHECK(requested_concurrency BETWEEN 1 AND 12),
-              text_input_mode TEXT NOT NULL DEFAULT 'paste'
+              text_input_mode TEXT NOT NULL DEFAULT 'type'
                 CHECK(text_input_mode IN ('paste', 'type')),
               auto_configured INTEGER NOT NULL DEFAULT 0,
               updated_at INTEGER NOT NULL,

@@ -505,7 +505,7 @@ class LiveBrowserSettingsPayload(BaseModel):
     standby_seconds: int = Field(default=60, ge=0, le=3600)
     auto_close_seconds: int = Field(default=300, ge=10, le=86400)
     max_concurrency: int = Field(default=SOCIAL_AUTOMATION_DEFAULT_GLOBAL_CONCURRENCY, ge=1, le=12)
-    text_input_mode: str = Field(default="paste", max_length=20)
+    text_input_mode: str = Field(default="type", max_length=20)
 
 
 class BrowserPreferencesPayload(BaseModel):
@@ -515,7 +515,7 @@ class BrowserPreferencesPayload(BaseModel):
     auto_close_seconds: int | None = Field(default=None, ge=10, le=86400)
     manual_timeout_seconds: int = Field(default=300, ge=300, le=1800)
     requested_concurrency: int = Field(default=1, ge=1, le=12)
-    text_input_mode: str = Field(default="paste", max_length=20)
+    text_input_mode: str = Field(default="type", max_length=20)
 
 
 class LiveBrowserTextPayload(BaseModel):
@@ -4296,8 +4296,7 @@ def _bounded_env_int(name: str, fallback: int, minimum: int, maximum: int) -> in
 
 
 def _normalize_text_input_mode(value: Any) -> str:
-    mode = str(value or "").strip().lower()
-    return mode if mode in {"paste", "type"} else "paste"
+    return "type"
 
 
 def get_live_browser_settings() -> dict[str, Any]:
@@ -4305,7 +4304,7 @@ def get_live_browser_settings() -> dict[str, Any]:
         "standby_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_STANDBY_SECONDS", 60, 0, 3600),
         "auto_close_seconds": _bounded_env_int("SOCIAL_AUTOMATION_LIVE_BROWSER_AUTO_CLOSE_SECONDS", 300, 10, 86400),
         "max_concurrency": SOCIAL_AUTOMATION_DEFAULT_GLOBAL_CONCURRENCY,
-        "text_input_mode": _normalize_text_input_mode(os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "paste")),
+        "text_input_mode": _normalize_text_input_mode(os.getenv("SOCIAL_AUTOMATION_TEXT_INPUT_MODE", "type")),
     }
     try:
         with db() as conn:
@@ -4400,7 +4399,7 @@ def _default_user_browser_preferences() -> dict[str, Any]:
             1,
             min(SOCIAL_AUTOMATION_USER_CONCURRENCY_LIMIT, global_limit),
         ),
-        "text_input_mode": "paste",
+        "text_input_mode": "type",
         "auto_configured": False,
         "updated_at": 0,
     }
@@ -4742,7 +4741,7 @@ def browser_environment_recommendation(user_id: int) -> dict[str, Any]:
             "auto_close_seconds": 30,
             "manual_timeout_seconds": 300,
             "requested_concurrency": recommended_concurrency,
-            "text_input_mode": "paste",
+            "text_input_mode": "type",
         },
         "reasons": reasons,
         "limits": {
