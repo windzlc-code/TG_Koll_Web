@@ -23209,6 +23209,7 @@ def _build_persona_dashboard_overview(
     task_status_counts = dict(queue_stats.get("by_status") or {})
     daily: dict[str, dict[str, int]] = {}
     platform_daily: dict[str, dict[str, dict[str, int]]] = {}
+    follower_snapshots_by_account_day: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     def _new_trend_bucket() -> dict[str, int]:
         return {
@@ -23223,35 +23224,25 @@ def _build_persona_dashboard_overview(
             "snapshot_count": 0,
         }
 
-    def _record_metric_snapshot(platform_name: str, snapshot: dict[str, Any], fallback_hot_score: int) -> None:
-        """Add one confirmed account snapshot to the global and platform trend buckets."""
+    def _record_metric_snapshot(
+        platform_name: str,
+        account_scope: str,
+        snapshot: dict[str, Any],
+    ) -> None:
+        """Keep the latest follower snapshot for one account on one local day."""
         nonlocal latest_update
         snapshot_at = str(snapshot.get("refreshedAt") or snapshot.get("refreshed_at") or "").strip()
         snapshot_day = _date_key(snapshot_at)
         if not snapshot_day:
             return
-        likes = _number(snapshot.get("likes"), 0)
-        comments = _number(snapshot.get("comments"), 0)
-        shares = _number(snapshot.get("shares"), 0)
-        reposts = _number(snapshot.get("reposts"), 0)
-        post_views = _number(snapshot.get("postViews") or snapshot.get("post_views") or snapshot.get("views"), 0)
-        hot_score = _number(
-            snapshot.get("hotScore") if snapshot.get("hotScore") is not None else snapshot.get("hot_score"),
-            _sum_numbers(likes, comments, shares, reposts, post_views) if fallback_hot_score is None else fallback_hot_score,
-        )
         followers = _number(snapshot.get("followers"), 0)
-        for bucket in (
-            daily.setdefault(snapshot_day, _new_trend_bucket()),
-            platform_daily.setdefault(platform_name, {}).setdefault(snapshot_day, _new_trend_bucket()),
-        ):
-            bucket["likes"] += likes
-            bucket["comments"] += comments
-            bucket["shares"] += shares
-            bucket["reposts"] += reposts
-            bucket["post_views"] += post_views
-            bucket["followers"] += followers
-            bucket["hot_score"] += hot_score
-            bucket["snapshot_count"] += 1
+        key = (platform_name, account_scope, snapshot_day)
+        previous = follower_snapshots_by_account_day.get(key)
+        if previous is None or snapshot_at >= str(previous.get("refreshed_at") or ""):
+            follower_snapshots_by_account_day[key] = {
+                "refreshed_at": snapshot_at,
+                "followers": followers,
+            }
         latest_update = max(latest_update, snapshot_at)
     personas: list[dict[str, Any]] = []
     totals = {
@@ -23318,6 +23309,7 @@ def _build_persona_dashboard_overview(
             )
             metric_account_id = str(metric_value.get("accountId") or metric_value.get("account_id") or "").strip()
             metric_account_username = str(metric_value.get("username") or "").strip().lstrip("@")
+            metric_account_scope = metric_account_id or metric_account_username.lower() or f"{archive_id}:{platform_name}"
             current_identity = current_accounts.get(platform_name) if isinstance(current_accounts.get(platform_name), dict) else {}
             current_account_id = str(current_identity.get("account_id") or "").strip()
             current_account_username = str(current_identity.get("username") or "").strip().lstrip("@")
@@ -23376,18 +23368,12 @@ def _build_persona_dashboard_overview(
             confirmed_snapshots = [snapshot for snapshot in metric_snapshots if isinstance(snapshot, dict) and _date_key(snapshot.get("refreshedAt") or snapshot.get("refreshed_at"))]
             if confirmed_snapshots:
                 for snapshot in confirmed_snapshots:
-                    _record_metric_snapshot(platform_name, snapshot, None)
+                    _record_metric_snapshot(platform_name, metric_account_scope, snapshot)
             else:
-                _record_metric_snapshot(platform_name, {
+                _record_metric_snapshot(platform_name, metric_account_scope, {
                     "refreshedAt": metric_value.get("refreshedAt") or metric_value.get("lightRefreshedAt"),
                     "followers": metric_value.get("followers"),
-                    "likes": platform_likes,
-                    "comments": platform_comments,
-                    "shares": platform_shares,
-                    "reposts": platform_reposts,
-                    "views": platform_post_views,
-                    "hotScore": platform_hot_score,
-                }, platform_hot_score)
+                })
             if metric_value.get("complete") is True:
                 totals["complete_hot_metrics"] += 1
             else:
@@ -23437,6 +23423,7 @@ def _build_persona_dashboard_overview(
                 continue
             record_platform_key = _normalize_persona_content_platform(record.get("platform") or "unknown")
             published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+            resolved_hot_metrics = _publish_history_hot_metrics(record, archive)
             targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
             target_sources: list[tuple[str, dict[str, Any]]] = []
             for target in targets:
@@ -23468,23 +23455,35 @@ def _build_persona_dashboard_overview(
             for platform_key, source in sources:
                 if not isinstance(source, dict):
                     continue
-                day = _date_key(source.get("capturedAt") or record.get("publishedAt"))
+                if len(sources) == 1:
+                    metric_values = {
+                        "likes": _number(resolved_hot_metrics.get("likes"), 0),
+                        "comments": _number(resolved_hot_metrics.get("comments"), 0),
+                        "shares": _number(resolved_hot_metrics.get("shares"), 0),
+                        "reposts": _number(resolved_hot_metrics.get("reposts"), 0),
+                        "post_views": _number(resolved_hot_metrics.get("views"), 0),
+                    }
+                else:
+                    metric_values = {
+                        "likes": _source_metric(source, "likeCount", "like_count"),
+                        "comments": _source_metric(source, "commentCount", "comment_count"),
+                        "shares": _source_metric(source, "shareCount", "share_count", "send_count"),
+                        "reposts": _source_metric(source, "repostCount", "repost_count"),
+                        "post_views": _source_metric(source, "viewCount", "view_count"),
+                    }
+                day = published_day
                 if day:
                     bucket = daily.setdefault(day, _new_trend_bucket())
-                    bucket["likes"] += _source_metric(source, "likeCount", "like_count")
-                    bucket["comments"] += _source_metric(source, "commentCount", "comment_count")
-                    bucket["shares"] += _source_metric(source, "shareCount", "share_count", "send_count")
-                    bucket["reposts"] += _source_metric(source, "repostCount", "repost_count")
-                    bucket["post_views"] += _source_metric(source, "viewCount", "view_count")
+                    for field, value in metric_values.items():
+                        bucket[field] += value
+                    bucket["hot_score"] += _sum_numbers(*metric_values.values())
                     platform_bucket = platform_daily.setdefault(platform_key, {}).setdefault(
                         day,
                         _new_trend_bucket(),
                     )
-                    platform_bucket["likes"] += _source_metric(source, "likeCount", "like_count")
-                    platform_bucket["comments"] += _source_metric(source, "commentCount", "comment_count")
-                    platform_bucket["shares"] += _source_metric(source, "shareCount", "share_count", "send_count")
-                    platform_bucket["reposts"] += _source_metric(source, "repostCount", "repost_count")
-                    platform_bucket["post_views"] += _source_metric(source, "viewCount", "view_count")
+                    for field, value in metric_values.items():
+                        platform_bucket[field] += value
+                    platform_bucket["hot_score"] += _sum_numbers(*metric_values.values())
             latest_update = max(latest_update, str(record.get("publishedAt") or ""))
 
         for post in posts:
@@ -23586,6 +23585,25 @@ def _build_persona_dashboard_overview(
             "queue": queue_for_archive,
             "warnings": _persona_dashboard_warnings(setup, hot_platforms, post_metric_rows),
         })
+
+    snapshot_daily: dict[str, dict[str, int]] = {}
+    snapshot_platform_daily: dict[str, dict[str, dict[str, int]]] = {}
+    for (platform_name, _account_scope, snapshot_day), snapshot in follower_snapshots_by_account_day.items():
+        for bucket in (
+            snapshot_daily.setdefault(snapshot_day, _new_trend_bucket()),
+            snapshot_platform_daily.setdefault(platform_name, {}).setdefault(snapshot_day, _new_trend_bucket()),
+        ):
+            bucket["followers"] += _number(snapshot.get("followers"), 0)
+            bucket["snapshot_count"] += 1
+    for snapshot_day, snapshot_values in snapshot_daily.items():
+        bucket = daily.setdefault(snapshot_day, _new_trend_bucket())
+        bucket["followers"] = snapshot_values["followers"]
+        bucket["snapshot_count"] = snapshot_values["snapshot_count"]
+    for platform_name, snapshot_days in snapshot_platform_daily.items():
+        for snapshot_day, snapshot_values in snapshot_days.items():
+            bucket = platform_daily.setdefault(platform_name, {}).setdefault(snapshot_day, _new_trend_bucket())
+            bucket["followers"] = snapshot_values["followers"]
+            bucket["snapshot_count"] = snapshot_values["snapshot_count"]
 
     personas.sort(key=lambda item: _number(item.get("hot", {}).get("hot_score"), 0), reverse=True)
     persona_groups = _read_persona_groups({str(item.get("id") or "").strip() for item in personas})

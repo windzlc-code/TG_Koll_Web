@@ -750,10 +750,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         threads_trend = data["charts"]["platform_trend"]["threads"]
         self.assertEqual(threads_trend[0]["date"], "2026-06-30")
         self.assertEqual(threads_trend[0]["published"], 1)
-        self.assertEqual(threads_trend[0]["likes"], 3)
+        self.assertEqual(threads_trend[0]["likes"], 10)
         self.assertNotIn("instagram", data["charts"]["platform_trend"])
 
-    def test_overview_adds_hot_snapshot_fields_to_platform_trend(self):
+    def test_overview_keeps_account_snapshot_fields_separate_from_content_trend(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
         archives = json.loads(archives_path.read_text(encoding="utf-8"))
@@ -770,12 +770,13 @@ class PersonaDashboardApiTests(unittest.TestCase):
             row["date"]: row
             for row in response.json()["charts"]["platform_trend"]["threads"]
         }
-        self.assertEqual(rows["2026-06-30"]["reposts"], 2)
+        self.assertEqual(rows["2026-06-30"]["likes"], 10)
+        self.assertEqual(rows["2026-06-30"]["post_views"], 300)
         self.assertEqual(rows["2026-07-31"]["followers"], 42)
         self.assertEqual(rows["2026-07-31"]["snapshot_count"], 1)
-        self.assertGreater(rows["2026-07-31"]["hot_score"], 0)
+        self.assertEqual(rows["2026-07-31"]["hot_score"], 0)
 
-    def test_overview_keeps_completed_metric_snapshots_as_distinct_trend_days(self):
+    def test_overview_keeps_completed_account_snapshots_as_follower_trend_days(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
         archives = json.loads(archives_path.read_text(encoding="utf-8"))
@@ -807,11 +808,97 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         rows = {row["date"]: row for row in response.json()["charts"]["platform_trend"]["threads"]}
         self.assertEqual(rows["2026-07-30"]["followers"], 41)
-        self.assertEqual(rows["2026-07-30"]["likes"], 4)
-        self.assertEqual(rows["2026-07-30"]["post_views"], 90)
+        self.assertEqual(rows["2026-07-30"]["likes"], 0)
+        self.assertEqual(rows["2026-07-30"]["post_views"], 0)
         self.assertEqual(rows["2026-07-31"]["followers"], 42)
-        self.assertEqual(rows["2026-07-31"]["likes"], 8)
-        self.assertEqual(rows["2026-07-31"]["post_views"], 120)
+        self.assertEqual(rows["2026-07-31"]["likes"], 0)
+        self.assertEqual(rows["2026-07-31"]["post_views"], 0)
+
+    def test_overview_uses_post_metrics_by_publish_day_and_snapshot_only_for_followers(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        hot_metric = archives[0]["setup"]["hotMetrics"]["threads"]
+        hot_metric["snapshots"] = [
+            {
+                "refreshedAt": "2026-07-30T18:00:00Z",
+                "followers": 41,
+                "likes": 4,
+                "comments": 2,
+                "shares": 1,
+                "reposts": 3,
+                "views": 90,
+            },
+            {
+                "refreshedAt": "2026-07-31T08:00:00Z",
+                "followers": 42,
+                "likes": 8,
+                "comments": 3,
+                "shares": 2,
+                "reposts": 4,
+                "views": 120,
+            },
+        ]
+        record = archives[0]["publishHistory"][0]
+        record["publishedAt"] = "2026-07-31T02:00:00Z"
+        record["publishedMeta"]["capturedAt"] = "2026-07-31T02:00:00Z"
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        response = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(response.status_code, 200)
+        row = next(
+            item
+            for item in response.json()["charts"]["platform_trend"]["threads"]
+            if item["date"] == "2026-07-31"
+        )
+        self.assertEqual(row["snapshot_count"], 1)
+        self.assertEqual(row["followers"], 42)
+        self.assertEqual(row["likes"], 10)
+        self.assertEqual(row["comments"], 5)
+        self.assertEqual(row["shares"], 2)
+        self.assertEqual(row["reposts"], 0)
+        self.assertEqual(row["post_views"], 300)
+        self.assertEqual(row["hot_score"], 317)
+
+    def test_overview_does_not_add_cumulative_account_totals_to_content_trend(self):
+        self._write_archives()
+        archives_path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(archives_path.read_text(encoding="utf-8"))
+        first = archives[0]
+        first_metric = first["setup"]["hotMetrics"]["threads"]
+        first_metric["username"] = "first_account"
+        first_metric["snapshots"] = [
+            {"refreshedAt": "2026-08-30T19:23:58Z", "views": 51297},
+            {"refreshedAt": "2026-08-31T04:02:03Z", "views": 51453},
+        ]
+        first["publishHistory"][0]["publishedAt"] = "2026-08-31T01:00:00Z"
+
+        second = json.loads(json.dumps(first))
+        second["id"] = "persona-2"
+        second["name"] = "Second account"
+        second_metric = second["setup"]["hotMetrics"]["threads"]
+        second_metric["username"] = "second_account"
+        second_metric["snapshots"] = [
+            {"refreshedAt": "2026-08-30T19:24:03Z", "views": 2155},
+            {"refreshedAt": "2026-08-31T04:02:11Z", "views": 2155},
+        ]
+        second["publishHistory"][0]["id"] = "pub-2"
+        second["publishHistory"][0]["publishedUrl"] = "https://www.threads.net/@second_account/post/def"
+        archives.append(second)
+        archives_path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+        self._assign_personas_to_admin(["persona-2"])
+
+        response = self.client.get("/api/persona_dashboard/overview")
+
+        self.assertEqual(response.status_code, 200)
+        row = next(
+            item
+            for item in response.json()["charts"]["platform_trend"]["threads"]
+            if item["date"] == "2026-08-31"
+        )
+        self.assertEqual(row["snapshot_count"], 2)
+        self.assertEqual(row["post_views"], 80)
 
     def test_overview_attributes_multi_platform_publish_targets_to_each_platform(self):
         self._write_archives()

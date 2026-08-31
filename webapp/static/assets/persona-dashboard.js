@@ -597,8 +597,7 @@ function pdAggregateTrendRows(rows, range = personaDashboardTrendRange) {
     return date.slice(0, 10);
   };
   const grouped = new Map();
-  const metricFields = ["post_views", "likes", "comments", "shares", "reposts"];
-  const snapshotFields = [...metricFields, "followers", "hot_score"];
+  const metricFields = ["post_views", "likes", "comments", "shares", "reposts", "hot_score"];
   safeRows.forEach((row) => {
     const key = keyFor(row);
     if (!key) return;
@@ -614,18 +613,16 @@ function pdAggregateTrendRows(rows, range = personaDashboardTrendRange) {
       hot_score: 0,
       snapshot_count: 0,
       _hasSnapshot: false,
+      _hasData: true,
     };
     current.published += Number(row.published || 0);
+    metricFields.forEach((field) => {
+      current[field] += Number(row[field] || 0);
+    });
     if (Number(row.snapshot_count || 0) > 0) {
-      snapshotFields.forEach((field) => {
-        current[field] = Number(row[field] || 0);
-      });
+      current.followers = Number(row.followers || 0);
       current.snapshot_count = Number(row.snapshot_count || 0);
       current._hasSnapshot = true;
-    } else if (!current._hasSnapshot) {
-      metricFields.forEach((field) => {
-        current[field] += Number(row[field] || 0);
-      });
     }
     grouped.set(key, current);
   });
@@ -633,7 +630,33 @@ function pdAggregateTrendRows(rows, range = personaDashboardTrendRange) {
   const groupedRows = Array.from(grouped.values()).sort((left, right) => String(left.date).localeCompare(String(right.date)));
   if (!groupedRows.length) return [];
   const limit = limits[range] || 30;
-  return groupedRows.slice(-limit).map(({ _hasSnapshot, ...row }) => row);
+  const latestText = String(safeRows[safeRows.length - 1].date || "").slice(0, 10);
+  const latest = new Date(`${latestText}T00:00:00Z`);
+  const keys = [];
+  for (let offset = limit - 1; offset >= 0; offset -= 1) {
+    if (range === "year") {
+      keys.push(String(latest.getUTCFullYear() - offset));
+    } else if (range === "month") {
+      keys.push(new Date(Date.UTC(latest.getUTCFullYear(), latest.getUTCMonth() - offset, 1)).toISOString().slice(0, 7));
+    } else {
+      keys.push(new Date(Date.UTC(latest.getUTCFullYear(), latest.getUTCMonth(), latest.getUTCDate() - offset)).toISOString().slice(0, 10));
+    }
+  }
+  return keys.map((date) => grouped.get(date)
+    ? (({ _hasSnapshot, ...row }) => row)(grouped.get(date))
+    : {
+      date,
+      published: 0,
+      post_views: 0,
+      likes: 0,
+      comments: 0,
+      shares: 0,
+      reposts: 0,
+      followers: 0,
+      hot_score: 0,
+      snapshot_count: 0,
+      _hasData: false,
+    });
 }
 
 function pdRenderTrendChart(hostId, rows) {
@@ -670,10 +693,20 @@ function pdRenderTrendChart(hostId, rows) {
     ...row,
     engagement: Number(row.likes || 0) + Number(row.comments || 0) + Number(row.shares || 0) + Number(row.reposts || 0),
   }));
-  const max = Math.max(1, ...normalizedItems.flatMap((row) => series.map((s) => Number(row[s.key] || 0))));
+  const max = Math.max(1, ...normalizedItems.filter((row) => row._hasData !== false).flatMap((row) => series.map((s) => Number(row[s.key] || 0))));
   const x = (index) => pad.left + (normalizedItems.length === 1 ? (width - pad.left - pad.right) / 2 : (index / (normalizedItems.length - 1)) * (width - pad.left - pad.right));
   const y = (value) => height - pad.bottom - (Number(value || 0) / max) * (height - pad.top - pad.bottom);
-  const normalizedPathFor = (key) => normalizedItems.map((row, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(row[key]).toFixed(1)}`).join(" ");
+  const normalizedPathFor = (key) => {
+    let connected = false;
+    return normalizedItems.map((row, index) => {
+      if (row._hasData === false) {
+        return "";
+      }
+      const command = connected ? "L" : "M";
+      connected = true;
+      return `${command}${x(index).toFixed(1)},${y(row[key]).toFixed(1)}`;
+    }).filter(Boolean).join(" ");
+  };
   const labelFor = (date) => personaDashboardTrendRange === "day" ? String(date).slice(5) : String(date);
   const labelStep = Math.max(1, Math.ceil(normalizedItems.length / 6));
   host.innerHTML = `
@@ -685,7 +718,7 @@ function pdRenderTrendChart(hostId, rows) {
       }).join("")}
       <line x1="${pad.left}" y1="${height - pad.bottom}" x2="${width - pad.right}" y2="${height - pad.bottom}" class="persona-axis" />
       ${series.map((s) => `<path d="${normalizedPathFor(s.key)}" fill="none" stroke="${s.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
-        ${normalizedItems.map((row, index) => `<circle cx="${x(index)}" cy="${y(row[s.key])}" r="3.5" fill="${s.color}" />`).join("")}`).join("")}
+        ${normalizedItems.map((row, index) => row._hasData === false ? "" : `<circle cx="${x(index)}" cy="${y(row[s.key])}" r="3.5" fill="${s.color}" />`).join("")}`).join("")}
       ${normalizedItems.map((row, index) => (index % labelStep === 0 || index === normalizedItems.length - 1) ? `<text x="${x(index)}" y="${height - 10}" text-anchor="middle">${pdEscape(labelFor(row.date))}</text>` : "").join("")}
     </svg>
     <div class="persona-trend-footer">
