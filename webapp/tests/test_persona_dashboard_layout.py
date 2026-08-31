@@ -464,6 +464,8 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('min-height: 18px;', self.styles)
         self.assertIn('if (range === "month") return date.slice(0, 7);', chart)
         self.assertIn("const limits = { day: 30, month: 12, year: 5 };", chart)
+        self.assertIn("return groupedRows.slice(-limit).map", chart)
+        self.assertNotIn("keys.map((date) => grouped.get(date)", chart)
         self.assertIn("data-persona-trend-range", chart)
         self.assertIn("pdRenderTrendChart(hostId, rows);", chart)
         self.assertNotIn("pdRenderDashboard();", chart)
@@ -484,6 +486,79 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("justify-items: center;", footer_rule)
         self.assertIn("justify-content: center;", legend_rule)
         self.assertIn("font-size: 12px;", self.styles)
+
+    def test_trend_aggregation_keeps_real_periods_and_uses_latest_snapshot(self):
+        chart_start = self.dashboard_script.index(
+            "function pdAggregateTrendRows(rows, range = personaDashboardTrendRange)"
+        )
+        chart_end = self.dashboard_script.index("\nfunction pdRenderTrendChart", chart_start)
+        function_source = self.dashboard_script[chart_start:chart_end]
+        rows = [
+            {
+                "date": "2025-12-20",
+                "published": 1,
+                "post_views": 100,
+                "likes": 5,
+                "snapshot_count": 0,
+            },
+            {
+                "date": "2026-08-01",
+                "post_views": 1000,
+                "likes": 50,
+                "followers": 10,
+                "hot_score": 1100,
+                "snapshot_count": 1,
+            },
+            {
+                "date": "2026-08-15",
+                "published": 1,
+                "post_views": 120,
+                "likes": 7,
+                "snapshot_count": 0,
+            },
+            {
+                "date": "2026-08-31",
+                "post_views": 1500,
+                "likes": 70,
+                "followers": 12,
+                "hot_score": 1600,
+                "snapshot_count": 1,
+            },
+        ]
+        script = "\n".join(
+            (
+                'let personaDashboardTrendRange = "day";',
+                function_source,
+                f"const rows = {json.dumps(rows)};",
+                "console.log(JSON.stringify({",
+                "  day: pdAggregateTrendRows(rows, 'day'),",
+                "  month: pdAggregateTrendRows(rows, 'month'),",
+                "  year: pdAggregateTrendRows(rows, 'year'),",
+                "}));",
+            )
+        )
+        result = subprocess.run(
+            ["node", "-e", script],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        aggregated = json.loads(result.stdout)
+
+        self.assertEqual(
+            [row["date"] for row in aggregated["day"]],
+            ["2025-12-20", "2026-08-01", "2026-08-15", "2026-08-31"],
+        )
+        self.assertEqual([row["date"] for row in aggregated["year"]], ["2025", "2026"])
+        self.assertEqual(aggregated["year"][0]["post_views"], 100)
+        self.assertEqual(aggregated["year"][1]["published"], 1)
+        self.assertEqual(aggregated["year"][1]["post_views"], 1500)
+        self.assertEqual(aggregated["year"][1]["likes"], 70)
+        self.assertEqual(aggregated["year"][1]["followers"], 12)
+        self.assertEqual(aggregated["year"][1]["hot_score"], 1600)
+        self.assertEqual([row["date"] for row in aggregated["month"]], ["2025-12", "2026-08"])
+        self.assertEqual(aggregated["month"][1]["post_views"], 1500)
 
     def test_trend_chart_uses_high_contrast_series_colors_per_platform(self):
         palette_start = self.dashboard_script.index("function pdPlatformPalette(platform = pdPlatformFilter())")

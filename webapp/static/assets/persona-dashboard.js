@@ -597,6 +597,8 @@ function pdAggregateTrendRows(rows, range = personaDashboardTrendRange) {
     return date.slice(0, 10);
   };
   const grouped = new Map();
+  const metricFields = ["post_views", "likes", "comments", "shares", "reposts"];
+  const snapshotFields = [...metricFields, "followers", "hot_score"];
   safeRows.forEach((row) => {
     const key = keyFor(row);
     if (!key) return;
@@ -611,14 +613,19 @@ function pdAggregateTrendRows(rows, range = personaDashboardTrendRange) {
       followers: 0,
       hot_score: 0,
       snapshot_count: 0,
+      _hasSnapshot: false,
     };
-    ["published", "post_views", "likes", "comments", "shares", "reposts"].forEach((field) => {
-      current[field] += Number(row[field] || 0);
-    });
+    current.published += Number(row.published || 0);
     if (Number(row.snapshot_count || 0) > 0) {
-      current.followers = Number(row.followers || 0);
-      current.hot_score = Number(row.hot_score || 0);
-      current.snapshot_count += Number(row.snapshot_count || 0);
+      snapshotFields.forEach((field) => {
+        current[field] = Number(row[field] || 0);
+      });
+      current.snapshot_count = Number(row.snapshot_count || 0);
+      current._hasSnapshot = true;
+    } else if (!current._hasSnapshot) {
+      metricFields.forEach((field) => {
+        current[field] += Number(row[field] || 0);
+      });
     }
     grouped.set(key, current);
   });
@@ -626,27 +633,7 @@ function pdAggregateTrendRows(rows, range = personaDashboardTrendRange) {
   const groupedRows = Array.from(grouped.values()).sort((left, right) => String(left.date).localeCompare(String(right.date)));
   if (!groupedRows.length) return [];
   const limit = limits[range] || 30;
-  const latest = new Date(`${safeRows[safeRows.length - 1].date.slice(0, 10)}T00:00:00Z`);
-  const keys = [];
-  for (let offset = limit - 1; offset >= 0; offset -= 1) {
-    const cursor = new Date(latest);
-    if (range === "year") cursor.setUTCFullYear(cursor.getUTCFullYear() - offset);
-    else if (range === "month") cursor.setUTCMonth(cursor.getUTCMonth() - offset);
-    else cursor.setUTCDate(cursor.getUTCDate() - offset);
-    keys.push(range === "year" ? String(cursor.getUTCFullYear()) : cursor.toISOString().slice(0, range === "month" ? 7 : 10));
-  }
-  return keys.map((date) => grouped.get(date) || {
-    date,
-    published: 0,
-    post_views: 0,
-    likes: 0,
-    comments: 0,
-    shares: 0,
-    reposts: 0,
-    followers: 0,
-    hot_score: 0,
-    snapshot_count: 0,
-  });
+  return groupedRows.slice(-limit).map(({ _hasSnapshot, ...row }) => row);
 }
 
 function pdRenderTrendChart(hostId, rows) {
