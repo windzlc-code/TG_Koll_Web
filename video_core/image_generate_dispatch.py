@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import VideoTaskCancelled
+from .image_sanitize import sanitize_generated_image_file
 
 
 SUPPORTED_IMAGE_MODES = frozenset(
@@ -590,6 +591,15 @@ def dispatch_image_generate(
             raise RuntimeError(f"all image generation providers failed: {_text(last_error)}") from last_error
 
         _check_cancelled(source, context)
+        progress = getattr(context, "progress", None)
+        if callable(progress):
+            progress(
+                stage="image_sanitize",
+                status="running",
+                message="正在清洗图片元数据",
+                progress=round((image_index - 0.15) * 100 / requested_count, 2),
+            )
+        sanitize_generated_image_file(output)
         path_text = str(output)
         image_paths.append(path_text)
         task_id_sources = [

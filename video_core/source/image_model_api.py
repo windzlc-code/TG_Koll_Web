@@ -220,6 +220,8 @@ def _save_base64_image(*, output_image_path: str, image_base64: str) -> str:
     path = Path(output_image_path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(base64.b64decode(image_base64))
+    from video_core.image_sanitize import sanitize_generated_image_file
+    sanitize_generated_image_file(path)
     return str(path)
 
 
@@ -229,6 +231,8 @@ def _download_image(*, image_url: str, output_image_path: str) -> str:
     response = requests.get(str(image_url).strip(), timeout=120)
     response.raise_for_status()
     path.write_bytes(response.content)
+    from video_core.image_sanitize import sanitize_generated_image_file
+    sanitize_generated_image_file(path)
     return str(path)
 
 
