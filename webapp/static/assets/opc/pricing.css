@@ -237,44 +237,6 @@
   box-shadow: 0 14px 34px rgba(37, 55, 70, 0.06);
 }
 
-.pricing-plan-browser-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.pricing-plan-family-tabs {
-  display: inline-grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid #b9c5cf;
-  border-radius: 999px;
-  background: #edf1f4;
-}
-
-.pricing-plan-family-tabs button {
-  min-width: 72px;
-  min-height: 28px;
-  padding: 3px 12px;
-  border: 0;
-  border-radius: 999px;
-  color: var(--ink-soft);
-  background: transparent;
-  font-size: 13px;
-  font-weight: 800;
-  line-height: 1.25;
-  cursor: pointer;
-  transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease;
-}
-
-.pricing-plan-family-tabs button[aria-selected="true"] {
-  color: #ffffff;
-  background: var(--teal-dark);
-  box-shadow: 0 3px 10px rgba(37, 55, 70, 0.2);
-}
-
-.pricing-plan-family-tabs button:focus-visible,
 .pricing-plan-page-button:focus-visible {
   outline: 3px solid rgba(75, 100, 120, 0.36);
   outline-offset: 2px;
@@ -978,7 +940,6 @@
   .pricing-section-nav { width: min(100% - 28px, 1120px); }
   .pricing-plan-browser { padding: 12px; }
   .pricing-plan-browser-toolbar { align-items: center; }
-  .pricing-plan-family-tabs { width: min(190px, 100%); }
   .pricing-plan-slider { grid-template-columns: 30px minmax(0, 1fr) 30px; gap: 5px; }
   .pricing-plan-page-button { width: 30px; height: 30px; }
   .pricing-subscription-card { flex-basis: 100%; }

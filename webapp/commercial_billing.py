@@ -57,33 +57,100 @@ DEFAULT_AUTOMATION_MODULES: list[dict[str, Any]] = [
     },
 ]
 
-PERSONAL_SUBSCRIPTION_FEATURES = [
-    "1 个独立 IG / Threads 综合代理账号，由 AI 自动驾驶",
-    "每月 10 张免费 AI 图片，使用免费额度不扣算力点",
-    "通用基础文案模板与日常发文话术包无限使用",
-    "Vecto OS 标准后台：单账号排程、流量数据看板与算力消耗明细",
-    "AI 热点抓取、单账号沙箱风控与内容前置审核",
+LATEST_PDF_SUBSCRIPTION_PLANS: list[dict[str, Any]] = [
+    {
+        "sku": "vanguard_beta_free",
+        "name": "免費試用版（Beta 創始會員）",
+        "price_ntd": 0,
+        "monthly_price_ntd": 0,
+        "period_months": 1,
+        "period_label": "免費開通",
+        "purchasable": False,
+        "plan_family": "vanguard_beta",
+        "threads_accounts": 1,
+        "monthly_free_images": 10,
+        "ai_personas": 1,
+        "audience": "首次註冊並體驗 AI 人設系統的使用者",
+        "account_positioning": "以免費初始算力完成基礎體驗，後續可補差額升級並保留資料",
+        "features": [
+            "AI 人設 1 組",
+            "新註冊贈送 20 點基礎算力，單日最多發布 5 篇",
+            "參與 Beta 早期測試",
+            "加入 LINE 群組輔導與交流",
+            "不參與分潤",
+            "可補差額升級，原有資料完整保留",
+        ],
+    },
+    {
+        "sku": "vanguard_experience_monthly",
+        "name": "正式－體驗版",
+        "price_ntd": 2980,
+        "monthly_price_ntd": 2980,
+        "period_months": 1,
+        "period_label": "月繳",
+        "purchasable": True,
+        "plan_family": "vanguard_experience",
+        "threads_accounts": 1,
+        "monthly_free_images": 10,
+        "ai_personas": 1,
+        "audience": "需要完整基礎創作與單組 AI 人設的使用者",
+        "account_positioning": "單組 AI 人設搭配基礎創作與矩陣教練算力系統",
+        "features": [
+            "AI 人設 1 組",
+            "完整基礎 AI 創作算力",
+            "獨立矩陣算力點數系統",
+            "加入 LINE 社群輔導與交流",
+            "每日 5 次免費矩陣教練使用額度",
+            "不參與分潤",
+        ],
+    },
+    {
+        "sku": "vanguard_basic_monthly",
+        "name": "正式－基礎版（月繳）",
+        "price_ntd": 5980,
+        "monthly_price_ntd": 5980,
+        "period_months": 1,
+        "period_label": "月繳",
+        "purchasable": True,
+        "plan_family": "vanguard_basic",
+        "threads_accounts": 3,
+        "monthly_free_images": 10,
+        "ai_personas": 3,
+        "audience": "需要三組 AI 人設與完整矩陣能力的經營者",
+        "account_positioning": "三組 AI 人設與完整矩陣教練權益，採月繳方式開通",
+        "features": [
+            "AI 人設 3 組",
+            "完整基礎 AI 創作算力",
+            "完整矩陣教練獨立算力權益",
+            "每週二固定 1 小時官方輔導",
+            "加入 LINE 社群輔導與交流",
+            "月繳方案不啟動分潤",
+        ],
+    },
+    {
+        "sku": "vanguard_basic_revenue_quarterly",
+        "name": "正式－基礎版／分潤啟動版",
+        "price_ntd": 17940,
+        "monthly_price_ntd": 5980,
+        "period_months": 3,
+        "period_label": "一次繳 3 個月",
+        "purchasable": True,
+        "plan_family": "vanguard_basic",
+        "threads_accounts": 3,
+        "monthly_free_images": 10,
+        "ai_personas": 3,
+        "audience": "需要啟動團隊經營與分潤權益的經營者",
+        "account_positioning": "三組 AI 人設、完整矩陣權益與團隊分潤同步啟動",
+        "features": [
+            "AI 人設 3 組",
+            "完整基礎版與矩陣教練權益",
+            "每週一、三各 1 堂官方輔導",
+            "可建立 20 人團隊",
+            "解鎖教練與團隊獎金",
+            "分潤權益：一次性、月度與團隊帳號獎勵",
+        ],
+    },
 ]
-
-ENTERPRISE_SUBSCRIPTION_FEATURES = [
-    "3 个独立 IG / Threads 分工代理账号，由 Vecto OS 自动管理",
-    "每月 10 张免费 AI 图片，使用免费额度不扣算力点",
-    "全行业乾货文案库、产品对比模板与评论互动话术包无限使用",
-    "Vecto OS 完整后台：三账号排程、流量向量看板与算力消耗明细",
-    "AI 热点抓取、内容前置风控与多账号分流防封机制",
-]
-
-PERSONAL_SUBSCRIPTION_PROFILE = {
-    "plan_tier": "personal",
-    "audience": "自由创作者与微型个人商家",
-    "account_positioning": "乾货输出、真实分享与轻量引流合一的综合账号",
-}
-
-ENTERPRISE_SUBSCRIPTION_PROFILE = {
-    "plan_tier": "enterprise",
-    "audience": "中小企业、品牌商家与多线运营团队",
-    "account_positioning": "乾货主账号、体验账号与投放账号分工运行",
-}
 
 OFFICIAL_BILLING_RULES = [
     {"key": "free_image_priority", "name": "免费图片优先抵扣", "description": "订阅期间每月赠送 10 张免费 AI 图片，用完后才扣除算力点。"},
@@ -99,26 +166,12 @@ DEFAULT_CATALOG: dict[str, Any] = {
     "timezone": "Asia/Shanghai",
     "point_unit_ntd": 10,
     "subscription": {
-        "sku": "vanguard_enterprise_quarterly",
-        "name": "Vecto Vanguard OPC 企业版（季缴）",
-        "price_ntd": 17940,
-        "monthly_price_ntd": 5980,
-        "period_months": 3,
-        "threads_accounts": 3,
-        "monthly_free_images": 10,
-        "features": [
-            "3 个独立 IG / Threads 代理账号",
-            "Vecto OS 排程、完整数据与账号分流风控",
-            "每月 10 张免费 AI 图片",
-        ],
+        **LATEST_PDF_SUBSCRIPTION_PLANS[-1],
+        "features": list(LATEST_PDF_SUBSCRIPTION_PLANS[-1]["features"]),
     },
     "subscriptions": [
-        {"sku": "vanguard_personal_quarterly", "name": "Vecto Vanguard OPC 个人轻量版（季缴）", "price_ntd": 8940, "monthly_price_ntd": 2980, "period_months": 3, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
-        {"sku": "vanguard_personal_half_year", "name": "Vecto Vanguard OPC 个人轻量版（半年缴）", "price_ntd": 17880, "monthly_price_ntd": 2980, "period_months": 6, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
-        {"sku": "vanguard_personal_annual", "name": "Vecto Vanguard OPC 个人轻量版（年缴）", "price_ntd": 35760, "monthly_price_ntd": 2980, "period_months": 12, "threads_accounts": 1, "monthly_free_images": 10, "features": ["1 个综合 IG / Threads 代理账号", "标准排程、文案库、模板与话术包", "每月 10 张免费 AI 图片"]},
-        {"sku": "vanguard_enterprise_quarterly", "name": "Vecto Vanguard OPC 企业版（季缴）", "price_ntd": 17940, "monthly_price_ntd": 5980, "period_months": 3, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
-        {"sku": "vanguard_enterprise_half_year", "name": "Vecto Vanguard OPC 企业版（半年缴）", "price_ntd": 35880, "monthly_price_ntd": 5980, "period_months": 6, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
-        {"sku": "vanguard_enterprise_annual", "name": "Vecto Vanguard OPC 企业版（年缴）", "price_ntd": 71760, "monthly_price_ntd": 5980, "period_months": 12, "threads_accounts": 3, "monthly_free_images": 10, "features": ["3 个独立 IG / Threads 代理账号", "完整数据、三账号排程与分流风控", "每月 10 张免费 AI 图片"]},
+        {**item, "features": list(item["features"])}
+        for item in LATEST_PDF_SUBSCRIPTION_PLANS
     ],
     "actions": [
         {"sku": "threads_text_publish", "name": "Threads 纯文字推文发布", "points": 0, "unit": "次", "implemented": True},
@@ -159,16 +212,6 @@ DEFAULT_CATALOG: dict[str, Any] = {
     "automation_modules": DEFAULT_AUTOMATION_MODULES,
 }
 
-DEFAULT_CATALOG["subscription"]["features"] = list(ENTERPRISE_SUBSCRIPTION_FEATURES)
-DEFAULT_CATALOG["subscription"].update(ENTERPRISE_SUBSCRIPTION_PROFILE)
-for _default_subscription in DEFAULT_CATALOG["subscriptions"]:
-    _is_personal_plan = str(_default_subscription.get("sku") or "").startswith("vanguard_personal_")
-    _default_subscription["features"] = list(
-        PERSONAL_SUBSCRIPTION_FEATURES if _is_personal_plan else ENTERPRISE_SUBSCRIPTION_FEATURES
-    )
-    _default_subscription.update(
-        PERSONAL_SUBSCRIPTION_PROFILE if _is_personal_plan else ENTERPRISE_SUBSCRIPTION_PROFILE
-    )
 DEFAULT_CATALOG["billing_rules"] = OFFICIAL_BILLING_RULES
 
 VIDEO_ACTION_SKUS = {
@@ -281,7 +324,7 @@ def _with_social_content_action_catalog(catalog: dict[str, Any]) -> dict[str, An
 
 
 def _with_pdf_subscription_prices(catalog: dict[str, Any]) -> dict[str, Any]:
-    """Update only subscription prices from the current public price sheet."""
+    """Update only subscription prices from the previous public price sheet."""
     result = _loads(_dumps(catalog), {})
     subscriptions = result.get("subscriptions") if isinstance(result, dict) else None
     if not isinstance(subscriptions, list):
@@ -307,6 +350,15 @@ def _with_pdf_subscription_prices(catalog: dict[str, Any]) -> dict[str, Any]:
         if matched is not None:
             default_subscription["monthly_price_ntd"] = matched["monthly_price_ntd"]
             default_subscription["price_ntd"] = matched["price_ntd"]
+    return result
+
+
+def _with_latest_pdf_subscription_plans(catalog: dict[str, Any]) -> dict[str, Any]:
+    """Replace only the subscription plan family with the latest PDF contract."""
+    result = _loads(_dumps(catalog), {})
+    plans = _loads(_dumps(LATEST_PDF_SUBSCRIPTION_PLANS), [])
+    result["subscriptions"] = plans
+    result["subscription"] = dict(plans[-1])
     return result
 
 
@@ -862,6 +914,51 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
             (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
         )
 
+    latest_pdf_plans_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v12_latest_pdf_plans'"
+    ).fetchone()
+    if latest_pdf_plans_migration is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        upgraded_catalog = _with_latest_pdf_subscription_plans(active_catalog) if active_row else active_catalog
+        changed = bool(active_row) and upgraded_catalog != active_catalog
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            validate_catalog(upgraded_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(upgraded_catalog), current, current, current),
+            )
+        updated_drafts = 0
+        draft_rows = conn.execute(
+            "SELECT id, catalog_json FROM billing_catalog_versions WHERE status = 'draft'"
+        ).fetchall()
+        for draft_row in draft_rows:
+            draft_catalog = _loads(draft_row["catalog_json"], {})
+            upgraded_draft = _with_latest_pdf_subscription_plans(draft_catalog)
+            if upgraded_draft == draft_catalog:
+                continue
+            validate_catalog(upgraded_draft)
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (_dumps(upgraded_draft), str(draft_row["id"])),
+            )
+            updated_drafts += 1
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v12_latest_pdf_plans', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
+        )
+
     enforcement_migration = conn.execute(
         "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_enforcement_v2'"
     ).fetchone()
@@ -1037,12 +1134,13 @@ def get_active_catalog(conn: sqlite3.Connection) -> dict[str, Any]:
     if row is None:
         raise BillingError("CATALOG_UNAVAILABLE", "当前没有已发布的计费目录", 503)
     catalog = _loads(row["catalog_json"], {})
+    catalog = _with_latest_pdf_subscription_plans(catalog if isinstance(catalog, dict) else {})
     return {
         "id": str(row["id"]),
         "version": int(row["version_number"]),
         "effective_at": int(row["effective_at"]),
         "published_at": int(row["published_at"]),
-        **(catalog if isinstance(catalog, dict) else {}),
+        **catalog,
     }
 
 
@@ -1108,6 +1206,32 @@ def publish_catalog(conn: sqlite3.Connection, catalog_id: str, *, actor_user_id:
     return get_active_catalog(conn)
 
 
+def _valid_subscription_catalog_item(item: Any) -> bool:
+    if not isinstance(item, dict) or not str(item.get("sku") or ""):
+        return False
+    try:
+        price = int(item.get("price_ntd") or 0)
+        monthly_price = int(item.get("monthly_price_ntd") or 0)
+        period_months = int(item.get("period_months") or 0)
+        purchasable = item.get("purchasable") is not False
+        valid_price = (
+            price > 0 and monthly_price > 0 and monthly_price * period_months == price
+            if purchasable
+            else price == 0 and monthly_price == 0
+        )
+        return (
+            valid_price
+            and period_months in {1, 3, 6, 12}
+            and int(item.get("threads_accounts") or 0) in {1, 3}
+            and int(item.get("monthly_free_images") or 0) >= 0
+            and len(item.get("features") if isinstance(item.get("features"), list) else []) >= 5
+            and bool(str(item.get("audience") or "").strip())
+            and bool(str(item.get("account_positioning") or "").strip())
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def validate_catalog(catalog: dict[str, Any]) -> None:
     if not isinstance(catalog, dict):
         raise BillingError("INVALID_CATALOG", "计费目录格式错误", 400)
@@ -1124,30 +1248,21 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
     if (
         not subscriptions
         or len(set(subscription_skus)) != len(subscription_skus)
-        or any(
-            not isinstance(item, dict)
-            or not str(item.get("sku") or "")
-            or int(item.get("price_ntd") or 0) <= 0
-            or int(item.get("period_months") or 0) not in {3, 6, 12}
-            or int(item.get("monthly_price_ntd") or 0) <= 0
-            or int(item.get("monthly_price_ntd") or 0) * int(item.get("period_months") or 0)
-            != int(item.get("price_ntd") or 0)
-            or int(item.get("threads_accounts") or 0) not in {1, 3}
-            or int(item.get("monthly_free_images") or 0) < 0
-            or len(item.get("features") if isinstance(item.get("features"), list) else []) < 5
-            or not str(item.get("audience") or "").strip()
-            or not str(item.get("account_positioning") or "").strip()
-            for item in subscriptions
-        )
+        or any(not _valid_subscription_catalog_item(item) for item in subscriptions)
         or str(subscription.get("sku") or "") not in set(subscription_skus)
         or any(
             subscription.get(field) != subscription_by_sku[str(subscription.get("sku") or "")].get(field)
             for field in (
                 "name",
                 "price_ntd",
+                "monthly_price_ntd",
                 "period_months",
+                "period_label",
+                "purchasable",
+                "plan_family",
                 "threads_accounts",
                 "monthly_free_images",
+                "ai_personas",
                 "features",
                 "audience",
                 "account_positioning",
@@ -1267,10 +1382,16 @@ def _active_subscription_count(conn: sqlite3.Connection, user_id: int, now: int)
 
 def _subscription_plan_family(sku: str) -> str:
     clean = str(sku or "").strip()
+    if clean == "vanguard_beta_free":
+        return "vanguard_beta"
+    if clean == "vanguard_experience_monthly":
+        return "vanguard_experience"
+    if clean in {"vanguard_basic_monthly", "vanguard_basic_revenue_quarterly"}:
+        return "vanguard_basic"
     if clean == "vanguard_monthly" or clean.startswith("vanguard_enterprise_"):
-        return "vanguard_enterprise"
+        return "vanguard_basic"
     if clean.startswith("vanguard_personal_"):
-        return "vanguard_personal"
+        return "vanguard_experience"
     return clean
 
 
@@ -1309,7 +1430,7 @@ def threads_account_limit(conn: sqlite3.Connection, user_id: int, *, now: int | 
         accounts = int(plan_accounts.get(sku) or 0)
         if accounts <= 0:
             family = _subscription_plan_family(sku)
-            accounts = 3 if family == "vanguard_enterprise" else (1 if family == "vanguard_personal" else 0)
+            accounts = 3 if family == "vanguard_basic" else (1 if family in {"vanguard_beta", "vanguard_experience"} else 0)
         if accounts > 0:
             recognized = True
             total += accounts
@@ -2227,6 +2348,8 @@ def create_order(
         return order_public(existing)
     catalog = get_active_catalog(conn)
     kind, item = _catalog_item(catalog, requested_sku)
+    if kind == "subscription" and item.get("purchasable") is False:
+        raise BillingError("SKU_NOT_PURCHASABLE", "免費試用方案由新用戶註冊時自動開通", 409)
     if kind != "subscription" and renewals:
         raise BillingError("INVALID_RENEWAL", "算力储值订单不能指定订阅", 400)
     if renewals and len(renewals) not in {1, qty}:

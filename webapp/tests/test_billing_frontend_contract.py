@@ -312,7 +312,7 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         self.assertIn(".admin-billing-editor-tabs", self.admin_styles)
         self.assertIn(".admin-billing-automation-card", self.admin_styles)
 
-    def test_admin_catalog_editor_groups_personal_and_enterprise_plans_with_pdf_details(self):
+    def test_admin_catalog_editor_groups_latest_pdf_plans_with_details(self):
         self.assertIn('id="billingCatalogRuleList"', self.admin_markup)
         renderer = self.admin_script[
             self.admin_script.index("function renderBillingCatalogForm")
@@ -322,12 +322,16 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         self.assertIn('field: "audience"', renderer)
         self.assertIn('field: "account_positioning"', renderer)
         self.assertIn("working.billing_rules.forEach", renderer)
-        self.assertIn("个人轻量版", renderer)
-        self.assertIn("企业版", renderer)
+        self.assertIn("最新版方案", renderer)
+        self.assertIn("免费试用、体验、基础月缴与分润启动方案", renderer)
+        self.assertNotIn("个人轻量版", renderer)
+        self.assertNotIn("企业版", renderer)
         self.assertIn(".admin-billing-subscription-grid", self.admin_styles)
         self.assertIn(".admin-billing-rule-card", self.admin_styles)
 
     def test_public_pricing_renews_within_the_same_subscription_family(self):
+        self.assertIn('clean === "vanguard_experience_monthly"', self.pricing_script)
+        self.assertIn('"vanguard_basic_revenue_quarterly"', self.pricing_script)
         self.assertIn('clean === "vanguard_monthly"', self.pricing_script)
         self.assertIn('clean.startsWith("vanguard_enterprise_")', self.pricing_script)
         self.assertIn('clean.startsWith("vanguard_personal_")', self.pricing_script)
@@ -366,32 +370,32 @@ function billingLedgerEntries() {{ return ledgerRows; }}
 
     def test_pricing_page_renders_all_formal_subscription_cycles_and_hides_internal_actions(self):
         self.assertIn("list(catalog.subscriptions)", self.pricing_script)
-        self.assertIn('3: "季繳", 6: "半年繳", 12: "年繳"', self.pricing_script)
+        self.assertIn('1: "月繳", 3: "一次繳 3 個月"', self.pricing_script)
         self.assertIn("item.public !== false", self.pricing_script)
         self.assertIn("monthly_price_ntd", self.pricing_script)
+        self.assertIn("subscription.purchasable !== false", self.pricing_script)
+        self.assertIn('href="/?register=1"', self.pricing_script)
         self.assertIn("renewalSubscriptions", self.pricing_script)
         self.assertIn("item.implemented === false", self.pricing_script)
         self.assertIn("暫未開放", self.pricing_script)
 
-    def test_pricing_subscription_carousel_keeps_personal_and_enterprise_plans_separate(self):
-        self.assertIn("const subscriptionPlanTier = (item) =>", self.pricing_script)
-        self.assertIn('item?.plan_tier || ""', self.pricing_script)
-        self.assertIn('return subscriptionPlanFamily(skuOf(item)) === "vanguard_personal" ? "personal" : "enterprise"', self.pricing_script)
-        self.assertIn("const subscriptionsForPlanTier = (subscriptions, tier)", self.pricing_script)
+    def test_pricing_subscription_carousel_renders_all_latest_pdf_plans_without_legacy_tabs(self):
         self.assertIn("function renderSubscriptionPlans(subscriptions)", self.pricing_script)
-        self.assertIn("subscriptionsForPlanTier(subscriptions, tier)", self.pricing_script)
+        self.assertIn("const plans = subscriptions", self.pricing_script)
+        self.assertNotIn("subscriptionPlanTier", self.pricing_script)
+        self.assertNotIn("subscriptionsForPlanTier", self.pricing_script)
+        self.assertNotIn("data-pricing-plan-family", self.pricing_markup)
         self.assertIn('data-purchase-sku="${escapeHtml(skuOf(subscription))}"', self.pricing_script)
         self.assertIn("function moveSubscriptionPlanPage(direction)", self.pricing_script)
         self.assertIn("cards[1].offsetLeft - cards[0].offsetLeft", self.pricing_script)
         self.assertIn('host.scrollBy({ left: direction * pageStep, behavior: "smooth" })', self.pricing_script)
-        self.assertIn('event.key === "ArrowRight"', self.pricing_script)
-        self.assertIn('event.key === "ArrowLeft"', self.pricing_script)
 
-    def test_pricing_page_has_no_enterprise_only_rights_claim_for_all_plans(self):
+    def test_pricing_page_has_no_legacy_personal_or_enterprise_plan_claims(self):
         self.assertNotIn("每套有效訂閱提供 3 個 Threads 帳號容量", self.pricing_markup)
         self.assertNotIn("三帳號 AI 駕駛艙", self.pricing_markup)
         self.assertNotIn("每個訂閱週期優先抵扣免費圖片額度", self.pricing_markup)
-        self.assertIn("個人版 1 個、企業版 3 個", self.pricing_markup)
+        self.assertNotIn("個人版 1 個、企業版 3 個", self.pricing_markup)
+        self.assertIn("免費試用、正式體驗、基礎月繳與分潤啟動", self.pricing_markup)
         self.assertIn("每月 10 張免費 AI 圖片", self.pricing_markup)
 
     def test_charge_button_markup_has_no_price_text(self):

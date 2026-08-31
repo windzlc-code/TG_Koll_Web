@@ -88,13 +88,11 @@ class OnlineApplicationFrontendContractTests(unittest.TestCase):
         self.assertNotIn("data-theme", open_order)
         self.assertNotIn("setTheme", open_order)
 
-    def test_subscription_plans_use_accessible_pills_and_a_horizontal_snap_carousel(self):
-        self.assertIn('role="tablist" aria-label="訂閱方案類型"', self.pricing_markup)
-        self.assertIn('data-pricing-plan-family="personal"', self.pricing_markup)
-        self.assertIn('data-pricing-plan-family="enterprise"', self.pricing_markup)
+    def test_subscription_plans_use_an_accessible_horizontal_snap_carousel(self):
+        self.assertNotIn('data-pricing-plan-family=', self.pricing_markup)
         self.assertIn('data-pricing-plan-page="prev"', self.pricing_markup)
         self.assertIn('data-pricing-plan-page="next"', self.pricing_markup)
-        self.assertIn('role="region" aria-label="個人版訂閱方案"', self.pricing_markup)
+        self.assertIn('role="region" aria-label="最新訂閱方案"', self.pricing_markup)
         self.assertIn(".pricing-plan-slider {", self.pricing_styles)
         self.assertIn("grid-template-columns: 34px minmax(0, 1fr) 34px;", self.pricing_styles)
         self.assertIn("justify-content: center;", self.pricing_styles)
@@ -107,7 +105,7 @@ class OnlineApplicationFrontendContractTests(unittest.TestCase):
         self.assertIn("overscroll-behavior-inline: contain;", shell_rule)
         self.assertIn("scroll-snap-align: start;", card_rule)
         self.assertIn("flex: 0 0 clamp(300px, 34vw, 370px);", card_rule)
-        self.assertIn('button[aria-selected="true"]', self.pricing_styles)
+        self.assertNotIn('.pricing-plan-family-tabs', self.pricing_styles)
         self.assertIn(".pricing-plan-page-button:focus-visible", self.pricing_styles)
 
     def test_subscription_cards_use_compact_copy_without_duplicate_entitlements(self):
@@ -115,14 +113,14 @@ class OnlineApplicationFrontendContractTests(unittest.TestCase):
             "function updateSubscriptionPlanPagination", 1
         )[0]
 
-        self.assertIn('const planTitle = subscriptionPlanTier(subscription) === "enterprise"', renderer)
+        self.assertIn('const planTitle = String(subscription.name || "訂閱方案")', renderer)
         self.assertIn('class="pricing-subscription-cycle"', renderer)
         self.assertIn('class="pricing-subscription-monthly"', renderer)
         self.assertIn('class="button button-primary pricing-subscription-cta"', renderer)
+        self.assertIn('href="/?register=1"', renderer)
         self.assertIn("const displayFeatures = features.length ? features :", renderer)
         self.assertEqual(renderer.count("monthly_free_images"), 1)
         self.assertEqual(renderer.count("threads_accounts"), 1)
-
 
 if __name__ == "__main__":
     unittest.main()

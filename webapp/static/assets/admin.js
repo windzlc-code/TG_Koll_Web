@@ -4214,9 +4214,7 @@ function renderBillingCatalogForm(catalog, version) {
   if (catalogTimezone) catalogTimezone.textContent = String(working.timezone || "Asia/Shanghai");
   const subscriptionCount = el("billingCatalogSubscriptionCount");
   if (subscriptionCount) {
-    const personalCount = working.subscriptions.filter((item) => String(item?.sku || "").startsWith("vanguard_personal_")).length;
-    const enterpriseCount = working.subscriptions.filter((item) => String(item?.sku || "").startsWith("vanguard_enterprise_")).length;
-    subscriptionCount.textContent = `个人 ${personalCount} · 企业 ${enterpriseCount}`;
+    subscriptionCount.textContent = `${working.subscriptions.length} 个`;
   }
   const packageCount = el("billingCatalogPackageCount");
   if (packageCount) packageCount.textContent = `${working.packages.length} 个`;
@@ -4232,30 +4230,23 @@ function renderBillingCatalogForm(catalog, version) {
 
   const subscriptionList = el("billingSubscriptionEditorList");
   subscriptionList?.replaceChildren();
-  const subscriptionGroups = new Map();
-  [
-    ["personal", "个人轻量版", "1 个综合账号 · 月标准价 NT$2,980"],
-    ["enterprise", "企业版", "3 个分工账号 · 月标准价 NT$5,980"],
-  ].forEach(([key, label, description]) => {
-    const group = document.createElement("section");
-    group.className = "admin-billing-subscription-group";
-    const heading = document.createElement("div");
-    heading.className = "admin-billing-subscription-group-head";
-    const copy = document.createElement("div");
-    const title = document.createElement("strong");
-    title.textContent = label;
-    const detail = document.createElement("span");
-    detail.textContent = description;
-    copy.append(title, detail);
-    const count = document.createElement("span");
-    count.textContent = `${working.subscriptions.filter((item) => String(item?.sku || "").startsWith(`vanguard_${key}_`)).length} 个周期`;
-    heading.append(copy, count);
-    const grid = document.createElement("div");
-    grid.className = "admin-billing-subscription-grid";
-    group.append(heading, grid);
-    subscriptionGroups.set(key, grid);
-    subscriptionList?.appendChild(group);
-  });
+  const subscriptionGroup = document.createElement("section");
+  subscriptionGroup.className = "admin-billing-subscription-group";
+  const subscriptionGroupHeading = document.createElement("div");
+  subscriptionGroupHeading.className = "admin-billing-subscription-group-head";
+  const subscriptionGroupCopy = document.createElement("div");
+  const subscriptionGroupTitle = document.createElement("strong");
+  subscriptionGroupTitle.textContent = "最新版方案";
+  const subscriptionGroupDetail = document.createElement("span");
+  subscriptionGroupDetail.textContent = "免费试用、体验、基础月缴与分润启动方案";
+  subscriptionGroupCopy.append(subscriptionGroupTitle, subscriptionGroupDetail);
+  const subscriptionGroupCount = document.createElement("span");
+  subscriptionGroupCount.textContent = `${working.subscriptions.length} 个方案`;
+  subscriptionGroupHeading.append(subscriptionGroupCopy, subscriptionGroupCount);
+  const subscriptionGrid = document.createElement("div");
+  subscriptionGrid.className = "admin-billing-subscription-grid";
+  subscriptionGroup.append(subscriptionGroupHeading, subscriptionGrid);
+  subscriptionList?.appendChild(subscriptionGroup);
   working.subscriptions.forEach((item, index) => {
     const card = document.createElement("article");
     card.className = "admin-billing-package-card admin-billing-subscription-card";
@@ -4281,8 +4272,7 @@ function renderBillingCatalogForm(catalog, version) {
       createBillingCatalogTextarea("套餐包含内容（每行一项）", Array.isArray(item.features) ? item.features.join("\n") : "", { field: "features", itemType: "subscription", itemIndex: index }),
     );
     card.append(title, fields);
-    const groupKey = String(item?.sku || "").startsWith("vanguard_personal_") ? "personal" : "enterprise";
-    (subscriptionGroups.get(groupKey) || subscriptionList)?.appendChild(card);
+    subscriptionGrid.appendChild(card);
   });
 
   const ruleList = el("billingCatalogRuleList");
@@ -4438,10 +4428,13 @@ function readBillingCatalogForm() {
       }
     });
     if (!item.name) throw new Error(`请填写“订阅方案 ${index + 1} 名称”`);
-    if (![3, 6, 12].includes(Number(item.period_months))) throw new Error(`订阅方案 ${index + 1} 的周期必须为 3、6 或 12 个月`);
+    if (![1, 3].includes(Number(item.period_months))) throw new Error(`订阅方案 ${index + 1} 的周期必须为 1 或 3 个月`);
     const expectedTotal = Number(item.monthly_price_ntd) * Number(item.period_months);
-    if (Math.abs(Number(item.price_ntd) - expectedTotal) > 0.000001) {
+    if (item.purchasable !== false && Math.abs(Number(item.price_ntd) - expectedTotal) > 0.000001) {
       throw new Error(`订阅方案 ${index + 1} 的周期总价必须等于月标准价 × 周期月数`);
+    }
+    if (item.purchasable === false && (Number(item.price_ntd) !== 0 || Number(item.monthly_price_ntd) !== 0)) {
+      throw new Error(`订阅方案 ${index + 1} 是免费方案，价格必须为 0`);
     }
     catalog.subscriptions[index] = item;
   });
@@ -4500,7 +4493,9 @@ function renderBillingAdjustmentSubscriptionOptions(catalog) {
   const select = el("billingAdjustmentSubscriptionSku");
   if (!select) return;
   const currentSku = String(select.value || "");
-  const subscriptions = Array.isArray(catalog?.subscriptions) ? catalog.subscriptions : [];
+  const subscriptions = Array.isArray(catalog?.subscriptions)
+    ? catalog.subscriptions.filter((item) => item?.purchasable !== false)
+    : [];
   select.replaceChildren();
   subscriptions.forEach((item) => {
     const option = document.createElement("option");

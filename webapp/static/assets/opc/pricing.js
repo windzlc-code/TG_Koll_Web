@@ -36,7 +36,6 @@
     pendingCount: null,
     selected: null,
     orderAttempt: null,
-    subscriptionPlanTier: "personal",
   };
   const list = (value) => Array.isArray(value) ? value : [];
   const object = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -49,17 +48,11 @@
     const clean = String(sku || "").trim();
     if (clean === "vanguard_monthly" || clean.startsWith("vanguard_enterprise_")) return "vanguard_enterprise";
     if (clean.startsWith("vanguard_personal_")) return "vanguard_personal";
+    if (clean === "vanguard_beta_free") return "vanguard_beta";
+    if (clean === "vanguard_experience_monthly") return "vanguard_experience";
+    if (["vanguard_basic_monthly", "vanguard_basic_revenue_quarterly"].includes(clean)) return "vanguard_basic";
     return clean;
   };
-  const subscriptionPlanTier = (item) => {
-    const explicit = String(item?.plan_tier || "").trim();
-    if (explicit === "personal" || explicit === "enterprise") return explicit;
-    return subscriptionPlanFamily(skuOf(item)) === "vanguard_personal" ? "personal" : "enterprise";
-  };
-  const subscriptionPlanTierLabel = (tier) => tier === "enterprise" ? "企業版" : "個人版";
-  const subscriptionsForPlanTier = (subscriptions, tier) => subscriptions.filter(
-    (subscription) => subscriptionPlanTier(subscription) === tier,
-  );
   const newOrderKey = () => `pricing-${Date.now()}-${globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)}`;
 
   function orderPayload(form) {
@@ -155,12 +148,7 @@
   }
 
   function renderSubscriptionPlans(subscriptions) {
-    const availableTiers = ["personal", "enterprise"].filter((tier) => subscriptionsForPlanTier(subscriptions, tier).length);
-    if (!availableTiers.includes(state.subscriptionPlanTier)) {
-      state.subscriptionPlanTier = availableTiers[0] || "personal";
-    }
-    const tier = state.subscriptionPlanTier;
-    const plans = subscriptionsForPlanTier(subscriptions, tier);
+    const plans = subscriptions;
     const host = document.querySelector("#pricingSubscription");
     const audience = document.querySelector("#pricingPlanAudience");
     if (!host) return;
@@ -168,40 +156,40 @@
     host.innerHTML = plans.map((subscription) => {
       const features = list(subscription.features);
       const periodMonths = Number(subscription.period_months || 1);
-      const periodLabel = ({ 3: "季繳", 6: "半年繳", 12: "年繳" })[periodMonths] || `${periodMonths} 個月`;
-      const planTitle = subscriptionPlanTier(subscription) === "enterprise" ? "企業版" : "個人輕量版";
+      const periodLabel = String(subscription.period_label || "").trim()
+        || ({ 1: "月繳", 3: "一次繳 3 個月" })[periodMonths]
+        || `${periodMonths} 個月`;
+      const planTitle = String(subscription.name || "訂閱方案");
+      const purchasable = subscription.purchasable !== false;
       const displayFeatures = features.length ? features : [
         `${Number(subscription.threads_accounts || 1)} 個 Threads 帳號容量`,
         `每月 ${Number(subscription.monthly_free_images || 10)} 張免費 AI 圖片`,
       ];
+      const priceDetail = purchasable
+        ? `<div class="pricing-subscription-price">${money(subscription.price_ntd)} <small>/ ${escapeHtml(periodLabel)}</small></div>
+        <p class="pricing-subscription-monthly">${money(subscription.monthly_price_ntd)} / 月標準</p>`
+        : `<div class="pricing-subscription-price">${money(0)} <small>/ 免費開通</small></div>
+        <p class="pricing-subscription-monthly">新註冊贈送 20 點基礎算力</p>`;
+      const callToAction = purchasable
+        ? `<button class="button button-primary pricing-subscription-cta" type="button" data-purchase-sku="${escapeHtml(skuOf(subscription))}">申請開通或續費</button>`
+        : '<a class="button button-primary pricing-subscription-cta" href="/?register=1" data-open-register>免費開通</a>';
       return `<article class="pricing-subscription-card">
       <div class="pricing-subscription-main">
-        <div class="pricing-subscription-card-heading"><span class="pricing-label">VECTO VANGUARD OPC</span><span class="pricing-subscription-cycle">${periodLabel}</span></div>
-        <h3>${planTitle}</h3>
-        <div class="pricing-subscription-price">${money(subscription.price_ntd)} <small>/ ${periodLabel}</small></div>
-        <p class="pricing-subscription-monthly">${money(subscription.monthly_price_ntd)} / 月標準</p>
+        <div class="pricing-subscription-card-heading"><span class="pricing-label">VECTO VANGUARD OPC</span><span class="pricing-subscription-cycle">${escapeHtml(periodLabel)}</span></div>
+        <h3>${escapeHtml(planTitle)}</h3>
+        ${priceDetail}
       </div>
       <div class="pricing-subscription-details"><strong>方案包含</strong><ul class="pricing-subscription-features">
         ${displayFeatures.map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")}
       </ul></div>
-      <button class="button button-primary pricing-subscription-cta" type="button" data-purchase-sku="${escapeHtml(skuOf(subscription))}">申請開通或續費</button>
+      ${callToAction}
     </article>`;
     }).join("") || '<div class="pricing-public-loading">目前沒有可申請方案</div>';
-    host.dataset.planTier = tier;
-    host.setAttribute("aria-label", `${subscriptionPlanTierLabel(tier)}訂閱方案`);
+    host.setAttribute("aria-label", "最新訂閱方案");
     host.scrollLeft = 0;
     if (audience) {
-      const configuredAudience = String(plans[0]?.audience || "").trim();
-      audience.textContent = configuredAudience || (tier === "enterprise"
-        ? "適合品牌商家與多線營運團隊。"
-        : "適合自由創作者與微型個人商家。");
+      audience.textContent = "依使用階段與經營規模選擇，詳細權益以各方案卡片為準。";
     }
-    document.querySelectorAll("[data-pricing-plan-family]").forEach((button) => {
-      const selected = String(button.dataset.pricingPlanFamily || "") === tier;
-      button.setAttribute("aria-selected", String(selected));
-      button.tabIndex = selected ? 0 : -1;
-      button.disabled = !availableTiers.includes(String(button.dataset.pricingPlanFamily || ""));
-    });
     window.requestAnimationFrame(updateSubscriptionPlanPagination);
   }
 
@@ -216,21 +204,13 @@
     const pageStep = Math.max(1, cards[1] ? cards[1].offsetLeft - cards[0].offsetLeft : host.clientWidth);
     const pageCount = Math.max(1, Math.ceil(maxScroll / pageStep) + 1);
     const page = Math.min(pageCount - 1, Math.max(0, Math.ceil(Math.max(0, host.scrollLeft - 1) / pageStep)));
-    status.textContent = `${subscriptionPlanTierLabel(state.subscriptionPlanTier)} · ${page + 1} / ${pageCount}`;
+    status.textContent = `方案 ${page + 1} / ${pageCount}`;
     const setDisabled = (button, disabled) => {
       button.disabled = disabled;
       button.setAttribute("aria-disabled", String(disabled));
     };
     setDisabled(previous, host.scrollLeft <= 1);
     setDisabled(next, host.scrollLeft >= maxScroll - 1);
-  }
-
-  function selectSubscriptionPlanTier(tier) {
-    if (!state.catalog || !["personal", "enterprise"].includes(tier) || tier === state.subscriptionPlanTier) return;
-    const subscriptions = list(state.catalog.subscriptions).length ? list(state.catalog.subscriptions) : [object(state.catalog.subscription)];
-    if (!subscriptionsForPlanTier(subscriptions, tier).length) return;
-    state.subscriptionPlanTier = tier;
-    renderSubscriptionPlans(subscriptions);
   }
 
   function moveSubscriptionPlanPage(direction) {
@@ -314,6 +294,10 @@
     const subscription = subscriptions.find((candidate) => skuOf(candidate) === sku);
     const item = subscription ? { ...subscription, kind: "subscription" } : list(state.catalog.packages).find((candidate) => skuOf(candidate) === sku);
     if (!item) return;
+    if (item.kind === "subscription" && item.purchasable === false) {
+      window.location.assign("/?register=1");
+      return;
+    }
     if (state.orderAttempt && skuOf(state.selected) !== skuOf(item)) state.orderAttempt = null;
     state.selected = item;
     const form = document.querySelector("#pricingOrderForm");
@@ -385,11 +369,6 @@
   }
 
   document.addEventListener("click", (event) => {
-    const planFamily = event.target.closest("[data-pricing-plan-family]");
-    if (planFamily) {
-      selectSubscriptionPlanTier(String(planFamily.dataset.pricingPlanFamily || ""));
-      return;
-    }
     const planPage = event.target.closest("[data-pricing-plan-page]");
     if (planPage) {
       moveSubscriptionPlanPage(String(planPage.dataset.pricingPlanPage || "") === "prev" ? -1 : 1);
@@ -398,22 +377,6 @@
     const purchase = event.target.closest("[data-purchase-sku]");
     if (purchase) openOrder(String(purchase.dataset.purchaseSku || ""));
     if (event.target.closest("[data-close-order]") || event.target.id === "pricingOrderModal") closeOrder();
-  });
-
-  document.querySelector(".pricing-plan-family-tabs")?.addEventListener("keydown", (event) => {
-    const buttons = [...document.querySelectorAll("[data-pricing-plan-family]:not(:disabled)")];
-    const currentIndex = buttons.indexOf(document.activeElement);
-    if (currentIndex < 0) return;
-    let nextIndex = -1;
-    if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % buttons.length;
-    if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
-    if (event.key === "Home") nextIndex = 0;
-    if (event.key === "End") nextIndex = buttons.length - 1;
-    if (nextIndex < 0) return;
-    event.preventDefault();
-    const next = buttons[nextIndex];
-    selectSubscriptionPlanTier(String(next.dataset.pricingPlanFamily || ""));
-    next.focus();
   });
 
   let subscriptionPlanScrollFrame = 0;

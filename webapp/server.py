@@ -303,7 +303,7 @@ class BillingAdjustmentPayload(BaseModel):
 
 
 class BillingManualSubscriptionPayload(BaseModel):
-    sku: str = Field(default="vanguard_enterprise_quarterly", max_length=120)
+    sku: str = Field(default="vanguard_basic_revenue_quarterly", max_length=120)
     quantity: int = Field(default=1, ge=1, le=50)
     renewal_subscription_ids: list[str] = Field(default_factory=list)
     note: str = Field(default="管理员人工开通", max_length=1000)

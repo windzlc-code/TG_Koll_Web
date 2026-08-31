@@ -65,7 +65,7 @@ class CommercialBillingTests(unittest.TestCase):
             order = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_enterprise_quarterly",
+                sku="vanguard_basic_revenue_quarterly",
                 quantity=1,
                 idempotency_key=f"subscription-{now}",
                 now=now,
@@ -158,12 +158,10 @@ class CommercialBillingTests(unittest.TestCase):
                 for sku, item in subscriptions.items()
             },
             {
-                "vanguard_personal_quarterly": (8940, 3, 1),
-                "vanguard_personal_half_year": (17880, 6, 1),
-                "vanguard_personal_annual": (35760, 12, 1),
-                "vanguard_enterprise_quarterly": (17940, 3, 3),
-                "vanguard_enterprise_half_year": (35880, 6, 3),
-                "vanguard_enterprise_annual": (71760, 12, 3),
+                "vanguard_beta_free": (0, 1, 1),
+                "vanguard_experience_monthly": (2980, 1, 1),
+                "vanguard_basic_monthly": (5980, 1, 3),
+                "vanguard_basic_revenue_quarterly": (17940, 3, 3),
             },
         )
         self.assertTrue(all(item["monthly_free_images"] == 10 for item in subscriptions.values()))
@@ -257,20 +255,28 @@ class CommercialBillingTests(unittest.TestCase):
                 versions_after,
             )
 
-    def test_v11_pdf_subscription_prices_change_only_prices(self):
+    def test_v12_latest_pdf_plans_replace_legacy_plan_family_once(self):
         with db_module.db() as conn:
             active_row = conn.execute(
                 "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
             ).fetchone()
             self.assertIsNotNone(active_row)
             catalog = json.loads(str(active_row["catalog_json"]))
-            for item in catalog["subscriptions"]:
-                item["price_ntd"] = int(item["period_months"]) * 1111
-                item["monthly_price_ntd"] = 1111
-                item["migration_sentinel"] = "preserved"
-            catalog["subscription"]["price_ntd"] = 3333
-            catalog["subscription"]["monthly_price_ntd"] = 1111
-            catalog["subscription"]["migration_sentinel"] = "preserved"
+            legacy_plan = {
+                "sku": "vanguard_personal_quarterly",
+                "name": "旧个人方案",
+                "price_ntd": 8940,
+                "monthly_price_ntd": 2980,
+                "period_months": 3,
+                "threads_accounts": 1,
+                "monthly_free_images": 10,
+                "features": ["旧权益"] * 5,
+                "audience": "旧受众",
+                "account_positioning": "旧定位",
+            }
+            catalog["subscriptions"] = [legacy_plan]
+            catalog["subscription"] = dict(legacy_plan)
+            catalog["packages"][0]["migration_sentinel"] = "preserved"
             old_json = json.dumps(catalog, ensure_ascii=False, separators=(",", ":"))
             conn.execute(
                 "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
@@ -284,12 +290,12 @@ class CommercialBillingTests(unittest.TestCase):
                 INSERT INTO billing_catalog_versions(
                   id, version_number, status, catalog_json, effective_at,
                   created_by, created_at, published_at
-                ) VALUES ('catalog_v11_draft', ?, 'draft', ?, 0, 0, 100, 0)
+                ) VALUES ('catalog_v12_draft', ?, 'draft', ?, 0, 0, 100, 0)
                 """,
                 (next_version, old_json),
             )
             conn.execute(
-                "DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v11_pdf_subscription_prices'"
+                "DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v12_latest_pdf_plans'"
             )
             versions_before = int(
                 conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]
@@ -299,24 +305,28 @@ class CommercialBillingTests(unittest.TestCase):
         with db_module.db() as conn:
             active = commercial_billing.get_active_catalog(conn)
             draft_row = conn.execute(
-                "SELECT catalog_json FROM billing_catalog_versions WHERE id = 'catalog_v11_draft'"
+                "SELECT catalog_json FROM billing_catalog_versions WHERE id = 'catalog_v12_draft'"
             ).fetchone()
             draft = json.loads(str(draft_row["catalog_json"]))
             marker = json.loads(str(conn.execute(
-                "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v11_pdf_subscription_prices'"
+                "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v12_latest_pdf_plans'"
             ).fetchone()["value_json"]))
             versions_after = int(
                 conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]
             )
 
-        expected_monthly = {"vanguard_personal_": 2980, "vanguard_enterprise_": 5980}
+        expected = {
+            "vanguard_beta_free": (0, 1),
+            "vanguard_experience_monthly": (2980, 1),
+            "vanguard_basic_monthly": (5980, 1),
+            "vanguard_basic_revenue_quarterly": (17940, 3),
+        }
         for catalog_value in (active, draft):
-            for item in catalog_value["subscriptions"]:
-                monthly = next(value for prefix, value in expected_monthly.items() if item["sku"].startswith(prefix))
-                self.assertEqual(item["monthly_price_ntd"], monthly)
-                self.assertEqual(item["price_ntd"], monthly * int(item["period_months"]))
-                self.assertEqual(item["migration_sentinel"], "preserved")
-            self.assertEqual(catalog_value["subscription"]["migration_sentinel"], "preserved")
+            self.assertEqual(
+                {item["sku"]: (item["price_ntd"], item["period_months"]) for item in catalog_value["subscriptions"]},
+                expected,
+            )
+            self.assertEqual(catalog_value["packages"][0]["migration_sentinel"], "preserved")
         self.assertEqual(marker["updated_drafts"], 1)
         self.assertEqual(versions_after, versions_before + 1)
 
@@ -327,24 +337,61 @@ class CommercialBillingTests(unittest.TestCase):
                 versions_after,
             )
 
+    def test_active_catalog_never_exposes_legacy_subscription_plans(self):
+        with db_module.db() as conn:
+            active_row = conn.execute(
+                "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+            ).fetchone()
+            catalog = json.loads(str(active_row["catalog_json"]))
+            legacy_plan = {
+                "sku": "vanguard_personal_quarterly",
+                "name": "Vecto Vanguard OPC 个人轻量版（季缴）",
+                "price_ntd": 8940,
+                "monthly_price_ntd": 2980,
+                "period_months": 3,
+                "period_label": "季缴",
+                "purchasable": True,
+                "plan_family": "vanguard_personal",
+                "threads_accounts": 1,
+                "monthly_free_images": 10,
+                "ai_personas": 1,
+                "features": ["旧方案权益"] * 5,
+                "audience": "旧方案受众",
+                "account_positioning": "旧方案定位",
+            }
+            catalog["subscriptions"] = [legacy_plan]
+            catalog["subscription"] = dict(legacy_plan)
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (json.dumps(catalog, ensure_ascii=False, separators=(",", ":")), str(active_row["id"])),
+            )
+            active = commercial_billing.get_active_catalog(conn)
+
+        self.assertEqual(
+            [item["sku"] for item in active["subscriptions"]],
+            [
+                "vanguard_beta_free",
+                "vanguard_experience_monthly",
+                "vanguard_basic_monthly",
+                "vanguard_basic_revenue_quarterly",
+            ],
+        )
+
     def test_subscription_entitlements_match_the_complete_pdf_catalog(self):
         plans = {item["sku"]: item for item in commercial_billing.DEFAULT_CATALOG["subscriptions"]}
-        personal = plans["vanguard_personal_quarterly"]
-        enterprise = plans["vanguard_enterprise_quarterly"]
-        self.assertEqual(len(personal["features"]), 5)
-        self.assertEqual(len(enterprise["features"]), 5)
-        self.assertTrue(any("1 个" in item and "IG / Threads" in item for item in personal["features"]))
-        self.assertTrue(any("3 个" in item and "IG / Threads" in item for item in enterprise["features"]))
-        self.assertTrue(any("每月 10 张" in item for item in personal["features"]))
-        self.assertTrue(any("每月 10 张" in item for item in enterprise["features"]))
-        self.assertTrue(any("单账号排程" in item for item in personal["features"]))
-        self.assertTrue(any("三账号排程" in item for item in enterprise["features"]))
-        self.assertTrue(any("单账号沙箱风控" in item for item in personal["features"]))
-        self.assertTrue(any("多账号分流防封" in item for item in enterprise["features"]))
-        self.assertIn("自由创作者", personal["audience"])
-        self.assertIn("中小企业", enterprise["audience"])
-        self.assertIn("乾货", personal["account_positioning"])
-        self.assertIn("投放账号", enterprise["account_positioning"])
+        self.assertEqual(set(plans), {
+            "vanguard_beta_free",
+            "vanguard_experience_monthly",
+            "vanguard_basic_monthly",
+            "vanguard_basic_revenue_quarterly",
+        })
+        self.assertFalse(plans["vanguard_beta_free"]["purchasable"])
+        self.assertEqual(plans["vanguard_experience_monthly"]["ai_personas"], 1)
+        self.assertEqual(plans["vanguard_basic_monthly"]["ai_personas"], 3)
+        self.assertTrue(any("每日 5 次" in item for item in plans["vanguard_experience_monthly"]["features"]))
+        self.assertTrue(any("每週二" in item for item in plans["vanguard_basic_monthly"]["features"]))
+        self.assertTrue(any("20 人團隊" in item for item in plans["vanguard_basic_revenue_quarterly"]["features"]))
+        self.assertTrue(all(len(item["features"]) >= 5 for item in plans.values()))
         self.assertEqual(
             [item["key"] for item in commercial_billing.DEFAULT_CATALOG["billing_rules"]],
             [
@@ -363,6 +410,18 @@ class CommercialBillingTests(unittest.TestCase):
         with self.assertRaises(commercial_billing.BillingError) as raised:
             commercial_billing.validate_catalog(catalog)
         self.assertEqual(raised.exception.code, "INVALID_CATALOG")
+
+    def test_free_trial_plan_is_display_only_and_cannot_create_a_payment_order(self):
+        with db_module.db() as conn:
+            with self.assertRaises(commercial_billing.BillingError) as raised:
+                commercial_billing.create_order(
+                    conn,
+                    user_id=self.user_id,
+                    sku="vanguard_beta_free",
+                    quantity=1,
+                    idempotency_key="free-trial-order",
+                )
+        self.assertEqual(raised.exception.code, "SKU_NOT_PURCHASABLE")
 
     def test_catalog_rejects_monthly_price_that_does_not_match_term_total(self):
         catalog = json.loads(json.dumps(commercial_billing.DEFAULT_CATALOG))
@@ -435,7 +494,7 @@ class CommercialBillingTests(unittest.TestCase):
         self.assertGreater(int(upgraded["version"]), int(active["version_number"]))
         self.assertEqual(actions["threads_text_publish"]["points"], 0)
         self.assertEqual(upgraded["packages"][0]["sku"], "credits_200")
-        self.assertEqual(len(upgraded["subscriptions"]), 6)
+        self.assertEqual(len(upgraded["subscriptions"]), 4)
         self.assertEqual(len([item for item in versions if item["status"] == "active"]), 1)
 
     def test_catalog_timezone_migrates_to_shanghai_without_resetting_prices(self):
@@ -486,17 +545,15 @@ class CommercialBillingTests(unittest.TestCase):
         )
         self.assertGreater(int(upgraded["version"]), int(active["version_number"]))
 
-    def test_complete_subscription_details_migrate_without_resetting_admin_prices(self):
+    def test_active_catalog_keeps_latest_pdf_plan_after_legacy_detail_migration(self):
         with db_module.db() as conn:
             active = conn.execute(
                 "SELECT id, version_number, catalog_json FROM billing_catalog_versions WHERE status = 'active'"
             ).fetchone()
             catalog = json.loads(str(active["catalog_json"]))
-            catalog["subscriptions"][0]["price_ntd"] = 6300
-            catalog["subscriptions"][0]["monthly_price_ntd"] = 2100
-            catalog["subscriptions"][0]["features"] = ["旧版简略权益"]
-            if str(catalog["subscription"].get("sku") or "") == str(catalog["subscriptions"][0].get("sku") or ""):
-                catalog["subscription"] = dict(catalog["subscriptions"][0])
+            catalog["subscriptions"][1]["price_ntd"] = 2100
+            catalog["subscriptions"][1]["monthly_price_ntd"] = 2100
+            catalog["subscriptions"][1]["features"] = ["旧版简略权益"]
             conn.execute(
                 "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
                 (json.dumps(catalog, ensure_ascii=False), str(active["id"])),
@@ -508,11 +565,11 @@ class CommercialBillingTests(unittest.TestCase):
             upgraded = commercial_billing.get_active_catalog(conn)
 
         upgraded_plan = next(
-            item for item in upgraded["subscriptions"] if item["sku"] == "vanguard_personal_quarterly"
+            item for item in upgraded["subscriptions"] if item["sku"] == "vanguard_experience_monthly"
         )
-        self.assertEqual(upgraded_plan["price_ntd"], 6300)
-        self.assertEqual(upgraded_plan["monthly_price_ntd"], 2100)
-        self.assertEqual(len(upgraded_plan["features"]), 5)
+        self.assertEqual(upgraded_plan["price_ntd"], 2980)
+        self.assertEqual(upgraded_plan["monthly_price_ntd"], 2980)
+        self.assertGreaterEqual(len(upgraded_plan["features"]), 5)
         self.assertGreater(int(upgraded["version"]), int(active["version_number"]))
 
     def test_video_workbench_actions_migrate_without_resetting_admin_prices(self):
@@ -606,7 +663,7 @@ class CommercialBillingTests(unittest.TestCase):
     def test_active_personal_and_enterprise_subscription_account_limits_are_summed(self):
         now = 1_700_000_000
         with db_module.db() as conn:
-            for sku in ("vanguard_personal_quarterly", "vanguard_enterprise_quarterly"):
+            for sku in ("vanguard_experience_monthly", "vanguard_basic_revenue_quarterly"):
                 order = commercial_billing.create_order(
                     conn,
                     user_id=self.user_id,
@@ -719,7 +776,7 @@ class CommercialBillingTests(unittest.TestCase):
             order = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_enterprise_annual",
+                sku="vanguard_basic_revenue_quarterly",
                 quantity=1,
                 renewal_subscription_ids=[subscription_id],
                 idempotency_key="legacy-enterprise-renewal",
@@ -735,7 +792,7 @@ class CommercialBillingTests(unittest.TestCase):
                 "SELECT plan_sku FROM billing_subscriptions WHERE id = ?",
                 (subscription_id,),
             ).fetchone()
-        self.assertEqual(str(updated["plan_sku"]), "vanguard_enterprise_annual")
+        self.assertEqual(str(updated["plan_sku"]), "vanguard_basic_revenue_quarterly")
 
     def test_subscription_can_switch_term_within_family_but_not_between_families(self):
         now = 1_700_000_000
@@ -743,9 +800,9 @@ class CommercialBillingTests(unittest.TestCase):
             original = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_personal_quarterly",
+                sku="vanguard_basic_monthly",
                 quantity=1,
-                idempotency_key="personal-quarterly-original",
+                idempotency_key="basic-monthly-original",
                 now=now,
             )
             commercial_billing.approve_order(
@@ -761,21 +818,21 @@ class CommercialBillingTests(unittest.TestCase):
             switched = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_personal_annual",
+                sku="vanguard_basic_revenue_quarterly",
                 quantity=1,
                 renewal_subscription_ids=[str(subscription["id"])],
-                idempotency_key="personal-annual-switch",
+                idempotency_key="basic-revenue-switch",
                 now=now + 1,
             )
-            self.assertEqual(switched["sku"], "vanguard_personal_annual")
+            self.assertEqual(switched["sku"], "vanguard_basic_revenue_quarterly")
             with self.assertRaises(commercial_billing.BillingError) as raised:
                 commercial_billing.create_order(
                     conn,
                     user_id=self.user_id,
-                    sku="vanguard_enterprise_quarterly",
+                    sku="vanguard_experience_monthly",
                     quantity=1,
                     renewal_subscription_ids=[str(subscription["id"])],
-                    idempotency_key="personal-to-enterprise-switch",
+                    idempotency_key="basic-to-experience-switch",
                     now=now + 2,
                 )
         self.assertEqual(raised.exception.code, "SUBSCRIPTION_PLAN_MISMATCH")
@@ -1123,7 +1180,7 @@ class CommercialBillingTests(unittest.TestCase):
             original = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_enterprise_quarterly",
+                sku="vanguard_basic_revenue_quarterly",
                 quantity=1,
                 idempotency_key="subscription-original",
                 now=now,
@@ -1143,7 +1200,7 @@ class CommercialBillingTests(unittest.TestCase):
             renewal = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_enterprise_quarterly",
+                sku="vanguard_basic_revenue_quarterly",
                 quantity=1,
                 renewal_subscription_ids=[str(subscription["id"])],
                 idempotency_key="subscription-renewal-refund",
@@ -1261,7 +1318,7 @@ class CommercialBillingTests(unittest.TestCase):
             order = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_enterprise_quarterly",
+                sku="vanguard_basic_revenue_quarterly",
                 quantity=1,
                 idempotency_key="subscription-with-held-image",
                 now=now,
@@ -1564,7 +1621,7 @@ class CommercialBillingTests(unittest.TestCase):
             order = commercial_billing.create_order(
                 conn,
                 user_id=self.user_id,
-                sku="vanguard_enterprise_quarterly",
+                sku="vanguard_basic_revenue_quarterly",
                 quantity=2,
                 renewal_subscription_ids=[str(subscription["id"])],
                 idempotency_key="renew-one-subscription-two-months",
