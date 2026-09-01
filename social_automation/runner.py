@@ -2007,8 +2007,8 @@ def _normalize_text_input_mode(value: Any) -> str:
     return "type"
 
 
-# Typing at 75% of the former speed requires 1 / 0.75 of the former delay.
-_PUBLISH_TEXT_SPEED_RATIO = 0.75
+# Halve the current 75% publish speed without affecting other text input paths.
+_PUBLISH_TEXT_SPEED_RATIO = 0.375
 _THREADS_PUBLISH_TEXT_DELAYS = (0.07 / _PUBLISH_TEXT_SPEED_RATIO, 0.16 / _PUBLISH_TEXT_SPEED_RATIO)
 _INSTAGRAM_PUBLISH_TEXT_DELAYS = (0.08 / _PUBLISH_TEXT_SPEED_RATIO, 0.18 / _PUBLISH_TEXT_SPEED_RATIO)
 
