@@ -2287,6 +2287,7 @@ def _start_bundle_authorization(
     persona_id = str(payload.persona_id or "").strip()
     account_id = str(payload.account_id or "").strip()
     owner_user_id = _identity_user_id(user)
+    account_team_id = ""
     _require_persona_reference_access(persona_id, user)
     with db() as conn:
         _require_active_owner_user(conn, owner_user_id)
@@ -2297,40 +2298,92 @@ def _start_bundle_authorization(
         )
         if account_id:
             row = conn.execute(
-                "SELECT id, platform, user_id FROM social_accounts WHERE id = ?",
+                "SELECT id, platform, user_id, external_team_id FROM social_accounts WHERE id = ?",
                 (account_id,),
             ).fetchone()
             if not row or int(row["user_id"] or 0) != owner_user_id:
                 raise HTTPException(status_code=404, detail="账号不存在")
             if str(row["platform"] or "").strip().lower() != platform:
                 raise HTTPException(status_code=400, detail="授权平台与账号平台不一致")
+            account_team_id = str(row["external_team_id"] or "").strip()
         elif platform == "threads" and not _billing_admin_waived(user):
-            bound = conn.execute(
-                "SELECT id FROM social_accounts WHERE user_id = ? AND persona_id = ? AND platform = ? LIMIT 1",
-                (owner_user_id, persona_id, platform),
-            ).fetchone() if persona_id else None
-            if not bound:
-                account_limit = commercial_billing.threads_account_limit(conn, owner_user_id, now=_now())
-                current_count = int(
-                    conn.execute(
-                        "SELECT COUNT(*) AS c FROM social_accounts WHERE user_id = ? AND lower(platform) = 'threads'",
-                        (owner_user_id,),
-                    ).fetchone()["c"]
+            account_limit = commercial_billing.threads_account_limit(conn, owner_user_id, now=_now())
+            current_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) AS c FROM social_accounts WHERE user_id = ? AND lower(platform) = 'threads'",
+                    (owner_user_id,),
+                ).fetchone()["c"]
+            )
+            if account_limit is not None and current_count >= int(account_limit):
+                raise commercial_billing.BillingError(
+                    "THREADS_ACCOUNT_LIMIT",
+                    f"当前订阅最多允许 {int(account_limit)} 个 Threads 账号，请增加订阅后再创建",
+                    409,
                 )
-                if account_limit is not None and current_count >= int(account_limit):
-                    raise commercial_billing.BillingError(
-                        "THREADS_ACCOUNT_LIMIT",
-                        f"当前订阅最多允许 {int(account_limit)} 个 Threads 账号，请增加订阅后再创建",
-                        409,
-                    )
 
     request_id = _NEW_ID("bundle_auth")
     now = _now()
     try:
         client = BundleSocialClient()
-        team_id = client.create_team(f"vecto-{owner_user_id}-{platform}-{request_id[-12:]}")
+        team_id = account_team_id
+        if not team_id:
+            team_prefix = f"vecto-{owner_user_id}-{platform}-"
+            with db() as conn:
+                bound_team_ids = {
+                    str(row["external_team_id"] or "").strip()
+                    for row in conn.execute(
+                        "SELECT external_team_id FROM social_accounts WHERE external_team_id <> ''"
+                    ).fetchall()
+                }
+                previous_team_ids = [
+                    str(row["team_id"] or "").strip()
+                    for row in conn.execute(
+                        """
+                        SELECT team_id FROM social_account_auth_requests
+                        WHERE user_id = ? AND platform = ? AND account_id = '' AND team_id <> ''
+                        ORDER BY updated_at DESC
+                        """,
+                        (owner_user_id, platform),
+                    ).fetchall()
+                ]
+            teams = client.list_teams(limit=100).get("items") or []
+            empty_teams = {
+                str(item.get("id") or "").strip(): item
+                for item in teams
+                if isinstance(item, dict)
+                and str(item.get("id") or "").strip()
+                and str(item.get("name") or "").startswith(team_prefix)
+                and not [
+                    social
+                    for social in (item.get("socialAccounts") or [])
+                    if isinstance(social, dict) and not social.get("deletedAt")
+                ]
+            }
+            team_id = next(
+                (
+                    candidate
+                    for candidate in previous_team_ids
+                    if candidate in empty_teams and candidate not in bound_team_ids
+                ),
+                "",
+            )
+            if not team_id:
+                team_id = next(
+                    (candidate for candidate in empty_teams if candidate not in bound_team_ids),
+                    "",
+                )
+            if not team_id:
+                team_id = client.create_team(f"{team_prefix}{request_id[-12:]}")
         redirect_url = _bundle_callback_url(request, request_id)
         with db() as conn:
+            conn.execute(
+                """
+                UPDATE social_account_auth_requests
+                SET status = 'superseded', updated_at = ?
+                WHERE user_id = ? AND platform = ? AND team_id = ? AND status <> 'completed'
+                """,
+                (now, owner_user_id, platform, team_id),
+            )
             conn.execute(
                 """
                 INSERT INTO social_account_auth_requests(
@@ -2351,17 +2404,17 @@ def _start_bundle_authorization(
     return {"ok": True, "request_id": request_id, "platform": platform, "url": url}
 
 
-def _finalize_bundle_authorization(request_id: str, request: Request, user: dict[str, Any]) -> RedirectResponse:
+def _finalize_bundle_authorization(request_id: str, request: Request) -> RedirectResponse:
     from .bundle_social import BundleSocialClient, BundleSocialError, platform_type
 
-    owner_user_id = _identity_user_id(user)
     with db() as conn:
         auth_row = conn.execute(
-            "SELECT * FROM social_account_auth_requests WHERE id = ? AND user_id = ?",
-            (str(request_id), owner_user_id),
+            "SELECT * FROM social_account_auth_requests WHERE id = ?",
+            (str(request_id),),
         ).fetchone()
     if not auth_row:
-        return _bundle_console_redirect(status="error", platform="", message="授权请求不存在或不属于当前账号")
+        return _bundle_console_redirect(status="error", platform="", message="授权请求不存在，请重新发起授权")
+    owner_user_id = int(auth_row["user_id"] or 0)
     platform = str(auth_row["platform"] or "").strip().lower()
     if str(auth_row["status"] or "") == "completed":
         return _bundle_console_redirect(status="success", platform=platform, message="平台账号已授权")
@@ -2421,11 +2474,6 @@ def _finalize_bundle_authorization(request_id: str, request: Request, user: dict
             current = conn.execute(
                 "SELECT * FROM social_accounts WHERE id = ? AND user_id = ? AND platform = ?",
                 (requested_account_id, owner_user_id, platform),
-            ).fetchone()
-        if current is None and str(auth_row["persona_id"] or "").strip():
-            current = conn.execute(
-                "SELECT * FROM social_accounts WHERE user_id = ? AND persona_id = ? AND platform = ? LIMIT 1",
-                (owner_user_id, str(auth_row["persona_id"] or ""), platform),
             ).fetchone()
         if current is None:
             current = conn.execute(
@@ -2618,9 +2666,8 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_account_bundle_callback(
         request: Request,
         request_id: str = "",
-        user: dict[str, Any] = Depends(get_current_user),
     ):
-        return _finalize_bundle_authorization(request_id, request, user)
+        return _finalize_bundle_authorization(request_id, request)
 
     @app.post("/api/persona_dashboard/automation/accounts")
     def api_social_account_create(payload: SocialAccountPayload, user: dict[str, Any] = Depends(get_current_user)):

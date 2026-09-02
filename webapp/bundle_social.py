@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -125,6 +126,10 @@ class BundleSocialClient:
                 detail = str(payload.get("message") or payload.get("detail") or payload.get("error") or "").strip()
             if self.api_key and detail:
                 detail = detail.replace(self.api_key, "***")
+            if "social sets limit reached" in detail.casefold():
+                limit_match = re.search(r"limit\s+is\s+(\d+)", detail, flags=re.IGNORECASE)
+                limit_text = f"（最多 {limit_match.group(1)} 个）" if limit_match else ""
+                detail = f"平台授权账号集合已达上限{limit_text}，请完成已有授权后再试"
             raise BundleSocialError(detail or f"平台授权服务请求失败（HTTP {response.status_code}）")
         return payload
 

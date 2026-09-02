@@ -4,6 +4,7 @@ import threading
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import FastAPI
 from starlette.requests import Request
 
 from social_automation import runner
@@ -61,6 +62,7 @@ def test_portal_link_requests_only_selected_platform():
     assert url == "https://portal.example/authorize"
     body = session.calls[0][2]["json"]
     assert body["socialAccountTypes"] == ["THREADS"]
+    assert body["disableAutoLogin"] is True
     assert body["expiresIn"] == 15
     assert "instagramConnectionMethod" not in body
     assert session.calls[0][2]["headers"]["x-api-key"] == "test-key"
@@ -74,6 +76,16 @@ def test_connection_check_uses_team_list_without_exposing_key():
 
     assert result == {"items": [{"id": "team-1"}], "count": 3}
     assert session.calls[0][0:2] == ("GET", "https://api.example/api/v1/team/?limit=1&offset=0")
+
+
+def test_provider_social_set_limit_error_is_localized():
+    session = _Session([_Response({"message": "Social sets limit reached. Limit is 3 sets."}, status_code=400)])
+    client = BundleSocialClient(api_key="test-key", api_base="https://api.example/api/v1", session=session)
+
+    with pytest.raises(BundleSocialError) as exc_info:
+        client.create_team("vecto-0-threads-request")
+
+    assert str(exc_info.value) == "平台授权账号集合已达上限（最多 3 个），请完成已有授权后再试"
 
 
 def test_find_social_account_checks_team_and_platform():
@@ -316,7 +328,6 @@ def test_bundle_callback_persists_only_verified_platform_account(monkeypatch, tm
             }
 
     monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
-    monkeypatch.setattr(social_automation_api, "_identity_user_id", lambda _: 0)
     request = Request(
         {
             "type": "http",
@@ -328,7 +339,7 @@ def test_bundle_callback_persists_only_verified_platform_account(monkeypatch, tm
             "headers": [],
         }
     )
-    response = social_automation_api._finalize_bundle_authorization("request-1", request, {"id": 0})
+    response = social_automation_api._finalize_bundle_authorization("request-1", request)
     with db() as conn:
         account = conn.execute("SELECT * FROM social_accounts").fetchone()
         auth_request = conn.execute("SELECT * FROM social_account_auth_requests WHERE id = 'request-1'").fetchone()
@@ -377,7 +388,6 @@ def test_bundle_callback_reauthorization_reuses_same_external_account(monkeypatc
             }
 
     monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
-    monkeypatch.setattr(social_automation_api, "_identity_user_id", lambda _: 0)
     request = Request(
         {
             "type": "http",
@@ -390,7 +400,7 @@ def test_bundle_callback_reauthorization_reuses_same_external_account(monkeypatc
         }
     )
 
-    response = social_automation_api._finalize_bundle_authorization("request-2", request, {"id": 0})
+    response = social_automation_api._finalize_bundle_authorization("request-2", request)
 
     with db() as conn:
         accounts = conn.execute("SELECT * FROM social_accounts").fetchall()
@@ -398,3 +408,205 @@ def test_bundle_callback_reauthorization_reuses_same_external_account(monkeypatc
     assert len(accounts) == 1
     assert accounts[0]["id"] == "account-1"
     assert accounts[0]["external_team_id"] == "team-new"
+
+
+def test_bundle_callback_route_does_not_require_console_session():
+    app = FastAPI()
+    social_automation_api.register_social_automation_routes(app)
+    callback = next(
+        route
+        for route in app.routes
+        if getattr(route, "path", "") == "/api/persona_dashboard/automation/accounts/bundle/callback"
+    )
+
+    assert callback.dependant.dependencies == []
+
+
+def test_bundle_new_account_still_obeys_threads_account_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "account-limit.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_accounts(
+              id, user_id, persona_id, platform, username, display_name, profile_dir,
+              status, created_at, updated_at
+            ) VALUES ('account-1', 0, 'persona-1', 'threads', 'first_owner', 'First Owner', '',
+                      'ready', ?, ?)
+            """,
+            (now, now),
+        )
+
+    monkeypatch.setattr(social_automation_api, "_identity_user_id", lambda _: 0)
+    monkeypatch.setattr(social_automation_api, "_require_persona_reference_access", lambda *_: None)
+    monkeypatch.setattr(social_automation_api, "_require_active_owner_user", lambda *_: None)
+    monkeypatch.setattr(social_automation_api, "_billing_admin_waived", lambda *_: False)
+    monkeypatch.setattr(social_automation_api.commercial_billing, "require_write_access", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(social_automation_api.commercial_billing, "threads_account_limit", lambda *_args, **_kwargs: 1)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/authorize",
+            "headers": [],
+        }
+    )
+
+    with pytest.raises(social_automation_api.commercial_billing.BillingError) as exc_info:
+        social_automation_api._start_bundle_authorization(
+            social_automation_api.BundleAuthorizationPayload(platform="threads", persona_id="persona-1"),
+            request,
+            {"id": 0},
+        )
+
+    assert exc_info.value.code == "THREADS_ACCOUNT_LIMIT"
+
+
+def test_bundle_authorization_reuses_existing_empty_team(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "reuse-empty-team.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_account_auth_requests(
+              id, user_id, persona_id, account_id, platform, team_id,
+              status, error, expires_at, created_at, updated_at
+            ) VALUES ('request-old', 0, '', '', 'threads', 'team-empty', 'failed', 'cancelled', ?, ?, ?)
+            """,
+            (now - 1, now - 30, now - 20),
+        )
+
+    class _Client:
+        def list_teams(self, *, limit):
+            assert limit == 100
+            return {
+                "items": [
+                    {
+                        "id": "team-empty",
+                        "name": "vecto-0-threads-oldrequest",
+                        "socialAccounts": [],
+                    },
+                    {
+                        "id": "team-connected",
+                        "name": "vecto-0-threads-connected",
+                        "socialAccounts": [{"id": "social-existing", "type": "THREADS"}],
+                    },
+                ],
+                "count": 2,
+            }
+
+        def create_team(self, _name):
+            pytest.fail("an existing empty authorization team must be reused")
+
+        def create_portal_link(self, *, team_id, platform, redirect_url):
+            assert (team_id, platform) == ("team-empty", "threads")
+            assert "request_id=" in redirect_url
+            return "https://portal.example/authorize"
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    monkeypatch.setattr(social_automation_api, "_identity_user_id", lambda _: 0)
+    monkeypatch.setattr(social_automation_api, "_require_active_owner_user", lambda *_: None)
+    monkeypatch.setattr(social_automation_api, "_billing_admin_waived", lambda *_: True)
+    monkeypatch.setattr(
+        social_automation_api.commercial_billing,
+        "require_write_access",
+        lambda *_args, **_kwargs: None,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/authorize",
+            "headers": [],
+        }
+    )
+
+    result = social_automation_api._start_bundle_authorization(
+        social_automation_api.BundleAuthorizationPayload(platform="threads"),
+        request,
+        {"id": 0},
+    )
+
+    with db() as conn:
+        current = conn.execute(
+            "SELECT team_id, status FROM social_account_auth_requests WHERE id = ?",
+            (result["request_id"],),
+        ).fetchone()
+        previous = conn.execute(
+            "SELECT status FROM social_account_auth_requests WHERE id = 'request-old'",
+        ).fetchone()
+    assert result["url"] == "https://portal.example/authorize"
+    assert (current["team_id"], current["status"]) == ("team-empty", "pending")
+    assert previous["status"] == "superseded"
+
+
+def test_bundle_new_authorization_keeps_existing_persona_account(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "multiple-accounts.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_accounts(
+              id, user_id, persona_id, platform, username, display_name, profile_dir,
+              status, auth_provider, external_team_id, external_account_id,
+              authorized_at, created_at, updated_at
+            ) VALUES ('account-1', 0, 'persona-1', 'threads', 'first_owner', 'First Owner', '', 'ready',
+                      'bundle', 'team-old', 'external-1', ?, ?, ?)
+            """,
+            (now, now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO social_account_auth_requests(
+              id, user_id, persona_id, account_id, platform, team_id,
+              status, error, expires_at, created_at, updated_at
+            ) VALUES ('request-3', 0, 'persona-1', '', 'threads', 'team-new', 'pending', '', ?, ?, ?)
+            """,
+            (now + 900, now, now),
+        )
+
+    class _Client:
+        def find_social_account(self, *, team_id, platform):
+            assert (team_id, platform) == ("team-new", "threads")
+            return {
+                "id": "external-2",
+                "type": "THREADS",
+                "teamId": team_id,
+                "username": "second_owner",
+            }
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/callback",
+            "query_string": b"request_id=request-3&threads-callback=success",
+            "headers": [],
+        }
+    )
+
+    response = social_automation_api._finalize_bundle_authorization("request-3", request)
+
+    with db() as conn:
+        accounts = conn.execute(
+            "SELECT id, username, external_account_id FROM social_accounts ORDER BY created_at, id"
+        ).fetchall()
+    assert response.status_code == 302
+    assert len(accounts) == 2
+    assert (accounts[0]["id"], accounts[0]["username"], accounts[0]["external_account_id"]) == (
+        "account-1", "first_owner", "external-1",
+    )
+    assert accounts[1]["id"] != "account-1"
+    assert (accounts[1]["username"], accounts[1]["external_account_id"]) == (
+        "second_owner", "external-2",
+    )

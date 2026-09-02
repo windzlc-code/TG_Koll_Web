@@ -4150,6 +4150,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("data-account-totp", modal)
         self.assertIn("startBundleAccountAuthorization", create_entry)
         self.assertNotIn("openAccountPoolEditorModal", create_entry)
+        self.assertNotIn("openBundleAccountAuthorizationModal", self.source)
         self.assertIn("openAccountPoolEditorModal({ account })", edit_modal)
         self.assertIn('String(account.auth_provider || "browser") === "bundle"', edit_modal)
         self.assertNotIn("consumeThreadsOauthResult", self.source)
