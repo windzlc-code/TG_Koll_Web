@@ -28920,7 +28920,7 @@ window.VectoConsoleNavigation = {
   openVideoWorkspace,
 };
 
-function renderAccountOpenLoginButtonContent(activeLoginTask = null) {
+function renderAccountOpenLoginButtonContent(activeLoginTask = null, account = null) {
   if (activeLoginTask?.id) {
     return renderBusyButtonContent(
       "执行中",
@@ -28928,13 +28928,17 @@ function renderAccountOpenLoginButtonContent(activeLoginTask = null) {
       activeLoginTask.started_at || activeLoginTask.created_at || activeLoginTask.updated_at
     );
   }
+  if (String(account?.auth_provider || "browser") === "bundle") {
+    return `${renderNetworkIcon()}<span>重新授权</span>`;
+  }
   return `${renderBrowserLaunchIcon()}<span>打开登录</span>`;
 }
 
 function updateAccountOpenLoginButton(button, accountId = "") {
   if (!button) return;
+  const account = typeof accountById === "function" ? accountById(accountId) : null;
   const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
-  button.innerHTML = renderAccountOpenLoginButtonContent(activeLoginTask);
+  button.innerHTML = renderAccountOpenLoginButtonContent(activeLoginTask, account);
   if (activeLoginTask?.id) {
     button.dataset.openLoginTaskId = String(activeLoginTask.id);
     button.setAttribute("aria-busy", "true");
@@ -29559,26 +29563,28 @@ function renderAccountPoolCardActions(account, { context = "pool", personaAccoun
   const accountId = String(account?.id || "");
   const proxyLabel = account?.proxy_id ? "切换代理" : "选择代理";
   const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
+  const usesPlatformAuthorization = String(account?.auth_provider || "browser") === "bundle";
+  const proxyAction = usesPlatformAuthorization ? "" : `<button type="button" class="account-card-action account-card-action--proxy" data-account-proxy-picker="${esc(accountId)}">${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span></button>`;
   const loginAction = (attribute) => {
     if (activeLoginTask?.id) {
-      return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}" data-open-login-task-id="${esc(activeLoginTask.id)}" aria-busy="true">${renderAccountOpenLoginButtonContent(activeLoginTask)}</button>`;
+      return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}" data-open-login-task-id="${esc(activeLoginTask.id)}" aria-busy="true">${renderAccountOpenLoginButtonContent(activeLoginTask, account)}</button>`;
     }
-    return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}">${renderAccountOpenLoginButtonContent()}</button>`;
+    return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}" title="${usesPlatformAuthorization ? "重新授权平台账号" : "打开登录"}">${renderAccountOpenLoginButtonContent(null, account)}</button>`;
   };
   if (context === "persona-settings") {
     const changeAction = personaAccountAction ? `<button type="button" class="account-card-action persona-account-card-action persona-account-card-change" data-persona-account-add data-persona-account-platform="${esc(personaAccountAction.platform || "")}" title="${esc(personaAccountAction.title || "更换当前账号")}" aria-label="${esc(personaAccountAction.title || "更换当前账号")}">${renderPersonaAccountBindingIcon("replace")}<span>更换</span></button>` : "";
     return `<div class="row-actions persona-account-summary-actions">
       ${loginAction("data-persona-account-open-login")}
-      <button type="button" class="account-card-action account-card-action--proxy" data-persona-account-proxy="${esc(accountId)}">${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span></button>
-      <button type="button" class="account-card-action account-card-action--edit" data-persona-account-edit="${esc(accountId)}">${renderEditIcon()}<span>编辑</span></button>
+      ${usesPlatformAuthorization ? "" : `<button type="button" class="account-card-action account-card-action--proxy" data-persona-account-proxy="${esc(accountId)}">${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span></button>`}
+      ${usesPlatformAuthorization ? "" : `<button type="button" class="account-card-action account-card-action--edit" data-persona-account-edit="${esc(accountId)}">${renderEditIcon()}<span>编辑</span></button>`}
       <button type="button" class="account-card-action persona-account-card-action persona-account-card-unbind" data-persona-account-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>${renderPersonaAccountBindingIcon("remove")}<span>移除</span></button>
       ${changeAction}
     </div>`;
   }
   return `<div class="row-actions account-pool-card-actions">
     ${loginAction("data-social-open-login")}
-    <button type="button" class="account-card-action account-card-action--proxy" data-account-proxy-picker="${esc(accountId)}">${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span></button>
-    <button type="button" class="account-card-action account-card-action--edit" data-account-pool-edit="${esc(accountId)}">${renderEditIcon()}<span>编辑</span></button>
+    ${proxyAction}
+    ${usesPlatformAuthorization ? "" : `<button type="button" class="account-card-action account-card-action--edit" data-account-pool-edit="${esc(accountId)}">${renderEditIcon()}<span>编辑</span></button>`}
     <button type="button" class="danger account-card-action account-card-action--delete" data-social-delete-account="${esc(accountId)}">${renderTrashIcon()}<span>删除</span></button>
   </div>`;
 }
@@ -29992,6 +29998,7 @@ function renderAccountIdentityFields(account = null, mode = "create") {
 function renderAccountEditorForm(account = null, mode = "create") {
   const editing = mode === "edit";
   const platform = account?.platform || normalizeAccountPoolPlatform();
+  const usesPlatformAuthorization = String(account?.auth_provider || "browser") === "bundle";
   return `<div class="account-pool-create-modal-body">
     <div class="account-pool-editor-platform" data-account-platform="${esc(platform)}">
       <span>平台：</span>
@@ -29999,7 +30006,7 @@ function renderAccountEditorForm(account = null, mode = "create") {
       <strong>${esc(platformLabel(platform))}</strong>
     </div>
     ${renderAccountIdentityFields(account, mode)}
-    ${renderAccountProxyPickerPanel(account, mode)}
+    ${usesPlatformAuthorization ? "" : renderAccountProxyPickerPanel(account, mode)}
   </div>`;
 }
 
@@ -32158,36 +32165,31 @@ function openAccountPoolEditorModal(options) {
   });
 }
 
+async function startBundleAccountAuthorization({ platform = "", personaId = "", accountId = "" } = {}) {
+  const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
+  const result = await api("/api/persona_dashboard/automation/accounts/bundle/authorize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      platform: selectedPlatform,
+      persona_id: String(personaId || accountById(accountId)?.persona_id || "").trim(),
+      account_id: String(accountId || "").trim(),
+    }),
+  });
+  const authorizationUrl = String(result?.url || "").trim();
+  if (!authorizationUrl) throw new Error("平台授权地址不可用，请稍后重试。");
+  showMsg("socialMsg", `正在前往 ${platformLabel(selectedPlatform)} 授权页面。`, true);
+  window.location.assign(authorizationUrl);
+  return result;
+}
+
 function openAccountPoolCreateModal(options) {
   options = options || {};
   const platform = normalizeAccountPoolPlatform(options.platform || state.accountPoolPlatform);
-  openAccountPoolEditorModal({ ...options, platform });
-}
-
-async function startAccountBrowserSessionReuse(accountId = "", personaId = "", messageId = "socialMsg") {
-  const cleanAccountId = String(accountId || "").trim();
-  if (!cleanAccountId) throw new Error("账号不存在，请刷新后重试。");
-  const existingTask = activeOpenLoginTaskForAccount(cleanAccountId);
-  if (existingTask) {
-    return { task: existingTask, reused: true };
-  }
-  const result = await api(`/api/persona_dashboard/automation/accounts/${encodeURIComponent(cleanAccountId)}/reuse_session`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ payload: {} }),
-  });
-  const taskId = String(result?.task?.id || "").trim();
-  showMsg(messageId, "正在检测该账号的浏览器登录态。", true, {
-    key: taskId ? socialTaskToastKey(taskId, result.task) : undefined,
-    kind: "queued",
-    taskId,
-    taskPanel: String(personaId || "").trim() ? "persona" : "regular",
-    personaId: String(personaId || "").trim(),
-    target: "复用浏览器登录态",
-  });
-  refreshLiveBrowserSessionsSoon(taskId, 60, 500);
-  await loadSocial();
-  return result;
+  void startBundleAccountAuthorization({
+    platform,
+    personaId: String(options.personaId || "").trim(),
+  }).catch((error) => showMsg("socialMsg", error.detail || error.message || "启动平台授权失败", false));
 }
 
 function openAccountPoolEditModal(accountId = "") {
@@ -32195,6 +32197,14 @@ function openAccountPoolEditModal(accountId = "") {
     || state.socialAccounts.find((item) => String(item.id || "") === String(accountId || ""));
   if (!account) {
     showMsg("socialMsg", "账号不存在，请刷新后重试。", false);
+    return;
+  }
+  if (String(account.auth_provider || "browser") === "bundle") {
+    void startBundleAccountAuthorization({
+      platform: account.platform,
+      personaId: account.persona_id,
+      accountId: account.id,
+    }).catch((error) => showMsg("socialMsg", error.detail || error.message || "启动平台授权失败", false));
     return;
   }
   openAccountPoolEditorModal({ account });
@@ -34422,6 +34432,16 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   }
   const selected = selectedSocialAccount(accountId);
   const platform = selected?.platform || $("socialPlatform")?.value || "threads";
+  if (taskType === "open_login") {
+    return startBundleAccountAuthorization({
+      platform,
+      personaId: String(personaId || selected?.persona_id || "").trim(),
+      accountId,
+    }).catch((error) => {
+      showMsg(messageId, error.detail || error.message || "启动平台授权失败", false);
+      return null;
+    });
+  }
   const allowPublishTask = taskType === "publish_post" && state.activeModule === "publishing";
   if (!validateTaskForPlatform(taskType, platform, { includePublish: allowPublishTask })) {
     showMsg(messageId, `${platformLabel(platform)} 当前不支持「${statusLabel(taskType)}」，请切换到可执行任务类型。`, false);
@@ -34505,7 +34525,8 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
       });
       clearUploadDropzoneState("simpleMediaFiles");
       clearUploadDropzoneState("socialMediaFiles");
-      showMsg(messageId, `浏览器任务已提交：${result.task?.id || ""}`, true, {
+      const usesPlatformApi = String(selected?.auth_provider || "browser") === "bundle";
+      showMsg(messageId, `${usesPlatformApi ? "平台 API" : "浏览器"}任务已提交：${result.task?.id || ""}`, true, {
         key: result.task?.id ? socialTaskToastKey(result.task.id, result.task) : undefined,
         kind: "queued",
         taskId: result.task?.id || "",
@@ -34513,7 +34534,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
         personaId: cleanPersonaId,
         target: socialTaskToastTarget(result.task, "queued"),
       });
-      refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
+      if (!usesPlatformApi) refreshLiveBrowserSessionsSoon(String(result.task?.id || ""));
       await loadSocial();
       return result;
     } finally {
@@ -34818,7 +34839,7 @@ function bindEvents() {
         showMsg("commandMsg", "未找到要编辑的账号，请刷新后重试。", false);
         return;
       }
-      openAccountPoolEditorModal({ account });
+      openAccountPoolEditModal(accountId);
       return;
     }
     openAccountPoolCreateModal({
@@ -37542,6 +37563,21 @@ function bindEvents() {
 
 let identityRevalidationEventsBound = false;
 
+function consumeBundleAuthorizationResult() {
+  const url = new URL(window.location.href);
+  const status = String(url.searchParams.get("bundle_auth") || "").trim().toLowerCase();
+  if (!status) return;
+  const platform = normalizeAccountPoolPlatform(url.searchParams.get("bundle_platform") || "threads");
+  const message = String(url.searchParams.get("bundle_message") || "").trim();
+  showMsg(
+    "socialMsg",
+    message || (status === "success" ? `${platformLabel(platform)} 账号授权成功。` : `${platformLabel(platform)} 账号授权未完成。`),
+    status === "success",
+  );
+  ["bundle_auth", "bundle_platform", "bundle_message"].forEach((key) => url.searchParams.delete(key));
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
 function bindIdentityRevalidationEvents() {
   if (identityRevalidationEventsBound) return;
   identityRevalidationEventsBound = true;
@@ -37592,6 +37628,7 @@ async function init() {
     if (window.matchMedia("(max-width: 820px)").matches) renderSocialAccounts();
     updateAccountStatusViews();
     consumeGoogleAccountSessionResult();
+    consumeBundleAuthorizationResult();
     if (!hasPersonaBootstrap || isPersonaWorkspaceModule() || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
   }).catch(() => {});
   const personasReady = loadPersonas().then(() => {

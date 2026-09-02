@@ -589,6 +589,17 @@ def run_social_task(
         raise UnsupportedActionError("Instagram Web 不提供真正的转发动作，请改用 share_post/复制链接。")
 
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    if str(account.get("auth_provider") or "browser").strip().lower() == "bundle":
+        from webapp.bundle_social import run_bundle_social_task
+
+        logger.log("info", "bundle_dispatch", "任务已切换到平台授权 API，不会启动指纹浏览器。", {"task_type": task_type, "platform": platform})
+        _raise_if_cancelled(cancel_event)
+        return run_bundle_social_task(
+            task={**task, "payload": payload, "platform": platform},
+            account=account,
+            logger=logger,
+            cancel_event=cancel_event,
+        )
     data_root = Path(data_dir).resolve()
     screenshot_dir = data_root / "social_automation" / "screenshots"
     screenshot_dir.mkdir(parents=True, exist_ok=True)

@@ -462,6 +462,7 @@ const SENSITIVE_RUNTIME_INPUT_IDS = [
   "rtVideoMiniMaxApiKey",
 ];
 const SENSITIVE_PROVIDER_INPUT_IDS = [
+  "bundleSocialApiKey",
   "proxyProviderApiKey",
   "proxyProviderApiSecret",
   "proxyProviderWebhookSecret",
@@ -631,6 +632,9 @@ function setActiveAdminPage(page, updateHash = true) {
   if (nextPage === "serviceAccounts") void loadServiceAccounts();
   if (nextPage === "proxyMarket") void loadProxyMarketWorkspace({ silent: adminState.proxyMarketLoaded });
   if (nextPage === "runtime") {
+    void loadBundleSocialConfig().catch((error) => {
+      setMsg("bundleSocialConfigMsg", `平台授权配置读取失败：${getErrorMessage(error)}`, false);
+    });
     void loadProxyProviderCredentialStatus().catch((error) => {
       setMsg("proxyProviderCredentialMsg", `供应商凭据状态读取失败：${getErrorMessage(error)}`, false);
     });
@@ -9484,6 +9488,62 @@ async function loadProxyProviderCredentialStatus() {
   return payload;
 }
 
+function renderBundleSocialConfig(status = {}) {
+  const configured = status?.configured === true;
+  const verified = status?.verified === true;
+  setText("bundleSocialCredentialSummary", verified ? "已验证" : configured ? "已保存，待验证" : "未配置");
+  const apiBaseInput = el("bundleSocialApiBaseUrl");
+  if (apiBaseInput) apiBaseInput.value = String(status?.api_base_url || "https://api.bundle.social/api/v1");
+  setProviderSecretInputState("bundleSocialApiKey", status?.api_key_configured === true, "API Key");
+  const tab = document.querySelector('[data-model-tab="bundle-social"]');
+  if (tab) tab.classList.toggle("has-attention", !configured || !verified);
+}
+
+async function loadBundleSocialConfig() {
+  const payload = await api("/api/admin/bundle-social/config");
+  renderBundleSocialConfig(payload || {});
+  return payload;
+}
+
+function bundleSocialConfigPayload() {
+  return {
+    api_base_url: String(el("bundleSocialApiBaseUrl")?.value || "").trim(),
+    api_key: providerSecretInputValue("bundleSocialApiKey"),
+  };
+}
+
+async function testBundleSocialConfig() {
+  const form = el("bundleSocialConfigForm");
+  if (!form?.reportValidity()) return false;
+  setMsg("bundleSocialConfigMsg", "正在验证平台授权服务连接...");
+  const payload = await api("/api/admin/bundle-social/config/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(bundleSocialConfigPayload()),
+  });
+  setMsg("bundleSocialConfigMsg", `连接成功，当前工作区数量 ${Number(payload?.team_count || 0)}`, true);
+  return true;
+}
+
+async function saveBundleSocialConfig() {
+  const form = el("bundleSocialConfigForm");
+  if (!form?.reportValidity()) return false;
+  form.setAttribute("aria-busy", "true");
+  setMsg("bundleSocialConfigMsg", "正在验证并加密保存平台授权配置...");
+  try {
+    const saved = await api("/api/admin/bundle-social/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bundleSocialConfigPayload()),
+    });
+    renderBundleSocialConfig(saved || {});
+    setMsg("bundleSocialConfigMsg", "配置已加密保存，授权、发布与评论链路已切换到最新配置", true);
+    return true;
+  } finally {
+    form.removeAttribute("aria-busy");
+  }
+}
+
 function proxyProviderSetupValueSummary(value) {
   if (Array.isArray(value)) return `${value.length} 项`;
   if (value && typeof value === "object") return `${Object.keys(value).length} 组`;
@@ -10988,6 +11048,18 @@ function bindActions() {
   el("btnTestProxyProviderCredentials")?.addEventListener("click", async () => {
     try { await testProxyProviderCredentials({ useInputs: true }); } catch (error) {
       setMsg("proxyProviderCredentialMsg", getErrorMessage(error), false);
+    }
+  });
+  el("bundleSocialConfigForm")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    try { await saveBundleSocialConfig(); } catch (error) {
+      setMsg("bundleSocialConfigMsg", getErrorMessage(error), false);
+      try { await loadBundleSocialConfig(); } catch {}
+    }
+  });
+  el("btnTestBundleSocialConfig")?.addEventListener("click", async () => {
+    try { await testBundleSocialConfig(); } catch (error) {
+      setMsg("bundleSocialConfigMsg", getErrorMessage(error), false);
     }
   });
   el("proxyPurchasePlanId")?.addEventListener("change", async () => {

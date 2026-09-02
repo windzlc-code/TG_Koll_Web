@@ -12548,6 +12548,11 @@ class RuntimeConfigPayload(BaseModel):
     auth_session_hours: int = Field(default=12, ge=1, le=72)
 
 
+class BundleSocialConfigPayload(BaseModel):
+    api_base_url: str = Field(default="https://api.bundle.social/api/v1", max_length=500)
+    api_key: str = Field(default="", max_length=512)
+
+
 class LlmModelsPayload(BaseModel):
     llm_base_url: str = ""
     llm_api_key: str = ""
@@ -29001,6 +29006,87 @@ def create_app() -> FastAPI:
         except RuntimeConfigFileError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return _redact_runtime_config(runtime)
+
+    @app.get("/api/admin/bundle-social/config")
+    def api_admin_get_bundle_social_config(_user: dict[str, Any] = Depends(require_admin)):
+        from .bundle_social_config import configuration_status
+
+        with db() as conn:
+            status = configuration_status(conn)
+        return JSONResponse(
+            content=status,
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+
+    @app.post("/api/admin/bundle-social/config/test")
+    def api_admin_test_bundle_social_config(
+        payload: BundleSocialConfigPayload,
+        request: Request,
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        from .bundle_social import BundleSocialClient, BundleSocialError
+        from .bundle_social_config import BundleSocialConfigError, candidate_configuration
+
+        _require_same_origin(request)
+        try:
+            with db() as conn:
+                candidate = candidate_configuration(
+                    conn,
+                    api_base_url=payload.api_base_url,
+                    api_key=payload.api_key,
+                )
+            result = BundleSocialClient(
+                api_key=candidate["api_key"],
+                api_base=candidate["api_base_url"],
+                timeout_seconds=15,
+            ).list_teams(limit=1)
+        except BundleSocialConfigError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except BundleSocialError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"ok": True, "team_count": int(result.get("count") or 0)}
+
+    @app.put("/api/admin/bundle-social/config")
+    def api_admin_set_bundle_social_config(
+        payload: BundleSocialConfigPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        from .bundle_social import BundleSocialClient, BundleSocialError
+        from .bundle_social_config import (
+            BundleSocialConfigError,
+            candidate_configuration,
+            save_configuration,
+        )
+
+        _require_same_origin(request)
+        try:
+            with db() as conn:
+                candidate = candidate_configuration(
+                    conn,
+                    api_base_url=payload.api_base_url,
+                    api_key=payload.api_key,
+                )
+            BundleSocialClient(
+                api_key=candidate["api_key"],
+                api_base=candidate["api_base_url"],
+                timeout_seconds=15,
+            ).list_teams(limit=1)
+            with db() as conn:
+                status = save_configuration(
+                    conn,
+                    api_base_url=candidate["api_base_url"],
+                    api_key=candidate["api_key"],
+                    actor_user_id=int(user.get("id") or 0),
+                )
+        except BundleSocialConfigError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        except BundleSocialError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return JSONResponse(
+            content=status,
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
 
     @app.post("/api/admin/runtime_config/secrets/{secret_name}")
     def api_admin_reveal_runtime_secret(

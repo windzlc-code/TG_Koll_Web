@@ -1211,9 +1211,7 @@ def _ensure_email_delivery_governance_schema(conn: sqlite3.Connection) -> None:
         ) VALUES (1, 'brevo', '')
         """
     )
-    conn.execute(
-        "INSERT OR IGNORE INTO email_delivery_sync_state(id) VALUES (1)"
-    )
+    conn.execute("INSERT OR IGNORE INTO email_delivery_sync_state(id) VALUES (1)")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_email_delivery_attempts_quota "
         "ON email_delivery_attempts(quota_day, status, reconciled_at)"
@@ -1221,6 +1219,27 @@ def _ensure_email_delivery_governance_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_email_delivery_attempts_user "
         "ON email_delivery_attempts(user_id, created_at DESC)"
+    )
+
+
+def _ensure_bundle_social_config_schema(conn: sqlite3.Connection) -> None:
+    """Install encrypted, administrator-managed Bundle Social configuration."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bundle_social_provider_config (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          owner_user_id INTEGER NOT NULL,
+          api_base_url TEXT NOT NULL,
+          api_key_ciphertext TEXT NOT NULL,
+          api_key_fingerprint TEXT NOT NULL DEFAULT '',
+          verified_at INTEGER NOT NULL DEFAULT 0,
+          last_checked_at INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          updated_by INTEGER NOT NULL
+        )
+        """
     )
 
 
@@ -1750,6 +1769,27 @@ def init_db() -> None:
               last_login_check_at INTEGER NOT NULL DEFAULT 0,
               last_run_at INTEGER NOT NULL DEFAULT 0,
               last_error TEXT NOT NULL DEFAULT '',
+              auth_provider TEXT NOT NULL DEFAULT 'browser',
+              external_team_id TEXT NOT NULL DEFAULT '',
+              external_account_id TEXT NOT NULL DEFAULT '',
+              authorized_at INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS social_account_auth_requests (
+              id TEXT PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              persona_id TEXT NOT NULL DEFAULT '',
+              account_id TEXT NOT NULL DEFAULT '',
+              platform TEXT NOT NULL,
+              team_id TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'pending',
+              error TEXT NOT NULL DEFAULT '',
+              expires_at INTEGER NOT NULL,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
             )
@@ -2205,6 +2245,23 @@ def init_db() -> None:
             conn.execute("ALTER TABLE social_accounts ADD COLUMN status_attempt_error TEXT NOT NULL DEFAULT ''")
         if "status_source_task_id" not in account_columns:
             conn.execute("ALTER TABLE social_accounts ADD COLUMN status_source_task_id TEXT NOT NULL DEFAULT ''")
+        if "auth_provider" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'browser'")
+        if "external_team_id" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN external_team_id TEXT NOT NULL DEFAULT ''")
+        if "external_account_id" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN external_account_id TEXT NOT NULL DEFAULT ''")
+        if "authorized_at" not in account_columns:
+            conn.execute("ALTER TABLE social_accounts ADD COLUMN authorized_at INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_social_account_auth_requests_owner "
+            "ON social_account_auth_requests(user_id, status, expires_at)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_social_accounts_bundle_external "
+            "ON social_accounts(auth_provider, external_team_id, external_account_id) "
+            "WHERE auth_provider = 'bundle' AND external_account_id <> ''"
+        )
         task_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(social_automation_tasks)").fetchall()}
         if "user_id" not in task_columns:
             conn.execute("ALTER TABLE social_automation_tasks ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
@@ -2329,6 +2386,7 @@ def init_db() -> None:
         _ensure_commercial_billing_schema(conn)
         _ensure_proxy_purchase_schema(conn)
         _ensure_email_delivery_governance_schema(conn)
+        _ensure_bundle_social_config_schema(conn)
         ensure_crm_schema(conn)
         conn.execute(
             """

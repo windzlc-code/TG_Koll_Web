@@ -1930,7 +1930,7 @@
             <div class="admin-runtime-panel-head">
               <div>
                 <div class="admin-config-card-title">API 与模型配置</div>
-                <div class="small">统一管理文字、图片、工作流、视频与第三方代理服务凭据。</div>
+                <div class="small">统一管理文字、图片、工作流、视频、平台授权与第三方代理服务凭据。</div>
               </div>
             </div>
             <div class="admin-model-tabs" role="tablist" aria-label="API 与模型配置">
@@ -1938,6 +1938,7 @@
               <button class="admin-model-tab" type="button" data-model-tab="image">图片模型</button>
               <button class="admin-model-tab" type="button" data-model-tab="runninghub">RunningHub 链路</button>
               <button class="admin-model-tab" type="button" data-model-tab="video">视频工作台</button>
+              <button class="admin-model-tab" type="button" data-model-tab="bundle-social">平台授权</button>
               <button class="admin-model-tab" type="button" data-model-tab="proxy-provider">第三方代理 IP</button>
             </div>
             <div class="admin-model-tab-panels">
@@ -2116,6 +2117,30 @@
                       <label>默认音色 ID</label>
                       <input id="rtVideoMiniMaxTtsVoiceId" type="text" value="male-qn-qingse">
                     </div>
+                  </div>
+                </div>
+                <div class="admin-runtime-block admin-model-tab-panel proxy-provider-tab-panel" data-model-panel="bundle-social" aria-labelledby="bundleSocialApiTitle">
+                  <div class="proxy-provider-api-title-row">
+                    <div>
+                      <div class="admin-config-card-title" id="bundleSocialApiTitle">平台授权服务</div>
+                      <div class="small">集中配置 Threads 与 Instagram 官方授权、发布和评论所使用的白标接口。</div>
+                    </div>
+                    <span id="bundleSocialCredentialSummary" class="proxy-provider-credential-summary">自动检测中</span>
+                  </div>
+                  <div class="proxy-provider-api-body">
+                    <div class="proxy-provider-api-head">
+                      <p>API Key 只加密保存在服务端；授权回调会自动使用当前网站地址，无需配置。</p>
+                      <button id="btnTestBundleSocialConfig" type="button" class="ghost">测试连接</button>
+                    </div>
+                    <form id="bundleSocialConfigForm" class="proxy-provider-credential-form" novalidate>
+                      <label><span>API Base URL</span><input id="bundleSocialApiBaseUrl" type="url" maxlength="500" required placeholder="https://api.bundle.social/api/v1"></label>
+                      <label><span>API Key</span><input id="bundleSocialApiKey" type="password" autocomplete="new-password" maxlength="512" placeholder="输入 API Key"></label>
+                      <div class="proxy-provider-credential-actions">
+                        <p class="proxy-provider-secret-note">保存前会先验证连接；验证通过后授权、发布与评论会立即读取最新配置，无需重启服务。</p>
+                        <button id="btnSaveBundleSocialConfig" type="submit" class="primary">保存并自动验证</button>
+                      </div>
+                    </form>
+                    <div id="bundleSocialConfigMsg" class="msg" role="status" aria-live="polite"></div>
                   </div>
                 </div>
                 <div class="admin-runtime-block admin-model-tab-panel proxy-provider-tab-panel" id="proxyProviderApiDetails" data-model-panel="proxy-provider" aria-labelledby="proxyProviderApiTitle">

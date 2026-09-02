@@ -52,8 +52,8 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         runtime_end = self.markup.index('id="secAccount"', runtime_start)
         runtime_panel = self.markup[runtime_start:runtime_end]
         self.assertIn('class="admin-config-card admin-runtime-panel admin-runtime-provider-shell"', runtime_panel)
-        self.assertEqual(runtime_panel.count('data-model-tab='), 5)
-        for panel_name in ("text", "image", "runninghub", "video", "proxy-provider"):
+        self.assertEqual(runtime_panel.count('data-model-tab='), 6)
+        for panel_name in ("text", "image", "runninghub", "video", "bundle-social", "proxy-provider"):
             self.assertIn(f'data-model-panel="{panel_name}"', runtime_panel)
         self.assertIn(".page-admin .admin-runtime-provider-shell", self.styles)
         self.assertIn("linear-gradient(105deg, #237fb2 0 8%, #155f96 24%, #123f69 56%, #102c47 100%)", self.styles)
@@ -72,7 +72,23 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
     def test_runtime_page_loads_provider_credential_status(self):
         active_page = self._function("setActiveAdminPage", "clearStoredAdminWorkspaceContext")
         self.assertIn('nextPage === "runtime"', active_page)
+        self.assertIn("loadBundleSocialConfig()", active_page)
         self.assertIn("loadProxyProviderCredentialStatus()", active_page)
+
+    def test_bundle_social_config_is_a_masked_parallel_tab(self):
+        runtime_start = self.markup.index('id="secRuntime"')
+        runtime_end = self.markup.index('id="secAccount"', runtime_start)
+        runtime_panel = self.markup[runtime_start:runtime_end]
+        self.assertIn('data-model-tab="bundle-social"', runtime_panel)
+        self.assertIn('data-model-panel="bundle-social"', runtime_panel)
+        self.assertIn('id="bundleSocialConfigForm"', runtime_panel)
+        self.assertIn('id="bundleSocialApiBaseUrl"', runtime_panel)
+        self.assertNotIn('id="bundleSocialPublicBaseUrl"', runtime_panel)
+        self.assertIn("授权回调会自动使用当前网站地址", runtime_panel)
+        self.assertIn('id="bundleSocialApiKey" type="password"', runtime_panel)
+        self.assertIn('"bundleSocialApiKey"', self.script)
+        self.assertIn('/api/admin/bundle-social/config/test', self.script)
+        self.assertIn('/api/admin/bundle-social/config', self.script)
 
     def test_credential_requests_do_not_send_server_owned_or_step_up_fields(self):
         test_connection = self._function("testProxyProviderCredentials", "saveProxyProviderCredentials")

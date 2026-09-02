@@ -20,8 +20,11 @@ export ADMIN_BOOTSTRAP_PASSWORD='replace-with-a-unique-password-of-at-least-12-c
 export SESSION_COOKIE_SECURE=1
 export FORCE_HTTPS=1
 export HTTPS_CANONICAL_ORIGIN='https://<server-ip-or-domain>'
+export BUNDLE_SOCIAL_API_KEY='replace-with-a-rotated-server-side-key'
 uvicorn webapp.server:app --host 0.0.0.0 --port 8000
 ```
+
+`BUNDLE_SOCIAL_API_KEY` must remain server-side. Do not expose it to browser assets or commit a real value.
 
 Open:
 

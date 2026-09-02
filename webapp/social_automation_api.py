@@ -25,12 +25,12 @@ from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -439,6 +439,12 @@ class SocialAccountPayload(BaseModel):
     login_password: str = Field(default="", max_length=SOCIAL_ACCOUNT_LOGIN_PASSWORD_MAX_LENGTH)
     totp_secret_or_uri: str = Field(default="", max_length=2048)
     residential_proxy: ResidentialProxyPayload | None = None
+
+
+class BundleAuthorizationPayload(BaseModel):
+    persona_id: str = ""
+    account_id: str = ""
+    platform: str = "threads"
 
 
 class SocialTaskPayload(BaseModel):
@@ -2238,6 +2244,240 @@ def _reconcile_social_automation_plans() -> None:
             )
 
 
+def _bundle_console_redirect(*, status: str, platform: str, message: str = "") -> RedirectResponse:
+    query = urlencode(
+        {
+            "view": "accounts",
+            "bundle_auth": str(status),
+            "bundle_platform": str(platform),
+            "bundle_message": str(message)[:240],
+        }
+    )
+    return RedirectResponse(url=f"/console.html?{query}", status_code=302)
+
+
+def _bundle_callback_url(request: Request, request_id: str) -> str:
+    configured_origin = str(os.getenv("HTTPS_CANONICAL_ORIGIN", "") or "").strip().rstrip("/")
+    scheme = str(request.headers.get("x-forwarded-proto") or request.url.scheme or "").split(",", 1)[0].strip().lower()
+    host = str(request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",", 1)[0].strip()
+    base = configured_origin or f"{scheme}://{host}".rstrip("/")
+    parsed = urlparse(base)
+    local_host = str(parsed.hostname or "").strip("[]").lower() in {"localhost", "127.0.0.1", "::1", "testserver"}
+    if (
+        not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+        or (parsed.scheme != "https" and not (parsed.scheme == "http" and local_host))
+    ):
+        raise HTTPException(status_code=503, detail="系统无法识别安全的授权回调地址")
+    return f"{base}/api/persona_dashboard/automation/accounts/bundle/callback?{urlencode({'request_id': request_id})}"
+
+
+def _start_bundle_authorization(
+    payload: BundleAuthorizationPayload,
+    request: Request,
+    user: dict[str, Any],
+) -> dict[str, Any]:
+    from .bundle_social import BundleSocialClient, BundleSocialError
+
+    platform = _normalize_platform(payload.platform)
+    persona_id = str(payload.persona_id or "").strip()
+    account_id = str(payload.account_id or "").strip()
+    owner_user_id = _identity_user_id(user)
+    _require_persona_reference_access(persona_id, user)
+    with db() as conn:
+        _require_active_owner_user(conn, owner_user_id)
+        commercial_billing.require_write_access(
+            conn,
+            owner_user_id,
+            admin_waived=_billing_admin_waived(user),
+        )
+        if account_id:
+            row = conn.execute(
+                "SELECT id, platform, user_id FROM social_accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            if not row or int(row["user_id"] or 0) != owner_user_id:
+                raise HTTPException(status_code=404, detail="账号不存在")
+            if str(row["platform"] or "").strip().lower() != platform:
+                raise HTTPException(status_code=400, detail="授权平台与账号平台不一致")
+        elif platform == "threads" and not _billing_admin_waived(user):
+            bound = conn.execute(
+                "SELECT id FROM social_accounts WHERE user_id = ? AND persona_id = ? AND platform = ? LIMIT 1",
+                (owner_user_id, persona_id, platform),
+            ).fetchone() if persona_id else None
+            if not bound:
+                account_limit = commercial_billing.threads_account_limit(conn, owner_user_id, now=_now())
+                current_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) AS c FROM social_accounts WHERE user_id = ? AND lower(platform) = 'threads'",
+                        (owner_user_id,),
+                    ).fetchone()["c"]
+                )
+                if account_limit is not None and current_count >= int(account_limit):
+                    raise commercial_billing.BillingError(
+                        "THREADS_ACCOUNT_LIMIT",
+                        f"当前订阅最多允许 {int(account_limit)} 个 Threads 账号，请增加订阅后再创建",
+                        409,
+                    )
+
+    request_id = _NEW_ID("bundle_auth")
+    now = _now()
+    try:
+        client = BundleSocialClient()
+        team_id = client.create_team(f"vecto-{owner_user_id}-{platform}-{request_id[-12:]}")
+        redirect_url = _bundle_callback_url(request, request_id)
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT INTO social_account_auth_requests(
+                  id, user_id, persona_id, account_id, platform, team_id,
+                  status, error, expires_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', '', ?, ?, ?)
+                """,
+                (request_id, owner_user_id, persona_id, account_id, platform, team_id, now + 900, now, now),
+            )
+        url = client.create_portal_link(team_id=team_id, platform=platform, redirect_url=redirect_url)
+    except BundleSocialError as exc:
+        with db() as conn:
+            conn.execute(
+                "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
+                (str(exc), _now(), request_id),
+            )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"ok": True, "request_id": request_id, "platform": platform, "url": url}
+
+
+def _finalize_bundle_authorization(request_id: str, request: Request, user: dict[str, Any]) -> RedirectResponse:
+    from .bundle_social import BundleSocialClient, BundleSocialError, platform_type
+
+    owner_user_id = _identity_user_id(user)
+    with db() as conn:
+        auth_row = conn.execute(
+            "SELECT * FROM social_account_auth_requests WHERE id = ? AND user_id = ?",
+            (str(request_id), owner_user_id),
+        ).fetchone()
+    if not auth_row:
+        return _bundle_console_redirect(status="error", platform="", message="授权请求不存在或不属于当前账号")
+    platform = str(auth_row["platform"] or "").strip().lower()
+    if str(auth_row["status"] or "") == "completed":
+        return _bundle_console_redirect(status="success", platform=platform, message="平台账号已授权")
+    if int(auth_row["expires_at"] or 0) < _now():
+        return _bundle_console_redirect(status="error", platform=platform, message="授权请求已过期，请重新授权")
+    callback_value = " ".join(
+        f"{str(key or '')} {str(value or '')}"
+        for key, value in request.query_params.multi_items()
+        if str(key or "") != "request_id"
+    ).lower()
+    if any(marker in callback_value for marker in ("not-enough", "cancel", "denied", "error")):
+        message = "平台授权未完成，请确认账号权限后重试"
+        with db() as conn:
+            conn.execute(
+                "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
+                (message, _now(), str(request_id)),
+            )
+        return _bundle_console_redirect(status="error", platform=platform, message=message)
+    try:
+        client = BundleSocialClient()
+        provider_account: dict[str, Any] = {}
+        last_error: BundleSocialError | None = None
+        for attempt in range(5):
+            try:
+                provider_account = client.find_social_account(
+                    team_id=str(auth_row["team_id"] or ""),
+                    platform=platform,
+                )
+                break
+            except BundleSocialError as exc:
+                last_error = exc
+                if attempt < 4:
+                    time.sleep(1)
+        if not provider_account:
+            raise last_error or BundleSocialError("尚未检测到本次平台授权，请重新授权")
+        if str(provider_account.get("type") or "").upper() != platform_type(platform):
+            raise BundleSocialError("授权结果与所选平台不一致")
+    except BundleSocialError as exc:
+        return _bundle_console_redirect(status="error", platform=platform, message=str(exc))
+
+    external_account_id = str(provider_account.get("id") or "").strip()
+    if not external_account_id:
+        return _bundle_console_redirect(status="error", platform=platform, message="平台授权结果缺少账号编号，请重新授权")
+    username = str(
+        provider_account.get("username")
+        or provider_account.get("displayName")
+        or provider_account.get("externalId")
+        or external_account_id
+    ).strip().lstrip("@")
+    display_name = str(provider_account.get("displayName") or username).strip()
+    now = _now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = None
+        requested_account_id = str(auth_row["account_id"] or "").strip()
+        if requested_account_id:
+            current = conn.execute(
+                "SELECT * FROM social_accounts WHERE id = ? AND user_id = ? AND platform = ?",
+                (requested_account_id, owner_user_id, platform),
+            ).fetchone()
+        if current is None and str(auth_row["persona_id"] or "").strip():
+            current = conn.execute(
+                "SELECT * FROM social_accounts WHERE user_id = ? AND persona_id = ? AND platform = ? LIMIT 1",
+                (owner_user_id, str(auth_row["persona_id"] or ""), platform),
+            ).fetchone()
+        if current is None:
+            current = conn.execute(
+                """
+                SELECT * FROM social_accounts
+                WHERE user_id = ? AND auth_provider = 'bundle' AND platform = ?
+                  AND external_account_id = ?
+                LIMIT 1
+                """,
+                (owner_user_id, platform, external_account_id),
+            ).fetchone()
+        if current is not None:
+            account_id = str(current["id"] or "")
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET username = ?, display_name = ?, status = 'ready', health_status = 'alive',
+                    health_checked_at = ?, health_detail = '', last_error = '', proxy_id = '',
+                    auth_provider = 'bundle', external_team_id = ?, external_account_id = ?,
+                    authorized_at = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    username, display_name, now, str(auth_row["team_id"] or ""),
+                    external_account_id, now, now, account_id, owner_user_id,
+                ),
+            )
+        else:
+            account_id = _NEW_ID("social_account")
+            conn.execute(
+                """
+                INSERT INTO social_accounts(
+                  id, user_id, persona_id, platform, username, display_name, profile_dir,
+                  proxy_id, status, health_status, health_checked_at, health_detail,
+                  last_error, auth_provider, external_team_id, external_account_id,
+                  authorized_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, '', '', 'ready', 'alive', ?, '', '',
+                          'bundle', ?, ?, ?, ?, ?)
+                """,
+                (
+                    account_id, owner_user_id, str(auth_row["persona_id"] or ""), platform,
+                    username, display_name, now, str(auth_row["team_id"] or ""),
+                    external_account_id, now, now, now,
+                ),
+            )
+        conn.execute(
+            "UPDATE social_account_auth_requests SET account_id = ?, status = 'completed', error = '', updated_at = ? WHERE id = ?",
+            (account_id, now, str(request_id)),
+        )
+    return _bundle_console_redirect(status="success", platform=platform, message=f"{platform.title()} 账号授权成功")
+
+
 def register_social_automation_routes(app: FastAPI) -> None:
     @app.get("/api/health")
     def api_health():
@@ -2366,6 +2606,22 @@ def register_social_automation_routes(app: FastAPI) -> None:
             )
         return {"ok": True, "accounts": accounts}
 
+    @app.post("/api/persona_dashboard/automation/accounts/bundle/authorize")
+    def api_social_account_bundle_authorize(
+        payload: BundleAuthorizationPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return _start_bundle_authorization(payload, request, user)
+
+    @app.get("/api/persona_dashboard/automation/accounts/bundle/callback")
+    def api_social_account_bundle_callback(
+        request: Request,
+        request_id: str = "",
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        return _finalize_bundle_authorization(request_id, request, user)
+
     @app.post("/api/persona_dashboard/automation/accounts")
     def api_social_account_create(payload: SocialAccountPayload, user: dict[str, Any] = Depends(get_current_user)):
         _require_persona_reference_access(payload.persona_id, user)
@@ -2389,7 +2645,12 @@ def register_social_automation_routes(app: FastAPI) -> None:
 
     @app.patch("/api/persona_dashboard/automation/accounts/{account_id}")
     def api_social_account_patch(account_id: str, payload: SocialAccountPatchPayload, user: dict[str, Any] = Depends(get_current_user)):
-        _require_account_access(account_id, user)
+        account = _require_account_access(account_id, user)
+        if (
+            str(dict(account).get("auth_provider") or "browser").strip().lower() == "bundle"
+            and (payload.proxy_id is not None or payload.residential_proxy is not None)
+        ):
+            raise HTTPException(status_code=409, detail="平台授权账号不使用浏览器代理")
         if payload.persona_id is not None:
             _require_persona_reference_access(payload.persona_id, user)
         if payload.profile_dir:
@@ -2553,7 +2814,9 @@ def register_social_automation_routes(app: FastAPI) -> None:
         payload: dict[str, Any] | None = Body(default=None),
         user: dict[str, Any] = Depends(get_current_user),
     ):
-        _require_account_access(account_id, user)
+        account = _require_account_access(account_id, user)
+        if str(dict(account).get("auth_provider") or "browser").strip().lower() == "bundle":
+            return {"ok": True, "account": get_social_account(account_id), "authorized": True}
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         _validate_user_task_media_paths(task_payload, user)
@@ -2574,6 +2837,8 @@ def register_social_automation_routes(app: FastAPI) -> None:
         user: dict[str, Any] = Depends(get_current_user),
     ):
         account = _require_account_access(account_id, user)
+        if str(dict(account).get("auth_provider") or "browser").strip().lower() == "bundle":
+            raise HTTPException(status_code=409, detail="该账号使用平台授权，请从账号卡重新授权")
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
         task_payload = dict(task_payload or {})
@@ -2613,15 +2878,9 @@ def register_social_automation_routes(app: FastAPI) -> None:
         payload: dict[str, Any] | None = Body(default=None),
         user: dict[str, Any] = Depends(get_current_user),
     ):
-        """Open the account-owned persistent profile without accepting credentials.
-
-        This endpoint is intentionally separate from automatic credential login:
-        it can only reuse the server-side profile already assigned to this account.
-        If that profile is no longer authenticated, the shared login runner keeps
-        the browser open for the existing manual-takeover flow.
-        """
-
-        _require_account_access(account_id, user)
+        account = _require_account_access(account_id, user)
+        if str(dict(account).get("auth_provider") or "browser").strip().lower() == "bundle":
+            raise HTTPException(status_code=409, detail="该账号使用平台授权，无需复用浏览器会话")
         wait_seconds = max(3600, int(os.getenv("SOCIAL_AUTOMATION_LOGIN_WAIT_SECONDS", "3600")))
         body = payload if isinstance(payload, dict) else {}
         task_payload = body.get("payload") if isinstance(body.get("payload"), dict) else body
@@ -6586,6 +6845,12 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
         account_platform = str(account["platform"] or "").strip().lower()
         if account_platform != platform:
             raise HTTPException(status_code=400, detail="任务平台与执行账号平台不一致")
+        auth_provider = str(dict(account).get("auth_provider") or "browser").strip().lower()
+        if auth_provider == "bundle" and task_type not in {"publish_post", "comment_post", "reply_comment"}:
+            raise HTTPException(
+                status_code=409,
+                detail="该账号使用平台授权，目前仅支持发布、评论和回复；不会回退到指纹浏览器",
+            )
         required_platform = SOCIAL_TASK_REQUIRED_PLATFORM.get(task_type)
         if required_platform and account_platform != required_platform:
             raise HTTPException(
@@ -6613,7 +6878,7 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
-        proxy_id = str(account["proxy_id"] or "").strip()
+        proxy_id = "" if auth_provider == "bundle" else str(account["proxy_id"] or "").strip()
         if proxy_id:
             proxy = conn.execute(
                 "SELECT status, ip_type, market_item_id, expires_at, last_check_at, last_check_result FROM social_proxies WHERE id = ? AND user_id = ?",
@@ -9666,7 +9931,13 @@ def _finalize_detached_manual_tasks(task_ids: list[str]) -> None:
 def _execute_claimed_task(task: dict[str, Any]) -> None:
     task_id = str(task.get("id") or "")
     task = dict(task)
-    batch_tasks = _claim_publish_batch_tail(task)
+    with db() as conn:
+        account_provider_row = conn.execute(
+            "SELECT auth_provider FROM social_accounts WHERE id = ?",
+            (str(task.get("account_id") or ""),),
+        ).fetchone()
+    account_provider = str(account_provider_row["auth_provider"] or "browser").strip().lower() if account_provider_row else "browser"
+    batch_tasks = [task] if account_provider == "bundle" else _claim_publish_batch_tail(task)
     batch_task_ids = [str(item.get("id") or "") for item in batch_tasks if str(item.get("id") or "")]
     control = {
         "cancel_event": threading.Event(),
@@ -9685,7 +9956,11 @@ def _execute_claimed_task(task: dict[str, Any]) -> None:
         "login_assistance_lock": threading.Lock(),
         "login_assistance_pending": False,
         "login_assistance_state": (
-            {"phase": "running", "kind": "progress", "title": "正在启动发布", "message": "正在连接指纹浏览器并准备发布内容。"}
+            {"phase": "running", "kind": "progress", "title": "正在提交发布", "message": "正在通过平台授权 API 提交发布内容。"}
+            if account_provider == "bundle" and str(task.get("task_type") or "") == "publish_post"
+            else {"phase": "running", "kind": "progress", "title": "正在执行平台操作", "message": "正在通过平台授权 API 执行任务。"}
+            if account_provider == "bundle"
+            else {"phase": "running", "kind": "progress", "title": "正在启动发布", "message": "正在连接指纹浏览器并准备发布内容。"}
             if str(task.get("task_type") or "") == "publish_post"
             else {"phase": "running", "kind": "progress", "title": "正在启动登录", "message": "正在连接指纹浏览器并检查账号状态。"}
         ),
@@ -9862,7 +10137,8 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         account_row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (task["account_id"],)).fetchone()
         if not account_row:
             raise RuntimeError("任务绑定账号不存在")
-        proxy_id = str(account_row["proxy_id"] or "").strip()
+        account_provider = str(dict(account_row).get("auth_provider") or "browser").strip().lower()
+        proxy_id = "" if account_provider == "bundle" else str(account_row["proxy_id"] or "").strip()
         proxy_row = None
         if proxy_id:
             proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
@@ -13355,6 +13631,9 @@ def _account_public(row: Any, proxy_row: Any | None = None, totp_row: Any | None
         "last_login_check_at": int(item.get("last_login_check_at") or 0),
         "last_run_at": int(item.get("last_run_at") or 0),
         "last_error": str(item.get("last_error") or ""),
+        "auth_provider": str(item.get("auth_provider") or "browser"),
+        "external_account_id": str(item.get("external_account_id") or ""),
+        "authorized_at": int(item.get("authorized_at") or 0),
         "created_at": int(item.get("created_at") or 0),
         "updated_at": int(item.get("updated_at") or 0),
     }
