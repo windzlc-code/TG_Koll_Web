@@ -32229,22 +32229,22 @@ function bindBundleAuthorizationEvents() {
   });
 }
 
-function openBundleAuthorizationPopup(platform = "threads") {
+function openBundleAuthorizationPopup(platform = "threads", authorizationUrl = "") {
   closeBundleAuthorizationPopup();
+  const targetUrl = String(authorizationUrl || "").trim();
+  if (!targetUrl) throw new Error("平台授权地址不可用，请稍后重试。");
   const width = Math.min(520, Math.max(360, window.screen.availWidth - 32));
   const height = Math.min(760, Math.max(560, window.screen.availHeight - 64));
   const left = Math.max(0, Math.round((window.screen.availWidth - width) / 2));
   const top = Math.max(0, Math.round((window.screen.availHeight - height) / 2));
   const popup = window.open(
-    "about:blank",
+    targetUrl,
     "vecto-platform-authorization",
     `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`,
   );
   if (!popup) throw new Error("浏览器阻止了授权窗口，请允许本站打开弹出窗口后重试。");
   bundleAuthorizationPopup = popup;
   bundleAuthorizationResultPending = false;
-  popup.document.title = `${platformLabel(platform)} 官方授权`;
-  popup.document.body.innerHTML = `<p style="font:16px/1.5 system-ui;margin:40px;text-align:center;color:#24384a">正在打开 ${esc(platformLabel(platform))} 官方授权…</p>`;
   popup.focus();
   bundleAuthorizationPopupTimer = window.setInterval(() => {
     if (!bundleAuthorizationPopup || bundleAuthorizationPopup.closed) {
@@ -32267,35 +32267,43 @@ function openBundleAuthorizationPopup(platform = "threads") {
   return popup;
 }
 
-async function startBundleAccountAuthorization({ platform = "", personaId = "", accountId = "" } = {}) {
+async function prepareBundleAccountAuthorization({ platform = "", personaId = "", accountId = "" } = {}) {
   const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
+  return api("/api/persona_dashboard/automation/accounts/bundle/authorize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      platform: selectedPlatform,
+      persona_id: String(personaId || accountById(accountId)?.persona_id || "").trim(),
+      account_id: String(accountId || "").trim(),
+    }),
+  });
+}
+
+async function startBundleAccountAuthorization({ platform = "", personaId = "", accountId = "", preparedResult = null } = {}) {
+  const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
+  const result = preparedResult || await prepareBundleAccountAuthorization({
+    platform: selectedPlatform,
+    personaId,
+    accountId,
+  });
+  const authorizationUrl = String(result?.url || "").trim();
+  if (!authorizationUrl) throw new Error("平台授权地址不可用，请稍后重试。");
   bindBundleAuthorizationEvents();
-  const popup = openBundleAuthorizationPopup(selectedPlatform);
-  try {
-    const result = await api("/api/persona_dashboard/automation/accounts/bundle/authorize", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        platform: selectedPlatform,
-        persona_id: String(personaId || accountById(accountId)?.persona_id || "").trim(),
-        account_id: String(accountId || "").trim(),
-      }),
-    });
-    const authorizationUrl = String(result?.url || "").trim();
-    if (!authorizationUrl) throw new Error("平台授权地址不可用，请稍后重试。");
-    showMsg("socialMsg", `${platformLabel(selectedPlatform)} 授权窗口已打开。`, true);
-    popup.location.replace(authorizationUrl);
-    return result;
-  } catch (error) {
-    closeBundleAuthorizationPopup();
-    throw error;
-  }
+  openBundleAuthorizationPopup(selectedPlatform, authorizationUrl);
+  showMsg("socialMsg", `${platformLabel(selectedPlatform)} 授权窗口已打开。`, true);
+  return result;
 }
 
 async function openBundleAccountAuthorizationModal({ platform = "", personaId = "", accountId = "" } = {}) {
   const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
   const selectedPlatformLabel = platformLabel(selectedPlatform);
   const editing = Boolean(String(accountId || "").trim());
+  const preparedResult = await prepareBundleAccountAuthorization({
+    platform: selectedPlatform,
+    personaId,
+    accountId,
+  });
   const confirmed = await openConsoleModal({
     modalKey: "bundle-account-authorization",
     title: editing ? "重新授权账号" : "添加账号",
@@ -32318,6 +32326,7 @@ async function openBundleAccountAuthorizationModal({ platform = "", personaId = 
     platform: selectedPlatform,
     personaId,
     accountId,
+    preparedResult,
   });
 }
 
@@ -34571,7 +34580,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   const selected = selectedSocialAccount(accountId);
   const platform = selected?.platform || $("socialPlatform")?.value || "threads";
   if (taskType === "open_login") {
-    return startBundleAccountAuthorization({
+    return openBundleAccountAuthorizationModal({
       platform,
       personaId: String(personaId || selected?.persona_id || "").trim(),
       accountId,

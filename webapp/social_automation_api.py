@@ -2392,32 +2392,53 @@ def _start_bundle_authorization(
                         (owner_user_id, platform),
                     ).fetchall()
                 ]
+                reserved_team_ids = {
+                    str(row["team_id"] or "").strip()
+                    for row in conn.execute(
+                        """
+                        SELECT team_id FROM social_account_auth_requests
+                        WHERE status = 'pending' AND expires_at >= ? AND team_id <> ''
+                          AND NOT (user_id = ? AND platform = ? AND account_id = '')
+                        """,
+                        (now, owner_user_id, platform),
+                    ).fetchall()
+                }
             teams = client.list_teams(limit=100).get("items") or []
             empty_teams = {
                 str(item.get("id") or "").strip(): item
                 for item in teams
                 if isinstance(item, dict)
                 and str(item.get("id") or "").strip()
-                and str(item.get("name") or "").startswith(team_prefix)
                 and not [
                     social
                     for social in (item.get("socialAccounts") or [])
                     if isinstance(social, dict) and not social.get("deletedAt")
                 ]
             }
+            available_empty_team_ids = [
+                candidate
+                for candidate in empty_teams
+                if candidate not in bound_team_ids and candidate not in reserved_team_ids
+            ]
             team_id = next(
                 (
                     candidate
                     for candidate in previous_team_ids
-                    if candidate in empty_teams and candidate not in bound_team_ids
+                    if candidate in available_empty_team_ids
                 ),
                 "",
             )
             if not team_id:
                 team_id = next(
-                    (candidate for candidate in empty_teams if candidate not in bound_team_ids),
+                    (
+                        candidate
+                        for candidate in available_empty_team_ids
+                        if str(empty_teams[candidate].get("name") or "").startswith(team_prefix)
+                    ),
                     "",
                 )
+            if not team_id:
+                team_id = next(iter(available_empty_team_ids), "")
             if not team_id:
                 team_id = client.create_team(f"{team_prefix}{request_id[-12:]}")
         redirect_url = _bundle_callback_url(
@@ -2549,20 +2570,21 @@ def _finalize_bundle_authorization(
                 (owner_user_id, platform, external_account_id),
             ).fetchone()
         if current is None:
-            current = conn.execute(
+            username_matches = conn.execute(
                 """
                 SELECT * FROM social_accounts
-                WHERE user_id = ? AND persona_id = ? AND platform = ?
-                  AND username = ? COLLATE NOCASE
-                LIMIT 1
+                WHERE user_id = ? AND platform = ? AND username = ? COLLATE NOCASE
+                ORDER BY CASE WHEN persona_id = ? THEN 0 ELSE 1 END, updated_at DESC
                 """,
                 (
                     owner_user_id,
-                    str(auth_row["persona_id"] or ""),
                     platform,
                     username,
+                    str(auth_row["persona_id"] or ""),
                 ),
-            ).fetchone()
+            ).fetchall()
+            if len(username_matches) == 1:
+                current = username_matches[0]
         if current is not None:
             account_id = str(current["id"] or "")
             conn.execute(
