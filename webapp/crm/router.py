@@ -11,6 +11,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -46,9 +47,12 @@ from .legacy_operations import (
     Provider,
     TenantContext,
     import_opc_history,
+    summarize_opc_history,
 )
+from .legacy_trace import build_legacy_trace
 from .ai_port import (
     analyze_demand,
+    comment_progress,
     generate_public_comment_drafts,
     generate_targeted_comment_followup,
 )
@@ -68,18 +72,24 @@ from .repository import (
     confirm_workflow_atomic,
     create_resource,
     create_workflow_atomic,
+    decode_cursor,
     dispatch_next_action_atomic,
+    encode_cursor,
     get_workflow,
     list_resource,
+    list_select_sql,
     new_id,
     now_ts,
     row_public,
+    row_public_list,
     retry_workflow_atomic,
     stop_schedule_atomic,
     transition_action_state_atomic,
     update_workflow_status,
     workspace_user_id,
 )
+
+
 from .service import (
     effective_module_state,
     module_settings,
@@ -91,6 +101,78 @@ from .service import (
     update_module_settings,
 )
 from .tracking import sign_tracking_token, verify_tracking_token
+
+
+def _task_page(conn: Any, *, user_id: int, limit: int = 50, cursor: str = "") -> dict[str, Any]:
+    page_size = min(max(int(limit), 1), 200)
+    params: list[Any] = [int(user_id)]
+    condition = ""
+    if cursor:
+        updated_at, record_id = decode_cursor(cursor)
+        condition = " AND (updated_at < ? OR (updated_at = ? AND id < ?))"
+        params.extend((updated_at, updated_at, record_id))
+    params.append(page_size + 1)
+    rows = conn.execute(
+        "SELECT " + list_select_sql(conn, "crm_workflows")
+        + " FROM crm_workflows WHERE user_id = ? AND active = 1" + condition
+        + " ORDER BY updated_at DESC,id DESC LIMIT ?",
+        tuple(params),
+    ).fetchall()
+    visible = rows[:page_size]
+    has_more = len(rows) > page_size
+    return {
+        "items": [row_public_list(row) for row in visible],
+        "has_more": has_more,
+        "next_cursor": encode_cursor(int(visible[-1]["updated_at"]), str(visible[-1]["id"])) if has_more and visible else "",
+        "limit": page_size,
+    }
+
+
+def _workflow_trend(conn: Any, *, user_id: int, current_ts: int) -> dict[str, list[dict[str, int | str]]]:
+    current = datetime.fromtimestamp(int(current_ts), tz=timezone.utc)
+    day_keys = [(current - timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(29, -1, -1)]
+    month_index = current.year * 12 + current.month - 1
+    month_keys = []
+    for offset in range(11, -1, -1):
+        year, month_zero = divmod(month_index - offset, 12)
+        month_keys.append(f"{year:04d}-{month_zero + 1:02d}")
+    year_keys = [f"{current.year - offset:04d}" for offset in range(4, -1, -1)]
+    keys_by_range = {"day": day_keys, "month": month_keys, "year": year_keys}
+    counts = {
+        range_key: {key: {"date": key, "created": 0, "completed": 0, "failed": 0} for key in keys}
+        for range_key, keys in keys_by_range.items()
+    }
+    oldest_year_start = int(datetime(current.year - 4, 1, 1, tzinfo=timezone.utc).timestamp())
+    rows = conn.execute(
+        "SELECT status,created_at,updated_at FROM crm_workflows "
+        "WHERE user_id=? AND active=1 AND (created_at>=? OR updated_at>=?)",
+        (int(user_id), oldest_year_start, oldest_year_start),
+    ).fetchall()
+
+    def key_for(timestamp: Any, range_key: str) -> str:
+        try:
+            value = datetime.fromtimestamp(int(timestamp or 0), tz=timezone.utc)
+        except (OverflowError, OSError, TypeError, ValueError):
+            return ""
+        if range_key == "year":
+            return value.strftime("%Y")
+        if range_key == "month":
+            return value.strftime("%Y-%m")
+        return value.strftime("%Y-%m-%d")
+
+    for row in rows:
+        status = str(row["status"] or "")
+        for range_key in keys_by_range:
+            created_key = key_for(row["created_at"], range_key)
+            if created_key in counts[range_key]:
+                counts[range_key][created_key]["created"] += 1
+            finished_key = key_for(row["updated_at"], range_key)
+            if finished_key in counts[range_key] and status in {"completed", "failed"}:
+                counts[range_key][finished_key][status] += 1
+    return {
+        range_key: [counts[range_key][key] for key in keys]
+        for range_key, keys in keys_by_range.items()
+    }
 
 PostCommitCallback = Callable[[dict[str, Any]], Any]
 
@@ -653,6 +735,7 @@ def create_crm_router(
             state = effective_module_state(conn, user_id=target_id, identity_is_admin=_identity_is_admin(user))
             counts = {}
             accounts: list[dict[str, Any]] = []
+            task_page = {"items": [], "has_more": False, "next_cursor": "", "limit": 50}
             if state["effective"]:
                 for resource, table in RESOURCE_TABLES.items():
                     counts[resource] = int(conn.execute(
@@ -685,6 +768,7 @@ def create_crm_router(
                     }
                     for row in account_rows
                 ]
+                task_page = _task_page(conn, user_id=target_id, limit=50)
             return {
                 "module": state,
                 "workspace": {
@@ -695,6 +779,11 @@ def create_crm_router(
                 },
                 "counts": counts,
                 "accounts": accounts,
+                "tasks": task_page["items"],
+                "task_page": {
+                    "has_more": task_page["has_more"],
+                    "next_cursor": task_page["next_cursor"],
+                },
                 "capabilities": public_capabilities(),
                 "api_version": "v1",
             }
@@ -719,6 +808,21 @@ def create_crm_router(
             _request_id(request),
         )
         return analyze_demand(tenant, payload, llm_provider=llm_provider)
+
+    @router.get("/api/crm/v1/comments/progress")
+    def public_comment_progress(
+        request: Request,
+        pool_id: str = Query(...),
+        tags: str = "",
+        batch_size: int = 10,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        tag_list = [item.strip() for item in str(tags or "").replace("，", ",").split(",") if item.strip()]
+        with db() as conn:
+            target_id, _ = _require_effective(conn, user)
+            pool = _ai_pool_snapshot(conn, user_id=target_id, pool_id=str(pool_id or "").strip())
+            tasks = _ai_task_snapshots(conn, user_id=target_id, pool_id=str(pool_id or "").strip())
+        return comment_progress(pool, tasks, tags=tag_list, batch_size=int(batch_size or 10))
 
     @router.post("/api/crm/v1/comments/drafts")
     def public_comment_drafts(
@@ -923,6 +1027,19 @@ def create_crm_router(
             "requested": len(usernames),
             "usernames": usernames,
         }
+
+    @router.get("/api/crm/v1/opc/history/summary")
+    def opc_history_summary(
+        request: Request,
+        locale: str = Query(default="zh-Hans", max_length=16),
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        with db() as conn:
+            target_id, _ = _require_effective(conn, user)
+            return summarize_opc_history(
+                conn,
+                TenantContext(target_id, locale, _request_id(request)),
+            )
 
     @router.post("/api/crm/v1/opc/history/query")
     def opc_history_query(
@@ -1566,30 +1683,7 @@ def create_crm_router(
     ):
         with db() as conn:
             target_id, _ = _require_effective(conn, user)
-            # Workflows use the same cursor contract as the other resources.
-            from .repository import decode_cursor, encode_cursor, list_select_sql, row_public_list
-
-            page_size = min(max(int(limit), 1), 200)
-            params: list[Any] = [target_id]
-            condition = ""
-            if cursor:
-                updated_at, record_id = decode_cursor(cursor)
-                condition = " AND (updated_at < ? OR (updated_at = ? AND id < ?))"
-                params.extend((updated_at, updated_at, record_id))
-            params.append(page_size + 1)
-            rows = conn.execute(
-                "SELECT " + list_select_sql(conn, "crm_workflows") +
-                " FROM crm_workflows WHERE user_id = ? AND active = 1" + condition +
-                " ORDER BY updated_at DESC,id DESC LIMIT ?",
-                tuple(params),
-            ).fetchall()
-            visible = rows[:page_size]
-            return {
-                "items": [row_public_list(row) for row in visible],
-                "has_more": len(rows) > page_size,
-                "next_cursor": encode_cursor(int(visible[-1]["updated_at"]), str(visible[-1]["id"])) if len(rows) > page_size and visible else "",
-                "limit": page_size,
-            }
+            return _task_page(conn, user_id=target_id, limit=limit, cursor=cursor)
 
     @router.post("/api/crm/v1/preflight")
     def preflight(
@@ -1668,6 +1762,10 @@ def create_crm_router(
         with db() as conn:
             target_id, _ = _require_effective(conn, user)
             workflow = get_workflow(conn, user_id=target_id, workflow_id=workflow_id)
+            legacy_trace = build_legacy_trace(workflow)
+            workflow.pop("legacy_payload", None)
+            if legacy_trace is not None:
+                workflow["legacy_trace"] = legacy_trace
             workflow["evidence"] = [
                 {
                     "action_id": item["id"],
@@ -2057,6 +2155,7 @@ def create_crm_router(
                 "event_types": {row["event_type"]: int(row["count"]) for row in event_types},
                 "action_states": state_counts,
                 "confirmed_action_types": {row["action_type"]: int(row["count"]) for row in action_types},
+                "workflow_trend": _workflow_trend(conn, user_id=target_id, current_ts=now_ts()),
                 "funnel": {
                     "submitted": submitted,
                     "confirmed": state_counts.get("confirmed", 0),

@@ -138,6 +138,29 @@ export function metricLabel(key: string, language: "zh-Hans" | "zh-Hant") {
   return key;
 }
 
+export function relationshipStatusLabel(value: unknown, language: "zh-Hans" | "zh-Hant") {
+  const normalized = String(value || "").trim().toLowerCase();
+  const labels: Record<string, [string, string]> = {
+    follows_sender: ["对方已关注", "對方已關注"],
+    mutual: ["双方互相关注", "雙方互相關注"],
+    following: ["已关注对方", "已關注對方"],
+    not_following: ["尚未建立关注关系", "尚未建立關注關係"],
+    verified: ["已完成关系核验", "已完成關係核驗"],
+    none: ["双方未建立关注关系", "雙方未建立關注關係"],
+    unknown: ["待复核", "待複核"],
+  };
+  const pair = labels[normalized];
+  return pair ? pair[language === "zh-Hant" ? 1 : 0] : "";
+}
+
+export function safeMetricLabel(value: unknown, language: "zh-Hans" | "zh-Hant", fallback = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return fallback;
+  const label = metricLabel(raw, language);
+  if (label !== raw || /[\u3400-\u9fff]/.test(label)) return label;
+  return fallback;
+}
+
 export function localizeStoredTitle(raw: string, language: "zh-Hans" | "zh-Hant") {
   const hant = language === "zh-Hant";
   const text = String(raw || "").trim();
@@ -342,14 +365,9 @@ export function friendlyNotice(text: string) {
     .trim();
 }
 
-export const CHART_COLORS = ["#356b91", "#4b6478", "#253746", "#8a674d", "#9c5960", "#5c6f82", "#7b8a99"];
+export const CHART_COLORS = ["#0b72e7", "#00a86b", "#ff9500", "#7c3aed", "#e63946", "#ec4899", "#00a8cc", "#84cc16"];
 
-export function chartColor(index: number, tone = "") {
-  if (tone === "complete") return "#356b91";
-  if (tone === "active") return "#4b6478";
-  if (tone === "warning") return "#8a674d";
-  if (tone === "danger") return "#9c5960";
-  if (tone === "neutral") return "#8b97a3";
+export function chartColor(index: number, _tone = "") {
   return CHART_COLORS[index % CHART_COLORS.length];
 }
 
@@ -386,4 +404,34 @@ export function dailyTrend(tasks: Array<Record<string, unknown>>, days = 14) {
     }
   }
   return keys.map((date) => ({ date, created: created[date], completed: completed[date], failed: failed[date] }));
+}
+
+export type TrendRange = "day" | "month" | "year";
+
+export function workflowTrend(tasks: Array<Record<string, unknown>>, range: TrendRange) {
+  const end = new Date();
+  end.setHours(0, 0, 0, 0);
+  const limits: Record<TrendRange, number> = { day: 30, month: 12, year: 5 };
+  const keys: string[] = [];
+  for (let offset = limits[range] - 1; offset >= 0; offset -= 1) {
+    const cursor = new Date(end);
+    if (range === "year") cursor.setFullYear(end.getFullYear() - offset);
+    else if (range === "month") cursor.setMonth(end.getMonth() - offset);
+    else cursor.setDate(end.getDate() - offset);
+    keys.push(range === "year" ? String(cursor.getFullYear()) : cursor.toISOString().slice(0, range === "month" ? 7 : 10));
+  }
+  const counts = Object.fromEntries(keys.map((key) => [key, { date: key, created: 0, completed: 0, failed: 0 }])) as Record<string, { date: string; created: number; completed: number; failed: number }>;
+  const periodKey = (value: unknown) => {
+    const day = dayKey(value);
+    return range === "year" ? day.slice(0, 4) : range === "month" ? day.slice(0, 7) : day;
+  };
+  for (const task of tasks) {
+    const opened = periodKey(task.created_at || task.updated_at);
+    if (opened in counts) counts[opened].created += 1;
+    const status = String(task.status || "");
+    const finished = periodKey(task.updated_at || task.created_at);
+    if (finished in counts && status === "completed") counts[finished].completed += 1;
+    if (finished in counts && status === "failed") counts[finished].failed += 1;
+  }
+  return keys.map((key) => counts[key]);
 }

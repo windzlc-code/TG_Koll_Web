@@ -1,22 +1,27 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { crmApi, taskItems } from "./api";
 import { createSinglePollScheduler, isModulePolicyError, mergeCursorPage, mergePolledItems } from "./runtime-helpers.js";
 import type { CrmTask } from "./types";
 
 type TaskPayload = Awaited<ReturnType<typeof crmApi.tasks>>;
 
-function nextCursor(payload: TaskPayload) {
-  return Array.isArray(payload) ? "" : String(payload.next_cursor || "");
+function nextCursor(payload: TaskPayload, requestedCursor = "") {
+  if (Array.isArray(payload) || payload.has_more === false) return "";
+  const next = String(payload.next_cursor || "");
+  return requestedCursor && next === requestedCursor ? "" : next;
 }
 
-export function useTaskPolling(seed: CrmTask[] | undefined, onPolicyFailure: () => void, enabled = true) {
+export function useTaskPolling(seed: CrmTask[] | undefined, onPolicyFailure: () => void, enabled = true, seedPage?: { next_cursor?: string | null; has_more?: boolean }) {
   const [tasks, setTasks] = useState<CrmTask[]>(seed || []);
   const [pollError, setPollError] = useState(false);
   const [cursor, setCursor] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState(false);
+  const [paginationStarted, setPaginationStarted] = useState(false);
   const failures = useRef(0);
   const mounted = useRef(true);
   const loadedExtraPages = useRef(false);
+  const loadMoreInFlight = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -36,27 +41,32 @@ export function useTaskPolling(seed: CrmTask[] | undefined, onPolicyFailure: () 
   }, [onPolicyFailure]);
 
   const loadMore = useCallback(async () => {
-    if (!cursor || loadingMore) return;
+    if (!cursor || loadMoreInFlight.current) return;
+    const requestedCursor = cursor;
+    loadMoreInFlight.current = true;
     setLoadingMore(true);
+    setLoadMoreError(false);
+    setPaginationStarted(true);
     try {
-      const payload = await crmApi.tasks(cursor, 50);
+      const payload = await crmApi.tasks(requestedCursor, 50);
       if (!mounted.current) return;
       loadedExtraPages.current = true;
       setTasks((current) => mergeCursorPage(current, taskItems(payload)) as CrmTask[]);
-      setCursor(nextCursor(payload));
-      setPollError(false);
+      setCursor(nextCursor(payload, requestedCursor));
     } catch (error) {
       if (!mounted.current) return;
-      setPollError(true);
+      setLoadMoreError(true);
       if (isModulePolicyError(error)) onPolicyFailure();
     } finally {
+      loadMoreInFlight.current = false;
       if (mounted.current) setLoadingMore(false);
     }
-  }, [cursor, loadingMore, onPolicyFailure]);
+  }, [cursor, onPolicyFailure]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (seed) setTasks((current) => mergePolledItems(current, seed) as CrmTask[]);
-  }, [seed]);
+    if (seedPage) setCursor(seedPage.has_more === false ? "" : String(seedPage.next_cursor || ""));
+  }, [seed, seedPage?.has_more, seedPage?.next_cursor]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -78,5 +88,5 @@ export function useTaskPolling(seed: CrmTask[] | undefined, onPolicyFailure: () 
     };
   }, [enabled, refresh]);
 
-  return { tasks, pollError, refresh, loadMore, hasMore: Boolean(cursor), loadingMore };
+  return { tasks, pollError, refresh, loadMore, hasMore: Boolean(cursor), loadingMore, loadMoreError, paginationStarted };
 }

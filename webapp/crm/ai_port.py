@@ -441,6 +441,68 @@ def _comment_progress(pool: Mapping[str, Any], tasks: Sequence[Mapping[str, Any]
     }
 
 
+def comment_progress(
+    pool: Mapping[str, Any],
+    tasks: Sequence[Mapping[str, Any]] = (),
+    *,
+    tags: Sequence[str] = (),
+    batch_size: int = 10,
+) -> JsonDict:
+    progress = _comment_progress(pool, tasks)
+    size = int(batch_size or 10)
+    if size not in {5, 10, 20}:
+        size = 10
+    tag_counts: dict[str, int] = {}
+    for raw_lead in pool.get("leads") if isinstance(pool.get("leads"), list) else []:
+        if not isinstance(raw_lead, Mapping):
+            continue
+        for tag in _string_list(raw_lead.get("tags"), 12, 80):
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    wanted = {item.casefold() for item in _string_list(list(tags), 40, 80)}
+    if wanted:
+        allowed_ids = {
+            _clean(raw_lead.get("id"), 180)
+            for raw_lead in (pool.get("leads") if isinstance(pool.get("leads"), list) else [])
+            if isinstance(raw_lead, Mapping)
+            and wanted.intersection(item.casefold() for item in _string_list(raw_lead.get("tags"), 12, 80))
+        }
+        progress["remainingLeadIds"] = [lead_id for lead_id in progress["remainingLeadIds"] if lead_id in allowed_ids]
+        progress["processedLeadIds"] = [lead_id for lead_id in progress["processedLeadIds"] if lead_id in allowed_ids]
+        progress["remaining"] = len(progress["remainingLeadIds"])
+        progress["processed"] = len(progress["processedLeadIds"])
+        progress["total"] = progress["remaining"] + progress["processed"]
+    progress["batchLimit"] = 20
+    progress["requestedBatchSize"] = size
+    progress["batchSize"] = min(size, int(progress["remaining"] or 0))
+    progress["nextLeadIds"] = list(progress["remainingLeadIds"])[: progress["batchSize"]]
+    lead_by_id = {
+        _clean(raw_lead.get("id"), 180): raw_lead
+        for raw_lead in (pool.get("leads") if isinstance(pool.get("leads"), list) else [])
+        if isinstance(raw_lead, Mapping) and _clean(raw_lead.get("id"), 180)
+    }
+    progress["nextLeads"] = [
+        {
+            "id": lead_id,
+            "lead_id": lead_id,
+            "username": _clean(lead.get("username"), 120),
+            "display_name": _clean(lead.get("displayName") or lead.get("display_name"), 120),
+            "platform": _clean(lead.get("platform"), 20) or "threads",
+            "source_url": _clean(lead.get("sourceUrl") or lead.get("source_url"), 1_200),
+            "tags": _string_list(lead.get("tags"), 12, 80),
+        }
+        for lead_id in progress["nextLeadIds"]
+        for lead in [lead_by_id.get(lead_id) or {}]
+        if isinstance(lead, Mapping)
+    ]
+    progress["poolName"] = _clean(pool.get("name"), 120)
+    progress["poolTags"] = _string_list(pool.get("tags"), 50, 80)
+    progress["tagOptions"] = [
+        {"tag": tag, "count": count}
+        for tag, count in sorted(tag_counts.items(), key=lambda item: (-item[1], item[0]))[:40]
+    ]
+    return progress
+
+
 def _localized(locale: str, simplified: str, traditional: str) -> str:
     return simplified if locale == "zh-Hans" else traditional
 

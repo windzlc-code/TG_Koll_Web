@@ -1,18 +1,20 @@
-import { Children, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Children, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 
 import { CrmApiError, adminWorkspaceContext, crmApi, payloadItems } from "./api";
 import { catalog, localizedError, operationCatalog, readLanguage, type Messages } from "./i18n";
 import { Icon } from "./icons";
 import { PlatformLogo, normalizePlatform, platformLabel } from "./platform";
-import { DestinationsView, GroupsView, MixBar, PoolsView, PublicEngageView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
+import { CollectionView, GroupsView, MixBar, PoolsView, PublicEngageView, SchedulesView, StructuredEvidence, TemplatesView } from "./BusinessViews";
 import { BarChart, DonutChart, LineChart } from "./charts";
-import { chartColor, dailyTrend, eventPreviewLabel, groupEventMix, humanText, isEnglishMachineLabel, isOpaqueUserValue, isTechnicalId, isTechnicalKey, localizeStoredTitle, metricLabel, mixFromValues, mixParts, taskTitle, workflowLabel } from "./present";
+import { chartColor, eventPreviewLabel, groupEventMix, humanText, isEnglishMachineLabel, isOpaqueUserValue, isTechnicalId, isTechnicalKey, localizeStoredTitle, metricLabel, mixFromValues, mixParts, relationshipStatusLabel, taskTitle, workflowLabel, workflowTrend, type TrendRange } from "./present";
 import { useTaskPolling } from "./useTaskPolling";
+import { useIntersectionLoadMore } from "./useIntersectionLoadMore";
 import { WorkflowWizard, type WizardView, type WorkflowSeed } from "./WorkflowWizard";
 import { mergeCursorPage } from "./runtime-helpers.js";
 import { applyDockPill, applySegmentPill, prefersReducedMotion } from "./segment-motion";
 import { ConfirmHost, ConsoleModal, clearPageScrollLock, requestConfirm } from "./confirm-dialog";
-import { SelectMenu } from "./select-menu";
+import { FilterMenu, SelectMenu } from "./select-menu";
+import { PublicToastHost, publicToast } from "./public-toast";
 import type { BootstrapPayload, CrmAccount, CrmAction, CrmStep, CrmTask, Language, ViewId } from "./types";
 
 declare global {
@@ -26,7 +28,7 @@ declare global {
 
 const viewIds: ViewId[] = [
   "overview", "collect", "pools", "public", "outreach", "groups",
-  "relationships", "tasks", "analytics", "schedules", "templates", "destinations", "accounts", "settings",
+  "tasks", "analytics", "schedules", "templates", "accounts", "settings",
 ];
 
 type NavViewId = "overview" | "collect" | "public" | "tasks" | "settings";
@@ -35,16 +37,14 @@ const viewAliases: Partial<Record<ViewId, ViewId>> = {
   pools: "collect",
   outreach: "public",
   groups: "public",
-  relationships: "public",
   analytics: "tasks",
   schedules: "settings",
   templates: "settings",
-  destinations: "settings",
   accounts: "settings",
 };
-const collectTabs: ViewId[] = ["collect"];
-const engageTabs: ViewId[] = ["public", "outreach", "groups", "relationships"];
-const settingTabs: ViewId[] = ["accounts", "templates", "destinations", "schedules"];
+const collectTabs: ViewId[] = ["collect", "pools"];
+const engageTabs: ViewId[] = ["public", "outreach", "groups"];
+const settingTabs: ViewId[] = ["accounts", "templates", "schedules"];
 
 const endpointByView: Partial<Record<ViewId, string>> = {
   collect: "hotspots",
@@ -52,27 +52,22 @@ const endpointByView: Partial<Record<ViewId, string>> = {
   public: "events",
   outreach: "tasks",
   groups: "groups",
-  relationships: "relationships",
   schedules: "schedules",
   templates: "templates",
-  destinations: "destinations",
-  settings: "destinations",
 };
 
-const writeViews = new Set<ViewId>(["collect", "public", "outreach", "groups", "relationships"]);
+const writeViews = new Set<ViewId>(["collect", "public", "outreach", "groups"]);
 const workflowActionByView: Partial<Record<ViewId, { actionType: string; write: boolean; sku?: string }>> = {
   collect: { actionType: "collect_profile", write: false },
   public: { actionType: "public_comment", write: true, sku: "threads_auto_reply_batch" },
   outreach: { actionType: "direct_message", write: true, sku: "crm_direct_message_batch" },
   groups: { actionType: "threads_group_invite_post", write: true, sku: "crm_group_invite_batch" },
-  relationships: { actionType: "relationship_verify", write: false },
 };
 const capabilityByView: Partial<Record<ViewId, string>> = {
   collect: "customer_collection",
   public: "public_interaction",
   outreach: "direct_message_batch",
   groups: "threads_community_post",
-  relationships: "relationship_live_verify",
 };
 const activeStatuses = new Set(["queued", "running", "manual_required", "paused_by_user", "paused_by_policy", "unknown", "awaiting_confirmation"]);
 
@@ -83,6 +78,8 @@ function navViewOf(view: ViewId): NavViewId {
 function hashView(): ViewId {
   const value = window.location.hash.replace(/^#\/?/, "");
   if (value === "ai") return "collect";
+  if (value === "relationships") return "outreach";
+  if (value === "destinations" || value === "ai-config") return "accounts";
   return viewIds.includes(value as ViewId) ? value as ViewId : "overview";
 }
 
@@ -139,7 +136,8 @@ function statusTone(status = "") {
 
 function statusText(status: string | undefined, messages: Messages) {
   if (!status) return "—";
-  return messages.statuses[status as keyof typeof messages.statuses] || status;
+  const language = document.documentElement.lang === "zh-Hant" ? "zh-Hant" : "zh-Hans";
+  return messages.statuses[status as keyof typeof messages.statuses] || relationshipStatusLabel(status, language) || messages.statuses.unknown;
 }
 
 function operationText(value: string | undefined, messages: Messages) {
@@ -291,6 +289,131 @@ function taskDetailSteps(detail: Record<string, unknown> | null): CrmStep[] {
   return detail && Array.isArray(detail.steps) ? detail.steps as CrmStep[] : [];
 }
 
+type LegacyTrace = {
+  source?: string;
+  kind?: string;
+  summary?: Record<string, string | number | boolean | null>;
+  steps?: Array<{ key?: string; status?: string; count?: number; warning?: string }>;
+  keyword_evidence?: Array<{ query?: string; count?: number; source_url?: string; warning?: string }>;
+  records?: Array<{
+    username?: string;
+    keyword?: string;
+    text?: string;
+    permalink?: string;
+    profile_url?: string;
+    source_url?: string;
+    timestamp?: string | number;
+    platform?: string;
+  }>;
+  source_details_missing?: boolean;
+};
+
+function legacyTraceOf(detail: Record<string, unknown> | null): LegacyTrace | null {
+  const trace = detail?.legacy_trace;
+  if (!trace || typeof trace !== "object" || Array.isArray(trace)) return null;
+  const normalized = trace as LegacyTrace;
+  return normalized.source === "legacy_import" ? normalized : null;
+}
+
+function safeExternalUrl(value: unknown) {
+  const url = String(value || "").trim();
+  if (!/^https:\/\//i.test(url)) return "";
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const allowedHosts = ["threads.com", "threads.net", "instagram.com"];
+    return parsed.protocol === "https:" && allowedHosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`)) ? parsed.href : "";
+  } catch {
+    return "";
+  }
+}
+
+const legacySummaryLabels: Record<Language, Record<string, string>> = {
+  "zh-Hans": {
+    original_status: "原始状态", trigger: "触发方式", date_key: "采集日期", started_at: "开始时间", finished_at: "完成时间",
+    error: "异常说明", keywords_total: "关键词数量", keywords_truncated: "关键词是否截断", records_total: "采集结果数量",
+    records_truncated: "结果是否截断", warning_count: "警告数量", sender_username: "采集账号", daily_quota: "每日配额",
+    limit: "每关键词数量", search_mode: "搜索排序", search_type: "搜索类型", media_filter: "媒体筛选", mode: "采集方式",
+    pool_id: "客户池", progress: "完成进度", collected: "已采集", duplicates_removed: "已去重", filtered_out: "已过滤",
+    instagram: "Instagram 结果", matched: "匹配数量", mortgage: "房贷相关", raw_matches: "原始匹配", threads: "Threads 结果",
+    name: "集合名称", platform: "平台", created_at: "建立时间", contact_count: "客户数量", post_count: "帖子数量",
+    tag_count: "标签数量", tags: "标签",
+  },
+  "zh-Hant": {
+    original_status: "原始狀態", trigger: "觸發方式", date_key: "採集日期", started_at: "開始時間", finished_at: "完成時間",
+    error: "異常說明", keywords_total: "關鍵詞數量", keywords_truncated: "關鍵詞是否截斷", records_total: "採集結果數量",
+    records_truncated: "結果是否截斷", warning_count: "警告數量", sender_username: "採集帳號", daily_quota: "每日配額",
+    limit: "每關鍵詞數量", search_mode: "搜尋排序", search_type: "搜尋類型", media_filter: "媒體篩選", mode: "採集方式",
+    pool_id: "客戶池", progress: "完成進度", collected: "已採集", duplicates_removed: "已去重", filtered_out: "已過濾",
+    instagram: "Instagram 結果", matched: "匹配數量", mortgage: "房貸相關", raw_matches: "原始匹配", threads: "Threads 結果",
+    name: "集合名稱", platform: "平台", created_at: "建立時間", contact_count: "客戶數量", post_count: "貼文數量",
+    tag_count: "標籤數量", tags: "標籤",
+  },
+};
+
+const legacyStepLabels: Record<Language, Record<string, string>> = {
+  "zh-Hans": { run: "任务执行", keyword_evidence: "关键词查询", records: "采集结果", collection_metrics: "采集统计", collection_contacts: "客户提取", collection_posts: "帖子来源", legacy_step: "历史步骤" },
+  "zh-Hant": { run: "任務執行", keyword_evidence: "關鍵詞查詢", records: "採集結果", collection_metrics: "採集統計", collection_contacts: "客戶提取", collection_posts: "貼文來源", legacy_step: "歷史步驟" },
+};
+
+function legacySummaryValue(key: string, value: string | number | boolean | null, messages: Messages, language: Language) {
+  if (key === "original_status") return statusText(String(value || ""), messages);
+  if (["date_key", "started_at", "finished_at", "created_at"].includes(key)) return localizedDate(value, language);
+  if (key === "platform") return platformLabel(normalizePlatform(value));
+  const values: Record<Language, Record<string, string>> = {
+    "zh-Hans": { manual: "手动", schedule: "定时排程", top: "热门优先", recent: "最新优先", keyword: "关键词", all: "全部", image: "图片", video: "视频", no_media: "纯文字" },
+    "zh-Hant": { manual: "手動", schedule: "定時排程", top: "熱門優先", recent: "最新優先", keyword: "關鍵詞", all: "全部", image: "圖片", video: "影片", no_media: "純文字" },
+  };
+  return values[language][String(value || "").toLowerCase()] || humanText(value);
+}
+
+function LegacyTaskTrace({ trace, messages, language }: { trace: LegacyTrace; messages: Messages; language: Language }) {
+  const summary = Object.entries(trace.summary || {}).filter(([, value]) => value !== null && value !== undefined && value !== "");
+  const steps = Array.isArray(trace.steps) ? trace.steps : [];
+  const keywords = Array.isArray(trace.keyword_evidence) ? trace.keyword_evidence : [];
+  const records = Array.isArray(trace.records) ? trace.records : [];
+  return <section className="crm-legacy-trace" aria-labelledby="crmLegacyTraceTitle">
+    <div className="crm-legacy-trace-notice" role="note"><Icon name="warning" /><div><strong id="crmLegacyTraceTitle">{messages.legacyImportedNotice}</strong>{trace.kind && <small>{workflowLabel(trace.kind, language)}</small>}</div></div>
+    {summary.length > 0 && <section>
+      <h3>{messages.legacyTraceSummary}</h3>
+      <dl className="crm-legacy-summary">{summary.map(([key, value]) => <div key={key}><dt>{legacySummaryLabels[language][key] || metricLabel(key, language)}</dt><dd>{legacySummaryValue(key, value, messages, language)}</dd></div>)}</dl>
+    </section>}
+    {steps.length > 0 && <section>
+      <h3>{messages.legacyTraceSteps}</h3>
+      <ol className="crm-legacy-steps">{steps.map((step, index) => <li key={`${String(step.key || "step")}-${index}`}>
+        <span className="crm-timeline-mark" aria-hidden="true" />
+        <div><strong>{legacyStepLabels[language][String(step.key || "")] || eventPreviewLabel(String(step.key || ""), language) || workflowLabel(String(step.key || ""), language) || `${messages.taskStep} ${index + 1}`}</strong>{step.warning && <small>{step.warning}</small>}</div>
+        <span className="crm-legacy-step-result">{typeof step.count === "number" ? step.count : ""}{step.status && <StatusBadge status={step.status} messages={messages} />}</span>
+      </li>)}</ol>
+    </section>}
+    {keywords.length > 0 && <section>
+      <h3>{messages.legacyKeywordEvidence}</h3>
+      <div className="crm-legacy-keywords">{keywords.map((item, index) => {
+        const sourceUrl = safeExternalUrl(item.source_url);
+        return <article key={`${String(item.query || "keyword")}-${index}`}><div><strong>{humanText(item.query, "—")}</strong>{item.warning && <small>{item.warning}</small>}</div>{typeof item.count === "number" && <span>{item.count}</span>}{sourceUrl && <a href={sourceUrl} target="_blank" rel="noreferrer noopener"><Icon name="external" />{messages.legacySourceLink}</a>}</article>;
+      })}</div>
+    </section>}
+    {records.length > 0 && <section>
+      <h3>{messages.legacyCollectedRecords}</h3>
+      <div className="crm-legacy-records">{records.map((record, index) => {
+        const username = String(record.username || "").replace(/^@/, "");
+        const links: Array<{ href: string; label: string }> = [
+          { href: safeExternalUrl(record.profile_url), label: messages.legacyProfileLink },
+          { href: safeExternalUrl(record.permalink), label: messages.legacyContentLink },
+          { href: safeExternalUrl(record.source_url), label: messages.legacySourceLink },
+        ].filter((item, linkIndex, all) => Boolean(item.href) && all.findIndex((candidate) => candidate.href === item.href) === linkIndex);
+        const platform = record.platform ? platformLabel(normalizePlatform(record.platform)) : "";
+        return <article key={`${username || String(record.permalink || record.source_url || "record")}-${index}`}>
+          <div className="crm-legacy-record-head"><strong>{username ? `@${username}` : `${messages.legacyCollectedRecords} ${index + 1}`}</strong><small>{[platform, record.timestamp ? localizedDate(record.timestamp, language) : ""].filter(Boolean).join(" · ")}</small></div>
+          {record.keyword && <span className="crm-member-tag">{record.keyword}</span>}
+          {record.text && <p>{record.text}</p>}
+          {links.length > 0 && <div className="crm-inline-actions">{links.map((link) => <a href={link.href} target="_blank" rel="noreferrer noopener" key={link.href}><Icon name="external" />{link.label}</a>)}</div>}
+        </article>;
+      })}</div>
+    </section>}
+    {trace.source_details_missing && <p className="crm-legacy-source-missing"><Icon name="warning" />{messages.legacySourceDetailsMissing}</p>}
+  </section>;
+}
 function manualAccountId(detail: Record<string, unknown> | null) {
   for (const action of taskDetailActions(detail)) {
     if (action.account_id) return String(action.account_id);
@@ -317,22 +440,36 @@ function TaskCard({ task, messages, language, onAction, onChanged, detailMode = 
   const status = String(task.status || "queued");
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [detailOpen, setDetailOpen] = useState(detailMode);
+  const [detailState, setDetailState] = useState<"idle" | "loading" | "ready" | "error">(detailMode ? "loading" : "idle");
+  const [detailError, setDetailError] = useState("");
+  const [evidenceError, setEvidenceError] = useState("");
   const [manualBusy, setManualBusy] = useState("");
   const [manualError, setManualError] = useState("");
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [followup, setFollowup] = useState<{ action: CrmAction; kind: "followup_reply" | "nurture_reply"; comment: string; sourceUrl: string; preflight?: Awaited<ReturnType<typeof crmApi.preflight>> } | null>(null);
   const [followupConfirmed, setFollowupConfirmed] = useState(false);
+  const detailRequestGeneration = useRef(0);
+  const detailRequestInFlight = useRef(false);
   const hasRealProgress = typeof task.progress === "number" || (typeof task.processed === "number" && typeof task.total === "number" && task.total > 0);
   const progress = typeof task.progress === "number" ? task.progress : task.total ? Math.round(((task.processed || 0) / task.total) * 100) : null;
   const loadDetail = async (showBusy = true) => {
-    if (showBusy) setManualBusy("detail");
-    setManualError("");
+    if (!id || detailRequestInFlight.current) return;
+    const generation = ++detailRequestGeneration.current;
+    detailRequestInFlight.current = true;
+    if (showBusy) {
+      setManualBusy("detail");
+      setDetailState("loading");
+      setDetailError("");
+    }
     try {
-      const [taskDetail, evidencePayload] = await Promise.all([
+      const [taskDetail, evidenceResult] = await Promise.all([
         crmApi.task(id),
-        crmApi.taskEvidence(id).catch(() => ({ items: [], evidence: [] })),
+        crmApi.taskEvidence(id)
+          .then((payload) => ({ payload, error: null as unknown }))
+          .catch((error: unknown) => ({ payload: null, error })),
       ]);
-      const evidenceItems = evidencePayload.items || evidencePayload.evidence || [];
+      if (generation !== detailRequestGeneration.current) return;
+      const evidenceItems = evidenceResult.payload?.items || evidenceResult.payload?.evidence || [];
       const evidenceByAction = new Map(evidenceItems.map((item) => [String(item.action_id || item.id || ""), item]));
       const taskActions = Array.isArray(taskDetail.actions) ? taskDetail.actions as Array<Record<string, unknown>> : [];
       const actions = taskActions.length
@@ -342,11 +479,21 @@ function TaskCard({ task, messages, language, onAction, onChanged, detailMode = 
         })
         : evidenceItems.map((item) => ({ id: item.action_id || item.id, state: item.state, evidence: item.evidence || {} }));
       setDetail({ ...taskDetail, actions, evidence: evidenceItems });
+      setDetailState("ready");
+      setDetailError("");
+      setEvidenceError(evidenceResult.error ? localizedError(evidenceResult.error, messages) : "");
       if (showBusy) setDetailOpen(true);
     } catch (error) {
-      setManualError(localizedError(error, messages));
+      if (generation !== detailRequestGeneration.current) return;
+      if (showBusy) {
+        setDetailState("error");
+        setDetailError(localizedError(error, messages));
+      }
     } finally {
-      if (showBusy) setManualBusy("");
+      if (generation === detailRequestGeneration.current) {
+        detailRequestInFlight.current = false;
+        if (showBusy) setManualBusy("");
+      }
     }
   };
   useEffect(() => {
@@ -359,6 +506,10 @@ function TaskCard({ task, messages, language, onAction, onChanged, detailMode = 
     setDetailOpen(true);
     void loadDetail();
   }, [detailMode, id]);
+  useEffect(() => () => {
+    detailRequestGeneration.current += 1;
+    detailRequestInFlight.current = false;
+  }, []);
   const removeTask = async () => {
     if (!await requestConfirm({
       title: messages.deleteTitle,
@@ -435,6 +586,7 @@ function TaskCard({ task, messages, language, onAction, onChanged, detailMode = 
   const unknownActions = taskDetailActions(detail).filter((action) => action.state === "unknown");
   const detailActions = taskDetailActions(detail);
   const detailSteps = taskDetailSteps(detail);
+  const legacyTrace = legacyTraceOf(detail);
   const accountId = manualAccountId(detail);
   const loginRequired = needsLoginTakeover(detail) && Boolean(accountId);
   const title = taskTitle(task as Record<string, unknown>, messages.untitledTask, language);
@@ -447,16 +599,30 @@ function TaskCard({ task, messages, language, onAction, onChanged, detailMode = 
   const showMessage = Boolean(message && message !== title && /[\u3400-\u9fff]/.test(message));
   const processed = Number(task.processed || 0);
   const total = Number(task.total || 0);
-  return <article className={`crm-task-card${detailMode ? " crm-task-card--detail" : ""}`}>
-    <div className="crm-task-card-head">
-      <div><strong>{title}</strong><small>{meta}</small></div>
-      <StatusBadge status={status} messages={messages} />
+  const hasSummary = total > 0 || Number(task.evidence_count || 0) > 0;
+  const hasTaskMetrics = (hasRealProgress && progress !== null) || hasSummary;
+  const openFromCard = (event: ReactMouseEvent<HTMLElement>) => {
+    if (!onOpen || detailMode) return;
+    if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) return;
+    onOpen();
+  };
+  return <article
+    className={`crm-task-card${detailMode ? " crm-task-card--detail" : ""}${!detailMode && !hasTaskMetrics ? " crm-task-card--no-progress" : ""}${!detailMode && onOpen ? " is-interactive" : ""}`}
+    onClick={openFromCard}
+  >
+    <div className="crm-task-card-main">
+      <div className="crm-task-card-head">
+        <div><strong>{title}</strong><small>{meta}</small></div>
+        <StatusBadge status={status} messages={messages} />
+      </div>
+      {showMessage && <p>{message}</p>}
     </div>
-    {showMessage && <p>{message}</p>}
-    {hasRealProgress && progress !== null && <div className="crm-progress" role="progressbar" aria-label={messages.taskProgress} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.max(0, Math.min(100, progress))}><span style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div>}
-    {(total > 0 || Number(task.evidence_count || 0) > 0) && <div className="crm-task-card-summary">
-      {total > 0 && <span>{messages.taskProgressSummary(processed, total)}</span>}
-      {Number(task.evidence_count || 0) > 0 && <span>{messages.evidenceAvailable} {Number(task.evidence_count)}</span>}
+    {hasTaskMetrics && <div className="crm-task-card-progress-cell">
+      {hasRealProgress && progress !== null && <div className="crm-progress" role="progressbar" aria-label={messages.taskProgress} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.max(0, Math.min(100, progress))}><span style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} /></div>}
+      {hasSummary && <div className="crm-task-card-summary">
+        {total > 0 && <span>{messages.taskProgressSummary(processed, total)}</span>}
+        {Number(task.evidence_count || 0) > 0 && <span>{messages.evidenceAvailable} {Number(task.evidence_count)}</span>}
+      </div>}
     </div>}
     <div className="crm-task-foot">
       <div className="row-actions">
@@ -464,16 +630,20 @@ function TaskCard({ task, messages, language, onAction, onChanged, detailMode = 
         {detailMode && status.startsWith("paused") && <button type="button" onClick={() => onAction(task, "resume")}>{messages.resume}</button>}
         {detailMode && status === "failed" && <button type="button" onClick={() => onAction(task, "retry")}>{messages.retryAction}</button>}
         {detailMode && status === "awaiting_confirmation" && <button type="button" onClick={() => onAction(task, "confirm")}>{messages.confirmTask}</button>}
-        {!detailMode && onOpen && <button type="button" onClick={onOpen}>{messages.inspectTask}</button>}
+        {!detailMode && onOpen && <button type="button" className="unified-action-icon-button" title={messages.inspectTask} aria-label={messages.inspectTask} onClick={onOpen}><Icon name="arrow" /></button>}
         {detailMode && ["awaiting_confirmation", "queued", "running", "manual_required", "paused_by_user", "paused_by_policy"].includes(status) && <button type="button" className="muted" onClick={() => onAction(task, "cancel")}>{messages.cancel}</button>}
         {["completed", "failed", "cancelled"].includes(status) && <button type="button" className="danger unified-action-icon-button" disabled={manualBusy === "delete"} title={language === "zh-Hant" ? "刪除" : "删除"} aria-label={language === "zh-Hant" ? "刪除" : "删除"} onClick={() => void removeTask()}><Icon name="trash" className="ui-trash-icon" /></button>}
       </div>
     </div>
     {manualError && <div className="crm-inline-error" role="alert"><Icon name="warning" />{manualError}</div>}
-    {detailMode && detailOpen && <div className="crm-manual-panel">
-      <section className="crm-evidence-timeline" aria-labelledby={`crm-evidence-${id}`}>
+    {detailMode && detailState === "loading" && <div className="crm-list-skeleton crm-task-detail-loading" aria-live="polite"><span>{messages.loadingData}</span><i /><i /></div>}
+    {detailMode && detailState === "error" && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{detailError || messages.dataError}</span><button type="button" onClick={() => void loadDetail()}><Icon name="refresh" />{messages.retry}</button></div>}
+    {detailMode && detailState === "ready" && legacyTrace && <LegacyTaskTrace trace={legacyTrace} messages={messages} language={language} />}
+    {detailMode && detailOpen && detailState === "ready" && (!legacyTrace || detailSteps.length > 0 || detailActions.length > 0 || Boolean(evidenceError) || loginRequired || unknownActions.length > 0) && <div className="crm-manual-panel">
+      {evidenceError && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{messages.evidenceUnavailable}<small>{evidenceError}</small></span><button type="button" onClick={() => void loadDetail()}><Icon name="refresh" />{messages.retry}</button></div>}
+      {(!legacyTrace || detailSteps.length > 0 || detailActions.length > 0) && <section className="crm-evidence-timeline" aria-labelledby={`crm-evidence-${id}`}>
         <h3 id={`crm-evidence-${id}`}>{messages.evidenceTimeline}</h3>
-        {!detailSteps.length && !detailActions.length ? <p>{messages.noEvidence}</p> : <ol>
+        {!detailSteps.length && !detailActions.length ? <p>{evidenceError ? messages.evidenceUnavailable : messages.noEvidence}</p> : <ol>
           {detailSteps.map((step, index) => <li key={String(step.id || step.social_task_id || index)}>
             <span className="crm-timeline-mark" aria-hidden="true" />
             <div><strong>{operationText(step.step_type, messages) || `${messages.taskStep} ${index + 1}`}</strong><small>{(messages.errors as Record<string, string>)[String(step.error_code || "")] || messages.noEvidence}</small></div>
@@ -485,7 +655,7 @@ function TaskCard({ task, messages, language, onAction, onChanged, detailMode = 
             <StatusBadge status={String(action.state || "planned")} messages={messages} />
           </li>)}
         </ol>}
-      </section>
+      </section>}
       {detailActions.filter((action) => action.state !== "unknown" && action.evidence && Object.keys(action.evidence).length > 0).map((action, index) => <section className="crm-evidence-card" key={`evidence-${String(action.id || action.action_id || index)}`}>
         <strong>{operationText(action.action_type, messages)}</strong>
         <span><StatusBadge status={action.state} messages={messages} /></span>
@@ -543,7 +713,11 @@ function isReachRecord(item: Record<string, unknown>, view: ViewId) {
     if (/(^| )collect( |$|_)/.test(hay) && !/public|comment|reply|outreach|message|engagement/.test(hay)) return false;
     return /public|outreach|comment|reply|direct_message|engagement|group|message|互动|留言|私信/.test(hay);
   }
-  if (view === "outreach") return /outreach|direct_message|dm_|私信|message/.test(hay) || !type;
+  if (view === "outreach") {
+    if (!type) return false;
+    if (/collect|hotspot|persona|pool|group|public_comment|public_reply/.test(type)) return false;
+    return /(^|_)(outreach|direct_message|dm)(_|$)/.test(type) || /私信/.test(type);
+  }
   return true;
 }
 
@@ -579,7 +753,6 @@ function inspectDetailRows(inspect: Record<string, unknown>, view: ViewId, messa
   const content = eventPreviewLabel(String(payload.preview_text || payload.content || payload.comment || payload.message || payload.instruction || payload.text || payload.source_text || ""), language)
     || humanText(payload.preview_text || payload.content || payload.comment || payload.message || payload.instruction || payload.text || payload.source_text, "");
   const result = summaryFromDetail(payload.detail, language) || summaryFromDetail(payload, language);
-  const shown = new Set(["event_type", "workflow_type", "kind", "type", "status", "state", "preview_user", "preview_text", "content", "comment", "message", "instruction", "text", "source_text", "recipient", "recipient_username", "username", "display_name", "occurred_at", "updated_at", "created_at", "payload", "input", "result", "evidence", "detail", "steps", "actions"]);
   const rows: Array<[string, string]> = [
     [messages.views[view][0], kind],
     [messages.recordTarget, target],
@@ -588,20 +761,6 @@ function inspectDetailRows(inspect: Record<string, unknown>, view: ViewId, messa
     [messages.recordContent, content && content !== "—" ? content : ""],
     [messages.recordResult, result && result !== content ? result : ""],
   ];
-  for (const [key, value] of Object.entries(payload)) {
-    if (shown.has(key) || isTechnicalKey(key) || /^(active|enabled|ok|schema_version)$/i.test(key)) continue;
-    if (value && typeof value === "object") {
-      const nested = summaryFromDetail(value as Record<string, unknown>, language);
-      const nestedLabel = metricLabel(key, language);
-      if (nested && !isOpaqueUserValue(nested) && !isEnglishMachineLabel(nestedLabel)) rows.push([nestedLabel, nested]);
-      continue;
-    }
-    const text = eventPreviewLabel(String(value || ""), language) || humanText(value, "");
-    const label = metricLabel(key, language);
-    if (!text || text === "—" || isTechnicalId(text) || isOpaqueUserValue(text) || isEnglishMachineLabel(label) || isEnglishMachineLabel(text)) continue;
-    rows.push([label, text]);
-    shown.add(key);
-  }
   return rows.filter(([, value]) => value && value !== "—");
 }
 
@@ -677,19 +836,23 @@ function ResourceList({ view, messages, language, enabled, blockedHint, advisory
   const clearFilters = () => { setQuery(""); setStatusFilter(""); };
 
   return <section id={`crm-panel-${view}`} className="crm-panel crm-resource-panel" aria-busy={state === "loading"}>
-    <div className="crm-panel-head">
-      <div><span className="crm-kicker">{messages.workspace}</span><h2>{messages.views[view][0]}</h2></div>
-      {writeViews.has(view) && enabled && <button className="crm-primary-button" type="button" onClick={onCreate}>{messages.create}</button>}
-    </div>
+    {view === "outreach"
+      ? writeViews.has(view) && enabled && <div className="crm-engage-toolbar"><button className="crm-primary-button" type="button" onClick={onCreate}>{messages.create}</button></div>
+      : <div className="crm-panel-head"><div><span className="crm-kicker">{messages.workspace}</span><h2>{messages.views[view][0]}</h2></div>{writeViews.has(view) && enabled && <button className="crm-primary-button" type="button" onClick={onCreate}>{messages.create}</button>}</div>}
     {!enabled && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{blockedHint}</span></div>}
     {enabled && advisory && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{advisory}</span></div>}
     {state === "loading" && <div className="crm-list-skeleton" aria-live="polite"><span>{messages.loadingData}</span><i /><i /><i /></div>}
     {state === "error" && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{loadError?.message || messages.dataError}{loadError?.retryable && <small>{messages.retryableHint}</small>}</span><button type="button" onClick={() => void load()}><Icon name="refresh" />{messages.retry}</button></div>}
     {state === "ready" && loadError && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{loadError.message}</span><button type="button" onClick={() => void load(nextCursor)}><Icon name="refresh" />{messages.retry}</button></div>}
-    {state === "ready" && visibleItems.length > 0 && <div className="crm-filter-bar" role="search" aria-label={messages.filterRecords}>
-      <label><span>{messages.search}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={messages.searchPlaceholder} /></label>
-      <label><span>{messages.status}</span><SelectMenu value={statusFilter} onChange={setStatusFilter} placeholder={messages.allStatuses} options={[{ value: "", label: messages.allStatuses }, ...statuses.map((status) => ({ value: status, label: statusText(status, messages) }))]} /></label>
-      {filtersActive && <button className="crm-secondary-button" type="button" onClick={clearFilters}>{messages.clearFilters}</button>}
+    {state === "ready" && visibleItems.length > 0 && <div className="crm-record-toolbar">
+      <span>{filteredItems.length}/{visibleItems.length}</span>
+      <FilterMenu triggerLabel={messages.filterRecords} active={filtersActive}>
+        <label className="crm-filter-menu-search"><span>{messages.search}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={messages.searchPlaceholder} /></label>
+        <fieldset className="crm-filter-menu-options"><legend>{messages.status}</legend>
+          {[{ value: "", label: messages.allStatuses }, ...statuses.map((status) => ({ value: status, label: statusText(status, messages) }))].map((option) => <button type="button" className={statusFilter === option.value ? "is-active" : ""} aria-pressed={statusFilter === option.value} key={option.value || "all"} onClick={() => setStatusFilter(option.value)}>{option.label}</button>)}
+        </fieldset>
+        {filtersActive && <button className="crm-filter-menu-clear" type="button" onClick={clearFilters}>{messages.clearFilters}</button>}
+      </FilterMenu>
     </div>}
     {state === "ready" && !visibleItems.length && <EmptyState messages={messages} view={view} actionLabel={writeViews.has(view) && enabled ? messages.create : undefined} onAction={writeViews.has(view) && enabled ? onCreate : undefined} />}
     {state === "ready" && visibleItems.length > 0 && !filteredItems.length && <EmptyState messages={messages} view={view} filtered actionLabel={messages.clearFilters} onAction={clearFilters} />}
@@ -728,6 +891,7 @@ function Overview({ bootstrap, tasks, messages, language }: { bootstrap: Bootstr
   const leadCount = Number(summary.leads ?? summary.lead_count ?? 0);
   const poolCount = Number(summary.pools ?? summary.pool_count ?? 0);
   const [analytics, setAnalytics] = useState<Record<string, unknown>>({});
+  const [trendRange, setTrendRange] = useState<TrendRange>("day");
   useEffect(() => { void crmApi.analytics().then(setAnalytics).catch(() => setAnalytics({})); }, []);
   const statusSource = Object.keys(analytics.workflow_statuses && typeof analytics.workflow_statuses === "object" ? analytics.workflow_statuses as object : {}).length
     ? Object.entries((analytics.workflow_statuses || {}) as Record<string, number>).map(([key, count]) => [key, Number(count) || 0] as [string, number])
@@ -747,29 +911,51 @@ function Overview({ bootstrap, tasks, messages, language }: { bootstrap: Bootstr
     Object.entries((analytics.event_types || {}) as Record<string, number>).map(([key, count]) => [key, Number(count) || 0]),
     language,
   );
-  const trend = dailyTrend(tasks as Array<Record<string, unknown>>);
+  const analyticsTrend = analytics.workflow_trend && typeof analytics.workflow_trend === "object"
+    ? (analytics.workflow_trend as Record<TrendRange, unknown>)[trendRange]
+    : null;
+  const trend = Array.isArray(analyticsTrend) && analyticsTrend.length
+    ? analyticsTrend.map((row) => {
+      const item = row && typeof row === "object" ? row as Record<string, unknown> : {};
+      return {
+        date: String(item.date || ""),
+        created: Number(item.created || 0),
+        completed: Number(item.completed || 0),
+        failed: Number(item.failed || 0),
+      };
+    })
+    : workflowTrend(tasks as Array<Record<string, unknown>>, trendRange);
   const trendSeries = [
-    { key: "created", label: messages.chartCreated, color: chartColor(0, "complete"), values: trend.map((row) => row.created) },
-    { key: "completed", label: messages.chartCompleted, color: chartColor(1, "active"), values: trend.map((row) => row.completed) },
-    { key: "failed", label: messages.chartFailed, color: chartColor(4, "danger"), values: trend.map((row) => row.failed) },
+    { key: "created", label: messages.chartCreated, color: chartColor(0), values: trend.map((row) => row.created) },
+    { key: "completed", label: messages.chartCompleted, color: chartColor(1), values: trend.map((row) => row.completed) },
+    { key: "failed", label: messages.chartFailed, color: chartColor(4), values: trend.map((row) => row.failed) },
   ];
 
   return <>
-    <section className="crm-overview-hero">
-      <div>
-        <p className="crm-flow-kicker">{messages.flowKicker}</p>
-        <h1>{messages.views.overview[0]}</h1>
-        <p>{messages.flowHint}</p>
-      </div>
-    </section>
+    <header className="crm-overview-title"><h1>{messages.views.overview[0]}</h1></header>
     <section className="crm-metrics" aria-label={messages.views.overview[0]}>
       <Metric label={messages.metrics.leads} value={leadCount} />
       <Metric label={messages.metrics.pools} value={poolCount} />
       <Metric label={messages.metrics.active} value={summary.active_tasks ?? active.length} />
       <Metric label={messages.metrics.manual} value={summary.manual_required ?? manual.length} />
     </section>
-    <section className="crm-chart-grid" aria-label={messages.flowKicker}>
-      <LineChart title={messages.chartTrend} hint={messages.chartTrendHint} labels={trend.map((row) => row.date)} series={trendSeries} empty={messages.chartEmpty} />
+    <section className="crm-chart-grid" aria-label={messages.views.overview[0]}>
+      <LineChart
+        title={messages.chartTrend}
+        hint={messages.chartTrendHints[trendRange]}
+        labels={trend.map((row) => row.date)}
+        series={trendSeries}
+        empty={messages.chartEmpty}
+        range={trendRange}
+        rangeLabel={messages.chartRangeLabel}
+        rangeOptions={[
+          { value: "day", label: messages.chartRangeDay },
+          { value: "month", label: messages.chartRangeMonth },
+          { value: "year", label: messages.chartRangeYear },
+        ]}
+        valueLabel={messages.chartTaskUnit}
+        onRangeChange={setTrendRange}
+      />
       <DonutChart title={messages.mixTasks} hint={messages.chartTasksHint} parts={taskMix} totalLabel={messages.chartTotal} empty={messages.chartEmpty} />
       <DonutChart title={messages.chartFunnel} hint={messages.chartFunnelHint} parts={funnelMix} totalLabel={messages.chartTotal} empty={messages.chartEmpty} />
       <BarChart title={messages.chartEvents} hint={messages.chartEventsHint} parts={eventMix} empty={messages.chartEmpty} />
@@ -858,7 +1044,7 @@ function AccountsView({ accounts: seedAccounts, messages, language }: { accounts
     }
   };
   return <section className="crm-panel">
-    <div className="crm-panel-head"><div><span className="crm-kicker">{messages.accountHealth}</span><h2>{messages.views.accounts[0]}</h2><p>{messages.addAccountHint}</p></div><button className="crm-secondary-button" type="button" onClick={() => void requestConfirm({ title: messages.addAccountConsole, message: messages.addAccountConfirm, confirmText: messages.addAccountConsole, cancelText: messages.cancel }).then((ok) => { if (ok) window.location.assign(consoleAccountsHref()); })}>{messages.addAccountConsole}</button></div>
+    <div className="crm-settings-toolbar crm-settings-toolbar--actions crm-account-add-toolbar"><button className="crm-secondary-button" type="button" onClick={() => void requestConfirm({ title: messages.addAccountConsole, message: messages.addAccountConfirm, confirmText: messages.addAccountConsole, cancelText: messages.cancel }).then((ok) => { if (ok) window.location.assign(consoleAccountsHref()); })}>{messages.addAccountConsole}</button></div>
     {accounts.length > 0 && <div className="crm-account-summary" aria-label={messages.accountHealth}>
       <span><b>{new Set(accounts.map((item) => String(item.username || item.id || "").replace(/^@/, "").toLowerCase()).filter(Boolean)).size}</b><small>{messages.accountTotal}</small></span>
       <span><b>{Array.from(accounts.reduce((map, item) => {
@@ -915,20 +1101,116 @@ function taskFilterGroup(statusValue: unknown): Exclude<TaskFilter, ""> {
   return "attention";
 }
 
-function TasksView({ tasks, pollError, messages, language, onAction, onChanged, hasMore, loadingMore, onLoadMore }: { tasks: CrmTask[]; pollError: boolean; messages: Messages; language: Language; onAction: (task: CrmTask, action: "pause" | "resume" | "cancel" | "retry" | "confirm") => void; onChanged: () => void; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
+type TaskDataMode = "live" | "history";
+
+const opcHistoryCopy = {
+  "zh-Hans": {
+    title: "OPC 历史池", runs: "OPC 历史任务", rows: "历史采集记录", unique: "去重可用账号",
+    search: "搜索账号、内容或关键词", searchPlaceholder: "例如：房贷需求、品牌经营、账号名称", keywords: "热门历史标签",
+    keywordHint: "可多选；查询会取并集，同平台同账号只保留一条。", platform: "筛选平台", status: "筛选触达状态",
+    allPlatforms: "全部平台", allStatuses: "全部状态", fresh: "全新名单", contacted: "曾触达", failed: "失败记录",
+    excludeExisting: "排除当前客户池已有账号", excludeInteracted: "排除已有互动记录", preview: "预览符合人数",
+    previewing: "正在查询…", import: "合并去重并保存客户池", importing: "正在导入…", matched: "符合去重账号",
+    imported: "已建立 OPC 历史客户池", empty: "当前条件没有匹配的 OPC 历史账号", loadError: "OPC 历史读取失败",
+    category: "OPC 历史精选客户池", clear: "清除标签",
+  },
+  "zh-Hant": {
+    title: "OPC 歷史池", runs: "OPC 歷史任務", rows: "歷史採集記錄", unique: "去重可用帳號",
+    search: "搜尋帳號、內容或關鍵詞", searchPlaceholder: "例如：房貸需求、品牌經營、帳號名稱", keywords: "熱門歷史標籤",
+    keywordHint: "可多選；查詢會取聯集，同平台同帳號只保留一筆。", platform: "篩選平台", status: "篩選觸達狀態",
+    allPlatforms: "全部平台", allStatuses: "全部狀態", fresh: "全新名單", contacted: "曾觸達", failed: "失敗記錄",
+    excludeExisting: "排除目前客戶池已有帳號", excludeInteracted: "排除已有互動記錄", preview: "預覽符合人數",
+    previewing: "正在查詢…", import: "合併去重並儲存客戶池", importing: "正在匯入…", matched: "符合去重帳號",
+    imported: "已建立 OPC 歷史客戶池", empty: "目前條件沒有匹配的 OPC 歷史帳號", loadError: "OPC 歷史讀取失敗",
+    category: "OPC 歷史精選客戶池", clear: "清除標籤",
+  },
+} as const;
+
+function OpcHistoryView({ language, onChanged }: { language: Language; onChanged: () => void }) {
+  const copy = opcHistoryCopy[language];
+  const [summary, setSummary] = useState<Record<string, unknown> | null>(null);
+  const [search, setSearch] = useState("");
+  const [keywords, setKeywords] = useState<string[]>([]);
+  const [platform, setPlatform] = useState("");
+  const [contact, setContact] = useState("");
+  const [excludeExisting, setExcludeExisting] = useState(true);
+  const [excludeInteracted, setExcludeInteracted] = useState(true);
+  const [preview, setPreview] = useState<{ total: number; rows: Array<Record<string, unknown>> } | null>(null);
+  const [busy, setBusy] = useState<"summary" | "preview" | "import" | "">("summary");
+  const [error, setError] = useState("");
+  const loadSummary = useCallback(async () => {
+    setBusy("summary"); setError("");
+    try { setSummary(await crmApi.opcHistorySummary(language)); }
+    catch (next) { setError(next instanceof CrmApiError && next.body.message ? String(next.body.message) : copy.loadError); }
+    finally { setBusy(""); }
+  }, [copy.loadError, language]);
+  useEffect(() => { void loadSummary(); }, [loadSummary]);
+  const topKeywords = Array.isArray(summary?.topKeywords)
+    ? summary.topKeywords.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+    : [];
+  const queryPayload = () => ({ search: search.trim(), platform, contact, keywords, keywordMode: "any", limit: 100, locale: language });
+  const runPreview = async () => {
+    setBusy("preview"); setError("");
+    try {
+      const result = await crmApi.queryOpcHistory(queryPayload());
+      const rows = Array.isArray(result.data) ? result.data.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item))) : [];
+      setPreview({ total: Number(result.total || 0), rows });
+    } catch (next) { setError(next instanceof CrmApiError && next.body.message ? String(next.body.message) : copy.loadError); setPreview(null); }
+    finally { setBusy(""); }
+  };
+  const importHistory = async () => {
+    if (!preview?.total) return;
+    setBusy("import"); setError("");
+    try {
+      const category = `${copy.category}${keywords.length ? ` · ${keywords.slice(0, 2).join("＋")}` : ""}`.slice(0, 32);
+      const result = await crmApi.importOpcHistory({
+        ...queryPayload(), limit: 2000, category, excludeExisting, excludeInteracted,
+        tags: keywords.map((keyword) => `${language === "zh-Hant" ? "關鍵詞" : "关键词"}:${keyword}`),
+        idempotencyKey: `crm-opc-import:${window.crypto.randomUUID()}`,
+      });
+      publicToast(`${copy.imported} · ${Number(result.importedCount || 0)}`);
+      onChanged();
+      await loadSummary();
+    } catch (next) {
+      const empty = next instanceof CrmApiError && (next.status === 409 || /opc_history_empty|opcHistoryEmpty/i.test(`${next.body.code || ""} ${next.body.message_key || ""}`));
+      setError(empty ? copy.empty : next instanceof CrmApiError && next.body.message ? String(next.body.message) : copy.loadError);
+    } finally { setBusy(""); }
+  };
+  return <section className="crm-opc-history-center" aria-busy={Boolean(busy)}>
+    <div className="crm-opc-history-summary" aria-label={copy.title}>
+      <div><strong>{Number(summary?.runs || 0)}</strong><span>{copy.runs}</span></div>
+      <div><strong>{Number(summary?.rows || 0)}</strong><span>{copy.rows}</span></div>
+      <div><strong>{Number(summary?.uniqueLeads || 0)}</strong><span>{copy.unique}</span></div>
+    </div>
+    {error && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{error}</span><button type="button" onClick={() => void loadSummary()}>{messagesForLanguage(language).retry}</button></div>}
+    <label className="crm-field crm-opc-history-search"><span>{copy.search}</span><input type="search" value={search} onChange={(event) => { setSearch(event.target.value); setPreview(null); }} placeholder={copy.searchPlaceholder} /></label>
+    <div className="crm-opc-history-keywords">
+      <div className="crm-opc-history-label"><strong>{copy.keywords}</strong><small>{copy.keywordHint}</small>{keywords.length > 0 && <button type="button" onClick={() => { setKeywords([]); setPreview(null); }}>{copy.clear}</button>}</div>
+      <div className="crm-chip-row">{topKeywords.slice(0, 16).map((item) => { const name = String(item.name || ""); const active = keywords.includes(name); return <button type="button" className={active ? "is-active" : ""} aria-pressed={active} key={name} onClick={() => { setKeywords((current) => current.includes(name) ? current.filter((value) => value !== name) : [...current, name]); setPreview(null); }}>{name} · {Number(item.count || 0)}</button>; })}</div>
+    </div>
+    <div className="crm-opc-history-controls">
+      <SelectMenu triggerIcon="filter" triggerLabel={copy.platform} active={Boolean(platform)} value={platform} onChange={(value) => { setPlatform(value); setPreview(null); }} options={[{ value: "", label: copy.allPlatforms }, { value: "instagram", label: "Instagram" }, { value: "threads", label: "Threads" }]} />
+      <SelectMenu triggerIcon="filter" triggerLabel={copy.status} active={Boolean(contact)} value={contact} onChange={(value) => { setContact(value); setPreview(null); }} options={[{ value: "", label: copy.allStatuses }, { value: "new", label: copy.fresh }, { value: "contacted", label: copy.contacted }, { value: "failed", label: copy.failed }]} />
+      <label className="crm-consent"><input type="checkbox" checked={excludeExisting} onChange={(event) => setExcludeExisting(event.target.checked)} /><span>{copy.excludeExisting}</span></label>
+      <label className="crm-consent"><input type="checkbox" checked={excludeInteracted} onChange={(event) => setExcludeInteracted(event.target.checked)} /><span>{copy.excludeInteracted}</span></label>
+    </div>
+    {preview && <div className="crm-opc-history-preview" role="status"><strong>{copy.matched} · {preview.total}</strong><span>{preview.total ? preview.rows.slice(0, 8).map((row) => `@${String(row.username || "")}`).join(" · ") : copy.empty}</span></div>}
+    <div className="crm-opc-history-actions"><button className="crm-secondary-button" type="button" disabled={Boolean(busy)} onClick={() => void runPreview()}>{busy === "preview" ? copy.previewing : copy.preview}</button><button className="crm-primary-button" type="button" disabled={Boolean(busy) || !preview?.total} onClick={() => void importHistory()}>{busy === "import" ? copy.importing : copy.import}</button></div>
+  </section>;
+}
+
+function messagesForLanguage(language: Language) { return catalog[language]; }
+
+function TasksView({ tasks, pollError, messages, language, onAction, onChanged, active, hasMore, loadingMore, loadMoreError, paginationStarted, onLoadMore }: { tasks: CrmTask[]; pollError: boolean; messages: Messages; language: Language; onAction: (task: CrmTask, action: "pause" | "resume" | "cancel" | "retry" | "confirm") => void; onChanged: () => void; active: boolean; hasMore: boolean; loadingMore: boolean; loadMoreError: boolean; paginationStarted: boolean; onLoadMore: () => void }) {
+  const [mode, setMode] = useState<TaskDataMode>("live");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<TaskFilter>("");
   const [sortOrder, setSortOrder] = useState<"created" | "updated">("created");
   const [selectedTaskId, setSelectedTaskId] = useState("");
   const selectedTask = tasks.find((task) => String(task.task_id || task.id || "") === selectedTaskId);
-  const openTask = (taskId: string) => {
-    setSelectedTaskId(taskId);
-    window.scrollTo({ top: 0, behavior: "auto" });
-  };
-  const closeTask = () => {
-    setSelectedTaskId("");
-    window.scrollTo({ top: 0, behavior: "auto" });
-  };
+  const { sentinelRef, supported: intersectionSupported } = useIntersectionLoadMore({ enabled: active && mode === "live" && hasMore && !loadMoreError && !selectedTaskId, loading: loadingMore, onLoadMore });
+  const openTask = (taskId: string) => setSelectedTaskId(taskId);
+  const closeTask = () => setSelectedTaskId("");
   const counts = useMemo(() => ({
     total: tasks.length,
     active: tasks.filter((task) => taskFilterGroup(task.status) === "active").length,
@@ -948,13 +1230,6 @@ function TasksView({ tasks, pollError, messages, language, onAction, onChanged, 
       return (Date.parse(String(rightValue || "")) || 0) - (Date.parse(String(leftValue || "")) || 0);
     });
   }, [query, sortOrder, statusFilter, tasks]);
-  if (selectedTask) return <section className="crm-panel crm-task-detail-page">
-    <div className="crm-task-detail-toolbar">
-      <button className="crm-secondary-button" type="button" onClick={closeTask}><Icon name="back" />{messages.backToTasks}</button>
-      <div><h2>{messages.taskDetailTitle}</h2><span className={`crm-live-indicator ${pollError ? "is-offline" : ""}`}><i />{pollError ? messages.partial : messages.live}</span></div>
-    </div>
-    <TaskCard task={selectedTask} messages={messages} language={language} onAction={onAction} onChanged={onChanged} onDeleted={closeTask} detailMode />
-  </section>;
   return <section className="crm-panel">
     <div className="crm-panel-head crm-task-panel-head"><div><h2>{messages.views.tasks[0]}</h2><p>{messages.noSimulatedProgress}</p></div><span className={`crm-live-indicator ${pollError ? "is-offline" : ""}`}><i />{pollError ? messages.partial : messages.live}</span></div>
     {tasks.length > 0 && <div className="crm-task-overview-grid" aria-label={messages.views.tasks[0]}>
@@ -963,16 +1238,29 @@ function TasksView({ tasks, pollError, messages, language, onAction, onChanged, 
       <div><strong>{counts.attention}</strong><span>{messages.taskAttention}</span></div>
       <div><strong>{counts.completed}</strong><span>{messages.taskCompleted}</span></div>
     </div>}
-    {tasks.length > 0 && <div className="crm-task-section-head"><h3>{messages.realTimeTasks}</h3><span>{tasks.length}</span></div>}
-    {tasks.length > 0 && <div className="crm-filter-bar crm-task-filter-bar" role="search" aria-label={messages.filterRecords}>
-      <label><span>{messages.search}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={messages.searchPlaceholder} /></label>
-      <label><span>{messages.taskFilter}</span><SelectMenu value={statusFilter} onChange={(value) => setStatusFilter(value as TaskFilter)} placeholder={messages.taskFilterAll} options={[{ value: "", label: messages.taskFilterAll }, { value: "attention", label: messages.taskFilterAttention }, { value: "active", label: messages.taskFilterActive }, { value: "completed", label: messages.taskFilterCompleted }, { value: "failed", label: messages.taskFilterFailed }]} /></label>
-      <label><span>{messages.taskSort}</span><SelectMenu value={sortOrder} onChange={(value) => setSortOrder(value as "created" | "updated")} options={[{ value: "created", label: messages.taskSortCreated }, { value: "updated", label: messages.taskSortUpdated }]} /></label>
-      {(query || statusFilter || sortOrder !== "created") && <button className="crm-secondary-button" type="button" onClick={() => { setQuery(""); setStatusFilter(""); setSortOrder("created"); }}>{messages.clearFilters}</button>}
+    <div className="crm-task-data-tabs" role="tablist" aria-label={messages.views.tasks[0]}><button type="button" role="tab" aria-selected={mode === "live"} className={mode === "live" ? "is-active" : ""} onClick={() => setMode("live")}>{messages.realTimeTasks}<span>{tasks.length}</span></button><button type="button" role="tab" aria-selected={mode === "history"} className={mode === "history" ? "is-active" : ""} onClick={() => { setMode("history"); setSelectedTaskId(""); }}>{language === "zh-Hant" ? "OPC 歷史池" : "OPC 历史池"}</button></div>
+    {mode === "history" ? <OpcHistoryView language={language} onChanged={onChanged} /> : <>
+    {tasks.length > 0 && <div className="crm-task-section-toolbar">
+      <div className="crm-task-section-head"><h3>{messages.realTimeTasks}</h3><span>{tasks.length}</span></div>
+      <div className="crm-task-filter-bar" role="search" aria-label={messages.filterRecords}>
+        {(query || statusFilter || sortOrder !== "created") && <span className="crm-task-result-count" title={messages.taskResultCount(visibleTasks.length, tasks.length)}>{visibleTasks.length}/{tasks.length}</span>}
+        <label className="crm-task-search"><Icon name="search" /><input type="search" aria-label={messages.search} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={messages.search} /></label>
+        <SelectMenu triggerIcon="filter" triggerLabel={messages.taskFilter} active={Boolean(statusFilter)} value={statusFilter} onChange={(value) => setStatusFilter(value as TaskFilter)} placeholder={messages.taskFilterAll} options={[{ value: "", label: messages.taskFilterAll }, { value: "attention", label: messages.taskFilterAttention }, { value: "active", label: messages.taskFilterActive }, { value: "completed", label: messages.taskFilterCompleted }, { value: "failed", label: messages.taskFilterFailed }]} />
+        <SelectMenu triggerIcon="sort" triggerLabel={messages.taskSort} active={sortOrder !== "created"} value={sortOrder} onChange={(value) => setSortOrder(value as "created" | "updated")} options={[{ value: "created", label: messages.taskSortCreated }, { value: "updated", label: messages.taskSortUpdated }]} />
+        {(query || statusFilter || sortOrder !== "created") && <button className="crm-task-filter-reset unified-action-icon-button" type="button" title={messages.clearFilters} aria-label={messages.clearFilters} onClick={() => { setQuery(""); setStatusFilter(""); setSortOrder("created"); }}><Icon name="close" /></button>}
+      </div>
     </div>}
-    {tasks.length > 0 && <p className="crm-task-result-count">{messages.taskResultCount(visibleTasks.length, tasks.length)}</p>}
     {!tasks.length ? <EmptyState messages={messages} view="tasks" /> : !visibleTasks.length ? <EmptyState messages={messages} view="tasks" filtered /> : <div className="crm-task-list">{visibleTasks.map((task, index) => <TaskCard task={task} messages={messages} language={language} onAction={onAction} onChanged={onChanged} onOpen={() => openTask(String(task.task_id || task.id || ""))} key={String(task.task_id || task.id || index)} />)}</div>}
-    {hasMore && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={onLoadMore}>{loadingMore ? messages.loadingMore : messages.loadMore}</button></div>}
+    {hasMore && !selectedTaskId && <div className="crm-task-load-sentinel">
+      <span ref={sentinelRef} role="status" aria-live="polite" aria-busy={loadingMore}>{loadingMore ? messages.loadingMore : messages.scrollToLoad}</span>
+      {loadMoreError && <div className="crm-inline-error" role="alert"><Icon name="warning" /><span>{messages.dataError}</span><button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={onLoadMore}><Icon name="refresh" />{messages.retry}</button></div>}
+      {!intersectionSupported && !loadMoreError && <button className="crm-secondary-button" type="button" disabled={loadingMore} onClick={onLoadMore}>{loadingMore ? messages.loadingMore : messages.loadMore}</button>}
+    </div>}
+    {!hasMore && paginationStarted && tasks.length > 0 && <p className="crm-task-load-complete" role="status" aria-live="polite">{messages.allTasksLoaded}</p>}
+    </>}
+    {selectedTask && <ConsoleModal title={messages.taskDetailTitle} labelledBy="crmTaskDetailTitle" onClose={closeTask} wide>
+      <TaskCard task={selectedTask} key={selectedTaskId} messages={messages} language={language} onAction={onAction} onChanged={onChanged} onDeleted={closeTask} detailMode />
+    </ConsoleModal>}
   </section>;
 }
 
@@ -996,9 +1284,7 @@ function WorkflowDialog({ view, messages, language, onClose, onCreated }: { view
       const next = payloadItems(payload) as CrmAccount[];
       const supported = view === "groups"
         ? next.filter((item) => String(item.platform || "").toLowerCase() === "threads")
-        : view === "relationships"
-          ? next.filter((item) => String(item.platform || "").toLowerCase() === "instagram")
-          : next;
+        : next;
       setAccounts(supported);
       setAccountId(String(supported[0]?.id || ""));
     }).catch(() => setAccounts([]));
@@ -1032,17 +1318,6 @@ function WorkflowDialog({ view, messages, language, onClose, onCreated }: { view
     setError("");
     try {
       const { actionType, write, sku = "" } = workflowAction;
-      if (view === "relationships") {
-        const leadIds = target.split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean);
-        const result = await crmApi.verifyRelationships({
-          account_id: accountId,
-          lead_ids: leadIds,
-          idempotency_key: idempotencyKey.current,
-        });
-        onCreated(result.task_id);
-        onClose();
-        return;
-      }
       const proposedActions = [{
         action_type: actionType,
         account_id: accountId,
@@ -1072,10 +1347,10 @@ function WorkflowDialog({ view, messages, language, onClose, onCreated }: { view
       setSubmitting(false);
     }
   };
-  return <ConsoleModal title={messages.workflowTitle} labelledBy="crmWorkflowTitle" onClose={onClose} dialogRef={dialog} actions={<><button type="button" onClick={onClose}>{messages.cancel}</button><button type="button" className="primary" disabled={(view !== "relationships" && !instruction.trim()) || !target.trim() || !accountId || (Boolean(workflowActionByView[view]?.write) && !consent) || submitting} onClick={() => void submit()}>{submitting ? messages.submitting : messages.confirm}</button></>}>
+  return <ConsoleModal title={messages.workflowTitle} labelledBy="crmWorkflowTitle" onClose={onClose} dialogRef={dialog} actions={<><button type="button" onClick={onClose}>{messages.cancel}</button><button type="button" className="primary" disabled={!instruction.trim() || !target.trim() || !accountId || (Boolean(workflowActionByView[view]?.write) && !consent) || submitting} onClick={() => void submit()}>{submitting ? messages.submitting : messages.confirm}</button></>}>
       <label className="crm-field"><span>{labels.account}</span><SelectMenu value={accountId} onChange={setAccountId} placeholder={labels.selectAccount} options={[{ value: "", label: labels.selectAccount }, ...accounts.map((account) => ({ value: String(account.id), label: `${account.display_name || account.username} · ${account.platform}` }))]} /></label>
       <label className="crm-field"><span>{labels.target}</span><input value={target} onChange={(event) => setTarget(event.target.value)} placeholder={labels.targetPlaceholder} /></label>
-      {view !== "relationships" && <label className="crm-field"><span>{messages.workflowInstruction}</span><textarea rows={5} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={messages.workflowPlaceholder} /></label>}
+      <label className="crm-field"><span>{messages.workflowInstruction}</span><textarea rows={5} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder={messages.workflowPlaceholder} /></label>
       <section className="crm-confirmation-summary" aria-labelledby="crmConfirmationTitle">
         <h3 id="crmConfirmationTitle">{messages.confirmationSummary}</h3>
         <dl>
@@ -1108,7 +1383,7 @@ export function App() {
   const [bootstrap, setBootstrap] = useState<BootstrapPayload>({});
   const [workflowView, setWorkflowView] = useState<WizardView | null>(null);
   const [workflowSeed, setWorkflowSeed] = useState<WorkflowSeed | null>(null);
-  const [toast, setToast] = useState("");
+  const [preferredPublicPoolId, setPreferredPublicPoolId] = useState("");
 
   const loadBootstrap = useCallback(async () => {
     setBootstrapState("loading");
@@ -1132,7 +1407,7 @@ export function App() {
     }
   }, []);
   const handlePolicyFailure = useCallback(() => { void loadBootstrap(); }, [loadBootstrap]);
-  const { tasks, pollError, refresh: refreshTasks, loadMore: loadMoreTasks, hasMore: hasMoreTasks, loadingMore: loadingMoreTasks } = useTaskPolling(bootstrap.tasks, handlePolicyFailure, bootstrapState === "ready");
+  const { tasks, pollError, refresh: refreshTasks, loadMore: loadMoreTasks, hasMore: hasMoreTasks, loadingMore: loadingMoreTasks, loadMoreError: loadMoreTasksError, paginationStarted: taskPaginationStarted } = useTaskPolling(bootstrap.tasks, handlePolicyFailure, bootstrapState === "ready", bootstrap.task_page);
   const closeWorkflow = useCallback(() => { setWorkflowView(null); setWorkflowSeed(null); }, []);
 
   useEffect(() => { void loadBootstrap(); }, [loadBootstrap]);
@@ -1158,12 +1433,6 @@ export function App() {
     document.body.classList.toggle("crm-drawer-open", drawerOpen);
     return () => document.body.classList.remove("crm-drawer-open");
   }, [drawerOpen]);
-
-  useEffect(() => {
-    if (!toast) return;
-    const timer = window.setTimeout(() => setToast(""), 4_500);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
 
   useEffect(() => {
     const media = window.matchMedia("(max-width: 980px)");
@@ -1268,7 +1537,7 @@ export function App() {
       await crmApi.taskAction(id, action);
       await refreshTasks();
     } catch (error) {
-      setToast(localizedError(error, messages));
+      publicToast(localizedError(error, messages), { status: "failed" });
     }
   };
 
@@ -1279,7 +1548,7 @@ export function App() {
 
   const activeNav = navViewOf(view);
   const startWorkflow = (next: ViewId, seed?: WorkflowSeed | null) => {
-    if (viewEnabled(next) && ["collect", "public", "outreach", "groups", "relationships"].includes(next)) {
+    if (viewEnabled(next) && ["collect", "public", "outreach", "groups"].includes(next)) {
       setWorkflowSeed(seed || null);
       setWorkflowView(next as WizardView);
     }
@@ -1304,33 +1573,30 @@ export function App() {
             <Overview bootstrap={bootstrap} tasks={tasks} messages={messages} language={language} />
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "collect"} inert={activeNav !== "collect" ? true : undefined}>
+            {!viewEnabled("collect") && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`}</span></div>}
+            {viewAdvisory("collect") && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{viewAdvisory("collect")}</span></div>}
             <CompactTabs items={collectTabs} value={collectTabs.includes(view) ? view : "collect"} messages={messages} navigate={navigate} label={messages.navItems.collect} />
             <SubpageStrip items={collectTabs} value={collectTabs.includes(view) ? view : "collect"}>
-              <div>
-                {!viewEnabled("collect") && <div className="crm-inline-error" role="status"><Icon name="warning" /><span>{`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`}</span></div>}
-                {viewAdvisory("collect") && <div className="crm-banner crm-banner--partial" role="status"><Icon name="warning" /><span>{viewAdvisory("collect")}</span></div>}
-                <PoolsView language={language} onCollectMode={viewEnabled("collect") ? (mode) => startWorkflow("collect", { collectMode: mode }) : undefined} onEngage={() => navigate("public")} />
-              </div>
+              <CollectionView language={language} onCollectMode={viewEnabled("collect") ? (mode) => startWorkflow("collect", { collectMode: mode }) : undefined} />
+              <PoolsView language={language} onEngage={(poolId) => { setPreferredPublicPoolId(poolId); navigate("public"); }} />
             </SubpageStrip>
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "public"} inert={activeNav !== "public" ? true : undefined}>
             <CompactTabs items={engageTabs} value={engageTabs.includes(view) ? view : "public"} messages={messages} navigate={navigate} label={messages.navItems.public} />
             <SubpageStrip items={engageTabs} value={engageTabs.includes(view) ? view : "public"}>
-              <PublicEngageView language={language} enabled={viewEnabled("public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} onRefreshTasks={() => void refreshTasks()} onStart={(seed) => startWorkflow("public", seed)} />
+              <PublicEngageView language={language} enabled={viewEnabled("public")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} initialPoolId={preferredPublicPoolId} onStart={(seed) => startWorkflow("public", seed)} />
               <ResourceList view="outreach" messages={messages} language={language} enabled={viewEnabled("outreach")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("outreach")} onCreate={() => startWorkflow("outreach")} />
               <GroupsView language={language} instagramEnabled={bootstrap.capabilities?.instagram_group_management?.enabled === true} advisory={viewAdvisory("groups")} onCreate={() => setWorkflowView("groups")} />
-              <ResourceList view="relationships" messages={messages} language={language} enabled={viewEnabled("relationships")} blockedHint={`${operationCatalog[language].blocked}。${operationCatalog[language].blockedHint}`} advisory={viewAdvisory("relationships")} onCreate={() => startWorkflow("relationships")} />
             </SubpageStrip>
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "tasks"} inert={activeNav !== "tasks" ? true : undefined}>
-            <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} onLoadMore={() => void loadMoreTasks()} />
+            <TasksView tasks={tasks} pollError={pollError} messages={messages} language={language} onAction={(task, action) => void taskAction(task, action)} onChanged={() => void refreshTasks()} active={activeNav === "tasks"} hasMore={hasMoreTasks} loadingMore={loadingMoreTasks} loadMoreError={loadMoreTasksError} paginationStarted={taskPaginationStarted} onLoadMore={() => void loadMoreTasks()} />
           </div>
           <div className="crm-nav-page" aria-hidden={activeNav !== "settings"} inert={activeNav !== "settings" ? true : undefined}>
             <CompactTabs items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"} messages={messages} navigate={navigate} label={messages.views.settings[0]} />
             <SubpageStrip items={settingTabs} value={settingTabs.includes(view) ? view : "accounts"}>
               <AccountsView accounts={bootstrap.accounts || []} messages={messages} language={language} />
               <TemplatesView language={language} />
-              <DestinationsView language={language} />
               <SchedulesView language={language} onCreate={(workflow) => startWorkflow(workflow, { execution: "schedule" })} />
             </SubpageStrip>
           </div>
@@ -1338,9 +1604,9 @@ export function App() {
       </div>
       </div>
     </main>
-    <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} seed={workflowSeed} onClose={closeWorkflow} onCreated={() => { setToast(messages.submitted); void refreshTasks(); }} />
+    <WorkflowWizard view={workflowView} messages={messages} language={language} capabilities={bootstrap.capabilities} seed={workflowSeed} onClose={closeWorkflow} onCreated={() => { publicToast(messages.submitted, { status: "queued", onClick: () => navigate("tasks") }); void refreshTasks(); }} />
     <ConfirmHost titleLabel={messages.confirmTitle} okLabel={messages.ok} cancelLabel={messages.cancel} />
-    {toast && <div className="crm-toast" role="status">{toast}</div>}
+    <PublicToastHost />
     <nav ref={dockRef} className="crm-mobile-dock" aria-label={messages.product} style={{ ["--crm-mobile-dock-item-count" as string]: String(navViews.length) }}>
       <span className="crm-mobile-dock-track" aria-hidden="true"><span ref={dockPillRef} className="crm-mobile-dock-pill" /></span>
       <div className="crm-mobile-dock-items">

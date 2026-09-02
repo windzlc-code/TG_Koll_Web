@@ -7342,6 +7342,25 @@ def create_crm_social_task_in_transaction(
 
     if contains_secret(task_payload):
         raise HTTPException(status_code=400, detail="CRM durable task payload cannot contain login secrets")
+    if task_type == "instagram_group_create":
+        from .crm.errors import CRMError
+        from .crm.instagram_group_validation import validate_instagram_group_create_targets
+
+        try:
+            validate_instagram_group_create_targets(
+                conn,
+                user_id=user_id,
+                payload=action_payload,
+            )
+        except CRMError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={
+                    "code": exc.code,
+                    "message_key": exc.message_key,
+                    "details": dict(exc.details or {}),
+                },
+            ) from exc
     if task_type == "open_login":
         task_payload["auto_submit"] = False
         task_payload["wait_for_manual"] = True

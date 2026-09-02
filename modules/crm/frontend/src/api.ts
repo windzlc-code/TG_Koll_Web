@@ -127,6 +127,10 @@ export const crmApi = {
     "/api/crm/v1/hotspots/search",
     { method: "POST", body: payload },
   ),
+  opcHistorySummary: (locale: "zh-Hans" | "zh-Hant" = "zh-Hans") => {
+    const query = new URLSearchParams({ locale });
+    return request<Record<string, unknown>>(`/api/crm/v1/opc/history/summary?${query}`);
+  },
   queryOpcHistory: (payload: Record<string, unknown>) => request<Record<string, unknown>>(
     "/api/crm/v1/opc/history/query",
     { method: "POST", body: payload },

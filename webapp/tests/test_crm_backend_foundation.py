@@ -1029,7 +1029,12 @@ class CRMBackendFoundationTests(unittest.TestCase):
         self.assertEqual(notifications[0]["event"], "workflow_created")
         bootstrap = client.get("/api/crm/v1/bootstrap")
         self.assertEqual(bootstrap.status_code, 200, bootstrap.text)
-        self.assertTrue(bootstrap.json()["capabilities"]["direct_message_batch"]["enabled"])
+        bootstrap_payload = bootstrap.json()
+        self.assertTrue(bootstrap_payload["capabilities"]["direct_message_batch"]["enabled"])
+        self.assertEqual(len(bootstrap_payload["tasks"]), 1)
+        self.assertEqual(bootstrap_payload["tasks"][0]["id"], created.json()["task_id"])
+        self.assertFalse(bootstrap_payload["task_page"]["has_more"])
+        self.assertEqual(bootstrap_payload["task_page"]["next_cursor"], "")
 
     def test_write_task_requires_matching_server_preflight(self):
         app = FastAPI()
@@ -1149,6 +1154,15 @@ class CRMBackendFoundationTests(unittest.TestCase):
         demand = client.post("/api/crm/v1/demand/analyze", json={"text": "寻找 AI 营销客户", "locale": "zh-Hans"})
         self.assertEqual(demand.status_code, 200, demand.text)
         self.assertTrue(demand.json()["keywords"])
+        progress = client.get(
+            "/api/crm/v1/comments/progress",
+            params={"pool_id": pool["id"], "batch_size": 5},
+        )
+        self.assertEqual(progress.status_code, 200, progress.text)
+        self.assertEqual(progress.json()["poolName"], "AI prospects")
+        self.assertEqual(progress.json()["remaining"], 1)
+        self.assertEqual(progress.json()["batchSize"], 1)
+        self.assertEqual(progress.json()["nextLeadIds"], [lead["id"]])
         drafts = client.post(
             "/api/crm/v1/comments/drafts",
             json={"poolId": pool["id"], "selectedLeadIds": [lead["id"]], "locale": "zh-Hans"},

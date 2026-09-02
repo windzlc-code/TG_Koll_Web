@@ -170,15 +170,44 @@ def _refresh_proxycheap_after_webhook(metadata: dict[str, Any]) -> None:
         api_secret = str(config.get("provider_api_secret") or "").strip()
         if not api_key or not api_secret:
             raise RuntimeError("Proxy-Cheap API credentials are unavailable")
-        traffic = _traffic_summary(_fetch_proxycheap_products(api_key, api_secret), config)
+        supplier_products = _fetch_proxycheap_products(api_key, api_secret)
+        traffic = _traffic_summary(supplier_products, config)
         with _CONFIG_LOCK:
             latest = _load_config()
             latest["traffic_cache"] = traffic
+            products = _normalise_products(latest)
+            known = {str(item.get("proxy_id") or "").strip() for item in products}
+            ingested: list[str] = []
+            for product in supplier_products:
+                if not isinstance(product, dict):
+                    continue
+                proxy_id = str(product.get("id") or "").strip()
+                if not proxy_id or proxy_id in known:
+                    continue
+                if not _is_rotating_residential(product):
+                    continue
+                if str(product.get("status") or "").strip().upper() != "ACTIVE":
+                    continue
+                if _is_summary_exhausted(_product_summary(product)):
+                    continue
+                _onboard_proxy_product(
+                    latest,
+                    products,
+                    product,
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    is_new=True,
+                )
+                known.add(proxy_id)
+                ingested.append(proxy_id)
+            if ingested:
+                latest = _apply_products(latest, products)
             latest = _maybe_switch_exhausted_reader(latest, traffic)
             latest["webhook_last_refresh"] = {
                 "ok": True,
                 "event_id": str(metadata.get("event_id") or ""),
                 "synced_at": _now(),
+                "ingested_ids": ingested,
             }
             _write_config(latest)
     except Exception as exc:
@@ -232,6 +261,7 @@ def _normalise_products(config: dict[str, Any]) -> list[dict[str, Any]]:
     source = raw if isinstance(raw, list) else (list(raw.values()) if isinstance(raw, dict) else [])
     products: list[dict[str, Any]] = []
     seen: set[str] = set()
+    account_product_id = _account_product_id(config)
     for value in source:
         if not isinstance(value, dict):
             continue
@@ -244,6 +274,11 @@ def _normalise_products(config: dict[str, Any]) -> list[dict[str, Any]]:
         item["product"] = item.get("product") if isinstance(item.get("product"), dict) else {"id": proxy_id}
         item["last_check"] = item.get("last_check") if isinstance(item.get("last_check"), dict) else {}
         item["public_reader_enabled"] = bool(item.get("public_reader_enabled"))
+        item["user_set_reader"] = bool(item.get("user_set_reader"))
+        item["user_set_traffic_role"] = bool(item.get("user_set_traffic_role"))
+        role = str(item.get("traffic_role") or "").strip().lower()
+        item["traffic_role"] = role if role in {"dynamic", "sticky"} else ("sticky" if proxy_id == account_product_id else "dynamic")
+        item["mode"] = "sticky" if item["traffic_role"] == "sticky" else "rotating"
         products.append(item)
         seen.add(proxy_id)
 
@@ -274,8 +309,9 @@ def _normalise_products(config: dict[str, Any]) -> list[dict[str, Any]]:
             products.append({
                 "proxy_id": proxy_id, "product_id": proxy_id, "product": {"id": proxy_id},
                 "host": "", "port": 0, "protocol": "http", "username": "", "password": "",
-                "last_check": {}, "public_reader_enabled": False, "state": "needs_connection",
-                "mode": "rotating", "created_at": _now(), "updated_at": _now(),
+                "last_check": {}, "public_reader_enabled": False, "user_set_reader": False,
+                "user_set_traffic_role": False, "state": "needs_connection",
+                "mode": "rotating", "traffic_role": "dynamic", "created_at": _now(), "updated_at": _now(),
             })
             seen.add(proxy_id)
     return products
@@ -555,6 +591,46 @@ def _traffic_remaining_gb(traffic: dict[str, Any], proxy_id: str) -> float | Non
     return None
 
 
+def _is_summary_exhausted(item: dict[str, Any] | None) -> bool:
+    if not isinstance(item, dict):
+        return False
+    total = _number(item.get("bandwidth_total_gb"))
+    if total <= 0:
+        return False
+    remaining = item.get("bandwidth_remaining_gb")
+    if remaining is None:
+        remaining = max(0.0, total - _number(item.get("bandwidth_used_gb")))
+    return float(remaining) <= EXHAUSTED_REMAINING_GB
+
+
+def _is_metered_traffic_exhausted(traffic: dict[str, Any], proxy_id: str) -> bool:
+    remaining = _traffic_remaining_gb(traffic, proxy_id)
+    if remaining is None:
+        return False
+    for item in traffic.get("products") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("id") or "") != str(proxy_id or "").strip():
+            continue
+        return _is_summary_exhausted(item)
+    return False
+
+
+def _prune_exhausted_products(config: dict[str, Any], traffic: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    products = _normalise_products(config)
+    kept: list[dict[str, Any]] = []
+    removed: list[str] = []
+    for item in products:
+        proxy_id = str(item.get("proxy_id") or "")
+        if proxy_id and _is_metered_traffic_exhausted(traffic, proxy_id):
+            removed.append(proxy_id)
+            continue
+        kept.append(item)
+    if not removed:
+        return config, []
+    return _apply_products(config, kept), removed
+
+
 def _account_product_id(config: dict[str, Any]) -> str:
     account = _stored_proxy_profile(config, "account")
     return str(account.get("product_id") or config.get("account_product_id") or "").strip()
@@ -614,6 +690,184 @@ def _pick_reader_switch_candidate(
     return ranked[0][2] if ranked else None
 
 
+def _product_verified(item: dict[str, Any]) -> bool:
+    fingerprint = _connection_fingerprint(item)
+    check = item.get("last_check") if isinstance(item.get("last_check"), dict) else {}
+    return bool(check.get("ok") and fingerprint and check.get("connection_fingerprint") == fingerprint)
+
+
+def _healthy_active_reader_ids(products: list[dict[str, Any]], *, exclude_id: str = "") -> list[str]:
+    exclude = str(exclude_id or "").strip()
+    ids: list[str] = []
+    for item in products:
+        proxy_id = str(item.get("proxy_id") or "").strip()
+        if not proxy_id or proxy_id == exclude:
+            continue
+        if not item.get("public_reader_enabled"):
+            continue
+        if str(item.get("state") or "") != "active":
+            continue
+        if str(item.get("traffic_role") or "dynamic") != "dynamic":
+            continue
+        if _product_verified(item):
+            ids.append(proxy_id)
+    return ids
+
+
+def _blank_product_entry(proxy_id: str, summary: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "proxy_id": proxy_id,
+        "product_id": proxy_id,
+        "product": summary if isinstance(summary, dict) else {"id": proxy_id},
+        "host": "",
+        "port": 0,
+        "protocol": "http",
+        "username": "",
+        "password": "",
+        "last_check": {},
+        "connection_fingerprint": "",
+        "public_reader_enabled": False,
+        "user_set_reader": False,
+        "user_set_traffic_role": False,
+        "state": "needs_connection",
+        "mode": "rotating",
+        "traffic_role": "dynamic",
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+
+
+def _fill_and_test_product_connection(
+    entry: dict[str, Any],
+    supplier: dict[str, Any] | None,
+    products: list[dict[str, Any]],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    supplier = supplier if isinstance(supplier, dict) else {}
+    authentication = supplier.get("authentication") if isinstance(supplier.get("authentication"), dict) else {}
+    host, port, protocol = _product_endpoint(supplier) if supplier else ("", 0, "http")
+    if not host or int(port or 0) <= 0:
+        host, port, protocol = _gateway_from_rotating_products(products, config)
+    if host and int(port or 0) > 0:
+        entry["host"] = host
+        entry["port"] = int(port)
+        entry["protocol"] = protocol or "http"
+    if authentication.get("username"):
+        entry["username"] = str(authentication.get("username") or "")
+        entry["password"] = str(authentication.get("password") or "")
+    if not entry.get("host") or int(entry.get("port") or 0) <= 0 or not entry.get("username"):
+        entry["last_check"] = {}
+        entry["connection_fingerprint"] = ""
+        entry["state"] = "needs_connection"
+        entry["updated_at"] = _now()
+        return {}
+    result: dict[str, Any] = {"ok": False}
+    for _attempt in range(2):
+        try:
+            result = _test_connection(entry)
+        except HTTPException as exc:
+            result = {"ok": False, "error": str(exc.detail), "checked_at": _now()}
+        except Exception as exc:
+            result = {"ok": False, "error": type(exc).__name__, "checked_at": _now()}
+        if result.get("ok"):
+            break
+    fingerprint = _connection_fingerprint(entry)
+    result["connection_fingerprint"] = fingerprint
+    entry["connection_fingerprint"] = fingerprint
+    entry["last_check"] = result
+    entry["updated_at"] = _now()
+    return result
+
+
+def _apply_auto_onboard_defaults(
+    entry: dict[str, Any],
+    products: list[dict[str, Any]],
+    *,
+    is_new: bool,
+    restore_reader: bool = False,
+    config: dict[str, Any] | None = None,
+) -> None:
+    if not bool(entry.get("user_set_traffic_role")):
+        existing_role = str(entry.get("traffic_role") or "").strip().lower()
+        if existing_role not in {"dynamic", "sticky"}:
+            account_id = _account_product_id(config or {})
+            if account_id and str(entry.get("proxy_id") or "") == account_id:
+                entry["traffic_role"] = "sticky"
+            else:
+                entry["traffic_role"] = "dynamic"
+    role = str(entry.get("traffic_role") or "dynamic")
+    entry["mode"] = "sticky" if role == "sticky" else "rotating"
+    verified = _product_verified(entry)
+    if not verified:
+        entry["public_reader_enabled"] = False
+        entry["state"] = "check_failed" if entry.get("last_check") else "needs_connection"
+        return
+    if role != "dynamic":
+        if not bool(entry.get("user_set_reader")):
+            entry["public_reader_enabled"] = False
+        elif entry.get("public_reader_enabled"):
+            entry["public_reader_enabled"] = False
+        entry["state"] = "ready"
+        return
+    if bool(entry.get("user_set_reader")):
+        entry["state"] = "active" if entry.get("public_reader_enabled") else "ready"
+        return
+    others = _healthy_active_reader_ids(products, exclude_id=str(entry.get("proxy_id") or ""))
+    if restore_reader or (is_new and not others):
+        entry["public_reader_enabled"] = True
+        entry["state"] = "active"
+        return
+    entry["public_reader_enabled"] = False
+    entry["state"] = "ready"
+
+
+def _onboard_proxy_product(
+    config: dict[str, Any],
+    products: list[dict[str, Any]],
+    candidate: dict[str, Any],
+    *,
+    api_key: str = "",
+    api_secret: str = "",
+    supplier: dict[str, Any] | None = None,
+    is_new: bool | None = None,
+    restore_reader: bool = False,
+) -> dict[str, Any]:
+    proxy_id = str(
+        (candidate or {}).get("id")
+        or (candidate or {}).get("proxy_id")
+        or (supplier or {}).get("id")
+        or ""
+    ).strip()
+    if not proxy_id:
+        raise ValueError("proxy id required")
+    entry = next((item for item in products if str(item.get("proxy_id") or "") == proxy_id), None)
+    created = entry is None
+    summary_source = supplier if isinstance(supplier, dict) else candidate
+    if entry is None:
+        entry = _blank_product_entry(proxy_id, _product_summary(summary_source if isinstance(summary_source, dict) else {}))
+        products.append(entry)
+    if is_new is None:
+        is_new = created
+    detail = supplier if isinstance(supplier, dict) else None
+    if detail is None and api_key and api_secret:
+        try:
+            detail = _fetch_proxycheap_product(proxy_id, api_key, api_secret)
+        except Exception:
+            detail = candidate if isinstance(candidate, dict) else {}
+    if not isinstance(detail, dict):
+        detail = candidate if isinstance(candidate, dict) else {}
+    entry["product"] = _product_summary(detail)
+    _fill_and_test_product_connection(entry, detail, products, config)
+    _apply_auto_onboard_defaults(
+        entry,
+        products,
+        is_new=bool(is_new),
+        restore_reader=restore_reader,
+        config=config,
+    )
+    return entry
+
+
 def _prepare_reader_product_entry(
     config: dict[str, Any],
     products: list[dict[str, Any]],
@@ -633,47 +887,12 @@ def _prepare_reader_product_entry(
         except Exception:
             supplier = None
     summary = _product_summary(supplier or candidate)
-    authentication = (supplier or {}).get("authentication") if isinstance((supplier or {}).get("authentication"), dict) else {}
-    gateway_host, gateway_port, gateway_protocol = _gateway_from_rotating_products(products, config)
     if entry is None:
-        entry = {
-            "proxy_id": proxy_id,
-            "product_id": proxy_id,
-            "product": summary,
-            "host": "",
-            "port": 0,
-            "protocol": "http",
-            "username": "",
-            "password": "",
-            "last_check": {},
-            "public_reader_enabled": False,
-            "state": "needs_connection",
-            "mode": "rotating",
-            "created_at": _now(),
-            "updated_at": _now(),
-        }
+        entry = _blank_product_entry(proxy_id, summary)
         products.append(entry)
     entry["product"] = summary
     entry["mode"] = "rotating"
-    if not entry.get("host") or int(entry.get("port") or 0) <= 0:
-        entry["host"] = gateway_host
-        entry["port"] = gateway_port
-        entry["protocol"] = gateway_protocol or "http"
-    if authentication.get("username"):
-        entry["username"] = str(authentication.get("username") or "")
-        entry["password"] = str(authentication.get("password") or "")
-    if not entry.get("host") or int(entry.get("port") or 0) <= 0 or not entry.get("username"):
-        return None
-    result = {"ok": False}
-    for _attempt in range(2):
-        result = _test_connection(entry)
-        if result.get("ok"):
-            break
-    fingerprint = _connection_fingerprint(entry)
-    result["connection_fingerprint"] = fingerprint
-    entry["connection_fingerprint"] = fingerprint
-    entry["last_check"] = result
-    entry["updated_at"] = _now()
+    result = _fill_and_test_product_connection(entry, supplier or candidate, products, config)
     if not result.get("ok"):
         entry["state"] = "check_failed"
         return None
@@ -1188,7 +1407,17 @@ def register_collector_proxy_admin_routes(app: FastAPI) -> None:
 
     @app.get("/api/admin/collector-proxy/config")
     def get_collector_proxy_config(_admin: dict[str, Any] = Depends(require_admin)):
-        return _public_config(_load_config())
+        config = _load_config()
+        traffic = config.get("traffic_cache") if isinstance(config.get("traffic_cache"), dict) else {}
+        if traffic.get("products"):
+            with _CONFIG_LOCK:
+                latest = _load_config()
+                cache = latest.get("traffic_cache") if isinstance(latest.get("traffic_cache"), dict) else traffic
+                latest, removed = _prune_exhausted_products(latest, cache)
+                if removed:
+                    _write_config(latest)
+                    config = latest
+        return _public_config(config)
 
     @app.post("/api/admin/collector-proxy/secrets/{secret_name}")
     def reveal_collector_proxy_secret(
@@ -1251,18 +1480,18 @@ def register_collector_proxy_admin_routes(app: FastAPI) -> None:
         if not api_key or not api_secret:
             raise HTTPException(status_code=409, detail="请先识别产品并保存有效 API 凭据")
         supplier_product = _fetch_proxycheap_product(proxy_id, api_key, api_secret)
-        summary = _product_summary(supplier_product)
         with _CONFIG_LOCK:
             config = _load_config()
             products = _normalise_products(config)
             if any(item.get("proxy_id") == proxy_id for item in products):
                 return {"ok": True, "exists": True, "config": _public_config(config)}
-            products.append({
-                "proxy_id": proxy_id, "product_id": proxy_id, "product": summary,
-                "host": "", "port": 0, "protocol": "http", "username": "", "password": "",
-                "last_check": {}, "public_reader_enabled": False, "state": "needs_connection",
-                "mode": "rotating", "created_at": _now(), "updated_at": _now(),
-            })
+            _onboard_proxy_product(
+                config,
+                products,
+                supplier_product,
+                supplier=supplier_product,
+                is_new=True,
+            )
             config = _apply_products(config, products)
             _write_config(config)
         return {"ok": True, "added_id": proxy_id, "config": _public_config(config)}
@@ -1297,12 +1526,42 @@ def register_collector_proxy_admin_routes(app: FastAPI) -> None:
             latest["provider_api_key"] = api_key
             latest["provider_api_secret"] = api_secret
             latest["traffic_cache"] = traffic
+            configured = _normalise_products(latest)
+            known = {str(item.get("proxy_id") or "").strip() for item in configured}
+            ingested = False
+            for product in products:
+                if not isinstance(product, dict):
+                    continue
+                proxy_id = str(product.get("id") or "").strip()
+                if not proxy_id or proxy_id in known:
+                    continue
+                if not _is_rotating_residential(product):
+                    continue
+                if str(product.get("status") or "").strip().upper() != "ACTIVE":
+                    continue
+                if _is_summary_exhausted(_product_summary(product)):
+                    continue
+                _onboard_proxy_product(
+                    latest,
+                    configured,
+                    product,
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    is_new=True,
+                )
+                known.add(proxy_id)
+                ingested = True
+            if ingested:
+                latest = _apply_products(latest, configured)
             latest = _maybe_switch_exhausted_reader(latest, traffic)
+            latest, removed = _prune_exhausted_products(latest, traffic)
             latest["updated_at"] = _now()
             _write_config(latest)
+        live_products = [item for item in traffic["products"] if not _is_summary_exhausted(item)]
         return {
             "ok": True,
-            "products": traffic["products"],
+            "products": live_products,
+            "removed_ids": removed,
             "traffic": traffic,
             "warning": latest.get("traffic_warning"),
             "config": _public_config(latest),
@@ -1367,6 +1626,7 @@ def register_collector_proxy_admin_routes(app: FastAPI) -> None:
             if payload.enabled and str(item.get("protocol") or "http") not in {"http", "https"}:
                 raise HTTPException(status_code=409, detail="公开 Reader 当前仅支持 HTTP 或 HTTPS 代理")
             item["public_reader_enabled"] = bool(payload.enabled)
+            item["user_set_reader"] = True
             item["state"] = "active" if payload.enabled else ("ready" if verified else "disabled")
             item["reader_rotation_epoch"] = int(item.get("reader_rotation_epoch") or 0) + 1
             item["last_rotation_at"] = _now()
@@ -1381,10 +1641,17 @@ def register_collector_proxy_admin_routes(app: FastAPI) -> None:
         cached = config.get("traffic_cache") if isinstance(config.get("traffic_cache"), dict) else {}
         cached_at = int(cached.get("synced_at") or 0)
         if cached and not force and (_now() - cached_at) < TRAFFIC_CACHE_SECONDS:
+            with _CONFIG_LOCK:
+                latest = _load_config()
+                latest, removed = _prune_exhausted_products(latest, cached)
+                if removed:
+                    _write_config(latest)
+                    config = latest
             traffic = _attach_traffic_groups(cached, config)
             return {
                 "ok": True,
                 "cached": True,
+                "removed_ids": removed,
                 "traffic": traffic,
                 "warning": config.get("traffic_warning") if isinstance(config.get("traffic_warning"), dict) else None,
                 "config": _public_config(config),
@@ -1398,10 +1665,12 @@ def register_collector_proxy_admin_routes(app: FastAPI) -> None:
             latest = _load_config()
             latest["traffic_cache"] = traffic
             latest = _maybe_switch_exhausted_reader(latest, traffic)
+            latest, removed = _prune_exhausted_products(latest, traffic)
             _write_config(latest)
         return {
             "ok": True,
             "cached": False,
+            "removed_ids": removed,
             "traffic": _attach_traffic_groups(traffic, latest),
             "warning": latest.get("traffic_warning"),
             "config": _public_config(latest),

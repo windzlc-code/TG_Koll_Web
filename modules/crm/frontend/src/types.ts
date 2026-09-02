@@ -12,7 +12,6 @@ export type ViewId =
   | "analytics"
   | "schedules"
   | "templates"
-  | "destinations"
   | "accounts"
   | "settings";
 
@@ -116,6 +115,7 @@ export type BootstrapPayload = {
   capabilities?: Record<string, { status?: "equivalent" | "adapted" | "blocked"; enabled?: boolean; reason_code?: string }>;
   accounts?: CrmAccount[];
   tasks?: CrmTask[];
+  task_page?: { next_cursor?: string | null; has_more?: boolean };
   onboarding?: { completed?: boolean; steps?: Array<{ id: string; completed?: boolean }> };
   warnings?: Array<{ code?: string; message?: string; message_key?: string }>;
 };

@@ -24467,8 +24467,9 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="administrator workspace access required")
 
         target_user_id = _workspace_user_id(user)
-        # Authenticated approved accounts can open CRM directly. The top-nav
-        # entry stays admin-only; ordinary accounts simply do not see it.
+        # Authenticated approved accounts can open CRM directly. The shared
+        # navigation keeps the entry visible to every visitor; this route
+        # remains the authentication boundary for the workspace itself.
         return _html_response_with_versions(
             "crm.html",
             replacements={
@@ -29628,6 +29629,20 @@ def create_app() -> FastAPI:
         _invalidate_admin_dashboard_cache()
         return {"ok": True, "email_delivery": overview}
 
+    def _hot_dataset_worker_base_url() -> str:
+        env_url = str(os.getenv("TG_FETCH_WORKER_INTERNAL_URL") or "").strip().rstrip("/")
+        if env_url:
+            return env_url
+        settings_path = Path(os.getenv("TG_COLLECTOR_WORKER_ENDPOINT_FILE", "/collector-proxy/worker-endpoint.json"))
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            file_url = str(dict(settings or {}).get("base_url") or "").strip().rstrip("/")
+            if file_url:
+                return file_url
+        except Exception:
+            pass
+        return "http://tg-koll-capture-worker:8092"
+
     def _hot_dataset_worker_request(method: str, path: str, *, query: str = "", body: bytes = b"") -> dict[str, Any]:
         try:
             keys_path = Path(os.getenv("TG_FETCH_WORKER_KEYS_FILE", "/data/internal/remote-fetch-keys.json"))
@@ -29643,7 +29658,7 @@ def create_app() -> FastAPI:
                 timestamp=int(time.time()),
                 nonce=secrets.token_urlsafe(24),
             )
-            base_url = os.getenv("TG_FETCH_WORKER_INTERNAL_URL", "http://tg-koll-capture-worker:8092").rstrip("/")
+            base_url = _hot_dataset_worker_base_url()
             url = base_url + path
             if query:
                 url = f"{url}?{query.lstrip('?')}"

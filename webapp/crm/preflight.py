@@ -13,6 +13,7 @@ from .errors import CRMError
 from .comment_policy import assess_public_comment_content
 from .direct_message_policy import evaluate_direct_message_trust
 from .engagement_policy import PUBLIC_COMMENT_MAX_PER_DAY, evaluate_public_comment_rate
+from .instagram_group_validation import validate_instagram_group_create_targets
 from .repository import canonicalize_action, dumps, find_active_duplicate_action, loads
 
 
@@ -152,6 +153,25 @@ def build_preflight(
                     "abnormal", "banned", "needs_login", "cookie_expired", "pending_login",
                 }:
                     reason = "crm_account_needs_login"
+        if not reason and action_type == "instagram_group_create":
+            payload = action.get("payload") if isinstance(action.get("payload"), dict) else {}
+            try:
+                validated_targets = validate_instagram_group_create_targets(
+                    conn,
+                    user_id=int(user_id),
+                    payload=payload,
+                )
+                policy["instagram_group_targets"] = {
+                    "allowed": True,
+                    "pool_id": validated_targets["pool_id"],
+                    "member_count": len(validated_targets["members"]),
+                }
+            except CRMError as exc:
+                reason = exc.code
+                policy["instagram_group_targets"] = {
+                    "allowed": False,
+                    **dict(exc.details or {}),
+                }
         if not reason and bool(action.get("write")):
             content_hash = hashlib.sha256(str(action.get("content") or "").encode("utf-8")).hexdigest()
             batch_key = (action_type, str(action["target_key"]), content_hash)

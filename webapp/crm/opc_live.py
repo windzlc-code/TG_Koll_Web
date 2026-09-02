@@ -568,31 +568,7 @@ def query_opc_history_realtime(
         minimum=1,
         maximum=maximum,
     )
-    requested_contact = _clean(payload.get("contact"), 20).lower()
-    if requested_contact == "contacted":
-        # Old opc-adapter.mjs defines contacted as every previously contacted
-        # row, including a later failed delivery.  The base Python query uses
-        # literal equality, so query the bounded tenant history first and then
-        # restore the old semantic here.
-        base_payload = {**dict(payload), "contact": "", "limit": maximum}
-        result = query_opc_history(conn, tenant, base_payload, maximum=maximum)
-        matched = [
-            row
-            for row in result.get("data", [])
-            if isinstance(row, Mapping) and row.get("contactStatus") != "new"
-        ]
-        filters = dict(result.get("filters") or {})
-        filters["contact"] = "contacted"
-        result = {
-            **result,
-            "total": len(matched),
-            "data": matched[:requested_limit],
-            "limit": requested_limit,
-            "truncated": len(matched) > requested_limit,
-            "filters": filters,
-        }
-    else:
-        result = query_opc_history(conn, tenant, payload, maximum=maximum)
+    result = query_opc_history(conn, tenant, {**dict(payload), "limit": requested_limit}, maximum=maximum)
     executed_at = _iso_now()
     return {
         **result,

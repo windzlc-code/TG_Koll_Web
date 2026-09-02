@@ -63,7 +63,7 @@
       pricing: "订阅方案",
       difference: "服务差异",
       console: "控制台",
-      crm: "CRM 工作台",
+      crm: "采集工作台",
       adminConsole: "运营后台",
       aboutVecto: "了解 Vecto",
       login: "登录",
@@ -165,7 +165,7 @@
       pricing: "訂閱方案",
       difference: "服務差異",
       console: "控制台",
-      crm: "CRM 工作台",
+      crm: "採集工作台",
       adminConsole: "營運後台",
       aboutVecto: "了解 Vecto",
       login: "登入",
@@ -423,9 +423,7 @@
   async function syncCrmEntryVisibility() {
     const entries = [...document.querySelectorAll("[data-crm-entry]")];
     if (!entries.length) return;
-    const adminIdentity = currentSessionMode === "admin"
-      && Boolean(currentAccount?.is_admin || currentAccount?.acting_admin);
-    entries.forEach((entry) => { entry.hidden = !adminIdentity; });
+    entries.forEach((entry) => { entry.hidden = false; });
   }
 
   function installAdminEntry(header) {
@@ -511,11 +509,10 @@
   function navLink({ key, href, current, className = "" }) {
     const busy = key === "console" ? " data-console-entry" : "";
     const crmEntry = key === "crm" ? " data-crm-entry" : "";
-    const initiallyHidden = key === "crm" ? " hidden" : "";
     const register = key === "guest" ? " data-open-register" : "";
     const active = current === key ? ' aria-current="page"' : "";
     const classAttribute = className ? ` class="${className}"` : "";
-    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}${crmEntry}${register}${initiallyHidden}><span data-site-copy="${key}"></span></a>`;
+    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}${crmEntry}${register}><span data-site-copy="${key}"></span></a>`;
   }
 
   function navigationLinks(page, current) {
@@ -724,11 +721,10 @@
       const active = current === key ? ' aria-current="page"' : "";
       const consoleEntry = key === "console" ? " data-console-entry" : "";
       const crmEntry = key === "crm" ? " data-crm-entry" : "";
-      const initiallyHidden = key === "crm" ? " hidden" : "";
       const groupLabel = index === 0 || items[index - 1].group !== group
         ? `<span class="site-mobile-menu-group-label" data-site-copy="${group}"></span>`
         : "";
-      return `${groupLabel}<a class="site-mobile-menu-link" data-site-nav-key="${key}" href="${href}"${active}${consoleEntry}${crmEntry}${initiallyHidden}><span class="site-mobile-menu-link-icon">${mobileMenuItemIcon(key)}</span><span data-site-copy="${key}"></span></a>`;
+      return `${groupLabel}<a class="site-mobile-menu-link" data-site-nav-key="${key}" href="${href}"${active}${consoleEntry}${crmEntry}><span class="site-mobile-menu-link-icon">${mobileMenuItemIcon(key)}</span><span data-site-copy="${key}"></span></a>`;
     }).join("");
   }
 

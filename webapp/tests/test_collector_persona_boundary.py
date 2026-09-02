@@ -31,6 +31,11 @@ def test_collector_boundary_assets_exist_and_strip_persona_product_surfaces() ->
     assert "enforceStandaloneAdmin()" not in observer_chunk
     assert "applyRedirectsOnce()" not in observer_chunk
 
+    assert "pruneCollectorUnusedProxyMarket" in script
+    assert '["proxyMarket", "代理 IP"]' not in script
+    assert '["crm", "CRM 后端"]' not in script
+    assert "html[data-deployment-role=\"collector\"] #secProxyMarket" in styles
+    assert "html[data-deployment-role=\"collector\"] #secCrm" in styles
     assert "html[data-deployment-role=\"collector\"] .account-pool-bound-persona" in styles
     assert "html[data-deployment-role=\"collector\"] .account-pool-persona-shell" in styles
     assert 'html[data-deployment-role="collector"] [data-view="persona_dashboard"]' in styles

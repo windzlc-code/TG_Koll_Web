@@ -17,7 +17,7 @@
   });
   const enforceAdminPageBoundary = () => {
     if (!document.body.classList.contains("page-admin")) return;
-    const allowed = new Set(["overview", "proxyMarket", "crm", "runtime", "sentimentCookies"]);
+    const allowed = new Set(["overview", "runtime", "sentimentCookies"]);
     const current = String(location.hash || "").replace(/^#admin-/, "");
     if (current && !allowed.has(current)) location.hash = "#admin-overview";
   };
@@ -94,13 +94,19 @@
   };
 
   const pruneCollectorCrmEntries = () => {
-    document.querySelectorAll('[data-crm-entry], a[href^="/crm.html"]').forEach((node) => node.remove());
+    document.querySelectorAll(
+      '[data-crm-entry], a[href^="/crm.html"], #adminPrimaryNav [data-page="crm"], [data-collector-admin-page="crm"], [data-page-view="crm"], #secCrm'
+    ).forEach((node) => node.remove());
+  };
+
+  const pruneCollectorUnusedProxyMarket = () => {
+    document.querySelectorAll(
+      '#adminPrimaryNav [data-page="proxyMarket"], [data-collector-admin-page="proxyMarket"], [data-page-view="proxyMarket"], #secProxyMarket, #proxyMarketShareModal, #accountBrowserProxiesTab, #accountBrowserProxiesPage'
+    ).forEach((node) => node.remove());
   };
 
   const collectorAdminPages = new Map([
     ["overview", "运营概览"],
-    ["proxyMarket", "代理 IP"],
-    ["crm", "CRM 后端"],
     ["runtime", "系统配置"],
     ["sentimentCookies", "舆情 Cookie"],
   ]);
@@ -284,8 +290,12 @@
     button.setAttribute("aria-selected", "false");
     button.setAttribute("aria-controls", "accountBrowserBrowsersPage");
     button.textContent = "登录监控";
-    if (proxiesTab) proxiesTab.after(button);
+    const accountsTab = tabs.querySelector("#accountBrowserAccountsTab, [data-account-browser-tab='accounts']");
+    if (accountsTab) accountsTab.after(button);
+    else if (proxiesTab) proxiesTab.before(button);
     else tabs.appendChild(button);
+    proxiesTab?.remove();
+    document.querySelector("#accountBrowserProxiesPage")?.remove();
   };
   if (!window.__collectorPersonaBindGuard) {
     window.__collectorPersonaBindGuard = true;
@@ -310,7 +320,7 @@
     document.body.classList.add("collector-embedded-admin");
   };
   const applyDom = () => {
-    replaceExactText(); cleanCollectorWorkspaceMenu(); enforceAdminPageBoundary(); pruneAdminOverview(); pruneCollectorHome(); pruneCollectorCrmEntries(); pruneCollectorAccountMenu(); installCollectorUnifiedConsole(); installCollectorLoginMonitorTab(); stripPersonaProductSurfaces();
+    replaceExactText(); cleanCollectorWorkspaceMenu(); enforceAdminPageBoundary(); pruneAdminOverview(); pruneCollectorHome(); pruneCollectorCrmEntries(); pruneCollectorUnusedProxyMarket(); pruneCollectorAccountMenu(); installCollectorUnifiedConsole(); installCollectorLoginMonitorTab(); stripPersonaProductSurfaces();
   };
   const applyRedirectsOnce = () => {
     if (document.body.dataset.collectorRedirectsReady === "true") return;

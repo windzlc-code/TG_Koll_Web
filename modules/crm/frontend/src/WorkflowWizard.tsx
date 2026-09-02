@@ -8,7 +8,7 @@ import { SelectMenu } from "./select-menu";
 import type { CrmAccount, Language, ViewId } from "./types";
 
 type Row = Record<string, unknown>;
-export type WizardView = Extract<ViewId, "collect" | "public" | "outreach" | "groups" | "relationships">;
+export type WizardView = Extract<ViewId, "collect" | "public" | "outreach" | "groups">;
 export type WorkflowSeed = {
   poolId?: string;
   leadIds?: string[];
@@ -29,54 +29,54 @@ const copy = {
     submit: "确认并开始", collectStart: "开始采集", submitting: "正在建立任务…", loading: "正在读取客户池、模板和账号…", required: "请完成当前步骤的必填内容。",
     step: (current: number, total: number) => `步骤 ${current}／${total}`,
     collectSteps: ["填写设置", "确认启动"],
-    collectHint2: "，AI 会先解析并让你确认，再启动采集。",
+    collectHint1Persona: "描述目标用户，AI 将生成画像与关键词。",
+    collectHint1Hotspot: "输入热门议题，搜索真实高互动贴文。",
+    collectHint1Link: "贴上 IG／Threads 链接，系统自动识别平台。",
     collectHint3Persona: "需求已拆解成画像与多组关键词，将并发执行并自动去重。",
     collectHint3Hotspot: "已找出高互动贴文，请勾选要深入采集的来源。",
     collectHint3Link: "请核对链接与采集范围，再开始采集。",
     preparePersona: "分析画像并继续", prepareHotspot: "搜索热门贴文并继续", prepareLink: "验证链接并继续",
     preparingPersona: "AI 正在拆解需求…", preparingHotspot: "搜寻真实热点中…", preparingLink: "正在验证链接…",
-    demand: "描述你的目标用户", demandPlaceholder: "例如：台湾 25–40 岁、经营电商品牌、关注 AI 自动化",
-    query: "输入近期热门议题", queryPlaceholder: "例如：AI 代理人、零售电商、个人品牌经营",
-    sourceLink: "贴上 IG／Threads 链接", sourceLinkPlaceholder: "https://www.instagram.com/... 或 https://www.threads.net/...",
+    demand: "目标用户", demandPlaceholder: "例如：台湾 25–40 岁、经营电商品牌、关注 AI 自动化",
+    query: "热门议题", queryPlaceholder: "例如：AI 代理人、零售电商、个人品牌经营",
+    sourceLink: "IG／Threads 链接", sourceLinkPlaceholder: "https://www.instagram.com/... 或 https://www.threads.net/...",
     audienceScope: "采集策略", audienceScopeHint: "决定哪些候选可进正式客户池",
     vertical: "垂直精准", verticalHint: "产业＋角色／需求至少两层讯号；泛相关不进名单",
     expanded: "扩大范围", expandedHint: "固定近 30 天；精准、扩展候选、排除三层统计",
     recommended: "推荐", expand: "扩量",
-    lookback: "采集资料时间范围", lookbackHint: "会实际筛选贴文与互动时间",
-    lookbackNote: (label: string) => `目前选择「${label}」。没有可验证时间的资料不会混入结果。`,
+    lookback: "资料时间", lookbackHint: "按贴文与互动时间筛选",
+    lookbackNote: (label: string) => `当前：${label}；无时间资料将排除。`,
     lookbackLabel: (days: number) => (days === 1 ? "今天" : `近${days}天`),
     platformHint: (names: string[]) => names.length === 0
-      ? "尚未选择采集平台。请点选 Threads 或 Instagram。"
+      ? "请选择采集平台。"
       : names.length === 1
-        ? `已选择 ${names[0]}。只会在该平台采集，不会跨平台混标。`
-        : `已选择 ${names.join("＋")}，共 ${names.length} 个平台，将分别执行并自动去重。`,
+        ? `仅采集 ${names[0]}。`
+        : `${names.join("＋")} 分开采集并自动去重。`,
     keywordLimit: "每个关键词采集范围", hotspotPostRange: "热点贴文选取范围",
     customRange: "自订起讫范围", allPosts: "全部找到的贴文",
     perPostUsers: "每则贴文采集用户范围",
     limitFast: "6 条", limitStandard: "12 条", limitDeep: "30 条", limitNone: "不限",
     limit30: "30位", limit100: "100位", limit300: "300位",
-    linkEngagement: "仅采集本篇贴文按赞、评论用户", linkFollowers: "采集该主账号公开可见粉丝",
-    linkPlatformNote: "由链接自动辨识。单一贴文只会在所属平台采集，不会误标成跨平台。",
-    batchName: "本次采集批次名称", batchNameHint: "选填，完成后仍可修改", batchPlaceholder: "例如：7 月房贷高意向名单", defaultBatch: "AI 潜在客户",
+    linkEngagement: "贴文互动用户", linkFollowers: "账号公开粉丝",
+    linkPlatformNote: "系统根据链接自动识别平台。",
+    batchName: "批次名称（选填）", batchNameHint: "", batchPlaceholder: "例如：7 月房贷高意向名单", defaultBatch: "AI 潜在客户",
     summaryMode: "采集方式", summaryPlatform: "目标平台", summaryBatch: "本次采集批次", summaryLookback: "资料时间范围", summaryScope: "采集策略",
     selectAllSources: "选择全部", clearSources: "清除选取",
     personaShort: "需求定向采集", hotspotShort: "热点全域采集", linkShort: "链接精准采集",
     engageSteps: ["选客户", "写内容", "选方式", "确认"],
-    relationSteps: ["选客户", "选账号", "确认"],
     assistant: "Vecto AI 操作助手", assistantHints: {
-      collect: "沿用原 CRM 的三步采集：先选方式，再分析需求或搜索热点，最后核对范围并启动。",
-      public: "先从客户池选择目标，再准备公开留言内容，最后完成执行前检查并确认发布。",
-      outreach: "先选客户、再绑定模板，最后选择样本、批次或排程；不会跳过重复触达检查。",
-      groups: "先确定邀请对象与平台，再准备邀请内容；Instagram 群聊和 Threads 邀请帖会明确区分。",
-      relationships: "从客户池选择要复核的客户，再使用 Instagram 账号进行只读关系检查。",
+      collect: "选择采集方式，填写条件后确认启动。",
+      public: "选择客户，填写留言，再确认发布。",
+      outreach: "选择客户，填写私信，再选择执行方式。",
+      groups: "选择客户与平台，填写邀请内容后确认。",
     },
     mode: "采集方式",
     platform: "采集平台", threads: "Threads", instagram: "Instagram", limit: "采集上限", analysis: "需求与客户画像分析", targetPersona: "目标画像", customerIntent: "客户意向", mainNeed: "主要需求", painPoint: "关注痛点", segments: "子画像", scenarios: "需求场景", keywords: "搜索关键词", results: "真实搜索结果", selectedSources: "已选择来源", noResults: "没有找到可用结果，可返回修改关键词。",
-    pool: "客户池", choosePool: "请选择客户池", recipients: "选择客户", selectAll: "选择本页全部", clear: "清空选择", loadMoreMembers: "加载更多客户", selected: (count: number) => `实际执行 ${count} 位客户`, noMembers: "该客户池暂无可用客户。", unavailableMember: "缺少平台账号或原帖链接，无法用于当前动作",
+    pool: "客户池", choosePool: "请选择客户池", recipients: "选择客户", selectAll: "选择本页全部", clear: "清空选择", loadMoreMembers: "加载更多客户", selected: (count: number) => `已选择 ${count} 位客户`, executing: (count: number) => `实际执行 ${count} 位客户`, noMembers: "该客户池暂无可用客户。", unavailableMember: "缺少平台账号或原帖链接，无法用于当前动作", platformMismatch: "该客户不属于当前所选平台，不能跨平台按同名账号猜测",
     template: "消息模板", chooseTemplate: "不使用已保存模板", content: "任务内容", contentPlaceholder: "填写公开留言、私信或邀请内容", publicMode: "公开互动方式", publicComment: "首次公开留言", publicReply: "公开回复", followupReply: "跟进回复", nurtureReply: "持续互动培育", publicReplyHint: "回复类动作必须选择带有原帖或评论链接的客户；系统会逐条保留提交证据。", publicStrategy: "留言策略", questionStrategy: "自然问句", questionStrategyHint: "回应原文，再提出一个容易回答的问题", offerStrategy: "提供帮助", offerStrategyHint: "先回应需求，再邀请对方回复关键词", groupStrategy: "征求群邀同意", groupStrategyHint: "只邀请对方回复同意，不会直接拉入群组", groupMode: "群组方式", threadsPost: "Threads 社群邀请帖", instagramDirect: "Instagram Direct 群聊",
     account: "执行账号", chooseAccount: "请选择账号", accountLogin: "需要先登录", execution: "执行方式", sample: "少量样本", sampleHint: "手动选择 1–20 位真实客户先行测试", batch: "稳定分批", batchHint: "按所选客户逐个执行并记录证据", schedule: "定时排程", scheduleHint: "到指定时间创建任务；真实动作仍按确认与计费规则执行", scheduleAt: "执行时间",
     scheduleCadence: "排程频率", scheduleOnce: "单次执行", scheduleDaily: "每日采集", dailyAt: "每天执行时间", dailyHint: "每天使用相同画像、关键词、范围和账号创建一个新的采集任务。",
-    trustFirstTitle: "信任触达规则", trustFirstHint: "首次私信只发送给已公开回复，或已验证关注执行账号的客户。", trustFirstSteps: ["未达到信任门槛的客户会在执行前检查中自动排除", "首次私信使用短文字，不附链接、电话、LINE 或图片", "发送前会再次显示可执行人数、跳过原因和预计扣点"],
+    trustFirstTitle: "信任触达规则", trustFirstHint: "首次私信只发送给已公开回复，或已验证关注执行账号的客户。", trustFirstSteps: ["未达到信任门槛的客户会在执行前检查中自动排除", "首次私信使用短文字，不附链接、电话、LINE 或图片", "发送前会再次显示可执行人数、跳过原因和预计扣点"], verifyRelationships: "校验私信资格", verifyRelationshipsHint: "使用所选 Instagram 执行账号核验当前选择中的原生 Instagram 客户；Threads 客户不会用同名账号猜测。", relationshipQueued: "关系核验任务已创建，可到任务详情查看证据", verificationNeedsInstagram: "请选择可用的 Instagram 账号，并至少选择一位原生 Instagram 客户。",
     confirmation: "提交前确认", action: "任务类型", targetRange: "目标范围", billing: "计费", billingWrite: "执行前检查通过后，按已确认批次扣点", billingRead: "只读操作免费，但会保留任务与结果记录", consent: "我已核对账号、目标客户与内容，并确认允许系统执行以上真实平台动作。",
     aiDrafts: "按原帖生成 AI 留言草稿", aiDrafting: "正在逐条生成草稿…", aiDraftHint: "每位客户会保留独立草稿；提交前仍可逐条修改。", draftFor: "给这位客户的留言",
     prepared: "准备完成", taskQueued: "任务已进入队列", scheduleSaved: "排程已保存", searchWarning: "结果来自实时搜索，请在继续前勾选正确来源。",
@@ -88,54 +88,54 @@ const copy = {
     submit: "確認並開始", collectStart: "開始採集", submitting: "正在建立任務…", loading: "正在讀取客戶池、範本和帳號…", required: "請完成目前步驟的必填內容。",
     step: (current: number, total: number) => `步驟 ${current}／${total}`,
     collectSteps: ["填寫設定", "確認啟動"],
-    collectHint2: "，AI 會先解析並讓你確認，再啟動採集。",
+    collectHint1Persona: "描述目標用戶，AI 將生成畫像與關鍵詞。",
+    collectHint1Hotspot: "輸入熱門議題，搜尋真實高互動貼文。",
+    collectHint1Link: "貼上 IG／Threads 連結，系統自動識別平台。",
     collectHint3Persona: "需求已拆解成畫像與多組關鍵詞，將併發執行並自動去重。",
     collectHint3Hotspot: "已找出高互動貼文，請勾選要深入採集的來源。",
     collectHint3Link: "請核對連結與採集範圍，再開始採集。",
     preparePersona: "分析畫像並繼續", prepareHotspot: "搜尋熱門貼文並繼續", prepareLink: "驗證連結並繼續",
     preparingPersona: "AI 正在拆解需求…", preparingHotspot: "搜尋真實熱點中…", preparingLink: "正在驗證連結…",
-    demand: "描述你的目標用戶", demandPlaceholder: "例如：台灣 25–40 歲、經營電商品牌、關注 AI 自動化",
-    query: "輸入近期熱門議題", queryPlaceholder: "例如：AI 代理人、零售電商、個人品牌經營",
-    sourceLink: "貼上 IG／Threads 連結", sourceLinkPlaceholder: "https://www.instagram.com/... 或 https://www.threads.net/...",
+    demand: "目標用戶", demandPlaceholder: "例如：台灣 25–40 歲、經營電商品牌、關注 AI 自動化",
+    query: "熱門議題", queryPlaceholder: "例如：AI 代理人、零售電商、個人品牌經營",
+    sourceLink: "IG／Threads 連結", sourceLinkPlaceholder: "https://www.instagram.com/... 或 https://www.threads.net/...",
     audienceScope: "採集策略", audienceScopeHint: "決定哪些候選可進正式客戶池",
     vertical: "垂直精準", verticalHint: "產業＋角色／需求至少兩層訊號；泛相關不進名單",
     expanded: "擴大範圍", expandedHint: "固定近 30 天；精準、擴展候選、排除三層統計",
     recommended: "推薦", expand: "擴量",
-    lookback: "採集資料時間範圍", lookbackHint: "會實際篩選貼文與互動時間",
-    lookbackNote: (label: string) => `目前選擇「${label}」。沒有可驗證時間的資料不會混入結果。`,
+    lookback: "資料時間", lookbackHint: "按貼文與互動時間篩選",
+    lookbackNote: (label: string) => `目前：${label}；無時間資料將排除。`,
     lookbackLabel: (days: number) => (days === 1 ? "今天" : `近${days}天`),
     platformHint: (names: string[]) => names.length === 0
-      ? "尚未選擇採集平台。請點選 Threads 或 Instagram。"
+      ? "請選擇採集平台。"
       : names.length === 1
-        ? `已選擇 ${names[0]}。只會在該平台採集，不會跨平台混標。`
-        : `已選擇 ${names.join("＋")}，共 ${names.length} 個平台，將分別執行並自動去重。`,
+        ? `僅採集 ${names[0]}。`
+        : `${names.join("＋")} 分開採集並自動去重。`,
     keywordLimit: "每個關鍵詞採集範圍", hotspotPostRange: "熱點貼文選取範圍",
     customRange: "自訂起訖範圍", allPosts: "全部找到的貼文",
     perPostUsers: "每則貼文採集用戶範圍",
     limitFast: "6 筆", limitStandard: "12 筆", limitDeep: "30 筆", limitNone: "不限",
     limit30: "30位", limit100: "100位", limit300: "300位",
-    linkEngagement: "僅採集本篇貼文按讚、評論用戶", linkFollowers: "採集該主帳號公開可見粉絲",
-    linkPlatformNote: "由連結自動辨識。單一貼文只會在所屬平台採集，不會誤標成跨平台。",
-    batchName: "本次採集批次名稱", batchNameHint: "選填，完成後仍可修改", batchPlaceholder: "例如：7 月房貸高意向名單", defaultBatch: "AI 潛在客戶",
+    linkEngagement: "貼文互動用戶", linkFollowers: "帳號公開粉絲",
+    linkPlatformNote: "系統根據連結自動識別平台。",
+    batchName: "批次名稱（選填）", batchNameHint: "", batchPlaceholder: "例如：7 月房貸高意向名單", defaultBatch: "AI 潛在客戶",
     summaryMode: "採集方式", summaryPlatform: "目標平台", summaryBatch: "本次採集批次", summaryLookback: "資料時間範圍", summaryScope: "採集策略",
     selectAllSources: "選擇全部", clearSources: "清除選取",
     personaShort: "需求定向採集", hotspotShort: "熱點全域採集", linkShort: "連結精準採集",
     engageSteps: ["選客戶", "寫內容", "選方式", "確認"],
-    relationSteps: ["選客戶", "選帳號", "確認"],
     assistant: "Vecto AI 操作助手", assistantHints: {
-      collect: "沿用原 CRM 的三步採集：先選方式，再分析需求或搜尋熱點，最後核對範圍並啟動。",
-      public: "先從客戶池選擇目標，再準備公開留言內容，最後完成執行前檢查並確認發佈。",
-      outreach: "先選客戶、再綁定範本，最後選擇樣本、批次或排程；不會跳過重複觸達檢查。",
-      groups: "先確定邀請對象與平台，再準備邀請內容；Instagram 群聊和 Threads 邀請貼文會明確區分。",
-      relationships: "從客戶池選擇要複核的客戶，再使用 Instagram 帳號進行唯讀關係檢查。",
+      collect: "選擇採集方式，填寫條件後確認啟動。",
+      public: "選擇客戶，填寫留言，再確認發佈。",
+      outreach: "選擇客戶，填寫私訊，再選擇執行方式。",
+      groups: "選擇客戶與平台，填寫邀請內容後確認。",
     },
     mode: "採集方式",
     platform: "採集平台", threads: "Threads", instagram: "Instagram", limit: "採集上限", analysis: "需求與客戶畫像分析", targetPersona: "目標畫像", customerIntent: "客戶意向", mainNeed: "主要需求", painPoint: "關注痛點", segments: "子畫像", scenarios: "需求場景", keywords: "搜尋關鍵詞", results: "真實搜尋結果", selectedSources: "已選擇來源", noResults: "沒有找到可用結果，可返回修改關鍵詞。",
-    pool: "客戶池", choosePool: "請選擇客戶池", recipients: "選擇客戶", selectAll: "選擇本頁全部", clear: "清空選擇", loadMoreMembers: "載入更多客戶", selected: (count: number) => `實際執行 ${count} 位客戶`, noMembers: "該客戶池暫無可用客戶。", unavailableMember: "缺少平台帳號或原貼文連結，無法用於目前動作",
+    pool: "客戶池", choosePool: "請選擇客戶池", recipients: "選擇客戶", selectAll: "選擇本頁全部", clear: "清空選擇", loadMoreMembers: "載入更多客戶", selected: (count: number) => `已選擇 ${count} 位客戶`, executing: (count: number) => `實際執行 ${count} 位客戶`, noMembers: "該客戶池暫無可用客戶。", unavailableMember: "缺少平台帳號或原貼文連結，無法用於目前動作", platformMismatch: "該客戶不屬於目前所選平台，不能跨平台按同名帳號猜測",
     template: "訊息範本", chooseTemplate: "不使用已儲存範本", content: "任務內容", contentPlaceholder: "填寫公開留言、私訊或邀請內容", publicMode: "公開互動方式", publicComment: "首次公開留言", publicReply: "公開回覆", followupReply: "跟進回覆", nurtureReply: "持續互動培育", publicReplyHint: "回覆類動作必須選擇帶有原貼文或留言連結的客戶；系統會逐則保留提交證據。", publicStrategy: "留言策略", questionStrategy: "自然問句", questionStrategyHint: "回應原文，再提出一個容易回答的問題", offerStrategy: "提供幫助", offerStrategyHint: "先回應需求，再邀請對方回覆關鍵詞", groupStrategy: "徵求群邀同意", groupStrategyHint: "只邀請對方回覆同意，不會直接拉入群組", groupMode: "群組方式", threadsPost: "Threads 社群邀請貼文", instagramDirect: "Instagram Direct 群聊",
     account: "執行帳號", chooseAccount: "請選擇帳號", accountLogin: "需要先登入", execution: "執行方式", sample: "少量樣本", sampleHint: "手動選擇 1–20 位真實客戶先行測試", batch: "穩定分批", batchHint: "按所選客戶逐個執行並記錄證據", schedule: "定時排程", scheduleHint: "到指定時間建立任務；真實動作仍按確認與計費規則執行", scheduleAt: "執行時間",
     scheduleCadence: "排程頻率", scheduleOnce: "單次執行", scheduleDaily: "每日採集", dailyAt: "每天執行時間", dailyHint: "每天使用相同畫像、關鍵詞、範圍和帳號建立一個新的採集任務。",
-    trustFirstTitle: "信任觸達規則", trustFirstHint: "首次私訊只發送給已公開回覆，或已驗證關注執行帳號的客戶。", trustFirstSteps: ["未達到信任門檻的客戶會在執行前檢查中自動排除", "首次私訊使用短文字，不附連結、電話、LINE 或圖片", "發送前會再次顯示可執行人數、略過原因和預計扣點"],
+    trustFirstTitle: "信任觸達規則", trustFirstHint: "首次私訊只發送給已公開回覆，或已驗證關注執行帳號的客戶。", trustFirstSteps: ["未達到信任門檻的客戶會在執行前檢查中自動排除", "首次私訊使用短文字，不附連結、電話、LINE 或圖片", "發送前會再次顯示可執行人數、略過原因和預計扣點"], verifyRelationships: "校驗私訊資格", verifyRelationshipsHint: "使用所選 Instagram 執行帳號核驗目前選擇中的原生 Instagram 客戶；Threads 客戶不會用同名帳號猜測。", relationshipQueued: "關係核驗任務已建立，可到任務詳情查看證據", verificationNeedsInstagram: "請選擇可用的 Instagram 帳號，並至少選擇一位原生 Instagram 客戶。",
     confirmation: "提交前確認", action: "任務類型", targetRange: "目標範圍", billing: "計費", billingWrite: "執行前檢查通過後，按已確認批次扣點", billingRead: "唯讀操作免費，但會保留任務與結果記錄", consent: "我已核對帳號、目標客戶與內容，並確認允許系統執行以上真實平台動作。",
     aiDrafts: "按原貼文生成 AI 留言草稿", aiDrafting: "正在逐則生成草稿…", aiDraftHint: "每位客戶會保留獨立草稿；提交前仍可逐則修改。", draftFor: "給這位客戶的留言",
     prepared: "準備完成", taskQueued: "任務已進入佇列", scheduleSaved: "排程已儲存", searchWarning: "結果來自即時搜尋，請在繼續前勾選正確來源。",
@@ -160,6 +160,7 @@ function rowId(row: Row) { return String(row.id || row.lead_id || row.task_id ||
 function memberLead(row: Row) { return objectOf(row.lead || row.profile || row.profile_json); }
 function memberId(row: Row) { return String(row.lead_id || memberLead(row).id || row.id || ""); }
 function memberUsername(row: Row) { const lead = memberLead(row); return String(row.username || lead.username || "").replace(/^@/, ""); }
+function memberPlatform(row: Row) { const lead = memberLead(row); return String(row.platform || lead.platform || "").trim().toLowerCase(); }
 function memberLabel(row: Row) { const lead = memberLead(row); return String(row.display_name || lead.display_name || memberUsername(row) || memberId(row)); }
 function memberTarget(row: Row) {
   const lead = memberLead(row);
@@ -217,6 +218,7 @@ export function WorkflowWizard({
   const [accounts, setAccounts] = useState<CrmAccount[]>([]);
   const [pools, setPools] = useState<Row[]>([]);
   const [templates, setTemplates] = useState<Row[]>([]);
+  const [templatePreviewUrls, setTemplatePreviewUrls] = useState<Record<string, string>>({});
   const [poolId, setPoolId] = useState("");
   const [members, setMembers] = useState<Row[]>([]);
   const [memberCursor, setMemberCursor] = useState("");
@@ -246,13 +248,14 @@ export function WorkflowWizard({
   const [publicAction, setPublicAction] = useState<PublicActionType>("public_comment");
   const [replyStrategy, setReplyStrategy] = useState<ReplyStrategy>("question_hook");
   const [preflightResult, setPreflightResult] = useState<PreflightResult | null>(null);
+  const [relationshipTaskId, setRelationshipTaskId] = useState("");
 
-  const totalSteps = view === "collect" ? 2 : view === "relationships" ? 3 : 4;
-  const stepNames = view === "collect" ? t.collectSteps : view === "relationships" ? t.relationSteps : t.engageSteps;
+  const totalSteps = view === "collect" ? 2 : 4;
+  const stepNames = view === "collect" ? t.collectSteps : t.engageSteps;
   const memberEligible = (row: Row) => {
     if (view === "public") return Boolean(memberTarget(row));
-    if (view === "outreach" || view === "relationships") return Boolean(memberUsername(row));
-    if (view === "groups" && groupMode === "instagram") return Boolean(memberUsername(row));
+    if (view === "outreach") return Boolean(memberUsername(row));
+    if (view === "groups") return Boolean(memberUsername(row)) && memberPlatform(row) === groupMode;
     return true;
   };
   const selectedMembers = useMemo(
@@ -265,11 +268,37 @@ export function WorkflowWizard({
     return selectedMembers;
   }, [execution, seed?.batchSize, selectedMembers]);
   const selectedAccount = accounts.find((account) => String(account.id) === accountId);
+  const selectedPool = pools.find((pool) => rowId(pool) === poolId);
   const selectedAccountReady = accountReady(selectedAccount);
+  const relationshipCandidates = useMemo(() => selectedMembers.filter((row) => memberPlatform(row) === "instagram"), [selectedMembers]);
   const collectPlatforms = (["threads", "instagram"] as const).filter((platform) => platforms[platform]);
   const isWrite = view === "public" || view === "outreach" || view === "groups";
-  const requiredPlatform = view === "relationships" || (view === "groups" && groupMode === "instagram") ? "instagram" : view === "public" || view === "groups" ? "threads" : "";
+  const requiredPlatform = view === "groups" && groupMode === "instagram" ? "instagram" : view === "public" || view === "groups" ? "threads" : "";
   const supportedAccounts = accounts.filter((account) => !requiredPlatform || String(account.platform || "").toLowerCase() === requiredPlatform);
+  const templateMediaIds = useMemo(() => [...new Set(templates.flatMap((template) => arrayOf(template.media_ids ?? template.media_ids_json).map(String)).filter(Boolean))], [templates]);
+
+  useEffect(() => {
+    let active = true;
+    const createdUrls: string[] = [];
+    const loadTemplatePreviews = async () => {
+      const entries = await Promise.all(templateMediaIds.map(async (mediaId) => {
+        try {
+          const blob = await crmApi.mediaContent(mediaId);
+          const url = URL.createObjectURL(blob);
+          createdUrls.push(url);
+          return [mediaId, url] as const;
+        } catch {
+          return [mediaId, ""] as const;
+        }
+      }));
+      if (active) setTemplatePreviewUrls(Object.fromEntries(entries));
+    };
+    void loadTemplatePreviews();
+    return () => {
+      active = false;
+      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [templateMediaIds]);
 
   useEffect(() => {
     if (!view) return;
@@ -284,7 +313,7 @@ export function WorkflowWizard({
     setExecution(seed?.execution || (seed?.batchSize ? "batch" : view === "collect" ? "batch" : "sample"));
     setScheduleCadence("once");
     setReplyStrategy("question_hook");
-    setStep(1); setError(""); setBusy("load"); setSelected(new Set()); setPrepared(null); setSourceSelection(new Set()); setDrafts({}); setConsent(false); setPreflightResult(null);
+    setStep(view === "public" && seed?.poolId ? 2 : 1); setError(""); setBusy("load"); setSelected(new Set()); setPrepared(null); setSourceSelection(new Set()); setDrafts({}); setConsent(false); setPreflightResult(null); setRelationshipTaskId(""); setTemplateId(""); setContent("");
     Promise.all([crmApi.list("accounts", "", 100), crmApi.list("pools", "", 200), crmApi.list("templates", "", 200)])
       .then(([accountPayload, poolPayload, templatePayload]) => {
         const nextAccounts = payloadItems(accountPayload) as CrmAccount[];
@@ -311,9 +340,10 @@ export function WorkflowWizard({
     setBusy("members"); setError("");
     crmApi.poolMembers(poolId, "", 200).then((payload) => {
       const rows = payloadItems(payload);
-      const extras = (seed?.leads || []).filter((row) => !rows.some((item) => memberId(item) === memberId(row)));
+      const seededPool = seed?.poolId === poolId;
+      const extras = seededPool ? (seed?.leads || []).filter((row) => !rows.some((item) => memberId(item) === memberId(row))) : [];
       setMembers([...extras, ...rows]);
-      const seeded = (seed?.leadIds || extras.map(memberId)).filter(Boolean);
+      const seeded = seededPool ? (seed?.leadIds || extras.map(memberId)).filter(Boolean) : [];
       setSelected(new Set(seeded.length ? seeded : []));
       setMemberCursor(String(payload.next_cursor || ""));
       setMembersHaveMore(Boolean(payload.has_more && payload.next_cursor));
@@ -371,8 +401,29 @@ export function WorkflowWizard({
   const selectTemplate = (id: string) => {
     setTemplateId(id);
     const template = templates.find((row) => rowId(row) === id);
-    if (template) setContent(String(template.content || ""));
+    setContent(template ? String(template.content || "") : "");
   };
+
+  const templateOptions = [{
+    value: "",
+    label: t.chooseTemplate,
+    plain: true,
+  }, ...templates.map((row) => {
+    const mediaIds = arrayOf(row.media_ids ?? row.media_ids_json).map(String);
+    const type = String(row.template_type || "message");
+    const typeLabel = type === "comment"
+      ? (language === "zh-Hant" ? "公開互動" : "公开互动")
+      : type === "group_invite" || type === "group"
+        ? (language === "zh-Hant" ? "拉群邀請" : "拉群邀请")
+        : (language === "zh-Hant" ? "私訊觸達" : "私信触达");
+    return {
+      value: rowId(row),
+      label: String(row.name || rowId(row)),
+      hint: `${typeLabel} · ${String(row.locale || language)}`,
+      previewCard: true,
+      previewImageUrl: templatePreviewUrls[mediaIds[0]],
+    };
+  })];
 
   const effectiveCollectLimit = collectLimit === 0 ? 200 : collectLimit;
   const collectLinkPlatform = collectMode === "link" ? platformFromUrl(collectInput) : "";
@@ -451,13 +502,28 @@ export function WorkflowWizard({
     return [];
   };
 
+  const verifyOutreachRelationships = async () => {
+    const instagramAccount = String(selectedAccount?.platform || "").toLowerCase() === "instagram" && selectedAccountReady;
+    if (view !== "outreach" || !instagramAccount || !relationshipCandidates.length) {
+      setError(t.verificationNeedsInstagram);
+      return;
+    }
+    setBusy("relationship"); setError("");
+    try {
+      const result = await crmApi.verifyRelationships({
+        account_id: accountId,
+        lead_ids: relationshipCandidates.map(memberId),
+        idempotency_key: `crm-outreach-relationship:${window.crypto.randomUUID()}`,
+      });
+      setRelationshipTaskId(result.task_id);
+      onCreated(result.task_id);
+    } catch (next) { setError(localizedError(next, messages)); }
+    finally { setBusy(""); }
+  };
+
   const submit = async () => {
     setBusy("submit"); setError("");
     try {
-      if (view === "relationships") {
-        const result = await crmApi.verifyRelationships({ account_id: accountId, lead_ids: selectedMembers.map(memberId), idempotency_key: idempotency.current });
-        onCreated(result.task_id); onClose(); return;
-      }
       const actions = view === "collect" ? collectActions() : actionRows();
       if (!actions.length || actions.some((action) => !action.account_id)) { setError(t.required); return; }
       if (isWrite && !preflightResult) {
@@ -503,7 +569,6 @@ export function WorkflowWizard({
       });
     }
     if (step === 1) return Boolean(poolId && selected.size && (view !== "groups" || groupMode !== "instagram" || selected.size >= 2));
-    if (view === "relationships") return step === 2 ? Boolean(accountId) && selectedAccountReady : true;
     if (step === 2) {
       const draftTargets = effectiveRecipients;
       const allPublicDraftsReady = view === "public"
@@ -532,9 +597,10 @@ export function WorkflowWizard({
   };
 
   const renderPoolSelection = () => <>
+    {view === "groups" && <fieldset className="crm-wizard-fieldset crm-platform-fieldset crm-field--wide"><legend>{t.groupMode}</legend><button className={groupMode === "threads" ? "is-active" : ""} type="button" data-account-platform="threads" onClick={() => { setGroupMode("threads"); setSelected(new Set()); }}><PlatformLogo platform="threads" /><strong>{t.threadsPost}</strong></button><button className={groupMode === "instagram" ? "is-active" : ""} type="button" data-account-platform="instagram" disabled={capabilities?.instagram_group_management?.enabled !== true} onClick={() => { setGroupMode("instagram"); setSelected(new Set()); }}><PlatformLogo platform="instagram" /><strong>{t.instagramDirect}</strong></button></fieldset>}
     <label className="crm-field"><span>{t.pool}</span><SelectMenu value={poolId} onChange={setPoolId} placeholder={t.choosePool} searchPlaceholder={language === "zh-Hant" ? "篩選客戶池" : "筛选客户池"} emptyLabel={language === "zh-Hant" ? "沒有匹配的客戶池" : "没有匹配的客户池"} options={[{ value: "", label: t.choosePool }, ...pools.map((pool) => ({ value: rowId(pool), label: String(pool.name || rowId(pool)) }))]} /></label>
-    <div className="crm-wizard-selection-head"><strong>{t.recipients}</strong><span>{t.selected(effectiveRecipients.length)}</span><div><button type="button" onClick={() => setSelected(new Set(members.filter(memberEligible).map(memberId).filter(Boolean)))}>{t.selectAll}</button><button type="button" onClick={() => setSelected(new Set())}>{t.clear}</button></div></div>
-    {!members.length ? <p className="crm-quiet-empty">{busy === "members" ? t.loading : t.noMembers}</p> : <><div className="crm-wizard-members">{members.map((row) => { const id = memberId(row); const eligible = memberEligible(row); return <label key={id} title={eligible ? "" : t.unavailableMember}><input type="checkbox" disabled={!eligible} checked={eligible && selected.has(id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} /><span><strong>{memberLabel(row)}</strong><small>{eligible ? `@${memberUsername(row) || id}` : t.unavailableMember}</small></span></label>; })}</div>{membersHaveMore && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={busy === "members-more"} onClick={() => void loadMoreMembers()}>{busy === "members-more" ? t.loading : t.loadMoreMembers}</button></div>}</>}
+    <div className="crm-wizard-selection-head"><strong>{t.recipients}</strong><span>{t.selected(selectedMembers.length)}</span><div><button type="button" onClick={() => setSelected(new Set(members.filter(memberEligible).map(memberId).filter(Boolean)))}>{t.selectAll}</button><button type="button" onClick={() => setSelected(new Set())}>{t.clear}</button></div></div>
+    {!members.length ? <p className="crm-quiet-empty">{busy === "members" ? t.loading : t.noMembers}</p> : <><div className="crm-wizard-members">{members.map((row) => { const id = memberId(row); const eligible = memberEligible(row); const unavailable = view === "groups" && memberPlatform(row) !== groupMode ? t.platformMismatch : t.unavailableMember; return <label key={id} title={eligible ? "" : unavailable}><input type="checkbox" disabled={!eligible} checked={eligible && selected.has(id)} onChange={() => setSelected((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} /><span><strong>{memberLabel(row)}</strong><small>{eligible ? `@${memberUsername(row) || id}` : unavailable}</small></span></label>; })}</div>{membersHaveMore && <div className="crm-pagination"><button className="crm-secondary-button" type="button" disabled={busy === "members-more"} onClick={() => void loadMoreMembers()}>{busy === "members-more" ? t.loading : t.loadMoreMembers}</button></div>}</>}
   </>;
 
   const resultRows = asRows(prepared?.data || prepared?.items || prepared?.results);
@@ -553,7 +619,7 @@ export function WorkflowWizard({
 
   const collectDemandLabel = collectMode === "persona" ? t.demand : collectMode === "hotspot" ? t.query : t.sourceLink;
   const collectAssistant = view === "collect"
-    ? (step === 1 ? `${collectDemandLabel}${t.collectHint2}` : collectMode === "hotspot" ? t.collectHint3Hotspot : collectMode === "persona" ? t.collectHint3Persona : t.collectHint3Link)
+    ? (step === 1 ? (collectMode === "hotspot" ? t.collectHint1Hotspot : collectMode === "persona" ? t.collectHint1Persona : t.collectHint1Link) : collectMode === "hotspot" ? t.collectHint3Hotspot : collectMode === "persona" ? t.collectHint3Persona : t.collectHint3Link)
     : t.assistantHints[view];
   const collectPrepareLabel = busy === "prepare"
     ? (collectMode === "hotspot" ? t.preparingHotspot : collectMode === "link" ? t.preparingLink : t.preparingPersona)
@@ -571,11 +637,11 @@ export function WorkflowWizard({
   return <ConsoleModal title={view === "collect" ? t.collectTitle : `${t.title} · ${messages.views[view][0]}`} labelledBy="crmWorkflowTitle" onClose={onClose} onBack={step > 1 ? goBack : undefined} backLabel={t.back} wide dialogRef={dialog} actions={<>{step === 1 ? <button type="button" onClick={onClose}>{t.cancel}</button> : null}{step < totalSteps ? <button type="button" className="primary" disabled={Boolean(busy) || !canContinue()} onClick={next}>{view === "collect" ? collectPrepareLabel : busy === "prepare" ? t.prepare : t.next}</button> : <button type="button" className="primary" disabled={Boolean(busy) || !canContinue()} onClick={() => void submit()}>{busy === "submit" ? t.submitting : isWrite ? (preflightResult ? t.confirmAfterPreflight : t.runPreflight) : view === "collect" ? t.collectStart : t.submit}</button>}</>}>
       <div className="crm-wizard-progress" aria-label={t.step(step, totalSteps)}>{stepNames.map((name, index) => <span className={index + 1 === step ? "is-current" : index + 1 < step ? "is-complete" : ""} key={name}><i aria-hidden="true">{index + 1 < step ? <Icon name="check" /> : index + 1}</i><b>{name}</b></span>)}</div>
       <aside className="crm-wizard-assistant"><Icon name="signal" /><span>{view === "collect" ? null : <strong>{t.assistant}</strong>}{collectAssistant}</span></aside>
-      <div className="crm-wizard-body">
-        {busy === "load" && <p className="crm-quiet-empty">{t.loading}</p>}
+      <div className="crm-wizard-body" aria-busy={busy === "load"}>
+        {busy === "load" && view !== "collect" && <p className="crm-quiet-empty">{t.loading}</p>}
         {view === "collect" && step === 1 && <div className="crm-form-grid crm-collect-form">
           {collectMode === "link" ? <div className="crm-field crm-field--wide"><span>{t.platform}</span><p className="crm-wizard-hint">{t.linkPlatformNote}{collectLinkPlatform ? ` ${collectLinkPlatform === "instagram" ? t.instagram : t.threads}` : ""}</p></div> : <fieldset className="crm-wizard-fieldset crm-platform-fieldset crm-field--wide"><legend>{t.platform}</legend><button className={platforms.instagram ? "is-active" : ""} type="button" data-account-platform="instagram" onClick={() => setPlatforms({ ...platforms, instagram: !platforms.instagram })}><PlatformLogo platform="instagram" /><strong>{t.instagram}</strong></button><button className={platforms.threads ? "is-active" : ""} type="button" data-account-platform="threads" onClick={() => setPlatforms({ ...platforms, threads: !platforms.threads })}><PlatformLogo platform="threads" /><strong>{t.threads}</strong></button><p className="crm-wizard-hint">{t.platformHint(collectPlatformNames)}</p></fieldset>}
-          <label className="crm-field crm-field--wide"><span>{collectDemandLabel}</span><textarea rows={collectMode === "persona" ? 3 : 2} value={collectInput} onChange={(event) => setCollectInput(event.target.value)} placeholder={collectMode === "persona" ? t.demandPlaceholder : collectMode === "hotspot" ? t.queryPlaceholder : t.sourceLinkPlaceholder} /></label>
+          <label className="crm-field crm-field--wide crm-collect-primary-input"><span>{collectDemandLabel}</span><textarea rows={4} value={collectInput} onChange={(event) => setCollectInput(event.target.value)} placeholder={collectMode === "persona" ? t.demandPlaceholder : collectMode === "hotspot" ? t.queryPlaceholder : t.sourceLinkPlaceholder} /></label>
           {collectMode === "persona" && <fieldset className="crm-wizard-fieldset crm-field--wide crm-scope-cards"><legend>{t.audienceScope}</legend>
             <button type="button" className={audienceScope === "vertical" ? "is-active" : ""} onClick={() => { setAudienceScope("vertical"); if (lookbackDays === 30) setLookbackDays(7); }}><small>{t.recommended}</small><strong>{t.vertical}</strong></button>
             <button type="button" className={audienceScope === "expanded" ? "is-active" : ""} onClick={() => { setAudienceScope("expanded"); setLookbackDays(30); }}><small>{t.expand}</small><strong>{t.expanded}</strong></button>
@@ -595,7 +661,7 @@ export function WorkflowWizard({
             <label><input type="checkbox" checked={linkOptions.engagement} onChange={(event) => setLinkOptions({ ...linkOptions, engagement: event.target.checked })} />{t.linkEngagement}</label>
             <label><input type="checkbox" checked={linkOptions.followers} onChange={(event) => setLinkOptions({ ...linkOptions, followers: event.target.checked })} />{t.linkFollowers}</label>
           </fieldset>}
-          <label className="crm-field crm-field--wide"><span>{t.batchName} · {t.batchNameHint}</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder={t.batchPlaceholder} /></label>
+          <label className="crm-field crm-field--wide"><span>{t.batchName}</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder={t.batchPlaceholder} /></label>
         </div>}
         {view === "collect" && step === 2 && <div className="crm-wizard-review">
           <dl className="crm-collect-summary">
@@ -635,20 +701,20 @@ export function WorkflowWizard({
           {execution === "schedule" && <><fieldset className="crm-wizard-fieldset crm-field--wide crm-segmented-picks"><legend>{t.scheduleCadence}</legend><button type="button" className={scheduleCadence === "once" ? "is-active" : ""} onClick={() => setScheduleCadence("once")}>{t.scheduleOnce}</button><button type="button" className={scheduleCadence === "daily" ? "is-active" : ""} onClick={() => setScheduleCadence("daily")}>{t.scheduleDaily}</button></fieldset>{scheduleCadence === "once" ? <label className="crm-field crm-field--wide"><span>{t.scheduleAt}</span><input type="datetime-local" value={scheduleAt} onChange={(event) => setScheduleAt(event.target.value)} /></label> : <label className="crm-field crm-field--wide"><span>{t.dailyAt}</span><input type="time" value={dailyTime} onChange={(event) => setDailyTime(event.target.value)} /><small>{t.dailyHint}</small></label>}</>}
         </div>}
         {view !== "collect" && step === 1 && <>{renderPoolSelection()}{view === "outreach" && <section className="crm-wizard-policy-card" aria-label={t.trustFirstTitle}><header><Icon name="relationships" /><div><strong>{t.trustFirstTitle}</strong><span>{t.trustFirstHint}</span></div></header><ol>{t.trustFirstSteps.map((item) => <li key={item}>{item}</li>)}</ol></section>}</>}
-        {view !== "collect" && view !== "relationships" && step === 2 && <div className="crm-form-grid">
+        {view !== "collect" && step === 2 && <div className="crm-form-grid">
+          {view === "public" && seed?.poolId && <section className="crm-wizard-seed-summary crm-field--wide"><div><span>{t.pool}</span><strong>{String(selectedPool?.name || poolId)}</strong><small>{t.selected(selectedMembers.length)}</small></div><button type="button" onClick={() => setStep(1)}>{language === "zh-Hant" ? "更換客戶池" : "更换客户池"}</button></section>}
           {view === "public" && <><fieldset className="crm-wizard-fieldset crm-field--wide"><legend>{t.publicMode}</legend>{([['public_comment', t.publicComment], ['public_reply', t.publicReply]] as Array<[PublicActionType, string]>).map(([mode, label]) => <label key={mode}><input type="radio" name="publicMode" checked={publicAction === mode} onChange={() => { setPublicAction(mode); setDrafts({}); }} />{label}</label>)}<small>{t.publicReplyHint} {language === "zh-Hant" ? "跟進與培育請從已確認任務的證據卡片發起。" : "跟进与培育请从已确认任务的证据卡片发起。"}</small></fieldset>
             {publicAction === "public_comment" && <fieldset className="crm-wizard-fieldset crm-field--wide crm-strategy-cards"><legend>{t.publicStrategy}</legend>{([['question_hook', t.questionStrategy, t.questionStrategyHint], ['offer_hook', t.offerStrategy, t.offerStrategyHint], ['group_invite', t.groupStrategy, t.groupStrategyHint]] as Array<[ReplyStrategy, string, string]>).map(([strategy, label, hint]) => <label className={replyStrategy === strategy ? "is-active" : ""} key={strategy}><input type="radio" name="replyStrategy" checked={replyStrategy === strategy} onChange={() => { setReplyStrategy(strategy); setDrafts({}); }} /><span><strong>{label}</strong><small>{hint}</small></span></label>)}</fieldset>}
           </>}
-          {view === "groups" && <fieldset className="crm-wizard-fieldset crm-platform-fieldset crm-field--wide"><legend>{t.groupMode}</legend><button className={groupMode === "threads" ? "is-active" : ""} type="button" data-account-platform="threads" onClick={() => setGroupMode("threads")}><PlatformLogo platform="threads" /><strong>{t.threadsPost}</strong></button><button className={groupMode === "instagram" ? "is-active" : ""} type="button" data-account-platform="instagram" disabled={capabilities?.instagram_group_management?.enabled !== true} onClick={() => setGroupMode("instagram")}><PlatformLogo platform="instagram" /><strong>{t.instagramDirect}</strong></button></fieldset>}
-          <label className="crm-field crm-field--wide"><span>{t.template}</span><SelectMenu value={templateId} onChange={selectTemplate} placeholder={t.chooseTemplate} options={[{ value: "", label: t.chooseTemplate }, ...templates.map((row) => ({ value: rowId(row), label: String(row.name || rowId(row)) }))]} /></label>
+          <label className="crm-field crm-field--wide"><span>{t.template}</span><SelectMenu value={templateId} onChange={selectTemplate} placeholder={t.chooseTemplate} searchPlaceholder={language === "zh-Hant" ? "搜尋範本" : "搜索模板"} emptyLabel={language === "zh-Hant" ? "沒有符合的範本" : "没有匹配的模板"} options={templateOptions} /></label>
           <label className="crm-field crm-field--wide"><span>{t.content}</span><textarea rows={8} value={content} onChange={(event) => setContent(event.target.value)} placeholder={t.contentPlaceholder} /></label>
           {view === "outreach" && <p className="crm-wizard-note crm-field--wide">{language === "zh-Hant" ? "首次信任私訊不附追蹤連結或媒體；取得客戶同意後，再從安全追蹤設定使用後續地址。" : "首次信任私信不附追踪链接或媒体；取得客户同意后，再从安全追踪设置使用后续地址。"}</p>}
           {view === "public" && publicAction === "public_comment" && <section className="crm-field--wide crm-wizard-drafts"><div><button className="crm-secondary-button" type="button" disabled={busy === "drafts"} onClick={() => void preparePublicDrafts()}>{busy === "drafts" ? t.aiDrafting : t.aiDrafts}</button><small>{t.aiDraftHint}</small></div>{selectedMembers.filter((row) => drafts[memberId(row)]).map((row) => <label className="crm-field" key={memberId(row)}><span>{t.draftFor} · @{memberUsername(row) || memberId(row)}</span><textarea rows={4} value={drafts[memberId(row)] || ""} onChange={(event) => setDrafts((current) => ({ ...current, [memberId(row)]: event.target.value }))} /></label>)}</section>}
         </div>}
-        {view !== "collect" && ((view === "relationships" && step === 2) || (view !== "relationships" && step === 3)) && <div className="crm-form-grid"><label className="crm-field crm-field--wide"><span>{t.account}</span><SelectMenu value={accountId} onChange={setAccountId} placeholder={t.chooseAccount} options={[{ value: "", label: t.chooseAccount }, ...supportedAccounts.map((account) => ({ value: String(account.id), label: `${account.display_name || account.username} · ${account.platform}${!accountReady(account) ? ` · ${t.accountLogin}` : ""}`, disabled: !accountReady(account) }))]} /></label>{view !== "relationships" && <fieldset className="crm-wizard-fieldset crm-field--wide"><legend>{t.execution}</legend>{(["sample", "batch", "schedule"] as const).map((mode) => <label key={mode}><input type="radio" name="execution" checked={execution === mode} onChange={() => setExecution(mode)} /><span><strong>{t[mode]}</strong><small>{t[`${mode}Hint` as "sampleHint" | "batchHint" | "scheduleHint"]}</small></span></label>)}</fieldset>}{view !== "relationships" && execution === "schedule" && <label className="crm-field crm-field--wide"><span>{t.scheduleAt}</span><input type="datetime-local" value={scheduleAt} onChange={(event) => setScheduleAt(event.target.value)} /></label>}</div>}
-        {((view === "relationships" && step === 3) || (view !== "collect" && view !== "relationships" && step === 4)) && <section className="crm-confirmation-summary crm-wizard-confirmation">
+        {view !== "collect" && step === 3 && <div className="crm-form-grid"><label className="crm-field crm-field--wide"><span>{t.account}</span><SelectMenu value={accountId} onChange={(next) => { setAccountId(next); setRelationshipTaskId(""); }} placeholder={t.chooseAccount} options={[{ value: "", label: t.chooseAccount }, ...supportedAccounts.map((account) => ({ value: String(account.id), label: `${account.display_name || account.username} · ${account.platform}${!accountReady(account) ? ` · ${t.accountLogin}` : ""}`, disabled: !accountReady(account) }))]} /></label>{view === "outreach" && <section className="crm-wizard-policy-card crm-field--wide" data-relationship-task-id={relationshipTaskId || undefined}><header><Icon name="relationships" /><div><strong>{t.verifyRelationships}</strong><span>{t.verifyRelationshipsHint}</span></div></header><button className="crm-secondary-button" type="button" disabled={busy === "relationship" || String(selectedAccount?.platform || "").toLowerCase() !== "instagram" || !selectedAccountReady || !relationshipCandidates.length} onClick={() => void verifyOutreachRelationships()}>{busy === "relationship" ? t.loading : `${t.verifyRelationships} · ${relationshipCandidates.length}`}</button></section>}<fieldset className="crm-wizard-fieldset crm-field--wide"><legend>{t.execution}</legend>{(["sample", "batch", "schedule"] as const).map((mode) => <label key={mode}><input type="radio" name="execution" checked={execution === mode} onChange={() => setExecution(mode)} /><span><strong>{t[mode]}</strong><small>{t[`${mode}Hint` as "sampleHint" | "batchHint" | "scheduleHint"]}</small></span></label>)}</fieldset>{execution === "schedule" && <label className="crm-field crm-field--wide"><span>{t.scheduleAt}</span><input type="datetime-local" value={scheduleAt} onChange={(event) => setScheduleAt(event.target.value)} /></label>}</div>}
+        {view !== "collect" && step === 4 && <section className="crm-confirmation-summary crm-wizard-confirmation">
           <h3>{t.confirmation}</h3>
-          <dl><div><dt>{t.action}</dt><dd>{view === "public" ? messages.operationLabels[publicAction] : messages.views[view][0]}</dd></div><div><dt>{t.account}</dt><dd>{selectedAccount?.display_name || selectedAccount?.username || messages.notSelected}</dd></div><div><dt>{t.targetRange}</dt><dd>{t.selected(effectiveRecipients.length)}</dd></div>{view !== "relationships" && <div><dt>{t.execution}</dt><dd>{t[execution]}{execution === "schedule" ? ` · ${new Date(scheduleAt).toLocaleString(language)}` : ""}</dd></div>}{content.trim() && <div><dt>{t.content}</dt><dd>{content.trim()}</dd></div>}{templateId && <div><dt>{t.template}</dt><dd>{String(templates.find((row) => rowId(row) === templateId)?.name || templateId)} · {arrayOf(templates.find((row) => rowId(row) === templateId)?.media_ids).length} {language === "zh-Hant" ? "個附件" : "个附件"}</dd></div>}<div><dt>{t.billing}</dt><dd>{isWrite ? t.billingWrite : t.billingRead}</dd></div></dl>
+          <dl><div><dt>{t.action}</dt><dd>{view === "public" ? messages.operationLabels[publicAction] : messages.views[view][0]}</dd></div><div><dt>{t.account}</dt><dd>{selectedAccount?.display_name || selectedAccount?.username || messages.notSelected}</dd></div><div><dt>{t.targetRange}</dt><dd>{t.executing(effectiveRecipients.length)}</dd></div><div><dt>{t.execution}</dt><dd>{t[execution]}{execution === "schedule" ? ` · ${new Date(scheduleAt).toLocaleString(language)}` : ""}</dd></div>{content.trim() && <div><dt>{t.content}</dt><dd>{content.trim()}</dd></div>}{templateId && <div><dt>{t.template}</dt><dd>{String(templates.find((row) => rowId(row) === templateId)?.name || templateId)} · {arrayOf(templates.find((row) => rowId(row) === templateId)?.media_ids).length} {language === "zh-Hant" ? "個附件" : "个附件"}</dd></div>}<div><dt>{t.billing}</dt><dd>{isWrite ? t.billingWrite : t.billingRead}</dd></div></dl>
           {isWrite && !preflightResult && <p className="crm-wizard-note">{t.preflightHint}</p>}
           {isWrite && preflightResult && <div className="crm-preflight-review" role="status">
             <header><span><Icon name="check" /><strong>{t.preflightTitle}</strong></span><small>{t.preflightHint}</small></header>

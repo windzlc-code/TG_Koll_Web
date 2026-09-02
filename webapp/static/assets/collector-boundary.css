@@ -9,6 +9,20 @@ a[href*="/subscription.html"], a[href*="/about-vecto.html"], a[href*="#solution"
 .admin-page-view[data-page-view="users"], .admin-page-view[data-page-view="taxonomy"],
 .admin-page-view[data-page-view="tasks"], .admin-page-view[data-page-view="pricing"] { display: none !important; }
 .collector-boundary-hidden { display: none !important; }
+html[data-deployment-role="collector"] #adminPrimaryNav [data-page="proxyMarket"],
+html[data-deployment-role="collector"] [data-collector-admin-page="proxyMarket"],
+html[data-deployment-role="collector"] [data-page-view="proxyMarket"],
+html[data-deployment-role="collector"] #secProxyMarket,
+html[data-deployment-role="collector"] #adminPrimaryNav [data-page="crm"],
+html[data-deployment-role="collector"] [data-collector-admin-page="crm"],
+html[data-deployment-role="collector"] [data-page-view="crm"],
+html[data-deployment-role="collector"] #secCrm,
+html[data-deployment-role="collector"] #proxyMarketShareModal,
+html[data-deployment-role="collector"] #accountBrowserProxiesTab,
+html[data-deployment-role="collector"] #accountBrowserProxiesPage,
+html[data-deployment-role="collector"] #proxyPool {
+  display: none !important;
+}
 /* Old-node collector console must not expose product persona pages or bind UI. */
 html[data-deployment-role="collector"] [data-view="persona_dashboard"],
 html[data-deployment-role="collector"] .persona-dashboard-view,

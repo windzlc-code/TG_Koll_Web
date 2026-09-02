@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -263,6 +264,23 @@ class CRMStateContractTests(unittest.TestCase):
             self.assertIsNotNone(conn.execute(
                 "SELECT 1 FROM crm_tracking_events WHERE id='hidden-track'",
             ).fetchone())
+
+    def test_analytics_exposes_complete_day_month_year_workflow_trends(self):
+        current = now_ts()
+        with db_module.db() as conn:
+            conn.execute(
+                "INSERT INTO crm_workflows(id,user_id,workflow_type,title,status,created_at,updated_at) "
+                "VALUES ('trend-completed',?,'test','completed','completed',?,?),"
+                "('trend-failed',?,'test','failed','failed',?,?)",
+                (self.user_id, current, current, self.user_id, current - 35 * 86400, current),
+            )
+        response = TestClient(self._app()).get("/api/crm/v1/analytics")
+        self.assertEqual(response.status_code, 200, response.text)
+        trend = response.json()["workflow_trend"]
+        self.assertEqual([len(trend[key]) for key in ("day", "month", "year")], [30, 12, 5])
+        today = datetime.fromtimestamp(current, tz=timezone.utc).strftime("%Y-%m-%d")
+        self.assertEqual(trend["day"][-1], {"date": today, "created": 1, "completed": 1, "failed": 1})
+        self.assertTrue(all(set(row) == {"date", "created", "completed", "failed"} for rows in trend.values() for row in rows))
 
     def test_reconcile_converges_mixed_terminals_and_unknown_wins(self):
         with db_module.db() as conn:

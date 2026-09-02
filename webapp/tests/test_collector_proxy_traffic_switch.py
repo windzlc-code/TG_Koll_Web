@@ -215,12 +215,204 @@ class CollectorProxyTrafficSwitchTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "account_id is required"):
             admin.allocate_runtime_account_proxy("")
 
+    def test_prunes_metered_products_when_remaining_traffic_is_gone(self) -> None:
+        config = self._config()
+        config["products"].append(
+            {
+                "proxy_id": "2320829",
+                "product_id": "2320829",
+                "product": {"id": "2320829", "network_type": "RESIDENTIAL"},
+                "host": "thehub.proxy-cheap.com",
+                "port": 8080,
+                "protocol": "http",
+                "public_reader_enabled": False,
+                "state": "ready",
+            }
+        )
+        pruned, removed = admin._prune_exhausted_products(config, self._traffic())
+        self.assertEqual(removed, ["2298788"])
+        kept = {str(item.get("proxy_id")) for item in pruned.get("products") or []}
+        self.assertNotIn("2298788", kept)
+        self.assertIn("2301582", kept)
+        self.assertIn("2320829", kept)
+
+    def test_static_zero_cap_products_are_not_treated_as_exhausted(self) -> None:
+        self.assertFalse(admin._is_summary_exhausted({
+            "id": "2315240",
+            "bandwidth_total_gb": 0,
+            "bandwidth_used_gb": 0.7,
+            "bandwidth_remaining_gb": 0,
+        }))
+        self.assertTrue(admin._is_summary_exhausted({
+            "id": "2298788",
+            "bandwidth_total_gb": 4,
+            "bandwidth_used_gb": 4,
+            "bandwidth_remaining_gb": 0,
+        }))
+
     def test_worker_exposes_signed_sticky_allocate_route(self) -> None:
         from pathlib import Path
 
         worker = (Path(__file__).resolve().parents[1] / "worker_server.py").read_text(encoding="utf-8")
         self.assertIn('"/internal/worker/v1/account-proxy/allocate"', worker)
         self.assertIn("allocate_runtime_account_proxy", worker)
+
+
+class CollectorProxyOnboardTests(unittest.TestCase):
+    def _supplier(self, proxy_id: str = "2400001") -> dict:
+        return {
+            "id": proxy_id,
+            "status": "ACTIVE",
+            "networkType": "RESIDENTIAL",
+            "proxyType": "HTTP",
+            "authentication": {"username": "new-user", "password": "new-pass"},
+            "connection": {"hostnames": ["thehub.proxy-cheap.com"], "httpPort": 8080},
+            "bandwidth": {"total": 4, "used": 0},
+        }
+
+    def _probe(self) -> dict:
+        return {"ok": True, "exit_ip": "203.0.113.10", "latency_ms": 12, "checked_at": 1}
+
+    def test_onboard_fills_connection_tests_and_enables_reader_when_pool_empty(self) -> None:
+        config = {"account_product_id": "2301582"}
+        products: list[dict] = []
+        with patch.object(admin, "_test_connection", return_value=self._probe()) as probed:
+            entry = admin._onboard_proxy_product(
+                config, products, self._supplier(), supplier=self._supplier(), is_new=True,
+            )
+        self.assertEqual(probed.call_count, 1)
+        self.assertEqual(entry["host"], "thehub.proxy-cheap.com")
+        self.assertEqual(entry["port"], 8080)
+        self.assertEqual(entry["username"], "new-user")
+        self.assertEqual(entry["traffic_role"], "dynamic")
+        self.assertTrue(entry["public_reader_enabled"])
+        self.assertEqual(entry["state"], "active")
+        self.assertTrue(entry["last_check"]["ok"])
+        self.assertEqual(entry["last_check"]["connection_fingerprint"], entry["connection_fingerprint"])
+
+    def test_second_new_product_joins_ready_and_does_not_steal_reader(self) -> None:
+        config = {}
+        products: list[dict] = []
+        with patch.object(admin, "_test_connection", return_value=self._probe()):
+            first = admin._onboard_proxy_product(
+                config, products, self._supplier("2400001"), supplier=self._supplier("2400001"), is_new=True,
+            )
+            second = admin._onboard_proxy_product(
+                config, products, self._supplier("2400002"), supplier=self._supplier("2400002"), is_new=True,
+            )
+        self.assertTrue(first["public_reader_enabled"])
+        self.assertEqual(first["state"], "active")
+        self.assertFalse(second["public_reader_enabled"])
+        self.assertEqual(second["state"], "ready")
+        self.assertEqual(second["traffic_role"], "dynamic")
+
+    def test_user_set_reader_stays_off_even_when_pool_empty(self) -> None:
+        config = {}
+        products = [admin._blank_product_entry("2400001")]
+        products[0]["user_set_reader"] = True
+        products[0]["public_reader_enabled"] = False
+        with patch.object(admin, "_test_connection", return_value=self._probe()):
+            entry = admin._onboard_proxy_product(
+                config, products, self._supplier(), supplier=self._supplier(), is_new=True,
+            )
+        self.assertFalse(entry["public_reader_enabled"])
+        self.assertEqual(entry["state"], "ready")
+        self.assertTrue(entry["user_set_reader"])
+
+    def test_user_set_sticky_role_is_kept_and_reader_stays_off(self) -> None:
+        config = {}
+        products = [admin._blank_product_entry("2400001")]
+        products[0]["user_set_traffic_role"] = True
+        products[0]["traffic_role"] = "sticky"
+        with patch.object(admin, "_test_connection", return_value=self._probe()):
+            entry = admin._onboard_proxy_product(
+                config, products, self._supplier(), supplier=self._supplier(), is_new=True,
+            )
+        self.assertEqual(entry["traffic_role"], "sticky")
+        self.assertEqual(entry["mode"], "sticky")
+        self.assertFalse(entry["public_reader_enabled"])
+        self.assertEqual(entry["state"], "ready")
+
+    def test_normalise_products_preserves_user_overrides(self) -> None:
+        config = {
+            "products": [
+                {
+                    "proxy_id": "2400001",
+                    "public_reader_enabled": False,
+                    "user_set_reader": True,
+                    "user_set_traffic_role": True,
+                    "traffic_role": "sticky",
+                }
+            ]
+        }
+        products = admin._normalise_products(config)
+        self.assertEqual(len(products), 1)
+        self.assertTrue(products[0]["user_set_reader"])
+        self.assertTrue(products[0]["user_set_traffic_role"])
+        self.assertEqual(products[0]["traffic_role"], "sticky")
+        self.assertFalse(products[0]["public_reader_enabled"])
+
+    def test_failed_detect_does_not_enable_reader(self) -> None:
+        config = {}
+        products: list[dict] = []
+        with patch.object(admin, "_test_connection", return_value={"ok": False, "error": "timeout", "checked_at": 1}):
+            entry = admin._onboard_proxy_product(
+                config, products, self._supplier(), supplier=self._supplier(), is_new=True,
+            )
+        self.assertFalse(entry["public_reader_enabled"])
+        self.assertEqual(entry["state"], "check_failed")
+
+    def test_webhook_ingests_new_sku_and_skips_existing(self) -> None:
+        current = {
+            "proxy_id": "2301582",
+            "product_id": "2301582",
+            "host": "thehub.proxy-cheap.com",
+            "port": 8080,
+            "protocol": "http",
+            "username": "old-user",
+            "password": "old-pass",
+            "public_reader_enabled": True,
+            "state": "active",
+            "traffic_role": "dynamic",
+        }
+        fingerprint = admin._connection_fingerprint(current)
+        current["connection_fingerprint"] = fingerprint
+        current["last_check"] = {"ok": True, "connection_fingerprint": fingerprint}
+        existing = {
+            "provider_api_key": "key",
+            "provider_api_secret": "secret",
+            "products": [current],
+        }
+        written: list[dict] = []
+        supplier_list = [
+            {"id": "2301582", "status": "ACTIVE", "networkType": "RESIDENTIAL", "bandwidth": {"total": 4, "used": 0.2}},
+            self._supplier("2400001"),
+        ]
+
+        def fake_load():
+            return written[-1] if written else dict(existing)
+
+        def fake_write(config):
+            written.append(dict(config))
+
+        with patch.object(admin, "_load_config", side_effect=fake_load), \
+             patch.object(admin, "_write_config", side_effect=fake_write), \
+             patch.object(admin, "_fetch_proxycheap_products", return_value=supplier_list), \
+             patch.object(admin, "_fetch_proxycheap_product", return_value=self._supplier("2400001")), \
+             patch.object(admin, "_test_connection", return_value=self._probe()):
+            admin._refresh_proxycheap_after_webhook({"event_id": "evt-1"})
+        self.assertTrue(written)
+        latest = written[-1]
+        ids = [str(item.get("proxy_id")) for item in latest.get("products") or []]
+        self.assertIn("2400001", ids)
+        new_item = next(item for item in latest["products"] if item["proxy_id"] == "2400001")
+        self.assertEqual(new_item["host"], "thehub.proxy-cheap.com")
+        self.assertEqual(new_item["username"], "new-user")
+        self.assertEqual(new_item["state"], "ready")
+        self.assertFalse(new_item["public_reader_enabled"])
+        old_item = next(item for item in latest["products"] if item["proxy_id"] == "2301582")
+        self.assertTrue(old_item["public_reader_enabled"])
+        self.assertEqual(latest["webhook_last_refresh"]["ingested_ids"], ["2400001"])
 
 
 if __name__ == "__main__":

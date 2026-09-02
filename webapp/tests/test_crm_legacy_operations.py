@@ -11,11 +11,13 @@ from webapp.crm.legacy_operations import (
     HOTSPOT_SCHEMA,
     OPC_IMPORT_SCHEMA,
     OPC_QUERY_SCHEMA,
+    OPC_SUMMARY_SCHEMA,
     TenantContext,
     analyze_demand,
     import_opc_history,
     query_opc_history,
     search_hotspots,
+    summarize_opc_history,
 )
 from webapp.crm.repository import create_resource
 
@@ -225,6 +227,100 @@ class CRMLegacyOperationsTests(unittest.TestCase):
         self.assertNotIn("secret", json.dumps(result, ensure_ascii=False))
         self.assertNotIn("native", json.dumps(result, ensure_ascii=False))
         self.assertEqual(result["limit"], 500)
+
+    def test_opc_summary_and_query_use_daily_run_rows_without_mixing_other_imports(self):
+        with db_module.db() as conn:
+            now = 1_700_000_000
+            runs = [
+                {
+                    "id": "run-one",
+                    "status": "completed",
+                    "rows": [
+                        {"username": "alice", "platform": "threads", "keyword": "房贷增贷", "text": "需要增贷"},
+                        {"username": "alice", "platform": "threads", "keyword": "房贷额度", "text": "额度咨询"},
+                        {"username": "bob", "platform": "instagram", "keyword": "房贷增贷", "text": "增贷方案"},
+                    ],
+                },
+                {
+                    "id": "run-two",
+                    "status": "completed_with_warnings",
+                    "rows": [
+                        {"username": "carol", "platform": "threads", "keyword": "资金周转", "text": "周转需求"},
+                    ],
+                },
+            ]
+            for index, run in enumerate(runs):
+                conn.execute(
+                    """
+                    INSERT INTO crm_workflows(
+                      id,user_id,workflow_type,title,status,input_json,result_json,confirmation_json,
+                      error_code,error_detail,billing_reservation_id,idempotency_key,scheduled_at,
+                      started_at,finished_at,import_batch_id,active,legacy_id,legacy_payload_json,
+                      schema_version,created_at,updated_at
+                    ) VALUES (?,?,?,'history','completed','{}','{}','{}','','','','',0,0,0,'batch',1,?,?,1,?,?)
+                    """,
+                    (f"history-{index}", self.user_id, "legacy_opc_daily_run", run["id"], json.dumps(run, ensure_ascii=False), now + index, now + index),
+                )
+            conn.execute(
+                """
+                INSERT INTO crm_workflows(
+                  id,user_id,workflow_type,title,status,input_json,result_json,confirmation_json,
+                  error_code,error_detail,billing_reservation_id,idempotency_key,scheduled_at,
+                  started_at,finished_at,import_batch_id,active,legacy_id,legacy_payload_json,
+                  schema_version,created_at,updated_at
+                ) VALUES ('other-history',?,?,'history','completed','{}','{}','{}','','','','',0,0,0,'batch',1,'other','{}',1,?,?)
+                """,
+                (self.other_user_id, "legacy_opc_daily_run", now, now),
+            )
+            existing = create_resource(
+                conn,
+                "leads",
+                user_id=self.user_id,
+                payload={
+                    "platform": "threads", "platform_user_key": "alice", "username": "alice",
+                    "stage": "contacted", "score": 88, "tags": ["画像:既有客户"],
+                    "profile": {"text": "原有画像不能覆盖"},
+                },
+            )
+            # This row was imported by another legacy source and must never leak into OPC history.
+            self._legacy_lead(conn, user_id=self.user_id, username="not-opc", keyword="房贷增贷")
+
+            summary = summarize_opc_history(conn, TenantContext(self.user_id))
+            result = query_opc_history(
+                conn,
+                TenantContext(self.user_id),
+                {"keywords": ["房贷增贷"], "limit": 20},
+            )
+            imported = import_opc_history(
+                conn,
+                TenantContext(self.user_id),
+                {"keywords": ["房贷增贷"], "idempotencyKey": "opc-workflow-source-import"},
+            )
+            stored_existing = conn.execute(
+                "SELECT stage,score,tags_json,profile_json FROM crm_leads WHERE id=? AND user_id=?",
+                (existing["id"], self.user_id),
+            ).fetchone()
+            stored_bob = conn.execute(
+                "SELECT id FROM crm_leads WHERE user_id=? AND platform='instagram' AND platform_user_key='bob' AND active=1",
+                (self.user_id,),
+            ).fetchone()
+
+        self.assertEqual(summary["schemaVersion"], OPC_SUMMARY_SCHEMA)
+        self.assertEqual(summary["runs"], 2)
+        self.assertEqual(summary["rows"], 4)
+        self.assertEqual(summary["uniqueLeads"], 3)
+        self.assertEqual(summary["topKeywords"][0], {"name": "房贷增贷", "count": 2})
+        self.assertEqual(summary["statusCounts"], {"completed": 1, "completed_with_warnings": 1})
+        self.assertEqual(result["total"], 2)
+        self.assertEqual({row["username"] for row in result["data"]}, {"alice", "bob"})
+        self.assertNotIn("not-opc", json.dumps(result, ensure_ascii=False))
+        self.assertEqual(imported["importedCount"], 2)
+        self.assertEqual(stored_existing["stage"], "contacted")
+        self.assertEqual(stored_existing["score"], 88)
+        self.assertEqual(json.loads(stored_existing["profile_json"])["text"], "原有画像不能覆盖")
+        self.assertIn("画像:既有客户", json.loads(stored_existing["tags_json"]))
+        self.assertIn("关键词:房贷增贷", json.loads(stored_existing["tags_json"]))
+        self.assertIsNotNone(stored_bob)
 
     def test_opc_import_creates_real_pool_membership_workflow_and_is_idempotent(self):
         with db_module.db() as conn:

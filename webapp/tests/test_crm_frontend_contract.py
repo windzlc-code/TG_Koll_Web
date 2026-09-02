@@ -30,22 +30,19 @@ def test_shared_navigation_adds_crm_immediately_after_console():
     assert mobile_crm > mobile_console
 
 
-def test_crm_navigation_entry_is_admin_only_and_fail_closed():
+def test_crm_navigation_entry_is_always_visible_and_keeps_auth_boundary():
     visibility = NAVIGATION[NAVIGATION.index("async function syncCrmEntryVisibility"):NAVIGATION.index("function syncPublicAdminEntry")]
-    assert 'const initiallyHidden = key === "crm" ? " hidden" : "";' in NAVIGATION
-    assert 'const adminIdentity = currentSessionMode === "admin"' in visibility
-    assert 'currentAccount?.is_admin || currentAccount?.acting_admin' in visibility
-    assert "entry.hidden = !adminIdentity" in visibility
+    assert 'const initiallyHidden = key === "crm" ? " hidden" : "";' not in NAVIGATION
+    assert 'const adminIdentity = currentSessionMode === "admin"' not in visibility
+    assert "entry.hidden = false" in visibility
     assert 'fetchAccountJson("/api/crm/v1/bootstrap")' not in visibility
-    assert "[data-crm-entry][hidden]" in NAVIGATION_CSS
-    crm_hidden_rule = NAVIGATION_CSS[NAVIGATION_CSS.index("[data-crm-entry][hidden]"):]
-    assert "display: none !important" in crm_hidden_rule.split("}", 1)[0]
 
     source_shell = (FRONTEND / "index.html").read_text(encoding="utf-8")
     production_shell = (ROOT / "webapp" / "static" / "crm.html").read_text(encoding="utf-8")
     assert 'data-site-mode="public"' in source_shell
     assert 'data-site-auth-state="pending"' in source_shell
-    assert 'data-crm-entry hidden' in source_shell
+    assert 'data-crm-entry hidden' not in source_shell
+    assert '>采集工作台</span>' in source_shell
     for control in (
         "data-site-mobile-menu",
         "data-site-subscription-entry",

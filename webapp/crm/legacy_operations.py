@@ -21,6 +21,7 @@ DEMAND_SCHEMA = "crm.demand-analysis.v1"
 HOTSPOT_SCHEMA = "crm.hotspot-search.v1"
 OPC_QUERY_SCHEMA = "crm.opc-history-query.v1"
 OPC_IMPORT_SCHEMA = "crm.opc-history-import.v1"
+OPC_SUMMARY_SCHEMA = "crm.opc-history-summary.v1"
 
 MAX_DEMAND_TEXT = 4_000
 MAX_HOTSPOT_QUERY = 300
@@ -406,7 +407,7 @@ def search_hotspots(
     }
 
 
-def _opc_rows(conn: sqlite3.Connection, tenant: TenantContext) -> list[sqlite3.Row]:
+def _opc_rows(conn: sqlite3.Connection, tenant: TenantContext, *, imported_only: bool = True) -> list[sqlite3.Row]:
     try:
         cursor = conn.execute(
             """
@@ -416,12 +417,13 @@ def _opc_rows(conn: sqlite3.Connection, tenant: TenantContext) -> list[sqlite3.R
               FROM crm_leads AS l
               LEFT JOIN crm_pool_members AS pm
                 ON pm.lead_id=l.id AND pm.user_id=l.user_id
-             WHERE l.user_id=? AND l.active=1 AND l.import_batch_id<>''
+             WHERE l.user_id=? AND l.active=1
+               AND (?=0 OR l.import_batch_id<>'')
              GROUP BY l.id
              ORDER BY l.updated_at DESC,l.id DESC
              LIMIT ?
             """,
-            (tenant.user_id, MAX_OPC_SCAN_ROWS + 1),
+            (tenant.user_id, 1 if imported_only else 0, MAX_OPC_SCAN_ROWS + 1),
         )
         rows = cursor.fetchall()
     except sqlite3.Error as exc:
@@ -491,6 +493,151 @@ def _lead_from_row(row: sqlite3.Row) -> JsonDict:
     }
 
 
+def _history_workflows(conn: sqlite3.Connection, tenant: TenantContext) -> list[tuple[sqlite3.Row, JsonDict]]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT id,status,legacy_id,legacy_payload_json,created_at,updated_at
+              FROM crm_workflows
+             WHERE user_id=? AND active=1 AND workflow_type='legacy_opc_daily_run'
+             ORDER BY created_at,id
+            """,
+            (tenant.user_id,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise CRMError(
+            "crm_opc_history_blocked",
+            "crm.errors.opcHistoryBlocked",
+            status_code=409,
+            details={"reason": "crm_history_store_unavailable"},
+        ) from exc
+    return [(row, _json_object(row["legacy_payload_json"])) for row in rows]
+
+
+def _history_lead(item: Mapping[str, Any], *, run_id: str = "") -> JsonDict | None:
+    username = _clean(item.get("username") or item.get("handle"), 120).lstrip("@")
+    if not username:
+        return None
+    source_url = _clean(item.get("permalink") or item.get("sourceUrl") or item.get("source_url"), 1_200)
+    profile_url = _clean(item.get("profileUrl") or item.get("profile_url"), 1_200)
+    platform_source = " ".join(
+        str(item.get(key) or "")
+        for key in ("platform", "profileUrl", "profile_url", "permalink", "sourceUrl", "source_url")
+    ).lower()
+    platform = "instagram" if "instagram" in platform_source else "threads"
+    keyword = _clean(item.get("keyword") or item.get("query"), 120)
+    tags = _string_list(item.get("tags"), maximum=100, item_maximum=120)
+    source_tag = f"来源:{'Instagram' if platform == 'instagram' else 'Threads'}"
+    if source_tag not in tags:
+        tags.append(source_tag)
+    if keyword and not any(tag.startswith(("关键词:", "關鍵詞:", "關鍵字:")) for tag in tags):
+        tags.append(f"关键词:{keyword}")
+    status = _clean(item.get("contactStatus") or item.get("contact_status") or item.get("stage"), 30).lower()
+    if status not in {"new", "contacted", "failed"}:
+        status = "contacted" if status in {"sent", "delivered", "replied", "converted"} else "new"
+    touch_tag = f"触及:{'全新' if status == 'new' else status}"
+    if touch_tag not in tags:
+        tags.append(touch_tag)
+    collected_at = _clean(item.get("collectedAt") or item.get("collected_at") or item.get("timestamp"), 40)
+    date_value = collected_at[:10] if len(collected_at) >= 10 else ""
+    if date_value and f"日期:{date_value}" not in tags:
+        tags.append(f"日期:{date_value}")
+    if not profile_url:
+        profile_url = (
+            f"https://www.instagram.com/{username}/"
+            if platform == "instagram"
+            else f"https://www.threads.com/@{username}"
+        )
+    return {
+        "id": "",
+        "username": username,
+        "displayName": _clean(item.get("displayName") or item.get("display_name") or item.get("name"), 160),
+        "platform": platform,
+        "profileUrl": profile_url,
+        "sourceUrl": source_url,
+        "text": _clean(item.get("text") or item.get("rawText") or item.get("content") or item.get("evidenceText"), 3_000),
+        "keyword": keyword,
+        "likeCount": _integer(item.get("likeCount"), default=0, minimum=0, maximum=2_147_483_647),
+        "replyCount": _integer(item.get("replyCount"), default=0, minimum=0, maximum=2_147_483_647),
+        "repostCount": _integer(item.get("repostCount"), default=0, minimum=0, maximum=2_147_483_647),
+        "tags": tags,
+        "contactStatus": status,
+        "lastContactAt": _clean(item.get("lastContactAt") or item.get("last_contact_at"), 40),
+        "collectedAt": collected_at,
+        "runId": _clean(item.get("runId") or item.get("run_id") or run_id, 160),
+        "poolIds": [],
+    }
+
+
+def _history_source_leads(conn: sqlite3.Connection, tenant: TenantContext) -> tuple[list[JsonDict], list[tuple[sqlite3.Row, JsonDict]]]:
+    workflows = _history_workflows(conn, tenant)
+    if not workflows:
+        return ([_lead_from_row(row) for row in _opc_rows(conn, tenant)], [])
+
+    existing: dict[tuple[str, str], JsonDict] = {}
+    for row in _opc_rows(conn, tenant, imported_only=False):
+        lead = _lead_from_row(row)
+        existing[(str(lead["platform"]), str(lead["username"]).casefold())] = lead
+
+    leads: list[JsonDict] = []
+    for workflow, payload in workflows:
+        run_id = _clean(payload.get("id") or payload.get("runId") or workflow["legacy_id"], 160)
+        raw_rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+        for item in raw_rows:
+            if not isinstance(item, Mapping):
+                continue
+            lead = _history_lead(item, run_id=run_id)
+            if lead is None:
+                continue
+            stored = existing.get((str(lead["platform"]), str(lead["username"]).casefold()))
+            if stored:
+                lead["id"] = stored["id"]
+                lead["poolIds"] = stored["poolIds"]
+                if stored["contactStatus"] != "new":
+                    lead["contactStatus"] = stored["contactStatus"]
+                lead["tags"] = _string_list([*lead["tags"], *stored["tags"]], maximum=100)
+            leads.append(lead)
+    return leads, workflows
+
+
+def summarize_opc_history(conn: sqlite3.Connection, tenant: TenantContext) -> JsonDict:
+    leads, workflows = _history_source_leads(conn, tenant)
+    unique: dict[tuple[str, str], JsonDict] = {}
+    keywords: dict[str, int] = {}
+    statuses: dict[str, int] = {}
+    rows = 0
+    for workflow, payload in workflows:
+        raw_rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+        rows += len(raw_rows) if raw_rows else _integer(payload.get("rowCount"), default=0, minimum=0, maximum=MAX_OPC_SCAN_ROWS)
+        status = _clean(payload.get("status") or workflow["status"], 50) or "unknown"
+        statuses[status] = statuses.get(status, 0) + 1
+        for item in raw_rows:
+            if not isinstance(item, Mapping):
+                continue
+            keyword = _clean(item.get("keyword") or item.get("query"), 120)
+            if keyword:
+                keywords[keyword] = keywords.get(keyword, 0) + 1
+    for lead in leads:
+        unique[(str(lead["platform"]), str(lead["username"]).casefold())] = lead
+        if not workflows and lead["keyword"]:
+            keyword = str(lead["keyword"])
+            keywords[keyword] = keywords.get(keyword, 0) + 1
+    if not workflows:
+        rows = len(leads)
+    return {
+        "schemaVersion": OPC_SUMMARY_SCHEMA,
+        "sourceAvailable": bool(workflows or leads),
+        "runs": len(workflows) or len({str(lead["runId"]) for lead in leads if lead["runId"]}),
+        "rows": rows,
+        "uniqueLeads": len(unique),
+        "statusCounts": statuses,
+        "topKeywords": [
+            {"name": name, "count": count}
+            for name, count in sorted(keywords.items(), key=lambda item: (-item[1], item[0]))[:30]
+        ],
+    }
+
+
 def _opc_filters(payload: Mapping[str, Any]) -> JsonDict:
     platform = _clean(payload.get("platform"), 20).lower()
     contact = _clean(payload.get("contact"), 20).lower()
@@ -521,13 +668,16 @@ def query_opc_history(
     excluded = [item.casefold() for item in filters["excludeKeywords"]]
     selected_runs = set(filters["runIds"])
     search = str(filters["search"]).casefold()
+    source_leads, _workflows = _history_source_leads(conn, tenant)
     matches: list[JsonDict] = []
-    for row in _opc_rows(conn, tenant):
-        lead = _lead_from_row(row)
+    for lead in source_leads:
         if filters["platform"] and lead["platform"] != filters["platform"]:
             continue
-        if filters["contact"] and lead["contactStatus"] != filters["contact"]:
-            continue
+        if filters["contact"]:
+            if filters["contact"] == "contacted" and lead["contactStatus"] == "new":
+                continue
+            if filters["contact"] != "contacted" and lead["contactStatus"] != filters["contact"]:
+                continue
         if selected_runs and lead["runId"] not in selected_runs:
             continue
         haystack = " ".join([
@@ -603,11 +753,11 @@ def import_opc_history(
         raise CRMError("crm_opc_history_empty", "crm.errors.opcHistoryEmpty", status_code=409)
     exclude_existing = payload.get("excludeExisting") is True
     exclude_interacted = payload.get("excludeInteracted") is True
-    lead_ids = [str(item["id"]) for item in leads]
+    lead_ids = [str(item["id"]) for item in leads if str(item.get("id") or "")]
     placeholders = ",".join("?" for _ in lead_ids)
     existing_ids: set[str] = set()
     interacted_ids: set[str] = set()
-    if exclude_existing:
+    if exclude_existing and lead_ids:
         existing_ids = {
             str(row["lead_id"])
             for row in conn.execute(
@@ -615,7 +765,7 @@ def import_opc_history(
                 (tenant.user_id, *lead_ids),
             ).fetchall()
         }
-    if exclude_interacted:
+    if exclude_interacted and lead_ids:
         interacted_ids = {
             str(row["lead_id"])
             for row in conn.execute(
@@ -638,6 +788,41 @@ def import_opc_history(
     savepoint = "crm_opc_import"
     conn.execute(f"SAVEPOINT {savepoint}")
     try:
+        for lead in selected:
+            if str(lead.get("id") or ""):
+                current = conn.execute(
+                    "SELECT tags_json FROM crm_leads WHERE id=? AND user_id=? AND active=1",
+                    (str(lead["id"]), tenant.user_id),
+                ).fetchone()
+                if current is not None:
+                    merged_tags = _string_list([*_json_list(current["tags_json"]), *lead["tags"]], maximum=100)
+                    conn.execute(
+                        "UPDATE crm_leads SET tags_json=?,updated_at=? WHERE id=? AND user_id=? AND active=1",
+                        (dumps(merged_tags), created, str(lead["id"]), tenant.user_id),
+                    )
+                continue
+            created_lead = create_resource(
+                conn,
+                "leads",
+                user_id=tenant.user_id,
+                import_batch_id="opc_history_runtime",
+                legacy_id=f"opc:{lead['platform']}:{str(lead['username']).casefold()}",
+                payload={
+                    "platform": lead["platform"],
+                    "platform_user_key": str(lead["username"]).casefold(),
+                    "username": lead["username"],
+                    "display_name": lead["displayName"],
+                    "stage": lead["contactStatus"],
+                    "score": 0,
+                    "tags": lead["tags"],
+                    "profile": {
+                        "keyword": lead["keyword"], "text": lead["text"], "runId": lead["runId"],
+                        "sourceUrl": lead["sourceUrl"], "profileUrl": lead["profileUrl"],
+                        "contactStatus": lead["contactStatus"], "collectedAt": lead["collectedAt"],
+                    },
+                },
+            )
+            lead["id"] = str(created_lead["id"])
         pool = create_resource(
             conn,
             "pools",
@@ -720,10 +905,12 @@ __all__ = [
     "HOTSPOT_SCHEMA",
     "OPC_IMPORT_SCHEMA",
     "OPC_QUERY_SCHEMA",
+    "OPC_SUMMARY_SCHEMA",
     "TenantContext",
     "analyze_demand",
     "import_opc_history",
     "normalize_locale",
     "query_opc_history",
     "search_hotspots",
+    "summarize_opc_history",
 ]
