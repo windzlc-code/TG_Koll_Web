@@ -2393,7 +2393,7 @@ def _start_bundle_authorization(
                 """,
                 (request_id, owner_user_id, persona_id, account_id, platform, team_id, now + 900, now, now),
             )
-        url = client.create_portal_link(team_id=team_id, platform=platform, redirect_url=redirect_url)
+        url = client.create_connect_link(team_id=team_id, platform=platform, redirect_url=redirect_url)
     except BundleSocialError as exc:
         with db() as conn:
             conn.execute(
@@ -2401,7 +2401,7 @@ def _start_bundle_authorization(
                 (str(exc), _now(), request_id),
             )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"ok": True, "request_id": request_id, "platform": platform, "url": url}
+    return {"ok": True, "request_id": request_id, "platform": platform, "flow": "custom", "url": url}
 
 
 def _finalize_bundle_authorization(request_id: str, request: Request) -> RedirectResponse:

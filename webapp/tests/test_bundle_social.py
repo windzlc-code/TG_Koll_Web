@@ -49,23 +49,40 @@ def test_platform_type_is_exact_and_rejects_unknown():
         platform_type("facebook")
 
 
-def test_portal_link_requests_only_selected_platform():
-    session = _Session([_Response({"url": "https://portal.example/authorize"})])
+def test_custom_connect_link_requests_only_selected_platform():
+    session = _Session([_Response({"url": "https://provider.example/oauth"})])
     client = BundleSocialClient(api_key="test-key", api_base="https://api.example/api/v1", session=session)
 
-    url = client.create_portal_link(
+    url = client.create_connect_link(
         team_id="team-1",
         platform="threads",
         redirect_url="https://vecto.example/callback",
     )
 
-    assert url == "https://portal.example/authorize"
+    assert url == "https://provider.example/oauth"
+    assert session.calls[0][0:2] == ("POST", "https://api.example/api/v1/social-account/connect")
     body = session.calls[0][2]["json"]
-    assert body["socialAccountTypes"] == ["THREADS"]
+    assert body["type"] == "THREADS"
     assert body["disableAutoLogin"] is True
-    assert body["expiresIn"] == 15
     assert "instagramConnectionMethod" not in body
+    assert "socialAccountTypes" not in body
     assert session.calls[0][2]["headers"]["x-api-key"] == "test-key"
+
+
+def test_custom_connect_link_uses_direct_instagram_browser_oauth():
+    session = _Session([_Response({"url": "https://instagram.example/oauth"})])
+    client = BundleSocialClient(api_key="test-key", api_base="https://api.example/api/v1", session=session)
+
+    client.create_connect_link(
+        team_id="team-1",
+        platform="instagram",
+        redirect_url="https://vecto.example/callback",
+    )
+
+    body = session.calls[0][2]["json"]
+    assert body["type"] == "INSTAGRAM"
+    assert body["instagramConnectionMethod"] == "INSTAGRAM"
+    assert body["forceBrowserOAuth"] is True
 
 
 def test_connection_check_uses_team_list_without_exposing_key():
@@ -502,10 +519,10 @@ def test_bundle_authorization_reuses_existing_empty_team(monkeypatch, tmp_path):
         def create_team(self, _name):
             pytest.fail("an existing empty authorization team must be reused")
 
-        def create_portal_link(self, *, team_id, platform, redirect_url):
+        def create_connect_link(self, *, team_id, platform, redirect_url):
             assert (team_id, platform) == ("team-empty", "threads")
             assert "request_id=" in redirect_url
-            return "https://portal.example/authorize"
+            return "https://provider.example/oauth"
 
     monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
     monkeypatch.setattr(social_automation_api, "_identity_user_id", lambda _: 0)
@@ -541,7 +558,8 @@ def test_bundle_authorization_reuses_existing_empty_team(monkeypatch, tmp_path):
         previous = conn.execute(
             "SELECT status FROM social_account_auth_requests WHERE id = 'request-old'",
         ).fetchone()
-    assert result["url"] == "https://portal.example/authorize"
+    assert result["url"] == "https://provider.example/oauth"
+    assert result["flow"] == "custom"
     assert (current["team_id"], current["status"]) == ("team-empty", "pending")
     assert previous["status"] == "superseded"
 

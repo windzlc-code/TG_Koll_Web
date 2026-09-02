@@ -17174,6 +17174,100 @@ body.persona-media-sorting {
   width: min(760px, calc(100vw - 32px));
 }
 
+.console-modal[data-modal-key="bundle-account-authorization"] .console-modal-dialog,
+.console-modal[data-modal-key="bundle-account-authorization-result"] .console-modal-dialog {
+  width: min(440px, calc(100vw - 24px));
+}
+
+.bundle-account-authorization-content {
+  display: grid;
+}
+
+.bundle-account-authorization-option {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+}
+
+.bundle-account-authorization-option > span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bundle-account-authorization-option strong {
+  color: var(--ink);
+}
+
+.bundle-account-authorization-option small,
+.bundle-account-authorization-result small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.bundle-account-authorization-brand {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-solid, #fff);
+}
+
+.bundle-account-authorization-brand .platform-brand-icon {
+  width: 24px;
+  height: 24px;
+}
+
+.bundle-account-authorization-result {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px 12px 8px;
+  text-align: center;
+}
+
+.bundle-account-authorization-result-icon {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  background: var(--status-success-bg);
+  color: var(--status-success-ink);
+}
+
+.bundle-account-authorization-result.is-error .bundle-account-authorization-result-icon {
+  background: var(--status-error-bg);
+  color: var(--status-error-ink);
+}
+
+.bundle-account-authorization-result-icon svg {
+  width: 34px;
+  height: 34px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.bundle-account-authorization-result.is-success .bundle-account-authorization-result-icon svg {
+  animation: bundle-account-authorization-success-pop 260ms ease-out both;
+}
+
+@keyframes bundle-account-authorization-success-pop {
+  from { opacity: 0; transform: scale(.78); }
+  to { opacity: 1; transform: scale(1); }
+}
+
 .google-account-session-modal {
   width: min(600px, calc(100vw - 32px));
 }

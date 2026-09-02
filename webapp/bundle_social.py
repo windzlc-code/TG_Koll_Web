@@ -140,20 +140,18 @@ class BundleSocialClient:
             raise BundleSocialError("平台授权服务未返回工作区编号")
         return team_id
 
-    def create_portal_link(self, *, team_id: str, platform: str, redirect_url: str) -> str:
+    def create_connect_link(self, *, team_id: str, platform: str, redirect_url: str) -> str:
         provider_type = platform_type(platform)
         body: dict[str, Any] = {
+            "type": provider_type,
             "teamId": str(team_id),
-            "socialAccountTypes": [provider_type],
             "redirectUrl": str(redirect_url),
             "disableAutoLogin": True,
-            "expiresIn": 15,
-            "language": "zh",
-            "maxSocialAccountsConnected": 1,
         }
         if provider_type == "INSTAGRAM":
             body["instagramConnectionMethod"] = "INSTAGRAM"
-        item = _first_mapping(self._request("POST", "social-account/create-portal-link", json_body=body))
+            body["forceBrowserOAuth"] = True
+        item = _first_mapping(self._request("POST", "social-account/connect", json_body=body))
         url = str(item.get("url") or "").strip()
         if not url:
             raise BundleSocialError("平台授权服务未返回授权地址")

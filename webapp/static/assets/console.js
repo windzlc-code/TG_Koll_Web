@@ -32178,15 +32178,44 @@ async function startBundleAccountAuthorization({ platform = "", personaId = "", 
   });
   const authorizationUrl = String(result?.url || "").trim();
   if (!authorizationUrl) throw new Error("平台授权地址不可用，请稍后重试。");
-  showMsg("socialMsg", `正在前往 ${platformLabel(selectedPlatform)} 授权页面。`, true);
+  showMsg("socialMsg", `正在进入 ${platformLabel(selectedPlatform)} 官方授权页面。`, true);
   window.location.assign(authorizationUrl);
   return result;
+}
+
+async function openBundleAccountAuthorizationModal({ platform = "", personaId = "", accountId = "" } = {}) {
+  const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
+  const selectedPlatformLabel = platformLabel(selectedPlatform);
+  const editing = Boolean(String(accountId || "").trim());
+  const confirmed = await openConsoleModal({
+    modalKey: "bundle-account-authorization",
+    title: editing ? "重新授权账号" : "添加账号",
+    confirmText: editing ? `重新授权 ${selectedPlatformLabel}` : `授权 ${selectedPlatformLabel}`,
+    cancelText: "取消",
+    contentHtml: `
+      <div class="bundle-account-authorization-content" data-account-platform="${esc(selectedPlatform)}">
+        <div class="bundle-account-authorization-option">
+          <span class="bundle-account-authorization-brand">${renderAccountPoolPlatformIcon(selectedPlatform)}</span>
+          <span>
+            <strong>${esc(selectedPlatformLabel)} 官方授权</strong>
+            <small>${editing ? "重新连接当前账号" : "连接一个新的账号"}</small>
+          </span>
+        </div>
+      </div>
+    `,
+  });
+  if (!confirmed) return null;
+  return startBundleAccountAuthorization({
+    platform: selectedPlatform,
+    personaId,
+    accountId,
+  });
 }
 
 function openAccountPoolCreateModal(options) {
   options = options || {};
   const platform = normalizeAccountPoolPlatform(options.platform || state.accountPoolPlatform);
-  void startBundleAccountAuthorization({
+  void openBundleAccountAuthorizationModal({
     platform,
     personaId: String(options.personaId || "").trim(),
   }).catch((error) => showMsg("socialMsg", error.detail || error.message || "启动平台授权失败", false));
@@ -32200,7 +32229,7 @@ function openAccountPoolEditModal(accountId = "") {
     return;
   }
   if (String(account.auth_provider || "browser") === "bundle") {
-    void startBundleAccountAuthorization({
+    void openBundleAccountAuthorizationModal({
       platform: account.platform,
       personaId: account.persona_id,
       accountId: account.id,
@@ -37576,6 +37605,22 @@ function consumeBundleAuthorizationResult() {
   );
   ["bundle_auth", "bundle_platform", "bundle_message"].forEach((key) => url.searchParams.delete(key));
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  const succeeded = status === "success";
+  void openConsoleModal({
+    modalKey: "bundle-account-authorization-result",
+    title: succeeded ? `${platformLabel(platform)} 账号连接成功` : `${platformLabel(platform)} 账号授权未完成`,
+    confirmText: "完成",
+    showCancel: false,
+    contentHtml: `
+      <div class="bundle-account-authorization-result ${succeeded ? "is-success" : "is-error"}">
+        <span class="bundle-account-authorization-result-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="${succeeded ? "m6.5 12.5 3.4 3.4 7.6-8" : "M12 7v6m0 4h.01"}"></path><circle cx="12" cy="12" r="9"></circle></svg>
+        </span>
+        <strong>${esc(succeeded ? "授权资料已同步到账号池" : "本次没有新增或更新账号")}</strong>
+        <small>${esc(message || (succeeded ? "现在可以继续添加其他账号，或直接使用该账号执行任务。" : "请确认平台账号和授权权限后重新操作。"))}</small>
+      </div>
+    `,
+  });
 }
 
 function bindIdentityRevalidationEvents() {
