@@ -43,6 +43,7 @@ from .auth import (
     SESSION_COOKIE,
     get_current_user,
     get_current_user_for_session,
+    request_uses_admin_session,
     require_admin,
 )
 from .db import db, get_admin_config, set_admin_config
@@ -2244,19 +2245,61 @@ def _reconcile_social_automation_plans() -> None:
             )
 
 
-def _bundle_console_redirect(*, status: str, platform: str, message: str = "") -> RedirectResponse:
-    query = urlencode(
+def _safe_bundle_console_return_path(return_path: str = "") -> str:
+    parsed = urlparse(str(return_path or "").strip())
+    source_query = parse_qs(parsed.query)
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or parsed.path != "/admin-console.html"
+        or str((source_query.get(ADMIN_CONSOLE_QUERY) or [""])[0]).strip() != "1"
+    ):
+        return "/console.html?view=accounts"
+    query = {"view": "accounts", ADMIN_CONSOLE_QUERY: "1"}
+    try:
+        workspace_user_id = int((source_query.get(ADMIN_WORKSPACE_QUERY) or [0])[0] or 0)
+    except (TypeError, ValueError):
+        workspace_user_id = 0
+    if workspace_user_id > 0:
+        query[ADMIN_WORKSPACE_QUERY] = str(workspace_user_id)
+    return f"/admin-console.html?{urlencode(query)}"
+
+
+def _bundle_authorization_return_path(request: Request, user: dict[str, Any]) -> str:
+    owner_user_id = _identity_user_id(user)
+    admin_workspace = bool(int(user.get("_workspace_admin_user_id") or 0))
+    if not request_uses_admin_session(request, owner_user_id if admin_workspace else None):
+        return "/console.html?view=accounts"
+    query = {"view": "accounts", ADMIN_CONSOLE_QUERY: "1"}
+    if admin_workspace:
+        query[ADMIN_WORKSPACE_QUERY] = str(owner_user_id)
+    return f"/admin-console.html?{urlencode(query)}"
+
+
+def _bundle_console_redirect(
+    *,
+    status: str,
+    platform: str,
+    message: str = "",
+    return_path: str = "",
+) -> RedirectResponse:
+    safe_return = urlparse(_safe_bundle_console_return_path(return_path))
+    query = {
+        key: values[-1]
+        for key, values in parse_qs(safe_return.query).items()
+        if values
+    }
+    query.update(
         {
-            "view": "accounts",
             "bundle_auth": str(status),
             "bundle_platform": str(platform),
             "bundle_message": str(message)[:240],
         }
     )
-    return RedirectResponse(url=f"/console.html?{query}", status_code=302)
+    return RedirectResponse(url=f"{safe_return.path}?{urlencode(query)}", status_code=302)
 
 
-def _bundle_callback_url(request: Request, request_id: str) -> str:
+def _bundle_callback_url(request: Request, request_id: str, *, return_path: str = "") -> str:
     configured_origin = str(os.getenv("HTTPS_CANONICAL_ORIGIN", "") or "").strip().rstrip("/")
     scheme = str(request.headers.get("x-forwarded-proto") or request.url.scheme or "").split(",", 1)[0].strip().lower()
     host = str(request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",", 1)[0].strip()
@@ -2273,7 +2316,10 @@ def _bundle_callback_url(request: Request, request_id: str) -> str:
         or (parsed.scheme != "https" and not (parsed.scheme == "http" and local_host))
     ):
         raise HTTPException(status_code=503, detail="系统无法识别安全的授权回调地址")
-    return f"{base}/api/persona_dashboard/automation/accounts/bundle/callback?{urlencode({'request_id': request_id})}"
+    query = {"request_id": request_id}
+    if return_path:
+        query["return_path"] = _safe_bundle_console_return_path(return_path)
+    return f"{base}/api/persona_dashboard/automation/accounts/bundle/callback?{urlencode(query)}"
 
 
 def _start_bundle_authorization(
@@ -2374,7 +2420,11 @@ def _start_bundle_authorization(
                 )
             if not team_id:
                 team_id = client.create_team(f"{team_prefix}{request_id[-12:]}")
-        redirect_url = _bundle_callback_url(request, request_id)
+        redirect_url = _bundle_callback_url(
+            request,
+            request_id,
+            return_path=_bundle_authorization_return_path(request, user),
+        )
         with db() as conn:
             conn.execute(
                 """
@@ -2404,7 +2454,12 @@ def _start_bundle_authorization(
     return {"ok": True, "request_id": request_id, "platform": platform, "flow": "custom", "url": url}
 
 
-def _finalize_bundle_authorization(request_id: str, request: Request) -> RedirectResponse:
+def _finalize_bundle_authorization(
+    request_id: str,
+    request: Request,
+    *,
+    return_path: str = "",
+) -> RedirectResponse:
     from .bundle_social import BundleSocialClient, BundleSocialError, platform_type
 
     with db() as conn:
@@ -2413,13 +2468,19 @@ def _finalize_bundle_authorization(request_id: str, request: Request) -> Redirec
             (str(request_id),),
         ).fetchone()
     if not auth_row:
-        return _bundle_console_redirect(status="error", platform="", message="授权请求不存在，请重新发起授权")
+        return _bundle_console_redirect(
+            status="error", platform="", message="授权请求不存在，请重新发起授权", return_path=return_path,
+        )
     owner_user_id = int(auth_row["user_id"] or 0)
     platform = str(auth_row["platform"] or "").strip().lower()
     if str(auth_row["status"] or "") == "completed":
-        return _bundle_console_redirect(status="success", platform=platform, message="平台账号已授权")
+        return _bundle_console_redirect(
+            status="success", platform=platform, message="平台账号已授权", return_path=return_path,
+        )
     if int(auth_row["expires_at"] or 0) < _now():
-        return _bundle_console_redirect(status="error", platform=platform, message="授权请求已过期，请重新授权")
+        return _bundle_console_redirect(
+            status="error", platform=platform, message="授权请求已过期，请重新授权", return_path=return_path,
+        )
     callback_value = " ".join(
         f"{str(key or '')} {str(value or '')}"
         for key, value in request.query_params.multi_items()
@@ -2432,7 +2493,7 @@ def _finalize_bundle_authorization(request_id: str, request: Request) -> Redirec
                 "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
                 (message, _now(), str(request_id)),
             )
-        return _bundle_console_redirect(status="error", platform=platform, message=message)
+        return _bundle_console_redirect(status="error", platform=platform, message=message, return_path=return_path)
     try:
         client = BundleSocialClient()
         provider_account: dict[str, Any] = {}
@@ -2453,11 +2514,13 @@ def _finalize_bundle_authorization(request_id: str, request: Request) -> Redirec
         if str(provider_account.get("type") or "").upper() != platform_type(platform):
             raise BundleSocialError("授权结果与所选平台不一致")
     except BundleSocialError as exc:
-        return _bundle_console_redirect(status="error", platform=platform, message=str(exc))
+        return _bundle_console_redirect(status="error", platform=platform, message=str(exc), return_path=return_path)
 
     external_account_id = str(provider_account.get("id") or "").strip()
     if not external_account_id:
-        return _bundle_console_redirect(status="error", platform=platform, message="平台授权结果缺少账号编号，请重新授权")
+        return _bundle_console_redirect(
+            status="error", platform=platform, message="平台授权结果缺少账号编号，请重新授权", return_path=return_path,
+        )
     username = str(
         provider_account.get("username")
         or provider_account.get("displayName")
@@ -2484,6 +2547,21 @@ def _finalize_bundle_authorization(request_id: str, request: Request) -> Redirec
                 LIMIT 1
                 """,
                 (owner_user_id, platform, external_account_id),
+            ).fetchone()
+        if current is None:
+            current = conn.execute(
+                """
+                SELECT * FROM social_accounts
+                WHERE user_id = ? AND persona_id = ? AND platform = ?
+                  AND username = ? COLLATE NOCASE
+                LIMIT 1
+                """,
+                (
+                    owner_user_id,
+                    str(auth_row["persona_id"] or ""),
+                    platform,
+                    username,
+                ),
             ).fetchone()
         if current is not None:
             account_id = str(current["id"] or "")
@@ -2523,7 +2601,9 @@ def _finalize_bundle_authorization(request_id: str, request: Request) -> Redirec
             "UPDATE social_account_auth_requests SET account_id = ?, status = 'completed', error = '', updated_at = ? WHERE id = ?",
             (account_id, now, str(request_id)),
         )
-    return _bundle_console_redirect(status="success", platform=platform, message=f"{platform.title()} 账号授权成功")
+    return _bundle_console_redirect(
+        status="success", platform=platform, message=f"{platform.title()} 账号授权成功", return_path=return_path,
+    )
 
 
 def register_social_automation_routes(app: FastAPI) -> None:
@@ -2666,8 +2746,9 @@ def register_social_automation_routes(app: FastAPI) -> None:
     def api_social_account_bundle_callback(
         request: Request,
         request_id: str = "",
+        return_path: str = "",
     ):
-        return _finalize_bundle_authorization(request_id, request)
+        return _finalize_bundle_authorization(request_id, request, return_path=return_path)
 
     @app.post("/api/persona_dashboard/automation/accounts")
     def api_social_account_create(payload: SocialAccountPayload, user: dict[str, Any] = Depends(get_current_user)):

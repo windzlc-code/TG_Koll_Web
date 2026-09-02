@@ -32165,22 +32165,131 @@ function openAccountPoolEditorModal(options) {
   });
 }
 
+let bundleAuthorizationPopup = null;
+let bundleAuthorizationPopupTimer = null;
+let bundleAuthorizationResultPending = false;
+let bundleAuthorizationEventsBound = false;
+
+function closeBundleAuthorizationPopup() {
+  if (bundleAuthorizationPopupTimer) {
+    window.clearInterval(bundleAuthorizationPopupTimer);
+    bundleAuthorizationPopupTimer = null;
+  }
+  if (bundleAuthorizationPopup && !bundleAuthorizationPopup.closed) bundleAuthorizationPopup.close();
+  bundleAuthorizationPopup = null;
+}
+
+async function applyBundleAuthorizationResult({ status = "", platform = "threads", message = "" } = {}) {
+  if (bundleAuthorizationResultPending) return;
+  bundleAuthorizationResultPending = true;
+  const normalizedPlatform = normalizeAccountPoolPlatform(platform);
+  const succeeded = String(status || "").trim().toLowerCase() === "success";
+  closeBundleAuthorizationPopup();
+  state.accountPoolPlatform = normalizedPlatform;
+  setAccountBrowserPanel("accounts");
+  try {
+    try {
+      await loadSocial();
+    } catch (_) {
+      // The result remains visible even if the account list refresh must be retried manually.
+    }
+    showMsg(
+      "socialMsg",
+      message || (succeeded ? `${platformLabel(normalizedPlatform)} 账号授权成功。` : `${platformLabel(normalizedPlatform)} 账号授权未完成。`),
+      succeeded,
+    );
+    await openConsoleModal({
+      modalKey: "bundle-account-authorization-result",
+      title: succeeded ? `${platformLabel(normalizedPlatform)} 账号连接成功` : `${platformLabel(normalizedPlatform)} 账号授权未完成`,
+      confirmText: "完成",
+      showCancel: false,
+      contentHtml: `
+        <div class="bundle-account-authorization-result ${succeeded ? "is-success" : "is-error"}">
+          <span class="bundle-account-authorization-result-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="${succeeded ? "m6.5 12.5 3.4 3.4 7.6-8" : "M12 7v6m0 4h.01"}"></path><circle cx="12" cy="12" r="9"></circle></svg>
+          </span>
+          <strong>${esc(succeeded ? "授权资料已同步到账号池" : "本次没有新增或更新账号")}</strong>
+          <small>${esc(message || (succeeded ? "现在可以继续添加其他账号，或直接使用该账号执行任务。" : "请确认平台账号和授权权限后重新操作。"))}</small>
+        </div>
+      `,
+    });
+  } finally {
+    bundleAuthorizationResultPending = false;
+  }
+}
+
+function bindBundleAuthorizationEvents() {
+  if (bundleAuthorizationEventsBound) return;
+  bundleAuthorizationEventsBound = true;
+  window.addEventListener("message", (event) => {
+    const data = event.data || {};
+    if (event.origin !== window.location.origin || data.type !== "vecto:bundle-authorization-result") return;
+    if (!bundleAuthorizationPopup || event.source !== bundleAuthorizationPopup) return;
+    void applyBundleAuthorizationResult(data);
+  });
+}
+
+function openBundleAuthorizationPopup(platform = "threads") {
+  closeBundleAuthorizationPopup();
+  const width = Math.min(520, Math.max(360, window.screen.availWidth - 32));
+  const height = Math.min(760, Math.max(560, window.screen.availHeight - 64));
+  const left = Math.max(0, Math.round((window.screen.availWidth - width) / 2));
+  const top = Math.max(0, Math.round((window.screen.availHeight - height) / 2));
+  const popup = window.open(
+    "about:blank",
+    "vecto-platform-authorization",
+    `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`,
+  );
+  if (!popup) throw new Error("浏览器阻止了授权窗口，请允许本站打开弹出窗口后重试。");
+  bundleAuthorizationPopup = popup;
+  bundleAuthorizationResultPending = false;
+  popup.document.title = `${platformLabel(platform)} 官方授权`;
+  popup.document.body.innerHTML = `<p style="font:16px/1.5 system-ui;margin:40px;text-align:center;color:#24384a">正在打开 ${esc(platformLabel(platform))} 官方授权…</p>`;
+  popup.focus();
+  bundleAuthorizationPopupTimer = window.setInterval(() => {
+    if (!bundleAuthorizationPopup || bundleAuthorizationPopup.closed) {
+      closeBundleAuthorizationPopup();
+      return;
+    }
+    try {
+      const callbackUrl = new URL(bundleAuthorizationPopup.location.href);
+      const status = String(callbackUrl.searchParams.get("bundle_auth") || "").trim().toLowerCase();
+      if (callbackUrl.origin !== window.location.origin || !status) return;
+      void applyBundleAuthorizationResult({
+        status,
+        platform: callbackUrl.searchParams.get("bundle_platform") || platform,
+        message: callbackUrl.searchParams.get("bundle_message") || "",
+      });
+    } catch (_) {
+      // Cross-origin access is expected while the official authorization page is open.
+    }
+  }, 500);
+  return popup;
+}
+
 async function startBundleAccountAuthorization({ platform = "", personaId = "", accountId = "" } = {}) {
   const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
-  const result = await api("/api/persona_dashboard/automation/accounts/bundle/authorize", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      platform: selectedPlatform,
-      persona_id: String(personaId || accountById(accountId)?.persona_id || "").trim(),
-      account_id: String(accountId || "").trim(),
-    }),
-  });
-  const authorizationUrl = String(result?.url || "").trim();
-  if (!authorizationUrl) throw new Error("平台授权地址不可用，请稍后重试。");
-  showMsg("socialMsg", `正在进入 ${platformLabel(selectedPlatform)} 官方授权页面。`, true);
-  window.location.assign(authorizationUrl);
-  return result;
+  bindBundleAuthorizationEvents();
+  const popup = openBundleAuthorizationPopup(selectedPlatform);
+  try {
+    const result = await api("/api/persona_dashboard/automation/accounts/bundle/authorize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        platform: selectedPlatform,
+        persona_id: String(personaId || accountById(accountId)?.persona_id || "").trim(),
+        account_id: String(accountId || "").trim(),
+      }),
+    });
+    const authorizationUrl = String(result?.url || "").trim();
+    if (!authorizationUrl) throw new Error("平台授权地址不可用，请稍后重试。");
+    showMsg("socialMsg", `${platformLabel(selectedPlatform)} 授权窗口已打开。`, true);
+    popup.location.replace(authorizationUrl);
+    return result;
+  } catch (error) {
+    closeBundleAuthorizationPopup();
+    throw error;
+  }
 }
 
 async function openBundleAccountAuthorizationModal({ platform = "", personaId = "", accountId = "" } = {}) {
@@ -37598,29 +37707,17 @@ function consumeBundleAuthorizationResult() {
   if (!status) return;
   const platform = normalizeAccountPoolPlatform(url.searchParams.get("bundle_platform") || "threads");
   const message = String(url.searchParams.get("bundle_message") || "").trim();
-  showMsg(
-    "socialMsg",
-    message || (status === "success" ? `${platformLabel(platform)} 账号授权成功。` : `${platformLabel(platform)} 账号授权未完成。`),
-    status === "success",
-  );
   ["bundle_auth", "bundle_platform", "bundle_message"].forEach((key) => url.searchParams.delete(key));
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
-  const succeeded = status === "success";
-  void openConsoleModal({
-    modalKey: "bundle-account-authorization-result",
-    title: succeeded ? `${platformLabel(platform)} 账号连接成功` : `${platformLabel(platform)} 账号授权未完成`,
-    confirmText: "完成",
-    showCancel: false,
-    contentHtml: `
-      <div class="bundle-account-authorization-result ${succeeded ? "is-success" : "is-error"}">
-        <span class="bundle-account-authorization-result-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24"><path d="${succeeded ? "m6.5 12.5 3.4 3.4 7.6-8" : "M12 7v6m0 4h.01"}"></path><circle cx="12" cy="12" r="9"></circle></svg>
-        </span>
-        <strong>${esc(succeeded ? "授权资料已同步到账号池" : "本次没有新增或更新账号")}</strong>
-        <small>${esc(message || (succeeded ? "现在可以继续添加其他账号，或直接使用该账号执行任务。" : "请确认平台账号和授权权限后重新操作。"))}</small>
-      </div>
-    `,
-  });
+  if (window.opener && !window.opener.closed) {
+    window.opener.postMessage(
+      { type: "vecto:bundle-authorization-result", status, platform, message },
+      window.location.origin,
+    );
+    window.close();
+    return;
+  }
+  void applyBundleAuthorizationResult({ status, platform, message });
 }
 
 function bindIdentityRevalidationEvents() {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from cryptography.fernet import Fernet
@@ -318,6 +319,85 @@ def test_bundle_callback_url_prefers_server_canonical_origin(monkeypatch):
     )
 
 
+def test_bundle_callback_url_preserves_admin_account_pool_return(monkeypatch):
+    monkeypatch.setenv("HTTPS_CANONICAL_ORIGIN", "https://www.vecto-ai.cn")
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("www.vecto-ai.cn", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/authorize",
+            "headers": [],
+        }
+    )
+
+    callback_url = social_automation_api._bundle_callback_url(
+        request,
+        "bundle_auth_admin",
+        return_path="/admin-console.html?view=accounts&admin_console=1&admin_workspace_user_id=42",
+    )
+
+    parsed = urlparse(callback_url)
+    callback_query = parse_qs(parsed.query)
+    assert callback_query["request_id"] == ["bundle_auth_admin"]
+    assert callback_query["return_path"] == [
+        "/admin-console.html?view=accounts&admin_console=1&admin_workspace_user_id=42"
+    ]
+
+
+def test_bundle_console_redirect_keeps_admin_session_boundary():
+    response = social_automation_api._bundle_console_redirect(
+        status="success",
+        platform="threads",
+        message="授权成功",
+        return_path="/admin-console.html?view=accounts&admin_console=1&admin_workspace_user_id=42",
+    )
+
+    parsed = urlparse(response.headers["location"])
+    query = parse_qs(parsed.query)
+    assert parsed.path == "/admin-console.html"
+    assert query["view"] == ["accounts"]
+    assert query["admin_console"] == ["1"]
+    assert query["admin_workspace_user_id"] == ["42"]
+    assert query["bundle_auth"] == ["success"]
+
+
+def test_bundle_console_redirect_rejects_external_return_path():
+    response = social_automation_api._bundle_console_redirect(
+        status="error",
+        platform="threads",
+        return_path="https://attacker.example/admin-console.html?admin_console=1",
+    )
+
+    parsed = urlparse(response.headers["location"])
+    assert parsed.path == "/console.html"
+    assert parse_qs(parsed.query)["view"] == ["accounts"]
+
+
+def test_bundle_authorization_return_path_uses_admin_workspace_boundary():
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("www.vecto-ai.cn", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/authorize",
+            "query_string": b"",
+            "headers": [(b"x-admin-console", b"1")],
+        }
+    )
+
+    return_path = social_automation_api._bundle_authorization_return_path(
+        request,
+        {"id": 1, "_workspace_admin_user_id": 1, "_workspace_user_id": 42},
+    )
+
+    assert return_path == (
+        "/admin-console.html?view=accounts&admin_console=1&admin_workspace_user_id=42"
+    )
+
+
 def test_bundle_callback_persists_only_verified_platform_account(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "callback.db"))
     init_db()
@@ -427,6 +507,77 @@ def test_bundle_callback_reauthorization_reuses_same_external_account(monkeypatc
     assert accounts[0]["external_team_id"] == "team-new"
 
 
+def test_bundle_callback_reuses_same_identity_when_bundle_changes_external_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "same-identity-new-bundle-id.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_accounts(
+              id, user_id, persona_id, platform, username, display_name, profile_dir,
+              status, auth_provider, external_team_id, external_account_id,
+              authorized_at, created_at, updated_at
+            ) VALUES ('account-existing', 0, 'persona-1', 'threads', 'same_owner',
+                      'Old Name', 'profiles/old', 'ready', 'bundle', 'team-old',
+                      'external-old', ?, ?, ?)
+            """,
+            (now, now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO social_account_auth_requests(
+              id, user_id, persona_id, account_id, platform, team_id,
+              status, error, expires_at, created_at, updated_at
+            ) VALUES ('request-upgrade', 0, 'persona-1', '', 'threads', 'team-new',
+                      'pending', '', ?, ?, ?)
+            """,
+            (now + 900, now, now),
+        )
+
+    class _Client:
+        def find_social_account(self, *, team_id, platform):
+            assert (team_id, platform) == ("team-new", "threads")
+            return {
+                "id": "external-new",
+                "type": "THREADS",
+                "teamId": team_id,
+                "username": "same_owner",
+                "displayName": "Current Name",
+            }
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/callback",
+            "query_string": b"request_id=request-upgrade&threads-callback=success",
+            "headers": [],
+        }
+    )
+
+    response = social_automation_api._finalize_bundle_authorization("request-upgrade", request)
+
+    with db() as conn:
+        accounts = conn.execute("SELECT * FROM social_accounts").fetchall()
+        auth_request = conn.execute(
+            "SELECT account_id, status FROM social_account_auth_requests WHERE id = 'request-upgrade'"
+        ).fetchone()
+    assert response.status_code == 302
+    assert "bundle_auth=success" in response.headers["location"]
+    assert len(accounts) == 1
+    assert accounts[0]["id"] == "account-existing"
+    assert accounts[0]["auth_provider"] == "bundle"
+    assert accounts[0]["external_team_id"] == "team-new"
+    assert accounts[0]["external_account_id"] == "external-new"
+    assert accounts[0]["username"] == "same_owner"
+    assert accounts[0]["display_name"] == "Current Name"
+    assert (auth_request["account_id"], auth_request["status"]) == ("account-existing", "completed")
+
+
 def test_bundle_callback_route_does_not_require_console_session():
     app = FastAPI()
     social_automation_api.register_social_automation_routes(app)
@@ -468,6 +619,7 @@ def test_bundle_new_account_still_obeys_threads_account_limit(monkeypatch, tmp_p
             "scheme": "https",
             "server": ("vecto.example", 443),
             "path": "/api/persona_dashboard/automation/accounts/bundle/authorize",
+            "query_string": b"",
             "headers": [],
         }
     )
@@ -540,6 +692,7 @@ def test_bundle_authorization_reuses_existing_empty_team(monkeypatch, tmp_path):
             "scheme": "https",
             "server": ("vecto.example", 443),
             "path": "/api/persona_dashboard/automation/accounts/bundle/authorize",
+            "query_string": b"",
             "headers": [],
         }
     )
