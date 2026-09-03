@@ -32273,26 +32273,53 @@ function bindBundleAuthorizationEvents() {
   });
 }
 
-function openBundleAuthorizationPopup(platform = "threads", authorizationUrl = "") {
-  closeBundleAuthorizationPopup();
+function bundleAuthorizationPopupFeatures() {
+  const width = Math.min(520, Math.max(360, window.screen.availWidth - 32));
+  const height = Math.min(760, Math.max(560, window.screen.availHeight - 64));
+  const left = Math.max(0, Math.round((window.screen.availWidth - width) / 2));
+  const top = Math.max(0, Math.round((window.screen.availHeight - height) / 2));
+  return `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`;
+}
+
+function openBundleAccountSwitchPopup(platform = "threads") {
+  const selectedPlatform = normalizeAccountPoolPlatform(platform);
+  const switchUrl = selectedPlatform === "instagram"
+    ? "https://www.instagram.com/accounts/login/"
+    : "https://www.threads.com/login/";
+  const popup = window.open(switchUrl, "vecto-platform-authorization", bundleAuthorizationPopupFeatures());
+  if (!popup) throw new Error("浏览器阻止了账号切换窗口，请允许本站打开弹出窗口后重试。");
+  popup.focus();
+  return popup;
+}
+
+function openBundleAuthorizationPopup(platform = "threads", authorizationUrl = "", authorizationPopup = null) {
   const targetUrl = String(authorizationUrl || "").trim();
   if (!targetUrl) throw new Error("平台授权地址不可用，请稍后重试。");
-  if (bundleAuthorizationUsesSamePage()) {
+  const reusablePopup = authorizationPopup && !authorizationPopup.closed ? authorizationPopup : null;
+  if (!reusablePopup && bundleAuthorizationUsesSamePage()) {
+    closeBundleAuthorizationPopup();
     rememberBundleAuthorizationReturnState(platform);
     bundleAuthorizationResultPending = false;
     window.location.assign(targetUrl);
     return null;
   }
-  const width = Math.min(520, Math.max(360, window.screen.availWidth - 32));
-  const height = Math.min(760, Math.max(560, window.screen.availHeight - 64));
-  const left = Math.max(0, Math.round((window.screen.availWidth - width) / 2));
-  const top = Math.max(0, Math.round((window.screen.availHeight - height) / 2));
-  const popup = window.open(
+  if (reusablePopup) {
+    if (bundleAuthorizationPopupTimer) window.clearInterval(bundleAuthorizationPopupTimer);
+    bundleAuthorizationPopupTimer = null;
+    if (bundleAuthorizationPopup && bundleAuthorizationPopup !== reusablePopup && !bundleAuthorizationPopup.closed) {
+      bundleAuthorizationPopup.close();
+    }
+    bundleAuthorizationPopup = null;
+  } else {
+    closeBundleAuthorizationPopup();
+  }
+  const popup = reusablePopup || window.open(
     targetUrl,
     "vecto-platform-authorization",
-    `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`,
+    bundleAuthorizationPopupFeatures(),
   );
   if (!popup) throw new Error("浏览器阻止了授权窗口，请允许本站打开弹出窗口后重试。");
+  if (reusablePopup) popup.location.href = targetUrl;
   bundleAuthorizationPopup = popup;
   bundleAuthorizationResultPending = false;
   popup.focus();
@@ -32331,7 +32358,7 @@ async function prepareBundleAccountAuthorization({ platform = "", personaId = ""
   });
 }
 
-async function startBundleAccountAuthorization({ platform = "", personaId = "", accountId = "", preparedResult = null } = {}) {
+async function startBundleAccountAuthorization({ platform = "", personaId = "", accountId = "", preparedResult = null, authorizationPopup = null } = {}) {
   const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
   const result = preparedResult || await prepareBundleAccountAuthorization({
     platform: selectedPlatform,
@@ -32341,7 +32368,7 @@ async function startBundleAccountAuthorization({ platform = "", personaId = "", 
   const authorizationUrl = String(result?.url || "").trim();
   if (!authorizationUrl) throw new Error("平台授权地址不可用，请稍后重试。");
   bindBundleAuthorizationEvents();
-  openBundleAuthorizationPopup(selectedPlatform, authorizationUrl);
+  openBundleAuthorizationPopup(selectedPlatform, authorizationUrl, authorizationPopup);
   showMsg("socialMsg", `${platformLabel(selectedPlatform)} 授权窗口已打开。`, true);
   return result;
 }
@@ -32350,39 +32377,55 @@ async function openBundleAccountAuthorizationModal({ platform = "", personaId = 
   const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
   const selectedPlatformLabel = platformLabel(selectedPlatform);
   const editing = Boolean(String(accountId || "").trim());
-  const authorizationHint = editing
-    ? "重新连接当前账号"
-    : selectedPlatform === "threads"
-      ? "请先在 Threads 网页切换到要添加的账号"
-      : "连接一个新的账号";
+  const authorizationHint = editing ? "重新连接当前账号" : "切换到要新增的账号后再授权";
   const preparedResult = await prepareBundleAccountAuthorization({
     platform: selectedPlatform,
     personaId,
     accountId,
   });
-  const confirmed = await openConsoleModal({
-    modalKey: "bundle-account-authorization",
-    title: editing ? "重新授权账号" : "添加账号",
-    confirmText: editing ? `重新授权 ${selectedPlatformLabel}` : `授权 ${selectedPlatformLabel}`,
-    cancelText: "取消",
-    contentHtml: `
-      <div class="bundle-account-authorization-content" data-account-platform="${esc(selectedPlatform)}">
-        <div class="bundle-account-authorization-option">
-          <span class="bundle-account-authorization-brand">${renderAccountPoolPlatformIcon(selectedPlatform)}</span>
-          <span>
-            <strong>${esc(selectedPlatformLabel)} 官方授权</strong>
-            <small>${esc(authorizationHint)}</small>
-          </span>
+  let authorizationPopup = null;
+  let confirmed = false;
+  while (!confirmed) {
+    const accountSwitchReady = Boolean(authorizationPopup && !authorizationPopup.closed);
+    const decision = await openConsoleModal({
+      modalKey: "bundle-account-authorization",
+      title: editing ? "重新授权账号" : "添加账号",
+      confirmText: editing ? `重新授权 ${selectedPlatformLabel}` : "开始授权",
+      cancelText: "取消",
+      showConfirm: editing || accountSwitchReady,
+      extraActions: editing || accountSwitchReady ? [] : [{
+        value: "switch-account",
+        text: `打开 ${selectedPlatformLabel} 切换账号`,
+        primary: true,
+      }],
+      contentHtml: `
+        <div class="bundle-account-authorization-content" data-account-platform="${esc(selectedPlatform)}">
+          <div class="bundle-account-authorization-option">
+            <span class="bundle-account-authorization-brand">${renderAccountPoolPlatformIcon(selectedPlatform)}</span>
+            <span>
+              <strong>${esc(selectedPlatformLabel)} 官方授权</strong>
+              <small>${esc(authorizationHint)}</small>
+            </span>
+          </div>
         </div>
-      </div>
-    `,
-  });
-  if (!confirmed) return null;
+      `,
+    });
+    if (!decision) {
+      if (authorizationPopup && !authorizationPopup.closed) authorizationPopup.close();
+      return null;
+    }
+    if (decision === "switch-account") {
+      authorizationPopup = openBundleAccountSwitchPopup(selectedPlatform);
+      continue;
+    }
+    confirmed = true;
+  }
   return startBundleAccountAuthorization({
     platform: selectedPlatform,
     personaId,
     accountId,
     preparedResult,
+    authorizationPopup,
   });
 }
 
