@@ -2414,8 +2414,8 @@ def _enqueue_bundle_oauth_live_task(
         "bundle_request_id": request_id,
         "oauth_url": oauth_url,
         "wait_for_manual": True,
-        "manual_takeover": True,
-        "auto_submit": False,
+        "manual_takeover": False,
+        "auto_submit": True,
     }
     with db() as conn:
         conn.execute(
@@ -14306,11 +14306,19 @@ def _runtime_task_payload(task: dict[str, Any], account: dict[str, Any]) -> dict
         secrets = dict(_EPHEMERAL_TASK_SECRETS.get(task_id) or {})
     if secrets.get("initial_cookies") and not payload.get("initial_cookies"):
         payload["initial_cookies"] = secrets["initial_cookies"]
-    if str(task.get("task_type") or "") != "open_login" or _open_login_auto_submit_mode(payload) is not True:
+    task_type = str(task.get("task_type") or "").strip()
+    if task_type not in {"open_login", "bundle_oauth"}:
+        return payload
+    if task_type == "open_login" and _open_login_auto_submit_mode(payload) is not True:
+        return payload
+    if task_type == "bundle_oauth" and payload.get("auto_submit") is False:
         return payload
     saved_username = str(account.get("login_username") or "").strip()
     saved_password = str(account.get("login_password") or "")
-    payload["login_username"] = str(payload.get("login_username") or saved_username or account.get("username") or "").strip()
+    account_username = str(account.get("username") or "").strip()
+    if account_username in {"官方授权"} or account_username.startswith("oauth_host_"):
+        account_username = ""
+    payload["login_username"] = str(payload.get("login_username") or saved_username or account_username).strip()
     if not str(payload.get("login_password") or ""):
         runtime_password = str(secrets.get("login_password") or saved_password or "")
         if runtime_password:

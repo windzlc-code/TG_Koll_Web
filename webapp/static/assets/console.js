@@ -28462,11 +28462,12 @@ function loginAssistanceViewModel(task = {}, session = null) {
   return {
     phase: String(assistance.phase || "running"),
     kind: String(assistance.kind || "progress"),
-    title: String(assistance.title || (oauthFlow ? "正在准备授权" : (session ? "正在执行登录" : "正在启动浏览器"))),
-    message: String(assistance.message || (oauthFlow ? "请稍候，准备好后只需填写账号并点击授权。" : (session ? "正在同步浏览器登录状态。" : "正在连接指纹浏览器，请稍候。"))),
+    title: String(assistance.title || (oauthFlow ? "正在自动授权" : (session ? "正在执行登录" : "正在启动浏览器"))),
+    message: String(assistance.message || (oauthFlow ? "正在使用已保存的账号自动授权；如需验证码或选择，会显示在本页。" : (session ? "正在同步浏览器登录状态。" : "正在连接指纹浏览器，请稍候。"))),
     fieldLabel: String(assistance.field_label || "验证码"),
     inputMode: String(assistance.input_mode || "text"),
     submitLabel: String(assistance.submit_label || (oauthFlow ? "授权" : "提交并继续")),
+    prefillUsername: String(assistance.prefill_username || ""),
     actions,
     remainingSeconds,
   };
@@ -28546,7 +28547,7 @@ function renderLoginAssistanceAction(model = {}, session = null, options = {}) {
   if (model.kind === "credentials") {
     return `<form class="login-assistance-form" data-login-assistance-form data-login-assistance-kind="credentials">
       <label>账号、邮箱或手机号
-        <input name="login_username" type="text" autocomplete="username" maxlength="320" placeholder="请输入登录账号" required />
+        <input name="login_username" type="text" autocomplete="username" maxlength="320" placeholder="请输入登录账号" value="${esc(model.prefillUsername || "")}" required />
       </label>
       <label>登录密码
         <input name="login_password" type="password" autocomplete="current-password" maxlength="512" placeholder="请输入登录密码" required />
@@ -28611,6 +28612,7 @@ function updateLoginAssistanceModal(modal, task = {}, session = null) {
     model.fieldLabel,
     model.inputMode,
     model.submitLabel,
+    model.prefillUsername || "",
     JSON.stringify(model.actions || []),
     model.permalink || "",
     model.screenshotUrl || "",

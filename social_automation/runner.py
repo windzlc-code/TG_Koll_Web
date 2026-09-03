@@ -612,6 +612,17 @@ BUNDLE_OAUTH_SSO_LOGIN_BUTTONS = [
     "使用 Instagram 登录",
     "使用 Instagram 登入",
 ]
+BUNDLE_OAUTH_USERNAME_LOGIN_BUTTONS = [
+    "Log in with username instead",
+    "Log in with username",
+    "Use username instead",
+    "代わりにユーザーネームでログイン",
+    "ユーザーネームでログイン",
+    "改用用户名登录",
+    "使用用户名登录",
+    "改用用戶名稱登入",
+    "使用用戶名稱登入",
+]
 BUNDLE_OAUTH_CONSENT_BUTTONS = [
     "Allow",
     "Allow access",
@@ -677,6 +688,10 @@ def _detect_bundle_oauth_page_state(page: Any, platform: str) -> dict[str, Any]:
     credentials = None
     with contextlib.suppress(Exception):
         credentials = _mapped_login_credentials(page)
+    if credentials is None:
+        with contextlib.suppress(Exception):
+            if _mapped_login_username_input(page) is not None or _mapped_login_password_input(page) is not None:
+                credentials = True
     if credentials is not None:
         return {
             "status": "cookie_expired",
@@ -749,10 +764,16 @@ def _maybe_auto_confirm_bundle_oauth(
     context_control: dict[str, Any] | None,
     login_status: dict[str, Any],
 ) -> bool:
-    if _mapped_login_credentials(page) is not None or _mapped_login_verification_code(page) is not None:
+    if (
+        _mapped_login_credentials(page) is not None
+        or _mapped_login_username_input(page) is not None
+        or _mapped_login_password_input(page) is not None
+        or _mapped_login_verification_code(page) is not None
+    ):
         return False
     submitted = str((context_control or {}).get("login_assistance_submitted_kind") or "").strip().lower()
-    if submitted not in {"credentials", "verification_code", "choice"}:
+    auto_filled = bool((context_control or {}).get("bundle_oauth_saved_credentials_queued_hosts"))
+    if submitted not in {"credentials", "verification_code", "choice"} and not auto_filled:
         return False
     clicked = _click_bundle_oauth_named_buttons(page, logger, BUNDLE_OAUTH_CONSENT_BUTTONS, "bundle_oauth_consent")
     if clicked:
@@ -761,7 +782,12 @@ def _maybe_auto_confirm_bundle_oauth(
 
 
 def _maybe_open_bundle_oauth_sso_login(page: Any, logger: AutomationLogger) -> bool:
-    if _mapped_login_credentials(page) is not None or _mapped_login_verification_code(page) is not None:
+    if (
+        _mapped_login_credentials(page) is not None
+        or _mapped_login_username_input(page) is not None
+        or _mapped_login_password_input(page) is not None
+        or _mapped_login_verification_code(page) is not None
+    ):
         return False
     clicked = _click_bundle_oauth_named_buttons(
         page,
@@ -779,6 +805,77 @@ def _maybe_open_bundle_oauth_sso_login(page: Any, logger: AutomationLogger) -> b
     return clicked
 
 
+def _maybe_open_bundle_oauth_username_login(page: Any, logger: AutomationLogger) -> bool:
+    if (
+        _mapped_login_credentials(page) is not None
+        or _mapped_login_username_input(page) is not None
+        or _mapped_login_password_input(page) is not None
+        or _mapped_login_verification_code(page) is not None
+    ):
+        return False
+    if _click_threads_username_entry_by_structure(page, logger):
+        logger.log(
+            "info",
+            "bundle_oauth_username_login",
+            "已打开 Threads 用户名密码登录入口。",
+            {"url": _safe_navigation_url(getattr(page, "url", ""))},
+        )
+        return True
+    clicked = _click_bundle_oauth_named_buttons(
+        page,
+        logger,
+        BUNDLE_OAUTH_USERNAME_LOGIN_BUTTONS,
+        "bundle_oauth_username_login",
+    )
+    if clicked:
+        logger.log(
+            "info",
+            "bundle_oauth_username_login",
+            "已打开 Threads 用户名密码登录入口。",
+            {"url": _safe_navigation_url(getattr(page, "url", ""))},
+        )
+    return clicked
+
+
+def _bundle_oauth_saved_login(account: dict[str, Any] | None, payload: dict[str, Any] | None = None) -> tuple[str, str]:
+    data = dict(account or {})
+    task_payload = dict(payload or {})
+    username = str(task_payload.get("login_username") or data.get("login_username") or "").strip()
+    password = str(task_payload.get("login_password") or data.get("login_password") or "")
+    fallback_username = str(data.get("username") or "").strip()
+    if not username and fallback_username not in {"官方授权"} and not fallback_username.startswith("oauth_host_"):
+        username = fallback_username
+    if username in {"官方授权"} or username.startswith("oauth_host_"):
+        return "", ""
+    if not username or not password:
+        return "", ""
+    return username, password
+
+
+def _bundle_oauth_login_stage(page: Any) -> str:
+    if _mapped_login_credentials(page) is not None:
+        return "credentials"
+    if _mapped_login_username_input(page) is not None:
+        return "username"
+    if _mapped_login_password_input(page) is not None:
+        return "password"
+    return ""
+
+
+def _bundle_oauth_auto_login_pending(context_control: dict[str, Any] | None) -> bool:
+    if not isinstance(context_control, dict):
+        return False
+    if context_control.get("bundle_oauth_auto_login_failed"):
+        return False
+    task = context_control.get("task") if isinstance(context_control.get("task"), dict) else {}
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    if payload.get("auto_submit") is False:
+        return False
+    username = str(payload.get("login_username") or context_control.get("bundle_oauth_prefill_username") or "").strip()
+    password = str(payload.get("login_password") or "")
+    return bool(username and password)
+
+
 def _queue_bundle_oauth_saved_credentials(
     page: Any,
     account: dict[str, Any],
@@ -787,15 +884,20 @@ def _queue_bundle_oauth_saved_credentials(
     if not isinstance(context_control, dict):
         return False
     current_host = str(urlparse(str(getattr(page, "url", "") or "")).hostname or "").lower() or "unknown"
-    queued_hosts = set(context_control.get("bundle_oauth_saved_credentials_queued_hosts") or [])
-    if current_host in queued_hosts:
+    stage = _bundle_oauth_login_stage(page)
+    if not stage:
         return False
-    username = str(account.get("login_username") or account.get("username") or "").strip()
-    password = str(account.get("login_password") or "")
+    queued_hosts = set(context_control.get("bundle_oauth_saved_credentials_queued_hosts") or [])
+    queue_key = f"{current_host}:{stage}"
+    if queue_key in queued_hosts:
+        return False
+    task = context_control.get("task") if isinstance(context_control.get("task"), dict) else {}
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    if payload.get("auto_submit") is False:
+        return False
+    username, password = _bundle_oauth_saved_login(account, payload)
     actions = context_control.get("login_assistance_queue")
     if not username or not password or actions is None or not hasattr(actions, "put_nowait"):
-        return False
-    if _mapped_login_credentials(page) is None:
         return False
     try:
         actions.put_nowait({
@@ -805,7 +907,7 @@ def _queue_bundle_oauth_saved_credentials(
         })
     except queue.Full:
         return False
-    queued_hosts.add(current_host)
+    queued_hosts.add(queue_key)
     context_control["bundle_oauth_saved_credentials_queued_hosts"] = sorted(queued_hosts)
     _set_login_assistance_pending(context_control, True)
     return True
@@ -821,11 +923,17 @@ def run_bundle_oauth_browser_task(
     cancel_event: Any | None = None,
     context_control: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    payload = dict(task.get("payload") if isinstance(task.get("payload"), dict) else {})
     oauth_url = str(payload.get("oauth_url") or "").strip()
     if not oauth_url:
         raise RuntimeError("平台授权地址不可用，请重新发起授权")
     platform = str(task.get("platform") or account.get("platform") or "").strip().lower() or "threads"
+    login_username, login_password = _bundle_oauth_saved_login(account, payload)
+    auto_submit = bool(login_username and login_password) and payload.get("auto_submit") is not False
+    if auto_submit:
+        payload["login_username"] = login_username
+        payload["login_password"] = login_password
+        payload["auto_submit"] = True
     try:
         timeout_seconds = int(payload.get("manual_login_timeout_seconds") or 900)
     except (TypeError, ValueError):
@@ -879,16 +987,30 @@ def run_bundle_oauth_browser_task(
             _sync_live_browser_viewport(page, context_control, logger)
             if isinstance(context_control, dict):
                 context_control["login_assistance_expires_at"] = int(time.time()) + timeout_seconds
+                if login_username:
+                    context_control["bundle_oauth_prefill_username"] = login_username
+                runtime_task = dict(context_control.get("task") or task or {})
+                runtime_payload = dict(runtime_task.get("payload") if isinstance(runtime_task.get("payload"), dict) else payload)
+                if auto_submit:
+                    runtime_payload["login_username"] = login_username
+                    runtime_payload["login_password"] = login_password
+                    runtime_payload["auto_submit"] = True
+                runtime_task["payload"] = runtime_payload
+                context_control["task"] = runtime_task
             logger.log(
                 "warn",
                 "need_manual",
-                "正在使用当前账号的独立登录态完成官方授权；如平台要求验证，请在助手页完成。",
-                {"status": "bundle_oauth", "platform": platform},
+                "正在使用当前账号的独立登录态完成官方授权；已保存的账号会自动填写，验证码等步骤请在助手页完成。",
+                {"status": "bundle_oauth", "platform": platform, "auto_submit": auto_submit},
             )
             _publish_login_assistance_state(
                 page,
                 context_control,
-                {"status": "transient_error", "reason": "正在准备官方授权。", "oauth_flow": True},
+                {
+                    "status": "transient_error",
+                    "reason": "正在使用已保存的账号自动授权。" if auto_submit else "正在准备官方授权。",
+                    "oauth_flow": True,
+                },
                 handoff=True,
             )
             try:
@@ -954,7 +1076,12 @@ def run_bundle_oauth_browser_task(
                 if _maybe_open_bundle_oauth_sso_login(page, logger):
                     _wait_for_cancellation(1.0, cancel_event)
                     continue
+                if _maybe_open_bundle_oauth_username_login(page, logger):
+                    _wait_for_cancellation(1.0, cancel_event)
+                    continue
                 page_status = _detect_bundle_oauth_page_state(page, platform)
+                if str(page_status.get("status") or "").strip().lower() == "invalid_credentials" and isinstance(context_control, dict):
+                    context_control["bundle_oauth_auto_login_failed"] = True
                 _maybe_auto_confirm_bundle_oauth(page, logger, context_control, page_status)
                 _publish_login_assistance_state(page, context_control, page_status, handoff=True)
                 _wait_for_cancellation(1.0, cancel_event)
@@ -4612,8 +4739,8 @@ def _bundle_oauth_assistance_presentation(status: dict[str, Any] | None) -> dict
     if kind == "progress":
         return {
             **result,
-            "title": "正在准备授权",
-            "message": _login_assistance_message(reason, "请稍候，准备好后只需填写账号并点击授权。"),
+            "title": "正在自动授权",
+            "message": _login_assistance_message(reason, "正在使用已保存的账号自动授权；如需验证码或选择，会显示在本页。"),
         }
     if status_code == "cancelled":
         return {**result, "title": "授权已停止", "message": _login_assistance_message(reason, "本次授权已取消。")}
@@ -4913,8 +5040,8 @@ def _publish_login_assistance_state(
                 **presentation,
                 "phase": "running",
                 "kind": "progress",
-                "title": "正在授权",
-                "message": str(current.get("reason") or "正在确认官方授权，请稍候。"),
+                "title": "正在自动授权",
+                "message": str(current.get("reason") or "正在使用已保存的账号自动授权，请稍候。"),
             }
         else:
             current = {
@@ -4925,6 +5052,22 @@ def _publish_login_assistance_state(
             if not _login_assistance_has_cjk(str(current.get("reason") or "")):
                 current["reason"] = "自动登录未成功，请人工输入账号和密码。"
             presentation = presentation_for(current)
+    if (
+        current.get("oauth_flow")
+        and str(presentation.get("kind") or "").strip().lower() == "credentials"
+        and str(current.get("status") or "").strip().lower() != "invalid_credentials"
+        and _bundle_oauth_auto_login_pending(context_control)
+    ):
+        presentation = {
+            "phase": "running",
+            "kind": "progress",
+            "title": "正在自动授权",
+            "message": "正在使用已保存的账号登录官方授权页，验证码等步骤会显示在本页。",
+            "challenge_type": str(presentation.get("challenge_type") or ""),
+        }
+    prefill_username = str((context_control or {}).get("bundle_oauth_prefill_username") or "").strip()
+    if str(presentation.get("kind") or "").strip().lower() == "credentials" and prefill_username:
+        presentation["prefill_username"] = prefill_username
     submitted_kind = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
     submitted_challenge = str(context_control.get("login_assistance_submitted_challenge") or "").strip().lower()
     if _login_assistance_verification_credentials_waiting(page, context_control, current, presentation):
@@ -5077,33 +5220,51 @@ def _login_assistance_surfaces(page: Any) -> list[tuple[Any, Any]]:
     return surfaces
 
 
-def _mapped_login_credentials(page: Any) -> tuple[Any, Any, Any, Any] | None:
-    username_selectors = [
-        'input[name="username"]',
-        'input[name="email"]',
-        'input[name="phone"]',
-        'input[autocomplete="username"]',
-        'input[type="email"]',
-        'input[type="tel"]',
-        'input[aria-label*="username" i]',
-        'input[aria-label*="email" i]',
-        'input[aria-label*="phone" i]',
-        'input[placeholder*="username" i]',
-        'input[placeholder*="email" i]',
-        'input[placeholder*="phone" i]',
-        'input[placeholder*="mobile" i]',
-    ]
-    password_selectors = [
-        'input[name="password"]',
-        'input[name="pass"]',
-        'input[autocomplete="current-password"]',
-        'input[type="password"]',
-        'input[aria-label*="password" i]',
-        'input[placeholder*="password" i]',
-    ]
+LOGIN_USERNAME_SELECTORS = [
+    'input[name="username"]',
+    'input[name="email"]',
+    'input[name="phone"]',
+    'input[autocomplete="username"]',
+    'input[type="email"]',
+    'input[type="tel"]',
+    'input[aria-label*="username" i]',
+    'input[aria-label*="email" i]',
+    'input[aria-label*="phone" i]',
+    'input[placeholder*="username" i]',
+    'input[placeholder*="email" i]',
+    'input[placeholder*="phone" i]',
+    'input[placeholder*="mobile" i]',
+]
+LOGIN_PASSWORD_SELECTORS = [
+    'input[name="password"]',
+    'input[name="pass"]',
+    'input[autocomplete="current-password"]',
+    'input[type="password"]',
+    'input[aria-label*="password" i]',
+    'input[placeholder*="password" i]',
+]
+
+
+def _mapped_login_username_input(page: Any) -> tuple[Any, Any, Any] | None:
     for action_page, surface in _login_assistance_surfaces(page):
-        username_input = _mapped_login_input(surface, username_selectors)
-        password_input = _mapped_login_input(surface, password_selectors)
+        username_input = _mapped_login_input(surface, LOGIN_USERNAME_SELECTORS)
+        if username_input is not None:
+            return action_page, surface, username_input
+    return None
+
+
+def _mapped_login_password_input(page: Any) -> tuple[Any, Any, Any] | None:
+    for action_page, surface in _login_assistance_surfaces(page):
+        password_input = _mapped_login_input(surface, LOGIN_PASSWORD_SELECTORS)
+        if password_input is not None:
+            return action_page, surface, password_input
+    return None
+
+
+def _mapped_login_credentials(page: Any) -> tuple[Any, Any, Any, Any] | None:
+    for action_page, surface in _login_assistance_surfaces(page):
+        username_input = _mapped_login_input(surface, LOGIN_USERNAME_SELECTORS)
+        password_input = _mapped_login_input(surface, LOGIN_PASSWORD_SELECTORS)
         if username_input is not None and password_input is not None:
             return action_page, surface, username_input, password_input
     return None
@@ -5167,20 +5328,42 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
             if not username or not password:
                 raise RuntimeError("请完整填写登录账号和密码")
             credentials = _mapped_login_credentials(page)
-            if credentials is None:
-                raise RuntimeError("当前页面尚未显示账号密码输入框")
-            action_page, action_surface, username_input, password_input = credentials
-            _clear_and_type(action_page, username_input, username, mode="type", logger=logger, stage="mapped_login_username")
-            _clear_and_type(action_page, password_input, password, mode="type", logger=logger, stage="mapped_login_password")
+            username_only = _mapped_login_username_input(page) if credentials is None else None
+            password_only = _mapped_login_password_input(page) if credentials is None and username_only is None else None
             login_buttons = (
                 BUNDLE_OAUTH_LOGIN_BUTTONS
                 if oauth_flow
                 else ["Log in", "Log In", "Login", "Continue", "登录", "登入", "继续"]
             )
-            clicked = _click_text_button(action_surface, logger, login_buttons, "mapped_login_submit")
-            if not clicked:
-                action_page.keyboard.press("Enter")
-            message = "登录信息已提交，正在检查账号状态。"
+            if credentials is not None:
+                action_page, action_surface, username_input, password_input = credentials
+                _clear_and_type(action_page, username_input, username, mode="type", logger=logger, stage="mapped_login_username")
+                _clear_and_type(action_page, password_input, password, mode="type", logger=logger, stage="mapped_login_password")
+                clicked = _click_text_button(action_surface, logger, login_buttons, "mapped_login_submit")
+                if not clicked:
+                    action_page.keyboard.press("Enter")
+                message = "登录信息已提交，正在检查账号状态。"
+            elif username_only is not None:
+                action_page, action_surface, username_input = username_only
+                _clear_and_type(action_page, username_input, username, mode="type", logger=logger, stage="mapped_login_username")
+                clicked = _click_text_button(
+                    action_surface,
+                    logger,
+                    ["Continue", "Next", "继续", "下一步", "次へ", *login_buttons],
+                    "mapped_login_username_continue",
+                )
+                if not clicked:
+                    action_page.keyboard.press("Enter")
+                message = "账号已提交，正在继续登录。"
+            elif password_only is not None:
+                action_page, action_surface, password_input = password_only
+                _clear_and_type(action_page, password_input, password, mode="type", logger=logger, stage="mapped_login_password")
+                clicked = _click_text_button(action_surface, logger, login_buttons, "mapped_login_submit")
+                if not clicked:
+                    action_page.keyboard.press("Enter")
+                message = "密码已提交，正在检查账号状态。"
+            else:
+                raise RuntimeError("当前页面尚未显示账号密码输入框")
         elif kind == "choice":
             label = str(action.get("action_label") or action.get("label") or "").strip()
             if not label:
