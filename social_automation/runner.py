@@ -605,6 +605,13 @@ BUNDLE_OAUTH_LOGIN_BUTTONS = [
     "ログイン",
     "次へ",
 ]
+BUNDLE_OAUTH_SSO_LOGIN_BUTTONS = [
+    "Log in with Instagram",
+    "Continue with Instagram",
+    "Instagramでログイン",
+    "使用 Instagram 登录",
+    "使用 Instagram 登入",
+]
 BUNDLE_OAUTH_CONSENT_BUTTONS = [
     "Allow",
     "Allow access",
@@ -753,12 +760,35 @@ def _maybe_auto_confirm_bundle_oauth(
     return clicked
 
 
+def _maybe_open_bundle_oauth_sso_login(page: Any, logger: AutomationLogger) -> bool:
+    if _mapped_login_credentials(page) is not None or _mapped_login_verification_code(page) is not None:
+        return False
+    clicked = _click_bundle_oauth_named_buttons(
+        page,
+        logger,
+        BUNDLE_OAUTH_SSO_LOGIN_BUTTONS,
+        "bundle_oauth_sso_login",
+    )
+    if clicked:
+        logger.log(
+            "info",
+            "bundle_oauth_sso_login",
+            "Threads 账号需要经 Instagram 登录，已继续进入对应登录页。",
+            {"url": _safe_navigation_url(getattr(page, "url", ""))},
+        )
+    return clicked
+
+
 def _queue_bundle_oauth_saved_credentials(
     page: Any,
     account: dict[str, Any],
     context_control: dict[str, Any] | None,
 ) -> bool:
-    if not isinstance(context_control, dict) or context_control.get("bundle_oauth_saved_credentials_queued"):
+    if not isinstance(context_control, dict):
+        return False
+    current_host = str(urlparse(str(getattr(page, "url", "") or "")).hostname or "").lower() or "unknown"
+    queued_hosts = set(context_control.get("bundle_oauth_saved_credentials_queued_hosts") or [])
+    if current_host in queued_hosts:
         return False
     username = str(account.get("login_username") or account.get("username") or "").strip()
     password = str(account.get("login_password") or "")
@@ -775,7 +805,8 @@ def _queue_bundle_oauth_saved_credentials(
         })
     except queue.Full:
         return False
-    context_control["bundle_oauth_saved_credentials_queued"] = True
+    queued_hosts.add(current_host)
+    context_control["bundle_oauth_saved_credentials_queued_hosts"] = sorted(queued_hosts)
     _set_login_assistance_pending(context_control, True)
     return True
 
@@ -903,6 +934,9 @@ def run_bundle_oauth_browser_task(
                 _queue_bundle_oauth_saved_credentials(page, oauth_account, context_control)
                 if _process_login_assistance_action(page, platform, logger, context_control):
                     _wait_for_cancellation(0.8, cancel_event)
+                    continue
+                if _maybe_open_bundle_oauth_sso_login(page, logger):
+                    _wait_for_cancellation(1.0, cancel_event)
                     continue
                 page_status = _detect_bundle_oauth_page_state(page, platform)
                 _maybe_auto_confirm_bundle_oauth(page, logger, context_control, page_status)

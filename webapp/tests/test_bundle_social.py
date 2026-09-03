@@ -1237,6 +1237,46 @@ def test_bundle_oauth_queues_saved_credentials_once(monkeypatch):
     }
 
 
+def test_bundle_oauth_reuses_saved_credentials_on_instagram_sso_stage(monkeypatch):
+    import queue
+
+    class _Page:
+        url = "https://www.threads.com/login"
+
+    page = _Page()
+    actions = queue.Queue(maxsize=2)
+    control = {"login_assistance_queue": actions}
+    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: (object(), object(), object(), object()))
+
+    assert runner._queue_bundle_oauth_saved_credentials(
+        page,
+        {"login_username": "login@example.com", "login_password": "secret-value"},
+        control,
+    ) is True
+    control["login_assistance_pending"] = False
+    page.url = "https://www.instagram.com/accounts/login/"
+    assert runner._queue_bundle_oauth_saved_credentials(
+        page,
+        {"login_username": "login@example.com", "login_password": "secret-value"},
+        control,
+    ) is True
+    assert control["bundle_oauth_saved_credentials_queued_hosts"] == ["www.instagram.com", "www.threads.com"]
+
+
+def test_bundle_oauth_opens_instagram_sso_login(monkeypatch):
+    calls = []
+    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: None)
+    monkeypatch.setattr(runner, "_mapped_login_verification_code", lambda _page: None)
+    monkeypatch.setattr(
+        runner,
+        "_click_bundle_oauth_named_buttons",
+        lambda _page, _logger, names, stage: calls.append((names, stage)) or True,
+    )
+
+    assert runner._maybe_open_bundle_oauth_sso_login(object(), _Logger()) is True
+    assert calls == [(runner.BUNDLE_OAUTH_SSO_LOGIN_BUTTONS, "bundle_oauth_sso_login")]
+
+
 def test_bundle_oauth_browser_uses_and_removes_one_time_profile(monkeypatch, tmp_path):
     profile_dir = tmp_path / "one-time-oauth-profile"
     captured = {}
