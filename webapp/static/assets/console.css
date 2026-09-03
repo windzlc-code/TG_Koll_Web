@@ -17179,6 +17179,52 @@ body.persona-media-sorting {
   width: min(440px, calc(100vw - 24px));
 }
 
+.console-modal[data-modal-key="bundle-account-authorization"] .login-assistance-live-link {
+  display: inline-flex;
+}
+
+.bundle-account-authorization-live {
+  display: grid;
+  min-height: 0;
+  padding: 14px 16px 16px;
+}
+
+.bundle-account-authorization-content.is-live {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+}
+
+.bundle-account-authorization-frame {
+  width: 100%;
+  min-height: 420px;
+  height: min(560px, calc(100dvh - 220px));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #0b1116;
+}
+
+.bundle-account-authorization-frame iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #0b1116;
+}
+
+@media (max-width: 720px) {
+  .console-modal[data-modal-key="bundle-account-authorization"] .bundle-account-authorization-dialog {
+    width: min(100vw - 16px, 720px);
+    max-height: calc(100dvh - 16px);
+  }
+
+  .bundle-account-authorization-frame {
+    min-height: 360px;
+    height: min(68dvh, calc(100dvh - 200px));
+  }
+}
+
 .bundle-account-authorization-content {
   display: grid;
 }
@@ -17205,9 +17251,14 @@ body.persona-media-sorting {
 }
 
 .bundle-account-authorization-option small,
-.bundle-account-authorization-result small {
+.bundle-account-authorization-result small,
+.bundle-account-authorization-note {
   color: var(--muted);
   line-height: 1.45;
+}
+
+.bundle-account-authorization-note {
+  margin: 10px 0 0;
 }
 
 .bundle-account-authorization-brand {

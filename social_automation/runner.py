@@ -10,13 +10,14 @@ import random
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol
-from urllib.parse import quote, quote_plus, urljoin, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, urljoin, urlparse
 
 
 INSTAGRAM_HOME = "https://www.instagram.com/"
@@ -90,6 +91,7 @@ SUPPORTED_TASK_TYPES = {
     "share_post",
     "repost_post",
     "direct_message",
+    "bundle_oauth",
 }
 
 _WARMUP_ACTION_HISTORY_LOCK = threading.Lock()
@@ -559,6 +561,329 @@ def _wait_for_browser_start_barrier(
         _raise_if_cancelled(cancel_event)
 
 
+def _bundle_oauth_result_from_url(url: str) -> dict[str, Any] | None:
+    raw = str(url or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return None
+    path = str(parsed.path or "").lower()
+    if "/bundle-auth-complete.html" not in path and "/accounts/bundle/callback" not in path:
+        return None
+    query = parse_qs(parsed.query)
+    status = str((query.get("bundle_auth") or [""])[0] or "").strip().lower()
+    if not status:
+        return None
+    message = str((query.get("bundle_message") or [""])[0] or "").strip()
+    account_id = str((query.get("bundle_account_id") or [""])[0] or "").strip()
+    platform = str((query.get("bundle_platform") or [""])[0] or "").strip()
+    if status in {"success", "completed"}:
+        return {
+            "status": "success",
+            "platform": platform,
+            "message": message or "平台账号已授权",
+            "account_id": account_id,
+        }
+    return {
+        "status": "error",
+        "platform": platform,
+        "message": message or "官方授权未完成",
+        "account_id": "",
+    }
+
+
+BUNDLE_OAUTH_LOGIN_BUTTONS = [
+    "Log in",
+    "Log In",
+    "Login",
+    "Continue",
+    "登录",
+    "登入",
+    "继续",
+    "ログイン",
+    "次へ",
+]
+BUNDLE_OAUTH_CONSENT_BUTTONS = [
+    "Allow",
+    "Allow access",
+    "Allow all",
+    "Authorize",
+    "Continue",
+    "Continue as",
+    "Confirm",
+    "授权",
+    "允许",
+    "同意",
+    "继续",
+    "確認",
+    "許可",
+    "アプリを承認",
+    "続ける",
+]
+
+
+def _bundle_oauth_result_from_status(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    status = str(payload.get("status") or "").strip().lower()
+    if status in {"completed", "success"}:
+        return {
+            "status": "success",
+            "platform": str(payload.get("platform") or ""),
+            "message": str(payload.get("error") or payload.get("message") or "平台账号已授权").strip() or "平台账号已授权",
+            "account_id": str(payload.get("account_id") or "").strip(),
+        }
+    if status in {"failed", "expired", "error"}:
+        return {
+            "status": "error",
+            "platform": str(payload.get("platform") or ""),
+            "message": str(payload.get("error") or payload.get("message") or ("授权请求已过期，请重新授权" if status == "expired" else "官方授权未完成")).strip(),
+            "account_id": "",
+        }
+    return None
+
+
+def _click_bundle_oauth_named_buttons(page: Any, logger: AutomationLogger, names: list[str], stage: str) -> bool:
+    for action_page, surface in _login_assistance_surfaces(page):
+        if _click_text_button(surface, logger, names, stage):
+            return True
+        if _click_text_button(action_page, logger, names, stage):
+            return True
+    return False
+
+
+def _detect_bundle_oauth_page_state(page: Any, platform: str) -> dict[str, Any]:
+    current_url = ""
+    with contextlib.suppress(Exception):
+        current_url = str(getattr(page, "url", "") or "")
+    outcome = _bundle_oauth_result_from_url(current_url)
+    if outcome is not None:
+        return {
+            "status": "ready" if outcome.get("status") == "success" else "failed",
+            "reason": str(outcome.get("message") or ""),
+            "oauth_flow": True,
+            "oauth_account_id": str(outcome.get("account_id") or ""),
+            "url": current_url,
+        }
+    credentials = None
+    with contextlib.suppress(Exception):
+        credentials = _mapped_login_credentials(page)
+    if credentials is not None:
+        return {
+            "status": "cookie_expired",
+            "reason": "请填写要添加的平台账号和密码，然后点击授权。",
+            "oauth_flow": True,
+            "url": current_url,
+        }
+    login = _detect_platform_login_state(page, platform)
+    login_code = str(login.get("status") or "").strip().lower()
+    if login_code in {"need_verification", "invalid_credentials", "banned", "disabled"}:
+        return {**login, "oauth_flow": True, "url": current_url or str(login.get("url") or "")}
+    if _click_bundle_oauth_consent_available(page):
+        return {
+            "status": "oauth_consent",
+            "reason": "账号已就绪，请确认授权。",
+            "oauth_flow": True,
+            "actions": [{"kind": "choice", "label": "授权", "title": "授权"}],
+            "url": current_url,
+        }
+    if login_code in {"ready", "threads_restore_required"}:
+        return {
+            "status": "transient_error",
+            "reason": "正在确认官方授权。",
+            "oauth_flow": True,
+            "url": current_url,
+        }
+    return {
+        **login,
+        "oauth_flow": True,
+        "reason": str(login.get("reason") or "正在准备官方授权。"),
+        "url": current_url or str(login.get("url") or ""),
+    }
+
+
+def _click_bundle_oauth_consent_available(page: Any) -> bool:
+    script = """names => {
+        const wanted = new Set((names || []).map((item) => String(item || '').trim().toLowerCase()).filter(Boolean));
+        const nodes = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+        for (const node of nodes) {
+            const text = String(node.innerText || node.textContent || node.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+            if (!text) continue;
+            const lowered = text.toLowerCase();
+            if (![...wanted].some((item) => lowered === item || lowered.startsWith(item + ' '))) continue;
+            const rect = node.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) continue;
+            const style = window.getComputedStyle(node);
+            if (style.visibility === 'hidden' || style.display === 'none' || style.pointerEvents === 'none') continue;
+            return true;
+        }
+        return false;
+    }"""
+    surfaces = []
+    with contextlib.suppress(Exception):
+        surfaces = [surface for _action_page, surface in _login_assistance_surfaces(page)]
+    if not surfaces:
+        surfaces = [page]
+    for surface in surfaces:
+        evaluate = getattr(surface, "evaluate", None)
+        if not callable(evaluate):
+            continue
+        with contextlib.suppress(Exception):
+            if evaluate(script, BUNDLE_OAUTH_CONSENT_BUTTONS):
+                return True
+    return False
+
+
+def _maybe_auto_confirm_bundle_oauth(
+    page: Any,
+    logger: AutomationLogger,
+    context_control: dict[str, Any] | None,
+    login_status: dict[str, Any],
+) -> bool:
+    if _mapped_login_credentials(page) is not None or _mapped_login_verification_code(page) is not None:
+        return False
+    submitted = str((context_control or {}).get("login_assistance_submitted_kind") or "").strip().lower()
+    if submitted not in {"credentials", "verification_code", "choice"}:
+        return False
+    clicked = _click_bundle_oauth_named_buttons(page, logger, BUNDLE_OAUTH_CONSENT_BUTTONS, "bundle_oauth_consent")
+    if clicked:
+        logger.log("info", "bundle_oauth_consent", "已自动确认官方授权。", {"url": _safe_navigation_url(getattr(page, "url", ""))})
+    return clicked
+
+
+def run_bundle_oauth_browser_task(
+    *,
+    task: dict[str, Any],
+    account: dict[str, Any],
+    proxy: dict[str, Any] | None,
+    data_dir: str | Path,
+    logger: AutomationLogger,
+    cancel_event: Any | None = None,
+    context_control: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    oauth_url = str(payload.get("oauth_url") or "").strip()
+    if not oauth_url:
+        raise RuntimeError("平台授权地址不可用，请重新发起授权")
+    platform = str(task.get("platform") or account.get("platform") or "").strip().lower() or "threads"
+    try:
+        timeout_seconds = int(payload.get("manual_login_timeout_seconds") or 900)
+    except (TypeError, ValueError):
+        timeout_seconds = 900
+    timeout_seconds = max(300, min(timeout_seconds, 1800))
+    ephemeral_dir = Path(tempfile.mkdtemp(prefix="wk_bundle_oauth_"))
+    oauth_account = {
+        **dict(account or {}),
+        "profile_dir": str(ephemeral_dir),
+        "auth_provider": "browser",
+        "username": str(account.get("username") or "官方授权"),
+        "display_name": str(account.get("display_name") or "官方授权"),
+    }
+    status_callback = (
+        context_control.get("bundle_oauth_status_callback")
+        if isinstance(context_control, dict)
+        else None
+    )
+    logger.log(
+        "info",
+        "bundle_oauth_start",
+        "正在打开站内空白授权窗口，不会使用当前浏览器已登录账号。",
+        {"platform": platform, "profile_dir": str(ephemeral_dir)},
+    )
+    try:
+        with _open_camoufox_context(
+            account=oauth_account,
+            proxy=proxy,
+            logger=logger,
+            context_control=context_control,
+        ) as context:
+            if not (isinstance(context_control, dict) and str(context_control.get("live_browser_session_id") or "").strip()):
+                raise RuntimeError("无法启动站内空白授权窗口，请稍后重试。")
+            page = _first_page(context)
+            _sync_live_browser_viewport(page, context_control, logger)
+            if isinstance(context_control, dict):
+                context_control["login_assistance_expires_at"] = int(time.time()) + timeout_seconds
+            logger.log(
+                "warn",
+                "need_manual",
+                "请填写要添加的平台账号并点击授权。本次使用空白会话，不会带入当前浏览器已登录账号。",
+                {"status": "bundle_oauth", "platform": platform},
+            )
+            _publish_login_assistance_state(
+                page,
+                context_control,
+                {"status": "transient_error", "reason": "正在准备官方授权。", "oauth_flow": True},
+                handoff=True,
+            )
+            try:
+                page.goto(oauth_url, wait_until="domcontentloaded", timeout=90000)
+            except Exception as exc:
+                logger.log(
+                    "warn",
+                    "bundle_oauth_navigate",
+                    "官方授权页打开较慢，将继续等待登录完成。",
+                    {"error": str(exc)[:240], "url": oauth_url},
+                )
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                _raise_if_cancelled(cancel_event)
+                if time.monotonic() >= deadline:
+                    raise AutoLoginFailedError(
+                        f"{_platform_name(platform)} 官方授权已超时，请重新添加账号。",
+                        "manual_login_timeout",
+                    )
+                current_url = ""
+                try:
+                    current_url = str(getattr(page, "url", "") or "")
+                except Exception:
+                    current_url = ""
+                outcome = _bundle_oauth_result_from_url(current_url)
+                if outcome is None and callable(status_callback):
+                    try:
+                        outcome = _bundle_oauth_result_from_status(status_callback())
+                    except Exception:
+                        outcome = None
+                if outcome is not None:
+                    if outcome.get("status") == "success":
+                        _publish_login_assistance_state(
+                            page,
+                            context_control,
+                            {
+                                "status": "ready",
+                                "reason": outcome.get("message") or "平台账号已授权",
+                                "oauth_flow": True,
+                            },
+                            handoff=True,
+                        )
+                        logger.log(
+                            "info",
+                            "bundle_oauth_complete",
+                            outcome.get("message") or "平台账号已授权",
+                            {"account_id": outcome.get("account_id") or "", "platform": platform},
+                        )
+                        return {
+                            "ok": True,
+                            "bundle_oauth": True,
+                            "account_id": str(outcome.get("account_id") or ""),
+                            "platform": platform,
+                        }
+                    raise AutoLoginFailedError(
+                        str(outcome.get("message") or "官方授权未完成"),
+                        "cookie_expired",
+                    )
+                if _process_login_assistance_action(page, platform, logger, context_control):
+                    _wait_for_cancellation(0.8, cancel_event)
+                    continue
+                page_status = _detect_bundle_oauth_page_state(page, platform)
+                _maybe_auto_confirm_bundle_oauth(page, logger, context_control, page_status)
+                _publish_login_assistance_state(page, context_control, page_status, handoff=True)
+                _wait_for_cancellation(1.0, cancel_event)
+    finally:
+        shutil.rmtree(ephemeral_dir, ignore_errors=True)
+
+
 def run_social_task(
     *,
     task: dict[str, Any],
@@ -583,12 +908,23 @@ def run_social_task(
         "open_login", "check_login", "browse_feed", "browse_profile",
         "threads_warmup", "threads_auto_reply", "publish_post", "direct_message",
         "comment_post", "reply_comment", "like_post", "share_post", "repost_post",
+        "bundle_oauth",
     }:
         raise UnsupportedActionError(f"{task_type} 尚未支持 Threads Web 自动化。")
     if platform == "instagram" and task_type == "repost_post":
         raise UnsupportedActionError("Instagram Web 不提供真正的转发动作，请改用 share_post/复制链接。")
 
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    if task_type == "bundle_oauth":
+        return run_bundle_oauth_browser_task(
+            task={**task, "payload": payload, "platform": platform},
+            account=account,
+            proxy=proxy,
+            data_dir=data_dir,
+            logger=logger,
+            cancel_event=cancel_event,
+            context_control=context_control,
+        )
     if str(account.get("auth_provider") or "browser").strip().lower() == "bundle":
         from webapp.bundle_social import run_bundle_social_task
 
@@ -4162,6 +4498,51 @@ def _login_assistance_presentation(status: dict[str, Any] | None) -> dict[str, A
     }
 
 
+def _bundle_oauth_assistance_presentation(status: dict[str, Any] | None) -> dict[str, Any]:
+    current = dict(status or {})
+    status_code = str(current.get("status") or "").strip().lower()
+    reason = str(current.get("reason") or "").strip()
+    if status_code == "oauth_consent":
+        actions = _login_assistance_normalize_actions(current.get("actions"))
+        return {
+            "phase": "attention",
+            "kind": "choice",
+            "title": "确认授权",
+            "message": _login_assistance_message(reason, "账号已就绪，请点击授权完成添加。"),
+            "submit_label": "授权",
+            "challenge_type": str(current.get("challenge_type") or "").strip().lower(),
+            "actions": actions or [{"kind": "choice", "label": "授权", "title": "授权"}],
+        }
+    result = _login_assistance_presentation(current)
+    kind = str(result.get("kind") or "").strip().lower()
+    if kind == "credentials":
+        return {
+            **result,
+            "title": "填写平台账号",
+            "message": _login_assistance_message(reason, "输入要添加的账号和密码，然后点击授权。"),
+            "submit_label": "授权",
+        }
+    if kind == "verification_code":
+        return {**result, "submit_label": "授权"}
+    if kind == "success":
+        return {
+            **result,
+            "title": "授权成功",
+            "message": _login_assistance_message(reason, "平台账号已授权，已保存到账号池。"),
+        }
+    if kind == "progress":
+        return {
+            **result,
+            "title": "正在准备授权",
+            "message": _login_assistance_message(reason, "请稍候，准备好后只需填写账号并点击授权。"),
+        }
+    if status_code == "cancelled":
+        return {**result, "title": "授权已停止", "message": _login_assistance_message(reason, "本次授权已取消。")}
+    if status_code in {"failed", "auto_login_failed"}:
+        return {**result, "title": "授权未完成", "message": _login_assistance_message(reason, "本次授权没有完成，请重新添加账号。")}
+    return result
+
+
 LOGIN_ASSISTANCE_CHOICE_GROUPS = {
     "method_selection": [
         "Text message", "Send SMS", "短信", "简讯", "簡訊", "手機簡訊",
@@ -4256,6 +4637,7 @@ def _login_assistance_requires_user(status: dict[str, Any] | None, context_contr
         "manual_login_timeout",
         "invalid_credentials",
         "need_manual",
+        "oauth_consent",
     }:
         return True
     if status_code == "ready":
@@ -4435,16 +4817,35 @@ def _publish_login_assistance_state(
     if "actions" not in current and _login_assistance_choice_labels(current):
         with contextlib.suppress(Exception):
             current["actions"] = _login_assistance_collect_choices(page, current)
-    presentation = _login_assistance_presentation(current)
+    presentation_for = (
+        _bundle_oauth_assistance_presentation
+        if current.get("oauth_flow")
+        else _login_assistance_presentation
+    )
+    presentation = presentation_for(current)
     if handoff and not _login_assistance_is_milestone(presentation):
-        current = {
-            **current,
-            "status": "cookie_expired",
-            "reason": str(current.get("reason") or "自动登录未成功，请人工输入账号和密码。"),
-        }
-        if not _login_assistance_has_cjk(str(current.get("reason") or "")):
-            current["reason"] = "自动登录未成功，请人工输入账号和密码。"
-        presentation = _login_assistance_presentation(current)
+        if current.get("oauth_flow") and str(current.get("status") or "").strip().lower() in {
+            "transient_error",
+            "threads_restore_required",
+            "totp_submitted",
+            "post_login_interstitial",
+        }:
+            presentation = {
+                **presentation,
+                "phase": "running",
+                "kind": "progress",
+                "title": "正在授权",
+                "message": str(current.get("reason") or "正在确认官方授权，请稍候。"),
+            }
+        else:
+            current = {
+                **current,
+                "status": "cookie_expired",
+                "reason": str(current.get("reason") or "自动登录未成功，请人工输入账号和密码。"),
+            }
+            if not _login_assistance_has_cjk(str(current.get("reason") or "")):
+                current["reason"] = "自动登录未成功，请人工输入账号和密码。"
+            presentation = presentation_for(current)
     submitted_kind = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
     submitted_challenge = str(context_control.get("login_assistance_submitted_challenge") or "").strip().lower()
     if _login_assistance_verification_credentials_waiting(page, context_control, current, presentation):
@@ -4468,14 +4869,14 @@ def _publish_login_assistance_state(
                 if rejected
                 else "平台尚未确认当前验证码，请检查实时画面或重新输入。"
             )
-            presentation = _login_assistance_presentation(current)
+            presentation = presentation_for(current)
         elif submitted_kind == "credentials":
             if str(current.get("status") or "").strip().lower() == "invalid_credentials" or _page_shows_invalid_credentials(page):
                 current["status"] = "invalid_credentials"
                 current["reason"] = str(current.get("reason") or "平台提示账号或密码不正确，请重新输入。")
             else:
                 current["reason"] = "登录未成功，请检查账号和密码后重新提交。"
-            presentation = _login_assistance_presentation(current)
+            presentation = presentation_for(current)
     elif submitted_kind and str(presentation.get("kind") or "") not in {submitted_kind, "progress"}:
         context_control.pop("login_assistance_submitted_kind", None)
         context_control.pop("login_assistance_submitted_challenge", None)
@@ -4491,7 +4892,7 @@ def _publish_login_assistance_state(
         and str(current.get("status") or "").strip().lower() == "cookie_expired"
     ):
         return
-    if not _login_assistance_is_milestone(presentation):
+    if not _login_assistance_is_milestone(presentation) and not current.get("oauth_flow"):
         return
     expires_at = context_control.get("login_assistance_expires_at")
     if expires_at:
@@ -4660,6 +5061,8 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
         _set_login_assistance_pending(context_control, False)
         return False
     kind = str(action.get("kind") or "").strip().lower()
+    task = context_control.get("task") if isinstance(context_control.get("task"), dict) else {}
+    oauth_flow = str(task.get("task_type") or "").strip() == "bundle_oauth"
     expires_at = context_control.get("login_assistance_expires_at")
     try:
         if kind == "verification_code":
@@ -4690,7 +5093,12 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
             action_page, action_surface, username_input, password_input = credentials
             _clear_and_type(action_page, username_input, username, mode="type", logger=logger, stage="mapped_login_username")
             _clear_and_type(action_page, password_input, password, mode="type", logger=logger, stage="mapped_login_password")
-            clicked = _click_text_button(action_surface, logger, ["Log in", "Log In", "Login", "Continue", "登录", "登入", "继续"], "mapped_login_submit")
+            login_buttons = (
+                BUNDLE_OAUTH_LOGIN_BUTTONS
+                if oauth_flow
+                else ["Log in", "Log In", "Login", "Continue", "登录", "登入", "继续"]
+            )
+            clicked = _click_text_button(action_surface, logger, login_buttons, "mapped_login_submit")
             if not clicked:
                 action_page.keyboard.press("Enter")
             message = "登录信息已提交，正在检查账号状态。"
@@ -4699,13 +5107,20 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
             if not label:
                 raise RuntimeError("请选择一个页面操作")
             clicked = False
+            names = (
+                list(BUNDLE_OAUTH_CONSENT_BUTTONS)
+                if oauth_flow and label in {"授权", "确认授权"}
+                else [label]
+            )
+            if label not in names:
+                names.append(label)
             for action_page, surface in _login_assistance_surfaces(page):
-                if _click_text_button(surface, logger, [label], "mapped_login_choice"):
+                if _click_text_button(surface, logger, names, "mapped_login_choice"):
                     clicked = True
                     break
             if not clicked:
                 raise RuntimeError("当前页面没有找到该操作按钮")
-            message = f"已点击「{label}」，正在继续登录。"
+            message = f"已点击「{label}」，正在继续{'授权' if oauth_flow else '登录'}。"
         else:
             raise RuntimeError("当前登录步骤不支持该操作")
     except Exception as exc:

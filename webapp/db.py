@@ -133,9 +133,10 @@ def _ensure_social_integrity_triggers(conn: sqlite3.Connection) -> None:
           SELECT CASE
             WHEN NEW.user_id != 0 AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
             THEN RAISE(ABORT, 'social task owner user missing')
-            WHEN NOT EXISTS (SELECT 1 FROM social_accounts WHERE id = NEW.account_id)
+            WHEN NEW.task_type != 'bundle_oauth'
+              AND NOT EXISTS (SELECT 1 FROM social_accounts WHERE id = NEW.account_id)
             THEN RAISE(ABORT, 'social task account missing')
-            WHEN NOT EXISTS (
+            WHEN NEW.task_type != 'bundle_oauth' AND NOT EXISTS (
               SELECT 1 FROM social_accounts WHERE id = NEW.account_id AND user_id = NEW.user_id
             )
             THEN RAISE(ABORT, 'social task account owner mismatch')
@@ -149,9 +150,10 @@ def _ensure_social_integrity_triggers(conn: sqlite3.Connection) -> None:
           SELECT CASE
             WHEN NEW.user_id != 0 AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
             THEN RAISE(ABORT, 'social task owner user missing')
-            WHEN NOT EXISTS (SELECT 1 FROM social_accounts WHERE id = NEW.account_id)
+            WHEN NEW.task_type != 'bundle_oauth'
+              AND NOT EXISTS (SELECT 1 FROM social_accounts WHERE id = NEW.account_id)
             THEN RAISE(ABORT, 'social task account missing')
-            WHEN NOT EXISTS (
+            WHEN NEW.task_type != 'bundle_oauth' AND NOT EXISTS (
               SELECT 1 FROM social_accounts WHERE id = NEW.account_id AND user_id = NEW.user_id
             )
             THEN RAISE(ABORT, 'social task account owner mismatch')

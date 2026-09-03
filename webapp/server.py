@@ -24242,6 +24242,10 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/bundle-auth-complete.html", include_in_schema=False)
+    def page_bundle_auth_complete() -> HTMLResponse:
+        return _html_response_with_versions("bundle-auth-complete.html")
+
     @app.get("/about-vecto.html", include_in_schema=False)
     def page_about_vecto() -> HTMLResponse:
         return _html_response_with_versions(

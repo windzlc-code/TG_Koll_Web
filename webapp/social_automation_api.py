@@ -2299,7 +2299,7 @@ def _bundle_console_redirect(
     )
     if str(account_id or "").strip():
         query["bundle_account_id"] = str(account_id).strip()
-    return RedirectResponse(url=f"{safe_return.path}?{urlencode(query)}", status_code=302)
+    return RedirectResponse(url=f"/bundle-auth-complete.html?{urlencode(query)}", status_code=302)
 
 
 def _bundle_callback_url(request: Request, request_id: str, *, return_path: str = "") -> str:
@@ -2323,6 +2323,158 @@ def _bundle_callback_url(request: Request, request_id: str, *, return_path: str 
     if return_path:
         query["return_path"] = _safe_bundle_console_return_path(return_path)
     return f"{base}/api/persona_dashboard/automation/accounts/bundle/callback?{urlencode(query)}"
+
+
+def _bundle_oauth_request_status(request_id: str) -> dict[str, Any]:
+    clean_id = str(request_id or "").strip()
+    if not clean_id:
+        return {"status": "missing", "account_id": "", "error": "授权请求不存在", "platform": ""}
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM social_account_auth_requests WHERE id = ?",
+            (clean_id,),
+        ).fetchone()
+    if not row:
+        return {"status": "missing", "account_id": "", "error": "授权请求不存在", "platform": ""}
+    status = str(row["status"] or "").strip() or "pending"
+    if status == "pending" and int(row["expires_at"] or 0) < _now():
+        status = "expired"
+    return {
+        "status": status,
+        "account_id": str(row["account_id"] or ""),
+        "error": str(row["error"] or ""),
+        "platform": str(row["platform"] or ""),
+    }
+
+
+def _cancel_bundle_authorization_request(request_id: str, *, reason: str) -> bool:
+    clean_id = str(request_id or "").strip()
+    if not clean_id:
+        return False
+    now = _now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT team_id, platform, status FROM social_account_auth_requests WHERE id = ?",
+            (clean_id,),
+        ).fetchone()
+        if not row or str(row["status"] or "").strip().lower() != "pending":
+            return False
+        changed = conn.execute(
+            """
+            UPDATE social_account_auth_requests
+            SET status = 'cancelled', error = ?, updated_at = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (str(reason or "用户取消授权")[:500], now, clean_id),
+        ).rowcount
+        team_id = str(row["team_id"] or "").strip()
+        platform = str(row["platform"] or "").strip().lower()
+    if changed and team_id and platform:
+        try:
+            from .bundle_social import BundleSocialClient
+
+            BundleSocialClient().disconnect_social_account(team_id=team_id, platform=platform)
+        except Exception:
+            LOGGER.warning("Failed to release cancelled Bundle authorization %s", clean_id, exc_info=True)
+    return bool(changed)
+
+
+def _bundle_oauth_task_id_for_request(request_id: str) -> str:
+    clean_id = str(request_id or "").strip()
+    if not clean_id:
+        return ""
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT id FROM social_automation_tasks
+            WHERE task_type = 'bundle_oauth'
+              AND json_extract(payload_json, '$.bundle_request_id') = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (clean_id,),
+        ).fetchone()
+    return str(row["id"] or "") if row else ""
+
+
+def _enqueue_bundle_oauth_live_task(
+    *,
+    owner_user_id: int,
+    persona_id: str,
+    platform: str,
+    request_id: str,
+    oauth_url: str,
+) -> str:
+    now = _now()
+    task_id = _NEW_ID("social_task")
+    host_account_id = f"oauth_host_{request_id}"
+    payload = {
+        "bundle_request_id": request_id,
+        "oauth_url": oauth_url,
+        "wait_for_manual": True,
+        "manual_takeover": True,
+        "auto_submit": False,
+    }
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_automation_tasks(
+              id, user_id, persona_id, account_id, platform, task_type, priority, status, scheduled_at,
+              payload_json, result_json, max_retries, billing_reservation_id, daily_publish_waived,
+              automation_plan_id, automation_plan_cycle, automation_plan_sequence,
+              created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                task_id,
+                int(owner_user_id or 0),
+                str(persona_id or ""),
+                host_account_id,
+                platform,
+                "bundle_oauth",
+                10,
+                "queued",
+                0,
+                json.dumps(payload, ensure_ascii=False),
+                0,
+                "",
+                0,
+                "",
+                0,
+                0,
+                now,
+                now,
+            ),
+        )
+        _insert_log(
+            conn,
+            task_id,
+            "info",
+            "queued",
+            "已启动站内空白授权窗口",
+            {"task_type": "bundle_oauth", "request_id": request_id},
+        )
+    wake_social_automation_worker()
+    return task_id
+
+
+def _bundle_oauth_host_account(task: dict[str, Any]) -> dict[str, Any]:
+    task_id = str(task.get("id") or "oauth")
+    data_root = Path(_DATA_DIR) if _DATA_DIR else Path(tempfile.gettempdir())
+    return {
+        "id": str(task.get("account_id") or ""),
+        "user_id": int(task.get("user_id") or 0),
+        "persona_id": str(task.get("persona_id") or ""),
+        "platform": str(task.get("platform") or ""),
+        "username": "官方授权",
+        "display_name": "官方授权",
+        "profile_dir": str((data_root / "social_automation" / "oauth_profiles" / task_id).resolve()),
+        "proxy_id": "",
+        "auth_provider": "browser",
+        "status": "pending",
+    }
 
 
 def _start_bundle_authorization(
@@ -2475,7 +2627,31 @@ def _start_bundle_authorization(
                 (str(exc), _now(), request_id),
             )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"ok": True, "request_id": request_id, "platform": platform, "flow": "custom", "url": url}
+    try:
+        task_id = _enqueue_bundle_oauth_live_task(
+            owner_user_id=owner_user_id,
+            persona_id=persona_id,
+            platform=platform,
+            request_id=request_id,
+            oauth_url=url,
+        )
+    except Exception as exc:
+        LOGGER.exception("Failed to start isolated bundle oauth browser")
+        with db() as conn:
+            conn.execute(
+                "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
+                ("无法启动站内空白授权窗口", _now(), request_id),
+            )
+        raise HTTPException(status_code=503, detail="无法启动站内空白授权窗口，请稍后重试") from exc
+    return {
+        "ok": True,
+        "request_id": request_id,
+        "platform": platform,
+        "flow": "live_window",
+        "url": url,
+        "task_id": task_id,
+        "live_window": True,
+    }
 
 
 def _finalize_bundle_authorization(
@@ -2576,7 +2752,7 @@ def _finalize_bundle_authorization(
                     client.disconnect_social_account(team_id=team_id, platform=platform)
                 except BundleSocialError:
                     LOGGER.warning("Failed to release duplicate Bundle authorization team %s", team_id, exc_info=True)
-            message = f"{platform.title()} 账号 @{username} 已存在，请先在 {platform.title()} 网页切换到其他账号后重试"
+            message = f"{platform.title()} 账号 @{username} 已存在。本次不会覆盖已有账号，请重新添加并登录另一个账号"
             with db() as conn:
                 conn.execute(
                     "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
@@ -2809,6 +2985,34 @@ def register_social_automation_routes(app: FastAPI) -> None:
         return_path: str = "",
     ):
         return _finalize_bundle_authorization(request_id, request, return_path=return_path)
+
+    @app.get("/api/persona_dashboard/automation/accounts/bundle/status")
+    def api_social_account_bundle_status(
+        request_id: str = "",
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        clean_id = str(request_id or "").strip()
+        if not clean_id:
+            raise HTTPException(status_code=400, detail="request_id required")
+        with db() as conn:
+            row = conn.execute(
+                "SELECT * FROM social_account_auth_requests WHERE id = ? AND user_id = ?",
+                (clean_id, _identity_user_id(user)),
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="授权请求不存在")
+        status = str(row["status"] or "").strip() or "pending"
+        if status == "pending" and int(row["expires_at"] or 0) < _now():
+            status = "expired"
+        return {
+            "ok": True,
+            "request_id": clean_id,
+            "status": status,
+            "platform": str(row["platform"] or ""),
+            "account_id": str(row["account_id"] or ""),
+            "error": str(row["error"] or ""),
+            "task_id": _bundle_oauth_task_id_for_request(clean_id),
+        }
 
     @app.post("/api/persona_dashboard/automation/accounts")
     def api_social_account_create(payload: SocialAccountPayload, user: dict[str, Any] = Depends(get_current_user)):
@@ -3758,8 +3962,10 @@ def _live_browser_task_input_allowed(row: Any) -> bool:
     if status == "need_manual":
         return True
     task_type = str(task.get("task_type") or "").strip()
-    if status != "running" or task_type not in {"open_login", "publish_post", "direct_message"}:
+    if status != "running" or task_type not in {"open_login", "publish_post", "direct_message", "bundle_oauth"}:
         return False
+    if task_type == "bundle_oauth":
+        return True
     running_mode = _running_task_login_mode(str(task.get("id") or ""))
     if running_mode == "manual":
         return True
@@ -4440,6 +4646,7 @@ def _live_browser_task_summary(row: Any) -> dict[str, Any]:
         "repost_post": "转发",
         "open_login": "账号登录",
         "check_login": "登录检测",
+        "bundle_oauth": "官方授权",
     }.get(task_type, "自动化任务")
 
     if task_type in {"threads_warmup", "instagram_warmup"}:
@@ -4693,10 +4900,10 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
         session["platform"] = str(dict(row).get("platform") or session.get("platform") or "")
         session["task_summary"] = _live_browser_task_summary(row)
         session["input_allowed"] = bool(session.get("browser_ready")) and _live_browser_task_input_allowed(row)
-        if current_task_type in {"open_login", "publish_post"}:
+        if current_task_type in {"open_login", "publish_post", "bundle_oauth"}:
             session["login_mode"] = _live_browser_open_login_mode(row)
             session["takeover_waiting_for"] = _running_task_takeover_waiting_for(str(row["id"] or ""))
-        if current_task_type in {"open_login", "publish_post"}:
+        if current_task_type in {"open_login", "publish_post", "bundle_oauth"}:
             session_id = str(session.get("id") or session.get("session_id") or "")
             task_key = str(session.get("task_id") or row["id"] or "")
             control = controls_by_session.get(session_id) or controls_by_task.get(task_key) or {}
@@ -4704,21 +4911,33 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
             if not isinstance(assistance, dict):
                 assistance = session.get("login_assistance")
             if not isinstance(assistance, dict) or not assistance:
+                if current_task_type == "publish_post":
+                    assistance_title, assistance_message = "正在启动发布", "正在连接指纹浏览器并准备发布内容。"
+                elif current_task_type == "bundle_oauth":
+                    assistance_title, assistance_message = "正在启动官方授权", "正在打开空白授权窗口，不会使用当前浏览器已登录账号。"
+                else:
+                    assistance_title, assistance_message = "正在启动登录", "正在连接指纹浏览器并检查账号状态。"
                 assistance = {
                     "phase": "running",
                     "kind": "progress",
-                    "title": "正在启动发布" if current_task_type == "publish_post" else "正在启动登录",
-                    "message": "正在连接指纹浏览器并准备发布内容。" if current_task_type == "publish_post" else "正在连接指纹浏览器并检查账号状态。",
+                    "title": assistance_title,
+                    "message": assistance_message,
                 }
             elif (
-                str(assistance.get("title") or "") in {"正在启动登录", "正在启动发布"}
+                str(assistance.get("title") or "") in {"正在启动登录", "正在启动发布", "正在启动官方授权"}
                 and bool(session.get("browser_ready"))
                 and str(assistance.get("kind") or "progress") == "progress"
             ):
+                if current_task_type == "publish_post":
+                    ready_title, ready_message = "正在执行发布", "指纹浏览器已打开，正在同步发布状态。"
+                elif current_task_type == "bundle_oauth":
+                    ready_title, ready_message = "请在窗口中登录要添加的账号", "空白授权窗口已打开，请登录新账号完成官方授权。"
+                else:
+                    ready_title, ready_message = "正在执行登录", "指纹浏览器已打开，正在检查页面并同步登录状态。"
                 assistance = {
                     **assistance,
-                    "title": "正在执行发布" if current_task_type == "publish_post" else "正在执行登录",
-                    "message": "指纹浏览器已打开，正在同步发布状态。" if current_task_type == "publish_post" else "指纹浏览器已打开，正在检查页面并同步登录状态。",
+                    "title": ready_title,
+                    "message": ready_message,
                 }
             screenshot_path = str(assistance.get("screenshot_path") or "")
             if screenshot_path and not assistance.get("screenshot_url"):
@@ -5388,7 +5607,7 @@ def request_live_browser_manual_takeover(session_id: str) -> dict[str, Any]:
         ).fetchone()
     status = str(row["status"] or "").strip().lower() if row else ""
     task_type = str(row["task_type"] or "").strip() if row else ""
-    if not row or status not in {"running", "need_manual"} or task_type not in {"open_login", "publish_post", "direct_message"}:
+    if not row or status not in {"running", "need_manual"} or task_type not in {"open_login", "publish_post", "direct_message", "bundle_oauth"}:
         raise HTTPException(status_code=409, detail="当前浏览器任务不支持人工接管")
     already_manual = status == "need_manual" or bool(getattr(ack_event, "is_set", lambda: False)())
     timeout_event.clear()
@@ -5449,7 +5668,7 @@ def _require_live_browser_assistance_session(session_id: str) -> str:
         raise HTTPException(status_code=409, detail="当前登录任务已结束，请重新打开登录")
     status = str(row["status"] or "").strip().lower()
     task_type = str(row["task_type"] or "").strip()
-    if status not in {"running", "need_manual"} or task_type not in {"open_login", "publish_post"}:
+    if status not in {"running", "need_manual"} or task_type not in {"open_login", "publish_post", "bundle_oauth"}:
         raise HTTPException(status_code=409, detail="当前任务不接受助手输入")
     return task_id
 
@@ -6777,6 +6996,9 @@ def delete_social_account(account_id: str) -> int:
         row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (clean_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="account not found")
+        auth_provider = str(dict(row).get("auth_provider") or "browser").strip().lower()
+        bundle_team_id = str(row["external_team_id"] or "").strip()
+        bundle_platform = str(row["platform"] or "").strip().lower()
         task_rows = conn.execute("SELECT * FROM social_automation_tasks WHERE account_id = ?", (clean_id,)).fetchall()
         active_task_ids = [
             str(task["id"] or "") for task in task_rows
@@ -6810,7 +7032,17 @@ def delete_social_account(account_id: str) -> int:
             task_id = str(task["id"] or "")
             conn.execute("DELETE FROM social_automation_logs WHERE task_id = ?", (task_id,))
         conn.execute("DELETE FROM social_automation_tasks WHERE account_id = ?", (clean_id,))
+        conn.execute("DELETE FROM social_account_auth_requests WHERE account_id = ?", (clean_id,))
         deleted = conn.execute("DELETE FROM social_accounts WHERE id = ?", (clean_id,)).rowcount
+    if int(deleted or 0) and auth_provider == "bundle" and bundle_team_id and bundle_platform:
+        try:
+            from .bundle_social import BundleSocialClient, BundleSocialError
+
+            BundleSocialClient().disconnect_social_account(team_id=bundle_team_id, platform=bundle_platform)
+        except BundleSocialError:
+            LOGGER.warning("Failed to disconnect official authorization for %s", clean_id, exc_info=True)
+        except Exception:
+            LOGGER.warning("Failed to disconnect official authorization for %s", clean_id, exc_info=True)
     wake_social_automation_worker()
     return int(deleted or 0)
 
@@ -8289,6 +8521,13 @@ def cancel_social_task(task_id: str, reason: str = "") -> dict[str, Any]:
         if cancelled:
             _insert_log(conn, task_id, "warn", "cancel", "任务已取消，正在停止执行上下文", {"reason": clean_reason})
         billing_statuses = _billing_reservation_statuses(conn, [row])
+    if cancelled and str(original["task_type"] or "") == "bundle_oauth":
+        original_payload = _loads(original["payload_json"], {})
+        if isinstance(original_payload, dict):
+            _cancel_bundle_authorization_request(
+                str(original_payload.get("bundle_request_id") or ""),
+                reason=clean_reason,
+            )
     _discard_ephemeral_task_secrets(task_id)
     if cancelled:
         _force_stop_running_task(task_id)
@@ -10321,42 +10560,52 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
             f"CRM policy stopped this child task before platform submission: {crm_policy_reason}",
         )
         return
-    with db() as conn:
-        account_row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (task["account_id"],)).fetchone()
-        if not account_row:
-            raise RuntimeError("任务绑定账号不存在")
-        account_provider = str(dict(account_row).get("auth_provider") or "browser").strip().lower()
-        proxy_id = "" if account_provider == "bundle" else str(account_row["proxy_id"] or "").strip()
-        proxy_row = None
-        if proxy_id:
-            proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
-            if proxy_row is not None:
-                try:
-                    proxy_row = resolve_market_proxy_credentials(
-                        conn,
-                        proxy_row,
-                        owner_user_id=int(account_row["user_id"] or 0),
-                    )
-                except ProxyMarketCredentialAuthorizationError as exc:
-                    raise RuntimeError(
-                        "Marketplace proxy allocation authorization is invalid."
-                    ) from exc
-                except PasswordVaultError as exc:
-                    raise RuntimeError(
-                        "Marketplace proxy credentials are unavailable."
-                    ) from exc
-    account = dict(account_row)
-    proxy = dict(proxy_row) if proxy_row else None
-    if proxy is not None and not _account_proxy_type_allowed(proxy):
-        raise RuntimeError("账号代理不是静态住宅 IP 或系统导入的机房代理，已阻止浏览器启动")
-    if proxy_id and proxy is None:
-        raise RuntimeError("账号绑定的住宅代理不存在，已阻止浏览器启动")
-    if proxy is not None and _proxy_is_expired(proxy):
-        raise RuntimeError("账号绑定的静态住宅代理已过期，已阻止浏览器启动")
-    if proxy is not None and str(proxy.get("status") or "").strip().lower() != "active":
-        raise RuntimeError("账号代理不可用，已阻止浏览器启动")
-    if proxy is not None and not _proxy_has_verified_check(proxy):
-        raise RuntimeError("账号代理尚未通过真实网络检测，已阻止浏览器启动")
+    task_type = str(task.get("task_type") or "").strip()
+    proxy_id = ""
+    proxy = None
+    if task_type == "bundle_oauth":
+        account = _bundle_oauth_host_account(task)
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        request_id = str(payload.get("bundle_request_id") or "").strip()
+        if request_id:
+            control["bundle_oauth_status_callback"] = lambda: _bundle_oauth_request_status(request_id)
+    else:
+        with db() as conn:
+            account_row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (task["account_id"],)).fetchone()
+            if not account_row:
+                raise RuntimeError("任务绑定账号不存在")
+            account_provider = str(dict(account_row).get("auth_provider") or "browser").strip().lower()
+            proxy_id = "" if account_provider == "bundle" else str(account_row["proxy_id"] or "").strip()
+            proxy_row = None
+            if proxy_id:
+                proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+                if proxy_row is not None:
+                    try:
+                        proxy_row = resolve_market_proxy_credentials(
+                            conn,
+                            proxy_row,
+                            owner_user_id=int(account_row["user_id"] or 0),
+                        )
+                    except ProxyMarketCredentialAuthorizationError as exc:
+                        raise RuntimeError(
+                            "Marketplace proxy allocation authorization is invalid."
+                        ) from exc
+                    except PasswordVaultError as exc:
+                        raise RuntimeError(
+                            "Marketplace proxy credentials are unavailable."
+                        ) from exc
+        account = dict(account_row)
+        proxy = dict(proxy_row) if proxy_row else None
+        if proxy is not None and not _account_proxy_type_allowed(proxy):
+            raise RuntimeError("账号代理不是静态住宅 IP 或系统导入的机房代理，已阻止浏览器启动")
+        if proxy_id and proxy is None:
+            raise RuntimeError("账号绑定的住宅代理不存在，已阻止浏览器启动")
+        if proxy is not None and _proxy_is_expired(proxy):
+            raise RuntimeError("账号绑定的静态住宅代理已过期，已阻止浏览器启动")
+        if proxy is not None and str(proxy.get("status") or "").strip().lower() != "active":
+            raise RuntimeError("账号代理不可用，已阻止浏览器启动")
+        if proxy is not None and not _proxy_has_verified_check(proxy):
+            raise RuntimeError("账号代理尚未通过真实网络检测，已阻止浏览器启动")
     if _is_task_cancelled(task_id):
         _discard_ephemeral_task_secrets(task_id)
         return

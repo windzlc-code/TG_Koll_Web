@@ -146,7 +146,6 @@ class BundleSocialClient:
             "type": provider_type,
             "teamId": str(team_id),
             "redirectUrl": str(redirect_url),
-            "disableAutoLogin": True,
         }
         if provider_type == "INSTAGRAM":
             body["instagramConnectionMethod"] = "INSTAGRAM"

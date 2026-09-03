@@ -64,7 +64,7 @@ def test_custom_connect_link_requests_only_selected_platform():
     assert session.calls[0][0:2] == ("POST", "https://api.example/api/v1/social-account/connect")
     body = session.calls[0][2]["json"]
     assert body["type"] == "THREADS"
-    assert body["disableAutoLogin"] is True
+    assert "disableAutoLogin" not in body
     assert "instagramConnectionMethod" not in body
     assert "socialAccountTypes" not in body
     assert session.calls[0][2]["headers"]["x-api-key"] == "test-key"
@@ -366,11 +366,9 @@ def test_bundle_console_redirect_keeps_admin_session_boundary():
 
     parsed = urlparse(response.headers["location"])
     query = parse_qs(parsed.query)
-    assert parsed.path == "/admin-console.html"
-    assert query["view"] == ["accounts"]
-    assert query["admin_console"] == ["1"]
-    assert query["admin_workspace_user_id"] == ["42"]
+    assert parsed.path == "/bundle-auth-complete.html"
     assert query["bundle_auth"] == ["success"]
+    assert query["bundle_platform"] == ["threads"]
 
 
 def test_bundle_console_redirect_rejects_external_return_path():
@@ -381,8 +379,39 @@ def test_bundle_console_redirect_rejects_external_return_path():
     )
 
     parsed = urlparse(response.headers["location"])
-    assert parsed.path == "/console.html"
-    assert parse_qs(parsed.query)["view"] == ["accounts"]
+    assert parsed.path == "/bundle-auth-complete.html"
+    assert parse_qs(parsed.query)["bundle_auth"] == ["error"]
+
+
+def test_bundle_authorization_status_is_scoped_to_owner(tmp_path, monkeypatch):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "bundle-status.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_account_auth_requests(
+              id, user_id, persona_id, account_id, platform, team_id,
+              status, error, expires_at, created_at, updated_at
+            ) VALUES ('request-status', 7, '', 'account-9', 'threads', 'team-9', 'completed', '', ?, ?, ?)
+            """,
+            (now + 900, now, now),
+        )
+    monkeypatch.setattr(social_automation_api, "_identity_user_id", lambda _user: 7)
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    social_automation_api.register_social_automation_routes(app)
+    handler = next(
+        route.endpoint
+        for route in app.routes
+        if getattr(route, "path", "") == "/api/persona_dashboard/automation/accounts/bundle/status"
+    )
+    result = handler(request_id="request-status", user={"id": 7})
+    assert result["ok"] is True
+    assert result["status"] == "completed"
+    assert result["account_id"] == "account-9"
+    assert result["platform"] == "threads"
 
 
 def test_bundle_authorization_return_path_uses_admin_workspace_boundary():
@@ -729,7 +758,9 @@ def test_bundle_authorization_reuses_existing_empty_team(monkeypatch, tmp_path):
             "SELECT status FROM social_account_auth_requests WHERE id = 'request-old'",
         ).fetchone()
     assert result["url"] == "https://provider.example/oauth"
-    assert result["flow"] == "custom"
+    assert result["flow"] == "live_window"
+    assert result["live_window"] is True
+    assert str(result["task_id"] or "").startswith("social_task_")
     assert (current["team_id"], current["status"]) == ("team-empty", "pending")
     assert previous["status"] == "superseded"
 
@@ -921,3 +952,268 @@ def test_bundle_new_authorization_keeps_existing_persona_account(monkeypatch, tm
     assert (accounts[1]["username"], accounts[1]["external_account_id"]) == (
         "second_owner", "external-2",
     )
+
+
+def test_oauth_flow_presentation_only_asks_for_authorize_inputs():
+    credentials = runner._bundle_oauth_assistance_presentation({
+        "status": "cookie_expired",
+        "oauth_flow": True,
+        "reason": "请填写要添加的平台账号和密码，然后点击授权。",
+    })
+    consent = runner._bundle_oauth_assistance_presentation({
+        "status": "oauth_consent",
+        "oauth_flow": True,
+        "reason": "账号已就绪，请确认授权。",
+    })
+    success = runner._bundle_oauth_assistance_presentation({
+        "status": "ready",
+        "oauth_flow": True,
+        "reason": "平台账号已授权",
+    })
+
+    assert credentials["kind"] == "credentials"
+    assert credentials["submit_label"] == "授权"
+    assert "账号" in credentials["title"]
+    assert consent["kind"] == "choice"
+    assert consent["submit_label"] == "授权"
+    assert success["kind"] == "success"
+    assert success["title"] == "授权成功"
+
+
+def test_regular_login_assistance_keeps_original_copy_during_oauth_support():
+    credentials = runner._login_assistance_presentation({
+        "status": "cookie_expired",
+        "reason": "自动登录未成功，请人工输入账号和密码。",
+    })
+    success = runner._login_assistance_presentation({"status": "ready"})
+
+    assert credentials["title"] == "需要登录信息"
+    assert credentials["submit_label"] == "提交并继续"
+    assert success["title"] == "登录成功"
+
+
+def test_bundle_oauth_result_from_complete_url():
+    success = runner._bundle_oauth_result_from_url(
+        "https://www.vecto-ai.cn/bundle-auth-complete.html?bundle_auth=success&bundle_platform=threads&bundle_account_id=acc-1&bundle_message=ok"
+    )
+    error = runner._bundle_oauth_result_from_url(
+        "https://www.vecto-ai.cn/bundle-auth-complete.html?bundle_auth=error&bundle_message=denied"
+    )
+    ignored = runner._bundle_oauth_result_from_url("https://www.threads.com/login/")
+
+    assert success == {
+        "status": "success",
+        "platform": "threads",
+        "message": "ok",
+        "account_id": "acc-1",
+    }
+    assert error["status"] == "error"
+    assert ignored is None
+
+
+def test_bundle_authorization_starts_isolated_live_window_task(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "live-window-auth.db"))
+    init_db()
+
+    class _Client:
+        def list_teams(self, *, limit):
+            return {"items": [{"id": "team-live", "name": "vecto-0-threads-live", "socialAccounts": []}], "count": 1}
+
+        def create_team(self, _name):
+            pytest.fail("should reuse empty team")
+
+        def create_connect_link(self, *, team_id, platform, redirect_url):
+            assert team_id == "team-live"
+            assert platform == "threads"
+            assert "request_id=" in redirect_url
+            return "https://provider.example/oauth"
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    monkeypatch.setattr(social_automation_api, "_identity_user_id", lambda _: 0)
+    monkeypatch.setattr(social_automation_api, "_require_active_owner_user", lambda *_: None)
+    monkeypatch.setattr(social_automation_api, "_billing_admin_waived", lambda *_: True)
+    monkeypatch.setattr(
+        social_automation_api.commercial_billing,
+        "require_write_access",
+        lambda *_args, **_kwargs: None,
+    )
+    woken = []
+    monkeypatch.setattr(social_automation_api, "wake_social_automation_worker", lambda: woken.append(True))
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/authorize",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+
+    result = social_automation_api._start_bundle_authorization(
+        social_automation_api.BundleAuthorizationPayload(platform="threads"),
+        request,
+        {"id": 0},
+    )
+
+    with db() as conn:
+        task = conn.execute(
+            "SELECT task_type, account_id, payload_json, status FROM social_automation_tasks WHERE id = ?",
+            (result["task_id"],),
+        ).fetchone()
+        host = conn.execute(
+            "SELECT username, display_name FROM social_accounts WHERE id = ?",
+            (task["account_id"],),
+        ).fetchone()
+    payload = __import__("json").loads(task["payload_json"])
+    assert result["flow"] == "live_window"
+    assert result["live_window"] is True
+    assert woken == [True]
+    assert task["task_type"] == "bundle_oauth"
+    assert task["status"] == "queued"
+    assert str(task["account_id"]).startswith("oauth_host_")
+    assert host is None
+    assert payload["oauth_url"] == "https://provider.example/oauth"
+    assert payload["bundle_request_id"] == result["request_id"]
+    assert payload["manual_takeover"] is True
+
+
+def test_bundle_oauth_browser_uses_and_removes_one_time_profile(monkeypatch, tmp_path):
+    profile_dir = tmp_path / "one-time-oauth-profile"
+    captured = {}
+
+    class _Page:
+        url = "https://vecto.example/bundle-auth-complete.html?bundle_auth=success&bundle_account_id=account-new"
+
+        def goto(self, *_args, **_kwargs):
+            return None
+
+    class _Context:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def _open_context(*, account, **_kwargs):
+        captured.update(account)
+        return _Context()
+
+    def _make_profile(*_args, **_kwargs):
+        profile_dir.mkdir()
+        return str(profile_dir)
+
+    monkeypatch.setattr(runner.tempfile, "mkdtemp", _make_profile)
+    monkeypatch.setattr(runner, "_open_camoufox_context", _open_context)
+    monkeypatch.setattr(runner, "_first_page", lambda _context: _Page())
+    monkeypatch.setattr(runner, "_sync_live_browser_viewport", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner, "_publish_login_assistance_state", lambda *_args, **_kwargs: None)
+
+    result = runner.run_bundle_oauth_browser_task(
+        task={
+            "id": "task-new",
+            "platform": "threads",
+            "payload": {"oauth_url": "https://provider.example/oauth"},
+        },
+        account={"username": "官方授权", "profile_dir": "shared-profile-must-not-be-used"},
+        proxy=None,
+        data_dir=tmp_path,
+        logger=_Logger(),
+        context_control={"live_browser_session_id": "live-task-new"},
+    )
+
+    assert result["ok"] is True
+    assert result["account_id"] == "account-new"
+    assert captured["profile_dir"] == str(profile_dir)
+    assert captured["profile_dir"] != "shared-profile-must-not-be-used"
+    assert not profile_dir.exists()
+
+
+def test_bundle_task_cancel_releases_pending_authorization(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "cancel-bundle-auth.db"))
+    init_db()
+    calls = []
+
+    class _Client:
+        def disconnect_social_account(self, *, team_id, platform):
+            calls.append((team_id, platform))
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    monkeypatch.setattr(social_automation_api, "wake_social_automation_worker", lambda: None)
+    monkeypatch.setattr(social_automation_api, "_force_stop_running_task", lambda _task_id: None)
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_account_auth_requests(
+              id, user_id, persona_id, account_id, platform, team_id,
+              status, error, expires_at, created_at, updated_at
+            ) VALUES ('request-cancel', 0, '', '', 'threads', 'team-cancel', 'pending', '', ?, ?, ?)
+            """,
+            (now + 900, now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO social_automation_tasks(
+              id, user_id, persona_id, account_id, platform, task_type, priority, status,
+              scheduled_at, payload_json, result_json, max_retries, created_at, updated_at
+            ) VALUES ('task-cancel', 0, '', 'oauth_host_request-cancel', 'threads', 'bundle_oauth',
+                      10, 'queued', 0, ?, '{}', 0, ?, ?)
+            """,
+            ('{"bundle_request_id":"request-cancel"}', now, now),
+        )
+
+    social_automation_api.cancel_social_task("task-cancel")
+
+    with db() as conn:
+        request_row = conn.execute(
+            "SELECT status FROM social_account_auth_requests WHERE id = 'request-cancel'"
+        ).fetchone()
+    assert request_row["status"] == "cancelled"
+    assert calls == [("team-cancel", "threads")]
+
+
+def test_deleting_bundle_account_clears_authorization_record(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "delete-bundle-account.db"))
+    init_db()
+    calls = []
+
+    class _Client:
+        def disconnect_social_account(self, *, team_id, platform):
+            calls.append((team_id, platform))
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    monkeypatch.setattr(social_automation_api, "wake_social_automation_worker", lambda: None)
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_accounts(
+              id, user_id, persona_id, platform, username, display_name, profile_dir,
+              status, auth_provider, external_team_id, external_account_id,
+              created_at, updated_at
+            ) VALUES ('account-delete', 0, '', 'threads', 'owner', 'Owner', '',
+                      'ready', 'bundle', 'team-delete', 'external-delete', ?, ?)
+            """,
+            (now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO social_account_auth_requests(
+              id, user_id, persona_id, account_id, platform, team_id,
+              status, error, expires_at, created_at, updated_at
+            ) VALUES ('request-delete', 0, '', 'account-delete', 'threads', 'team-delete',
+                      'completed', '', ?, ?, ?)
+            """,
+            (now + 900, now, now),
+        )
+
+    assert social_automation_api.delete_social_account("account-delete") == 1
+
+    with db() as conn:
+        request_row = conn.execute(
+            "SELECT id FROM social_account_auth_requests WHERE id = 'request-delete'"
+        ).fetchone()
+    assert request_row is None
+    assert calls == [("team-delete", "threads")]

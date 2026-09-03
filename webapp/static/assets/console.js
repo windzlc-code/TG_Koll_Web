@@ -14,7 +14,6 @@ const TASK_QUEUE_REGULAR_PAGE_SIZE_KEY = "wk-task-queue-regular-page-size";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
 const LIVE_BROWSER_MOBILE_QUERY = "(max-width: 760px)";
 const SELECTED_PERSONA_STORAGE_KEY = "wk-selected-persona";
-const BUNDLE_AUTH_RETURN_STATE_KEY = "wk-bundle-auth-return-state";
 const MOBILE_NAV_QUERY = "(max-width: 980px)";
 const REORDER_LONG_PRESS_MS = 420;
 const REORDER_LONG_PRESS_MOVE_TOLERANCE = 10;
@@ -3032,6 +3031,7 @@ function statusLabel(status) {
     ready: "正常可用",
     open_login: "登录流程",
     check_login: "登录状态同步",
+    bundle_oauth: "官方授权",
     publish_post: "发布内容",
     persona_post_image: "推文配图",
     threads_warmup: "Threads 养号",
@@ -3447,6 +3447,7 @@ function logStageLabel(stage, level) {
     threads_auto_reply_backfill: "补定位",
     open_login: "登录流程",
     check_login: "登录状态同步",
+    bundle_oauth: "官方授权",
     publish_post: "发布内容",
     browse_feed: "浏览动态",
     browse_profile: "浏览主页",
@@ -6756,7 +6757,7 @@ function activeOpenLoginTaskForAccount(accountId = "") {
   const cleanAccountId = String(accountId || "").trim();
   return (state.socialTasks || []).find((task) => (
     String(task?.account_id || "").trim() === cleanAccountId
-    && String(task?.task_type || "").trim() === "open_login"
+    && ["open_login", "bundle_oauth"].includes(String(task?.task_type || "").trim())
     && ["preparing", "queued", "running", "need_manual"].includes(String(task?.status || "").trim())
   )) || null;
 }
@@ -28408,6 +28409,7 @@ function publishAssistanceViewModel(task = {}, session = null) {
 
 function loginAssistanceViewModel(task = {}, session = null) {
   const taskStatus = loginAssistanceTaskStatus(task);
+  const oauthFlow = String(task?.task_type || session?.task_type || "").trim() === "bundle_oauth";
   let assistance = session?.login_assistance && typeof session.login_assistance === "object"
     ? session.login_assistance
     : {};
@@ -28419,8 +28421,8 @@ function loginAssistanceViewModel(task = {}, session = null) {
     return {
       phase: "success",
       kind: "success",
-      title: "登录成功",
-      message: "账号登录状态已确认，可以开始使用。",
+      title: oauthFlow ? "授权成功" : "登录成功",
+      message: oauthFlow ? "平台账号已授权，已保存到账号池。" : "账号登录状态已确认，可以开始使用。",
     };
   }
   if (String(assistance.phase || "").trim().toLowerCase() === "success") {
@@ -28460,11 +28462,11 @@ function loginAssistanceViewModel(task = {}, session = null) {
   return {
     phase: String(assistance.phase || "running"),
     kind: String(assistance.kind || "progress"),
-    title: String(assistance.title || (session ? "正在执行登录" : "正在启动浏览器")),
-    message: String(assistance.message || (session ? "正在同步浏览器登录状态。" : "正在连接指纹浏览器，请稍候。")),
+    title: String(assistance.title || (oauthFlow ? "正在准备授权" : (session ? "正在执行登录" : "正在启动浏览器"))),
+    message: String(assistance.message || (oauthFlow ? "请稍候，准备好后只需填写账号并点击授权。" : (session ? "正在同步浏览器登录状态。" : "正在连接指纹浏览器，请稍候。"))),
     fieldLabel: String(assistance.field_label || "验证码"),
     inputMode: String(assistance.input_mode || "text"),
-    submitLabel: String(assistance.submit_label || "提交并继续"),
+    submitLabel: String(assistance.submit_label || (oauthFlow ? "授权" : "提交并继续")),
     actions,
     remainingSeconds,
   };
@@ -28717,7 +28719,16 @@ function openPublishAssistanceView(taskId = "", options) {
 }
 
 function openLoginAssistanceView(taskId = "", accountId = "") {
-  return openTaskAssistanceView(taskId, { accountId });
+  const cleanTaskId = String(taskId || "").trim();
+  const task = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === cleanTaskId) || {};
+  const payload = socialTaskPayload(task);
+  const authorizeMode = String(task?.task_type || "").trim() === "bundle_oauth";
+  return openTaskAssistanceView(cleanTaskId, {
+    accountId,
+    mode: authorizeMode ? "authorize" : "login",
+    platform: task?.platform || "",
+    bundleRequestId: String(payload.bundle_request_id || "").trim(),
+  });
 }
 
 function openTaskAssistanceView(taskId = "", options) {
@@ -28725,7 +28736,11 @@ function openTaskAssistanceView(taskId = "", options) {
   const cleanTaskId = String(taskId || "").trim();
   if (!cleanTaskId) return;
   const accountId = String(options.accountId || "").trim();
-  const mode = String(options.mode || "login").trim() || "login";
+  const existingTask = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === cleanTaskId) || {};
+  const existingPayload = socialTaskPayload(existingTask);
+  const mode = String(options.mode || (String(existingTask?.task_type || "") === "bundle_oauth" ? "authorize" : "login")).trim() || "login";
+  const authorizeMode = mode === "authorize" || String(existingTask?.task_type || "") === "bundle_oauth";
+  const bundleRequestId = String(options.bundleRequestId || existingPayload.bundle_request_id || "").trim();
   const existing = document.getElementById("loginAssistanceModal");
   if (existing) closeConsoleModal(null, existing);
   if (mode === "publish") hidePublishAssistanceRestore();
@@ -28735,14 +28750,20 @@ function openTaskAssistanceView(taskId = "", options) {
   const modal = document.createElement("div");
   modal.id = "loginAssistanceModal";
   modal.className = `console-modal login-assistance-modal${mode === "publish" ? " is-publish-assistance" : ""}`;
-  modal.dataset.modalKey = mode === "publish" ? "publish-assistance" : "login-assistance";
+  modal.dataset.modalKey = mode === "publish" ? "publish-assistance" : (authorizeMode ? "bundle-account-authorization" : "login-assistance");
+  modal.dataset.bundleRequestId = bundleRequestId;
+  modal.dataset.bundlePlatform = normalizeAccountPoolPlatform(options.platform || existingTask.platform || account?.platform || "threads");
+  const assistanceTitle = mode === "publish" ? "发布助手" : (authorizeMode ? "授权助手" : "登录助手");
+  const assistanceSubtitle = authorizeMode
+    ? `${platformLabel(modal.dataset.bundlePlatform)} · 官方授权`
+    : `${platformLabel(account?.platform || "")} · ${account?.username || account?.login_username || "当前账号"}`;
   modal.innerHTML = `
     <div class="console-modal-backdrop"></div>
     <section class="console-modal-dialog login-assistance-dialog" role="dialog" aria-modal="true" aria-labelledby="loginAssistanceTitle">
       <div class="console-modal-head login-assistance-head">
         <div>
-          <strong id="loginAssistanceTitle">${mode === "publish" ? "发布助手" : "登录助手"}</strong>
-          <span>${esc(platformLabel(account?.platform || ""))} · ${esc(account?.username || account?.login_username || "当前账号")}</span>
+          <strong id="loginAssistanceTitle">${esc(assistanceTitle)}</strong>
+          <span>${esc(assistanceSubtitle)}</span>
         </div>
         ${renderModalCloseButton("data-login-assistance-close")}
       </div>
@@ -28770,6 +28791,30 @@ function openTaskAssistanceView(taskId = "", options) {
         : null)
       || null;
     const currentTask = task || (state.socialTasks || []).find((item) => String(item?.id || "") === cleanTaskId) || { id: cleanTaskId, status: "queued" };
+    if (authorizeMode || String(currentTask?.task_type || "") === "bundle_oauth") {
+      const requestId = String(modal.dataset.bundleRequestId || socialTaskPayload(currentTask).bundle_request_id || "").trim();
+      if (requestId) {
+        const bundle = await pollBundleAuthorizationStatus(requestId, modal.dataset.bundlePlatform || currentTask.platform).catch(() => null);
+        if (bundle && !bundle.pending) {
+          await applyBundleAuthorizationResult({ ...bundle, showResultModal: false });
+          updateLoginAssistanceModal(modal, {
+            ...currentTask,
+            task_type: "bundle_oauth",
+            status: bundle.status === "success" ? "success" : "failed",
+          }, {
+            ...(currentSession || {}),
+            task_type: "bundle_oauth",
+            login_assistance: {
+              phase: bundle.status === "success" ? "success" : "error",
+              kind: bundle.status === "success" ? "success" : "error",
+              title: bundle.status === "success" ? "授权成功" : "授权未完成",
+              message: bundle.message || "",
+            },
+          });
+          return;
+        }
+      }
+    }
     const taskStatus = loginAssistanceTaskStatus(currentTask);
     const assistancePhase = String(currentSession?.login_assistance?.phase || "").trim().toLowerCase();
     const statusAccountId = accountId || String(currentTask?.account_id || "").trim();
@@ -28955,10 +29000,13 @@ function updateAccountLoginResumeButton(button, accountId = "") {
   const activePublishTask = activeLoginTask?.id ? null : activePublishTaskForAccount(accountId);
   const canResume = Boolean(activeLoginTask?.id) || Boolean(activePublishTask?.id);
   button.hidden = !canResume;
-  button.innerHTML = `${renderBrowserLaunchIcon()}<span>${activePublishTask?.id ? "发布助手" : "继续登录"}</span>`;
+  const resumeLabel = activePublishTask?.id
+    ? "发布助手"
+    : (String(activeLoginTask?.task_type || "") === "bundle_oauth" ? "继续授权" : "继续登录");
+  button.innerHTML = `${renderBrowserLaunchIcon()}<span>${resumeLabel}</span>`;
   button.dataset.accountTaskAssistance = String(accountId || "");
-  button.setAttribute("aria-label", activePublishTask?.id ? "打开发布助手" : "继续登录");
-  button.setAttribute("title", activePublishTask?.id ? "打开发布助手" : "继续登录");
+  button.setAttribute("aria-label", resumeLabel);
+  button.setAttribute("title", resumeLabel);
   if (canResume && activeLoginTask?.id) {
     button.dataset.openLoginTaskId = String(activeLoginTask.id);
     delete button.dataset.openPublishTaskId;
@@ -29597,8 +29645,12 @@ function renderAccountPoolCardFields(account, { selectionControl = "", includeCo
   const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
   const activePublishTask = activeLoginTask?.id ? null : activePublishTaskForAccount(accountId);
   const canResumeLogin = Boolean(activeLoginTask?.id) || Boolean(activePublishTask?.id);
-  const assistanceLabel = activePublishTask?.id ? "发布助手" : "继续登录";
-  const assistanceTitle = activePublishTask?.id ? "打开发布助手" : "继续登录";
+  const assistanceLabel = activePublishTask?.id
+    ? "发布助手"
+    : (String(activeLoginTask?.task_type || "") === "bundle_oauth" ? "继续授权" : "继续登录");
+  const assistanceTitle = activePublishTask?.id
+    ? "打开发布助手"
+    : (String(activeLoginTask?.task_type || "") === "bundle_oauth" ? "继续授权" : "继续登录");
   const platformCopy = [
     platformLabel(platform),
     account?.display_name && account.display_name !== account.username ? account.display_name : "",
@@ -32167,57 +32219,14 @@ function openAccountPoolEditorModal(options) {
   });
 }
 
-let bundleAuthorizationPopup = null;
-let bundleAuthorizationPopupTimer = null;
 let bundleAuthorizationResultPending = false;
-let bundleAuthorizationEventsBound = false;
 
-function bundleAuthorizationUsesSamePage() {
-  return window.matchMedia(MOBILE_NAV_QUERY).matches;
-}
-
-function rememberBundleAuthorizationReturnState(platform = "threads") {
-  try {
-    window.sessionStorage.setItem(BUNDLE_AUTH_RETURN_STATE_KEY, JSON.stringify({
-      platform: normalizeAccountPoolPlatform(platform),
-      scroll: snapshotConsoleScrollState(),
-      createdAt: Date.now(),
-    }));
-  } catch (_) {
-    // Authorization still works when session storage is unavailable.
-  }
-}
-
-function consumeBundleAuthorizationReturnState() {
-  try {
-    const raw = window.sessionStorage.getItem(BUNDLE_AUTH_RETURN_STATE_KEY);
-    window.sessionStorage.removeItem(BUNDLE_AUTH_RETURN_STATE_KEY);
-    if (!raw) return null;
-    const value = JSON.parse(raw);
-    if (!value || Date.now() - Number(value.createdAt || 0) > 20 * 60 * 1000) return null;
-    return value;
-  } catch (_) {
-    return null;
-  }
-}
-
-function closeBundleAuthorizationPopup() {
-  if (bundleAuthorizationPopupTimer) {
-    window.clearInterval(bundleAuthorizationPopupTimer);
-    bundleAuthorizationPopupTimer = null;
-  }
-  if (bundleAuthorizationPopup && !bundleAuthorizationPopup.closed) bundleAuthorizationPopup.close();
-  bundleAuthorizationPopup = null;
-}
-
-async function applyBundleAuthorizationResult({ status = "", platform = "threads", message = "", accountId = "" } = {}) {
+async function applyBundleAuthorizationResult({ status = "", platform = "threads", message = "", accountId = "", showResultModal = true } = {}) {
   if (bundleAuthorizationResultPending) return;
   bundleAuthorizationResultPending = true;
-  const returnState = consumeBundleAuthorizationReturnState();
   const normalizedPlatform = normalizeAccountPoolPlatform(platform);
   const authorizedAccountId = String(accountId || "").trim();
   const succeeded = String(status || "").trim().toLowerCase() === "success";
-  closeBundleAuthorizationPopup();
   state.accountPoolPlatform = normalizedPlatform;
   if (state.view !== "accounts") setView("accounts");
   setAccountBrowserPanel("accounts");
@@ -32236,12 +32245,12 @@ async function applyBundleAuthorizationResult({ status = "", platform = "threads
       state.preferredAccountId = authorizedAccountId;
       renderSocialAccounts();
     }
-    if (returnState?.scroll) restoreConsoleScrollState(returnState.scroll);
     showMsg(
       "socialMsg",
       message || (succeeded ? `${platformLabel(normalizedPlatform)} 账号授权成功。` : `${platformLabel(normalizedPlatform)} 账号授权未完成。`),
       succeeded,
     );
+    if (!showResultModal) return;
     await openConsoleModal({
       modalKey: "bundle-account-authorization-result",
       title: succeeded ? `${platformLabel(normalizedPlatform)} 账号连接成功` : `${platformLabel(normalizedPlatform)} 账号授权未完成`,
@@ -32262,89 +32271,6 @@ async function applyBundleAuthorizationResult({ status = "", platform = "threads
   }
 }
 
-function bindBundleAuthorizationEvents() {
-  if (bundleAuthorizationEventsBound) return;
-  bundleAuthorizationEventsBound = true;
-  window.addEventListener("message", (event) => {
-    const data = event.data || {};
-    if (event.origin !== window.location.origin || data.type !== "vecto:bundle-authorization-result") return;
-    if (!bundleAuthorizationPopup || event.source !== bundleAuthorizationPopup) return;
-    void applyBundleAuthorizationResult(data);
-  });
-}
-
-function bundleAuthorizationPopupFeatures() {
-  const width = Math.min(520, Math.max(360, window.screen.availWidth - 32));
-  const height = Math.min(760, Math.max(560, window.screen.availHeight - 64));
-  const left = Math.max(0, Math.round((window.screen.availWidth - width) / 2));
-  const top = Math.max(0, Math.round((window.screen.availHeight - height) / 2));
-  return `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`;
-}
-
-function openBundleAccountSwitchPopup(platform = "threads") {
-  const selectedPlatform = normalizeAccountPoolPlatform(platform);
-  const switchUrl = selectedPlatform === "instagram"
-    ? "https://www.instagram.com/accounts/login/"
-    : "https://www.threads.com/login/";
-  const popup = window.open(switchUrl, "vecto-platform-authorization", bundleAuthorizationPopupFeatures());
-  if (!popup) throw new Error("浏览器阻止了账号切换窗口，请允许本站打开弹出窗口后重试。");
-  popup.focus();
-  return popup;
-}
-
-function openBundleAuthorizationPopup(platform = "threads", authorizationUrl = "", authorizationPopup = null) {
-  const targetUrl = String(authorizationUrl || "").trim();
-  if (!targetUrl) throw new Error("平台授权地址不可用，请稍后重试。");
-  const reusablePopup = authorizationPopup && !authorizationPopup.closed ? authorizationPopup : null;
-  if (!reusablePopup && bundleAuthorizationUsesSamePage()) {
-    closeBundleAuthorizationPopup();
-    rememberBundleAuthorizationReturnState(platform);
-    bundleAuthorizationResultPending = false;
-    window.location.assign(targetUrl);
-    return null;
-  }
-  if (reusablePopup) {
-    if (bundleAuthorizationPopupTimer) window.clearInterval(bundleAuthorizationPopupTimer);
-    bundleAuthorizationPopupTimer = null;
-    if (bundleAuthorizationPopup && bundleAuthorizationPopup !== reusablePopup && !bundleAuthorizationPopup.closed) {
-      bundleAuthorizationPopup.close();
-    }
-    bundleAuthorizationPopup = null;
-  } else {
-    closeBundleAuthorizationPopup();
-  }
-  const popup = reusablePopup || window.open(
-    targetUrl,
-    "vecto-platform-authorization",
-    bundleAuthorizationPopupFeatures(),
-  );
-  if (!popup) throw new Error("浏览器阻止了授权窗口，请允许本站打开弹出窗口后重试。");
-  if (reusablePopup) popup.location.href = targetUrl;
-  bundleAuthorizationPopup = popup;
-  bundleAuthorizationResultPending = false;
-  popup.focus();
-  bundleAuthorizationPopupTimer = window.setInterval(() => {
-    if (!bundleAuthorizationPopup || bundleAuthorizationPopup.closed) {
-      closeBundleAuthorizationPopup();
-      return;
-    }
-    try {
-      const callbackUrl = new URL(bundleAuthorizationPopup.location.href);
-      const status = String(callbackUrl.searchParams.get("bundle_auth") || "").trim().toLowerCase();
-      if (callbackUrl.origin !== window.location.origin || !status) return;
-      void applyBundleAuthorizationResult({
-        status,
-        platform: callbackUrl.searchParams.get("bundle_platform") || platform,
-        message: callbackUrl.searchParams.get("bundle_message") || "",
-        accountId: callbackUrl.searchParams.get("bundle_account_id") || "",
-      });
-    } catch (_) {
-      // Cross-origin access is expected while the official authorization page is open.
-    }
-  }, 500);
-  return popup;
-}
-
 async function prepareBundleAccountAuthorization({ platform = "", personaId = "", accountId = "" } = {}) {
   const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
   return api("/api/persona_dashboard/automation/accounts/bundle/authorize", {
@@ -32358,81 +32284,99 @@ async function prepareBundleAccountAuthorization({ platform = "", personaId = ""
   });
 }
 
-async function startBundleAccountAuthorization({ platform = "", personaId = "", accountId = "", preparedResult = null, authorizationPopup = null } = {}) {
+async function pollBundleAuthorizationStatus(requestId = "", platform = "threads") {
+  const cleanId = String(requestId || "").trim();
+  if (!cleanId) throw new Error("授权请求不存在，请重新发起授权");
+  const data = await api(`/api/persona_dashboard/automation/accounts/bundle/status?request_id=${encodeURIComponent(cleanId)}`);
+  const status = String(data?.status || "").trim().toLowerCase();
+  if (status === "completed") {
+    return {
+      status: "success",
+      platform: data.platform || platform,
+      message: "平台账号已授权",
+      accountId: String(data.account_id || ""),
+      taskId: String(data.task_id || ""),
+    };
+  }
+  if (status === "failed" || status === "expired") {
+    return {
+      status: "error",
+      platform: data.platform || platform,
+      message: String(data.error || (status === "expired" ? "授权请求已过期，请重新授权" : "官方授权未完成")),
+      accountId: "",
+      taskId: String(data.task_id || ""),
+    };
+  }
+  return { pending: true, taskId: String(data.task_id || ""), platform: data.platform || platform };
+}
+
+function watchBundleAuthorizationUntilSettled(requestId = "", platform = "threads", taskId = "") {
+  const cleanId = String(requestId || "").trim();
+  if (!cleanId) return;
+  const token = `${Date.now()}:${Math.random()}`;
+  state.bundleAuthWatchTokens ||= {};
+  state.bundleAuthWatchTokens[cleanId] = token;
+  let attempts = 0;
+  const run = async () => {
+    if (state.bundleAuthWatchTokens?.[cleanId] !== token) return;
+    attempts += 1;
+    const payload = await pollBundleAuthorizationStatus(cleanId, platform).catch(() => null);
+    if (payload && !payload.pending) {
+      delete state.bundleAuthWatchTokens[cleanId];
+      await applyBundleAuthorizationResult({ ...payload, showResultModal: false });
+      if (taskId) await refreshSocialTaskState(taskId).catch(() => null);
+      return;
+    }
+    if (attempts >= 450) {
+      delete state.bundleAuthWatchTokens[cleanId];
+      return;
+    }
+    window.setTimeout(() => { void run(); }, 2000);
+  };
+  void run();
+}
+
+async function startBundleAccountAuthorization({ platform = "", personaId = "", accountId = "", preparedResult = null } = {}) {
   const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
   const result = preparedResult || await prepareBundleAccountAuthorization({
     platform: selectedPlatform,
     personaId,
     accountId,
   });
-  const authorizationUrl = String(result?.url || "").trim();
-  if (!authorizationUrl) throw new Error("平台授权地址不可用，请稍后重试。");
-  bindBundleAuthorizationEvents();
-  openBundleAuthorizationPopup(selectedPlatform, authorizationUrl, authorizationPopup);
-  showMsg("socialMsg", `${platformLabel(selectedPlatform)} 授权窗口已打开。`, true);
+  const requestId = String(result?.request_id || "").trim();
+  const taskId = String(result?.task_id || "").trim();
+  if (!requestId || !taskId) throw new Error("平台授权地址不可用，请稍后重试。");
+  mergeSocialTaskState({
+    id: taskId,
+    task_type: "bundle_oauth",
+    status: "queued",
+    platform: selectedPlatform,
+    account_username: "官方授权",
+    payload: { bundle_request_id: requestId },
+  });
+  openLiveBrowserTaskView(taskId);
+  openTaskAssistanceView(taskId, {
+    mode: "authorize",
+    platform: selectedPlatform,
+    bundleRequestId: requestId,
+    accountId: String(accountId || "").trim(),
+  });
+  watchBundleAuthorizationUntilSettled(requestId, selectedPlatform, taskId);
   return result;
 }
 
 async function openBundleAccountAuthorizationModal({ platform = "", personaId = "", accountId = "" } = {}) {
-  const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
-  const selectedPlatformLabel = platformLabel(selectedPlatform);
-  const editing = Boolean(String(accountId || "").trim());
-  const authorizationHint = editing ? "重新连接当前账号" : "切换到要新增的账号后再授权";
-  const preparedResult = await prepareBundleAccountAuthorization({
-    platform: selectedPlatform,
-    personaId,
-    accountId,
-  });
-  let authorizationPopup = null;
-  let confirmed = false;
-  while (!confirmed) {
-    const accountSwitchReady = Boolean(authorizationPopup && !authorizationPopup.closed);
-    const decision = await openConsoleModal({
-      modalKey: "bundle-account-authorization",
-      title: editing ? "重新授权账号" : "添加账号",
-      confirmText: editing ? `重新授权 ${selectedPlatformLabel}` : "开始授权",
-      cancelText: "取消",
-      showConfirm: editing || accountSwitchReady,
-      extraActions: editing || accountSwitchReady ? [] : [{
-        value: "switch-account",
-        text: `打开 ${selectedPlatformLabel} 切换账号`,
-        primary: true,
-      }],
-      contentHtml: `
-        <div class="bundle-account-authorization-content" data-account-platform="${esc(selectedPlatform)}">
-          <div class="bundle-account-authorization-option">
-            <span class="bundle-account-authorization-brand">${renderAccountPoolPlatformIcon(selectedPlatform)}</span>
-            <span>
-              <strong>${esc(selectedPlatformLabel)} 官方授权</strong>
-              <small>${esc(authorizationHint)}</small>
-            </span>
-          </div>
-        </div>
-      `,
-    });
-    if (!decision) {
-      if (authorizationPopup && !authorizationPopup.closed) authorizationPopup.close();
-      return null;
-    }
-    if (decision === "switch-account") {
-      authorizationPopup = openBundleAccountSwitchPopup(selectedPlatform);
-      continue;
-    }
-    confirmed = true;
-  }
   return startBundleAccountAuthorization({
-    platform: selectedPlatform,
+    platform,
     personaId,
     accountId,
-    preparedResult,
-    authorizationPopup,
   });
 }
 
 function openAccountPoolCreateModal(options) {
   options = options || {};
   const platform = normalizeAccountPoolPlatform(options.platform || state.accountPoolPlatform);
-  void openBundleAccountAuthorizationModal({
+  void startBundleAccountAuthorization({
     platform,
     personaId: String(options.personaId || "").trim(),
   }).catch((error) => showMsg("socialMsg", error.detail || error.message || "启动平台授权失败", false));
@@ -33612,6 +33556,9 @@ function renderLiveBrowserActionMenu(session, { canStopTask = false, canCloseWin
       <summary title="任务操作" aria-label="任务操作">${renderEditIcon()}</summary>
       <div class="live-browser-action-menu-panel">
         ${renderLiveBrowserModeToggle(session)}
+        ${["open_login", "bundle_oauth", "publish_post"].includes(String(session?.task_type || "").trim()) && session.task_id
+          ? `<button type="button" data-live-browser-assistance="${esc(session.task_id)}">${String(session?.task_type || "") === "publish_post" ? "打开助手" : (String(session?.task_type || "") === "bundle_oauth" ? "打开授权助手" : "打开登录助手")}</button>`
+          : ""}
         <button type="button" class="danger" data-social-cancel="${esc(session.task_id || "")}" ${canStopTask ? "" : "hidden disabled"}>停止进程</button>
         <button type="button" data-live-browser-close="${esc(sessionId)}" ${canCloseWindow ? "" : "hidden disabled"}>关闭窗口</button>
       </div>
@@ -34678,7 +34625,7 @@ async function createSocialTask(taskType = $("socialTaskType")?.value, accountId
   }
   const selected = selectedSocialAccount(accountId);
   const platform = selected?.platform || $("socialPlatform")?.value || "threads";
-  if (taskType === "open_login") {
+  if (taskType === "open_login" && String(selected?.auth_provider || "browser") === "bundle") {
     return openBundleAccountAuthorizationModal({
       platform,
       personaId: String(personaId || selected?.persona_id || "").trim(),
@@ -37653,6 +37600,17 @@ function bindEvents() {
       tools.toggleAttribute("inert", !opening);
       liveBrowserInputToggle.setAttribute("aria-expanded", opening ? "true" : "false");
       if (opening) window.requestAnimationFrame(() => card.querySelector("[data-live-browser-text]")?.focus());
+      return;
+    }
+    const liveBrowserAssistance = event.target.closest("[data-live-browser-assistance]");
+    if (liveBrowserAssistance) {
+      const assistanceTaskId = String(liveBrowserAssistance.dataset.liveBrowserAssistance || "").trim();
+      const assistanceTask = (state.socialTasks || []).find((item) => String(item?.id || "").trim() === assistanceTaskId) || {};
+      if (String(assistanceTask.task_type || "") === "publish_post") {
+        openPublishAssistanceView(assistanceTaskId, { accountId: assistanceTask.account_id || "" });
+      } else {
+        openLoginAssistanceView(assistanceTaskId, assistanceTask.account_id || "");
+      }
       return;
     }
     const closeLiveBrowser = event.target.closest("[data-live-browser-close]");
