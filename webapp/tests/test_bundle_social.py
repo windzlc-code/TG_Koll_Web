@@ -1143,6 +1143,56 @@ def test_bundle_reauthorization_keeps_task_attached_to_existing_account(monkeypa
     assert result["account_id"] == "account-existing"
 
 
+def test_bundle_oauth_host_account_reuses_saved_login_credentials(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "oauth-host-credentials.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_accounts(
+              id, user_id, persona_id, platform, username, display_name, profile_dir,
+              status, login_username, login_password, created_at, updated_at
+            ) VALUES ('account-login', 0, '', 'threads', 'profile_name', 'Profile', '',
+                      'pending_login', 'login@example.com', 'secret-value', ?, ?)
+            """,
+            (now, now),
+        )
+
+    account = social_automation_api._bundle_oauth_host_account(
+        {"id": "task-login", "account_id": "account-login", "user_id": 0, "platform": "threads"}
+    )
+
+    assert account["id"] == "account-login"
+    assert account["username"] == "profile_name"
+    assert account["login_username"] == "login@example.com"
+    assert account["login_password"] == "secret-value"
+
+
+def test_bundle_oauth_queues_saved_credentials_once(monkeypatch):
+    import queue
+
+    actions = queue.Queue(maxsize=2)
+    control = {"login_assistance_queue": actions}
+    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: (object(), object(), object(), object()))
+
+    assert runner._queue_bundle_oauth_saved_credentials(
+        object(),
+        {"login_username": "login@example.com", "login_password": "secret-value"},
+        control,
+    ) is True
+    assert runner._queue_bundle_oauth_saved_credentials(
+        object(),
+        {"login_username": "login@example.com", "login_password": "secret-value"},
+        control,
+    ) is False
+    assert actions.get_nowait() == {
+        "kind": "credentials",
+        "login_username": "login@example.com",
+        "login_password": "secret-value",
+    }
+
+
 def test_bundle_oauth_browser_uses_and_removes_one_time_profile(monkeypatch, tmp_path):
     profile_dir = tmp_path / "one-time-oauth-profile"
     captured = {}

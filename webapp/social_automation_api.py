@@ -2464,9 +2464,24 @@ def _enqueue_bundle_oauth_live_task(
 def _bundle_oauth_host_account(task: dict[str, Any]) -> dict[str, Any]:
     task_id = str(task.get("id") or "oauth")
     data_root = Path(_DATA_DIR) if _DATA_DIR else Path(tempfile.gettempdir())
+    account_id = str(task.get("account_id") or "").strip()
+    owner_user_id = int(task.get("user_id") or 0)
+    if account_id and not account_id.startswith("oauth_host_"):
+        with db() as conn:
+            account_row = conn.execute(
+                "SELECT * FROM social_accounts WHERE id = ? AND user_id = ?",
+                (account_id, owner_user_id),
+            ).fetchone()
+        if account_row is not None:
+            return {
+                **dict(account_row),
+                "profile_dir": str((data_root / "social_automation" / "oauth_profiles" / task_id).resolve()),
+                "auth_provider": "browser",
+                "status": "pending",
+            }
     return {
-        "id": str(task.get("account_id") or ""),
-        "user_id": int(task.get("user_id") or 0),
+        "id": account_id,
+        "user_id": owner_user_id,
         "persona_id": str(task.get("persona_id") or ""),
         "platform": str(task.get("platform") or ""),
         "username": "官方授权",

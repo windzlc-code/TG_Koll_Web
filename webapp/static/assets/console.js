@@ -28755,7 +28755,7 @@ function openTaskAssistanceView(taskId = "", options) {
   modal.dataset.bundlePlatform = normalizeAccountPoolPlatform(options.platform || existingTask.platform || account?.platform || "threads");
   const assistanceTitle = mode === "publish" ? "发布助手" : (authorizeMode ? "授权助手" : "登录助手");
   const assistanceSubtitle = authorizeMode
-    ? `${platformLabel(modal.dataset.bundlePlatform)} · 官方授权`
+    ? `${platformLabel(modal.dataset.bundlePlatform)} · ${account?.username || account?.login_username || "当前账号"}`
     : `${platformLabel(account?.platform || "")} · ${account?.username || account?.login_username || "当前账号"}`;
   modal.innerHTML = `
     <div class="console-modal-backdrop"></div>
@@ -30084,6 +30084,10 @@ async function saveAccountPoolCreateForm(options) {
     showMsg("socialMsg", `请填写${accountLoginIdentifierCopy(platform).placeholder}。`, false);
     return false;
   }
+  if (!String(payload.login_password || "")) {
+    showMsg("socialMsg", "请填写登录密码。", false);
+    return false;
+  }
   const result = await api("/api/persona_dashboard/automation/accounts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -30100,14 +30104,15 @@ async function saveAccountPoolCreateForm(options) {
     showMsg("socialMsg", payload.persona_id ? "账号已保存，并已绑定当前人设。" : "账号已保存。", true);
     return account;
   }
-  showMsg("socialMsg", "账号已保存，正在启动自动登录。", true);
+  showMsg("socialMsg", "账号已保存，正在启动授权助手。", true);
   try {
-    const loginResult = await createSocialTask("open_login", account.id, payload.persona_id, "socialMsg");
-    const taskId = String(loginResult?.task?.id || "").trim();
-    if (taskId) openLoginAssistanceView(taskId, account.id);
-    else showMsg("socialMsg", "账号已保存，但自动登录未启动，请在账号卡中重试。", false);
+    await startBundleAccountAuthorization({
+      platform: account.platform || payload.platform,
+      personaId: account.persona_id || payload.persona_id,
+      accountId: account.id,
+    });
   } catch (error) {
-    showMsg("socialMsg", `账号已保存，但自动登录启动失败：${error.detail || error.message || "请稍后重试"}`, false);
+    showMsg("socialMsg", `账号已保存，但授权助手启动失败：${error.detail || error.message || "请稍后重试"}`, false);
   }
   return account;
 }
@@ -32137,7 +32142,7 @@ function openAccountPoolEditorModal(options) {
         ${renderAccountEditorForm(account, mode)}
       </div>
       <div class="console-modal-actions">
-        <button type="button" class="primary" data-account-pool-editor-save>${editing ? "保存修改" : "保存并登录"}</button>
+        <button type="button" class="primary" data-account-pool-editor-save>${editing ? "保存修改" : "保存并授权"}</button>
         <button type="button" data-account-pool-editor-cancel>取消</button>
       </div>
     </section>`;
@@ -32376,10 +32381,10 @@ async function openBundleAccountAuthorizationModal({ platform = "", personaId = 
 function openAccountPoolCreateModal(options) {
   options = options || {};
   const platform = normalizeAccountPoolPlatform(options.platform || state.accountPoolPlatform);
-  void startBundleAccountAuthorization({
+  openAccountPoolEditorModal({
     platform,
     personaId: String(options.personaId || "").trim(),
-  }).catch((error) => showMsg("socialMsg", error.detail || error.message || "启动平台授权失败", false));
+  });
 }
 
 function openAccountPoolEditModal(accountId = "") {

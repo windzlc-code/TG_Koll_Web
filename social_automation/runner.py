@@ -753,6 +753,33 @@ def _maybe_auto_confirm_bundle_oauth(
     return clicked
 
 
+def _queue_bundle_oauth_saved_credentials(
+    page: Any,
+    account: dict[str, Any],
+    context_control: dict[str, Any] | None,
+) -> bool:
+    if not isinstance(context_control, dict) or context_control.get("bundle_oauth_saved_credentials_queued"):
+        return False
+    username = str(account.get("login_username") or account.get("username") or "").strip()
+    password = str(account.get("login_password") or "")
+    actions = context_control.get("login_assistance_queue")
+    if not username or not password or actions is None or not hasattr(actions, "put_nowait"):
+        return False
+    if _mapped_login_credentials(page) is None:
+        return False
+    try:
+        actions.put_nowait({
+            "kind": "credentials",
+            "login_username": username,
+            "login_password": password,
+        })
+    except queue.Full:
+        return False
+    context_control["bundle_oauth_saved_credentials_queued"] = True
+    _set_login_assistance_pending(context_control, True)
+    return True
+
+
 def run_bundle_oauth_browser_task(
     *,
     task: dict[str, Any],
@@ -873,6 +900,7 @@ def run_bundle_oauth_browser_task(
                         str(outcome.get("message") or "官方授权未完成"),
                         "cookie_expired",
                     )
+                _queue_bundle_oauth_saved_credentials(page, oauth_account, context_control)
                 if _process_login_assistance_action(page, platform, logger, context_control):
                     _wait_for_cancellation(0.8, cancel_event)
                     continue
