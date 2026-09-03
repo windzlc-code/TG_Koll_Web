@@ -828,12 +828,20 @@ def test_bundle_callback_reuses_single_legacy_account_with_same_username(monkeyp
     with db() as conn:
         conn.execute(
             """
+            INSERT INTO social_proxies(
+              id, user_id, name, proxy_type, host, port, created_at, updated_at
+            ) VALUES ('proxy-existing', 0, 'Existing proxy', 'http', 'proxy.example', 8080, ?, ?)
+            """,
+            (now, now),
+        )
+        conn.execute(
+            """
             INSERT INTO social_accounts(
               id, user_id, persona_id, platform, username, display_name, profile_dir,
-              status, auth_provider, external_team_id, external_account_id,
+              proxy_id, status, auth_provider, external_team_id, external_account_id,
               authorized_at, created_at, updated_at
             ) VALUES ('legacy-account', 0, 'persona-old', 'threads', 'same_owner', 'Same Owner', '',
-                      'needs_login', 'browser', '', '', 0, ?, ?)
+                      'proxy-existing', 'needs_login', 'browser', '', '', 0, ?, ?)
             """,
             (now, now),
         )
@@ -874,7 +882,7 @@ def test_bundle_callback_reuses_single_legacy_account_with_same_username(monkeyp
 
     with db() as conn:
         accounts = conn.execute(
-            "SELECT id, auth_provider, external_team_id, external_account_id, status FROM social_accounts"
+            "SELECT id, auth_provider, external_team_id, external_account_id, proxy_id, status FROM social_accounts"
         ).fetchall()
     assert response.status_code == 302
     assert len(accounts) == 1
@@ -883,8 +891,77 @@ def test_bundle_callback_reuses_single_legacy_account_with_same_username(monkeyp
         "auth_provider": "bundle",
         "external_team_id": "team-new",
         "external_account_id": "external-new",
+        "proxy_id": "proxy-existing",
         "status": "ready",
     }
+
+
+def test_bundle_callback_rejects_different_account_for_existing_profile(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "oauth-account-mismatch.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_accounts(
+              id, user_id, persona_id, platform, username, display_name, profile_dir,
+              status, auth_provider, external_team_id, external_account_id,
+              created_at, updated_at
+            ) VALUES ('account-b', 0, '', 'threads', 'expected_b', 'Expected B', 'profiles/account-b',
+                      'pending_login', 'browser', '', '', ?, ?)
+            """,
+            (now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO social_account_auth_requests(
+              id, user_id, persona_id, account_id, platform, team_id,
+              status, error, expires_at, created_at, updated_at
+            ) VALUES ('request-mismatch', 0, '', 'account-b', 'threads', 'team-b',
+                      'pending', '', ?, ?, ?)
+            """,
+            (now + 900, now, now),
+        )
+
+    disconnected = []
+
+    class _Client:
+        def find_social_account(self, *, team_id, platform):
+            assert (team_id, platform) == ("team-b", "threads")
+            return {"id": "external-wrong", "type": "THREADS", "teamId": team_id, "username": "wrong_a"}
+
+        def disconnect_social_account(self, *, team_id, platform):
+            disconnected.append((team_id, platform))
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/callback",
+            "query_string": b"request_id=request-mismatch&threads-callback=success",
+            "headers": [],
+        }
+    )
+
+    response = social_automation_api._finalize_bundle_authorization("request-mismatch", request)
+
+    with db() as conn:
+        account = conn.execute(
+            "SELECT username, auth_provider, external_account_id FROM social_accounts WHERE id = 'account-b'"
+        ).fetchone()
+        auth_request = conn.execute(
+            "SELECT status, error FROM social_account_auth_requests WHERE id = 'request-mismatch'"
+        ).fetchone()
+    assert response.status_code == 302
+    assert disconnected == [("team-b", "threads")]
+    assert (account["username"], account["auth_provider"], account["external_account_id"]) == (
+        "expected_b", "browser", "",
+    )
+    assert auth_request["status"] == "failed"
+    assert "不一致" in auth_request["error"]
 
 
 def test_bundle_new_authorization_keeps_existing_persona_account(monkeypatch, tmp_path):
@@ -1150,11 +1227,19 @@ def test_bundle_oauth_host_account_reuses_saved_login_credentials(monkeypatch, t
     with db() as conn:
         conn.execute(
             """
+            INSERT INTO social_proxies(
+              id, user_id, name, proxy_type, host, port, created_at, updated_at
+            ) VALUES ('proxy-login', 0, 'Proxy B', 'http', 'proxy.example', 8080, ?, ?)
+            """,
+            (now, now),
+        )
+        conn.execute(
+            """
             INSERT INTO social_accounts(
               id, user_id, persona_id, platform, username, display_name, profile_dir,
-              status, login_username, login_password, created_at, updated_at
-            ) VALUES ('account-login', 0, '', 'threads', 'profile_name', 'Profile', '',
-                      'pending_login', 'login@example.com', 'secret-value', ?, ?)
+              proxy_id, status, login_username, login_password, created_at, updated_at
+            ) VALUES ('account-login', 0, '', 'threads', 'profile_name', 'Profile', 'profiles/account-login',
+                      'proxy-login', 'pending_login', 'login@example.com', 'secret-value', ?, ?)
             """,
             (now, now),
         )
@@ -1167,6 +1252,8 @@ def test_bundle_oauth_host_account_reuses_saved_login_credentials(monkeypatch, t
     assert account["username"] == "profile_name"
     assert account["login_username"] == "login@example.com"
     assert account["login_password"] == "secret-value"
+    assert account["profile_dir"] == "profiles/account-login"
+    assert account["proxy_id"] == "proxy-login"
 
 
 def test_claimed_bundle_oauth_task_keeps_owner_for_saved_credentials(monkeypatch, tmp_path):
@@ -1277,8 +1364,9 @@ def test_bundle_oauth_opens_instagram_sso_login(monkeypatch):
     assert calls == [(runner.BUNDLE_OAUTH_SSO_LOGIN_BUTTONS, "bundle_oauth_sso_login")]
 
 
-def test_bundle_oauth_browser_uses_and_removes_one_time_profile(monkeypatch, tmp_path):
-    profile_dir = tmp_path / "one-time-oauth-profile"
+def test_bundle_oauth_browser_reuses_account_profile(monkeypatch, tmp_path):
+    profile_dir = tmp_path / "account-oauth-profile"
+    profile_dir.mkdir()
     captured = {}
 
     class _Page:
@@ -1298,11 +1386,6 @@ def test_bundle_oauth_browser_uses_and_removes_one_time_profile(monkeypatch, tmp
         captured.update(account)
         return _Context()
 
-    def _make_profile(*_args, **_kwargs):
-        profile_dir.mkdir()
-        return str(profile_dir)
-
-    monkeypatch.setattr(runner.tempfile, "mkdtemp", _make_profile)
     monkeypatch.setattr(runner, "_open_camoufox_context", _open_context)
     monkeypatch.setattr(runner, "_first_page", lambda _context: _Page())
     monkeypatch.setattr(runner, "_sync_live_browser_viewport", lambda *_args, **_kwargs: None)
@@ -1314,7 +1397,7 @@ def test_bundle_oauth_browser_uses_and_removes_one_time_profile(monkeypatch, tmp
             "platform": "threads",
             "payload": {"oauth_url": "https://provider.example/oauth"},
         },
-        account={"username": "官方授权", "profile_dir": "shared-profile-must-not-be-used"},
+        account={"id": "account-new", "username": "账号 B", "profile_dir": str(profile_dir)},
         proxy=None,
         data_dir=tmp_path,
         logger=_Logger(),
@@ -1324,8 +1407,7 @@ def test_bundle_oauth_browser_uses_and_removes_one_time_profile(monkeypatch, tmp
     assert result["ok"] is True
     assert result["account_id"] == "account-new"
     assert captured["profile_dir"] == str(profile_dir)
-    assert captured["profile_dir"] != "shared-profile-must-not-be-used"
-    assert not profile_dir.exists()
+    assert profile_dir.exists()
 
 
 def test_bundle_task_cancel_releases_pending_authorization(monkeypatch, tmp_path):

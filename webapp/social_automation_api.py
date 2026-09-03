@@ -2454,7 +2454,7 @@ def _enqueue_bundle_oauth_live_task(
             task_id,
             "info",
             "queued",
-            "已启动站内空白授权窗口",
+            "已启动账号独立授权窗口",
             {"task_type": "bundle_oauth", "request_id": request_id},
         )
     wake_social_automation_worker()
@@ -2473,9 +2473,21 @@ def _bundle_oauth_host_account(task: dict[str, Any]) -> dict[str, Any]:
                 (account_id, owner_user_id),
             ).fetchone()
         if account_row is not None:
+            account = dict(account_row)
+            profile_dir = str(account.get("profile_dir") or "").strip()
+            if not profile_dir:
+                profile_dir = str(
+                    (
+                        data_root
+                        / "social_automation"
+                        / "profiles"
+                        / str(account.get("platform") or task.get("platform") or "threads")
+                        / account_id
+                    ).resolve()
+                )
             return {
-                **dict(account_row),
-                "profile_dir": str((data_root / "social_automation" / "oauth_profiles" / task_id).resolve()),
+                **account,
+                "profile_dir": profile_dir,
                 "auth_provider": "browser",
                 "status": "pending",
             }
@@ -2657,9 +2669,9 @@ def _start_bundle_authorization(
         with db() as conn:
             conn.execute(
                 "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
-                ("无法启动站内空白授权窗口", _now(), request_id),
+                ("无法启动账号独立授权窗口", _now(), request_id),
             )
-        raise HTTPException(status_code=503, detail="无法启动站内空白授权窗口，请稍后重试") from exc
+        raise HTTPException(status_code=503, detail="无法启动账号独立授权窗口，请稍后重试") from exc
     return {
         "ok": True,
         "request_id": request_id,
@@ -2743,15 +2755,48 @@ def _finalize_bundle_authorization(
         return _bundle_console_redirect(
             status="error", platform=platform, message="平台授权结果缺少账号编号，请重新授权", return_path=return_path,
         )
+    provider_username = str(provider_account.get("username") or "").strip().lstrip("@")
+    requested_account_id = str(auth_row["account_id"] or "").strip()
+    if requested_account_id and provider_username:
+        with db() as conn:
+            expected_row = conn.execute(
+                "SELECT username FROM social_accounts WHERE id = ? AND user_id = ? AND platform = ?",
+                (requested_account_id, owner_user_id, platform),
+            ).fetchone()
+        expected_username = str(expected_row["username"] or "").strip().lstrip("@") if expected_row else ""
+        comparable_expected = bool(
+            expected_username
+            and "@" not in expected_username
+            and re.fullmatch(r"[A-Za-z0-9._]{1,64}", expected_username)
+        )
+        if comparable_expected and expected_username.casefold() != provider_username.casefold():
+            message = (
+                f"授权账号 @{provider_username} 与待授权账号 @{expected_username} 不一致，"
+                "请确认指纹环境登录的是该账号后重试"
+            )
+            try:
+                client.disconnect_social_account(
+                    team_id=str(auth_row["team_id"] or ""),
+                    platform=platform,
+                )
+            except BundleSocialError:
+                LOGGER.warning("Failed to disconnect mismatched Bundle authorization", exc_info=True)
+            with db() as conn:
+                conn.execute(
+                    "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
+                    (message, _now(), str(request_id)),
+                )
+            return _bundle_console_redirect(
+                status="error", platform=platform, message=message, return_path=return_path,
+            )
     username = str(
-        provider_account.get("username")
+        provider_username
         or provider_account.get("displayName")
         or provider_account.get("externalId")
         or external_account_id
     ).strip().lstrip("@")
     display_name = str(provider_account.get("displayName") or username).strip()
     now = _now()
-    requested_account_id = str(auth_row["account_id"] or "").strip()
     if not requested_account_id:
         with db() as conn:
             duplicate = conn.execute(
@@ -2819,7 +2864,7 @@ def _finalize_bundle_authorization(
                 """
                 UPDATE social_accounts
                 SET username = ?, display_name = ?, status = 'ready', health_status = 'alive',
-                    health_checked_at = ?, health_detail = '', last_error = '', proxy_id = '',
+                    health_checked_at = ?, health_detail = '', last_error = '',
                     auth_provider = 'bundle', external_team_id = ?, external_account_id = ?,
                     authorized_at = ?, updated_at = ?
                 WHERE id = ? AND user_id = ?
@@ -4932,7 +4977,7 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
                 if current_task_type == "publish_post":
                     assistance_title, assistance_message = "正在启动发布", "正在连接指纹浏览器并准备发布内容。"
                 elif current_task_type == "bundle_oauth":
-                    assistance_title, assistance_message = "正在启动官方授权", "正在打开空白授权窗口，不会使用当前浏览器已登录账号。"
+                    assistance_title, assistance_message = "正在启动官方授权", "正在使用当前账号的独立指纹环境打开授权页。"
                 else:
                     assistance_title, assistance_message = "正在启动登录", "正在连接指纹浏览器并检查账号状态。"
                 assistance = {
@@ -4949,7 +4994,7 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
                 if current_task_type == "publish_post":
                     ready_title, ready_message = "正在执行发布", "指纹浏览器已打开，正在同步发布状态。"
                 elif current_task_type == "bundle_oauth":
-                    ready_title, ready_message = "请在窗口中登录要添加的账号", "空白授权窗口已打开，请登录新账号完成官方授权。"
+                    ready_title, ready_message = "请确认当前授权账号", "独立授权窗口已打开，请按平台提示完成授权。"
                 else:
                     ready_title, ready_message = "正在执行登录", "指纹浏览器已打开，正在检查页面并同步登录状态。"
                 assistance = {
@@ -10584,6 +10629,36 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     proxy = None
     if task_type == "bundle_oauth":
         account = _bundle_oauth_host_account(task)
+        proxy_id = str(account.get("proxy_id") or "").strip()
+        if proxy_id:
+            with db() as conn:
+                proxy_row = conn.execute("SELECT * FROM social_proxies WHERE id = ?", (proxy_id,)).fetchone()
+                if proxy_row is not None:
+                    try:
+                        proxy_row = resolve_market_proxy_credentials(
+                            conn,
+                            proxy_row,
+                            owner_user_id=int(account.get("user_id") or 0),
+                        )
+                    except ProxyMarketCredentialAuthorizationError as exc:
+                        raise RuntimeError(
+                            "Marketplace proxy allocation authorization is invalid."
+                        ) from exc
+                    except PasswordVaultError as exc:
+                        raise RuntimeError(
+                            "Marketplace proxy credentials are unavailable."
+                        ) from exc
+            proxy = dict(proxy_row) if proxy_row else None
+            if proxy is not None and not _account_proxy_type_allowed(proxy):
+                raise RuntimeError("账号代理不是静态住宅 IP 或系统导入的机房代理，已阻止授权浏览器启动")
+            if proxy is None:
+                raise RuntimeError("账号绑定的住宅代理不存在，已阻止授权浏览器启动")
+            if _proxy_is_expired(proxy):
+                raise RuntimeError("账号绑定的静态住宅代理已过期，已阻止授权浏览器启动")
+            if str(proxy.get("status") or "").strip().lower() != "active":
+                raise RuntimeError("账号代理不可用，已阻止授权浏览器启动")
+            if not _proxy_has_verified_check(proxy):
+                raise RuntimeError("账号代理尚未通过真实网络检测，已阻止授权浏览器启动")
         payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
         request_id = str(payload.get("bundle_request_id") or "").strip()
         if request_id:

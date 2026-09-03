@@ -831,10 +831,21 @@ def run_bundle_oauth_browser_task(
     except (TypeError, ValueError):
         timeout_seconds = 900
     timeout_seconds = max(300, min(timeout_seconds, 1800))
-    ephemeral_dir = Path(tempfile.mkdtemp(prefix="wk_bundle_oauth_"))
+    account_id = str(account.get("id") or "").strip()
+    account_profile_dir = str(account.get("profile_dir") or "").strip()
+    reuse_account_profile = bool(
+        account_profile_dir
+        and account_id
+        and not account_id.startswith("oauth_host_")
+    )
+    profile_dir = (
+        Path(account_profile_dir).expanduser().resolve()
+        if reuse_account_profile
+        else Path(tempfile.mkdtemp(prefix="wk_bundle_oauth_"))
+    )
     oauth_account = {
         **dict(account or {}),
-        "profile_dir": str(ephemeral_dir),
+        "profile_dir": str(profile_dir),
         "auth_provider": "browser",
         "username": str(account.get("username") or "官方授权"),
         "display_name": str(account.get("display_name") or "官方授权"),
@@ -847,8 +858,13 @@ def run_bundle_oauth_browser_task(
     logger.log(
         "info",
         "bundle_oauth_start",
-        "正在打开站内空白授权窗口，不会使用当前浏览器已登录账号。",
-        {"platform": platform, "profile_dir": str(ephemeral_dir)},
+        "正在使用当前账号的独立指纹环境打开官方授权页。",
+        {
+            "platform": platform,
+            "profile_dir": str(profile_dir),
+            "profile_reused": reuse_account_profile,
+            "proxy_attached": bool(proxy),
+        },
     )
     try:
         with _open_camoufox_context(
@@ -858,7 +874,7 @@ def run_bundle_oauth_browser_task(
             context_control=context_control,
         ) as context:
             if not (isinstance(context_control, dict) and str(context_control.get("live_browser_session_id") or "").strip()):
-                raise RuntimeError("无法启动站内空白授权窗口，请稍后重试。")
+                raise RuntimeError("无法启动账号独立授权窗口，请稍后重试。")
             page = _first_page(context)
             _sync_live_browser_viewport(page, context_control, logger)
             if isinstance(context_control, dict):
@@ -866,7 +882,7 @@ def run_bundle_oauth_browser_task(
             logger.log(
                 "warn",
                 "need_manual",
-                "请填写要添加的平台账号并点击授权。本次使用空白会话，不会带入当前浏览器已登录账号。",
+                "正在使用当前账号的独立登录态完成官方授权；如平台要求验证，请在助手页完成。",
                 {"status": "bundle_oauth", "platform": platform},
             )
             _publish_login_assistance_state(
@@ -943,7 +959,8 @@ def run_bundle_oauth_browser_task(
                 _publish_login_assistance_state(page, context_control, page_status, handoff=True)
                 _wait_for_cancellation(1.0, cancel_event)
     finally:
-        shutil.rmtree(ephemeral_dir, ignore_errors=True)
+        if not reuse_account_profile:
+            shutil.rmtree(profile_dir, ignore_errors=True)
 
 
 def run_social_task(
