@@ -1193,6 +1193,32 @@ def test_bundle_oauth_queues_saved_credentials_once(monkeypatch):
     }
 
 
+def test_bundle_oauth_retries_saved_credentials_after_unconfirmed_submit(monkeypatch):
+    import queue
+
+    actions = queue.Queue(maxsize=2)
+    control = {
+        "login_assistance_queue": actions,
+        "bundle_oauth_saved_credentials_attempts": 1,
+        "login_assistance_submitted_kind": "credentials",
+        "login_assistance_credentials_submitted_at": runner.time.monotonic() - 7,
+    }
+    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: (object(), object(), object(), object()))
+    monkeypatch.setattr(runner, "_page_shows_invalid_credentials", lambda _page: False)
+
+    assert runner._queue_bundle_oauth_saved_credentials(
+        object(),
+        {"login_username": "login@example.com", "login_password": "secret-value"},
+        control,
+    ) is True
+    assert control["bundle_oauth_saved_credentials_attempts"] == 2
+    assert actions.get_nowait() == {
+        "kind": "credentials",
+        "login_username": "login@example.com",
+        "login_password": "secret-value",
+    }
+
+
 def test_bundle_oauth_browser_uses_and_removes_one_time_profile(monkeypatch, tmp_path):
     profile_dir = tmp_path / "one-time-oauth-profile"
     captured = {}

@@ -30,6 +30,7 @@ LOGIN_FORM_WAIT_SECONDS = 12
 LOGIN_ASSISTANCE_CREDENTIAL_SUBMIT_SETTLE_SECONDS = 6
 LOGIN_ASSISTANCE_VERIFICATION_SUBMIT_SETTLE_SECONDS = 6
 LOGIN_ASSISTANCE_VERIFICATION_CREDENTIAL_STABLE_SECONDS = 6
+BUNDLE_OAUTH_SAVED_CREDENTIAL_MAX_ATTEMPTS = 2
 DEFAULT_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MIN_MANUAL_LOGIN_TIMEOUT_SECONDS = 300
 MAX_MANUAL_LOGIN_TIMEOUT_SECONDS = 1800
@@ -758,7 +759,7 @@ def _queue_bundle_oauth_saved_credentials(
     account: dict[str, Any],
     context_control: dict[str, Any] | None,
 ) -> bool:
-    if not isinstance(context_control, dict) or context_control.get("bundle_oauth_saved_credentials_queued"):
+    if not isinstance(context_control, dict):
         return False
     username = str(account.get("login_username") or account.get("username") or "").strip()
     password = str(account.get("login_password") or "")
@@ -766,6 +767,23 @@ def _queue_bundle_oauth_saved_credentials(
     if not username or not password or actions is None or not hasattr(actions, "put_nowait"):
         return False
     if _mapped_login_credentials(page) is None:
+        return False
+    if context_control.get("login_assistance_pending"):
+        return False
+    try:
+        attempts = int(context_control.get("bundle_oauth_saved_credentials_attempts") or 0)
+    except (TypeError, ValueError):
+        attempts = 0
+    submitted_kind = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
+    if submitted_kind == "credentials":
+        if _login_assistance_credentials_submission_waiting(context_control):
+            return False
+        if _page_shows_invalid_credentials(page) or attempts >= BUNDLE_OAUTH_SAVED_CREDENTIAL_MAX_ATTEMPTS:
+            return False
+        context_control.pop("login_assistance_submitted_kind", None)
+        context_control.pop("login_assistance_submitted_challenge", None)
+        context_control.pop("login_assistance_credentials_submitted_at", None)
+    elif submitted_kind or attempts >= BUNDLE_OAUTH_SAVED_CREDENTIAL_MAX_ATTEMPTS:
         return False
     try:
         actions.put_nowait({
@@ -775,7 +793,7 @@ def _queue_bundle_oauth_saved_credentials(
         })
     except queue.Full:
         return False
-    context_control["bundle_oauth_saved_credentials_queued"] = True
+    context_control["bundle_oauth_saved_credentials_attempts"] = attempts + 1
     _set_login_assistance_pending(context_control, True)
     return True
 
