@@ -32351,10 +32351,10 @@ async function startBundleAccountAuthorization({ platform = "", personaId = "", 
     task_type: "bundle_oauth",
     status: "queued",
     platform: selectedPlatform,
+    account_id: String(accountId || result?.account_id || "").trim(),
     account_username: "官方授权",
     payload: { bundle_request_id: requestId },
   });
-  openLiveBrowserTaskView(taskId);
   openTaskAssistanceView(taskId, {
     mode: "authorize",
     platform: selectedPlatform,

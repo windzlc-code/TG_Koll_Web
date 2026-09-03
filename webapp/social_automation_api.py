@@ -2403,12 +2403,13 @@ def _enqueue_bundle_oauth_live_task(
     owner_user_id: int,
     persona_id: str,
     platform: str,
+    account_id: str,
     request_id: str,
     oauth_url: str,
 ) -> str:
     now = _now()
     task_id = _NEW_ID("social_task")
-    host_account_id = f"oauth_host_{request_id}"
+    host_account_id = str(account_id or "").strip() or f"oauth_host_{request_id}"
     payload = {
         "bundle_request_id": request_id,
         "oauth_url": oauth_url,
@@ -2632,6 +2633,7 @@ def _start_bundle_authorization(
             owner_user_id=owner_user_id,
             persona_id=persona_id,
             platform=platform,
+            account_id=account_id,
             request_id=request_id,
             oauth_url=url,
         )
@@ -2647,6 +2649,7 @@ def _start_bundle_authorization(
         "ok": True,
         "request_id": request_id,
         "platform": platform,
+        "account_id": account_id,
         "flow": "live_window",
         "url": url,
         "task_id": task_id,

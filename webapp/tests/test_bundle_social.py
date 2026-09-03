@@ -1079,6 +1079,70 @@ def test_bundle_authorization_starts_isolated_live_window_task(monkeypatch, tmp_
     assert payload["manual_takeover"] is True
 
 
+def test_bundle_reauthorization_keeps_task_attached_to_existing_account(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "existing-account-auth.db"))
+    init_db()
+
+    class _Client:
+        def create_connect_link(self, *, team_id, platform, redirect_url):
+            assert team_id == "team-existing"
+            assert platform == "threads"
+            assert "request_id=" in redirect_url
+            return "https://provider.example/oauth"
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    monkeypatch.setattr(social_automation_api, "_identity_user_id", lambda _: 0)
+    monkeypatch.setattr(social_automation_api, "_require_active_owner_user", lambda *_: None)
+    monkeypatch.setattr(social_automation_api, "_billing_admin_waived", lambda *_: True)
+    monkeypatch.setattr(
+        social_automation_api.commercial_billing,
+        "require_write_access",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(social_automation_api, "wake_social_automation_worker", lambda: None)
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_accounts(
+              id, user_id, persona_id, platform, username, display_name, profile_dir,
+              status, auth_provider, external_team_id, external_account_id,
+              created_at, updated_at
+            ) VALUES ('account-existing', 0, '', 'threads', 'existing', 'Existing', '',
+                      'ready', 'bundle', 'team-existing', 'external-existing', ?, ?)
+            """,
+            (now, now),
+        )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/authorize",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+
+    result = social_automation_api._start_bundle_authorization(
+        social_automation_api.BundleAuthorizationPayload(
+            platform="threads",
+            account_id="account-existing",
+        ),
+        request,
+        {"id": 0},
+    )
+
+    with db() as conn:
+        task = conn.execute(
+            "SELECT account_id FROM social_automation_tasks WHERE id = ?",
+            (result["task_id"],),
+        ).fetchone()
+    assert task["account_id"] == "account-existing"
+    assert result["account_id"] == "account-existing"
+
+
 def test_bundle_oauth_browser_uses_and_removes_one_time_profile(monkeypatch, tmp_path):
     profile_dir = tmp_path / "one-time-oauth-profile"
     captured = {}
