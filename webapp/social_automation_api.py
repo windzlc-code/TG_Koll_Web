@@ -2282,6 +2282,7 @@ def _bundle_console_redirect(
     platform: str,
     message: str = "",
     return_path: str = "",
+    account_id: str = "",
 ) -> RedirectResponse:
     safe_return = urlparse(_safe_bundle_console_return_path(return_path))
     query = {
@@ -2296,6 +2297,8 @@ def _bundle_console_redirect(
             "bundle_message": str(message)[:240],
         }
     )
+    if str(account_id or "").strip():
+        query["bundle_account_id"] = str(account_id).strip()
     return RedirectResponse(url=f"{safe_return.path}?{urlencode(query)}", status_code=302)
 
 
@@ -2496,7 +2499,11 @@ def _finalize_bundle_authorization(
     platform = str(auth_row["platform"] or "").strip().lower()
     if str(auth_row["status"] or "") == "completed":
         return _bundle_console_redirect(
-            status="success", platform=platform, message="平台账号已授权", return_path=return_path,
+            status="success",
+            platform=platform,
+            message="平台账号已授权",
+            return_path=return_path,
+            account_id=str(auth_row["account_id"] or ""),
         )
     if int(auth_row["expires_at"] or 0) < _now():
         return _bundle_console_redirect(
@@ -2550,10 +2557,37 @@ def _finalize_bundle_authorization(
     ).strip().lstrip("@")
     display_name = str(provider_account.get("displayName") or username).strip()
     now = _now()
+    requested_account_id = str(auth_row["account_id"] or "").strip()
+    if not requested_account_id:
+        with db() as conn:
+            duplicate = conn.execute(
+                """
+                SELECT id, external_team_id FROM social_accounts
+                WHERE user_id = ? AND platform = ? AND auth_provider = 'bundle'
+                  AND (external_account_id = ? OR username = ? COLLATE NOCASE)
+                LIMIT 1
+                """,
+                (owner_user_id, platform, external_account_id, username),
+            ).fetchone()
+        if duplicate is not None:
+            team_id = str(auth_row["team_id"] or "").strip()
+            if team_id and team_id != str(duplicate["external_team_id"] or "").strip():
+                try:
+                    client.disconnect_social_account(team_id=team_id, platform=platform)
+                except BundleSocialError:
+                    LOGGER.warning("Failed to release duplicate Bundle authorization team %s", team_id, exc_info=True)
+            message = f"{platform.title()} 账号 @{username} 已存在，请先在 {platform.title()} 网页切换到其他账号后重试"
+            with db() as conn:
+                conn.execute(
+                    "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
+                    (message, now, str(request_id)),
+                )
+            return _bundle_console_redirect(
+                status="error", platform=platform, message=message, return_path=return_path,
+            )
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         current = None
-        requested_account_id = str(auth_row["account_id"] or "").strip()
         if requested_account_id:
             current = conn.execute(
                 "SELECT * FROM social_accounts WHERE id = ? AND user_id = ? AND platform = ?",
@@ -2624,7 +2658,11 @@ def _finalize_bundle_authorization(
             (account_id, now, str(request_id)),
         )
     return _bundle_console_redirect(
-        status="success", platform=platform, message=f"{platform.title()} 账号授权成功", return_path=return_path,
+        status="success",
+        platform=platform,
+        message=f"{platform.title()} 账号授权成功",
+        return_path=return_path,
+        account_id=account_id,
     )
 
 

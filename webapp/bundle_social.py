@@ -157,6 +157,13 @@ class BundleSocialClient:
             raise BundleSocialError("平台授权服务未返回授权地址")
         return url
 
+    def disconnect_social_account(self, *, team_id: str, platform: str) -> None:
+        self._request(
+            "DELETE",
+            "social-account/disconnect",
+            json_body={"type": platform_type(platform), "teamId": str(team_id)},
+        )
+
     def find_social_account(self, *, team_id: str, platform: str) -> dict[str, Any]:
         provider_type = platform_type(platform)
         payload = self._request(

@@ -121,6 +121,16 @@ def test_find_social_account_checks_team_and_platform():
     assert client.find_social_account(team_id="team-1", platform="threads")["id"] == "right"
 
 
+def test_disconnect_social_account_releases_selected_team_slot():
+    session = _Session([_Response({"id": "external-1", "type": "THREADS", "teamId": "team-1"})])
+    client = BundleSocialClient(api_key="test-key", api_base="https://api.example/api/v1", session=session)
+
+    client.disconnect_social_account(team_id="team-1", platform="threads")
+
+    assert session.calls[0][0:2] == ("DELETE", "https://api.example/api/v1/social-account/disconnect")
+    assert session.calls[0][2]["json"] == {"type": "THREADS", "teamId": "team-1"}
+
+
 def test_upload_uses_documented_trailing_slash_endpoint(tmp_path):
     media = tmp_path / "photo.jpg"
     media.write_bytes(b"jpeg")
@@ -470,7 +480,7 @@ def test_bundle_callback_reauthorization_reuses_same_external_account(monkeypatc
             INSERT INTO social_account_auth_requests(
               id, user_id, persona_id, account_id, platform, team_id,
               status, error, expires_at, created_at, updated_at
-            ) VALUES ('request-2', 0, '', '', 'threads', 'team-new', 'pending', '', ?, ?, ?)
+            ) VALUES ('request-2', 0, '', 'account-1', 'threads', 'team-new', 'pending', '', ?, ?, ?)
             """,
             (now + 900, now, now),
         )
@@ -507,7 +517,7 @@ def test_bundle_callback_reauthorization_reuses_same_external_account(monkeypatc
     assert accounts[0]["external_team_id"] == "team-new"
 
 
-def test_bundle_callback_reuses_same_identity_when_bundle_changes_external_id(monkeypatch, tmp_path):
+def test_bundle_new_authorization_rejects_same_identity_and_releases_team(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "same-identity-new-bundle-id.db"))
     init_db()
     now = social_automation_api._now()
@@ -535,6 +545,8 @@ def test_bundle_callback_reuses_same_identity_when_bundle_changes_external_id(mo
             (now + 900, now, now),
         )
 
+    disconnected = []
+
     class _Client:
         def find_social_account(self, *, team_id, platform):
             assert (team_id, platform) == ("team-new", "threads")
@@ -545,6 +557,9 @@ def test_bundle_callback_reuses_same_identity_when_bundle_changes_external_id(mo
                 "username": "same_owner",
                 "displayName": "Current Name",
             }
+
+        def disconnect_social_account(self, *, team_id, platform):
+            disconnected.append((team_id, platform))
 
     monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
     request = Request(
@@ -567,15 +582,17 @@ def test_bundle_callback_reuses_same_identity_when_bundle_changes_external_id(mo
             "SELECT account_id, status FROM social_account_auth_requests WHERE id = 'request-upgrade'"
         ).fetchone()
     assert response.status_code == 302
-    assert "bundle_auth=success" in response.headers["location"]
+    assert "bundle_auth=error" in response.headers["location"]
+    assert "%E5%B7%B2%E5%AD%98%E5%9C%A8" in response.headers["location"]
     assert len(accounts) == 1
     assert accounts[0]["id"] == "account-existing"
     assert accounts[0]["auth_provider"] == "bundle"
-    assert accounts[0]["external_team_id"] == "team-new"
-    assert accounts[0]["external_account_id"] == "external-new"
+    assert accounts[0]["external_team_id"] == "team-old"
+    assert accounts[0]["external_account_id"] == "external-old"
     assert accounts[0]["username"] == "same_owner"
-    assert accounts[0]["display_name"] == "Current Name"
-    assert (auth_request["account_id"], auth_request["status"]) == ("account-existing", "completed")
+    assert accounts[0]["display_name"] == "Old Name"
+    assert (auth_request["account_id"], auth_request["status"]) == ("", "failed")
+    assert disconnected == [("team-new", "threads")]
 
 
 def test_bundle_callback_route_does_not_require_console_session():
@@ -895,6 +912,7 @@ def test_bundle_new_authorization_keeps_existing_persona_account(monkeypatch, tm
             "SELECT id, username, external_account_id FROM social_accounts ORDER BY created_at, id"
         ).fetchall()
     assert response.status_code == 302
+    assert "bundle_account_id=" in response.headers["location"]
     assert len(accounts) == 2
     assert (accounts[0]["id"], accounts[0]["username"], accounts[0]["external_account_id"]) == (
         "account-1", "first_owner", "external-1",

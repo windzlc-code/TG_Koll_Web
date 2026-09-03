@@ -14,6 +14,7 @@ const TASK_QUEUE_REGULAR_PAGE_SIZE_KEY = "wk-task-queue-regular-page-size";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
 const LIVE_BROWSER_MOBILE_QUERY = "(max-width: 760px)";
 const SELECTED_PERSONA_STORAGE_KEY = "wk-selected-persona";
+const BUNDLE_AUTH_RETURN_STATE_KEY = "wk-bundle-auth-return-state";
 const MOBILE_NAV_QUERY = "(max-width: 980px)";
 const REORDER_LONG_PRESS_MS = 420;
 const REORDER_LONG_PRESS_MOVE_TOLERANCE = 10;
@@ -29420,6 +29421,7 @@ function selectAccountPoolAccount(accountId = "") {
   if (!account) return;
   state.accountPoolAccountId = cleanId;
   state.accountPoolSelectedAccountIds = [cleanId];
+  state.preferredAccountId = cleanId;
 }
 
 function clearAccountPoolAccountSelection() {
@@ -32170,6 +32172,35 @@ let bundleAuthorizationPopupTimer = null;
 let bundleAuthorizationResultPending = false;
 let bundleAuthorizationEventsBound = false;
 
+function bundleAuthorizationUsesSamePage() {
+  return window.matchMedia(MOBILE_NAV_QUERY).matches;
+}
+
+function rememberBundleAuthorizationReturnState(platform = "threads") {
+  try {
+    window.sessionStorage.setItem(BUNDLE_AUTH_RETURN_STATE_KEY, JSON.stringify({
+      platform: normalizeAccountPoolPlatform(platform),
+      scroll: snapshotConsoleScrollState(),
+      createdAt: Date.now(),
+    }));
+  } catch (_) {
+    // Authorization still works when session storage is unavailable.
+  }
+}
+
+function consumeBundleAuthorizationReturnState() {
+  try {
+    const raw = window.sessionStorage.getItem(BUNDLE_AUTH_RETURN_STATE_KEY);
+    window.sessionStorage.removeItem(BUNDLE_AUTH_RETURN_STATE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw);
+    if (!value || Date.now() - Number(value.createdAt || 0) > 20 * 60 * 1000) return null;
+    return value;
+  } catch (_) {
+    return null;
+  }
+}
+
 function closeBundleAuthorizationPopup() {
   if (bundleAuthorizationPopupTimer) {
     window.clearInterval(bundleAuthorizationPopupTimer);
@@ -32179,13 +32210,16 @@ function closeBundleAuthorizationPopup() {
   bundleAuthorizationPopup = null;
 }
 
-async function applyBundleAuthorizationResult({ status = "", platform = "threads", message = "" } = {}) {
+async function applyBundleAuthorizationResult({ status = "", platform = "threads", message = "", accountId = "" } = {}) {
   if (bundleAuthorizationResultPending) return;
   bundleAuthorizationResultPending = true;
+  const returnState = consumeBundleAuthorizationReturnState();
   const normalizedPlatform = normalizeAccountPoolPlatform(platform);
+  const authorizedAccountId = String(accountId || "").trim();
   const succeeded = String(status || "").trim().toLowerCase() === "success";
   closeBundleAuthorizationPopup();
   state.accountPoolPlatform = normalizedPlatform;
+  if (state.view !== "accounts") setView("accounts");
   setAccountBrowserPanel("accounts");
   try {
     try {
@@ -32193,6 +32227,16 @@ async function applyBundleAuthorizationResult({ status = "", platform = "threads
     } catch (_) {
       // The result remains visible even if the account list refresh must be retried manually.
     }
+    const authorizedAccount = succeeded && authorizedAccountId
+      ? selectedSocialAccount(authorizedAccountId)
+      : null;
+    if (authorizedAccount && normalizeAccountPoolPlatform(authorizedAccount.platform) === normalizedPlatform) {
+      state.accountPoolAccountId = authorizedAccountId;
+      state.accountPoolSelectedAccountIds = [authorizedAccountId];
+      state.preferredAccountId = authorizedAccountId;
+      renderSocialAccounts();
+    }
+    if (returnState?.scroll) restoreConsoleScrollState(returnState.scroll);
     showMsg(
       "socialMsg",
       message || (succeeded ? `${platformLabel(normalizedPlatform)} 账号授权成功。` : `${platformLabel(normalizedPlatform)} 账号授权未完成。`),
@@ -32233,6 +32277,12 @@ function openBundleAuthorizationPopup(platform = "threads", authorizationUrl = "
   closeBundleAuthorizationPopup();
   const targetUrl = String(authorizationUrl || "").trim();
   if (!targetUrl) throw new Error("平台授权地址不可用，请稍后重试。");
+  if (bundleAuthorizationUsesSamePage()) {
+    rememberBundleAuthorizationReturnState(platform);
+    bundleAuthorizationResultPending = false;
+    window.location.assign(targetUrl);
+    return null;
+  }
   const width = Math.min(520, Math.max(360, window.screen.availWidth - 32));
   const height = Math.min(760, Math.max(560, window.screen.availHeight - 64));
   const left = Math.max(0, Math.round((window.screen.availWidth - width) / 2));
@@ -32259,6 +32309,7 @@ function openBundleAuthorizationPopup(platform = "threads", authorizationUrl = "
         status,
         platform: callbackUrl.searchParams.get("bundle_platform") || platform,
         message: callbackUrl.searchParams.get("bundle_message") || "",
+        accountId: callbackUrl.searchParams.get("bundle_account_id") || "",
       });
     } catch (_) {
       // Cross-origin access is expected while the official authorization page is open.
@@ -32299,6 +32350,11 @@ async function openBundleAccountAuthorizationModal({ platform = "", personaId = 
   const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
   const selectedPlatformLabel = platformLabel(selectedPlatform);
   const editing = Boolean(String(accountId || "").trim());
+  const authorizationHint = editing
+    ? "重新连接当前账号"
+    : selectedPlatform === "threads"
+      ? "请先在 Threads 网页切换到要添加的账号"
+      : "连接一个新的账号";
   const preparedResult = await prepareBundleAccountAuthorization({
     platform: selectedPlatform,
     personaId,
@@ -32315,7 +32371,7 @@ async function openBundleAccountAuthorizationModal({ platform = "", personaId = 
           <span class="bundle-account-authorization-brand">${renderAccountPoolPlatformIcon(selectedPlatform)}</span>
           <span>
             <strong>${esc(selectedPlatformLabel)} 官方授权</strong>
-            <small>${editing ? "重新连接当前账号" : "连接一个新的账号"}</small>
+            <small>${esc(authorizationHint)}</small>
           </span>
         </div>
       </div>
@@ -37716,17 +37772,18 @@ function consumeBundleAuthorizationResult() {
   if (!status) return;
   const platform = normalizeAccountPoolPlatform(url.searchParams.get("bundle_platform") || "threads");
   const message = String(url.searchParams.get("bundle_message") || "").trim();
-  ["bundle_auth", "bundle_platform", "bundle_message"].forEach((key) => url.searchParams.delete(key));
+  const accountId = String(url.searchParams.get("bundle_account_id") || "").trim();
+  ["bundle_auth", "bundle_platform", "bundle_message", "bundle_account_id"].forEach((key) => url.searchParams.delete(key));
   window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   if (window.opener && !window.opener.closed) {
     window.opener.postMessage(
-      { type: "vecto:bundle-authorization-result", status, platform, message },
+      { type: "vecto:bundle-authorization-result", status, platform, message, accountId },
       window.location.origin,
     );
     window.close();
     return;
   }
-  void applyBundleAuthorizationResult({ status, platform, message });
+  void applyBundleAuthorizationResult({ status, platform, message, accountId });
 }
 
 function bindIdentityRevalidationEvents() {
