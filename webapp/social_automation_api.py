@@ -9671,6 +9671,7 @@ def _claim_next_task() -> dict[str, Any] | None:
         updated,
         billing_reservation_status=billing_statuses.get(str(updated["billing_reservation_id"] or ""), ""),
     )
+    public["user_id"] = int(updated["user_id"] or 0)
     public["payload"] = _loads(updated["payload_json"], {})
     return public
 

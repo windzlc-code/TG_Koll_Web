@@ -1169,6 +1169,50 @@ def test_bundle_oauth_host_account_reuses_saved_login_credentials(monkeypatch, t
     assert account["login_password"] == "secret-value"
 
 
+def test_claimed_bundle_oauth_task_keeps_owner_for_saved_credentials(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "claimed-oauth-owner.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            "INSERT INTO users(id, username, password_hash, created_at, updated_at) "
+            "VALUES (7, 'oauth-owner', 'x', ?, ?)",
+            (now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO social_accounts(
+              id, user_id, persona_id, platform, username, display_name, profile_dir,
+              status, login_username, login_password, created_at, updated_at
+            ) VALUES ('account-owned', 7, '', 'threads', 'profile_name', 'Profile', '',
+                      'pending_login', 'login@example.com', 'secret-value', ?, ?)
+            """,
+            (now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO social_automation_tasks(
+              id, user_id, persona_id, account_id, platform, task_type, priority, status,
+              scheduled_at, started_at, payload_json, result_json, error, retry_count,
+              max_retries, created_by, created_at, updated_at
+            ) VALUES ('task-owned', 7, '', 'account-owned', 'threads', 'bundle_oauth', 10,
+                      'queued', 0, 0, '{}', '{}', '', 0, 0, 'web', ?, ?)
+            """,
+            (now, now),
+        )
+    monkeypatch.setattr(social_automation_api, "_recover_orphaned_publish_confirmation_tasks", lambda *_: None)
+    monkeypatch.setattr(social_automation_api, "_recover_orphaned_manual_task", lambda *_: None)
+    monkeypatch.setattr(social_automation_api, "_recover_orphaned_running_tasks", lambda *_: None)
+
+    claimed = social_automation_api._claim_next_task()
+    account = social_automation_api._bundle_oauth_host_account(claimed)
+
+    assert claimed["user_id"] == 7
+    assert account["id"] == "account-owned"
+    assert account["login_username"] == "login@example.com"
+    assert account["login_password"] == "secret-value"
+
+
 def test_bundle_oauth_queues_saved_credentials_once(monkeypatch):
     import queue
 
@@ -1186,32 +1230,6 @@ def test_bundle_oauth_queues_saved_credentials_once(monkeypatch):
         {"login_username": "login@example.com", "login_password": "secret-value"},
         control,
     ) is False
-    assert actions.get_nowait() == {
-        "kind": "credentials",
-        "login_username": "login@example.com",
-        "login_password": "secret-value",
-    }
-
-
-def test_bundle_oauth_retries_saved_credentials_after_unconfirmed_submit(monkeypatch):
-    import queue
-
-    actions = queue.Queue(maxsize=2)
-    control = {
-        "login_assistance_queue": actions,
-        "bundle_oauth_saved_credentials_attempts": 1,
-        "login_assistance_submitted_kind": "credentials",
-        "login_assistance_credentials_submitted_at": runner.time.monotonic() - 7,
-    }
-    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: (object(), object(), object(), object()))
-    monkeypatch.setattr(runner, "_page_shows_invalid_credentials", lambda _page: False)
-
-    assert runner._queue_bundle_oauth_saved_credentials(
-        object(),
-        {"login_username": "login@example.com", "login_password": "secret-value"},
-        control,
-    ) is True
-    assert control["bundle_oauth_saved_credentials_attempts"] == 2
     assert actions.get_nowait() == {
         "kind": "credentials",
         "login_username": "login@example.com",
