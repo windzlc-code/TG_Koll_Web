@@ -1568,6 +1568,59 @@ def test_bundle_oauth_resumes_authorize_url_from_home_after_login():
     assert runner._maybe_resume_bundle_oauth_url(page, oauth_url, _Logger(), control) is False
 
 
+def test_bundle_oauth_keeps_login_next_authorize_url():
+    class _Page:
+        url = (
+            "https://www.threads.com/login?next="
+            "https%3A%2F%2Fwww.threads.com%2Foauth%2Fauthorize%3Fclient_id%3D1"
+        )
+        gotos = []
+
+        def goto(self, url, **_kwargs):
+            self.gotos.append(url)
+            self.url = url
+
+    page = _Page()
+    control = {}
+    next_url = runner._bundle_oauth_authorize_resume_url(
+        page,
+        "https://threads.net/oauth/authorize?client_id=1",
+        control,
+    )
+    assert next_url.startswith("https://www.threads.com/oauth/authorize")
+    assert control["bundle_oauth_authorize_url"] == next_url
+
+    page.url = "https://www.threads.com/"
+    control["login_assistance_submitted_kind"] = "credentials"
+    assert runner._maybe_resume_bundle_oauth_url(
+        page,
+        "https://threads.net/oauth/authorize?client_id=1",
+        _Logger(),
+        control,
+    ) is True
+    assert page.gotos == [next_url]
+
+
+def test_bundle_oauth_does_not_drop_next_with_username_login_href(monkeypatch):
+    class _Page:
+        url = "https://www.threads.com/login?next=https://www.threads.com/oauth/authorize?client_id=1"
+
+    structure_calls = []
+    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: None)
+    monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: None)
+    monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: None)
+    monkeypatch.setattr(runner, "_mapped_login_verification_code", lambda _page: None)
+    monkeypatch.setattr(
+        runner,
+        "_click_threads_username_entry_by_structure",
+        lambda *_args, **_kwargs: structure_calls.append(True) or True,
+    )
+    monkeypatch.setattr(runner, "_click_bundle_oauth_named_buttons", lambda *_args, **_kwargs: False)
+
+    assert runner._maybe_open_bundle_oauth_username_login(_Page(), _Logger(), {}) is False
+    assert structure_calls == []
+
+
 def test_bundle_oauth_does_not_resume_before_login_from_home():
     class _Page:
         url = "https://www.threads.com/"

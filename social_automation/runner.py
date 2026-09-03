@@ -771,6 +771,28 @@ def _bundle_oauth_is_authorize_url(url: str) -> bool:
     return "/oauth/authorize" in raw or "api.bundle.social" in raw or "bundle.social" in raw
 
 
+def _bundle_oauth_authorize_resume_url(page: Any, oauth_url: str, context_control: dict[str, Any] | None = None) -> str:
+    fallback = str(oauth_url or "").strip()
+    current = _bundle_oauth_page_url(page)
+    parsed = urlparse(current)
+    next_raw = str((parse_qs(parsed.query).get("next") or [""])[0] or "").strip()
+    if next_raw:
+        if next_raw.startswith("/"):
+            next_raw = f"{parsed.scheme}://{parsed.netloc}{next_raw}"
+        if _bundle_oauth_is_authorize_url(next_raw):
+            if isinstance(context_control, dict):
+                context_control["bundle_oauth_authorize_url"] = next_raw
+            return next_raw
+    stored = str((context_control or {}).get("bundle_oauth_authorize_url") or "").strip()
+    if _bundle_oauth_is_authorize_url(current):
+        if isinstance(context_control, dict):
+            context_control["bundle_oauth_authorize_url"] = current
+        return current
+    if _bundle_oauth_is_authorize_url(stored):
+        return stored
+    return fallback
+
+
 def _bundle_oauth_is_login_path(url: str) -> bool:
     raw = str(url or "").strip().lower()
     if not raw:
@@ -823,10 +845,10 @@ def _maybe_resume_bundle_oauth_url(
     logger: AutomationLogger,
     context_control: dict[str, Any] | None,
 ) -> bool:
-    target = str(oauth_url or "").strip()
+    current = _bundle_oauth_page_url(page)
+    target = _bundle_oauth_authorize_resume_url(page, oauth_url, context_control)
     if not target:
         return False
-    current = _bundle_oauth_page_url(page)
     if _bundle_oauth_result_from_url(current) is not None or _bundle_oauth_is_authorize_url(current):
         return False
     if _login_assistance_credentials_submission_waiting(context_control) or _login_assistance_verification_submission_waiting(context_control):
@@ -923,6 +945,8 @@ def _maybe_open_bundle_oauth_sso_login(
     ):
         return False
     current = _bundle_oauth_page_url(page)
+    if _bundle_oauth_login_was_submitted(context_control):
+        return False
     if _bundle_oauth_is_detached_home(current) and _bundle_oauth_login_was_submitted(context_control):
         return False
     if isinstance(context_control, dict) and context_control.get("bundle_oauth_sso_clicked"):
@@ -958,11 +982,17 @@ def _maybe_open_bundle_oauth_username_login(
     ):
         return False
     current = _bundle_oauth_page_url(page)
-    if _bundle_oauth_is_detached_home(current) and _bundle_oauth_login_was_submitted(context_control):
+    if _bundle_oauth_login_was_submitted(context_control):
         return False
     if isinstance(context_control, dict) and context_control.get("bundle_oauth_username_clicked"):
         return False
-    if _click_threads_username_entry_by_structure(page, logger):
+    parsed = urlparse(current)
+    path = str(parsed.path or "").lower()
+    query = str(parsed.query or "").lower()
+    # /login?next=/oauth/authorize is the official Threads OAuth continuation.
+    # Do not click a bare /login href that would drop the next= parameter.
+    preserve_oauth_next = "/oauth/authorize" in query or path.rstrip("/").endswith("/login")
+    if not preserve_oauth_next and _click_threads_username_entry_by_structure(page, logger):
         if isinstance(context_control, dict):
             context_control["bundle_oauth_username_clicked"] = True
         logger.log(
@@ -1175,6 +1205,7 @@ def run_bundle_oauth_browser_task(
                     "官方授权页打开较慢，将继续等待登录完成。",
                     {"error": str(exc)[:240], "url": oauth_url},
                 )
+            _bundle_oauth_authorize_resume_url(page, oauth_url, context_control)
             deadline = time.monotonic() + timeout_seconds
             while True:
                 _raise_if_cancelled(cancel_event)
@@ -1188,6 +1219,7 @@ def run_bundle_oauth_browser_task(
                     current_url = str(getattr(page, "url", "") or "")
                 except Exception:
                     current_url = ""
+                _bundle_oauth_authorize_resume_url(page, oauth_url, context_control)
                 outcome = _bundle_oauth_result_from_url(current_url)
                 if outcome is None and callable(status_callback):
                     try:
