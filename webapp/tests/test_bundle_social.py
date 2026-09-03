@@ -1521,6 +1521,71 @@ def test_bundle_oauth_opens_instagram_sso_login(monkeypatch):
     assert calls == [(runner.BUNDLE_OAUTH_SSO_LOGIN_BUTTONS, "bundle_oauth_sso_login")]
 
 
+def test_bundle_oauth_does_not_reopen_sso_on_home_after_login(monkeypatch):
+    calls = []
+
+    class _Page:
+        url = "https://www.threads.com/"
+
+    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: None)
+    monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: None)
+    monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: None)
+    monkeypatch.setattr(runner, "_mapped_login_verification_code", lambda _page: None)
+    monkeypatch.setattr(
+        runner,
+        "_click_bundle_oauth_named_buttons",
+        lambda _page, _logger, names, stage: calls.append((names, stage)) or True,
+    )
+
+    assert runner._maybe_open_bundle_oauth_sso_login(
+        _Page(),
+        _Logger(),
+        {"login_assistance_submitted_kind": "credentials"},
+    ) is False
+    assert runner._maybe_open_bundle_oauth_username_login(
+        _Page(),
+        _Logger(),
+        {"login_assistance_submitted_kind": "credentials"},
+    ) is False
+    assert calls == []
+
+
+def test_bundle_oauth_resumes_authorize_url_from_home_after_login():
+    class _Page:
+        url = "https://www.threads.com/"
+        gotos = []
+
+        def goto(self, url, **_kwargs):
+            self.gotos.append(url)
+            self.url = url
+
+    page = _Page()
+    control = {"login_assistance_submitted_kind": "credentials"}
+    oauth_url = "https://threads.net/oauth/authorize?client_id=1&redirect_uri=https://api.bundle.social/callback"
+
+    assert runner._maybe_resume_bundle_oauth_url(page, oauth_url, _Logger(), control) is True
+    assert page.gotos == [oauth_url]
+    assert runner._maybe_resume_bundle_oauth_url(page, oauth_url, _Logger(), control) is False
+
+
+def test_bundle_oauth_does_not_resume_before_login_from_home():
+    class _Page:
+        url = "https://www.threads.com/"
+        gotos = []
+
+        def goto(self, url, **_kwargs):
+            self.gotos.append(url)
+
+    page = _Page()
+    assert runner._maybe_resume_bundle_oauth_url(
+        page,
+        "https://threads.net/oauth/authorize?client_id=1",
+        _Logger(),
+        {},
+    ) is False
+    assert page.gotos == []
+
+
 def test_bundle_oauth_browser_reuses_account_profile(monkeypatch, tmp_path):
     profile_dir = tmp_path / "account-oauth-profile"
     profile_dir.mkdir()

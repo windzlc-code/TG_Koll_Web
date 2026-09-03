@@ -758,12 +758,141 @@ def _click_bundle_oauth_consent_available(page: Any) -> bool:
     return False
 
 
+def _bundle_oauth_page_url(page: Any) -> str:
+    with contextlib.suppress(Exception):
+        return str(getattr(page, "url", "") or "").strip()
+    return ""
+
+
+def _bundle_oauth_is_authorize_url(url: str) -> bool:
+    raw = str(url or "").strip().lower()
+    if not raw:
+        return False
+    return "/oauth/authorize" in raw or "api.bundle.social" in raw or "bundle.social" in raw
+
+
+def _bundle_oauth_is_login_path(url: str) -> bool:
+    raw = str(url or "").strip().lower()
+    if not raw:
+        return False
+    parsed = urlparse(raw)
+    path = str(parsed.path or "").lower()
+    return any(
+        token in raw
+        for token in (
+            "/oauth/authorize",
+            "/accounts/login",
+            "/login",
+            "/sso/",
+            "checkpoint",
+            "/two_factor",
+            "two-factor",
+        )
+    ) or path.endswith("/login")
+
+
+def _bundle_oauth_is_detached_home(url: str) -> bool:
+    raw = str(url or "").strip()
+    if not raw:
+        return False
+    parsed = urlparse(raw)
+    host = str(parsed.hostname or "").lower()
+    path = (str(parsed.path or "/") or "/").rstrip("/") or "/"
+    query = str(parsed.query or "").lower()
+    if "client_id=" in query or "redirect_uri=" in query or "/oauth/" in str(parsed.path or "").lower():
+        return False
+    if host.endswith(("threads.com", "threads.net")) and path in {"/", "/home"}:
+        return True
+    if host.endswith("instagram.com") and path in {"/", "/home"}:
+        return True
+    return False
+
+
+def _bundle_oauth_login_was_submitted(context_control: dict[str, Any] | None) -> bool:
+    if not isinstance(context_control, dict):
+        return False
+    submitted = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
+    return submitted in {"credentials", "verification_code", "choice"} or bool(
+        context_control.get("bundle_oauth_saved_credentials_queued_hosts")
+    )
+
+
+def _maybe_resume_bundle_oauth_url(
+    page: Any,
+    oauth_url: str,
+    logger: AutomationLogger,
+    context_control: dict[str, Any] | None,
+) -> bool:
+    target = str(oauth_url or "").strip()
+    if not target:
+        return False
+    current = _bundle_oauth_page_url(page)
+    if _bundle_oauth_result_from_url(current) is not None or _bundle_oauth_is_authorize_url(current):
+        return False
+    if _login_assistance_credentials_submission_waiting(context_control) or _login_assistance_verification_submission_waiting(context_control):
+        return False
+    has_login_fields = False
+    with contextlib.suppress(Exception):
+        has_login_fields = bool(
+            _mapped_login_credentials(page)
+            or _mapped_login_username_input(page)
+            or _mapped_login_password_input(page)
+            or _mapped_login_verification_code(page)
+        )
+    detached_home = _bundle_oauth_is_detached_home(current)
+    if has_login_fields and not detached_home:
+        return False
+    if _bundle_oauth_is_login_path(current) and not detached_home:
+        return False
+    submitted = _bundle_oauth_login_was_submitted(context_control)
+    session_ready = False
+    with contextlib.suppress(Exception):
+        session_ready = _has_threads_session_cookie(page)
+    if not submitted and not session_ready:
+        return False
+    if not isinstance(context_control, dict):
+        return False
+    try:
+        resume_count = int(context_control.get("bundle_oauth_resume_count") or 0)
+    except (TypeError, ValueError):
+        resume_count = 0
+    if resume_count >= 6:
+        return False
+    try:
+        last_resume = float(context_control.get("bundle_oauth_resume_at") or 0)
+    except (TypeError, ValueError):
+        last_resume = 0.0
+    if last_resume and (time.monotonic() - last_resume) < 6:
+        return False
+    context_control["bundle_oauth_resume_count"] = resume_count + 1
+    context_control["bundle_oauth_resume_at"] = time.monotonic()
+    logger.log(
+        "info",
+        "bundle_oauth_resume",
+        "登录后未停留在官方授权页，正在返回授权链接。",
+        {"from": _safe_navigation_url(current), "to": _safe_navigation_url(target)},
+    )
+    try:
+        page.goto(target, wait_until="domcontentloaded", timeout=90000)
+    except Exception as exc:
+        logger.log(
+            "warn",
+            "bundle_oauth_resume",
+            "返回官方授权页较慢，将继续等待授权完成。",
+            {"error": str(exc)[:240], "url": target},
+        )
+    return True
+
+
 def _maybe_auto_confirm_bundle_oauth(
     page: Any,
     logger: AutomationLogger,
     context_control: dict[str, Any] | None,
     login_status: dict[str, Any],
 ) -> bool:
+    current = _bundle_oauth_page_url(page)
+    if _bundle_oauth_is_detached_home(current):
+        return False
     if (
         _mapped_login_credentials(page) is not None
         or _mapped_login_username_input(page) is not None
@@ -781,13 +910,22 @@ def _maybe_auto_confirm_bundle_oauth(
     return clicked
 
 
-def _maybe_open_bundle_oauth_sso_login(page: Any, logger: AutomationLogger) -> bool:
+def _maybe_open_bundle_oauth_sso_login(
+    page: Any,
+    logger: AutomationLogger,
+    context_control: dict[str, Any] | None = None,
+) -> bool:
     if (
         _mapped_login_credentials(page) is not None
         or _mapped_login_username_input(page) is not None
         or _mapped_login_password_input(page) is not None
         or _mapped_login_verification_code(page) is not None
     ):
+        return False
+    current = _bundle_oauth_page_url(page)
+    if _bundle_oauth_is_detached_home(current) and _bundle_oauth_login_was_submitted(context_control):
+        return False
+    if isinstance(context_control, dict) and context_control.get("bundle_oauth_sso_clicked"):
         return False
     clicked = _click_bundle_oauth_named_buttons(
         page,
@@ -796,6 +934,8 @@ def _maybe_open_bundle_oauth_sso_login(page: Any, logger: AutomationLogger) -> b
         "bundle_oauth_sso_login",
     )
     if clicked:
+        if isinstance(context_control, dict):
+            context_control["bundle_oauth_sso_clicked"] = True
         logger.log(
             "info",
             "bundle_oauth_sso_login",
@@ -805,7 +945,11 @@ def _maybe_open_bundle_oauth_sso_login(page: Any, logger: AutomationLogger) -> b
     return clicked
 
 
-def _maybe_open_bundle_oauth_username_login(page: Any, logger: AutomationLogger) -> bool:
+def _maybe_open_bundle_oauth_username_login(
+    page: Any,
+    logger: AutomationLogger,
+    context_control: dict[str, Any] | None = None,
+) -> bool:
     if (
         _mapped_login_credentials(page) is not None
         or _mapped_login_username_input(page) is not None
@@ -813,7 +957,14 @@ def _maybe_open_bundle_oauth_username_login(page: Any, logger: AutomationLogger)
         or _mapped_login_verification_code(page) is not None
     ):
         return False
+    current = _bundle_oauth_page_url(page)
+    if _bundle_oauth_is_detached_home(current) and _bundle_oauth_login_was_submitted(context_control):
+        return False
+    if isinstance(context_control, dict) and context_control.get("bundle_oauth_username_clicked"):
+        return False
     if _click_threads_username_entry_by_structure(page, logger):
+        if isinstance(context_control, dict):
+            context_control["bundle_oauth_username_clicked"] = True
         logger.log(
             "info",
             "bundle_oauth_username_login",
@@ -828,6 +979,8 @@ def _maybe_open_bundle_oauth_username_login(page: Any, logger: AutomationLogger)
         "bundle_oauth_username_login",
     )
     if clicked:
+        if isinstance(context_control, dict):
+            context_control["bundle_oauth_username_clicked"] = True
         logger.log(
             "info",
             "bundle_oauth_username_login",
@@ -1073,10 +1226,13 @@ def run_bundle_oauth_browser_task(
                 if _process_login_assistance_action(page, platform, logger, context_control):
                     _wait_for_cancellation(0.8, cancel_event)
                     continue
-                if _maybe_open_bundle_oauth_sso_login(page, logger):
+                if _maybe_resume_bundle_oauth_url(page, oauth_url, logger, context_control):
+                    _wait_for_cancellation(1.2, cancel_event)
+                    continue
+                if _maybe_open_bundle_oauth_sso_login(page, logger, context_control):
                     _wait_for_cancellation(1.0, cancel_event)
                     continue
-                if _maybe_open_bundle_oauth_username_login(page, logger):
+                if _maybe_open_bundle_oauth_username_login(page, logger, context_control):
                     _wait_for_cancellation(1.0, cancel_event)
                     continue
                 page_status = _detect_bundle_oauth_page_state(page, platform)
