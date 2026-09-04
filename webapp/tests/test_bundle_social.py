@@ -1531,6 +1531,7 @@ def test_bundle_oauth_does_not_reopen_sso_on_home_after_login(monkeypatch):
     monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: None)
     monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: None)
     monkeypatch.setattr(runner, "_mapped_login_verification_code", lambda _page: None)
+    monkeypatch.setattr(runner, "_has_threads_session_cookie", lambda _page: True)
     monkeypatch.setattr(
         runner,
         "_click_bundle_oauth_named_buttons",

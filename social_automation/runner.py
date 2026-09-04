@@ -955,10 +955,14 @@ def _maybe_open_bundle_oauth_sso_login(
     ):
         return False
     current = _bundle_oauth_page_url(page)
+    if _login_assistance_credentials_submission_waiting(context_control) or _login_assistance_verification_submission_waiting(context_control):
+        return False
     if _bundle_oauth_login_was_submitted(context_control):
-        return False
-    if _bundle_oauth_is_detached_home(current) and _bundle_oauth_login_was_submitted(context_control):
-        return False
+        session_ready = False
+        with contextlib.suppress(Exception):
+            session_ready = _has_threads_session_cookie(page)
+        if session_ready:
+            return False
     if isinstance(context_control, dict) and context_control.get("bundle_oauth_sso_clicked"):
         return False
     clicked = _click_bundle_oauth_named_buttons(
@@ -992,8 +996,14 @@ def _maybe_open_bundle_oauth_username_login(
     ):
         return False
     current = _bundle_oauth_page_url(page)
-    if _bundle_oauth_login_was_submitted(context_control):
+    if _login_assistance_credentials_submission_waiting(context_control) or _login_assistance_verification_submission_waiting(context_control):
         return False
+    if _bundle_oauth_login_was_submitted(context_control):
+        session_ready = False
+        with contextlib.suppress(Exception):
+            session_ready = _has_threads_session_cookie(page)
+        if session_ready:
+            return False
     if isinstance(context_control, dict) and context_control.get("bundle_oauth_username_clicked"):
         return False
     parsed = urlparse(current)
