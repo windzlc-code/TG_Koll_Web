@@ -830,6 +830,21 @@ def _bundle_oauth_is_detached_home(url: str) -> bool:
     return False
 
 
+def _bundle_oauth_reset_login_attempt(page: Any, context_control: dict[str, Any] | None) -> None:
+    if not isinstance(context_control, dict):
+        return
+    current_host = str(urlparse(_bundle_oauth_page_url(page)).hostname or "").lower()
+    queued = {
+        item
+        for item in (context_control.get("bundle_oauth_saved_credentials_queued_hosts") or [])
+        if not str(item).startswith(f"{current_host}:")
+    }
+    context_control["bundle_oauth_saved_credentials_queued_hosts"] = sorted(queued)
+    context_control.pop("login_assistance_submitted_kind", None)
+    context_control.pop("login_assistance_credentials_submitted_at", None)
+    _set_login_assistance_pending(context_control, False)
+
+
 def _bundle_oauth_login_was_submitted(context_control: dict[str, Any] | None) -> bool:
     if not isinstance(context_control, dict):
         return False
@@ -974,6 +989,7 @@ def _maybe_open_bundle_oauth_sso_login(
     if clicked:
         if isinstance(context_control, dict):
             context_control["bundle_oauth_sso_clicked"] = True
+        _bundle_oauth_reset_login_attempt(page, context_control)
         logger.log(
             "info",
             "bundle_oauth_sso_login",
@@ -1015,6 +1031,7 @@ def _maybe_open_bundle_oauth_username_login(
     if not preserve_oauth_next and _click_threads_username_entry_by_structure(page, logger):
         if isinstance(context_control, dict):
             context_control["bundle_oauth_username_clicked"] = True
+        _bundle_oauth_reset_login_attempt(page, context_control)
         logger.log(
             "info",
             "bundle_oauth_username_login",
@@ -1031,6 +1048,7 @@ def _maybe_open_bundle_oauth_username_login(
     if clicked:
         if isinstance(context_control, dict):
             context_control["bundle_oauth_username_clicked"] = True
+        _bundle_oauth_reset_login_attempt(page, context_control)
         logger.log(
             "info",
             "bundle_oauth_username_login",
