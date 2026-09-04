@@ -1681,6 +1681,61 @@ def test_bundle_oauth_does_not_resume_before_login_from_home():
     assert page.gotos == []
 
 
+def test_bundle_oauth_runs_original_open_login_before_authorize(monkeypatch, tmp_path):
+    calls = []
+    profile_dir = tmp_path / "account-login-then-oauth"
+    profile_dir.mkdir()
+
+    class _Page:
+        url = "https://www.threads.com/"
+
+        def goto(self, url, *_args, **_kwargs):
+            calls.append(url)
+            self.url = url
+            if "oauth" in str(url):
+                self.url = "https://vecto.example/bundle-auth-complete.html?bundle_auth=success&bundle_account_id=account-login"
+
+    class _Context:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(runner, "_open_camoufox_context", lambda **_kwargs: _Context())
+    monkeypatch.setattr(runner, "_first_page", lambda _context: _Page())
+    monkeypatch.setattr(runner, "_sync_live_browser_viewport", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner, "_publish_login_assistance_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        runner,
+        "_run_open_login",
+        lambda *_args, **_kwargs: calls.append("open_login") or {"ok": True, "status": "ready"},
+    )
+
+    result = runner.run_bundle_oauth_browser_task(
+        task={
+            "id": "task-login-then-oauth",
+            "platform": "threads",
+            "payload": {"oauth_url": "https://provider.example/oauth"},
+        },
+        account={
+            "id": "account-login",
+            "username": "Lilia",
+            "login_username": "Lilia",
+            "login_password": "secret",
+            "profile_dir": str(profile_dir),
+        },
+        proxy=None,
+        data_dir=tmp_path,
+        logger=_Logger(),
+        context_control={"live_browser_session_id": "live-login-then-oauth"},
+    )
+
+    assert result["ok"] is True
+    assert calls[0] == "open_login"
+    assert "https://provider.example/oauth" in calls
+
+
 def test_bundle_oauth_browser_reuses_account_profile(monkeypatch, tmp_path):
     profile_dir = tmp_path / "account-oauth-profile"
     profile_dir.mkdir()

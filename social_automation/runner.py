@@ -1232,7 +1232,7 @@ def run_bundle_oauth_browser_task(
             logger.log(
                 "warn",
                 "need_manual",
-                "正在使用当前账号的独立登录态完成官方授权；已保存的账号会自动填写，验证码等步骤请在助手页完成。",
+                "先按原自动化登录完成平台会话，确认登录后再打开官方授权页。",
                 {"status": "bundle_oauth", "platform": platform, "auto_submit": auto_submit},
             )
             _publish_login_assistance_state(
@@ -1240,28 +1240,77 @@ def run_bundle_oauth_browser_task(
                 context_control,
                 {
                     "status": "transient_error",
-                    "reason": "正在使用已保存的账号自动授权。" if auto_submit else "正在准备官方授权。",
+                    "reason": "正在自动登录，登录成功后会进入官方授权。",
                     "oauth_flow": True,
                 },
                 handoff=True,
             )
-            login_entry = THREADS_LOGIN if platform == "threads" else INSTAGRAM_LOGIN
+            current_url = ""
+            with contextlib.suppress(Exception):
+                current_url = str(getattr(page, "url", "") or "")
+            early_outcome = _bundle_oauth_result_from_url(current_url)
+            if early_outcome is not None:
+                if early_outcome.get("status") == "success":
+                    _publish_login_assistance_state(
+                        page,
+                        context_control,
+                        {
+                            "status": "ready",
+                            "reason": early_outcome.get("message") or "平台账号已授权",
+                            "oauth_flow": True,
+                        },
+                        handoff=True,
+                    )
+                    return {
+                        "ok": True,
+                        "bundle_oauth": True,
+                        "account_id": str(early_outcome.get("account_id") or ""),
+                        "platform": platform,
+                    }
+                raise AutoLoginFailedError(str(early_outcome.get("message") or "官方授权未完成"), "cookie_expired")
+            screenshot_dir = Path(data_dir).resolve() / "social_automation" / "screenshots"
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+            login_payload = {
+                **payload,
+                "auto_submit": auto_submit,
+                "wait_for_manual": True,
+                "login_wait_seconds": timeout_seconds,
+            }
+            if login_username:
+                login_payload["login_username"] = login_username
+            if login_password:
+                login_payload["login_password"] = login_password
+            login_result = _run_open_login(
+                page,
+                task,
+                oauth_account,
+                login_payload,
+                screenshot_dir,
+                logger,
+                platform,
+                cancel_event,
+                context_control,
+            )
+            if not login_result.get("ok") or str(login_result.get("status") or "") not in {"", "ready"}:
+                raise AutoLoginFailedError(
+                    str(login_result.get("reason") or "平台登录未完成，无法打开官方授权页。"),
+                    "cookie_expired",
+                )
             logger.log(
                 "info",
-                "bundle_oauth_login_first",
-                "先完成平台登录再打开官方授权页，避免 Threads 把未登录的授权请求打回主页。",
-                {"entry": login_entry},
+                "bundle_oauth_session_ready",
+                "原自动化登录已确认，正在打开官方授权页。",
+                {"status": str(login_result.get("status") or "ready")},
             )
             try:
-                page.goto(login_entry, wait_until="domcontentloaded", timeout=90000)
+                page.goto(oauth_url, wait_until="domcontentloaded", timeout=90000)
             except Exception as exc:
                 logger.log(
                     "warn",
                     "bundle_oauth_navigate",
-                    "平台登录页打开较慢，将继续等待登录完成。",
-                    {"error": str(exc)[:240], "url": login_entry},
+                    "官方授权页打开较慢，将继续等待授权完成。",
+                    {"error": str(exc)[:240], "url": oauth_url},
                 )
-            oauth_opened = False
             deadline = time.monotonic() + timeout_seconds
             while True:
                 _raise_if_cancelled(cancel_event)
@@ -1275,7 +1324,6 @@ def run_bundle_oauth_browser_task(
                     current_url = str(getattr(page, "url", "") or "")
                 except Exception:
                     current_url = ""
-                _bundle_oauth_authorize_resume_url(page, oauth_url, context_control)
                 outcome = _bundle_oauth_result_from_url(current_url)
                 if outcome is None and callable(status_callback):
                     try:
@@ -1310,56 +1358,13 @@ def run_bundle_oauth_browser_task(
                         str(outcome.get("message") or "官方授权未完成"),
                         "cookie_expired",
                     )
-                session_ready = False
-                with contextlib.suppress(Exception):
-                    session_ready = _has_threads_session_cookie(page) and not (
-                        _threads_login_surface_visible(page)
-                        or _mapped_login_credentials(page)
-                        or _mapped_login_username_input(page)
-                    )
-                if platform == "threads":
-                    with contextlib.suppress(Exception):
-                        login_state = _detect_platform_login_state(page, platform)
-                        if str(login_state.get("status") or "") == "threads_restore_required":
-                            _restore_threads_after_instagram_login(page, login_state, logger)
-                            continue
-                        if str(login_state.get("status") or "") == "ready":
-                            session_ready = True
-                if session_ready and not oauth_opened:
-                    logger.log(
-                        "info",
-                        "bundle_oauth_session_ready",
-                        "平台已登录，正在打开官方授权页。",
-                        {"url": _safe_navigation_url(current_url)},
-                    )
-                    try:
-                        page.goto(oauth_url, wait_until="domcontentloaded", timeout=90000)
-                    except Exception as exc:
-                        logger.log(
-                            "warn",
-                            "bundle_oauth_navigate",
-                            "官方授权页打开较慢，将继续等待授权完成。",
-                            {"error": str(exc)[:240], "url": oauth_url},
-                        )
-                    oauth_opened = True
-                    _wait_for_cancellation(1.2, cancel_event)
-                    continue
-                _queue_bundle_oauth_saved_credentials(page, oauth_account, context_control)
                 if _process_login_assistance_action(page, platform, logger, context_control):
                     _wait_for_cancellation(0.8, cancel_event)
                     continue
-                if oauth_opened and _maybe_resume_bundle_oauth_url(page, oauth_url, logger, context_control):
+                if _maybe_resume_bundle_oauth_url(page, oauth_url, logger, context_control):
                     _wait_for_cancellation(1.2, cancel_event)
                     continue
-                if _maybe_open_bundle_oauth_username_login(page, logger, context_control):
-                    _wait_for_cancellation(1.0, cancel_event)
-                    continue
-                if _maybe_open_bundle_oauth_sso_login(page, logger, context_control):
-                    _wait_for_cancellation(1.0, cancel_event)
-                    continue
                 page_status = _detect_bundle_oauth_page_state(page, platform)
-                if str(page_status.get("status") or "").strip().lower() == "invalid_credentials" and isinstance(context_control, dict):
-                    context_control["bundle_oauth_auto_login_failed"] = True
                 _maybe_auto_confirm_bundle_oauth(page, logger, context_control, page_status)
                 _publish_login_assistance_state(page, context_control, page_status, handoff=True)
                 _wait_for_cancellation(1.0, cancel_event)
