@@ -605,24 +605,6 @@ BUNDLE_OAUTH_LOGIN_BUTTONS = [
     "ログイン",
     "次へ",
 ]
-BUNDLE_OAUTH_SSO_LOGIN_BUTTONS = [
-    "Log in with Instagram",
-    "Continue with Instagram",
-    "Instagramでログイン",
-    "使用 Instagram 登录",
-    "使用 Instagram 登入",
-]
-BUNDLE_OAUTH_USERNAME_LOGIN_BUTTONS = [
-    "Log in with username instead",
-    "Log in with username",
-    "Use username instead",
-    "代わりにユーザーネームでログイン",
-    "ユーザーネームでログイン",
-    "改用用户名登录",
-    "使用用户名登录",
-    "改用用戶名稱登入",
-    "使用用戶名稱登入",
-]
 BUNDLE_OAUTH_CONSENT_BUTTONS = [
     "Allow",
     "Allow access",
@@ -830,30 +812,6 @@ def _bundle_oauth_is_detached_home(url: str) -> bool:
     return False
 
 
-def _bundle_oauth_reset_login_attempt(page: Any, context_control: dict[str, Any] | None) -> None:
-    if not isinstance(context_control, dict):
-        return
-    current_host = str(urlparse(_bundle_oauth_page_url(page)).hostname or "").lower()
-    queued = {
-        item
-        for item in (context_control.get("bundle_oauth_saved_credentials_queued_hosts") or [])
-        if not str(item).startswith(f"{current_host}:")
-    }
-    context_control["bundle_oauth_saved_credentials_queued_hosts"] = sorted(queued)
-    context_control.pop("login_assistance_submitted_kind", None)
-    context_control.pop("login_assistance_credentials_submitted_at", None)
-    _set_login_assistance_pending(context_control, False)
-
-
-def _bundle_oauth_login_was_submitted(context_control: dict[str, Any] | None) -> bool:
-    if not isinstance(context_control, dict):
-        return False
-    submitted = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
-    return submitted in {"credentials", "verification_code", "choice"} or bool(
-        context_control.get("bundle_oauth_saved_credentials_queued_hosts")
-    )
-
-
 def _maybe_resume_bundle_oauth_url(
     page: Any,
     oauth_url: str,
@@ -947,114 +905,16 @@ def _maybe_auto_confirm_bundle_oauth(
         or _mapped_login_verification_code(page) is not None
     ):
         return False
+    login_confirmed = bool((context_control or {}).get("bundle_oauth_login_confirmed"))
     submitted = str((context_control or {}).get("login_assistance_submitted_kind") or "").strip().lower()
-    auto_filled = bool((context_control or {}).get("bundle_oauth_saved_credentials_queued_hosts"))
-    if submitted not in {"credentials", "verification_code", "choice"} and not auto_filled:
+    if (
+        not login_confirmed
+        and submitted not in {"credentials", "verification_code", "choice"}
+    ):
         return False
     clicked = _click_bundle_oauth_named_buttons(page, logger, BUNDLE_OAUTH_CONSENT_BUTTONS, "bundle_oauth_consent")
     if clicked:
         logger.log("info", "bundle_oauth_consent", "已自动确认官方授权。", {"url": _safe_navigation_url(getattr(page, "url", ""))})
-    return clicked
-
-
-def _maybe_open_bundle_oauth_sso_login(
-    page: Any,
-    logger: AutomationLogger,
-    context_control: dict[str, Any] | None = None,
-) -> bool:
-    if (
-        _mapped_login_credentials(page) is not None
-        or _mapped_login_username_input(page) is not None
-        or _mapped_login_password_input(page) is not None
-        or _mapped_login_verification_code(page) is not None
-    ):
-        return False
-    current = _bundle_oauth_page_url(page)
-    if _login_assistance_credentials_submission_waiting(context_control) or _login_assistance_verification_submission_waiting(context_control):
-        return False
-    if _bundle_oauth_login_was_submitted(context_control):
-        session_ready = False
-        with contextlib.suppress(Exception):
-            session_ready = _has_threads_session_cookie(page)
-        if session_ready:
-            return False
-    if isinstance(context_control, dict) and context_control.get("bundle_oauth_sso_clicked"):
-        return False
-    clicked = _click_bundle_oauth_named_buttons(
-        page,
-        logger,
-        BUNDLE_OAUTH_SSO_LOGIN_BUTTONS,
-        "bundle_oauth_sso_login",
-    )
-    if clicked:
-        if isinstance(context_control, dict):
-            context_control["bundle_oauth_sso_clicked"] = True
-        _bundle_oauth_reset_login_attempt(page, context_control)
-        logger.log(
-            "info",
-            "bundle_oauth_sso_login",
-            "Threads 账号需要经 Instagram 登录，已继续进入对应登录页。",
-            {"url": _safe_navigation_url(getattr(page, "url", ""))},
-        )
-    return clicked
-
-
-def _maybe_open_bundle_oauth_username_login(
-    page: Any,
-    logger: AutomationLogger,
-    context_control: dict[str, Any] | None = None,
-) -> bool:
-    if (
-        _mapped_login_credentials(page) is not None
-        or _mapped_login_username_input(page) is not None
-        or _mapped_login_password_input(page) is not None
-        or _mapped_login_verification_code(page) is not None
-    ):
-        return False
-    current = _bundle_oauth_page_url(page)
-    if _login_assistance_credentials_submission_waiting(context_control) or _login_assistance_verification_submission_waiting(context_control):
-        return False
-    if _bundle_oauth_login_was_submitted(context_control):
-        session_ready = False
-        with contextlib.suppress(Exception):
-            session_ready = _has_threads_session_cookie(page)
-        if session_ready:
-            return False
-    if isinstance(context_control, dict) and context_control.get("bundle_oauth_username_clicked"):
-        return False
-    parsed = urlparse(current)
-    path = str(parsed.path or "").lower()
-    query = str(parsed.query or "").lower()
-    # /login?next=/oauth/authorize is the official Threads OAuth continuation.
-    # Do not click a bare /login href that would drop the next= parameter.
-    preserve_oauth_next = "/oauth/authorize" in query or path.rstrip("/").endswith("/login")
-    if not preserve_oauth_next and _click_threads_username_entry_by_structure(page, logger):
-        if isinstance(context_control, dict):
-            context_control["bundle_oauth_username_clicked"] = True
-        _bundle_oauth_reset_login_attempt(page, context_control)
-        logger.log(
-            "info",
-            "bundle_oauth_username_login",
-            "已打开 Threads 用户名密码登录入口。",
-            {"url": _safe_navigation_url(getattr(page, "url", ""))},
-        )
-        return True
-    clicked = _click_bundle_oauth_named_buttons(
-        page,
-        logger,
-        BUNDLE_OAUTH_USERNAME_LOGIN_BUTTONS,
-        "bundle_oauth_username_login",
-    )
-    if clicked:
-        if isinstance(context_control, dict):
-            context_control["bundle_oauth_username_clicked"] = True
-        _bundle_oauth_reset_login_attempt(page, context_control)
-        logger.log(
-            "info",
-            "bundle_oauth_username_login",
-            "已打开 Threads 用户名密码登录入口。",
-            {"url": _safe_navigation_url(getattr(page, "url", ""))},
-        )
     return clicked
 
 
@@ -1071,78 +931,6 @@ def _bundle_oauth_saved_login(account: dict[str, Any] | None, payload: dict[str,
     if not username or not password:
         return "", ""
     return username, password
-
-
-def _bundle_oauth_login_stage(page: Any) -> str:
-    if _mapped_login_credentials(page) is not None:
-        return "credentials"
-    if _mapped_login_username_input(page) is not None:
-        return "username"
-    if _mapped_login_password_input(page) is not None:
-        return "password"
-    return ""
-
-
-def _bundle_oauth_auto_login_pending(context_control: dict[str, Any] | None) -> bool:
-    if not isinstance(context_control, dict):
-        return False
-    if context_control.get("bundle_oauth_auto_login_failed"):
-        return False
-    task = context_control.get("task") if isinstance(context_control.get("task"), dict) else {}
-    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
-    if payload.get("auto_submit") is False:
-        return False
-    username = str(payload.get("login_username") or context_control.get("bundle_oauth_prefill_username") or "").strip()
-    password = str(payload.get("login_password") or "")
-    return bool(username and password)
-
-
-def _queue_bundle_oauth_saved_credentials(
-    page: Any,
-    account: dict[str, Any],
-    context_control: dict[str, Any] | None,
-) -> bool:
-    if not isinstance(context_control, dict):
-        return False
-    if _login_assistance_credentials_submission_waiting(context_control):
-        return False
-    submitted = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
-    try:
-        resume_count = int(context_control.get("bundle_oauth_resume_count") or 0)
-    except (TypeError, ValueError):
-        resume_count = 0
-    queued_resume = context_control.get("bundle_oauth_queued_resume_count")
-    if submitted == "credentials" and queued_resume == resume_count and not context_control.get("bundle_oauth_auto_login_failed"):
-        return False
-    current_host = str(urlparse(str(getattr(page, "url", "") or "")).hostname or "").lower() or "unknown"
-    stage = _bundle_oauth_login_stage(page)
-    if not stage:
-        return False
-    queued_hosts = set(context_control.get("bundle_oauth_saved_credentials_queued_hosts") or [])
-    queue_key = f"{current_host}:{stage}"
-    if queue_key in queued_hosts:
-        return False
-    task = context_control.get("task") if isinstance(context_control.get("task"), dict) else {}
-    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
-    if payload.get("auto_submit") is False:
-        return False
-    username, password = _bundle_oauth_saved_login(account, payload)
-    actions = context_control.get("login_assistance_queue")
-    if not username or not password or actions is None or not hasattr(actions, "put_nowait"):
-        return False
-    try:
-        actions.put_nowait({
-            "kind": "credentials",
-            "login_username": username,
-            "login_password": password,
-        })
-    except queue.Full:
-        return False
-    queued_hosts.add(queue_key)
-    context_control["bundle_oauth_saved_credentials_queued_hosts"] = sorted(queued_hosts)
-    context_control["bundle_oauth_queued_resume_count"] = resume_count
-    _set_login_assistance_pending(context_control, True)
-    return True
 
 
 def run_bundle_oauth_browser_task(
@@ -1296,6 +1084,8 @@ def run_bundle_oauth_browser_task(
                     str(login_result.get("reason") or "平台登录未完成，无法打开官方授权页。"),
                     "cookie_expired",
                 )
+            if isinstance(context_control, dict):
+                context_control["bundle_oauth_login_confirmed"] = True
             logger.log(
                 "info",
                 "bundle_oauth_session_ready",
@@ -5338,14 +5128,13 @@ def _publish_login_assistance_state(
     if (
         current.get("oauth_flow")
         and str(presentation.get("kind") or "").strip().lower() == "credentials"
-        and str(current.get("status") or "").strip().lower() != "invalid_credentials"
-        and _bundle_oauth_auto_login_pending(context_control)
+        and bool((context_control or {}).get("bundle_oauth_login_confirmed"))
     ):
         presentation = {
             "phase": "running",
             "kind": "progress",
-            "title": "正在自动授权",
-            "message": "正在使用已保存的账号登录官方授权页，验证码等步骤会显示在本页。",
+            "title": "正在确认授权",
+            "message": "平台已登录，正在官方授权页完成确认，不会再次填写账号密码。",
             "challenge_type": str(presentation.get("challenge_type") or ""),
         }
     prefill_username = str((context_control or {}).get("bundle_oauth_prefill_username") or "").strip()
@@ -5606,6 +5395,9 @@ def _process_login_assistance_action(page: Any, platform: str, logger: Automatio
             )
             message = "验证码已提交，正在确认登录结果。"
         elif kind == "credentials":
+            if oauth_flow and bool(context_control.get("bundle_oauth_login_confirmed")):
+                _set_login_assistance_pending(context_control, False)
+                return False
             username = str(action.get("login_username") or "").strip()
             password = str(action.get("login_password") or "")
             if not username or not password:

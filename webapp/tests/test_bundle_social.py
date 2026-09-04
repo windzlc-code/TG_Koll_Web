@@ -1301,92 +1301,6 @@ def test_claimed_bundle_oauth_task_keeps_owner_for_saved_credentials(monkeypatch
     assert account["login_username"] == "login@example.com"
     assert account["login_password"] == "secret-value"
 
-
-def test_bundle_oauth_queues_saved_credentials_once(monkeypatch):
-    import queue
-
-    actions = queue.Queue(maxsize=2)
-    control = {"login_assistance_queue": actions}
-    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: (object(), object(), object(), object()))
-
-    assert runner._queue_bundle_oauth_saved_credentials(
-        object(),
-        {"login_username": "login@example.com", "login_password": "secret-value"},
-        control,
-    ) is True
-    assert runner._queue_bundle_oauth_saved_credentials(
-        object(),
-        {"login_username": "login@example.com", "login_password": "secret-value"},
-        control,
-    ) is False
-    assert actions.get_nowait() == {
-        "kind": "credentials",
-        "login_username": "login@example.com",
-        "login_password": "secret-value",
-    }
-
-
-def test_bundle_oauth_reuses_saved_credentials_on_instagram_sso_stage(monkeypatch):
-    import queue
-
-    class _Page:
-        url = "https://www.threads.com/login"
-
-    page = _Page()
-    actions = queue.Queue(maxsize=2)
-    control = {"login_assistance_queue": actions}
-    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: (object(), object(), object(), object()))
-
-    assert runner._queue_bundle_oauth_saved_credentials(
-        page,
-        {"login_username": "login@example.com", "login_password": "secret-value"},
-        control,
-    ) is True
-    control["login_assistance_pending"] = False
-    page.url = "https://www.instagram.com/accounts/login/"
-    assert runner._queue_bundle_oauth_saved_credentials(
-        page,
-        {"login_username": "login@example.com", "login_password": "secret-value"},
-        control,
-    ) is True
-    assert control["bundle_oauth_saved_credentials_queued_hosts"] == [
-        "www.instagram.com:credentials",
-        "www.threads.com:credentials",
-    ]
-
-
-def test_bundle_oauth_queues_username_then_password_on_same_host(monkeypatch):
-    import queue
-
-    class _Page:
-        url = "https://www.instagram.com/accounts/login/"
-
-    page = _Page()
-    actions = queue.Queue(maxsize=2)
-    control = {"login_assistance_queue": actions}
-    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: (object(), object(), object()))
-    monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: None)
-
-    assert runner._queue_bundle_oauth_saved_credentials(
-        page,
-        {"login_username": "login@example.com", "login_password": "secret-value"},
-        control,
-    ) is True
-
-    monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: (object(), object(), object()))
-    assert runner._queue_bundle_oauth_saved_credentials(
-        page,
-        {"login_username": "login@example.com", "login_password": "secret-value"},
-        control,
-    ) is True
-    assert control["bundle_oauth_saved_credentials_queued_hosts"] == [
-        "www.instagram.com:password",
-        "www.instagram.com:username",
-    ]
-
-
 def test_bundle_oauth_runtime_payload_injects_saved_credentials():
     payload = social_automation_api._runtime_task_payload(
         {
@@ -1407,7 +1321,7 @@ def test_bundle_oauth_runtime_payload_injects_saved_credentials():
     assert payload["login_password"] == "secret-value"
 
 
-def test_bundle_oauth_hides_credentials_prompt_while_auto_login_pending():
+def test_bundle_oauth_hides_credentials_prompt_after_login_confirmed():
     published = {}
 
     def _capture(_session_id, presentation):
@@ -1425,14 +1339,7 @@ def test_bundle_oauth_hides_credentials_prompt_while_auto_login_pending():
             _Page(),
             {
                 "live_browser_session_id": "live-auto",
-                "bundle_oauth_prefill_username": "login@example.com",
-                "task": {
-                    "payload": {
-                        "auto_submit": True,
-                        "login_username": "login@example.com",
-                        "login_password": "secret-value",
-                    }
-                },
+                "bundle_oauth_login_confirmed": True,
             },
             {
                 "status": "cookie_expired",
@@ -1443,8 +1350,8 @@ def test_bundle_oauth_hides_credentials_prompt_while_auto_login_pending():
         )
 
     assert published["kind"] == "progress"
-    assert published["title"] == "正在自动授权"
-    assert "验证码" in published["message"]
+    assert published["title"] == "正在确认授权"
+    assert "不会再次填写账号密码" in published["message"]
 
 
 def test_bundle_oauth_prefill_username_when_auto_login_failed():
@@ -1486,70 +1393,6 @@ def test_bundle_oauth_prefill_username_when_auto_login_failed():
     assert published["kind"] == "credentials"
     assert published["prefill_username"] == "login@example.com"
     assert published["submit_label"] == "授权"
-
-
-def test_bundle_oauth_opens_username_login(monkeypatch):
-    calls = []
-    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_verification_code", lambda _page: None)
-    monkeypatch.setattr(runner, "_click_threads_username_entry_by_structure", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(
-        runner,
-        "_click_bundle_oauth_named_buttons",
-        lambda _page, _logger, names, stage: calls.append((names, stage)) or True,
-    )
-
-    assert runner._maybe_open_bundle_oauth_username_login(object(), _Logger()) is True
-    assert calls == [(runner.BUNDLE_OAUTH_USERNAME_LOGIN_BUTTONS, "bundle_oauth_username_login")]
-
-
-def test_bundle_oauth_opens_instagram_sso_login(monkeypatch):
-    calls = []
-    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_verification_code", lambda _page: None)
-    monkeypatch.setattr(
-        runner,
-        "_click_bundle_oauth_named_buttons",
-        lambda _page, _logger, names, stage: calls.append((names, stage)) or True,
-    )
-
-    assert runner._maybe_open_bundle_oauth_sso_login(object(), _Logger()) is True
-    assert calls == [(runner.BUNDLE_OAUTH_SSO_LOGIN_BUTTONS, "bundle_oauth_sso_login")]
-
-
-def test_bundle_oauth_does_not_reopen_sso_on_home_after_login(monkeypatch):
-    calls = []
-
-    class _Page:
-        url = "https://www.threads.com/"
-
-    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_verification_code", lambda _page: None)
-    monkeypatch.setattr(runner, "_has_threads_session_cookie", lambda _page: True)
-    monkeypatch.setattr(
-        runner,
-        "_click_bundle_oauth_named_buttons",
-        lambda _page, _logger, names, stage: calls.append((names, stage)) or True,
-    )
-
-    assert runner._maybe_open_bundle_oauth_sso_login(
-        _Page(),
-        _Logger(),
-        {"login_assistance_submitted_kind": "credentials"},
-    ) is False
-    assert runner._maybe_open_bundle_oauth_username_login(
-        _Page(),
-        _Logger(),
-        {"login_assistance_submitted_kind": "credentials"},
-    ) is False
-    assert calls == []
-
 
 def test_bundle_oauth_resumes_authorize_url_from_home_after_login(monkeypatch):
     class _Page:
@@ -1619,49 +1462,6 @@ def test_bundle_oauth_keeps_login_next_authorize_url(monkeypatch):
         control,
     ) is True
     assert page.gotos == [original]
-
-
-def test_bundle_oauth_does_not_requeue_credentials_until_resume(monkeypatch):
-    import queue
-
-    class _Page:
-        url = "https://www.threads.com/login"
-
-    page = _Page()
-    actions = queue.Queue(maxsize=2)
-    control = {
-        "login_assistance_queue": actions,
-        "login_assistance_submitted_kind": "credentials",
-        "bundle_oauth_queued_resume_count": 0,
-        "bundle_oauth_resume_count": 0,
-    }
-    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: (object(), object(), object(), object()))
-    account = {"login_username": "login@example.com", "login_password": "secret-value"}
-
-    assert runner._queue_bundle_oauth_saved_credentials(page, account, control) is False
-    control["bundle_oauth_resume_count"] = 1
-    assert runner._queue_bundle_oauth_saved_credentials(page, account, control) is True
-
-
-def test_bundle_oauth_does_not_drop_next_with_username_login_href(monkeypatch):
-    class _Page:
-        url = "https://www.threads.com/login?next=https://www.threads.com/oauth/authorize?client_id=1"
-
-    structure_calls = []
-    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: None)
-    monkeypatch.setattr(runner, "_mapped_login_verification_code", lambda _page: None)
-    monkeypatch.setattr(
-        runner,
-        "_click_threads_username_entry_by_structure",
-        lambda *_args, **_kwargs: structure_calls.append(True) or True,
-    )
-    monkeypatch.setattr(runner, "_click_bundle_oauth_named_buttons", lambda *_args, **_kwargs: False)
-
-    assert runner._maybe_open_bundle_oauth_username_login(_Page(), _Logger(), {}) is False
-    assert structure_calls == []
-
 
 def test_bundle_oauth_does_not_resume_before_login_from_home():
     class _Page:
