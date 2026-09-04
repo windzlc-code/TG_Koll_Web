@@ -873,11 +873,10 @@ def _maybe_resume_bundle_oauth_url(
         return False
     if _bundle_oauth_is_login_path(current) and not detached_home:
         return False
-    submitted = _bundle_oauth_login_was_submitted(context_control)
     session_ready = False
     with contextlib.suppress(Exception):
         session_ready = _has_threads_session_cookie(page)
-    if not submitted and not session_ready:
+    if not session_ready:
         return False
     if not isinstance(context_control, dict):
         return False
@@ -1218,16 +1217,23 @@ def run_bundle_oauth_browser_task(
                 },
                 handoff=True,
             )
+            login_entry = THREADS_LOGIN if platform == "threads" else INSTAGRAM_LOGIN
+            logger.log(
+                "info",
+                "bundle_oauth_login_first",
+                "先完成平台登录再打开官方授权页，避免 Threads 把未登录的授权请求打回主页。",
+                {"entry": login_entry},
+            )
             try:
-                page.goto(oauth_url, wait_until="domcontentloaded", timeout=90000)
+                page.goto(login_entry, wait_until="domcontentloaded", timeout=90000)
             except Exception as exc:
                 logger.log(
                     "warn",
                     "bundle_oauth_navigate",
-                    "官方授权页打开较慢，将继续等待登录完成。",
-                    {"error": str(exc)[:240], "url": oauth_url},
+                    "平台登录页打开较慢，将继续等待登录完成。",
+                    {"error": str(exc)[:240], "url": login_entry},
                 )
-            _bundle_oauth_authorize_resume_url(page, oauth_url, context_control)
+            oauth_opened = False
             deadline = time.monotonic() + timeout_seconds
             while True:
                 _raise_if_cancelled(cancel_event)
@@ -1276,17 +1282,51 @@ def run_bundle_oauth_browser_task(
                         str(outcome.get("message") or "官方授权未完成"),
                         "cookie_expired",
                     )
+                session_ready = False
+                with contextlib.suppress(Exception):
+                    session_ready = _has_threads_session_cookie(page) and not (
+                        _threads_login_surface_visible(page)
+                        or _mapped_login_credentials(page)
+                        or _mapped_login_username_input(page)
+                    )
+                if platform == "threads":
+                    with contextlib.suppress(Exception):
+                        login_state = _detect_platform_login_state(page, platform)
+                        if str(login_state.get("status") or "") == "threads_restore_required":
+                            _restore_threads_after_instagram_login(page, login_state, logger)
+                            continue
+                        if str(login_state.get("status") or "") == "ready":
+                            session_ready = True
+                if session_ready and not oauth_opened:
+                    logger.log(
+                        "info",
+                        "bundle_oauth_session_ready",
+                        "平台已登录，正在打开官方授权页。",
+                        {"url": _safe_navigation_url(current_url)},
+                    )
+                    try:
+                        page.goto(oauth_url, wait_until="domcontentloaded", timeout=90000)
+                    except Exception as exc:
+                        logger.log(
+                            "warn",
+                            "bundle_oauth_navigate",
+                            "官方授权页打开较慢，将继续等待授权完成。",
+                            {"error": str(exc)[:240], "url": oauth_url},
+                        )
+                    oauth_opened = True
+                    _wait_for_cancellation(1.2, cancel_event)
+                    continue
                 _queue_bundle_oauth_saved_credentials(page, oauth_account, context_control)
                 if _process_login_assistance_action(page, platform, logger, context_control):
                     _wait_for_cancellation(0.8, cancel_event)
                     continue
-                if _maybe_resume_bundle_oauth_url(page, oauth_url, logger, context_control):
+                if oauth_opened and _maybe_resume_bundle_oauth_url(page, oauth_url, logger, context_control):
                     _wait_for_cancellation(1.2, cancel_event)
                     continue
-                if _maybe_open_bundle_oauth_sso_login(page, logger, context_control):
+                if _maybe_open_bundle_oauth_username_login(page, logger, context_control):
                     _wait_for_cancellation(1.0, cancel_event)
                     continue
-                if _maybe_open_bundle_oauth_username_login(page, logger, context_control):
+                if _maybe_open_bundle_oauth_sso_login(page, logger, context_control):
                     _wait_for_cancellation(1.0, cancel_event)
                     continue
                 page_status = _detect_bundle_oauth_page_state(page, platform)

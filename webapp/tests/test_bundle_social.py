@@ -1550,7 +1550,7 @@ def test_bundle_oauth_does_not_reopen_sso_on_home_after_login(monkeypatch):
     assert calls == []
 
 
-def test_bundle_oauth_resumes_authorize_url_from_home_after_login():
+def test_bundle_oauth_resumes_authorize_url_from_home_after_login(monkeypatch):
     class _Page:
         url = "https://www.threads.com/"
         gotos = []
@@ -1562,13 +1562,30 @@ def test_bundle_oauth_resumes_authorize_url_from_home_after_login():
     page = _Page()
     control = {"login_assistance_submitted_kind": "credentials"}
     oauth_url = "https://threads.net/oauth/authorize?client_id=1&redirect_uri=https://api.bundle.social/callback"
+    monkeypatch.setattr(runner, "_has_threads_session_cookie", lambda _page: True)
 
     assert runner._maybe_resume_bundle_oauth_url(page, oauth_url, _Logger(), control) is True
     assert page.gotos == [oauth_url]
     assert runner._maybe_resume_bundle_oauth_url(page, oauth_url, _Logger(), control) is False
 
 
-def test_bundle_oauth_keeps_login_next_authorize_url():
+def test_bundle_oauth_does_not_resume_without_session():
+    class _Page:
+        url = "https://www.threads.com/"
+        gotos = []
+
+        def goto(self, url, **_kwargs):
+            self.gotos.append(url)
+
+    assert runner._maybe_resume_bundle_oauth_url(
+        _Page(),
+        "https://threads.net/oauth/authorize?client_id=1",
+        _Logger(),
+        {"login_assistance_submitted_kind": "credentials"},
+    ) is False
+
+
+def test_bundle_oauth_keeps_login_next_authorize_url(monkeypatch):
     class _Page:
         url = (
             "https://www.threads.com/login?next="
@@ -1593,6 +1610,7 @@ def test_bundle_oauth_keeps_login_next_authorize_url():
     page.url = "https://www.threads.com/"
     control["login_assistance_submitted_kind"] = "credentials"
     original = "https://threads.net/oauth/authorize?client_id=1&redirect_uri=https://api.bundle.social/callback"
+    monkeypatch.setattr(runner, "_has_threads_session_cookie", lambda _page: True)
     assert runner._maybe_resume_bundle_oauth_url(
         page,
         original,
