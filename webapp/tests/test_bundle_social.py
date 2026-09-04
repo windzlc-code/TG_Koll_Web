@@ -1592,13 +1592,36 @@ def test_bundle_oauth_keeps_login_next_authorize_url():
 
     page.url = "https://www.threads.com/"
     control["login_assistance_submitted_kind"] = "credentials"
+    original = "https://threads.net/oauth/authorize?client_id=1&redirect_uri=https://api.bundle.social/callback"
     assert runner._maybe_resume_bundle_oauth_url(
         page,
-        "https://threads.net/oauth/authorize?client_id=1",
+        original,
         _Logger(),
         control,
     ) is True
-    assert page.gotos == [next_url]
+    assert page.gotos == [original]
+
+
+def test_bundle_oauth_does_not_requeue_credentials_until_resume(monkeypatch):
+    import queue
+
+    class _Page:
+        url = "https://www.threads.com/login"
+
+    page = _Page()
+    actions = queue.Queue(maxsize=2)
+    control = {
+        "login_assistance_queue": actions,
+        "login_assistance_submitted_kind": "credentials",
+        "bundle_oauth_queued_resume_count": 0,
+        "bundle_oauth_resume_count": 0,
+    }
+    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: (object(), object(), object(), object()))
+    account = {"login_username": "login@example.com", "login_password": "secret-value"}
+
+    assert runner._queue_bundle_oauth_saved_credentials(page, account, control) is False
+    control["bundle_oauth_resume_count"] = 1
+    assert runner._queue_bundle_oauth_saved_credentials(page, account, control) is True
 
 
 def test_bundle_oauth_does_not_drop_next_with_username_login_href(monkeypatch):

@@ -846,12 +846,20 @@ def _maybe_resume_bundle_oauth_url(
     context_control: dict[str, Any] | None,
 ) -> bool:
     current = _bundle_oauth_page_url(page)
-    target = _bundle_oauth_authorize_resume_url(page, oauth_url, context_control)
+    _bundle_oauth_authorize_resume_url(page, oauth_url, context_control)
+    target = str(oauth_url or "").strip()
     if not target:
         return False
     if _bundle_oauth_result_from_url(current) is not None or _bundle_oauth_is_authorize_url(current):
         return False
-    if _login_assistance_credentials_submission_waiting(context_control) or _login_assistance_verification_submission_waiting(context_control):
+    detached_home = _bundle_oauth_is_detached_home(current)
+    if (
+        not detached_home
+        and (
+            _login_assistance_credentials_submission_waiting(context_control)
+            or _login_assistance_verification_submission_waiting(context_control)
+        )
+    ):
         return False
     has_login_fields = False
     with contextlib.suppress(Exception):
@@ -861,7 +869,6 @@ def _maybe_resume_bundle_oauth_url(
             or _mapped_login_password_input(page)
             or _mapped_login_verification_code(page)
         )
-    detached_home = _bundle_oauth_is_detached_home(current)
     if has_login_fields and not detached_home:
         return False
     if _bundle_oauth_is_login_path(current) and not detached_home:
@@ -892,7 +899,11 @@ def _maybe_resume_bundle_oauth_url(
         "info",
         "bundle_oauth_resume",
         "登录后未停留在官方授权页，正在返回授权链接。",
-        {"from": _safe_navigation_url(current), "to": _safe_navigation_url(target)},
+        {
+            "from": _safe_navigation_url(current),
+            "to": _safe_navigation_url(target),
+            "to_has_client_id": "client_id=" in target,
+        },
     )
     try:
         page.goto(target, wait_until="domcontentloaded", timeout=90000)
@@ -1066,6 +1077,16 @@ def _queue_bundle_oauth_saved_credentials(
 ) -> bool:
     if not isinstance(context_control, dict):
         return False
+    if _login_assistance_credentials_submission_waiting(context_control):
+        return False
+    submitted = str(context_control.get("login_assistance_submitted_kind") or "").strip().lower()
+    try:
+        resume_count = int(context_control.get("bundle_oauth_resume_count") or 0)
+    except (TypeError, ValueError):
+        resume_count = 0
+    queued_resume = context_control.get("bundle_oauth_queued_resume_count")
+    if submitted == "credentials" and queued_resume == resume_count and not context_control.get("bundle_oauth_auto_login_failed"):
+        return False
     current_host = str(urlparse(str(getattr(page, "url", "") or "")).hostname or "").lower() or "unknown"
     stage = _bundle_oauth_login_stage(page)
     if not stage:
@@ -1092,6 +1113,7 @@ def _queue_bundle_oauth_saved_credentials(
         return False
     queued_hosts.add(queue_key)
     context_control["bundle_oauth_saved_credentials_queued_hosts"] = sorted(queued_hosts)
+    context_control["bundle_oauth_queued_resume_count"] = resume_count
     _set_login_assistance_pending(context_control, True)
     return True
 
