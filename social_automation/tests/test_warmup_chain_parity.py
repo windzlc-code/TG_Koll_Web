@@ -1653,7 +1653,7 @@ class WarmupChainParityTests(TestCase):
         self.assertEqual(risk["force_manual"], "true")
         self.assertEqual(risk["challenge_type"], "human_verification")
 
-    def test_human_verification_is_banned_after_the_single_retry(self):
+    def test_human_verification_waits_for_manual_instead_of_banning(self):
         page = mock.Mock()
         callback = mock.Mock()
         context_control = {"account_login_status_callback": callback}
@@ -1665,10 +1665,15 @@ class WarmupChainParityTests(TestCase):
             "challenge_type": "human_verification",
         }
         with (
-            mock.patch.object(runner, "_warmup_risk_state", side_effect=[challenge, challenge]),
-            mock.patch.object(runner, "_wait_for_cancellation"),
+            mock.patch.object(runner, "_warmup_risk_state", return_value=challenge),
+            mock.patch.object(runner, "_screenshot", return_value="human.png"),
             mock.patch.object(runner, "_request_manual_takeover") as request_manual,
-            self.assertRaises(runner.NeedManualError) as raised,
+            mock.patch.object(runner, "_resume_after_manual_takeover") as resume_auto,
+            mock.patch.object(
+                runner,
+                "_wait_for_manual_login_completion",
+                return_value={"status": "ready"},
+            ) as wait_manual,
         ):
             runner._guard_warmup_risk(
                 page,
@@ -1680,76 +1685,14 @@ class WarmupChainParityTests(TestCase):
                 context_control=context_control,
             )
 
-        page.reload.assert_called_once_with(wait_until="domcontentloaded", timeout=30000)
-        request_manual.assert_not_called()
-        callback.assert_called_once_with("disabled")
-        self.assertEqual(raised.exception.status, "disabled")
-        self.assertEqual(raised.exception.health_status, "banned")
+        page.reload.assert_not_called()
+        request_manual.assert_called_once_with(context_control)
+        resume_auto.assert_called_once_with(context_control)
+        wait_manual.assert_called_once()
+        callback.assert_has_calls([mock.call("need_verification"), mock.call("ready")])
 
-    def test_numeric_image_captcha_retries_once_and_recovers_when_page_clears(self):
+    def test_numeric_image_captcha_does_not_auto_reload(self):
         page = mock.Mock()
-        callback = mock.Mock()
-        context_control = {"account_login_status_callback": callback}
-        captcha = {
-            "status": "need_verification",
-            "health_status": "abnormal",
-            "reason": "Instagram requires image verification",
-            "force_manual": "true",
-            "challenge_type": "numeric_image_captcha",
-        }
-        with (
-            mock.patch.object(runner, "_warmup_risk_state", side_effect=[captcha, None]),
-            mock.patch.object(runner, "_wait_for_cancellation") as wait_retry,
-        ):
-            runner._guard_warmup_risk(
-                page,
-                "instagram",
-                {"stop_on_risk_limit": False},
-                _Logger(),
-                context_control=context_control,
-            )
-
-        page.reload.assert_called_once_with(wait_until="domcontentloaded", timeout=30000)
-        wait_retry.assert_called_once()
-        callback.assert_not_called()
-        self.assertNotIn("instagram_numeric_captcha_retry_attempted", context_control)
-
-    def test_numeric_image_captcha_is_banned_after_the_single_retry(self):
-        page = mock.Mock()
-        callback = mock.Mock()
-        context_control = {"account_login_status_callback": callback}
-        captcha = {
-            "status": "need_verification",
-            "health_status": "abnormal",
-            "reason": "Instagram requires image verification",
-            "force_manual": "true",
-            "challenge_type": "numeric_image_captcha",
-        }
-        with (
-            mock.patch.object(runner, "_warmup_risk_state", side_effect=[captcha, captcha]),
-            mock.patch.object(runner, "_wait_for_cancellation"),
-            mock.patch.object(runner, "_request_manual_takeover") as request_manual,
-            self.assertRaises(runner.NeedManualError) as raised,
-        ):
-            runner._guard_warmup_risk(
-                page,
-                "instagram",
-                {"stop_on_risk_limit": False},
-                _Logger(),
-                task={"id": "task-1", "payload": {}},
-                screenshot_dir=Path("."),
-                context_control=context_control,
-            )
-
-        page.reload.assert_called_once_with(wait_until="domcontentloaded", timeout=30000)
-        request_manual.assert_not_called()
-        callback.assert_called_once_with("disabled")
-        self.assertEqual(raised.exception.status, "disabled")
-        self.assertEqual(raised.exception.health_status, "banned")
-
-    def test_numeric_image_captcha_reload_failure_remains_abnormal(self):
-        page = mock.Mock()
-        page.reload.side_effect = TimeoutError("reload timed out")
         callback = mock.Mock()
         context_control = {"account_login_status_callback": callback}
         captcha = {
@@ -1772,10 +1715,75 @@ class WarmupChainParityTests(TestCase):
                 context_control=context_control,
             )
 
+        page.reload.assert_not_called()
         request_manual.assert_called_once_with(context_control)
         callback.assert_called_once_with("need_verification")
         self.assertEqual(raised.exception.status, "need_verification")
         self.assertEqual(raised.exception.health_status, "abnormal")
+
+    def test_numeric_image_captcha_waits_for_manual_instead_of_banning(self):
+        page = mock.Mock()
+        callback = mock.Mock()
+        context_control = {"account_login_status_callback": callback}
+        captcha = {
+            "status": "need_verification",
+            "health_status": "abnormal",
+            "reason": "Instagram requires image verification",
+            "force_manual": "true",
+            "challenge_type": "numeric_image_captcha",
+        }
+        with (
+            mock.patch.object(runner, "_warmup_risk_state", return_value=captcha),
+            mock.patch.object(runner, "_screenshot", return_value="captcha.png"),
+            mock.patch.object(runner, "_request_manual_takeover") as request_manual,
+            mock.patch.object(runner, "_resume_after_manual_takeover") as resume_auto,
+            mock.patch.object(
+                runner,
+                "_wait_for_manual_login_completion",
+                return_value={"status": "ready"},
+            ) as wait_manual,
+        ):
+            runner._guard_warmup_risk(
+                page,
+                "instagram",
+                {"stop_on_risk_limit": False},
+                _Logger(),
+                task={"id": "task-1", "payload": {}},
+                screenshot_dir=Path("."),
+                context_control=context_control,
+            )
+
+        page.reload.assert_not_called()
+        request_manual.assert_called_once_with(context_control)
+        resume_auto.assert_called_once_with(context_control)
+        wait_manual.assert_called_once()
+        callback.assert_has_calls([mock.call("need_verification"), mock.call("ready")])
+
+    def test_self_heal_skips_reload_on_human_verification_page(self):
+        page = mock.Mock()
+        page.url = "https://www.instagram.com/challenge/"
+        body = mock.Mock()
+        body.inner_text.return_value = "Help us confirm you're human to continue"
+        page.locator.return_value = body
+        with (
+            mock.patch.object(runner, "_screenshot") as screenshot,
+            mock.patch.object(runner, "_click_text_button") as click_retry,
+            mock.patch.object(runner, "_goto") as goto,
+        ):
+            runner._self_heal_login_page(
+                page,
+                "instagram",
+                _Logger(),
+                {"id": "human-verify"},
+                Path("."),
+                "login_state_not_ready",
+                1,
+            )
+
+        screenshot.assert_not_called()
+        click_retry.assert_not_called()
+        page.reload.assert_not_called()
+        goto.assert_not_called()
 
     def test_threads_post_open_does_not_swallow_cancellation(self):
         cancel_event = threading.Event()
