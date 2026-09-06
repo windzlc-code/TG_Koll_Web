@@ -3639,25 +3639,6 @@ def _self_heal_login_page(
     _raise_if_cancelled(cancel_event)
     if _manual_takeover_requested(context_control):
         return
-    body_text = ""
-    with contextlib.suppress(Exception):
-        raw_text = page.locator("body").inner_text(timeout=3000)
-        if isinstance(raw_text, str):
-            body_text = raw_text
-    page_url = str(getattr(page, "url", "") or "")
-    if (
-        _is_verification_url(page_url)
-        or _is_human_verification_text(body_text)
-        or _is_numeric_image_captcha_text(body_text)
-        or any(marker in body_text.lower() for marker in _verification_text_markers())
-    ):
-        logger.log(
-            "warn",
-            "login_self_heal_skipped_verification",
-            "检测到真人验证或验证码页面，已停止自动恢复，浏览器保持打开等待人工接手。",
-            {"attempt": attempt, "reason": reason, "url": _safe_navigation_url(page_url)},
-        )
-        return
     shot = _screenshot(page, screenshot_dir, task, f"login_self_heal_{attempt}", logger)
     logger.log(
         "warn",
@@ -5927,21 +5908,57 @@ def _guard_warmup_risk(
     challenge_type = str(risk.get("challenge_type") or "")
     if challenge_type in {"numeric_image_captcha", "human_verification"}:
         challenge_label = "数字图片验证码" if challenge_type == "numeric_image_captcha" else "真人验证页面"
-        logger.log(
-            "warn",
-            f"{platform}_{challenge_type}_manual_handoff",
-            f"检测到{challenge_label}，已停止自动操作，浏览器保持打开等待人工接手。",
-            {"status": risk.get("status", "need_verification")},
+        retry_key = f"{str(platform or '').strip().lower()}_{challenge_type}_retry_attempted"
+        retry_attempted = bool(
+            isinstance(context_control, dict) and context_control.get(retry_key)
         )
-        risk = {
-            **risk,
-            "status": "need_verification",
-            "health_status": "abnormal",
-            "force_manual": "true",
-            "challenge_type": challenge_type,
-            "reason": str(risk.get("reason") or "").strip()
-            or f"{_platform_name(platform)} {challenge_label}需要人工处理，自动操作已停止。",
-        }
+        if not retry_attempted:
+            if isinstance(context_control, dict):
+                context_control[retry_key] = True
+            logger.log(
+                "warn",
+                f"{platform}_{challenge_type}_retry",
+                f"检测到{challenge_label}，正在进行唯一一次低频重试。",
+                {"status": risk.get("status", "need_verification")},
+            )
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=30000)
+            except Exception as exc:
+                refreshed_risk = {
+                    "status": "need_verification",
+                    "health_status": "abnormal",
+                    "reason": f"{_platform_name(platform)} {challenge_label}重试失败，账号状态保持异常并等待人工确认。",
+                    "force_manual": "true",
+                    "challenge_type": "verification_retry_failed",
+                }
+                logger.log(
+                    "warn",
+                    f"{platform}_{challenge_type}_retry_failed",
+                    refreshed_risk["reason"],
+                    {"error": str(exc)[:500]},
+                )
+            else:
+                _wait_for_cancellation(1.5, cancel_event)
+                refreshed_risk = _warmup_risk_state(page, platform)
+            if refreshed_risk is None:
+                if isinstance(context_control, dict):
+                    context_control.pop(retry_key, None)
+                logger.log(
+                    "info",
+                    f"{platform}_{challenge_type}_cleared",
+                    f"{challenge_label}在一次重试后已解除，继续执行任务。",
+                    {},
+                )
+                return
+            risk = refreshed_risk
+        if str(risk.get("challenge_type") or "") == challenge_type:
+            risk = {
+                "status": "disabled",
+                "health_status": "banned",
+                "reason": f"{_platform_name(platform)} {challenge_label}在一次重试后仍未解除，账号已判定为封控死号并停止使用。",
+                "force_manual": "true",
+                "challenge_type": challenge_type,
+            }
     force_manual = str(risk.get("force_manual") or "").lower() == "true"
     if not force_manual and not bool(payload.get("stop_on_risk_limit", False)):
         return
