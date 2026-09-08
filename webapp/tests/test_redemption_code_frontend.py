@@ -15,6 +15,8 @@ def test_admin_redemption_workspace_is_part_of_existing_billing_page():
     assert 'id="redemptionCodeBody"' in ADMIN_HTML
     assert "/api/admin/billing/redemption-codes" in ADMIN_JS
     assert "完整代码仅显示一次" in ADMIN_HTML
+    assert "redemptionCodeCreateInFlight" in ADMIN_JS
+    assert 'submit.disabled = true' in ADMIN_JS
 
 
 def test_profile_uses_shared_feedback_dialog_for_redemption():

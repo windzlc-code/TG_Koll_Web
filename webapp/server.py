@@ -33609,6 +33609,21 @@ def create_app() -> FastAPI:
                     )
                     conn.execute("DELETE FROM persona_owners WHERE user_id = ?", (target_id,))
                     conn.execute("DELETE FROM persona_group_owners WHERE user_id = ?", (target_id,))
+                    # Keep a non-identifying redemption receipt so the code
+                    # remains permanently spent and health checks stay true
+                    # after the user's account and personal billing records
+                    # are purged.
+                    conn.execute(
+                        "UPDATE billing_redemption_codes SET redeemed_by = 0 "
+                        "WHERE status = 'redeemed' AND redeemed_by = ?",
+                        (target_id,),
+                    )
+                    conn.execute(
+                        "UPDATE billing_ledger SET user_id = 0 "
+                        "WHERE user_id = ? AND ref_type = 'redemption_code' "
+                        "AND event_type = 'redemption_code_redeemed'",
+                        (target_id,),
+                    )
                     for billing_table in (
                         "billing_ledger",
                         "billing_reservations",

@@ -3382,7 +3382,7 @@ def redemption_code_health(conn: sqlite3.Connection) -> dict[str, Any]:
         """
         SELECT COUNT(*)
         FROM billing_redemption_codes AS code
-        WHERE (code.status = 'redeemed' AND (code.redeemed_by <= 0 OR code.redeemed_at <= 0))
+        WHERE (code.status = 'redeemed' AND code.redeemed_at <= 0)
            OR (code.status != 'redeemed' AND (code.redeemed_by > 0 OR code.redeemed_at > 0))
            OR (code.status = 'redeemed' AND NOT EXISTS (
                  SELECT 1 FROM billing_ledger AS ledger
@@ -3390,6 +3390,7 @@ def redemption_code_health(conn: sqlite3.Connection) -> dict[str, Any]:
                    AND ledger.ref_id = code.id
                    AND ledger.event_type = 'redemption_code_redeemed'
                    AND ledger.amount_units = code.credit_units
+                   AND ledger.user_id = code.redeemed_by
                ))
         """
     ).fetchone()[0] or 0)

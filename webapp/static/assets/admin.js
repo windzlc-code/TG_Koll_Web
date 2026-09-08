@@ -1856,6 +1856,7 @@ const adminState = {
   billingOrderLoading: false,
   redemptionCodeRows: [],
   redemptionCodePlaintext: [],
+  redemptionCodeCreateInFlight: false,
   billingSelectedUserId: null,
   billingSelectedPoints: 0,
   billingLedgerRows: [],
@@ -5279,25 +5280,34 @@ async function checkRedemptionCodes() {
 
 async function createRedemptionCodes(event) {
   event.preventDefault();
+  if (adminState.redemptionCodeCreateInFlight) return;
   const points = Number(el("redemptionCodePoints")?.value || 0);
   const quantity = Number(el("redemptionCodeQuantity")?.value || 0);
   if (!Number.isFinite(points) || points <= 0) throw new Error("请填写大于 0 的积分");
   if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) throw new Error("生成数量必须为 1 至 100");
-  const result = await api("/api/admin/billing/redemption-codes", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      points,
-      quantity,
-      note: String(el("redemptionCodeNote")?.value || "").trim(),
-    }),
-  });
-  adminState.redemptionCodePlaintext = (result.items || []).map((item) => String(item.code || "")).filter(Boolean);
-  const output = el("redemptionCodeCreatedList");
-  if (output) output.textContent = adminState.redemptionCodePlaintext.join("\n");
-  if (el("redemptionCodeCreated")) el("redemptionCodeCreated").hidden = !adminState.redemptionCodePlaintext.length;
-  await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
-  setMsg("redemptionCodeMsg", `已生成 ${adminState.redemptionCodePlaintext.length} 个兑换码，请立即复制保存`, true);
+  adminState.redemptionCodeCreateInFlight = true;
+  const submit = el("btnCreateRedemptionCodes");
+  if (submit) submit.disabled = true;
+  try {
+    const result = await api("/api/admin/billing/redemption-codes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        points,
+        quantity,
+        note: String(el("redemptionCodeNote")?.value || "").trim(),
+      }),
+    });
+    adminState.redemptionCodePlaintext = (result.items || []).map((item) => String(item.code || "")).filter(Boolean);
+    const output = el("redemptionCodeCreatedList");
+    if (output) output.textContent = adminState.redemptionCodePlaintext.join("\n");
+    if (el("redemptionCodeCreated")) el("redemptionCodeCreated").hidden = !adminState.redemptionCodePlaintext.length;
+    await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
+    setMsg("redemptionCodeMsg", `已生成 ${adminState.redemptionCodePlaintext.length} 个兑换码，请立即复制保存`, true);
+  } finally {
+    adminState.redemptionCodeCreateInFlight = false;
+    if (submit) submit.disabled = false;
+  }
 }
 
 async function copyCreatedRedemptionCodes() {

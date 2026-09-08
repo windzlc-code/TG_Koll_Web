@@ -184,6 +184,24 @@ class RedemptionCodeClosedLoopTests(unittest.TestCase):
         self.assertTrue(health.json()["ok"])
         self.assertEqual(health.json()["counts"]["revoked"], 1)
 
+    def test_health_accepts_anonymized_redeemed_receipt_after_user_purge(self):
+        code = self._create_code(8)
+        redeemed = self.customer.post(
+            "/api/billing/redemption-codes/redeem", json={"code": code}
+        )
+        self.assertEqual(redeemed.status_code, 200, redeemed.text)
+        with db_module.db() as conn:
+            conn.execute(
+                "UPDATE billing_redemption_codes SET redeemed_by = 0 WHERE code_digest = ?",
+                (commercial_billing._redemption_code_digest(code),),
+            )
+            conn.execute(
+                "UPDATE billing_ledger SET user_id = 0 WHERE ref_type = 'redemption_code' AND event_type = 'redemption_code_redeemed'"
+            )
+            health = commercial_billing.redemption_code_health(conn)
+        self.assertTrue(health["ok"], health)
+        self.assertEqual(health["inconsistent"], 0)
+
     def test_concurrent_redeem_credits_exactly_one_wallet(self):
         code = self._create_code(12)
         barrier = threading.Barrier(2)
