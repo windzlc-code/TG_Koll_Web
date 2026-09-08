@@ -43,6 +43,7 @@ type FetchHotCandidatesInput = {
   sourcePolicy?: "reader_first" | "reader_only" | "authenticated_only";
   memorySummaries?: string[];
   keywords?: string[];
+  allKeywords?: string[];
   platform?: "threads" | "instagram" | string;
   /** Authoritative control-plane snapshot. When present, never read the worker's archive copy. */
   archiveSnapshot?: PersonaArchive;
@@ -204,6 +205,9 @@ export async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     keywords: Array.isArray(input.keywords)
       ? input.keywords.map((item) => String(item || "").trim()).filter(Boolean)
       : [],
+    allKeywords: Array.isArray(input.allKeywords)
+      ? input.allKeywords.map((item) => String(item || "").trim()).filter(Boolean)
+      : [],
     limit: Math.max(1, Math.min(Number(input.limit || 10), 20)),
     refresh: input.refresh === true,
     searchMode: input.searchMode === "normal" ? "normal" : "strict",
@@ -226,6 +230,7 @@ export async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     liveOnly: input.liveOnly === true,
     cookieStatuses: result.cookieStatuses,
     warnings: result.warnings,
+    emptyReason: result.emptyReason,
     candidates: result.candidates,
   };
 }

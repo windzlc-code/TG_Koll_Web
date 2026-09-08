@@ -151,6 +151,10 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         swipe = function_source("bindPersonaAccountPlatformSwipe", "bindAccountPoolAccountToPersona")
 
         self.assertIn("state.personaAutomationPlatform = nextPlatform", linked)
+        self.assertIn("setPersonaContentPlatform(next, persona)", CONSOLE_JS[
+            CONSOLE_JS.index("function stagePersonaAccountPlatformSelection"):
+            CONSOLE_JS.index("function renderPersonaAccountPlatformSelection")
+        ])
         self.assertIn("transitionPersonaAccountPlatform(", account_handler)
         self.assertIn("bindAccountPoolPlatformSwipe(host, {", swipe)
         self.assertIn("createPersonaAccountPlatformMotion(persona, next, direction)", swipe)

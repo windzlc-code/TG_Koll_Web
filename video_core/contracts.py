@@ -11,6 +11,7 @@ VIDEO_TASK_TYPES: tuple[str, ...] = (
     "video_language_replace",
     "replace_model",
     "replace_product",
+    "replace_productANDmodel",
     "image_generate",
 )
 
@@ -169,11 +170,14 @@ def normalize_video_result(task_type: str, value: Any, payload: dict[str, Any] |
         )
     elif typ == "video_language_replace":
         merged["video_path"] = _existing_path(source.get("video_path"), download_path)
-    elif typ in {"replace_model", "replace_product"}:
+    elif typ in {"replace_model", "replace_product", "replace_productANDmodel"}:
         merged.setdefault("duration_seconds", request.get("duration_seconds") or request.get("duration") or 0)
         if typ == "replace_model":
             merged.setdefault("mode", _string(request.get("mode") or "original"))
             merged.setdefault("mode_label", _string(request.get("mode_label") or merged.get("mode")))
+        if typ == "replace_productANDmodel":
+            merged.setdefault("mode", _string(request.get("mode") or "union"))
+            merged.setdefault("mode_label", _string(request.get("mode_label") or "联合替换"))
     elif typ == "image_generate":
         image_path = _existing_path(source.get("image_path"), source.get("download_path"), source.get("output_path"))
         merged["image_path"] = image_path

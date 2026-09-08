@@ -19,8 +19,6 @@ class AdminVideoRuntimeFrontendContractTests(unittest.TestCase):
             "rtVideoImagePriorityModelList",
             "rtVideoImageModelCandidate",
             "btnAddVideoImagePriorityModel",
-            "rtVideoMiniMaxApiKey",
-            "rtVideoMiniMaxBaseUrl",
             "rtVideoMiniMaxTtsModel",
             "rtVideoMiniMaxTtsVoiceId",
         )
@@ -36,6 +34,8 @@ class AdminVideoRuntimeFrontendContractTests(unittest.TestCase):
             "rtVideoReplaceProductAppId",
             "rtVideoEcommerceAppId",
             "rtVideoEcommerceFastAppId",
+            "rtVideoMiniMaxApiKey",
+            "rtVideoMiniMaxBaseUrl",
             "rtVideoTtsProvider",
             "rtVideoTtsBaseUrl",
             "rtVideoTtsApiKey",
@@ -55,13 +55,22 @@ class AdminVideoRuntimeFrontendContractTests(unittest.TestCase):
             "企业级共享 API Key",
             "口播热点模式",
             "图片模型优先级",
-            "MiniMax API Key",
-            "MiniMax 国内版接口地址",
+            "MiniMax Speech",
             "TTS 模型 ID",
             "默认音色 ID",
         ):
             self.assertIn(label, self.html)
-        self.assertIn('id="rtVideoMiniMaxBaseUrl" type="url" value="https://api.minimaxi.com" readonly', self.html)
+        self.assertIn('id="rtVideoMiniMaxTtsModel"', self.html)
+        self.assertIn("<select id=\"rtVideoMiniMaxTtsModel\">", self.html)
+        self.assertIn('value="speech-2.8-hd"', self.html)
+        self.assertIn('value="speech-2.8-turbo"', self.html)
+        self.assertIn('value="speech-02-hd"', self.html)
+        self.assertNotIn("speech-01-hd", self.html)
+        self.assertNotIn("MiniMax API Key", self.html)
+        self.assertNotIn("https://api.minimaxi.com", self.html)
+        self.assertIn('value="male-qn-qingse"', self.html)
+        self.assertIn('VIDEO_SPEECH_VOICE_DEFAULT = "male-qn-qingse"', self.javascript)
+        self.assertIn('text === "Wise_Woman"', self.javascript)
         self.assertIn("文字模型沿用系统文字模型配置", self.html)
 
     def test_source_runtime_keys_are_serialized_and_restored(self):
@@ -70,18 +79,17 @@ class AdminVideoRuntimeFrontendContractTests(unittest.TestCase):
             "runninghub_enterprise_api_key",
             "digital_human_oral_hot_topic_mode",
             "video_image_model_priority_order",
-            "minimax_api_key",
             "minimax_tts_model",
             "minimax_tts_voice_id",
         ):
             self.assertGreaterEqual(self.javascript.count(runtime_key), 2)
-        self.assertIn('minimax_base_url: "https://api.minimaxi.com"', self.javascript)
+        self.assertIn('video_tts_provider: "runninghub"', self.javascript)
+        self.assertNotIn('minimax_base_url: "https://api.minimaxi.com"', self.javascript)
 
     def test_source_secrets_use_existing_mask_contract(self):
         mappings = {
             "rtVideoRunningHubPersonalApiKey": "runninghub_personal_api_key",
             "rtVideoRunningHubEnterpriseApiKey": "runninghub_enterprise_api_key",
-            "rtVideoMiniMaxApiKey": "minimax_api_key",
         }
         for field_id, runtime_key in mappings.items():
             self.assertIn(f'{field_id}: "{runtime_key}"', self.javascript)

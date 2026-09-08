@@ -272,6 +272,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             self.script.index("\nfunction resizePersonaHotEditorContent")
         ]
         self.assertIn("source_content: source", rewrite_fn)
+        self.assertIn("publishTextNeedsOverLimitPrompt", rewrite_fn)
+        self.assertIn("confirmRewriteOverlimitText", rewrite_fn)
         self.assertIn("instruction,", rewrite_fn)
         self.assertIn('personaHotRewriteInstructionStore(persona.id)[candidateId] = ""', rewrite_fn)
         self.assertIn("可继续输入新的提示词再调整", rewrite_fn)
@@ -387,13 +389,28 @@ class MediaUploadComponentContractTests(unittest.TestCase):
 
     def test_hotspot_fetch_keeps_current_platform_results_separate(self):
         fetcher = self.script[
-            self.script.index("async function fetchPersonaHotCandidates"):
+            self.script.index("function personaHotEmptyFetchMessage"):
             self.script.index("\nasync function cancelPersonaHotCandidates")
         ]
         self.assertIn("platform: personaContentPlatform(persona)", fetcher)
         self.assertIn("previousOther", fetcher)
         self.assertIn("platformCandidates", fetcher)
         self.assertIn("mergedCandidates", fetcher)
+        self.assertIn("currentIds.length", fetcher)
+        self.assertIn("personaHotEmptyFetchMessage", fetcher)
+        self.assertIn("这次没有搜索到帖，还没有进入热度筛选", fetcher)
+        self.assertIn("搜到了帖，但没有符合条件的结果", fetcher)
+        self.assertNotIn("本次没有抓到浏览量加互动热度合计满 1000、或互动热度满 200、且近 30 天的公开帖。", fetcher)
+        self.assertIn("all_keywords: allKeywords", fetcher)
+        self.assertNotIn("热点候选已获取 ${candidateIds.length} 条", fetcher)
+
+    def test_hotspot_keyword_prepare_waits_long_enough_for_the_model(self):
+        prepare = self.script[
+            self.script.index("async function preparePersonaHotKeywords"):
+            self.script.index("\nasync function fetchPersonaHotCandidates")
+        ]
+        self.assertIn("}, 90000)", prepare)
+        self.assertIn("大约需要 20–40 秒", prepare)
 
     def test_hotspot_import_and_publish_wait_for_background_media_cache(self):
         submitter = self.script[
@@ -461,6 +478,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             platform_handler.index("clearPersonaHotUnreadCount"),
             platform_handler.index("if (nextPlatform === personaContentPlatform(persona))"),
         )
+        self.assertIn("还没有 Instagram 热点候选", picker)
+        self.assertIn("这次 Instagram 没有可用结果", picker)
         self.assertIn('<details class="persona-hot-keyword-disclosure">', picker)
         self.assertIn("personaHotKeywordChips", picker)
         self.assertNotIn("Cookie 状态", picker)

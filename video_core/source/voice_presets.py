@@ -260,7 +260,7 @@ def ensure_elevenlabs_preview_audio(*, preset: dict[str, str], output_path: Path
         return bundled_path
     preview_url = str((preset or {}).get("preview_url") or "").strip()
     if not preview_url:
-        raise RuntimeError("预设音色缺少 ElevenLabs preview_url")
+        raise RuntimeError("预设音色缺少预览地址")
     output_path = Path(output_path).expanduser().resolve()
     if output_path.exists() and output_path.stat().st_size > 0:
         return output_path
@@ -269,9 +269,9 @@ def ensure_elevenlabs_preview_audio(*, preset: dict[str, str], output_path: Path
     response = requests.get(preview_url, timeout=60)
     if response.status_code >= 400:
         detail = str(getattr(response, "text", "") or "")[:300]
-        raise RuntimeError(f"ElevenLabs 预设音色下载失败（HTTP {response.status_code}）：{detail}")
+        raise RuntimeError(f"预设音色下载失败（HTTP {response.status_code}）：{detail}")
     temp_path.write_bytes(response.content or b"")
     if temp_path.stat().st_size <= 0:
-        raise RuntimeError("ElevenLabs 预设音色下载为空文件")
+        raise RuntimeError("预设音色下载为空文件")
     temp_path.replace(output_path)
     return output_path

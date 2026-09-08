@@ -60,7 +60,7 @@ class BillingFrontendContractTests(unittest.TestCase):
     def test_admin_lists_and_billing_details_render_unlimited_accounts(self):
         self.assertIn('balanceCell.textContent = u.is_admin ? "-" : (unlimited ? "∞"', self.admin_script)
         self.assertIn('createBillingSummaryItem("算力点余额", unlimited ? "∞"', self.admin_script)
-        self.assertIn('? "无限"', self.admin_script)
+        self.assertIn('unlimited ? "∞"', self.admin_script)
         self.assertIn(".admin-billing-unlimited-option", self.admin_styles)
 
     def test_admin_wallet_kpi_and_credit_unit_fallback_are_unambiguous(self):
@@ -242,6 +242,58 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr));", dashboard_styles)
         self.assertIn("@media (max-width: 760px)", dashboard_styles)
 
+    def test_customer_billing_details_live_in_account_modal_not_pricing_page(self):
+        pricing = self.admin_markup[
+            self.admin_markup.index('id="secPricing"') : self.admin_markup.index('id="secRuntime"')
+        ]
+        detail_modal = self.admin_markup[
+            self.admin_markup.index('id="userDetailModal"') : self.admin_markup.index('id="userBillingModal"')
+        ]
+        billing_modal = self.admin_markup[
+            self.admin_markup.index('id="userBillingModal"') : self.admin_markup.index('id="adminMfaModal"')
+        ]
+        self.assertNotIn("用户计费详情与人工调整", pricing)
+        self.assertNotIn("基础换算参数", pricing)
+        self.assertNotIn('id="billingUserLookupForm"', self.admin_markup)
+        self.assertNotIn('id="userBillingSection"', detail_modal)
+        self.assertNotIn('id="billingUserWorkspace"', detail_modal)
+        self.assertIn('id="userResourceSection"', detail_modal)
+        self.assertIn('id="userGenerationBody"', detail_modal)
+        self.assertIn('id="userBillingSection"', billing_modal)
+        self.assertIn('id="billingUserWorkspace"', billing_modal)
+        self.assertIn('id="billingAdjustmentForm"', billing_modal)
+        self.assertIn('id="billingLedgerPageSize"', billing_modal)
+        self.assertIn('data-billing-ledger-filter="all"', billing_modal)
+        self.assertIn(">原因<", billing_modal)
+        self.assertIn("快捷输入", billing_modal)
+        self.assertIn("调整后算力点", billing_modal)
+        self.assertIn('id="billingCreditShortcutList"', billing_modal)
+        self.assertIn("function billingLedgerCoreReason", self.admin_script)
+        self.assertIn("BILLING_LEDGER_TEMPORARY_EVENTS", self.admin_script)
+        self.assertIn("reservation_refund", self.admin_script)
+        self.assertIn("if (amount === 0) return false", self.admin_script)
+        self.assertNotIn("导致扣费", self.admin_script)
+        self.assertIn("任务预扣", self.admin_script)
+        self.assertIn("管理员豁免", self.admin_script)
+        self.assertNotIn("entry.asset_type || \"-\"", self.admin_script)
+        self.assertNotIn("entry.event_type || entry.type || \"-\"", self.admin_script)
+        self.assertIn("function renderUserDetailResources", self.admin_script)
+        self.assertIn('["人设"', self.admin_script)
+        self.assertIn('["人设分组"', self.admin_script)
+        self.assertIn('["创建推文"', self.admin_script)
+        self.assertIn('["已发推文"', self.admin_script)
+        self.assertIn("/api/admin/tasks?limit=20&user_id=", self.admin_script)
+        self.assertNotIn('detailRow("登录账号"', self.admin_script)
+        self.assertNotIn('createBillingSummaryItem("客户"', self.admin_script)
+        self.assertIn('<label for="userApprovalNote">管理员审核备注</label>', self.admin_markup)
+        self.assertIn('if (el("userApprovalNote")) el("userApprovalNote").value', self.admin_script)
+        self.assertIn('addAction("详情", "user_detail", "detail")', self.admin_script)
+        self.assertIn('addAction("算力", "user_billing", "billing"', self.admin_script)
+        self.assertIn("async function openUserBillingModal", self.admin_script)
+        self.assertNotIn("billing_detail", self.admin_script)
+        self.assertIn("isRetiredCatalogPlanSku", self.admin_script)
+        self.assertIn("vanguard_personal_", self.admin_script)
+
     def test_admin_catalog_editor_uses_business_fields_instead_of_raw_json(self):
         for control_id in (
             "billingSubscriptionEditorList",
@@ -278,10 +330,9 @@ function billingLedgerEntries() {{ return ledgerRows; }}
             ".page-admin #secPricing .admin-billing-catalog-layout {\n  grid-template-columns: minmax(0, 1fr);",
             self.admin_styles,
         )
-        self.assertIn(
-            ".page-admin #secPricing .admin-billing-catalog-layout > .admin-billing-table-wrap .admin-billing-table",
-            self.admin_styles,
-        )
+        self.assertNotIn('id="billingCatalogBody"', self.admin_markup)
+        self.assertNotIn("客户套餐历史记录", self.admin_markup)
+        self.assertIn('id="btnPublishCatalogDraft"', self.admin_markup)
         self.assertIn("table-layout: fixed;", self.admin_styles)
         for editor_list in (
             "#billingSubscriptionEditorList",

@@ -44,42 +44,55 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
         captured: dict = {}
 
         class FakeResponse:
-            @staticmethod
-            def raise_for_status():
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
                 return None
 
-            @staticmethod
-            def json():
-                return {"base_resp": {"status_code": 0}, "data": {"audio": "00"}}
+            def json(self):
+                return self._payload
 
         def fake_post(url, **kwargs):
             captured["url"] = url
-            captured["json"] = kwargs["json"]
-            return FakeResponse()
+            captured["data"] = kwargs.get("data") or kwargs.get("json")
+            return FakeResponse({"taskId": "speech-task-1", "status": "RUNNING"})
+
+        def fake_query_task(**kwargs):
+            output = Path(kwargs["video_output_path"])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"rh-speech")
+            captured["query"] = kwargs
+            return {"status": "success", "message": "ok"}
 
         with tempfile.TemporaryDirectory() as tmpdir:
             backend = ArchivedSourceBackend()
-            backend.http = SimpleNamespace(post=fake_post)
-            output = backend._generate_minimax_tts(
-                speech_text="hello",
-                output_path=Path(tmpdir) / "speech.mp3",
-                payload={
-                    "video_tts_api_key": "test-key",
-                    "video_tts_base_url": "https://video.example.invalid",
-                    "minimax_base_url": "https://legacy.example.invalid",
-                    "video_tts_model": "explicit-video-model",
-                    "minimax_tts_model": "legacy-runtime-model",
-                    "video_default_voice_id": "explicit-video-voice",
-                    "minimax_tts_voice_id": "legacy-runtime-voice",
-                },
-                context=self._context("create_video"),
-            )
-            output_bytes = output.read_bytes()
+            with patch("video_core.source.runninghub_speech.runninghub_common.rh_post", side_effect=fake_post), patch(
+                "video_core.source.runninghub_speech.runninghub_common.query_task",
+                side_effect=fake_query_task,
+            ):
+                output = backend._generate_minimax_tts(
+                    speech_text="hello",
+                    output_path=Path(tmpdir) / "speech.mp3",
+                    payload={
+                        "video_tts_api_key": "test-key",
+                        "video_tts_base_url": "https://video.example.invalid",
+                        "minimax_base_url": "https://api.minimaxi.com",
+                        "video_tts_model": "speech-2.8-turbo",
+                        "minimax_tts_model": "speech-2.8-hd",
+                        "video_default_voice_id": "Elegant_Man",
+                        "minimax_tts_voice_id": "male-qn-qingse",
+                    },
+                    context=self._context("create_video"),
+                )
+                output_bytes = output.read_bytes()
 
-        self.assertEqual(captured["url"], "https://video.example.invalid/v1/t2a_v2")
-        self.assertEqual(captured["json"]["model"], "explicit-video-model")
-        self.assertEqual(captured["json"]["voice_setting"]["voice_id"], "explicit-video-voice")
-        self.assertEqual(output_bytes, b"\x00")
+        self.assertEqual(captured["url"], "https://video.example.invalid/openapi/v2/rhart-audio/text-to-audio/speech-2.8-turbo")
+        body = json.loads(captured["data"]) if isinstance(captured["data"], str) else captured["data"]
+        self.assertEqual(body["voice_id"], "Elegant_Man")
+        self.assertEqual(body["text"], "hello")
+        self.assertNotIn("/v1/t2a_v2", captured["url"])
+        self.assertEqual(output_bytes, b"rh-speech")
 
     def test_image_generate_builds_mode_specific_prompts_and_inputs(self):
         with tempfile.TemporaryDirectory() as tmpdir:

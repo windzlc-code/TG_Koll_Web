@@ -46,7 +46,7 @@ ALLOWED_CAPABILITIES = {
     "persona.profile_metrics.v1": "refresh-profile-metrics",
 }
 TERMINAL_STATES = {"success", "failed", "cancelled"}
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 62
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 63
 PERSONA_HOT_POOL_LOW_WATERMARK = 15
 PERSONA_HOT_POOL_TARGET_WATERMARK = 15
 PERSONA_HOT_POOL_CAPACITY = 30
@@ -947,7 +947,90 @@ class JobStore:
     def get(self, job_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             row = connection.execute("SELECT * FROM fetch_jobs WHERE id=?", (job_id,)).fetchone()
-            return self.public(row) if row is not None else None
+            if row is None:
+                return None
+            payload = self.public(row)
+            payload["queue"] = self._queue_view_for_row(connection, row)
+            return payload
+
+    @staticmethod
+    def _payload_is_pool_refill(payload_json: Any) -> bool:
+        try:
+            payload = json.loads(str(payload_json or "{}"))
+        except json.JSONDecodeError:
+            return False
+        return bool(payload.get("_poolRefill")) if isinstance(payload, dict) else False
+
+    @classmethod
+    def _row_is_interactive_hot(cls, row: sqlite3.Row | Mapping[str, Any]) -> bool:
+        if str(row["capability"] or "") != "persona.hot_candidates.v1":
+            return False
+        return not cls._payload_is_pool_refill(row["payload_json"])
+
+    @staticmethod
+    def _hot_queue_message(phase: str, queue_ahead: int, estimated_wait_seconds: int) -> str:
+        if phase == "fetching":
+            return "正在抓取公开帖。不想等可随时取消。"
+        if queue_ahead <= 0 and estimated_wait_seconds <= 5:
+            return "马上轮到你，抓取即将开始。不想等可随时取消。"
+        if queue_ahead <= 0:
+            return "正在等待空闲抓取位，大约还要不到 1 分钟。不想等可随时取消。"
+        minutes = max(1, (max(0, int(estimated_wait_seconds)) + 59) // 60)
+        return f"前面还有 {int(queue_ahead)} 人排队，大约还要等 {minutes} 分钟。不想等可随时取消。"
+
+    def _queue_view_for_row(self, connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+        concurrency = max(1, _worker_job_concurrency())
+        status = str(row["status"] or "")
+        running_count = int(connection.execute(
+            "SELECT COUNT(*) FROM fetch_jobs WHERE status='running'"
+        ).fetchone()[0])
+        queue_ahead = 0
+        estimated = 0
+        if status == "running":
+            phase = "fetching"
+            estimated = 50
+        elif status != "queued":
+            return {
+                "phase": status,
+                "queue_ahead": 0,
+                "running_count": running_count,
+                "slot_count": concurrency,
+                "estimated_wait_seconds": 0,
+                "message": "",
+            }
+        else:
+            phase = "queued"
+            created_at = int(row["created_at"] or 0)
+            job_id = str(row["id"] or "")
+            queued_rows = connection.execute(
+                """
+                SELECT id, created_at, capability, payload_json
+                FROM fetch_jobs
+                WHERE status='queued' AND cancel_requested=0
+                """
+            ).fetchall()
+            for item in queued_rows:
+                if not self._row_is_interactive_hot(item):
+                    continue
+                item_id = str(item["id"] or "")
+                if item_id == job_id:
+                    continue
+                item_created = int(item["created_at"] or 0)
+                if item_created < created_at or (item_created == created_at and item_id < job_id):
+                    queue_ahead += 1
+            estimated = (queue_ahead // concurrency) * 50
+            if running_count >= concurrency:
+                estimated += 50
+            if queue_ahead <= 0 and running_count < concurrency:
+                estimated = 0
+        return {
+            "phase": phase,
+            "queue_ahead": queue_ahead,
+            "running_count": running_count,
+            "slot_count": concurrency,
+            "estimated_wait_seconds": estimated,
+            "message": self._hot_queue_message(phase, queue_ahead, estimated),
+        }
 
     def claim_next(self) -> tuple[dict[str, Any], dict[str, Any]] | None:
         now = int(time.time())
@@ -960,14 +1043,38 @@ class JobStore:
                 ORDER BY created_at,id
                 """
             ).fetchall()
+            running = connection.execute(
+                """
+                SELECT capability, payload_json FROM fetch_jobs
+                WHERE status='running'
+                """
+            ).fetchall()
+
+            def _is_interactive_hot(row: sqlite3.Row) -> bool:
+                if str(row["capability"] or "") != "persona.hot_candidates.v1":
+                    return False
+                payload = json.loads(str(row["payload_json"] or "{}"))
+                return not payload.get("_poolRefill")
+
+            def _is_pool_refill(row: sqlite3.Row) -> bool:
+                if str(row["capability"] or "") != "persona.hot_candidates.v1":
+                    return False
+                payload = json.loads(str(row["payload_json"] or "{}"))
+                return bool(payload.get("_poolRefill"))
+
+            interactive_busy = any(_is_interactive_hot(item) for item in (*running, *queued))
             row = None
             for candidate in queued:
-                payload = json.loads(str(candidate["payload_json"] or "{}"))
-                if not payload.get("_poolRefill"):
+                if _is_pool_refill(candidate) and interactive_busy:
+                    continue
+                if not _is_pool_refill(candidate):
                     row = candidate
                     break
-            if row is None and queued:
-                row = queued[0]
+            if row is None and queued and not interactive_busy:
+                for candidate in queued:
+                    if _is_pool_refill(candidate):
+                        row = candidate
+                        break
             if row is None:
                 return None
             updated = connection.execute(
@@ -1068,6 +1175,14 @@ class JobStore:
                         (now, job_id),
                     )
                     running_ids.append(job_id)
+            connection.execute(
+                """
+                UPDATE fetch_pool_targets
+                SET next_run_at=CASE WHEN next_run_at > ? THEN next_run_at ELSE ? END,
+                    updated_at=?
+                """,
+                (now + 120, now + 120, now),
+            )
         return running_ids
 
     def retry(self, job_id: str, *, idempotency_key: str) -> tuple[dict[str, Any], bool]:
@@ -1501,7 +1616,7 @@ def _apply_hot_reader_execution_profile(
 ) -> None:
     runtime_environment["SENTIMENT_HOT_READER_CONCURRENCY"] = "2" if background_refill else "24"
     runtime_environment["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"] = "1" if background_refill else "0"
-    runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "55000" if background_refill else "45000"
+    runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "40000" if background_refill else "50000"
     runtime_environment["SENTIMENT_HOT_READER_JITTER_MAX_MS"] = "5000" if background_refill else "200"
     runtime_environment["SENTIMENT_HOT_READER_MAX_ATTEMPTS"] = "2" if background_refill else "1"
     requested = str(platform or "").strip().lower()
@@ -1521,6 +1636,9 @@ def _run_tool_r18_job_once(
     runtime_payload.pop("userInitiated", None)
     if capability in {"persona.hot_candidates.v1", "persona.hot_keywords.v1"}:
         runtime_payload["keywords"] = _clean_hot_keywords(runtime_payload.get("keywords"))
+        runtime_payload["allKeywords"] = _clean_hot_keywords(
+            runtime_payload.get("allKeywords") or runtime_payload.get("all_keywords"),
+        ) or list(runtime_payload["keywords"])
         if capability == "persona.hot_candidates.v1" and not _has_current_hot_keyword_strategy(runtime_payload):
             raise RuntimeError("persona hot keywords must use the current new-host strategy")
     for private_field in (
@@ -1866,6 +1984,9 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
             if normalized.get("_poolRefill"):
                 raise ProtocolError("background pool refill cannot be submitted externally")
             normalized["keywords"] = _clean_hot_keywords(normalized.get("keywords"))
+            normalized["allKeywords"] = _clean_hot_keywords(
+                normalized.get("allKeywords") or normalized.get("all_keywords"),
+            ) or list(normalized["keywords"])
             if not _has_current_hot_keyword_strategy(normalized):
                 raise ProtocolError("persona hot keywords must use the current new-host strategy")
         if capability == "crm.threads_live_search.v1" and normalized.get("liveOnly") is not True:

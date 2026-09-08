@@ -7,6 +7,17 @@ from pathlib import Path
 from typing import Any
 
 MINIMAX_CN_BASE_URL = "https://api.minimaxi.com"
+RUNNINGHUB_SPEECH_BASE_URL = "https://www.runninghub.ai"
+RUNNINGHUB_SPEECH_DEFAULT_MODEL = "speech-2.8-hd"
+RUNNINGHUB_SPEECH_DEFAULT_VOICE = "male-qn-qingse"
+RUNNINGHUB_SPEECH_MODELS = {
+    "speech-2.8-hd",
+    "speech-2.8-turbo",
+    "speech-2.6-hd",
+    "speech-2.6-turbo",
+    "speech-02-hd",
+    "speech-02-turbo",
+}
 
 DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "runninghub_api_key": "",
@@ -32,9 +43,9 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "llm_default_model_gpt": "",
     "llm_model_priority_order": "google/gemini-3.1-pro-preview, google/gemini-3.5-flash",
     "minimax_api_key": "",
-    "minimax_base_url": MINIMAX_CN_BASE_URL,
-    "minimax_tts_model": "speech-2.8-hd",
-    "minimax_tts_voice_id": "male-qn-qingse",
+    "minimax_base_url": RUNNINGHUB_SPEECH_BASE_URL,
+    "minimax_tts_model": RUNNINGHUB_SPEECH_DEFAULT_MODEL,
+    "minimax_tts_voice_id": RUNNINGHUB_SPEECH_DEFAULT_VOICE,
     "minimax_tts_format": "mp3",
     "minimax_tts_language_boost": "auto",
     "create_video_app_id": "2068273204367544322",
@@ -116,9 +127,15 @@ def load_runtime_config() -> dict[str, Any]:
             if not _has_runtime_value(merged.get(key)) and _has_runtime_value(value):
                 merged[key] = value
     merged["minimax_api_key"] = str(merged.get("minimax_api_key") or "").strip()
-    merged["minimax_base_url"] = MINIMAX_CN_BASE_URL
-    merged["minimax_tts_model"] = str(merged.get("minimax_tts_model") or "speech-2.8-hd").strip() or "speech-2.8-hd"
-    merged["minimax_tts_voice_id"] = str(merged.get("minimax_tts_voice_id") or "male-qn-qingse").strip() or "male-qn-qingse"
+    speech_model = str(merged.get("minimax_tts_model") or RUNNINGHUB_SPEECH_DEFAULT_MODEL).strip()
+    merged["minimax_tts_model"] = speech_model if speech_model in RUNNINGHUB_SPEECH_MODELS else RUNNINGHUB_SPEECH_DEFAULT_MODEL
+    speech_voice = str(merged.get("minimax_tts_voice_id") or "").strip()
+    merged["minimax_tts_voice_id"] = (
+        RUNNINGHUB_SPEECH_DEFAULT_VOICE
+        if not speech_voice or speech_voice == "Wise_Woman"
+        else speech_voice
+    )
+    merged["minimax_base_url"] = RUNNINGHUB_SPEECH_BASE_URL
     merged["minimax_tts_format"] = str(merged.get("minimax_tts_format") or "mp3").strip().lower() or "mp3"
     merged["minimax_tts_language_boost"] = str(merged.get("minimax_tts_language_boost") or "auto").strip() or "auto"
     return merged

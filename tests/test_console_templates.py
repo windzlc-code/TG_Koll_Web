@@ -87,6 +87,18 @@ class ConsoleTemplateMarkupTests(unittest.TestCase):
         self.assertNotIn("width: min(1420px", styles)
         self.assertNotIn("@container persona-account-panel (max-width: 520px)", styles)
 
+    def test_persona_avatar_crop_options_are_flat_and_clipped(self):
+        root = Path(__file__).resolve().parents[1] / "webapp" / "static" / "assets"
+        source = (root / "console.js").read_text(encoding="utf-8")
+        styles = (root / "console.css").read_text(encoding="utf-8")
+        self.assertIn("persona-avatar-crop-option-label", source)
+        self.assertIn(".console-page .console-modal button.persona-avatar-crop-option", styles)
+        option_css = styles[styles.rindex(".console-page .console-modal button.persona-avatar-crop-option"):]
+        self.assertIn("overflow: hidden", option_css)
+        self.assertIn("box-shadow: none", option_css)
+        self.assertIn("max-width: 48px", option_css)
+        self.assertIn("object-fit: cover", option_css)
+
     def test_persona_group_toggle_closes_aria_expanded_attribute(self):
         source = (
             Path(__file__).resolve().parents[1]

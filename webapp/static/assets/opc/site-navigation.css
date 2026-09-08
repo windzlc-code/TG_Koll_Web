@@ -179,7 +179,7 @@ html {
 }
 
 .site-nav > a[data-site-nav-key="console"] {
-  flex-basis: 70px;
+  flex-basis: 110px;
 }
 
 .site-nav > a[data-site-nav-key="aboutVecto"] {
@@ -252,6 +252,30 @@ html {
   pointer-events: none;
 }
 
+.site-header[data-site-page="video"],
+.site-header[data-site-page="crm"],
+.site-header[data-site-page="video-login"],
+.site-header[data-site-page="crm-login"] {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.site-header[data-site-page="video"] > .site-nav,
+.site-header[data-site-page="crm"] > .site-nav,
+.site-header[data-site-page="video-login"] > .site-nav,
+.site-header[data-site-page="crm-login"] > .site-nav,
+.site-header[data-site-page="video"] .site-mobile-menu,
+.site-header[data-site-page="crm"] .site-mobile-menu,
+.site-header[data-site-page="video-login"] .site-mobile-menu,
+.site-header[data-site-page="crm-login"] .site-mobile-menu {
+  display: none !important;
+}
+
+.site-header[data-site-page="video"][data-site-mode="public"][data-site-auth-state="pending"] .header-actions,
+.site-header[data-site-page="crm"][data-site-mode="public"][data-site-auth-state="pending"] .header-actions {
+  visibility: visible;
+  pointer-events: auto;
+}
+
 @media (min-width: 1241px) {
   .site-header[data-site-mode="public"] .header-actions {
     min-width: 274px;
@@ -260,7 +284,10 @@ html {
 
   /* Keep the console, CRM, and public pages on the same grid anchor when a nav link navigates between them. */
   .site-header[data-site-page="console"] .header-actions,
-  .site-header[data-site-page="crm"] .header-actions {
+  .site-header[data-site-page="crm"] .header-actions,
+  .site-header[data-site-page="video"] .header-actions,
+  .site-header[data-site-page="video-login"] .header-actions,
+  .site-header[data-site-page="crm-login"] .header-actions {
     min-width: 274px;
     justify-content: flex-end;
   }

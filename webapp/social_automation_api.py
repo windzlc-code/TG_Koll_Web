@@ -544,6 +544,8 @@ class LiveBrowserLoginAssistancePayload(StrictProxyModel):
     login_username: str = Field(default="", max_length=SOCIAL_ACCOUNT_LOGIN_USERNAME_MAX_LENGTH)
     login_password: str = Field(default="", max_length=SOCIAL_ACCOUNT_LOGIN_PASSWORD_MAX_LENGTH)
     action_label: str = Field(default="", max_length=80)
+    action_role: str = Field(default="", max_length=32)
+    action_selector: str = Field(default="", max_length=240)
 
 
 def configure_social_automation(*, data_dir: Path, new_id: Callable[[str], str] | None = None) -> None:
@@ -2299,7 +2301,13 @@ def _bundle_console_redirect(
     )
     if str(account_id or "").strip():
         query["bundle_account_id"] = str(account_id).strip()
-    return RedirectResponse(url=f"/bundle-auth-complete.html?{urlencode(query)}", status_code=302)
+    path = str(safe_return.path or "/console.html").strip() or "/console.html"
+    return RedirectResponse(url=f"{path}?{urlencode(query)}", status_code=302)
+
+
+def _bundle_cancel_return_response(*, return_path: str = "") -> RedirectResponse:
+    fallback = _safe_bundle_console_return_path(return_path)
+    return RedirectResponse(url=fallback, status_code=302)
 
 
 def _bundle_callback_url(request: Request, request_id: str, *, return_path: str = "") -> str:
@@ -2461,6 +2469,122 @@ def _enqueue_bundle_oauth_live_task(
     return task_id
 
 
+def _bundle_public_origin() -> str:
+    configured_origin = str(os.getenv("HTTPS_CANONICAL_ORIGIN", "https://www.vecto-ai.cn") or "").strip().rstrip("/")
+    parsed = urlparse(configured_origin)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise HTTPException(status_code=503, detail="系统无法识别安全的授权回调地址")
+    return configured_origin
+
+
+def _bundle_canonical_callback_url(request_id: str) -> str:
+    return (
+        f"{_bundle_public_origin()}/api/persona_dashboard/automation/accounts/bundle/callback"
+        f"?{urlencode({'request_id': str(request_id or '').strip()})}"
+    )
+
+
+def _pending_bundle_auth_for_account(account_id: str) -> dict[str, Any] | None:
+    clean_id = str(account_id or "").strip()
+    if not clean_id:
+        return None
+    now = _now()
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM social_account_auth_requests
+            WHERE account_id = ? AND status = 'pending' AND expires_at >= ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (clean_id, now),
+        ).fetchone()
+    if row is None:
+        return None
+    request_id = str(row["id"] or "").strip()
+    return {
+        "request_id": request_id,
+        "task_id": _bundle_oauth_task_id_for_request(request_id),
+        "platform": str(row["platform"] or ""),
+        "reused": True,
+    }
+
+
+def _start_bundle_reauthorization_for_account(account: dict[str, Any]) -> dict[str, Any]:
+    from .bundle_social import BundleSocialClient, BundleSocialError
+
+    account_id = str(account.get("id") or "").strip()
+    platform = _normalize_platform(account.get("platform"))
+    owner_user_id = int(account.get("user_id") or 0)
+    persona_id = str(account.get("persona_id") or "").strip()
+    team_id = str(account.get("external_team_id") or "").strip()
+    if not account_id or not owner_user_id or not team_id:
+        raise BundleSocialError("账号授权信息不完整，无法自动续约")
+    existing = _pending_bundle_auth_for_account(account_id)
+    if existing and existing.get("request_id") and existing.get("task_id"):
+        return existing
+    request_id = _NEW_ID("bundle_auth")
+    now = _now()
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE social_account_auth_requests
+            SET status = 'superseded', updated_at = ?
+            WHERE account_id = ? AND status = 'pending'
+            """,
+            (now, account_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO social_account_auth_requests(
+              id, user_id, persona_id, account_id, platform, team_id,
+              status, error, expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', '', ?, ?, ?)
+            """,
+            (request_id, owner_user_id, persona_id, account_id, platform, team_id, now + 900, now, now),
+        )
+    try:
+        client = BundleSocialClient()
+        url = client.create_connect_link(
+            team_id=team_id,
+            platform=platform,
+            redirect_url=_bundle_canonical_callback_url(request_id),
+        )
+    except BundleSocialError as exc:
+        with db() as conn:
+            conn.execute(
+                "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
+                (str(exc), _now(), request_id),
+            )
+        raise
+    task_id = _enqueue_bundle_oauth_live_task(
+        owner_user_id=owner_user_id,
+        persona_id=persona_id,
+        platform=platform,
+        account_id=account_id,
+        request_id=request_id,
+        oauth_url=url,
+    )
+    return {
+        "request_id": request_id,
+        "task_id": task_id,
+        "platform": platform,
+        "reused": False,
+    }
+
+
+def _requeue_for_bundle_reauth(task_id: str, exc: BaseException) -> bool:
+    return False
+
+
 def _bundle_oauth_host_account(task: dict[str, Any]) -> dict[str, Any]:
     task_id = str(task.get("id") or "oauth")
     data_root = Path(_DATA_DIR) if _DATA_DIR else Path(tempfile.gettempdir())
@@ -2510,13 +2634,19 @@ def _start_bundle_authorization(
     request: Request,
     user: dict[str, Any],
 ) -> dict[str, Any]:
-    from .bundle_social import BundleSocialClient, BundleSocialError
+    from .bundle_social import (
+        BundleSocialClient,
+        BundleSocialError,
+        platform_label as bundle_platform_label,
+        platform_supports_oauth_account_switch,
+    )
 
     platform = _normalize_platform(payload.platform)
     persona_id = str(payload.persona_id or "").strip()
     account_id = str(payload.account_id or "").strip()
     owner_user_id = _identity_user_id(user)
     account_team_id = ""
+    account_username = ""
     _require_persona_reference_access(persona_id, user)
     with db() as conn:
         _require_active_owner_user(conn, owner_user_id)
@@ -2527,7 +2657,10 @@ def _start_bundle_authorization(
         )
         if account_id:
             row = conn.execute(
-                "SELECT id, platform, user_id, external_team_id FROM social_accounts WHERE id = ?",
+                """
+                SELECT id, platform, user_id, username, auth_provider, external_team_id, external_account_id
+                FROM social_accounts WHERE id = ?
+                """,
                 (account_id,),
             ).fetchone()
             if not row or int(row["user_id"] or 0) != owner_user_id:
@@ -2535,6 +2668,7 @@ def _start_bundle_authorization(
             if str(row["platform"] or "").strip().lower() != platform:
                 raise HTTPException(status_code=400, detail="授权平台与账号平台不一致")
             account_team_id = str(row["external_team_id"] or "").strip()
+            account_username = str(row["username"] or "").strip().lstrip("@")
         elif platform == "threads" and not _billing_admin_waived(user):
             account_limit = commercial_billing.threads_account_limit(conn, owner_user_id, now=_now())
             current_count = int(
@@ -2554,6 +2688,34 @@ def _start_bundle_authorization(
     now = _now()
     try:
         client = BundleSocialClient()
+        if account_id and account_team_id:
+            try:
+                inspection = client.inspect_social_account(team_id=account_team_id, platform=platform)
+            except Exception:
+                inspection = {"valid": False}
+            if inspection.get("valid"):
+                inspected = inspection.get("account") if isinstance(inspection.get("account"), dict) else {}
+                username = str(inspected.get("username") or account_username or "").strip().lstrip("@")
+                display = bundle_platform_label(platform)
+                return {
+                    "ok": True,
+                    "already_authorized": True,
+                    "valid": True,
+                    "flow": "already_authorized",
+                    "platform": platform,
+                    "account_id": account_id,
+                    "username": username,
+                    "url": "",
+                    "task_id": "",
+                    "live_window": False,
+                    "message": (
+                        f"{display} 账号 @{username} 授权仍有效，无需重复授权。"
+                        if username
+                        else f"当前 {display} 账号授权仍有效，无需重复授权。"
+                    ),
+                }
+        adding_new_account = not account_id
+        switch_supported = adding_new_account and platform_supports_oauth_account_switch(platform)
         team_id = account_team_id
         if not team_id:
             team_prefix = f"vecto-{owner_user_id}-{platform}-"
@@ -2647,7 +2809,13 @@ def _start_bundle_authorization(
                 """,
                 (request_id, owner_user_id, persona_id, account_id, platform, team_id, now + 900, now, now),
             )
-        url = client.create_connect_link(team_id=team_id, platform=platform, redirect_url=redirect_url)
+        url = client.create_connect_link(
+            team_id=team_id,
+            platform=platform,
+            redirect_url=redirect_url,
+            disable_auto_login=switch_supported,
+            force_browser_oauth=True,
+        )
     except BundleSocialError as exc:
         with db() as conn:
             conn.execute(
@@ -2655,32 +2823,27 @@ def _start_bundle_authorization(
                 (str(exc), _now(), request_id),
             )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    try:
-        task_id = _enqueue_bundle_oauth_live_task(
-            owner_user_id=owner_user_id,
-            persona_id=persona_id,
-            platform=platform,
-            account_id=account_id,
-            request_id=request_id,
-            oauth_url=url,
-        )
-    except Exception as exc:
-        LOGGER.exception("Failed to start isolated bundle oauth browser")
-        with db() as conn:
-            conn.execute(
-                "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
-                ("无法启动账号独立授权窗口", _now(), request_id),
-            )
-        raise HTTPException(status_code=503, detail="无法启动账号独立授权窗口，请稍后重试") from exc
+    display = bundle_platform_label(platform)
+    if switch_supported:
+        switch_hint = f"授权页会尽量打开 {display} 账号选择。若仍进入当前已登录账号，请先在浏览器退出后再登录要添加的新账号。"
+        switch_mode = "oauth"
+    elif adding_new_account:
+        switch_hint = f"{display} 官方授权不支持在授权页切换账号。请先在当前浏览器退出已登录的 {display} 账号，再登录要添加的新账号后继续。"
+        switch_mode = "manual"
+    else:
+        switch_hint = ""
+        switch_mode = ""
     return {
         "ok": True,
         "request_id": request_id,
         "platform": platform,
         "account_id": account_id,
-        "flow": "live_window",
+        "flow": "user_browser",
         "url": url,
-        "task_id": task_id,
-        "live_window": True,
+        "task_id": "",
+        "live_window": False,
+        "account_switch": switch_mode,
+        "account_switch_hint": switch_hint,
     }
 
 
@@ -2698,9 +2861,7 @@ def _finalize_bundle_authorization(
             (str(request_id),),
         ).fetchone()
     if not auth_row:
-        return _bundle_console_redirect(
-            status="error", platform="", message="授权请求不存在，请重新发起授权", return_path=return_path,
-        )
+        return _bundle_cancel_return_response(return_path=return_path)
     owner_user_id = int(auth_row["user_id"] or 0)
     platform = str(auth_row["platform"] or "").strip().lower()
     if str(auth_row["status"] or "") == "completed":
@@ -2712,9 +2873,7 @@ def _finalize_bundle_authorization(
             account_id=str(auth_row["account_id"] or ""),
         )
     if int(auth_row["expires_at"] or 0) < _now():
-        return _bundle_console_redirect(
-            status="error", platform=platform, message="授权请求已过期，请重新授权", return_path=return_path,
-        )
+        return _bundle_cancel_return_response(return_path=return_path)
     callback_value = " ".join(
         f"{str(key or '')} {str(value or '')}"
         for key, value in request.query_params.multi_items()
@@ -2727,7 +2886,7 @@ def _finalize_bundle_authorization(
                 "UPDATE social_account_auth_requests SET status = 'failed', error = ?, updated_at = ? WHERE id = ?",
                 (message, _now(), str(request_id)),
             )
-        return _bundle_console_redirect(status="error", platform=platform, message=message, return_path=return_path)
+        return _bundle_cancel_return_response(return_path=return_path)
     try:
         client = BundleSocialClient()
         provider_account: dict[str, Any] = {}
@@ -2772,7 +2931,7 @@ def _finalize_bundle_authorization(
         if comparable_expected and expected_username.casefold() != provider_username.casefold():
             message = (
                 f"授权账号 @{provider_username} 与待授权账号 @{expected_username} 不一致，"
-                "请确认指纹环境登录的是该账号后重试"
+                "请在当前浏览器退出或切换到该账号后再授权"
             )
             try:
                 client.disconnect_social_account(
@@ -4974,7 +5133,15 @@ def _live_browser_sessions(*, user_id: int | None = None, raise_on_error: bool =
             if not isinstance(assistance, dict):
                 assistance = session.get("login_assistance")
             if not isinstance(assistance, dict) or not assistance:
-                if current_task_type == "publish_post":
+                account_provider = str(dict(row).get("auth_provider") or "").strip().lower()
+                if not account_provider:
+                    try:
+                        account_provider = str((get_social_account(str(row["account_id"] or "")) or {}).get("auth_provider") or "browser").strip().lower()
+                    except Exception:
+                        account_provider = "browser"
+                if current_task_type == "publish_post" and account_provider == "bundle":
+                    assistance_title, assistance_message = "正在发布", "正在通过平台授权接口提交内容。"
+                elif current_task_type == "publish_post":
                     assistance_title, assistance_message = "正在启动发布", "正在连接指纹浏览器并准备发布内容。"
                 elif current_task_type == "bundle_oauth":
                     assistance_title, assistance_message = "正在启动官方授权", "正在使用当前账号的独立指纹环境打开授权页。"
@@ -5782,7 +5949,11 @@ def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLog
         raise HTTPException(status_code=422, detail="请输入验证码")
     if kind == "credentials" and (not str(payload.login_username or "").strip() or not str(payload.login_password or "")):
         raise HTTPException(status_code=422, detail="请完整填写登录账号和密码")
-    if kind == "choice" and not str(payload.action_label or "").strip():
+    if kind == "choice" and not (
+        str(payload.action_label or "").strip()
+        or str(payload.action_role or "").strip()
+        or str(payload.action_selector or "").strip()
+    ):
         raise HTTPException(status_code=422, detail="请选择一个页面操作")
     actions = control.get("login_assistance_queue")
     if actions is None or not hasattr(actions, "put_nowait"):
@@ -5801,8 +5972,18 @@ def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLog
             for item in (assistance.get("actions") or [])
             if isinstance(item, dict) and str(item.get("label") or "").strip()
         }
+        allowed_roles = {
+            str(item.get("role") or "").strip().lower()
+            for item in (assistance.get("actions") or [])
+            if isinstance(item, dict) and str(item.get("role") or "").strip()
+        }
         choice_label = str(payload.action_label or "").strip()
-        accepts_choice = kind == "choice" and choice_label in allowed_actions
+        choice_role = str(payload.action_role or "").strip().lower()
+        accepts_choice = kind == "choice" and (
+            (choice_label and choice_label in allowed_actions)
+            or (choice_role and choice_role in allowed_roles)
+            or (kind == "choice" and not allowed_actions and (choice_label or choice_role))
+        )
         if kind not in {"verification_code", "credentials", "choice"} or (
             expected_kind != kind and not accepts_choice
         ):
@@ -5815,6 +5996,11 @@ def queue_live_browser_login_assistance(session_id: str, payload: LiveBrowserLog
             action["login_password"] = str(payload.login_password or "")
         elif kind == "choice":
             action["action_label"] = choice_label
+            if choice_role:
+                action["action_role"] = choice_role
+            selector = str(payload.action_selector or "").strip()
+            if selector:
+                action["action_selector"] = selector
         try:
             actions.put_nowait(action)
         except queue.Full as exc:
@@ -10712,6 +10898,7 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
         run_social_publish_batch,
         run_social_task,
     )
+    from .bundle_social import BundleReauthRequiredError
 
     logger = _DbTaskLogger(task["id"])
     try:
@@ -10902,6 +11089,18 @@ def _execute_claimed_task_with_control(task: dict[str, Any], control: dict[str, 
     except UnsupportedActionError as exc:
         if not _is_task_cancelled(str(task["id"])):
             _finish_task(task["id"], "failed", {"unsupported": True}, str(exc))
+        return
+    except BundleReauthRequiredError as exc:
+        if _is_task_cancelled(str(task["id"])):
+            return
+        if _requeue_for_bundle_reauth(str(task["id"]), exc):
+            return
+        _finish_task(
+            task["id"],
+            "failed",
+            {"provider": "bundle", "bundle_reauth": True, "retryable": True},
+            "平台授权已失效。请在当前浏览器登录对应账号后，点击登录并授权。",
+        )
         return
     if _is_task_cancelled(str(task["id"])):
         return
@@ -13066,6 +13265,17 @@ def _confirmed_published_url(result: dict[str, Any] | None, platform: Any) -> st
     # compose, source, or redirect URL, so it must never settle a publish.
     if published.get("confirmed") is True:
         candidates.extend((published.get("permalink"), published.get("url")))
+    provider = str(payload.get("provider") or "").strip().lower()
+    api_status = str(payload.get("status") or published.get("status") or "").strip().upper()
+    if provider == "bundle" and api_status in {"POSTED", "PUBLISHED", "SUCCESS", "COMPLETED"}:
+        from .bundle_social import _result_url
+
+        candidates.extend((
+            payload.get("url"),
+            published.get("permalink"),
+            published.get("url"),
+            _result_url(published.get("raw") if isinstance(published.get("raw"), dict) else published),
+        ))
     raw_url = next((value for value in candidates if str(value or "").strip()), "")
     clean_platform = str(platform or "").strip().lower()
     if clean_platform == "threads":
@@ -13881,6 +14091,10 @@ def _fail_task_safely(task_id: str, exc: Exception) -> None:
     try:
         if _is_task_cancelled(task_id):
             return
+        from .bundle_social import BundleReauthRequiredError
+
+        if isinstance(exc, BundleReauthRequiredError) and _requeue_for_bundle_reauth(task_id, exc):
+            return
         row = get_social_task(task_id)
         payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
         confirmation = payload.get("_publish_confirmation") if isinstance(payload, dict) else None
@@ -14444,6 +14658,13 @@ def _task_public(row: Any, *, billing_reservation_status: str = "") -> dict[str,
     task_result = _loads(item.get("result_json"), {})
     public_payload = _loads(item.get("payload_json"), {})
     task_summary = _live_browser_task_summary(item)
+    login_assistance = {}
+    with _RUNNING_TASK_CONTROLS_LOCK:
+        running_control = _RUNNING_TASK_CONTROLS.get(str(item.get("id") or ""))
+    if isinstance(running_control, dict):
+        assistance_state = running_control.get("login_assistance_state")
+        if isinstance(assistance_state, dict):
+            login_assistance = dict(assistance_state)
     if isinstance(public_payload, dict):
         public_payload = dict(public_payload)
         public_payload.pop(_TASK_WORKER_LEASE_KEY, None)
@@ -14474,6 +14695,7 @@ def _task_public(row: Any, *, billing_reservation_status: str = "") -> dict[str,
         "finished_at": int(item.get("finished_at") or 0),
         "payload": _redact_sensitive(public_payload),
         "result": _redact_sensitive(task_result),
+        "login_assistance": _redact_sensitive(login_assistance) if login_assistance else {},
         "task_summary": task_summary,
         "error": str(item.get("error") or ""),
         "retry_count": int(item.get("retry_count") or 0),

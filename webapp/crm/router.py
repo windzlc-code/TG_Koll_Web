@@ -41,7 +41,7 @@ from .business import (
     remove_pool_member,
     soft_delete_resource,
 )
-from .importer import activate_import, dry_run_import, import_root
+from .importer import import_root
 from .history_cleanup import delete_daily_runs, delete_outreach_campaign, delete_tracking_campaign
 from .legacy_operations import (
     Provider,
@@ -93,12 +93,9 @@ from .repository import (
 from .service import (
     effective_module_state,
     module_settings,
-    pause_for_policy,
     require_write_capacity,
     reconcile_workflow,
-    set_user_access,
     sync_social_child_tasks,
-    update_module_settings,
 )
 from .tracking import sign_tracking_token, verify_tracking_token
 
@@ -2172,39 +2169,6 @@ def create_crm_router(
                 "generated_at": now_ts(),
             }
 
-    @router.get("/api/admin/modules/crm")
-    def admin_module(user: dict[str, Any] = Depends(require_admin)):
-        with db() as conn:
-            return module_settings(conn)
-
-    @router.patch("/api/admin/modules/crm")
-    def patch_admin_module(request: Request, payload: dict[str, Any] = Body(...), user: dict[str, Any] = Depends(require_admin)):
-        with db() as conn:
-            current = module_settings(conn)
-            dangerous = (
-                (current["enabled"] and payload.get("enabled") is False)
-                or (not current["maintenance"] and payload.get("maintenance") is True)
-                or (not current["emergency_pause"] and payload.get("emergency_pause") is True)
-            )
-            if dangerous and payload.get("confirmed") is not True:
-                raise CRMError("crm_confirmation_required", "crm.errors.confirmationRequired", status_code=409)
-            updated = update_module_settings(conn, {key: value for key, value in payload.items() if key != "confirmed"})
-            paused = 0
-            if not updated["enabled"] or updated["maintenance"] or updated["emergency_pause"]:
-                paused = pause_for_policy(conn)
-            _audit_request(conn, request, user, "crm.module.update", after={**updated, "paused_workflows": paused})
-            return {**updated, "paused_workflows": paused}
-
-    @router.post("/api/admin/modules/crm/emergency-pause")
-    def emergency_pause(request: Request, payload: dict[str, Any] = Body(default={}), user: dict[str, Any] = Depends(require_admin)):
-        if payload.get("confirmed") is not True:
-            raise CRMError("crm_confirmation_required", "crm.errors.confirmationRequired", status_code=409)
-        with db() as conn:
-            updated = update_module_settings(conn, {"emergency_pause": True})
-            paused = pause_for_policy(conn)
-            _audit_request(conn, request, user, "crm.module.emergency_pause", after={"paused_workflows": paused})
-            return {**updated, "paused_workflows": paused}
-
     @router.get("/api/admin/modules/crm/health")
     def module_health(user: dict[str, Any] = Depends(require_admin)):
         with db() as conn:
@@ -2256,104 +2220,6 @@ def create_crm_router(
             }
             ready = all(bool(checks[key]) for key in ("database", "database_schema", "static_html", "static_assets", "media_directory", "media_writable", "disk_ok", "tracking_secret", "scheduler_lease", "worker_adapter_registered", "billing_adapter_registered"))
             return {"status": "ok" if ready and not settings["emergency_pause"] else "degraded", "ready": ready, "checked_at": current, "checks": checks, "settings": settings, "unknown_actions": unknown}
-
-    @router.get("/api/admin/users/{target_user_id}/modules/crm")
-    def admin_user_module(target_user_id: int, user: dict[str, Any] = Depends(require_admin)):
-        with db() as conn:
-            state = effective_module_state(conn, user_id=target_user_id, identity_is_admin=False)
-            return state
-
-    @router.patch("/api/admin/users/{target_user_id}/modules/crm")
-    def patch_admin_user_module(
-        request: Request,
-        target_user_id: int,
-        payload: dict[str, Any] = Body(...),
-        user: dict[str, Any] = Depends(require_admin),
-    ):
-        with db() as conn:
-            updated = set_user_access(
-                conn, user_id=target_user_id, enabled=bool(payload.get("enabled")), actor_user_id=int(user.get("id") or 0),
-            )
-            _audit_request(conn, request, user, "crm.user_access.update", target_user_id=target_user_id, after=updated)
-            return updated
-
-    @router.post("/api/admin/modules/crm/import/dry-run")
-    def import_dry_run(request: Request, payload: dict[str, Any] = Body(...), user: dict[str, Any] = Depends(require_admin)):
-        require_write_capacity()
-        data_dir = Path(str(os.getenv("WEBAPP_DATA_DIR", "webapp_data") or "webapp_data")).resolve()
-        target_user_id = int(payload.get("user_id") or user.get("id") or 0)
-        with db() as conn:
-            result = dry_run_import(
-                conn, user_id=target_user_id, actor_user_id=int(user.get("id") or 0),
-                root=import_root(data_dir), source=str(payload.get("source") or ""),
-            )
-            if str(result.get("status") or "") != "active":
-                update_module_settings(conn, {"migration_required": True})
-            _audit_request(conn, request, user, "crm.import.dry_run", target_user_id=target_user_id, after={"batch_id": result["id"]})
-            return result
-
-    @router.post("/api/admin/modules/crm/import/activate")
-    def import_activate(request: Request, payload: dict[str, Any] = Body(...), user: dict[str, Any] = Depends(require_admin)):
-        if payload.get("confirmed") is not True:
-            raise CRMError("crm_confirmation_required", "crm.errors.confirmationRequired", status_code=409)
-        require_write_capacity()
-        target_user_id = int(payload.get("user_id") or user.get("id") or 0)
-        with db() as conn:
-            result = activate_import(conn, batch_id=str(payload.get("batch_id") or ""), user_id=target_user_id)
-            pending_imports = int(conn.execute(
-                "SELECT COUNT(*) FROM crm_import_batches WHERE status IN ('dry_run','staged')"
-            ).fetchone()[0])
-            update_module_settings(conn, {"migration_required": pending_imports > 0})
-            _audit_request(conn, request, user, "crm.import.activate", target_user_id=target_user_id, after={"batch_id": result["id"]})
-            return result
-
-    @router.post("/api/admin/modules/crm/import/{batch_id}/dismiss")
-    def dismiss_import_batch(
-        batch_id: str,
-        request: Request,
-        payload: dict[str, Any] = Body(default={}),
-        user: dict[str, Any] = Depends(require_admin),
-    ):
-        if payload.get("confirmed") is not True:
-            raise CRMError("crm_confirmation_required", "crm.errors.confirmationRequired", status_code=409)
-        target_user_id = int(payload.get("user_id") or user.get("id") or 0)
-        with db() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            batch = conn.execute(
-                "SELECT status FROM crm_import_batches WHERE id=? AND user_id=?",
-                (str(batch_id), target_user_id),
-            ).fetchone()
-            if batch is None:
-                raise CRMError("crm_import_not_found", "crm.errors.importNotFound", status_code=404)
-            if str(batch["status"] or "") == "active":
-                raise CRMError("crm_import_active_cannot_dismiss", "crm.errors.importActiveCannotDismiss", status_code=409)
-            for table in (*RESOURCE_TABLES.values(), "crm_pool_members", "crm_workflows"):
-                conn.execute(
-                    f"DELETE FROM {table} WHERE import_batch_id=? AND user_id=? AND active=0",
-                    (str(batch_id), target_user_id),
-                )
-            conn.execute("DELETE FROM crm_legacy_id_map WHERE import_batch_id=? AND user_id=?", (str(batch_id), target_user_id))
-            conn.execute(
-                "UPDATE crm_import_batches SET status='dismissed',updated_at=? WHERE id=? AND user_id=?",
-                (now_ts(), str(batch_id), target_user_id),
-            )
-            pending = int(conn.execute("SELECT COUNT(*) FROM crm_import_batches WHERE status IN ('dry_run','staged')").fetchone()[0])
-            update_module_settings(conn, {"migration_required": pending > 0})
-            _audit_request(conn, request, user, "crm.import.dismiss", target_user_id=target_user_id, after={"batch_id": batch_id})
-            return {"id": batch_id, "status": "dismissed", "migration_required": pending > 0}
-
-    @router.get("/api/admin/modules/crm/import-status")
-    def import_status(
-        user_id: int = Query(default=0, ge=0),
-        user: dict[str, Any] = Depends(require_admin),
-    ):
-        target = int(user_id or user.get("id") or 0)
-        with db() as conn:
-            rows = conn.execute(
-                "SELECT * FROM crm_import_batches WHERE user_id = ? ORDER BY created_at DESC LIMIT 100",
-                (target,),
-            ).fetchall()
-            return {"items": [row_public(row) for row in rows]}
 
     @router.get("/crm/go/{token}")
     def tracking_redirect(token: str, request: Request):

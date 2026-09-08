@@ -30,7 +30,7 @@
   const VOICE_PRESETS_MANIFEST_URL = "/assets/voice_presets_manifest.json";
   const VOICE_MODULES = new Set(["digital_human_video", "ecommerce_short_video", "video_language_replace"]);
   const TIMELINE_MODULES = new Set(["video_language_replace"]);
-  const VIDEO_OUTPUT_TASK_TYPES = new Set(["create_video", "ecommerce_short_video", "video_language_replace", "replace_model", "replace_product"]);
+  const VIDEO_OUTPUT_TASK_TYPES = new Set(["create_video", "ecommerce_short_video", "video_language_replace", "replace_model", "replace_product", "replace_productANDmodel"]);
   const SUBTITLE_TEMPLATE_OPTIONS = [
     ["split_hook", "模板 1 · 强钩子分屏"],
     ["handwritten_quote", "模板 2 · 手写金句"],
@@ -50,16 +50,38 @@
     { value: "Thai", label: "泰语" },
     { value: "Malay", label: "马来西亚" },
   ];
-  const MINIMAX_TTS_MODEL_OPTIONS = [
+  const RUNNINGHUB_SPEECH_MODEL_OPTIONS = [
     { value: "speech-2.8-hd", label: "speech-2.8-hd（高清，推荐）" },
     { value: "speech-2.8-turbo", label: "speech-2.8-turbo（快速）" },
     { value: "speech-2.6-hd", label: "speech-2.6-hd" },
     { value: "speech-2.6-turbo", label: "speech-2.6-turbo" },
     { value: "speech-02-hd", label: "speech-02-hd" },
     { value: "speech-02-turbo", label: "speech-02-turbo" },
-    { value: "speech-01-hd", label: "speech-01-hd" },
-    { value: "speech-01-turbo", label: "speech-01-turbo" },
   ];
+  const RUNNINGHUB_SPEECH_MODEL_DEFAULT = "speech-2.8-hd";
+
+  function speechModelCatalog() {
+    const live = Array.isArray(state.runtimeDefaults?.speech_models)
+      ? state.runtimeDefaults.speech_models.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    const allowed = live.length
+      ? RUNNINGHUB_SPEECH_MODEL_OPTIONS.filter((item) => live.includes(item.value))
+      : RUNNINGHUB_SPEECH_MODEL_OPTIONS;
+    return allowed.length ? allowed : RUNNINGHUB_SPEECH_MODEL_OPTIONS;
+  }
+
+  function clampSpeechModel(value) {
+    const allowed = speechModelCatalog().map((item) => item.value);
+    const text = String(value || "").trim();
+    if (allowed.includes(text)) return text;
+    const runtimeValue = String(
+      state.runtimeDefaults?.minimax_tts_model
+      || state.runtimeDefaults?.video_tts_model
+      || ""
+    ).trim();
+    return allowed.includes(runtimeValue) ? runtimeValue : RUNNINGHUB_SPEECH_MODEL_DEFAULT;
+  }
+
   const VIDEO_RATIO_OPTIONS = ["16:9", "4:3", "1:1", "3:4", "9:16"];
   const VIDEO_RESOLUTION_OPTIONS = ["480p", "720p", "1080p", { value: "2k", label: "2K" }, { value: "4k", label: "4K" }];
   const IMAGE_RESOLUTION_OPTIONS = ["1K", "2K", "4K"];
@@ -159,7 +181,7 @@
           textarea("product_details", oral ? "文案需求" : "产品相关简介", { placeholder: oral ? "可选：说明口播主题、受众、核心观点、段落方向、语气风格；AI 会据此生成口播文案" : "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情；只用于 AI 生成文案或提示词", wide: true }),
           ...(oral ? [number("oral_target_duration_seconds", "目标口播时长（秒）", { default: 30, min: 5, max: 180, step: 1 })] : []),
           select("target_language", "口播语言", LANGUAGE_OPTIONS, { default: "Chinese", placement: "voice" }),
-          select("minimax_tts_model", "MiniMax 音频模型", MINIMAX_TTS_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
+          select("minimax_tts_model", "音频模型", RUNNINGHUB_SPEECH_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
           textarea("speech_text", "口播文案", { placeholder: oral ? "可手动输入成稿，也可留空让 AI 根据文案需求和场景图生成" : "可手动输入，也可留空让 AI 根据图片生成", wide: true }),
           select("ratio", "画面比例", VIDEO_RATIO_OPTIONS, { default: "9:16" }),
           select("image_resolution", "图片分辨率", IMAGE_RESOLUTION_OPTIONS, { default: "2K" }),
@@ -211,7 +233,7 @@
         file("video", "原视频", "video/*", { required: true }),
         file("audio", "参考音频/干音", "audio/*", { help: "可选；用于目标语言配音" }),
         select("target_language", "目标语言", LANGUAGE_OPTIONS, { default: "English", placement: "voice" }),
-        select("minimax_tts_model", "MiniMax 音频模型", MINIMAX_TTS_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
+        select("minimax_tts_model", "音频模型", RUNNINGHUB_SPEECH_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
         textarea("script_text", "原文台词", { placeholder: "第一步会自动解析原视频台词和时间戳；如已手动填写且自带时间戳，会直接跳过这一步", wide: true }),
         textarea("opening_insert_text", "开场插入台词", { placeholder: "可选：在原视频第一句开始前额外插入一句台词", wide: true }),
         textarea("ending_insert_text", "结尾插入台词", { placeholder: "可选：在原视频最后一句之后额外插入一句台词", wide: true }),
@@ -222,12 +244,20 @@
       label: "视频模特 / 商品替换",
       shortLabel: "视频换主体",
       kicker: "VIDEO SUBJECT",
-      description: "保留原视频动作和镜头，替换人物或商品主体。",
-      fields: [
-        select("replace_mode", "替换模式", [{ value: "model", label: "模特替换" }, { value: "product", label: "商品替换" }], { default: "model", placement: "uploadFooter" }),
-        file("video", "原视频", "video/*", { required: true }),
-        file("image", "目标人物/模特图", "image/*", { required: true, dynamicLabel: true }),
-      ],
+      description: "保留原视频动作和镜头，替换人物、商品，或同时替换两者。",
+      fields(values = {}) {
+        const union = values.replace_mode === "union";
+        return [
+          select("replace_mode", "替换模式", [{ value: "model", label: "模特替换" }, { value: "product", label: "商品替换" }, { value: "union", label: "联合替换" }], { default: "model", placement: "uploadFooter" }),
+          file("video", "原视频", "video/*", { required: true }),
+          ...(union
+            ? [
+                file("model", "目标人物/模特图", "image/*", { required: true }),
+                file("product", "目标商品图", "image/*", { required: true }),
+              ]
+            : [file("image", values.replace_mode === "product" ? "目标商品图" : "目标人物/模特图", "image/*", { required: true, dynamicLabel: true })]),
+        ];
+      },
     },
     ecommerce_image: {
       id: "ecommerce_image",
@@ -301,6 +331,7 @@
     initialized: false,
     moduleId: MODULE_ORDER[0],
     modules: MODULE_ORDER.map((id) => FALLBACK_MODULES[id]),
+    runtimeDefaults: {},
     moduleLoading: false,
     moduleError: "",
     moduleEmpty: false,
@@ -484,6 +515,10 @@
       payload = { detail: raw };
     }
     if (!response.ok) {
+      if (response.status === 401 && /video\.html$/.test(window.location.pathname)) {
+        const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+        window.location.replace(`/video-login.html?return_url=${encodeURIComponent(here)}`);
+      }
       const code = String(payload?.detail?.code || payload?.code || "").trim();
       if (response.status === 402 && code === "INSUFFICIENT_POINTS") {
         window.dispatchEvent(new CustomEvent("vecto:billing-insufficient", { detail: { code } }));
@@ -866,7 +901,9 @@
   function defaultValues(module) {
     return Object.fromEntries(resolvedFields(module).filter((field) => field.type !== "file").map((field) => [
       field.key,
-      field.default ?? (field.type === "checkbox" ? false : ""),
+      field.key === "minimax_tts_model"
+        ? clampSpeechModel("")
+        : (field.default ?? (field.type === "checkbox" ? false : "")),
     ]));
   }
 
@@ -889,6 +926,9 @@
       values: { ...defaultValues(module), ...(stored?.values && typeof stored.values === "object" ? stored.values : {}) },
       savedAt: String(stored?.savedAt || ""),
     };
+    if (Object.prototype.hasOwnProperty.call(state.drafts[module.id].values, "minimax_tts_model")) {
+      state.drafts[module.id].values.minimax_tts_model = clampSpeechModel(state.drafts[module.id].values.minimax_tts_model);
+    }
     return hydrateDynamicDefaults(module, state.drafts[module.id]);
   }
 
@@ -1150,7 +1190,7 @@
         const label = fileItem?.name || previewLabels[index] || `素材 ${index + 1}`;
         const previewUrl = localFilePreviewUrl(fileItem);
         return `<button type="button" class="${fileItem ? "is-filled" : ""} ${previewUrl ? "has-preview" : ""}" data-video-file-slot="${index}" data-video-file-filled="${fileItem ? "true" : "false"}" aria-label="${escapeHtml(fileItem ? `替换 ${label}` : `上传 ${label}`)}" title="${escapeHtml(fileItem ? `点击替换：${label}` : `点击上传：${label}`)}">
-          ${previewUrl ? `<img class="video-upload-slot-preview" data-video-file-preview src="${escapeHtml(previewUrl)}" alt="" decoding="async"><span class="video-upload-slot-shade" aria-hidden="true"></span><span class="video-upload-slot-action" aria-hidden="true">${workbenchIcon("replace")}</span>` : `<span class="video-upload-slot-empty-icon" aria-hidden="true">${workbenchIcon("upload")}</span>`}
+          ${previewUrl ? `<img class="video-upload-slot-preview" data-video-file-preview src="${escapeHtml(previewUrl)}" alt="" decoding="async"><span class="video-upload-slot-shade" aria-hidden="true"></span><span class="video-upload-slot-action" aria-hidden="true">${workbenchIcon("replace")}</span>` : `<span class="video-upload-slot-empty-icon" aria-hidden="true">${workbenchIcon("add")}</span>`}
           <span class="video-upload-slot-label">${escapeHtml(label)}</span>
         </button>`;
       }).join("")}</span>` : ""}
@@ -2022,6 +2062,57 @@
     return input.value;
   }
 
+  function filesMatchAccept(field, files) {
+    const accept = String(field?.accept || "").trim();
+    const items = Array.from(files || []).filter(Boolean);
+    if (!accept) return items;
+    const tokens = accept.split(",").map((item) => item.trim()).filter(Boolean);
+    return items.filter((file) => {
+      const type = String(file.type || "").toLowerCase();
+      const name = String(file.name || "").toLowerCase();
+      return tokens.some((token) => {
+        if (token === "image/*") return type.startsWith("image/");
+        if (token === "audio/*") return type.startsWith("audio/");
+        if (token === "video/*") return type.startsWith("video/");
+        if (token.endsWith("/*")) return type.startsWith(token.slice(0, -1));
+        if (token.startsWith(".")) return name.endsWith(token);
+        return type === token;
+      });
+    });
+  }
+
+  function assignFilesToField(field, files, slotIndex = null) {
+    const module = currentModule();
+    const draft = loadDraft(module);
+    const selected = filesMatchAccept(field, files);
+    if (!field || !selected.length) return false;
+    state.files[module.id] ||= {};
+    invalidatePromptPreview(module, draft, field.key);
+    if (Number.isInteger(slotIndex) && slotIndex >= 0) {
+      const slotLimit = Math.max(1, Number(field.previewSlots || field.maxFiles || 1));
+      if (slotIndex >= slotLimit) return false;
+      const next = selectedFileSlots(module.id, field.key).slice(0, slotLimit);
+      next[slotIndex] = selected[0];
+      replaceFileSlots(module.id, field.key, next);
+    } else {
+      const limit = field.maxFiles ? Number(field.maxFiles) : (field.multiple ? selected.length : 1);
+      replaceFileSlots(module.id, field.key, selected.slice(0, Math.max(1, limit)));
+    }
+    if (field.key === "audio") {
+      delete draft.values.voice_id;
+      delete draft.values.speaker;
+      delete draft.values.voice_label;
+      delete draft.values.voice_name;
+      delete draft.values.elevenlabs_tts_preset_key;
+      saveDraft(module.id);
+    }
+    if (module.id === "video_language_replace" && field.key === "video") {
+      draft.values.video_language_script_analyzed = false;
+      draft.values.video_language_script_confirmed = false;
+    }
+    return true;
+  }
+
   function openFilePicker(fieldKey, slotIndex = null) {
     const module = currentModule();
     const draft = loadDraft(module);
@@ -2048,34 +2139,9 @@
     const field = resolvedFields(module, draft.values).find((item) => item.key === input.dataset.videoField);
     if (!field) return;
     if (field.type === "file") {
-      state.files[module.id] ||= {};
-      const selected = Array.from(input.files || []);
-      if (!selected.length) return;
-      invalidatePromptPreview(module, draft, field.key);
       const targetSlot = Number.parseInt(input.dataset.videoFileSlotTarget || "", 10);
       delete input.dataset.videoFileSlotTarget;
-      if (Number.isInteger(targetSlot) && targetSlot >= 0) {
-        const slotLimit = Math.max(1, Number(field.previewSlots || field.maxFiles || 1));
-        if (targetSlot >= slotLimit) return;
-        const next = selectedFileSlots(module.id, field.key).slice(0, slotLimit);
-        next[targetSlot] = selected[0];
-        replaceFileSlots(module.id, field.key, next);
-      } else {
-        const limit = field.maxFiles ? Number(field.maxFiles) : (field.multiple ? selected.length : 1);
-        replaceFileSlots(module.id, field.key, selected.slice(0, Math.max(1, limit)));
-      }
-      if (field.key === "audio") {
-        delete draft.values.voice_id;
-        delete draft.values.speaker;
-        delete draft.values.voice_label;
-        delete draft.values.voice_name;
-        delete draft.values.elevenlabs_tts_preset_key;
-        saveDraft(module.id);
-      }
-      if (module.id === "video_language_replace" && field.key === "video") {
-        draft.values.video_language_script_analyzed = false;
-        draft.values.video_language_script_confirmed = false;
-      }
+      if (!assignFilesToField(field, Array.from(input.files || []), Number.isInteger(targetSlot) ? targetSlot : null)) return;
       render();
       return;
     }
@@ -2435,6 +2501,10 @@
       values.elevenlabs_tts_preset_key = draft.values.elevenlabs_tts_preset_key || "";
       values.minimax_tts_voice_id = "";
     }
+    if (values.minimax_tts_model) {
+      values.minimax_tts_model = clampSpeechModel(values.minimax_tts_model);
+      values.video_tts_model = values.minimax_tts_model;
+    }
     if (module.id === "digital_human_video") {
       const oral = values.digital_human_content_mode === "oral_broadcast";
       Object.assign(values, {
@@ -2465,16 +2535,19 @@
       }
     } else if (module.id === "video_language_replace") {
       values.language = values.target_language;
-      values.video_tts_model = values.minimax_tts_model;
+      values.video_tts_model = clampSpeechModel(values.minimax_tts_model);
       values.script_text = String(draft.values.script_text || values.script_text || "");
       values.source_script = String(draft.values.source_script || values.script_text || "");
       values.video_language_script_analyzed = Boolean(draft.values.video_language_script_analyzed);
       values.video_language_script_confirmed = Boolean(draft.values.video_language_script_confirmed);
     } else if (module.id === "video_subject_replace") {
-      values.subject_kind = values.replace_mode === "product" ? "product" : "model";
+      values.subject_kind = values.replace_mode === "union" ? "union" : (values.replace_mode === "product" ? "product" : "model");
       if (values.subject_kind === "model") {
         values.mode = "original";
         values.use_custom_duration = false;
+      } else if (values.subject_kind === "union") {
+        values.mode = "union";
+        values.tg_workflow_label = "联合替换工作流";
       } else {
         values.prompt_text = "替换视频中所有同类商品，保持人物、背景、光影和原视频节奏不变。";
       }
@@ -2588,7 +2661,19 @@
       const payload = await request("/api/video/modules");
       const rows = moduleRowsFromPayload(payload);
       state.moduleEmpty = rows.length === 0;
+      state.runtimeDefaults = payload && typeof payload.runtime_defaults === "object" && payload.runtime_defaults
+        ? payload.runtime_defaults
+        : {};
+      if (Array.isArray(payload?.speech_models) && payload.speech_models.length) {
+        state.runtimeDefaults.speech_models = payload.speech_models;
+      }
       state.modules = normalizeModules(payload);
+      Object.keys(state.drafts || {}).forEach((moduleId) => {
+        const draft = state.drafts[moduleId];
+        if (draft?.values && Object.prototype.hasOwnProperty.call(draft.values, "minimax_tts_model")) {
+          draft.values.minimax_tts_model = clampSpeechModel(draft.values.minimax_tts_model);
+        }
+      });
     } catch (error) {
       state.moduleError = error?.message || "无法读取模块配置";
       state.modules = MODULE_ORDER.map((id) => FALLBACK_MODULES[id]);
@@ -2691,6 +2776,41 @@
     });
     document.addEventListener("submit", (event) => {
       if (event.target.id === "videoWorkbenchForm") submit(event);
+    });
+    const clearDropState = (host, slot) => {
+      host?.classList.remove("is-drop-target");
+      slot?.classList.remove("is-drop-target");
+    };
+    document.addEventListener("dragenter", (event) => {
+      const host = event.target.closest?.("#videoWorkbenchRoot [data-video-file-field]");
+      if (!host) return;
+      event.preventDefault();
+      host.classList.add("is-drop-target");
+      event.target.closest?.("[data-video-file-slot]")?.classList.add("is-drop-target");
+    });
+    document.addEventListener("dragover", (event) => {
+      const host = event.target.closest?.("#videoWorkbenchRoot [data-video-file-field]");
+      if (!host) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    });
+    document.addEventListener("dragleave", (event) => {
+      const host = event.target.closest?.("#videoWorkbenchRoot [data-video-file-field]");
+      const slot = event.target.closest?.("#videoWorkbenchRoot [data-video-file-slot]");
+      if (slot && !slot.contains(event.relatedTarget)) slot.classList.remove("is-drop-target");
+      if (host && !host.contains(event.relatedTarget)) clearDropState(host, slot);
+    });
+    document.addEventListener("drop", (event) => {
+      const host = event.target.closest?.("#videoWorkbenchRoot [data-video-file-field]");
+      if (!host) return;
+      event.preventDefault();
+      const slot = event.target.closest?.("[data-video-file-slot]");
+      clearDropState(host, slot);
+      const module = currentModule();
+      const draft = loadDraft(module);
+      const field = resolvedFields(module, draft.values).find((item) => item.type === "file" && item.key === host.dataset.videoFileField);
+      const slotIndex = Number.parseInt(slot?.dataset.videoFileSlot || "", 10);
+      if (assignFilesToField(field, event.dataTransfer?.files, Number.isInteger(slotIndex) ? slotIndex : null)) render();
     });
     document.addEventListener("click", (event) => {
       if (event.target.closest?.("[data-video-image-close]")) {

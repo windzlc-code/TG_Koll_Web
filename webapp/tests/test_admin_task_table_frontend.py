@@ -33,11 +33,12 @@ class AdminTaskTableFrontendTests(unittest.TestCase):
         self.assertIn(".page-admin .admin-task-table th:nth-child(8)", self.styles)
 
     def test_long_admin_lists_share_the_same_pagination_pattern(self):
-        for prefix in ("task", "audit", "security"):
+        for prefix in ("task", "security"):
             self.assertIn(f'id="{prefix}Pagination"', self.html)
             self.assertIn(f'id="{prefix}PageIndicator"', self.html)
+        self.assertNotIn('id="auditPagination"', self.html)
         self.assertIn("pageSize: 20", self.script)
-        self.assertIn("auditListPageSize: 20", self.script)
+        self.assertNotIn("auditListPageSize: 20", self.script)
         self.assertIn("securityListPageSize: 20", self.script)
         self.assertIn(".page-admin .admin-list-pagination[hidden]", self.styles)
 

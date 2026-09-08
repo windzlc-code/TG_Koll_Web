@@ -483,7 +483,7 @@ function buildLifestyleCameraDirection(thirdPerson: boolean, selectionKey: strin
   const selectedBackgroundFallback = selectStableCameraSetup(`${selectionKey}|background`, LIFESTYLE_BACKGROUND_FALLBACKS);
   return [
     "output one single candid social-media photo with one instance of the person, never a character sheet, multi-view layout, pose lineup, collage, or studio cutout",
-    "if the persona reference is a three-view sheet, use it only to preserve face and identity; do not copy its straight standing pose, eye-level camera, white or neutral background, or side-by-side presentation",
+    "if the persona reference is a three-view sheet, lock the protagonist face to that identity and do not copy its straight standing pose, eye-level camera, white or neutral background, or side-by-side presentation",
     `use this specific camera and pose setup for this post: ${selectedCameraSetup}`,
     "do not default to a centered eye-level front-facing half-body pose; vary camera height, shot distance, body orientation, gaze direction, hand placement, weight shift, crop, and foreground depth across different posts and selected style hints",
     `when the post does not name a location, use this fallback lived-in setting: ${selectedBackgroundFallback}`,
@@ -566,7 +566,8 @@ export async function generatePersonaImage(
   // Keep the normal scene/POV classifier for text-only generation, but do not
   // discard the user's source image just because the edit prompt describes a scene.
   const { prompt, mode } = built;
-  const withAvatar = Boolean(referenceImageUrl?.trim()) || built.withAvatar;
+  const identityReferenceUrl = explicitReferenceUrl || route.referenceUrl || String(referenceSheetUrl || "").trim();
+  const withAvatar = Boolean(explicitReferenceUrl) || built.withAvatar;
   const customCue = customPrompt?.trim();
   const finalPrompt = withAvatar
     ? explicitReferenceUrl
@@ -578,14 +579,16 @@ export async function generatePersonaImage(
         prompt,
       ].filter(Boolean).join("\n")
       : [
-        "Use the attached persona reference only to preserve the same face, apparent age, gender, ethnicity, hair, skin tone, and body proportions.",
-        "Create a completely new candid everyday photo from the current request. Do not copy the reference sheet's white studio background, straight standing pose, side-by-side views, outfit, polished skin, flat studio lighting, or model-sheet composition.",
+        "FACE IDENTITY LOCK: The attached image is the currently selected persona reference. The protagonist's face MUST be the same person as in that image.",
+        "Keep the exact same face: facial structure, eyes, nose, mouth, eyebrows, bone structure, skin tone, apparent age, gender, ethnicity, and hairline. Do not invent a similar new face, do not swap identity, and do not beautify the person into someone else.",
+        "Clothing, pose, scene, camera, lighting, and props may change freely to follow the current request. Only the face identity is locked.",
+        "If the attached image is a multi-view character sheet, use the front face for identity only. Do not copy the white studio, standing lineup, side-by-side views, or model-sheet composition.",
         customCue ? `Highest priority current visual request: ${customCue}` : "",
         prompt,
       ].filter(Boolean).join("\n")
     : [prompt, customCue || ""].filter(Boolean).join(", ");
 
-  const avatarSource = withAvatar ? (explicitReferenceUrl || route.referenceUrl) : undefined;
+  const avatarSource = withAvatar ? identityReferenceUrl : undefined;
   const avatarBase64 = avatarSource ? avatarSource.replace(/^data:[^;]+;base64,/, "") : undefined;
   const avatarMimeType = avatarSource
     ? ((avatarSource.match(/^data:([^;]+);/) || [])[1] || "image/jpeg")

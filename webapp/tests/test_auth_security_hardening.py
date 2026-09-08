@@ -787,7 +787,7 @@ class AuthSecurityHardeningTests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(admin_console.status_code, 302)
-        self.assertEqual(admin_console.headers["location"], "/?login=1&return_url=%2Fconsole.html")
+        self.assertEqual(admin_console.headers["location"], "/console-login.html?return_url=%2Fconsole.html")
         owner_detail = admin.get(f"/api/admin/users/{owner_id}")
         self.assertEqual(owner_detail.status_code, 200, owner_detail.text)
         self.assertEqual(owner_detail.json()["resource_counts"]["personas"], 1)
@@ -1285,8 +1285,20 @@ class AuthSecurityHardeningTests(unittest.TestCase):
             {"key": "new_persona_runninghub_api_key", "value": "runninghub-secret-key"},
         )
 
-        unknown = admin.post(
+        runtime["telegram_bot_token"] = "123456:ABCDEF-token"
+        server._write_runtime_config_file(runtime)
+        telegram_revealed = admin.post(
             "/api/admin/runtime_config/secrets/telegram_bot_token",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(telegram_revealed.status_code, 200, telegram_revealed.text)
+        self.assertEqual(
+            telegram_revealed.json(),
+            {"key": "telegram_bot_token", "value": "123456:ABCDEF-token"},
+        )
+
+        unknown = admin.post(
+            "/api/admin/runtime_config/secrets/not_a_real_secret",
             headers={"Origin": "http://testserver"},
         )
         self.assertEqual(unknown.status_code, 404, unknown.text)

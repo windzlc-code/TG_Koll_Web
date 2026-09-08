@@ -224,9 +224,15 @@ _DIGITAL_HUMAN_CLOTHING_LABELS = {
 }
 
 
+def _selected_temperament_style_prompt(temperament_key: str, temperament: str) -> str:
+    if temperament_key == "adult_glamour":
+        return "妩媚性感气质，美女福利向，明艳精致有镜头吸引力，高级写真气场"
+    return f"{temperament}气质"
+
+
 def _selected_clothing_style_prompt(clothing_key: str, clothing: str) -> str:
     if clothing_key == "intimate_glamour_female":
-        return "性感福利风格，明显露肤、清凉妩媚、高级写真感，服装款式由模型自主设计"
+        return "性感福利风格，明显露肤、清凉妩媚、高级写真感，轻透修身、肩颈锁骨有镜头感，服装款式由模型自主设计"
     return f"{clothing.removesuffix('套装')}风格，服装由模型自主设计"
 
 
@@ -260,7 +266,7 @@ def build_digital_human_character_selection_prompt(payload: Mapping[str, Any] | 
     temperament_key = _text(source.get("character_temperament")).lower()
     temperament = _DIGITAL_HUMAN_TEMPERAMENT_LABELS.get(temperament_key)
     if temperament:
-        parts.append(f"{temperament}气质")
+        parts.append(_selected_temperament_style_prompt(temperament_key, temperament))
     clothing_key = _text(source.get("character_clothing")).lower()
     clothing = _DIGITAL_HUMAN_CLOTHING_LABELS.get(clothing_key)
     if clothing:

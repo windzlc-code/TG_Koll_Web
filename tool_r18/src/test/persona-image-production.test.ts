@@ -367,8 +367,10 @@ describe("persona image production", () => {
     expect(result.ok).toBe(true);
     expect(calls[0].prompt).toContain("球场训练");
     expect(calls[0].prompt).toContain("盖帽");
-    expect(calls[0].prompt).toContain("Use the attached persona reference only to preserve the same face, apparent age, gender");
-    expect(calls[0].prompt).toContain("Do not copy the reference sheet's white studio background");
+    expect(calls[0].prompt).toContain("FACE IDENTITY LOCK");
+    expect(calls[0].prompt).toContain("The protagonist's face MUST be the same person as in that image");
+    expect(calls[0].prompt).toContain("Only the face identity is locked");
+    expect(calls[0].prompt).not.toContain("polished skin");
     expect(calls[0].prompt).not.toContain("Preserve every area and detail");
     expect(calls[0].prompt).toContain("篮球大佬");
     expect(calls[0].prompt).not.toContain("adult woman");
@@ -551,6 +553,9 @@ describe("persona image production", () => {
 
     expect(result).toMatchObject({ ok: true, mode: "closed-person" });
     expect(calls[0].avatarBase64).toBe("cmVmZXJlbmNl");
+    expect(calls[0].runningHubNewPersonaMode).toBe("image-to-image");
+    expect(calls[0].prompt).toContain("FACE IDENTITY LOCK");
+    expect(calls[0].prompt).toContain("Only the face identity is locked");
   });
 
   it("keeps an explicitly selected reference image for scene edits", async () => {
@@ -722,7 +727,7 @@ describe("persona image production", () => {
     expect(built.prompt).toContain("when the post does not name a location, use this fallback lived-in setting");
     expect(built.prompt).toContain("it overrides any conflicting camera, pose, or fallback setting");
     expect(built.prompt).toContain("keep the named action mandatory and adapt the selected setup around it");
-    expect(built.prompt).toContain("use it only to preserve face and identity");
+    expect(built.prompt).toContain("lock the protagonist face to that identity");
     expect(alternate.prompt).not.toBe(built.prompt);
     expect(built.prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
     expect(built.prompt).not.toContain("avoid a generic portrait, generic selfie");

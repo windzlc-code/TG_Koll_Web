@@ -4,9 +4,9 @@ a[href*="/subscription.html"], a[href*="/about-vecto.html"], a[href*="#solution"
 #personaDashboardToolbarActions, [data-persona-open-create], [data-persona-create-group],
 [data-persona-bulk-start], [data-persona-editor-menu], [data-persona-edit], [data-persona-edit-group],
 [data-persona-delete-group], [data-persona-rename-group] { display: none !important; }
-#adminPrimaryNav [data-page="users"], #adminPrimaryNav [data-page="taxonomy"],
+#adminPrimaryNav [data-page="users"],
 #adminPrimaryNav [data-page="tasks"], #adminPrimaryNav [data-page="pricing"],
-.admin-page-view[data-page-view="users"], .admin-page-view[data-page-view="taxonomy"],
+.admin-page-view[data-page-view="users"],
 .admin-page-view[data-page-view="tasks"], .admin-page-view[data-page-view="pricing"] { display: none !important; }
 .collector-boundary-hidden { display: none !important; }
 html[data-deployment-role="collector"] #adminPrimaryNav [data-page="proxyMarket"],

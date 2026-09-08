@@ -218,7 +218,7 @@ def requests_create_video(
     if isinstance(raw, dict) and "code" in raw and int(raw.get("code") or 0) != 0:
         return {
             "status": "failed",
-            "message": f"RunningHub API 返回错误: code={raw.get('code')} msg={raw.get('msg')} preview={_safe_json_preview(raw)}",
+            "message": f"服务接口返回错误: code={raw.get('code')} msg={raw.get('msg')} preview={_safe_json_preview(raw)}",
             "raw": raw,
         }
     normalized = _normalize_submit_result(raw)
@@ -308,11 +308,11 @@ def requests_api(
         if retry_kind and attempt <= retry_budget:
             sleep_s = min(float(base_sleep) * (1.35 ** (attempt - 1)), 30.0)
             if retry_kind == "limit":
-                _log(logger, f"RunningHub 视频任务触发并发限制，等待 {sleep_s:.1f}s 后重试（{attempt}/{retry_budget}）")
+                _log(logger, f"视频生成任务触发并发限制，等待 {sleep_s:.1f}s 后重试（{attempt}/{retry_budget}）")
             else:
                 _log(
                     logger,
-                    f"RunningHub 视频任务提交返回瞬时未知错误，等待 {sleep_s:.1f}s 后重试（{attempt}/{retry_budget}）",
+                    f"视频生成任务提交返回瞬时未知错误，等待 {sleep_s:.1f}s 后重试（{attempt}/{retry_budget}）",
                 )
             time.sleep(max(sleep_s, 0.5))
             continue

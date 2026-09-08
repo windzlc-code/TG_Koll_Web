@@ -34,9 +34,9 @@ class MatrixPublishFrontendContractTests(unittest.TestCase):
         panel = function_source("renderMatrixPublishPanel", "submitMatrixPublishTask")
         candidates = function_source("matrixPublishCandidatePosts", "matrixPublishAvailabilityRows")
 
-        self.assertIn('<select id="matrixPublishCount"', panel)
-        self.assertIn("countOptions.map", panel)
-        self.assertIn("Math.min(matrixPublishCommonLimit(availability), publishBatchLimit(platform))", panel)
+        self.assertNotIn('<select id="matrixPublishCount"', panel)
+        self.assertNotIn("每个人设任务数量", panel)
+        self.assertIn("const perCount = 1;", panel)
         self.assertIn('PUBLISH_BATCH_LIMITS = Object.freeze({ threads: 1, instagram: 1 })', CONSOLE_JS)
         self.assertIn("submitPosts", candidates)
         self.assertIn("availableCount: detail.availablePosts.length", CONSOLE_JS)
@@ -60,6 +60,11 @@ class MatrixPublishFrontendContractTests(unittest.TestCase):
         self.assertIn("width: 29%", CONSOLE_CSS)
         self.assertNotIn("matrix-selection-head", panel)
         self.assertNotIn("matrix-persona-tabs", panel)
+
+    def test_leaving_matrix_publish_does_not_prompt_because_state_is_persisted(self):
+        self.assertIn("function activeMatrixPublishTransientState()", CONSOLE_JS)
+        self.assertIn("function activeMatrixPublishTransientState() {\n  return null;\n}", CONSOLE_JS)
+        self.assertNotIn("离开矩阵任务配置？", CONSOLE_JS)
 
     def test_submit_confirms_and_excludes_zero_capacity_personas(self):
         submit = function_source("submitMatrixPublishTask", "createSocialTask")

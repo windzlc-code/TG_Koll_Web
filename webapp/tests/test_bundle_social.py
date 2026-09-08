@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import threading
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -9,7 +11,15 @@ from fastapi import FastAPI
 from starlette.requests import Request
 
 from social_automation import runner
-from webapp.bundle_social import BundleSocialClient, BundleSocialError, platform_type
+from webapp.bundle_social import (
+    BundleReauthRequiredError,
+    BundleSocialClient,
+    BundleSocialError,
+    _localize_bundle_error,
+    _result_thumbnail,
+    is_bundle_reauth_required,
+    platform_type,
+)
 from webapp.bundle_social_config import configuration_status, resolve_configuration, save_configuration
 from webapp.db import db, init_db
 from webapp import social_automation_api
@@ -66,6 +76,7 @@ def test_custom_connect_link_requests_only_selected_platform():
     assert body["type"] == "THREADS"
     assert "disableAutoLogin" not in body
     assert "instagramConnectionMethod" not in body
+    assert "forceBrowserOAuth" not in body
     assert "socialAccountTypes" not in body
     assert session.calls[0][2]["headers"]["x-api-key"] == "test-key"
 
@@ -84,6 +95,50 @@ def test_custom_connect_link_uses_direct_instagram_browser_oauth():
     assert body["type"] == "INSTAGRAM"
     assert body["instagramConnectionMethod"] == "INSTAGRAM"
     assert body["forceBrowserOAuth"] is True
+    assert "disableAutoLogin" not in body
+
+
+def test_instagram_connect_link_sends_force_browser_oauth_only_when_requested():
+    session = _Session([_Response({"url": "https://instagram.example/oauth"})])
+    client = BundleSocialClient(api_key="test-key", api_base="https://api.example/api/v1", session=session)
+    client.create_connect_link(
+        team_id="team-1",
+        platform="instagram",
+        redirect_url="https://vecto.example/callback",
+        force_browser_oauth=True,
+    )
+    assert session.calls[0][2]["json"]["forceBrowserOAuth"] is True
+
+
+def test_new_instagram_connect_link_requests_account_switch():
+    session = _Session([_Response({"url": "https://instagram.example/oauth"})])
+    client = BundleSocialClient(api_key="test-key", api_base="https://api.example/api/v1", session=session)
+    client.create_connect_link(
+        team_id="team-1",
+        platform="instagram",
+        redirect_url="https://vecto.example/callback",
+        disable_auto_login=True,
+    )
+    assert session.calls[0][2]["json"]["disableAutoLogin"] is True
+
+
+def test_inspect_social_account_treats_live_check_as_valid():
+    session = _Session([
+        _Response([{"id": "right", "type": "THREADS", "teamId": "team-1", "username": "hiro"}]),
+        _Response({"ok": True, "status": "connected"}),
+    ])
+    client = BundleSocialClient(api_key="test-key", session=session)
+    result = client.inspect_social_account(team_id="team-1", platform="threads")
+    assert result["valid"] is True
+    assert result["account"]["username"] == "hiro"
+    assert session.calls[1][0:2][1].endswith("social-account/connection-check")
+
+
+def test_inspect_social_account_treats_missing_account_as_invalid():
+    session = _Session([_Response([])])
+    client = BundleSocialClient(api_key="test-key", session=session)
+    result = client.inspect_social_account(team_id="team-1", platform="threads")
+    assert result == {"valid": False, "reason": "missing"}
 
 
 def test_connection_check_uses_team_list_without_exposing_key():
@@ -104,6 +159,66 @@ def test_provider_social_set_limit_error_is_localized():
         client.create_team("vecto-0-threads-request")
 
     assert str(exc_info.value) == "平台授权账号集合已达上限（最多 3 个），请完成已有授权后再试"
+
+
+def test_already_connected_team_is_disconnected_then_reconnected():
+    session = _Session([
+        _Response(
+            {"message": "This team already has a Threads account connected. Please disconnect it first."},
+            status_code=400,
+        ),
+        _Response({"ok": True}),
+        _Response({"url": "https://provider.example/oauth"}),
+    ])
+    client = BundleSocialClient(api_key="test-key", api_base="https://api.example/api/v1", session=session)
+
+    url = client.create_connect_link(
+        team_id="team-1",
+        platform="threads",
+        redirect_url="https://vecto.example/callback",
+    )
+
+    assert url == "https://provider.example/oauth"
+    assert session.calls[0][0:2] == ("POST", "https://api.example/api/v1/social-account/connect")
+    assert session.calls[1][0:2] == ("DELETE", "https://api.example/api/v1/social-account/disconnect")
+    assert session.calls[1][2]["json"] == {"type": "THREADS", "teamId": "team-1"}
+    assert session.calls[2][0:2] == ("POST", "https://api.example/api/v1/social-account/connect")
+
+
+def test_bundle_english_errors_are_localized_to_chinese():
+    assert "已连接 Threads" in _localize_bundle_error(
+        "This team already has a Threads account connected. Please disconnect it first."
+    )
+    assert "已连接 Instagram" in _localize_bundle_error(
+        "This team already has an Instagram account connected. Please disconnect it first."
+    )
+    assert _localize_bundle_error("Unauthorized") == "平台授权服务验证失败，请联系管理员"
+    assert _localize_bundle_error("Some unexpected English failure from provider") == "平台未接受本次请求，请稍后重试"
+    assert _localize_bundle_error("平台授权服务尚未配置") == "平台授权服务尚未配置"
+    assert "500 字" in _localize_bundle_error("Text exceeds the 500 character limit")
+    assert "320-1440px" in _localize_bundle_error("Image width must be between 320 and 1440 pixels")
+    assert "浪费额度" in _localize_bundle_error("Invalid media: aspect ratio is not supported")
+    assert "8MB" in _localize_bundle_error("File too large: image exceeds 8MB")
+
+
+def test_already_connected_error_without_reconnect_url_stays_chinese():
+    session = _Session([
+        _Response(
+            {"message": "This team already has a Threads account connected. Please disconnect it first."},
+            status_code=400,
+        ),
+        _Response({"ok": True}),
+        _Response({"message": "This team already has a Threads account connected. Please disconnect it first."}, status_code=400),
+    ])
+    client = BundleSocialClient(api_key="test-key", api_base="https://api.example/api/v1", session=session)
+    with pytest.raises(BundleSocialError) as exc_info:
+        client.create_connect_link(
+            team_id="team-1",
+            platform="threads",
+            redirect_url="https://vecto.example/callback",
+        )
+    assert "已连接 Threads" in str(exc_info.value)
+    assert "Please disconnect" not in str(exc_info.value)
 
 
 def test_find_social_account_checks_team_and_platform():
@@ -142,8 +257,87 @@ def test_upload_uses_documented_trailing_slash_endpoint(tmp_path):
     assert session.calls[0][2]["data"] == {"teamId": "team-1"}
 
 
+def test_result_thumbnail_prefers_platform_external_data():
+    assert _result_thumbnail({
+        "id": "post-1",
+        "status": "POSTED",
+        "externalData": {
+            "THREADS": {
+                "permalink": "https://www.threads.net/@hiro/post/abc",
+                "thumbnail": "https://cdn.example/post.jpg",
+            }
+        },
+    }) == "https://cdn.example/post.jpg"
+    assert _result_thumbnail({
+        "id": "post-1",
+        "status": "POSTED",
+        "externalData": {"THREADS": {"permalink": "https://www.threads.net/@hiro/post/abc"}},
+    }) == ""
+
+
+def test_first_mapping_keeps_post_id_when_platform_data_is_present():
+    from webapp.bundle_social import _first_mapping
+
+    mapped = _first_mapping({
+        "id": "post-1",
+        "status": "SCHEDULED",
+        "data": {"THREADS": {"text": "hello", "uploadIds": ["u1"]}},
+        "externalData": {"THREADS": {"permalink": "https://www.threads.net/@hiro/post/abc"}},
+    })
+    assert mapped["id"] == "post-1"
+    assert mapped["status"] == "SCHEDULED"
+    assert mapped["data"]["THREADS"]["text"] == "hello"
+
+
+def test_bundle_publish_success_proof_is_posted_status_and_permalink(monkeypatch):
+    from webapp.bundle_social import run_bundle_social_task
+
+    class _Client:
+        def create_post(self, **_kwargs):
+            return {
+                "id": "post-1",
+                "status": "SCHEDULED",
+                "data": {"THREADS": {"text": "hello"}},
+            }
+
+        def wait_for_result(self, **_kwargs):
+            return {
+                "id": "post-1",
+                "status": "POSTED",
+                "externalData": {
+                    "THREADS": {
+                        "id": "ext-1",
+                        "permalink": "https://www.threads.net/@hiro504522/post/abc",
+                        "thumbnail": "https://cdn.example/threads-post.jpg",
+                    }
+                },
+            }
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: _Client())
+    result = run_bundle_social_task(
+        task={"id": "task-1", "task_type": "publish_post", "platform": "threads", "payload": {"content": "hello"}},
+        account={"external_team_id": "team-1", "external_account_id": "social-1", "platform": "threads"},
+        logger=_Logger(),
+    )
+    assert result["ok"] is True
+    assert result["provider"] == "bundle"
+    assert result["bundle_post_id"] == "post-1"
+    assert result["status"] == "POSTED"
+    assert result["url"] == "https://www.threads.net/@hiro504522/post/abc"
+    assert result["published_url"] == result["url"]
+    assert result["published"]["confirmed"] is True
+    assert result["published"]["permalink"] == result["url"]
+    assert result["screenshot_url"] == "https://cdn.example/threads-post.jpg"
+    assert result["published"]["thumbnail"] == result["screenshot_url"]
+    assert social_automation_api._confirmed_published_url(result, "threads") == "https://www.threads.net/@hiro504522/post/abc"
+
+
 def test_create_post_uses_selected_platform_and_reference_key():
-    session = _Session([_Response({"id": "post-1", "status": "SCHEDULED"})])
+    session = _Session([_Response({
+        "id": "post-1",
+        "status": "SCHEDULED",
+        "data": {"INSTAGRAM": {"text": "hello", "uploadIds": ["upload-1"]}},
+    })])
     client = BundleSocialClient(api_key="test-key", session=session)
 
     created = client.create_post(
@@ -165,6 +359,180 @@ def test_create_post_uses_selected_platform_and_reference_key():
         "type": "POST",
         "autoFitImage": True,
     }
+
+
+def test_create_post_uses_reel_for_single_instagram_video(tmp_path):
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"mp4")
+    session = _Session([_Response({"id": "post-1", "status": "SCHEDULED"})])
+    client = BundleSocialClient(api_key="test-key", session=session)
+
+    client.create_post(
+        team_id="team-1",
+        platform="instagram",
+        text="hello",
+        upload_ids=["upload-1"],
+        reference_key="task-video",
+        media_paths=[str(video)],
+    )
+
+    body = session.calls[0][2]["json"]
+    assert body["data"]["INSTAGRAM"] == {
+        "text": "hello",
+        "uploadIds": ["upload-1"],
+        "type": "REEL",
+        "shareToFeed": True,
+    }
+
+
+def test_create_post_keeps_feed_post_for_instagram_images_and_mixed_media(tmp_path):
+    image = tmp_path / "photo.jpg"
+    image.write_bytes(b"jpeg")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"mp4")
+    session = _Session([
+        _Response({"id": "post-img", "status": "SCHEDULED"}),
+        _Response({"id": "post-mix", "status": "SCHEDULED"}),
+    ])
+    client = BundleSocialClient(api_key="test-key", session=session)
+
+    client.create_post(
+        team_id="team-1",
+        platform="instagram",
+        text="photo",
+        upload_ids=["upload-img"],
+        reference_key="task-img",
+        media_paths=[str(image)],
+    )
+    client.create_post(
+        team_id="team-1",
+        platform="instagram",
+        text="carousel",
+        upload_ids=["upload-img", "upload-vid"],
+        reference_key="task-mix",
+        media_paths=[str(image), str(video)],
+    )
+
+    assert session.calls[0][2]["json"]["data"]["INSTAGRAM"] == {
+        "text": "photo",
+        "uploadIds": ["upload-img"],
+        "type": "POST",
+        "autoFitImage": True,
+    }
+    assert session.calls[1][2]["json"]["data"]["INSTAGRAM"] == {
+        "text": "carousel",
+        "uploadIds": ["upload-img", "upload-vid"],
+        "type": "POST",
+        "autoFitImage": True,
+    }
+
+
+def test_threads_create_post_accepts_text_image_and_video_without_type(tmp_path):
+    image = tmp_path / "photo.jpg"
+    image.write_bytes(b"jpeg")
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"mp4")
+    session = _Session([
+        _Response({"id": "post-text", "status": "SCHEDULED"}),
+        _Response({"id": "post-media", "status": "SCHEDULED"}),
+    ])
+    client = BundleSocialClient(api_key="test-key", session=session)
+
+    client.create_post(
+        team_id="team-1",
+        platform="threads",
+        text="hello",
+        upload_ids=[],
+        reference_key="task-text",
+    )
+    client.create_post(
+        team_id="team-1",
+        platform="threads",
+        text="media",
+        upload_ids=["u-img", "u-vid"],
+        reference_key="task-media",
+        media_paths=[str(image), str(video)],
+    )
+
+    assert session.calls[0][2]["json"]["data"]["THREADS"] == {"text": "hello", "uploadIds": []}
+    assert session.calls[1][2]["json"]["data"]["THREADS"] == {
+        "text": "media",
+        "uploadIds": ["u-img", "u-vid"],
+    }
+
+
+def test_expired_access_token_is_classified_as_reauth_required():
+    assert is_bundle_reauth_required("Error validating access token. Session has expired.")
+    assert is_bundle_reauth_required("Please reconnect the account")
+    assert not is_bundle_reauth_required("平台接口未返回发布任务编号")
+    assert not is_bundle_reauth_required("Instagram 发布至少需要一份媒体素材")
+
+
+def test_wait_for_result_raises_reauth_required_on_expired_token():
+    session = _Session([
+        _Response({
+            "id": "post-1",
+            "status": "ERROR",
+            "errorsVerbose": {
+                "THREADS": {"userFacingMessage": "Error validating access token. Session has expired."},
+            },
+        })
+    ])
+    client = BundleSocialClient(api_key="test-key", session=session)
+    with pytest.raises(BundleReauthRequiredError):
+        client.wait_for_result(resource="post", resource_id="post-1", timeout_seconds=5)
+
+
+def test_instagram_bundle_publish_success_proof_is_posted_status_and_permalink(monkeypatch):
+    from webapp.bundle_social import run_bundle_social_task
+
+    class _Client:
+        def upload_file(self, **_kwargs):
+            return "upload-1"
+
+        def create_post(self, **kwargs):
+            assert kwargs["platform"] == "instagram"
+            assert kwargs["media_paths"] == ["clip.mp4"]
+            return {"id": "post-ig", "status": "SCHEDULED", "data": {"INSTAGRAM": {"type": "REEL"}}}
+
+        def wait_for_result(self, **_kwargs):
+            return {
+                "id": "post-ig",
+                "status": "POSTED",
+                "externalData": {
+                    "INSTAGRAM": {
+                        "id": "ext-ig",
+                        "permalink": "https://www.instagram.com/reel/abc123/",
+                        "thumbnail": "https://cdn.example/ig-reel.jpg",
+                    }
+                },
+            }
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: _Client())
+    result = run_bundle_social_task(
+        task={
+            "id": "task-ig",
+            "task_type": "publish_post",
+            "platform": "instagram",
+            "payload": {"content": "hello", "media_paths": ["clip.mp4"]},
+        },
+        account={"external_team_id": "team-1", "external_account_id": "social-1", "platform": "instagram"},
+        logger=_Logger(),
+    )
+    assert result["ok"] is True
+    assert result["status"] == "POSTED"
+    assert result["url"] == "https://www.instagram.com/reel/abc123/"
+    assert result["published"]["confirmed"] is True
+    assert result["screenshot_url"] == "https://cdn.example/ig-reel.jpg"
+    assert social_automation_api._confirmed_published_url(result, "instagram") == "https://www.instagram.com/reel/abc123/"
+
+
+def test_expired_token_does_not_start_fingerprint_reauthorization():
+    ok = social_automation_api._requeue_for_bundle_reauth(
+        "task-1",
+        BundleReauthRequiredError("Error validating access token. Session has expired."),
+    )
+    assert ok is False
 
 
 def test_create_comment_uses_imported_post_without_inventing_reference_key():
@@ -241,6 +609,188 @@ def test_bundle_runner_dispatch_does_not_open_browser(monkeypatch, tmp_path):
     assert result == {"ok": True, "provider": "bundle"}
     assert called["task"]["payload"]["content"] == "hello"
     assert any(event[1] == "bundle_dispatch" for event in logger.events)
+
+
+def test_instagram_bundle_runner_dispatch_does_not_open_browser(monkeypatch, tmp_path):
+    called = {}
+
+    def fake_run_bundle_social_task(**kwargs):
+        called.update(kwargs)
+        return {"ok": True, "provider": "bundle"}
+
+    monkeypatch.setattr("webapp.bundle_social.run_bundle_social_task", fake_run_bundle_social_task)
+    monkeypatch.setattr(
+        runner,
+        "_open_camoufox_context",
+        lambda **_: pytest.fail("Bundle account must not start Camoufox"),
+    )
+    logger = _Logger()
+    result = runner.run_social_task(
+        task={
+            "id": "task-ig",
+            "task_type": "publish_post",
+            "platform": "instagram",
+            "payload": {"content": "hello", "media_paths": ["clip.mp4"]},
+        },
+        account={
+            "id": "account-ig",
+            "platform": "instagram",
+            "auth_provider": "bundle",
+            "external_team_id": "team-ig",
+            "external_account_id": "social-ig",
+        },
+        proxy=None,
+        data_dir=tmp_path,
+        logger=logger,
+        cancel_event=threading.Event(),
+    )
+    assert result == {"ok": True, "provider": "bundle"}
+    assert called["task"]["platform"] == "instagram"
+    assert called["task"]["payload"]["media_paths"] == ["clip.mp4"]
+    assert called["account"]["external_account_id"] == "social-ig"
+    assert any(event[1] == "bundle_dispatch" for event in logger.events)
+
+
+def test_prepare_publish_media_downscales_threads_oversize_image(tmp_path):
+    from PIL import Image
+    from webapp.bundle_social import prepare_publish_media_paths
+
+    source = tmp_path / "hot.jpg"
+    Image.new("RGB", (1920, 1920), (20, 80, 160)).save(source, format="JPEG", quality=90)
+    logger = _Logger()
+    prepared = prepare_publish_media_paths("threads", [str(source)], logger=logger)
+    assert len(prepared) == 1
+    dest = Path(prepared[0])
+    assert dest != source
+    assert dest.is_file()
+    with Image.open(dest) as image:
+        assert image.size == (1440, 1440)
+    assert dest.stat().st_size <= 8 * 1024 * 1024
+    assert any(event[1] == "bundle_publish_media_prepared" for event in logger.events)
+
+
+def test_prepare_publish_media_keeps_compliant_threads_image(tmp_path):
+    from PIL import Image
+    from webapp.bundle_social import prepare_publish_media_paths
+
+    source = tmp_path / "ok.jpg"
+    Image.new("RGB", (1080, 1080), (10, 10, 10)).save(source, format="JPEG", quality=90)
+    prepared = prepare_publish_media_paths("threads", [str(source)], logger=_Logger())
+    assert prepared == [str(source)]
+
+
+def test_prepare_publish_media_fits_threads_wide_aspect(tmp_path):
+    from PIL import Image
+    from webapp.bundle_social import prepare_publish_media_paths
+
+    source = tmp_path / "pano.jpg"
+    Image.new("RGB", (3000, 1000), (80, 80, 80)).save(source, format="JPEG", quality=90)
+    dest = Path(prepare_publish_media_paths("threads", [str(source)], logger=_Logger())[0])
+    with Image.open(dest) as image:
+        width, height = image.size
+    assert width <= 1440
+    assert width >= 320
+    assert width / height <= 10 + 1e-6
+
+
+def test_prepare_publish_media_fits_instagram_tall_aspect(tmp_path):
+    from PIL import Image
+    from webapp.bundle_social import prepare_publish_media_paths
+
+    source = tmp_path / "tall.jpg"
+    Image.new("RGB", (800, 2000), (90, 90, 90)).save(source, format="JPEG", quality=90)
+    dest = Path(prepare_publish_media_paths("instagram", [str(source)], logger=_Logger())[0])
+    with Image.open(dest) as image:
+        width, height = image.size
+    assert width <= 1920
+    assert 0.8 - 1e-6 <= width / height <= 1.91 + 1e-6
+
+
+def test_threads_bundle_publish_prepares_oversize_image_before_upload(monkeypatch, tmp_path):
+    from PIL import Image
+    from webapp.bundle_social import run_bundle_social_task
+
+    source = tmp_path / "wide.jpg"
+    Image.new("RGB", (1920, 1920), (30, 30, 30)).save(source, format="JPEG", quality=90)
+    uploaded = {}
+
+    class _Client:
+        def upload_file(self, **kwargs):
+            uploaded["path"] = kwargs["path"]
+            return "upload-1"
+
+        def create_post(self, **kwargs):
+            uploaded["create_paths"] = kwargs["media_paths"]
+            return {"id": "post-1", "status": "SCHEDULED"}
+
+        def wait_for_result(self, **_kwargs):
+            return {
+                "id": "post-1",
+                "status": "POSTED",
+                "externalData": {"THREADS": {"permalink": "https://www.threads.net/@caiyu739/post/abc"}},
+            }
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: _Client())
+    logger = _Logger()
+    result = run_bundle_social_task(
+        task={
+            "id": "task-media",
+            "task_type": "publish_post",
+            "platform": "threads",
+            "payload": {"content": "hello", "media_paths": [str(source)]},
+        },
+        account={"external_team_id": "team-1", "external_account_id": "social-1", "platform": "threads"},
+        logger=logger,
+    )
+    assert result["ok"] is True
+    prepared = Path(uploaded["path"])
+    assert prepared != source
+    with Image.open(prepared) as image:
+        assert image.size[0] <= 1440
+    assert uploaded["create_paths"] == [str(prepared)]
+    assert any(event[1] == "bundle_publish_media_prepared" for event in logger.events)
+
+
+def test_threads_bundle_publish_rejects_overlong_caption(monkeypatch):
+    from webapp.bundle_social import run_bundle_social_task
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: object())
+    with pytest.raises(BundleSocialError, match="正文不能超过 500 字"):
+        run_bundle_social_task(
+            task={
+                "id": "task-long-text",
+                "task_type": "publish_post",
+                "platform": "threads",
+                "payload": {"content": "a" * 761},
+            },
+            account={
+                "external_team_id": "team-1",
+                "external_account_id": "social-1",
+                "platform": "threads",
+            },
+            logger=_Logger(),
+        )
+
+
+def test_instagram_bundle_publish_rejects_text_only(monkeypatch):
+    from webapp.bundle_social import run_bundle_social_task
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: object())
+    with pytest.raises(BundleSocialError, match="Instagram 发布至少需要一份媒体素材"):
+        run_bundle_social_task(
+            task={
+                "id": "task-ig-text",
+                "task_type": "publish_post",
+                "platform": "instagram",
+                "payload": {"content": "hello"},
+            },
+            account={
+                "external_team_id": "team-ig",
+                "external_account_id": "social-ig",
+                "platform": "instagram",
+            },
+            logger=_Logger(),
+        )
 
 
 def test_bundle_account_storage_migration(monkeypatch, tmp_path):
@@ -366,9 +916,56 @@ def test_bundle_console_redirect_keeps_admin_session_boundary():
 
     parsed = urlparse(response.headers["location"])
     query = parse_qs(parsed.query)
-    assert parsed.path == "/bundle-auth-complete.html"
+    assert parsed.path == "/admin-console.html"
     assert query["bundle_auth"] == ["success"]
     assert query["bundle_platform"] == ["threads"]
+    assert query["admin_console"] == ["1"]
+    assert query["admin_workspace_user_id"] == ["42"]
+
+
+def test_bundle_cancel_returns_to_existing_account_pool_without_redirect_refresh():
+    response = social_automation_api._bundle_cancel_return_response(
+        return_path="/console.html?view=accounts",
+    )
+    assert response.status_code == 302
+    assert response.headers["location"] == "/console.html?view=accounts"
+    assert "bundle_auth=" not in response.headers["location"]
+
+
+def test_bundle_callback_cancel_does_not_reload_console_query(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "callback-cancel.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_account_auth_requests(
+              id, user_id, persona_id, account_id, platform, team_id,
+              status, error, expires_at, created_at, updated_at
+            ) VALUES ('request-cancel', 0, '', '', 'instagram', 'team-1', 'pending', '', ?, ?, ?)
+            """,
+            (now + 900, now, now),
+        )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/callback",
+            "query_string": b"request_id=request-cancel&error=access_denied",
+            "headers": [],
+        }
+    )
+    response = social_automation_api._finalize_bundle_authorization("request-cancel", request)
+    assert response.status_code == 302
+    assert response.headers["location"] == "/console.html?view=accounts"
+    assert "bundle_auth=" not in response.headers["location"]
+    with db() as conn:
+        row = conn.execute(
+            "SELECT status FROM social_account_auth_requests WHERE id = 'request-cancel'"
+        ).fetchone()
+    assert row["status"] == "failed"
 
 
 def test_bundle_console_redirect_rejects_external_return_path():
@@ -379,7 +976,7 @@ def test_bundle_console_redirect_rejects_external_return_path():
     )
 
     parsed = urlparse(response.headers["location"])
-    assert parsed.path == "/bundle-auth-complete.html"
+    assert parsed.path == "/console.html"
     assert parse_qs(parsed.query)["bundle_auth"] == ["error"]
 
 
@@ -486,6 +1083,60 @@ def test_bundle_callback_persists_only_verified_platform_account(monkeypatch, tm
     assert account["external_team_id"] == "team-1"
     assert account["external_account_id"] == "external-1"
     assert auth_request["status"] == "completed"
+
+
+def test_instagram_callback_persists_bundle_account_for_api_publish(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "ig-callback.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_account_auth_requests(
+              id, user_id, persona_id, account_id, platform, team_id,
+              status, error, expires_at, created_at, updated_at
+            ) VALUES ('request-ig', 0, 'persona-ig', '', 'instagram', 'team-ig', 'pending', '', ?, ?, ?)
+            """,
+            (now + 900, now, now),
+        )
+
+    class _Client:
+        def find_social_account(self, *, team_id, platform):
+            assert (team_id, platform) == ("team-ig", "instagram")
+            return {
+                "id": "external-ig",
+                "type": "INSTAGRAM",
+                "teamId": "team-ig",
+                "username": "ig_verified",
+                "displayName": "IG Verified",
+            }
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/callback",
+            "query_string": b"request_id=request-ig&callback=instagram-callback",
+            "headers": [],
+        }
+    )
+    response = social_automation_api._finalize_bundle_authorization("request-ig", request)
+    with db() as conn:
+        account = conn.execute("SELECT * FROM social_accounts").fetchone()
+        auth_request = conn.execute("SELECT * FROM social_account_auth_requests WHERE id = 'request-ig'").fetchone()
+    assert response.status_code == 302
+    assert "bundle_auth=success" in response.headers["location"]
+    assert account["platform"] == "instagram"
+    assert account["persona_id"] == "persona-ig"
+    assert account["auth_provider"] == "bundle"
+    assert account["status"] == "ready"
+    assert account["external_team_id"] == "team-ig"
+    assert account["external_account_id"] == "external-ig"
+    assert auth_request["status"] == "completed"
+    assert auth_request["account_id"] == account["id"]
 
 
 def test_bundle_callback_reauthorization_reuses_same_external_account(monkeypatch, tmp_path):
@@ -717,7 +1368,7 @@ def test_bundle_authorization_reuses_existing_empty_team(monkeypatch, tmp_path):
         def create_team(self, _name):
             pytest.fail("an existing empty authorization team must be reused")
 
-        def create_connect_link(self, *, team_id, platform, redirect_url):
+        def create_connect_link(self, *, team_id, platform, redirect_url, disable_auto_login=False, **_kwargs):
             assert (team_id, platform) == ("team-empty", "threads")
             assert "request_id=" in redirect_url
             return "https://provider.example/oauth"
@@ -758,9 +1409,9 @@ def test_bundle_authorization_reuses_existing_empty_team(monkeypatch, tmp_path):
             "SELECT status FROM social_account_auth_requests WHERE id = 'request-old'",
         ).fetchone()
     assert result["url"] == "https://provider.example/oauth"
-    assert result["flow"] == "live_window"
-    assert result["live_window"] is True
-    assert str(result["task_id"] or "").startswith("social_task_")
+    assert result["flow"] == "user_browser"
+    assert result["live_window"] is False
+    assert not str(result.get("task_id") or "").strip()
     assert (current["team_id"], current["status"]) == ("team-empty", "pending")
     assert previous["status"] == "superseded"
 
@@ -780,7 +1431,7 @@ def test_bundle_authorization_reuses_unbound_provider_empty_team(monkeypatch, tm
         def create_team(self, _name):
             pytest.fail("an unbound provider empty team must be reused before creating another team")
 
-        def create_connect_link(self, *, team_id, platform, redirect_url):
+        def create_connect_link(self, *, team_id, platform, redirect_url, disable_auto_login=False, **_kwargs):
             assert (team_id, platform) == ("team-provider-empty", "threads")
             assert "request_id=" in redirect_url
             return "https://provider.example/oauth"
@@ -1057,6 +1708,154 @@ def test_oauth_flow_presentation_only_asks_for_authorize_inputs():
     assert success["title"] == "授权成功"
 
 
+def test_bundle_oauth_consent_uses_live_page_buttons_and_copy():
+    consent = runner._bundle_oauth_assistance_presentation({
+        "status": "oauth_consent",
+        "oauth_flow": True,
+        "title": "bundlesocial 要求存取下列項目：",
+        "reason": "请点击与授权页相同的按钮完成确认。",
+        "details": "Access and display Your Threads information and posts (Required)",
+        "actions": [
+            {"kind": "choice", "role": "confirm", "label": "以 hiro504522 的身份繼續", "title": "以 hiro504522 的身份繼續"},
+            {"kind": "choice", "role": "cancel", "label": "取消", "title": "取消"},
+        ],
+    })
+
+    assert consent["kind"] == "choice"
+    assert consent["phase"] == "attention"
+    assert consent["title"] == "bundlesocial 要求存取下列項目："
+    assert consent["details"].startswith("Access and display")
+    assert consent["submit_label"] == "以 hiro504522 的身份繼續"
+    assert [item["label"] for item in consent["actions"]] == ["以 hiro504522 的身份繼續", "取消"]
+    assert [item.get("role") for item in consent["actions"]] == ["confirm", "cancel"]
+
+
+def test_bundle_oauth_login_confirmed_does_not_hide_consent_buttons():
+    published = {}
+
+    def _capture(_session_id, presentation):
+        published.update(presentation)
+
+    class _Page:
+        url = "https://www.threads.com/privacy/consent/?flow=gdp"
+
+        def evaluate(self, _script, *_args):
+            return {
+                "available": True,
+                "title": "bundlesocial 要求存取下列項目：",
+                "details": "Access and display Your Threads information and posts (Required)",
+                "actions": [
+                    {"kind": "choice", "role": "confirm", "label": "以 hiro504522 的身份繼續", "title": "以 hiro504522 的身份繼續", "selector": "[data-vecto-consent-role=\"confirm\"]"},
+                    {"kind": "choice", "role": "cancel", "label": "取消", "title": "取消", "selector": "[data-vecto-consent-role=\"cancel\"]"},
+                ],
+            }
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            "social_automation.live_browser.update_live_browser_login_assistance",
+            _capture,
+        )
+        monkeypatch.setattr(runner, "_login_assistance_surfaces", lambda _page: [(_Page(), _Page())])
+        runner._publish_login_assistance_state(
+            _Page(),
+            {
+                "live_browser_session_id": "live-consent",
+                "bundle_oauth_login_confirmed": True,
+            },
+            {
+                "status": "oauth_consent",
+                "oauth_flow": True,
+                "reason": "请点击与授权页相同的按钮完成确认。",
+            },
+            handoff=True,
+        )
+
+    assert published["kind"] == "choice"
+    assert published["title"] == "bundlesocial 要求存取下列項目："
+    assert published["details"].startswith("Access and display")
+    assert [item["label"] for item in published["actions"]] == ["以 hiro504522 的身份繼續", "取消"]
+    assert [item.get("role") for item in published["actions"]] == ["confirm", "cancel"]
+
+
+def test_bundle_oauth_detects_privacy_consent_url_before_credentials():
+    class _Page:
+        url = "https://www.threads.com/privacy/consent/?flow=gdp&params[redirect_uri]=https://api.bundle.social/x"
+
+        def evaluate(self, _script, *_args):
+            return {
+                "available": True,
+                "title": "bundlesocial 要求存取下列項目：",
+                "details": "Access and display Your Threads information and posts (Required)",
+                "actions": [{"kind": "choice", "role": "confirm", "label": "以 hiro504522 的身份繼續", "title": "以 hiro504522 的身份繼續", "selector": "[data-vecto-consent-role=\"confirm\"]"}],
+            }
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(runner, "_login_assistance_surfaces", lambda page: [(page, page)])
+        monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: True)
+        monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: True)
+        state = runner._detect_bundle_oauth_page_state(_Page(), "threads")
+
+    assert state["status"] == "oauth_consent"
+    assert state["actions"][0]["label"] == "以 hiro504522 的身份繼續"
+
+
+def test_bundle_oauth_start_stays_automatic_until_a_real_block():
+    import inspect
+    source = inspect.getsource(runner.run_bundle_oauth_browser_task)
+    assert '"need_manual"' not in source
+    assert "先按原自动化登录完成平台会话" not in source
+    assert "正在自动登录，登录成功后会进入官方授权。" in source
+    assert "正在自动确认授权。" in source
+    assert "bundle_oauth_consent_misses" in source
+
+
+def test_consent_snapshot_identifies_by_structure_not_copy():
+    import inspect
+    source = inspect.getsource(runner._collect_bundle_oauth_consent_snapshot)
+    click_source = inspect.getsource(runner._click_mapped_consent_action)
+    auto_source = inspect.getsource(runner._maybe_auto_confirm_bundle_oauth)
+
+    assert "data-vecto-consent-role" in source
+    assert "hasIconCluster" in source
+    assert "fillScore" in source
+    assert "confirmRe" not in source
+    assert "Allow" not in source
+    assert "继续" not in source
+    assert "BUNDLE_OAUTH_CONSENT_BUTTONS" not in auto_source
+    assert 'role="confirm"' in auto_source
+    assert "data-vecto-consent-role" in click_source
+
+
+def test_mapped_consent_click_uses_role_not_button_copy():
+    clicks = []
+
+    class _Page:
+        url = "https://www.threads.com/privacy/consent/"
+
+        def evaluate(self, _script, *args):
+            if args:
+                clicks.append(args[0])
+                return True
+            return {
+                "available": True,
+                "title": "heading",
+                "details": "",
+                "actions": [{
+                    "kind": "choice",
+                    "role": "confirm",
+                    "label": "whatever-language-label",
+                    "title": "whatever-language-label",
+                    "selector": "[data-vecto-consent-role=\"confirm\"]",
+                }],
+            }
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(runner, "_login_assistance_surfaces", lambda page: [(page, page)])
+        assert runner._click_mapped_consent_action(_Page(), _Logger(), role="confirm") is True
+
+    assert clicks == ["confirm"]
+
+
 def test_regular_login_assistance_keeps_original_copy_during_oauth_support():
     credentials = runner._login_assistance_presentation({
         "status": "cookie_expired",
@@ -1088,8 +1887,8 @@ def test_bundle_oauth_result_from_complete_url():
     assert ignored is None
 
 
-def test_bundle_authorization_starts_isolated_live_window_task(monkeypatch, tmp_path):
-    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "live-window-auth.db"))
+def test_bundle_authorization_returns_user_browser_oauth_url(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "user-browser-auth.db"))
     init_db()
 
     class _Client:
@@ -1099,7 +1898,7 @@ def test_bundle_authorization_starts_isolated_live_window_task(monkeypatch, tmp_
         def create_team(self, _name):
             pytest.fail("should reuse empty team")
 
-        def create_connect_link(self, *, team_id, platform, redirect_url):
+        def create_connect_link(self, *, team_id, platform, redirect_url, disable_auto_login=False, **_kwargs):
             assert team_id == "team-live"
             assert platform == "threads"
             assert "request_id=" in redirect_url
@@ -1135,27 +1934,18 @@ def test_bundle_authorization_starts_isolated_live_window_task(monkeypatch, tmp_
     )
 
     with db() as conn:
-        task = conn.execute(
-            "SELECT task_type, account_id, payload_json, status FROM social_automation_tasks WHERE id = ?",
-            (result["task_id"],),
+        tasks = conn.execute("SELECT id FROM social_automation_tasks").fetchall()
+        auth = conn.execute(
+            "SELECT status FROM social_account_auth_requests WHERE id = ?",
+            (result["request_id"],),
         ).fetchone()
-        host = conn.execute(
-            "SELECT username, display_name FROM social_accounts WHERE id = ?",
-            (task["account_id"],),
-        ).fetchone()
-    payload = __import__("json").loads(task["payload_json"])
-    assert result["flow"] == "live_window"
-    assert result["live_window"] is True
-    assert woken == [True]
-    assert task["task_type"] == "bundle_oauth"
-    assert task["status"] == "queued"
-    assert str(task["account_id"]).startswith("oauth_host_")
-    assert host is None
-    assert payload["oauth_url"] == "https://provider.example/oauth"
-    assert payload["bundle_request_id"] == result["request_id"]
-    assert payload["manual_takeover"] is False
-    assert payload["auto_submit"] is True
-    assert payload["wait_for_manual"] is True
+    assert result["flow"] == "user_browser"
+    assert result["live_window"] is False
+    assert result["url"] == "https://provider.example/oauth"
+    assert not str(result.get("task_id") or "").strip()
+    assert woken == []
+    assert tasks == []
+    assert auth["status"] == "pending"
 
 
 def test_bundle_reauthorization_keeps_task_attached_to_existing_account(monkeypatch, tmp_path):
@@ -1163,7 +1953,7 @@ def test_bundle_reauthorization_keeps_task_attached_to_existing_account(monkeypa
     init_db()
 
     class _Client:
-        def create_connect_link(self, *, team_id, platform, redirect_url):
+        def create_connect_link(self, *, team_id, platform, redirect_url, disable_auto_login=False, **_kwargs):
             assert team_id == "team-existing"
             assert platform == "threads"
             assert "request_id=" in redirect_url
@@ -1214,12 +2004,127 @@ def test_bundle_reauthorization_keeps_task_attached_to_existing_account(monkeypa
     )
 
     with db() as conn:
-        task = conn.execute(
-            "SELECT account_id FROM social_automation_tasks WHERE id = ?",
-            (result["task_id"],),
+        tasks = conn.execute("SELECT id FROM social_automation_tasks").fetchall()
+        auth = conn.execute(
+            "SELECT account_id, status FROM social_account_auth_requests WHERE id = ?",
+            (result["request_id"],),
         ).fetchone()
-    assert task["account_id"] == "account-existing"
+    assert tasks == []
     assert result["account_id"] == "account-existing"
+    assert result["flow"] == "user_browser"
+    assert not str(result.get("task_id") or "").strip()
+    assert (auth["account_id"], auth["status"]) == ("account-existing", "pending")
+
+
+def test_reauthorize_skips_oauth_when_connection_still_valid(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "valid-reauth.db"))
+    init_db()
+    now = social_automation_api._now()
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO social_accounts(
+              id, user_id, persona_id, platform, username, display_name, profile_dir,
+              status, auth_provider, external_team_id, external_account_id,
+              created_at, updated_at
+            ) VALUES ('account-valid', 0, '', 'threads', 'hiro', 'Hiro', '',
+                      'ready', 'bundle', 'team-valid', 'external-valid', ?, ?)
+            """,
+            (now, now),
+        )
+
+    class _Client:
+        def inspect_social_account(self, *, team_id, platform):
+            assert (team_id, platform) == ("team-valid", "threads")
+            return {"valid": True, "reason": "active", "account": {"username": "hiro", "id": "external-valid"}}
+
+        def create_connect_link(self, **_kwargs):
+            pytest.fail("valid authorization must not start oauth")
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    monkeypatch.setattr(social_automation_api, "_identity_user_id", lambda _: 0)
+    monkeypatch.setattr(social_automation_api, "_require_active_owner_user", lambda *_: None)
+    monkeypatch.setattr(social_automation_api, "_billing_admin_waived", lambda *_: True)
+    monkeypatch.setattr(
+        social_automation_api.commercial_billing,
+        "require_write_access",
+        lambda *_args, **_kwargs: None,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/authorize",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+    result = social_automation_api._start_bundle_authorization(
+        social_automation_api.BundleAuthorizationPayload(platform="threads", account_id="account-valid"),
+        request,
+        {"id": 0},
+    )
+    assert result["already_authorized"] is True
+    assert result["flow"] == "already_authorized"
+    assert not str(result.get("url") or "").strip()
+    assert "无需重复授权" in result["message"]
+    with db() as conn:
+        pending = conn.execute("SELECT id FROM social_account_auth_requests").fetchall()
+    assert pending == []
+
+
+def test_new_instagram_authorization_enables_oauth_account_switch(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_DB_PATH", str(tmp_path / "ig-switch.db"))
+    init_db()
+    captured = {}
+
+    class _Client:
+        def list_teams(self, *, limit):
+            return {"items": [{"id": "team-ig", "name": "vecto-0-instagram-ig", "socialAccounts": []}], "count": 1}
+
+        def create_team(self, _name):
+            pytest.fail("should reuse empty team")
+
+        def create_connect_link(self, *, team_id, platform, redirect_url, disable_auto_login=False, **_kwargs):
+            captured.update({
+                "team_id": team_id,
+                "platform": platform,
+                "disable_auto_login": disable_auto_login,
+                "force_browser_oauth": _kwargs.get("force_browser_oauth"),
+            })
+            return "https://instagram.example/oauth"
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", _Client)
+    monkeypatch.setattr(social_automation_api, "_identity_user_id", lambda _: 0)
+    monkeypatch.setattr(social_automation_api, "_require_active_owner_user", lambda *_: None)
+    monkeypatch.setattr(social_automation_api, "_billing_admin_waived", lambda *_: True)
+    monkeypatch.setattr(
+        social_automation_api.commercial_billing,
+        "require_write_access",
+        lambda *_args, **_kwargs: None,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("vecto.example", 443),
+            "path": "/api/persona_dashboard/automation/accounts/bundle/authorize",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
+    result = social_automation_api._start_bundle_authorization(
+        social_automation_api.BundleAuthorizationPayload(platform="instagram"),
+        request,
+        {"id": 0},
+    )
+    assert captured["disable_auto_login"] is True
+    assert captured["force_browser_oauth"] is True
+    assert result["account_switch"] == "oauth"
+    assert "账号选择" in result["account_switch_hint"]
 
 
 def test_bundle_oauth_host_account_reuses_saved_login_credentials(monkeypatch, tmp_path):
@@ -1534,6 +2439,143 @@ def test_bundle_oauth_runs_original_open_login_before_authorize(monkeypatch, tmp
     assert result["ok"] is True
     assert calls[0] == "open_login"
     assert "https://provider.example/oauth" in calls
+
+
+def test_auto_confirm_still_clicks_when_consent_page_has_leftover_login_inputs(monkeypatch):
+    clicks = []
+
+    class _Page:
+        url = "https://www.threads.com/privacy/consent/?flow=gdp"
+
+        def evaluate(self, _script, *args):
+            if args:
+                clicks.append(args[0])
+                return True
+            return {
+                "available": True,
+                "title": "bundlesocial 要求存取下列項目：",
+                "details": "",
+                "actions": [{
+                    "kind": "choice",
+                    "role": "confirm",
+                    "label": "以 hiro504522 的身份繼續",
+                    "title": "以 hiro504522 的身份繼續",
+                    "selector": '[data-vecto-consent-role="confirm"]',
+                }],
+            }
+
+    page = _Page()
+    monkeypatch.setattr(runner, "_login_assistance_surfaces", lambda _page: [(page, page)])
+    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: True)
+    monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: True)
+    monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: True)
+    monkeypatch.setattr(runner, "_mapped_login_verification_code", lambda _page: None)
+
+    clicked = runner._maybe_auto_confirm_bundle_oauth(
+        page,
+        _Logger(),
+        {"bundle_oauth_login_confirmed": True},
+        {"status": "oauth_consent", "oauth_flow": True},
+    )
+    assert clicked is True
+    assert clicks == ["confirm"]
+
+
+def test_bundle_oauth_full_auto_login_and_consent_closed_loop(monkeypatch, tmp_path):
+    profile_dir = tmp_path / "account-closed-loop"
+    profile_dir.mkdir()
+    published = []
+    login_payloads = []
+
+    class _Page:
+        def __init__(self):
+            self.url = "https://www.threads.com/"
+            self.clicks = []
+
+        def goto(self, url, **_kwargs):
+            self.url = "https://www.threads.com/privacy/consent/?flow=gdp&client_id=1"
+
+        def evaluate(self, _script, *args):
+            if args:
+                self.clicks.append(args[0])
+                self.url = (
+                    "https://www.vecto-ai.cn/bundle-auth-complete.html"
+                    "?bundle_auth=success&bundle_platform=threads"
+                    "&bundle_account_id=account-closed&bundle_message=ok"
+                )
+                return True
+            return {
+                "available": True,
+                "title": "bundlesocial 要求存取下列項目：",
+                "details": "Access and display Your Threads information and posts (Required)",
+                "actions": [{
+                    "kind": "choice",
+                    "role": "confirm",
+                    "label": "以 hiro504522 的身份繼續",
+                    "title": "以 hiro504522 的身份繼續",
+                    "selector": '[data-vecto-consent-role="confirm"]',
+                }],
+            }
+
+    page = _Page()
+
+    class _Context:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def _open_login(_page, _task, _account, payload, *_args, **_kwargs):
+        login_payloads.append(dict(payload))
+        return {"ok": True, "status": "ready"}
+
+    monkeypatch.setattr(runner, "_open_camoufox_context", lambda **_kwargs: _Context())
+    monkeypatch.setattr(runner, "_first_page", lambda _context: page)
+    monkeypatch.setattr(runner, "_sync_live_browser_viewport", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        runner,
+        "_publish_login_assistance_state",
+        lambda _page, _control, status, **_kwargs: published.append(dict(status or {})),
+    )
+    monkeypatch.setattr(runner, "_run_open_login", _open_login)
+    monkeypatch.setattr(runner, "_process_login_assistance_action", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(runner, "_maybe_resume_bundle_oauth_url", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(runner, "_wait_for_cancellation", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(runner, "_login_assistance_surfaces", lambda _page: [(page, page)])
+    monkeypatch.setattr(runner, "_mapped_login_credentials", lambda _page: True)
+    monkeypatch.setattr(runner, "_mapped_login_username_input", lambda _page: True)
+    monkeypatch.setattr(runner, "_mapped_login_password_input", lambda _page: None)
+    monkeypatch.setattr(runner, "_mapped_login_verification_code", lambda _page: None)
+
+    control = {"live_browser_session_id": "live-closed-loop"}
+    result = runner.run_bundle_oauth_browser_task(
+        task={
+            "id": "task-closed-loop",
+            "platform": "threads",
+            "payload": {"oauth_url": "https://threads.net/oauth/authorize?client_id=1", "auto_submit": True},
+        },
+        account={
+            "id": "account-closed",
+            "username": "hiro504522",
+            "login_username": "hiro504522",
+            "login_password": "secret",
+            "profile_dir": str(profile_dir),
+        },
+        proxy=None,
+        data_dir=tmp_path,
+        logger=_Logger(),
+        context_control=control,
+    )
+
+    assert result == {"ok": True, "bundle_oauth": True, "account_id": "account-closed", "platform": "threads"}
+    assert login_payloads and login_payloads[0]["auto_submit"] is True
+    assert login_payloads[0]["login_username"] == "hiro504522"
+    assert control.get("bundle_oauth_login_confirmed") is True
+    assert page.clicks == ["confirm"]
+    assert control.get("bundle_oauth_consent_misses", 0) == 0
+    assert any(item.get("reason") == "正在自动确认授权。" for item in published)
+    assert all(item.get("status") != "oauth_consent" for item in published)
 
 
 def test_bundle_oauth_browser_reuses_account_profile(monkeypatch, tmp_path):

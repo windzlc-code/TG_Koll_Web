@@ -226,6 +226,7 @@ class RemoteFetchClient:
         idempotency_key: str,
         timeout_seconds: int,
         on_job_created: Callable[[str], None] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         clean_key = validate_idempotency_key(idempotency_key)
         response = self._request(
@@ -244,14 +245,22 @@ class RemoteFetchClient:
         job_id = str(job["id"])
         if on_job_created is not None:
             on_job_created(job_id)
-        deadline = time.monotonic() + max(30, min(int(timeout_seconds), 240))
-        while time.monotonic() < deadline:
+        fetch_timeout = max(30, min(int(timeout_seconds), 240))
+        queue_limit = time.monotonic() + 600
+        fetch_deadline: float | None = None
+        while True:
+            now = time.monotonic()
+            if now >= queue_limit or (fetch_deadline is not None and now >= fetch_deadline):
+                break
             state = self._request(
                 "GET",
                 f"/internal/worker/v1/jobs/{urllib.parse.quote(job_id, safe='')}",
             ).get("job")
             if not isinstance(state, dict):
                 raise RemoteFetchError("remote fetch returned invalid job state")
+            if on_progress is not None:
+                with contextlib.suppress(Exception):
+                    on_progress(state)
             status = str(state.get("status") or "")
             if status == "success":
                 result = state.get("result")
@@ -265,6 +274,8 @@ class RemoteFetchClient:
                     status_code=503,
                     retryable=bool(error.get("retryable", status == "failed")),
                 )
+            if status == "running" and fetch_deadline is None:
+                fetch_deadline = now + fetch_timeout
             time.sleep(self.settings.poll_seconds)
         with contextlib.suppress(Exception):
             self.cancel(job_id)

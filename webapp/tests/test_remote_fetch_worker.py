@@ -498,6 +498,62 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(target["next_run_at"], now + 60)
         self.assertEqual(refill_count, 0)
 
+    def test_claim_next_skips_refill_while_interactive_job_is_running(self) -> None:
+        interactive, _created = self.store.submit(
+            idempotency_key="capture:interactive-running:1234",
+            request_digest="4" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="archive_interactive_running",
+            payload=self.pool_payload("archive_interactive_running", user_initiated=True),
+        )
+        claimed = self.store.claim_next()
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed[0]["id"], interactive["id"])
+        self.store.submit(
+            idempotency_key="pool:behind-interactive:1234",
+            request_digest="5" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="pool_behind_interactive",
+            payload={
+                **self.pool_payload("archive_pool_behind", user_initiated=False),
+                "_poolRefill": True,
+            },
+        )
+        self.assertIsNone(self.store.claim_next())
+
+    def test_preempt_background_refills_postpones_pool_target(self) -> None:
+        now = int(time.time())
+        archive_id = "archive_preempt_delay"
+        self.store.submit(
+            idempotency_key="capture:preempt-delay:1234",
+            request_digest="6" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=self.pool_payload(archive_id, user_initiated=True),
+        )
+        with self.store._connection() as connection:
+            connection.execute(
+                "UPDATE fetch_pool_targets SET next_run_at=? WHERE archive_id=?",
+                (now + 10, archive_id),
+            )
+        self.store.submit(
+            idempotency_key="pool:preempt-delay:1234",
+            request_digest="7" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="pool_preempt_delay",
+            payload={
+                **self.pool_payload(archive_id, user_initiated=False),
+                "_poolRefill": True,
+            },
+        )
+        self.store.preempt_background_refills()
+        with self.store._connection() as connection:
+            next_run = connection.execute(
+                "SELECT next_run_at FROM fetch_pool_targets WHERE archive_id=?",
+                (archive_id,),
+            ).fetchone()[0]
+        self.assertGreaterEqual(int(next_run), now + 120)
+
     def test_claim_next_prefers_interactive_job_over_earlier_pool_refill(self) -> None:
         self.store.submit(
             idempotency_key="pool:earlier-refill:1234",
@@ -536,6 +592,49 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(running, [])
         stored = self.store.get(pool["id"])
         self.assertEqual(stored["status"], "cancelled")
+
+    def test_interactive_queue_reports_people_ahead_and_ignores_refill(self) -> None:
+        first, _created = self.store.submit(
+            idempotency_key="capture:queue-first:1234",
+            request_digest="1" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="archive_queue_first",
+            payload=self.pool_payload("archive_queue_first", user_initiated=True),
+        )
+        second, _created_second = self.store.submit(
+            idempotency_key="capture:queue-second:1234",
+            request_digest="2" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="archive_queue_second",
+            payload=self.pool_payload("archive_queue_second", user_initiated=True),
+        )
+        self.store.submit(
+            idempotency_key="pool:queue-refill:1234",
+            request_digest="3" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id="pool_queue_refill",
+            payload={
+                **self.pool_payload("archive_queue_refill", user_initiated=False),
+                "_poolRefill": True,
+            },
+        )
+        first_view = self.store.get(first["id"])
+        second_view = self.store.get(second["id"])
+        self.assertEqual(first_view["queue"]["phase"], "queued")
+        self.assertEqual(
+            sorted([first_view["queue"]["queue_ahead"], second_view["queue"]["queue_ahead"]]),
+            [0, 1],
+        )
+        waiting = first_view if first_view["queue"]["queue_ahead"] else second_view
+        self.assertIn("前面还有 1 人排队", waiting["queue"]["message"])
+        self.assertIn("不想等可随时取消", waiting["queue"]["message"])
+        leader_id = first["id"] if first_view["queue"]["queue_ahead"] == 0 else second["id"]
+        claimed = self.store.claim_next()
+        self.assertEqual(claimed[0]["id"], leader_id)
+        running_view = self.store.get(leader_id)
+        self.assertEqual(running_view["queue"]["phase"], "fetching")
+        self.assertEqual(running_view["queue"]["queue_ahead"], 0)
+        self.assertIn("正在抓取公开帖", running_view["queue"]["message"])
 
     def test_watermark_starts_below_15_and_stops_at_15(self) -> None:
         now = int(time.time())
@@ -1280,7 +1379,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertNotIn("userInitiated", sent)
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "2")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "1")
-        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "55000")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "40000")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_JITTER_MAX_MS"], "5000")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_MAX_ATTEMPTS"], "2")
         self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "0")
@@ -1344,7 +1443,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertTrue(sent["recordShown"])
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "24")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "0")
-        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "45000")
+        self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "50000")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_JITTER_MAX_MS"], "200")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_MAX_ATTEMPTS"], "1")
         self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "0")

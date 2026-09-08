@@ -26,7 +26,7 @@ def test_all_eight_workbench_modules_resolve_to_registered_core_runners() -> Non
         "subject_generate": "image_generate",
     }
     assert {item["id"]: item["task_type"] for item in video_workbench.VIDEO_UI_MODULE_METADATA} == expected
-    for task_type in {"create_video", "ecommerce_short_video", "video_language_replace", "replace_model", "replace_product", "image_generate"}:
+    for task_type in {"create_video", "ecommerce_short_video", "video_language_replace", "replace_model", "replace_product", "replace_productANDmodel", "image_generate"}:
         assert callable(video_workbench.VIDEO_TASK_RUNNERS[task_type])
 
 

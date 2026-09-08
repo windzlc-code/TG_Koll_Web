@@ -40,7 +40,7 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertIn('class="command-actions ${moduleId === "publishing" ? `publish-command-actions${publishSelectionExpanded ? " is-selection-expanded" : ""}` : ""}"', SCRIPT)
         self.assertIn('id="executeSimpleFlow"', SCRIPT)
         self.assertIn('renderPublishMobileSelectionStrip(selectedPersona(), publishModeForAction, publishSelectionExpanded)', SCRIPT)
-        self.assertIn('mobilePublishingTaskPending ? "任务执行中" : "执行任务"', SCRIPT)
+        self.assertIn('mobilePublishingTaskPending ? "发布中" : "发布推文"', SCRIPT)
 
     def test_selection_strip_only_opens_after_a_long_press(self):
         self.assertIn("const PUBLISH_SELECTION_LONG_PRESS_MS = 520;", SCRIPT)
@@ -216,6 +216,18 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertNotIn("自定义模式不需要选择草稿，右侧直接输入发布内容。", SCRIPT)
         self.assertNotIn("请先在左侧选择要发布的内容。", SCRIPT)
 
+    def test_custom_compose_blocks_input_past_platform_limit_and_hides_selection_badge(self):
+        preview = self._function_source("renderPublishContentPreview")
+        self.assertIn("publish-content-preview--custom", preview)
+        self.assertIn("data-publish-custom-limit", preview)
+        self.assertIn("clampPublishTextToPlatformLimit", preview)
+        self.assertIn("无法继续输入", self._function_source("publishCustomContentLimitHint"))
+        self.assertIn('if (normalizePublishContentSource(source) === "custom") return 0;', self._function_source("publishQueuedSelectionCount"))
+        self.assertIn("applyPublishCustomContentLimit", self._function_source("bindSimpleFlowInputs"))
+        self.assertIn(".publish-content-preview--custom", STYLES)
+        self.assertIn(".publish-custom-limit.is-limit", STYLES)
+        self.assertIn("border-color: var(--danger)", STYLES)
+
     def test_missing_publish_account_is_checked_before_busy_state_starts(self):
         handler = SCRIPT.index('if ($("executeSimpleFlow")) $("executeSimpleFlow").addEventListener("click"')
         preflight = SCRIPT.index("await preflightSimpleFlowExecution(moduleId)", handler)
@@ -223,6 +235,11 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertLess(preflight, pending)
         self.assertIn("async function preflightSimpleFlowExecution", SCRIPT)
         self.assertIn("await promptPersonaAccountBinding(persona);", SCRIPT)
+        panel = self._function_source("renderPublishContentPanel")
+        self.assertIn("renderPublishDestinationPicker", panel)
+        self.assertLess(panel.index("renderPublishDestinationPicker"), panel.index("任务来源"))
+        self.assertIn("confirmPublishDestinations", self._function_source("preflightSimpleFlowExecution"))
+        self.assertNotIn("choosePublishPlatformAccount", self._function_source("preflightSimpleFlowExecution"))
 
     def test_restricted_account_confirmation_finishes_before_busy_timer_starts(self):
         preflight = self._function_source("preflightSimpleFlowExecution")
@@ -263,13 +280,13 @@ class MobilePublishActionDockTests(unittest.TestCase):
         self.assertNotIn("publishAssistanceRestoreTaskId", SCRIPT)
         self.assertNotIn("function publishAssistanceTrackedTask", SCRIPT)
         self.assertIn("body:has(.login-assistance-modal.is-publish-assistance) .publish-assistance-restore", STYLES)
-        self.assertIn('renderBusyButtonContent(moduleId === "publishing" ? "任务执行中"', SCRIPT)
+        self.assertIn('renderBusyButtonContent(moduleId === "publishing" ? "发布中"', SCRIPT)
         self.assertIn(
-            "!deferMobilePublishingBrowserView(immediateTaskIds, state.simpleFlowPendingStartedAt)",
+            "!deferMobilePublishingBrowserView(allImmediateTaskIds, state.simpleFlowPendingStartedAt)",
             SCRIPT,
         )
         self.assertIn("!deferMobilePublishingBrowserView(firstImmediateTaskId)", SCRIPT)
-        self.assertIn("openPublishAssistanceView(immediateTaskId, { accountId })", SCRIPT)
+        self.assertIn("openPublishAssistanceView(immediateTaskId, { accountId: assistanceAccountId })", SCRIPT)
         self.assertIn("if (moduleId === \"publishing\" && mobileTask)", SCRIPT)
         self.assertIn("openLiveBrowserTaskView(String(mobileTask.id || \"\"));", SCRIPT)
         self.assertIn("function publishAssistanceLooksSettled", SCRIPT)

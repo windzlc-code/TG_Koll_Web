@@ -44,6 +44,7 @@ from PIL import Image, ImageOps
 import get_gemini
 import asset_uploader
 import runninghub_common
+from video_core.source import runninghub_speech
 from .auth import (
     ADMIN_CONSOLE_HEADER,
     ADMIN_SESSION_COOKIE,
@@ -157,6 +158,8 @@ from .remote_fetch_client import (
     configured_client as configured_remote_fetch_client,
     configured_mode as configured_remote_fetch_mode,
 )
+from .telegram_admin import inject_telegram_admin, stop_telegram_bot_worker
+from .telegram_internal import inject_telegram_internal_routes
 from .video_workbench import (
     cancel_video_remote_tasks,
     inject_video_workbench,
@@ -171,6 +174,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 WEBAPP_DIR = Path(__file__).resolve().parent
 STATIC_DIR = WEBAPP_DIR / "static"
 DATA_DIR = Path(os.getenv("WEBAPP_DATA_DIR", str(ROOT_DIR / "webapp_data"))).resolve()
+LLM_PROMPT_IMAGE_ROOT = DATA_DIR / "llm_prompt_images"
 UPLOAD_ROOT = DATA_DIR / "uploads"
 OUTPUT_ROOT = DATA_DIR / "outputs"
 TOOL_R18_UPLOAD_ROOT = Path(os.getenv("TOOL_R18_UPLOAD_HOST_DIR", str(DATA_DIR / "tool_r18_uploads"))).resolve()
@@ -348,15 +352,19 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "video_replace_product_app_id": "",
     "video_ecommerce_app_id": "",
     "video_ecommerce_fast_app_id": "",
-    "video_tts_provider": "minimax",
-    "video_tts_base_url": "https://api.minimaxi.com",
+    "video_tts_provider": "runninghub",
+    "video_tts_base_url": runninghub_speech.RUNNINGHUB_SPEECH_BASE_URL,
     "video_tts_api_key": "",
-    "video_tts_model": "speech-2.8-hd",
-    "video_default_voice_id": "male-qn-qingse",
+    "video_tts_model": runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_MODEL,
+    "video_default_voice_id": runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_VOICE,
     "minimax_api_key": "",
-    "minimax_base_url": "https://api.minimaxi.com",
-    "minimax_tts_model": "speech-2.8-hd",
-    "minimax_tts_voice_id": "male-qn-qingse",
+    "minimax_base_url": runninghub_speech.RUNNINGHUB_SPEECH_BASE_URL,
+    "minimax_tts_model": runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_MODEL,
+    "minimax_tts_voice_id": runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_VOICE,
+    "telegram_bot_token": "",
+    "telegram_allowed_chat_ids": "",
+    "telegram_bot_enabled": False,
+    "telegram_video_entry_url": "/video.html",
     "video_default_duration_seconds": 10,
     "video_default_ratio": "9:16",
     "video_default_resolution": "720p",
@@ -602,16 +610,20 @@ def _role_safe_return_url(value: Any, fallback: str, *, admin: bool) -> str:
         parsed = urlsplit(safe_value)
     except ValueError:
         return str(fallback or "/").strip() or "/"
-    path = str(parsed.path or "/")
+    path = _canonical_product_page_path(str(parsed.path or "/"))
     params = dict(parse_qsl(parsed.query, keep_blank_values=True))
     admin_parameters = {"admin_console", "admin_workspace_user_id", "manage_user_id", "return_manage_user_id"}
     if not admin:
         if path.startswith("/admin") or path == "/api/admin" or path.startswith("/api/admin/") or admin_parameters.intersection(params):
             return str(fallback or "/console.html").strip() or "/console.html"
+        if path != str(parsed.path or "/"):
+            return urlunsplit(("", "", path, parsed.query, parsed.fragment))
         return safe_value
 
     if path == "/console.html":
         path = "/admin-console.html"
+    elif path == "/video.html":
+        path = "/admin-video.html"
     elif path == "/profile.html":
         path = "/admin-profile.html"
     elif path in {"/admin-login.html"}:
@@ -4731,10 +4743,73 @@ def _tool_r18_api_config_file() -> Path:
     return Path(os.getenv("AUTO_TWEET_API_CONFIG_PATH", str(_tool_r18_runtime_dir() / "api_config.json"))).resolve()
 
 
+_QUOTA_ERROR_MARKERS = (
+    "insufficient balance",
+    "insufficient_funds",
+    "insufficient funds",
+    "insufficient_quota",
+    "insufficient quota",
+    "insufficient corporate funds",
+    "please top up",
+    "payment required",
+    "http 402",
+    "402 client error",
+    '"status": 402',
+    "(402)",
+    "余额不足",
+    "額度不足",
+    "额度不足",
+    "請充值",
+    "请充值",
+)
+
+
+def _task_error_payload(text: str) -> dict[str, Any]:
+    blob = str(text or "")
+    start = blob.find("{")
+    end = blob.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+    try:
+        payload = json.loads(blob[start : end + 1])
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    nested = payload.get("error")
+    return nested if isinstance(nested, dict) else payload
+
+
+def _task_error_looks_like_quota(text: str, payload: dict[str, Any] | None = None) -> bool:
+    blob = str(text or "")
+    info = payload if isinstance(payload, dict) else _task_error_payload(blob)
+    extra = " ".join(str(info.get(key) or "") for key in ("code", "type", "message", "msg"))
+    combined = f"{blob} {extra}".lower()
+    if any(marker in combined for marker in _QUOTA_ERROR_MARKERS):
+        return True
+    return bool(re.search(r"(?:http\s*)?402\b|\(402\)", combined))
+
+
+def _quota_error_message(text: str) -> str:
+    required_match = re.search(r"Required:\s*\d+\s*amount\s*\(([\d.]+)\s*credits?\)", text, flags=re.IGNORECASE)
+    available_match = re.search(r"Available:\s*\d+\s*amount\s*\(([\d.]+)\s*credits?\)", text, flags=re.IGNORECASE)
+    if required_match and available_match:
+        return (
+            f"生成服务余额不足：本次需要 {required_match.group(1)}，"
+            f"当前仅剩 {available_match.group(1)}。请充值或降低任务参数后重试。"
+        )
+    return "生成服务余额不足，请充值后再试。"
+
+
 def _format_user_visible_task_error(error: str) -> str:
     text = str(error or "").strip()
+    payload = _task_error_payload(text)
+    if "结构化错误" in text or "隐藏原始 JSON" in text or "隐藏原始JSON" in text:
+        return _quota_error_message(text) if _task_error_looks_like_quota(text, payload) else "生成失败，请稍后重试。"
     short_reason_prefixes = (
         "余额不足：",
+        "生成服务余额不足",
+        "当前图片模型余额不足",
         "图像生成服务显存不足：",
         "图像工作流参数校验失败：",
         "图像工作流缺少自定义节点：",
@@ -4748,17 +4823,13 @@ def _format_user_visible_task_error(error: str) -> str:
         "上游服务异常：",
         "图像生成服务当前不可用",
         "图像生成连接通道中断",
-        "后台生成失败：",
+        "生成失败，请稍后重试",
     )
     if text.startswith(short_reason_prefixes):
         return text
     lower = text.lower()
-    if "insufficient balance" in lower or "http 402" in lower or '"status": 402' in lower or "402 client error" in lower:
-        required_match = re.search(r"Required:\s*\d+\s*amount\s*\(([\d.]+)\s*credits?\)", text, flags=re.IGNORECASE)
-        available_match = re.search(r"Available:\s*\d+\s*amount\s*\(([\d.]+)\s*credits?\)", text, flags=re.IGNORECASE)
-        if required_match and available_match:
-            return f"上游生成服务额度不足：本次需要 {required_match.group(1)} credits，当前仅返回 {available_match.group(1)} credits。请降低任务参数后重试。"
-        return "上游生成服务额度不足：请求被拒绝，请降低任务参数后重试。"
+    if _task_error_looks_like_quota(text, payload):
+        return _quota_error_message(text)
     if "cuda error" in lower and ("out of memory" in lower or "cudaerrormemoryallocation" in lower):
         return "图像生成服务显存不足：请释放资源、降低分辨率/批量数，或稍后重试。"
     if "prompt_outputs_failed_validation" in text or "Prompt outputs failed validation" in text:
@@ -4777,13 +4848,19 @@ def _format_user_visible_task_error(error: str) -> str:
         return "请求过于频繁：上游服务限流，请稍后重试。"
     if "request entity too large" in lower or "payload too large" in lower or "http 413" in lower:
         return "上传素材过大：请压缩图片/视频后重新提交。"
-    http_match = re.search(r"\bHTTP\s+(\d{3})\b|(\d{3})\s+Client Error|\"status\"\s*:\s*(\d{3})", text, flags=re.IGNORECASE)
+    http_match = re.search(
+        r"\bHTTP\s+(\d{3})\b|(\d{3})\s+Client Error|\"status\"\s*:\s*(\d{3})|\((\d{3})\)",
+        text,
+        flags=re.IGNORECASE,
+    )
     http_code = next((int(group) for group in (http_match.groups() if http_match else ()) if group), 0)
     if http_code:
         if http_code == 400:
             return "请求参数不合法：当前任务参数或工作流输入不符合上游接口要求，请检查后台映射后重试。"
         if http_code in {401, 403}:
             return "接口鉴权失败：当前 API Key、Token 或账号权限不足，请检查后台配置。"
+        if http_code == 402:
+            return _quota_error_message(text)
         if http_code == 404:
             return "上游资源不存在：模型、工作流或接口地址配置错误，请检查后台映射。"
         if http_code == 408:
@@ -4791,11 +4868,14 @@ def _format_user_visible_task_error(error: str) -> str:
         if http_code == 429:
             return "请求过于频繁：上游服务限流，请稍后重试。"
         if 500 <= http_code <= 599:
-            return "上游服务异常：生成服务临时不可用，请稍后重试。"
+            return "生成服务暂时不可用，请稍后重试。"
     if "WinError 10061" in text or "Connection refused" in text or "目标电脑拒绝连接" in text or "目標電腦拒絕連線" in text:
         return "图像生成服务当前不可用或已崩溃，网关能连接但执行端口拒绝连接；请先恢复服务后再提交。"
     if "RemoteDisconnected" in text or "SSH session not active" in text or "Connection aborted" in text:
         return "图像生成连接通道中断，已不是提示词问题；请重新连接网关后再提交。"
+    extracted = str(payload.get("userFacingMessage") or payload.get("message") or payload.get("msg") or "").strip()
+    if extracted and any("\u4e00" <= char <= "\u9fff" for char in extracted):
+        text = extracted
     text = re.sub(r"工作台[:：]\s*https?://\S+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\bfor url:\s*https?://\S+", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\burl:\s*https?://\S+", "", text, flags=re.IGNORECASE)
@@ -4803,11 +4883,18 @@ def _format_user_visible_task_error(error: str) -> str:
     text = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:/[^\s，。；;]*)?", "", text)
     text = re.sub(r"\s+", " ", text)
     text = text.strip(" ：:，,。；;")
-    if text.startswith("{") or text.startswith("[") or '\\"error\\"' in text or '"error"' in text:
-        return "后台生成失败：上游服务返回了结构化错误，已隐藏原始 JSON；请在工作台查看详情或按当前任务类型重新提交。"
+    if (
+        text.startswith("{")
+        or text.startswith("[")
+        or '\\"error\\"' in text
+        or '"error"' in text
+        or '"message"' in text
+        or '"code"' in text
+    ):
+        return "生成失败，请稍后重试。"
     if len(text) > 180:
         text = text[:180].rstrip() + "..."
-    return text or "未知错误"
+    return text or "生成失败，请稍后重试。"
 
 
 def _format_optional_user_visible_task_error(error: Any) -> str:
@@ -5429,9 +5516,17 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         video_image_models = ["gpt image 2", "nano banana 2", "nano banana pro"]
     merged["video_image_model_priority_order"] = ", ".join(dict.fromkeys(video_image_models))
     merged["minimax_api_key"] = str(current.get("minimax_api_key") or "").strip()
-    merged["minimax_base_url"] = "https://api.minimaxi.com"
-    merged["minimax_tts_model"] = str(current.get("minimax_tts_model") or "speech-2.8-hd").strip() or "speech-2.8-hd"
-    merged["minimax_tts_voice_id"] = str(current.get("minimax_tts_voice_id") or "male-qn-qingse").strip() or "male-qn-qingse"
+    merged["minimax_tts_model"] = runninghub_speech.normalize_speech_model(
+        current.get("minimax_tts_model") or current.get("video_tts_model")
+    )
+    merged["minimax_tts_voice_id"] = runninghub_speech.normalize_speech_voice(
+        current.get("minimax_tts_voice_id") or current.get("video_default_voice_id")
+    )
+    merged["telegram_bot_token"] = str(current.get("telegram_bot_token") or "").strip()
+    merged["telegram_allowed_chat_ids"] = str(current.get("telegram_allowed_chat_ids") or "").strip()
+    merged["telegram_bot_enabled"] = bool(current.get("telegram_bot_enabled"))
+    video_entry = str(current.get("telegram_video_entry_url") or "/video.html").strip() or "/video.html"
+    merged["telegram_video_entry_url"] = video_entry if video_entry.startswith("/") else "/video.html"
     for key in (
         "video_create_audio_app_id",
         "video_create_video_app_id",
@@ -5448,6 +5543,13 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         "video_default_resolution",
     ):
         merged[key] = str(merged.get(key) or DEFAULT_RUNTIME_CONFIG.get(key) or "").strip()
+    merged["video_tts_provider"] = "runninghub"
+    merged["video_tts_base_url"] = runninghub_speech.speech_base_url(
+        merged.get("video_runninghub_base_url") or merged.get("video_tts_base_url")
+    )
+    merged["video_tts_model"] = merged["minimax_tts_model"]
+    merged["video_default_voice_id"] = merged["minimax_tts_voice_id"]
+    merged["minimax_base_url"] = merged["video_tts_base_url"]
     merged["video_default_duration_seconds"] = min(
         max(_to_int(merged.get("video_default_duration_seconds"), 10), 1),
         3600,
@@ -5817,8 +5919,93 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
     )
 
 
+_PRODUCT_LOGIN_SPECS = {
+    "console": {
+        "kind": "console",
+        "redirect": "/console.html",
+        "admin_redirect": "/admin-console.html",
+        "page_title": "推文工作台登录 · Vecto",
+        "kicker": "VECTO / 推文工作台",
+        "stage_title": "推文工作台",
+        "stage_copy": "同一品牌、独立网页。登录后进入人设、热点与发布工作区。",
+        "heading": "登录推文工作台",
+        "copy": "使用 Vecto 账号登录。登录后只会进入推文工作台，不会打开视频工作台或采集工作台。",
+        "submit": "登录并进入推文工作台",
+        "fact_1_title": "人设与热点",
+        "fact_1_copy": "管理人设、抓取公开热点，并继续内容生产。",
+        "fact_2_title": "矩阵发布",
+        "fact_2_copy": "按账号矩阵发布，并查看任务与额度。",
+    },
+    "video": {
+        "kind": "video",
+        "redirect": "/video.html",
+        "admin_redirect": "/admin-video.html",
+        "page_title": "视频工作台登录 · Vecto",
+        "kicker": "VECTO / 视频工作台",
+        "stage_title": "视频工作台",
+        "stage_copy": "同一品牌、独立网页。登录后进入数字人、广告视频与图片素材工作区。",
+        "heading": "登录视频工作台",
+        "copy": "使用同一套 Vecto 账号登录。登录后只会进入视频工作台。",
+        "submit": "登录并进入视频工作台",
+        "fact_1_title": "视频生成",
+        "fact_1_copy": "数字人口播、广告种草、语种与模特替换。",
+        "fact_2_title": "图片素材",
+        "fact_2_copy": "电商广告图、主体替换与海报语种切换。",
+    },
+    "crm": {
+        "kind": "crm",
+        "redirect": "/crm.html",
+        "admin_redirect": "/crm.html?admin_console=1",
+        "page_title": "采集工作台登录 · Vecto",
+        "kicker": "VECTO / 采集工作台",
+        "stage_title": "采集工作台",
+        "stage_copy": "同一品牌、独立网页。登录后进入客户采集与互动工作区。",
+        "heading": "登录采集工作台",
+        "copy": "使用同一套 Vecto 账号登录。登录后只会进入采集工作台。",
+        "submit": "登录并进入采集工作台",
+        "fact_1_title": "客户采集",
+        "fact_1_copy": "采集线索、维护客户池，并跟进互动任务。",
+        "fact_2_title": "互动跟进",
+        "fact_2_copy": "查看任务、审核动作，并继续客户运营。",
+    },
+}
+
+
+_PRODUCT_PAGE_ALIASES = {
+    "/console": "/console.html",
+    "/video": "/video.html",
+    "/crm": "/crm.html",
+    "/console-login": "/console-login.html",
+    "/video-login": "/video-login.html",
+    "/crm-login": "/crm-login.html",
+    "/admin-console": "/admin-console.html",
+    "/admin-video": "/admin-video.html",
+}
+
+
+def _canonical_product_page_path(path: str) -> str:
+    clean = str(path or "").strip() or "/"
+    if len(clean) > 1:
+        clean = clean.rstrip("/")
+    return _PRODUCT_PAGE_ALIASES.get(clean, clean)
+
+
+def _product_login_path_for_return(return_path: str) -> str | None:
+    path = _canonical_product_page_path(str(urlsplit(str(return_path or "")).path or ""))
+    if path in {"/video.html", "/admin-video.html"}:
+        return "/video-login.html"
+    if path == "/crm.html":
+        return "/crm-login.html"
+    if path in {"/console.html", "/admin-console.html"}:
+        return "/console-login.html"
+    return None
+
+
 def _public_login_location(return_url: str = "/console.html") -> str:
     candidate = _role_safe_return_url(return_url, "/console.html", admin=False)
+    login_path = _product_login_path_for_return(candidate)
+    if login_path:
+        return f"{login_path}?return_url={quote(candidate, safe='')}"
     return f"/?login=1&return_url={quote(candidate, safe='')}"
 
 
@@ -5827,6 +6014,33 @@ def _public_admin_login_location(return_url: str = "/admin") -> str:
     if is_collector_deployment():
         return f"/collector-login.html?return_url={quote(candidate, safe='')}"
     return f"/?login=1&return_url={quote(candidate, safe='')}"
+
+
+def _product_login_html(kind: str) -> HTMLResponse:
+    spec = dict(_PRODUCT_LOGIN_SPECS.get(kind) or _PRODUCT_LOGIN_SPECS["console"])
+    return _html_response_with_versions(
+        "product-login.html",
+        replacements={
+            "__STYLE_VERSION__": _asset_version("assets", "style.css"),
+            "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+            "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
+            "__PRODUCT_LOGIN_CSS_VERSION__": _asset_version("assets", "product-login.css"),
+            "__PRODUCT_LOGIN_JS_VERSION__": _asset_version("assets", "product-login.js"),
+            "__PRODUCT_KIND__": str(spec["kind"]),
+            "__PRODUCT_REDIRECT__": str(spec["redirect"]),
+            "__PRODUCT_PAGE_TITLE__": str(spec["page_title"]),
+            "__PRODUCT_KICKER__": str(spec["kicker"]),
+            "__PRODUCT_STAGE_TITLE__": str(spec["stage_title"]),
+            "__PRODUCT_STAGE_COPY__": str(spec["stage_copy"]),
+            "__PRODUCT_HEADING__": str(spec["heading"]),
+            "__PRODUCT_COPY__": str(spec["copy"]),
+            "__PRODUCT_SUBMIT__": str(spec["submit"]),
+            "__PRODUCT_FACT_1_TITLE__": str(spec["fact_1_title"]),
+            "__PRODUCT_FACT_1_COPY__": str(spec["fact_1_copy"]),
+            "__PRODUCT_FACT_2_TITLE__": str(spec["fact_2_title"]),
+            "__PRODUCT_FACT_2_COPY__": str(spec["fact_2_copy"]),
+        },
+    )
 
 
 def _json_script_payload(value: Any) -> str:
@@ -10286,6 +10500,486 @@ def _tg_analyze_user_visual_request_with_llm(source: dict[str, Any], *, user_req
     return parsed, selected, attempts
 
 
+def _normalize_target_language(value: Any, *, default: str = "Chinese") -> str:
+    text = str(value or "").strip()
+    aliases = {
+        "日本": "Japanese",
+        "日语": "Japanese",
+        "日本語": "Japanese",
+        "japanese": "Japanese",
+        "马来西亚": "Malay",
+        "馬來西亞": "Malay",
+        "马来语": "Malay",
+        "馬來語": "Malay",
+        "malay": "Malay",
+        "bahasa malaysia": "Malay",
+        "bahasa melayu": "Malay",
+        "西班牙语": "Spanish",
+        "español": "Spanish",
+        "spanish": "Spanish",
+        "泰语": "Thai",
+        "thai": "Thai",
+        "印尼语": "Indonesian",
+        "印度尼西亚语": "Indonesian",
+        "indonesian": "Indonesian",
+        "中文": "Chinese",
+        "汉语": "Chinese",
+        "chinese": "Chinese",
+        "英文": "English",
+        "英语": "English",
+        "english": "English",
+    }
+    specs = {
+        "Japanese": {"label": "日语"},
+        "Malay": {"label": "马来语"},
+        "Spanish": {"label": "西班牙语"},
+        "Thai": {"label": "泰语"},
+        "Indonesian": {"label": "印尼语"},
+        "Chinese": {"label": "中文"},
+        "English": {"label": "英文"},
+    }
+    if text in specs:
+        return text
+    return aliases.get(text.lower(), aliases.get(text, default))
+
+
+def _target_language_label(value: Any) -> str:
+    language = _normalize_target_language(value)
+    specs = {
+        "Japanese": "日语",
+        "Malay": "马来语",
+        "Spanish": "西班牙语",
+        "Thai": "泰语",
+        "Indonesian": "印尼语",
+        "Chinese": "中文",
+        "English": "英文",
+    }
+    return specs.get(language, "中文")
+
+
+def _prepare_llm_prompt_image_paths(
+    image_paths: list[str] | tuple[str, ...] | None,
+    *,
+    max_images: int = 9,
+    max_side: int = 896,
+    quality: int = 82,
+) -> list[str]:
+    prepared: list[str] = []
+    seen: set[str] = set()
+    if not image_paths:
+        return prepared
+    LLM_PROMPT_IMAGE_ROOT.mkdir(parents=True, exist_ok=True)
+    cutoff = time.time() - 6 * 3600
+    try:
+        for old in LLM_PROMPT_IMAGE_ROOT.glob("*.jpg"):
+            try:
+                if old.stat().st_mtime < cutoff:
+                    old.unlink(missing_ok=True)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    for raw in image_paths:
+        if len(prepared) >= max_images:
+            break
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            src = Path(text).expanduser().resolve()
+        except Exception:
+            continue
+        key = str(src)
+        if key in seen or not src.exists() or not src.is_file():
+            continue
+        seen.add(key)
+        try:
+            with Image.open(src) as image:
+                converted = image.convert("RGB")
+                converted.thumbnail((max_side, max_side), Image.LANCZOS)
+                out = LLM_PROMPT_IMAGE_ROOT / f"{uuid.uuid4().hex}.jpg"
+                converted.save(out, format="JPEG", quality=quality, optimize=True)
+                prepared.append(str(out.resolve()))
+        except Exception:
+            prepared.append(key)
+    return prepared
+
+
+def _digital_human_model_image_paths(
+    payload: dict[str, Any] | None,
+    *,
+    primary_path: Path | str | None = None,
+    max_count: int = 2,
+) -> list[Path]:
+    source = payload or {}
+    raw_values: list[Any] = []
+    if primary_path:
+        raw_values.append(primary_path)
+    list_values = source.get("model_image_local_paths")
+    if isinstance(list_values, list):
+        raw_values.extend(list_values)
+    elif str(list_values or "").strip():
+        raw_values.append(list_values)
+    for key in ("model_image_local_path", "image_local_path"):
+        value = source.get(key)
+        if str(value or "").strip():
+            raw_values.append(value)
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for value in raw_values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        try:
+            path = Path(text).expanduser().resolve()
+        except Exception:
+            continue
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(path)
+        if len(paths) >= max(1, int(max_count or 1)):
+            break
+    return paths
+
+
+def _digital_human_product_image_paths(payload: dict[str, Any], *, primary_path: Path | None = None, max_count: int = 4) -> list[Path]:
+    values = payload.get("product_image_local_paths")
+    if isinstance(values, str):
+        try:
+            parsed_values = json.loads(values)
+        except Exception:
+            values = [values]
+        else:
+            values = parsed_values if isinstance(parsed_values, list) else [values]
+    elif not isinstance(values, list):
+        values = []
+    paths: list[Path] = []
+    seen: set[str] = set()
+
+    def add_path(value: Any) -> None:
+        if len(paths) >= max_count:
+            return
+        text = str(value or "").strip()
+        if not text:
+            return
+        path = Path(text).expanduser().resolve()
+        key = str(path)
+        if key in seen or not path.exists() or not path.is_file():
+            return
+        paths.append(path)
+        seen.add(key)
+
+    if values:
+        for value in values:
+            add_path(value)
+    else:
+        if primary_path is not None:
+            add_path(primary_path)
+        else:
+            add_path(payload.get("product_image_local_path"))
+    return paths
+
+
+def _digital_human_storyboard_script_product_refs(payload: dict[str, Any], *, primary_path: Path) -> list[Path]:
+    if str((payload or {}).get("digital_human_short_mode") or "").strip().lower() != "storyboard":
+        return []
+    refs = _digital_human_product_image_paths(payload or {}, primary_path=primary_path, max_count=3)
+    return refs if len(refs) >= 2 else []
+
+
+def _digital_human_product_reference_is_space_scene(payload: dict[str, Any], image_index: int) -> bool:
+    if image_index <= 1:
+        return True
+    analysis = payload.get("digital_human_product_reference_analysis")
+    if not isinstance(analysis, dict):
+        return False
+    usage = str((analysis.get("usage") or {}).get(image_index) or analysis.get(f"image_{image_index}_usage") or "").strip().lower()
+    return usage in {"space_scene", "scene", "scene_space", "spatial_scene", "environment_scene"}
+
+
+def _digital_human_storyboard_script_reference_plan(payload: dict[str, Any], *, primary_path: Path) -> list[dict[str, Any]]:
+    refs = _digital_human_storyboard_script_product_refs(payload, primary_path=primary_path)
+    if not refs:
+        return []
+    space_ref_indexes = [
+        image_index
+        for image_index in range(2, len(refs) + 1)
+        if _digital_human_product_reference_is_space_scene(payload, image_index)
+    ]
+    if len(space_ref_indexes) >= 2:
+        second_ref_index = space_ref_indexes[0]
+        third_ref_index = space_ref_indexes[1]
+    elif len(space_ref_indexes) == 1:
+        second_ref_index = space_ref_indexes[0]
+        third_ref_index = space_ref_indexes[0]
+    else:
+        second_ref_index = 1
+        third_ref_index = 1
+    return [
+        {"part": 1, "image_index": 1, "role": "引入并整体描述产品/项目主体，建立用户兴趣。"},
+        {
+            "part": 2,
+            "image_index": second_ref_index,
+            "role": (
+                "描述第一个分镜产品图/空间图，讲清可见场景、体验和价值。"
+                if second_ref_index != 1
+                else "基于主图展开第一个不同角度，后续细节/海报/参数图只能补充产品描述，不要把它们当作独立分镜场景。"
+            ),
+        },
+        {
+            "part": 3,
+            "image_index": third_ref_index,
+            "role": (
+                "描述第二个分镜产品图/空间图，避免重复上一段。"
+                if third_ref_index != second_ref_index
+                else (
+                    "继续围绕同一张分镜产品图，从另一个维度补充空间体验、功能动线或细节价值，禁止简单复述 2/4。"
+                    if third_ref_index != 1
+                    else "继续基于主图展开第二个不同角度，可吸收细节图里的功能/卖点信息，但不要写成海报图、参数图或侧面细节图的单独分镜。"
+                )
+            ),
+        },
+        {"part": 4, "image_index": 1, "role": "回到产品/项目整体做结尾总结、购买理由或行动引导。"},
+    ]
+
+
+def _split_text_into_weighted_segments(text: str, count: int) -> list[str]:
+    raw_source = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    total = max(int(count or 1), 1)
+    explicit_lines = [line.strip() for line in raw_source.split("\n") if line.strip()]
+    if total > 1 and len(explicit_lines) == total:
+        return explicit_lines
+    source = re.sub(r"\s+", " ", raw_source).strip()
+    if not source:
+        return ["" for _ in range(total)]
+    if total <= 1:
+        return [source]
+    atoms = [item.strip() for item in re.findall(r"[^。！？!?；;]+[。！？!?；;]?", source) if item.strip()] or [source]
+    if len(atoms) <= total:
+        return atoms[:]
+    chunk_size = max(len(atoms) // total, 1)
+    chunks: list[str] = []
+    for index in range(total):
+        start = index * chunk_size
+        end = len(atoms) if index == total - 1 else min(len(atoms), start + chunk_size)
+        chunks.append("".join(atoms[start:end]).strip())
+    return chunks
+
+
+def _ensure_digital_human_storyboard_segment_count(segments: list[str], target_count: int) -> list[str]:
+    target = max(int(target_count or 1), 1)
+    chunks = [str(item or "").strip() for item in segments if str(item or "").strip()]
+    if not chunks:
+        return ["" for _ in range(target)]
+    while len(chunks) < target:
+        split_idx = max(range(len(chunks)), key=lambda idx: len(chunks[idx]))
+        source = chunks[split_idx]
+        if len(source) <= 1:
+            chunks.append("")
+            continue
+        midpoint = len(source) // 2
+        left = source[:midpoint].strip()
+        right = source[midpoint:].strip()
+        if not left or not right:
+            chunks.append("")
+            continue
+        chunks = [*chunks[:split_idx], left, right, *chunks[split_idx + 1 :]]
+    return chunks[:target]
+
+
+def _ensure_digital_human_storyboard_script_structure(text: str, payload: dict[str, Any], *, primary_path: Path) -> str:
+    plan = _digital_human_storyboard_script_reference_plan(payload, primary_path=primary_path)
+    if not plan:
+        return _clean_digital_human_short_script_text(text)
+    source = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    source = re.sub(r"(?<!^)\s*((?:第?\s*)?[一二三四1234]\s*/\s*4\s*[：:、.．-])", r"\n\1", source)
+    source = re.sub(r"(?m)^\s*(?:第?\s*)?[一1]\s*/\s*4\s*[：:、.．-]?\s*", "\n", source)
+    source = re.sub(r"(?m)^\s*(?:第?\s*)?[二2]\s*/\s*4\s*[：:、.．-]?\s*", "\n", source)
+    source = re.sub(r"(?m)^\s*(?:第?\s*)?[三3]\s*/\s*4\s*[：:、.．-]?\s*", "\n", source)
+    source = re.sub(r"(?m)^\s*(?:第?\s*)?[四4]\s*/\s*4\s*[：:、.．-]?\s*", "\n", source)
+    source = re.sub(r"(?:^|\n)\s*(?:段落|部分)?\s*[一二三四1234]\s*[：:、.．-]\s*", "\n", source)
+    paragraphs = [_clean_digital_human_short_script_text(item) for item in re.split(r"\n+", source) if item.strip()]
+    paragraphs = [item for item in paragraphs if item]
+    if len(paragraphs) != 4:
+        cleaned = _clean_digital_human_short_script_text(text)
+        paragraphs = _ensure_digital_human_storyboard_segment_count(_split_text_into_weighted_segments(cleaned, 4), 4)
+    return "\n".join(paragraphs[:4])
+
+
+def _clean_digital_human_short_script_text(text: str) -> str:
+    source = str(text or "").strip()
+    if not source:
+        return ""
+    source = source.replace("\r\n", "\n").replace("\r", "\n")
+    source = re.sub(r"(?m)^\s*镜头[一二三四五六七八九十\d]+\s*[：:]\s*", "", source)
+    source = re.sub(r"(?<=[。！？!?；;\n])\s*镜头[一二三四五六七八九十\d]+\s*[：:]\s*", "", source)
+    source = re.sub(r"(?m)^\s*[一二三四五六七八九十\d]+[、.．]\s*", "", source)
+    banned_sentence_tokens = (
+        "三视图",
+        "三視圖",
+        "设定图",
+        "設定圖",
+        "正面图",
+        "側面圖",
+        "侧面图",
+        "背面图",
+        "长宽高",
+        "長寬高",
+        "侧面厚度",
+        "側面厚度",
+    )
+    sentences = re.split(r"(?<=[。！？!?；;])\s*|\n+", source)
+    kept: list[str] = []
+    for sentence in sentences:
+        item = sentence.strip()
+        if not item:
+            continue
+        if any(token in item for token in banned_sentence_tokens):
+            continue
+        if re.search(r"(正面|侧面|側面|背面).{0,12}(约|約)?\d+(?:\.\d+)?\s*(毫米|厘米|mm|cm|公分)", item, flags=re.IGNORECASE):
+            continue
+        item = re.sub(r"(?:约|約)?\d+(?:\.\d+)?\s*(毫米|厘米|mm|cm|公分)", "", item, flags=re.IGNORECASE)
+        item = re.sub(r"\s+", " ", item).strip(" ，,、；;")
+        if item:
+            kept.append(item)
+    cleaned = "".join(kept).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned
+
+
+def _ensure_digital_human_speech_matches_product_name(text: str, payload: dict[str, Any] | None) -> str:
+    return _clean_digital_human_short_script_text(text)
+
+
+def _ensure_text_target_language(text: str, payload: dict[str, Any], *, field_name: str = "speech_text") -> str:
+    source_text = str(text or "").strip()
+    if not source_text:
+        return ""
+    language = _normalize_target_language(payload.get("target_language") or payload.get("language"))
+    if language == "Chinese":
+        return source_text
+    label = _target_language_label(language)
+    source = dict(payload or {})
+    base_url, candidates = _resolve_llm_fallback_candidates(source, allow_builtin=True)
+    if not base_url or not candidates:
+        payload["target_language_translation_error"] = "missing_llm_config"
+        return source_text
+    system_prompt = (
+        "你是广告短视频本地化翻译助手。请只输出严格 JSON，不要代码块。"
+        f"输出字段固定为 {{\"{field_name}\": string}}。"
+        f"把输入文本翻译/本地化为{label}，保持广告口播自然、简洁、适合直接配音和字幕。"
+        "目标语言不是中文时，输出不得保留中文汉字。"
+        "不要添加解释，不要添加未给出的参数、品牌、价格或新卖点。"
+    )
+    try:
+        result, selected, attempts = _request_llm_json_with_fallback(
+            source=source,
+            user_input=json.dumps({"text": source_text, "target_language": label}, ensure_ascii=False),
+            system_prompt=system_prompt,
+            parameters="",
+            allow_builtin=True,
+            request_label=f"{label}本地化翻译",
+        )
+        parsed = result.get("parsed") if isinstance(result, dict) else None
+        translated = str((parsed or {}).get(field_name) or (parsed or {}).get("text") or "").strip() if isinstance(parsed, dict) else ""
+        if translated:
+            payload["target_language_translation_meta"] = {"llm_selected": selected, "llm_attempts": attempts}
+            return _clean_digital_human_short_script_text(translated) if field_name == "speech_text" else translated
+    except Exception as exc:
+        payload["target_language_translation_error"] = str(exc)[:240]
+    return source_text
+
+
+def _revise_digital_human_short_script_with_llm(
+    payload: dict[str, Any],
+    *,
+    current_script: str,
+    revision_instruction: str,
+    product_path: Path,
+    model_path: Path,
+) -> tuple[str, dict[str, Any]]:
+    source = dict(payload or {})
+    base_url, candidates = _resolve_llm_fallback_candidates(source, allow_builtin=True)
+    if not base_url or not candidates:
+        raise RuntimeError("AI 修改口播文稿需要先配置文字服务 API")
+    current = _clean_digital_human_short_script_text(current_script)
+    instruction = str(revision_instruction or "").strip()
+    if not current or not instruction:
+        raise RuntimeError("当前文稿和修改要求不能为空")
+    target_language_label = _target_language_label(
+        payload.get("target_language") or payload.get("language")
+    )
+    mode = str(payload.get("digital_human_short_mode") or "single").strip().lower()
+    product_name = str(
+        payload.get("product_name") or payload.get("project_name") or ""
+    ).strip()
+    product_details = str(
+        payload.get("product_details")
+        or payload.get("product_description")
+        or payload.get("product_intro")
+        or ""
+    ).strip()
+    system_prompt = "\n".join(
+        [
+            "你是数字人口播短视频文案修改助手。请只输出严格 JSON，不要代码块。",
+            '输出字段固定为 {"speech_text": string, "style_hint": string}。',
+            f"输出必须使用{target_language_label}，适合直接配音；不要混用其他语言。",
+            "以当前口播文稿为基础，严格执行用户修改要求，只改写文案，不输出分镜、镜头编号、制作参数或解释。",
+            "保留当前文稿中没有被要求修改的有效事实，不要编造图片、产品或用户没有提供的品牌、价格、参数、功效和承诺。",
+            "不要在文案中提及任何第三方平台、服务商、工作流来源或内部实现。",
+            f"视频模式：{mode}；产品/项目名称参考：{product_name or '未提供'}。",
+            f"产品补充信息（仅作事实参考）：{product_details}" if product_details else "",
+            "返回的 speech_text 必须是一段自然、完整、可直接配音的口播文稿。",
+        ]
+    )
+    image_paths = _prepare_llm_prompt_image_paths(
+        [
+            str(product_path),
+            *[
+                str(path)
+                for path in _digital_human_model_image_paths(
+                    payload, primary_path=model_path, max_count=2
+                )
+            ],
+        ],
+        max_images=4,
+        max_side=896,
+    )
+    result, selected, attempts = _request_llm_json_with_fallback(
+        source=source,
+        user_input=json.dumps(
+            {"current_script": current, "revision_instruction": instruction},
+            ensure_ascii=False,
+        ),
+        system_prompt=system_prompt,
+        parameters="",
+        image_paths=image_paths,
+        logger=payload.get("_event_logger"),
+        allow_builtin=True,
+        request_label="数字人口播文稿引导修改",
+    )
+    parsed = result.get("parsed") if isinstance(result, dict) else None
+    if not isinstance(parsed, dict):
+        raise RuntimeError("AI 修改口播文稿失败：文字模型未返回有效 JSON")
+    revised = str(parsed.get("speech_text") or "").strip()
+    if not revised:
+        raise RuntimeError("AI 修改口播文稿失败：返回文稿为空")
+    revised = _ensure_text_target_language(revised, payload, field_name="speech_text")
+    revised = _ensure_digital_human_speech_matches_product_name(revised, payload)
+    revised = _ensure_digital_human_storyboard_script_structure(
+        revised, payload, primary_path=product_path
+    )
+    if not revised:
+        raise RuntimeError("AI 修改口播文稿失败：清理后文稿为空")
+    return revised, {
+        "llm_selected": selected,
+        "llm_attempts": attempts,
+        "raw": result,
+    }
+
+
 def _enhance_tg_payload_with_llm_prompt(task_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     enhanced = dict(payload or {})
     if enhanced.get("tg_llm_prompt_enhanced"):
@@ -10684,10 +11378,15 @@ def _build_agent_task_payload(
     default_duration: int = 15,
     production_only: bool = False,
 ) -> tuple[str, dict[str, Any], str]:
-    return (
-        "chat",
-        {"reply": "该生产工作流入口已移除，请使用现有的人设、推文配图或视频生成入口。"},
-        "生产工作流入口已移除",
+    from .telegram_agent import bind_server, build_agent_task_payload
+
+    bind_server(sys.modules[__name__])
+    return build_agent_task_payload(
+        message=message,
+        file_infos=list(file_infos or []),
+        use_ai_copy=use_ai_copy,
+        default_duration=default_duration,
+        production_only=production_only,
     )
 
 def _persist_image_media(image_url: str, workdir: Path, stem: str) -> str:
@@ -12498,15 +13197,15 @@ class RuntimeConfigPayload(BaseModel):
     video_replace_product_app_id: str = ""
     video_ecommerce_app_id: str = ""
     video_ecommerce_fast_app_id: str = ""
-    video_tts_provider: str = "minimax"
-    video_tts_base_url: str = "https://api.minimaxi.com"
+    video_tts_provider: str = "runninghub"
+    video_tts_base_url: str = runninghub_speech.RUNNINGHUB_SPEECH_BASE_URL
     video_tts_api_key: str = ""
-    video_tts_model: str = "speech-2.8-hd"
-    video_default_voice_id: str = "male-qn-qingse"
+    video_tts_model: str = runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_MODEL
+    video_default_voice_id: str = runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_VOICE
     minimax_api_key: str = ""
-    minimax_base_url: str = "https://api.minimaxi.com"
-    minimax_tts_model: str = "speech-2.8-hd"
-    minimax_tts_voice_id: str = "male-qn-qingse"
+    minimax_base_url: str = runninghub_speech.RUNNINGHUB_SPEECH_BASE_URL
+    minimax_tts_model: str = runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_MODEL
+    minimax_tts_voice_id: str = runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_VOICE
     video_default_duration_seconds: int = Field(default=10, ge=1, le=3600)
     video_default_ratio: str = Field(default="9:16", max_length=20)
     video_default_resolution: str = Field(default="720p", max_length=20)
@@ -12551,6 +13250,10 @@ class RuntimeConfigPayload(BaseModel):
 class BundleSocialConfigPayload(BaseModel):
     api_base_url: str = Field(default="https://api.bundle.social/api/v1", max_length=500)
     api_key: str = Field(default="", max_length=512)
+    webhook_secret: str = Field(default="", max_length=512)
+    homepage_overlay_enabled: bool | None = True
+    homepage_read_interval_hours: int | None = Field(default=12, ge=6, le=24)
+    collect_offset_hours: int | None = Field(default=12, ge=8, le=18)
 
 
 class LlmModelsPayload(BaseModel):
@@ -12932,6 +13635,7 @@ class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     freshness_days: int = 30
     freshness_policy: str = "strict"
     keywords: list[str] = Field(default_factory=list)
+    all_keywords: list[str] = Field(default_factory=list)
     platform: str = "threads"
 
 
@@ -14340,6 +15044,14 @@ def _normalize_persona_hot_candidate(candidate: Any) -> dict[str, Any] | None:
     candidate_id = raw_candidate_id or _new_id("hot")
     source_url = str(candidate.get("sourceUrl") or candidate.get("source_url") or "").strip()
     content = str(candidate.get("content") or "").strip()
+    source_host = source_url.lower()
+    raw_platform = str(candidate.get("platform") or "").strip().lower()
+    if "instagram.com" in source_host:
+        platform_name = "instagram"
+    elif "threads.net" in source_host or "threads.com" in source_host:
+        platform_name = "threads"
+    else:
+        platform_name = raw_platform if raw_platform in {"threads", "instagram"} else ""
     metrics = candidate.get("metrics") if isinstance(candidate.get("metrics"), dict) else {}
     engagement = candidate.get("engagement") if isinstance(candidate.get("engagement"), dict) else {}
     origin = str(metrics.get("origin") or "").strip()
@@ -14364,7 +15076,7 @@ def _normalize_persona_hot_candidate(candidate: Any) -> dict[str, Any] | None:
     return {
         "candidate_id": candidate_id,
         "id": candidate_id,
-        "platform": str(candidate.get("platform") or "threads").strip() or "threads",
+        "platform": platform_name or "",
         "author": str(candidate.get("author") or "").strip(),
         "origin": origin,
         "origin_label": origin_labels.get(origin, origin),
@@ -15050,6 +15762,7 @@ def _run_remote_persona_hot_workflow(
     payload: dict[str, Any],
     *,
     timeout_seconds: int,
+    on_progress: Any = None,
 ) -> dict[str, Any] | None:
     mode = configured_remote_fetch_mode()
     capability = _remote_fetch_capability(payload)
@@ -15125,6 +15838,7 @@ def _run_remote_persona_hot_workflow(
             idempotency_key=idempotency_key,
             timeout_seconds=timeout_seconds,
             on_job_created=remember,
+            on_progress=on_progress,
         )
     except RemoteFetchError as exc:
         raise HTTPException(
@@ -15193,13 +15907,18 @@ def _run_persona_hot_workflow_cli(
     *,
     background: bool = False,
     isolated: bool = False,
+    progress_callback: Any = None,
 ) -> dict[str, Any]:
     if isolated:
         return _run_persona_hot_workflow_subprocess(payload, timeout_seconds=timeout_seconds)
     global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_INTERACTIVE_PROCESS, _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID, _PERSONA_HOT_LAST_INTERACTIVE_AT
     _sync_tool_r18_api_config_for_persona_workflow()
     timeout = min(max(30, int(timeout_seconds)), 120)
-    remote_result = _run_remote_persona_hot_workflow(payload, timeout_seconds=timeout)
+    remote_result = _run_remote_persona_hot_workflow(
+        payload,
+        timeout_seconds=timeout,
+        on_progress=progress_callback,
+    )
     if remote_result is not None:
         return remote_result
     command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
@@ -15357,7 +16076,15 @@ def _persona_hot_raw_candidate_count(result: dict[str, Any]) -> int:
     return len(candidates) if isinstance(candidates, list) else 0
 
 
-def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: int, cookie_rows: Any = None) -> list[str]:
+def _persona_hot_user_warnings(
+    raw_warnings: Any,
+    candidate_count: int,
+    limit: int,
+    cookie_rows: Any = None,
+    *,
+    empty_reason: str = "",
+    platform: str = "",
+) -> list[str]:
     count = max(0, int(candidate_count or 0))
     target = max(1, int(limit or 10))
     normalized = [
@@ -15413,6 +16140,12 @@ def _persona_hot_user_warnings(raw_warnings: Any, candidate_count: int, limit: i
         specific_message = "热点来源抓取超时，本次未获得候选，请稍后重试。" if count <= 0 else "热点来源抓取超时，当前结果可能不完整。"
 
     if count <= 0:
+        platform_label = "Instagram" if str(platform or "").strip().lower() == "instagram" else "Threads"
+        if empty_reason == "no_source" or "没有搜索到帖" in warning_text:
+            return [specific_message or f"{platform_label} 这次没有搜索到帖，还没有进入热度筛选。"]
+        if empty_reason == "below_threshold" or "搜到了帖，但没有符合条件" in warning_text:
+            heat_floor = 100 if platform_label == "Instagram" else 200
+            return [specific_message or f"{platform_label} 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 {heat_floor}。"]
         return [specific_message or "暂未找到符合条件的热点，请稍后刷新候选。"]
     messages = [f"已找到 {count} 条符合条件的热点，暂不足 {target} 条。" if count < target else f"已获取 {count} 条热点候选。"]
     if specific_message:
@@ -15436,7 +16169,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     return keywords
 
 
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 62
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 63
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 10
 PERSONA_HOT_KEYWORD_BATCH_MAX_USES = 2
 PERSONA_HOT_KEYWORD_PLAN_MAX_CYCLES = 1
@@ -15447,6 +16180,36 @@ def _hot_public_probe_enabled() -> bool:
     if str(os.getenv("TG_HOT_PUBLIC_PROBE") or "").strip().lower() in {"1", "true", "yes", "on"}:
         return True
     return _HOT_PUBLIC_PROBE_FLAG.is_file()
+
+
+def _merge_hot_keyword_lists(*groups: Any) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for keyword in _persona_hot_payload_keywords(group):
+            key = keyword.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(keyword)
+            if len(merged) >= 32:
+                return merged
+    return merged
+
+
+def _persona_hot_relevance_keywords(
+    archive_id: str,
+    payload: PersonaDashboardHotCandidatesFetchPayload,
+    batch_keywords: list[str],
+) -> list[str]:
+    explicit = _persona_hot_payload_keywords(getattr(payload, "all_keywords", None))
+    if explicit:
+        return _merge_hot_keyword_lists(explicit, batch_keywords)
+    with _PERSONA_HOT_KEYWORD_BATCH_LOCK:
+        state = _read_persona_hot_keyword_batch_state()
+        row = state.get(_persona_hot_keyword_batch_key(archive_id, payload))
+    planned = _persona_hot_keyword_plan_keywords(row)
+    return _merge_hot_keyword_lists(planned, batch_keywords) if planned else list(batch_keywords)
 
 
 def _persona_hot_keyword_digest(keywords: list[str]) -> str:
@@ -15614,7 +16377,7 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
             prepare_payload["archiveSnapshot"] = archive_snapshot
         result = _run_persona_hot_workflow_cli(
             prepare_payload,
-            timeout_seconds=90,
+            timeout_seconds=110,
         )
         result = result if isinstance(result, dict) else {}
         warnings = [
@@ -15665,14 +16428,40 @@ def _persona_llm_runtime_source() -> dict[str, Any]:
     return source
 
 
+_PERSONA_PUBLISH_TEXT_LIMITS = {
+    "threads": 500,
+    "instagram": 2200,
+}
+
+
+def _persona_publish_text_limit(platform: str) -> int:
+    key = _normalize_persona_content_platform(platform)
+    return int(_PERSONA_PUBLISH_TEXT_LIMITS.get(key) or 0)
+
+
+def _persona_publish_text_count(text: str) -> int:
+    return len(str(text or ""))
+
+
 def _persona_hot_rewrite_char_count(text: str) -> int:
     return len("".join(str(text or "").split()))
 
 
-def _persona_hot_rewrite_length_bounds(source_length: int) -> tuple[int, int | None]:
+def _persona_hot_rewrite_length_bounds(
+    source_length: int,
+    platform: str = "threads",
+    source_text: str = "",
+) -> tuple[int, int | None]:
     clean = max(1, int(source_length or 0))
     delta = max(1, int(round(clean * 0.05)))
-    return max(1, clean - delta), None
+    min_length = max(1, clean - delta)
+    limit = _persona_publish_text_limit(platform)
+    if not limit:
+        return min_length, None
+    api_length = _persona_publish_text_count(source_text) if str(source_text or "").strip() else clean
+    if api_length > limit:
+        return max(1, min(int(round(limit * 0.85)), limit)), limit
+    return min(min_length, limit), limit
 
 
 def _persona_hot_rewrite_similarity(source: str, rewritten: str) -> float:
@@ -15754,17 +16543,36 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
     if style_sample:
         persona_lines.append(f"推文风格样本：{style_sample[:280]}")
     source_length = _persona_hot_rewrite_char_count(source_content)
-    min_length, max_length = _persona_hot_rewrite_length_bounds(source_length)
+    source_api_length = _persona_publish_text_count(source_content)
+    min_length, max_length = _persona_hot_rewrite_length_bounds(
+        source_length,
+        platform=platform,
+        source_text=source_content,
+    )
     rewrite_max_output_tokens = max(2048, min(8192, source_length * 2 + 512))
     instruction = str(payload.instruction or "").strip()[:1200]
     directed = bool(instruction)
+    over_platform_limit = bool(max_length) and source_api_length > int(max_length)
+    max_length_rule = (
+        f"且不得超过 {max_length} 字（{platform} API 含空格和标点的全文上限）。"
+        if max_length
+        else "可以超过原文字数。"
+    )
+    if over_platform_limit:
+        length_goal = (
+            f"原文按平台计是 {source_api_length} 字，已超过 {max_length} 字上限。"
+            f"必须改写成不超过 {max_length} 字的完整帖，保留核心事实，允许比原文短。"
+        )
+    else:
+        length_goal = (
+            f"原文去掉空白后是 {source_length} 字。改写后不得少于 {min_length} 字，{max_length_rule}"
+            "这是改写，不是摘要。人设只改口吻和身份，不要无故大幅缩短。原文里的数字、金额、产品、比例、年龄、问题和结论都要留下。"
+        )
     length_contract = "\n".join([
         "【字数硬性合同，必须一次写对】",
-        f"原文去掉空白后是 {source_length} 字。改写后不得少于 {min_length} 字，可以超过原文字数。",
-        "字数按去掉所有空白后的字符计算。这是改写，不是摘要，也不是压缩。",
-        "人设只改口吻和身份，不缩短篇幅。原文里的数字、金额、产品、比例、年龄、问题和结论都要留下。",
-        "不要按微博、推特或 Threads 的发布字数上限压缩。即使接近平台上限，也不许擅自删减。",
-        "写完后先在心里核对字数；不够就补同等细节，超过原文字数可以直接保留。",
+        length_goal,
+        "最低字数按去掉所有空白后的字符计算；平台上限按含空格和标点的全文长度计算。",
+        "写完后先在心里核对字数；不够就补同等细节，超过平台上限就必须压回去。",
     ])
     system_prompt_lines = [
         length_contract,
@@ -15794,7 +16602,11 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         "当前人设：",
         *[line for line in persona_lines if not line.endswith("：")],
         "",
-        f"热点原文约 {source_length} 字。改写后不得少于 {min_length} 字，超过原文字数允许直接输出。",
+        (
+            f"热点原文约 {source_length} 字，按平台计 {source_api_length} 字。"
+            f"改写后不得少于 {min_length} 字"
+            + (f"，不得超过 {max_length} 字。" if max_length else "，超过原文字数允许直接输出。")
+        ),
         "热点原文（只作素材，禁止照抄）：",
         source_content[:4000],
     ]
@@ -15835,8 +16647,10 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
             continue
         last_content = content
         last_length = _persona_hot_rewrite_char_count(content)
+        last_api_length = _persona_publish_text_count(content)
         last_quality_issues, _similarity = _persona_hot_rewrite_quality_issues(source_content, content)
-        if last_length >= min_length and not last_quality_issues:
+        within_max = max_length is None or last_api_length <= int(max_length)
+        if last_length >= min_length and within_max and not last_quality_issues:
             return {
                 "ok": True,
                 "content": last_content[:5000],
@@ -15849,13 +16663,25 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         retry_reasons = []
         if last_length < min_length:
             retry_reasons.append(f"字数只有 {last_length} 字，低于最低要求 {min_length} 字，还差 {gap} 字")
+        if max_length is not None and last_api_length > int(max_length):
+            retry_reasons.append(f"全文 {last_api_length} 字，超过平台上限 {max_length} 字")
         retry_reasons.extend(last_quality_issues)
+        shorten_only = bool(max_length) and last_api_length > int(max_length) and last_length >= min_length
         prompt_user_lines = [
             user_input,
             "",
             f"上次改写不合格：{'；'.join(retry_reasons)}。",
-            f"请按同一事实和人设重写一整篇，至少写到 {min_length} 字，超过原文字数可以保留。",
-            "禁止继续摘要。把原文里的数字、金额、产品和问题都写回去，用同等信息量补足字数。",
+            (
+                f"请按同一事实和人设重写一整篇，必须压到 {max_length} 字以内，保留核心事实，不要灌水。"
+                if shorten_only
+                else f"请按同一事实和人设重写一整篇，至少写到 {min_length} 字"
+                + (f"，且不得超过 {max_length} 字。" if max_length else "，超过原文字数可以保留。")
+            ),
+            (
+                "把原文里的数字、金额、产品和问题都留下，用更紧凑的句子表达，不要写成摘要提纲。"
+                if shorten_only
+                else "禁止继续摘要。把原文里的数字、金额、产品和问题都写回去，用同等信息量补足字数。"
+            ),
             "必须从新的观察角度重新组织开头、段落顺序、句型和结尾，不能沿用原文口吻或连续原句。",
             "补齐自然标点和完整断句，确保读起来连贯、顺口，并明显体现当前人设的表达习惯。",
         ]
@@ -15864,14 +16690,22 @@ def _rewrite_persona_hot_candidate_content(archive_id: str, payload: PersonaDash
         prompt_user = "\n".join(prompt_user_lines)
     if not last_content:
         raise HTTPException(status_code=502, detail="模型没有返回可用正文，请稍后重试。")
+    last_api_length = _persona_publish_text_count(last_content)
     if last_length < min_length:
         detail = f"改写字数不足（原文 {source_length} 字，结果 {last_length} 字，至少需要 {min_length} 字），请再试一次。"
+    elif max_length is not None and last_api_length > int(max_length):
+        detail = f"改写后仍超过平台上限（结果 {last_api_length} 字，上限 {max_length} 字），请再试一次。"
     else:
         detail = f"AI 改写质量未达标：{'；'.join(last_quality_issues) or '表达不够自然'}，请再试一次。"
     raise HTTPException(status_code=502, detail=detail)
 
 
-def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload) -> dict[str, Any]:
+def _fetch_persona_hot_candidates(
+    archive_id: str,
+    payload: PersonaDashboardHotCandidatesFetchPayload,
+    *,
+    progress_callback: Any = None,
+) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
     if not clean_id:
         raise HTTPException(status_code=400, detail="缺少人设 ID。")
@@ -15912,6 +16746,7 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
             "freshnessDays": freshness_days,
             "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
             "keywords": keywords,
+            "allKeywords": _persona_hot_relevance_keywords(clean_id, payload, keywords),
             "keywordStrategyVersion": PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
             "keywordDigest": _persona_hot_keyword_digest(keywords),
             "platform": target_platform,
@@ -15927,9 +16762,10 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
     }
     result = _run_persona_hot_workflow_cli(
         fetch_payload,
-        # A healthy account normally returns within 20-30 seconds. Keep enough
-        # headroom for the worker's single sparse-result account rotation.
-        timeout_seconds=65,
+        # Reader budget is 45-50s. Keep extra headroom so queue/preempt
+        # does not eat the user-facing search window.
+        timeout_seconds=90,
+        progress_callback=progress_callback,
     )
     _consume_persona_hot_keyword_batch(clean_id, payload, keywords)
 
@@ -15937,14 +16773,18 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
     # expose or infer account Cookie state through the product-facing route.
     cookie_rows: list[dict[str, Any]] = []
 
-    candidates = [
-        normalized
-        for normalized in (
-            _normalize_persona_hot_candidate(item)
-            for item in (result.get("candidates") if isinstance(result.get("candidates"), list) else [])
-        )
-        if normalized and _normalize_persona_content_platform(normalized.get("platform")) == target_platform
-    ]
+    candidates = []
+    for item in (result.get("candidates") if isinstance(result.get("candidates"), list) else []):
+        normalized = _normalize_persona_hot_candidate(item)
+        if not normalized:
+            continue
+        item_platform = _normalize_persona_content_platform(normalized.get("platform"))
+        if not item_platform:
+            normalized["platform"] = target_platform
+            item_platform = target_platform
+        if item_platform != target_platform:
+            continue
+        candidates.append(normalized)
     def candidate_display_priority(item: dict[str, Any]) -> tuple[float, float]:
         try:
             published_at = _parse_business_iso_timestamp(item.get("published_at"))
@@ -15966,7 +16806,15 @@ def _fetch_persona_hot_candidates(archive_id: str, payload: PersonaDashboardHotC
         "freshness_days": min(max(_to_int(result.get("freshnessDays"), freshness_days), 0), 30),
         "freshness_policy": "strict" if str(result.get("freshnessPolicy") or payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
         "cookie_statuses": cookie_rows,
-        "warnings": _persona_hot_user_warnings(result.get("warnings"), len(candidates), limit, cookie_rows),
+        "warnings": _persona_hot_user_warnings(
+            result.get("warnings"),
+            len(candidates),
+            limit,
+            cookie_rows,
+            empty_reason=str(result.get("emptyReason") or result.get("empty_reason") or "").strip(),
+            platform=target_platform,
+        ),
+        "empty_reason": str(result.get("emptyReason") or result.get("empty_reason") or "").strip(),
         "candidates": candidates,
     }
 
@@ -15991,6 +16839,42 @@ def _finalize_persona_hot_candidate_reservation(
         return commercial_billing.release_reservation(conn, reservation_id)
 
 
+def _persona_hot_progress_from_remote_job(state: Any) -> dict[str, Any]:
+    job = state if isinstance(state, dict) else {}
+    queue = job.get("queue") if isinstance(job.get("queue"), dict) else {}
+    status = str(job.get("status") or "").strip().lower()
+    phase = str(queue.get("phase") or "").strip().lower()
+    if phase not in {"queued", "fetching"}:
+        phase = "fetching" if status == "running" else "queued"
+    queue_ahead = max(0, _to_int(queue.get("queue_ahead"), 0))
+    estimated_wait_seconds = max(0, _to_int(queue.get("estimated_wait_seconds"), 0))
+    message = str(queue.get("message") or "").strip()
+    if not message:
+        if phase == "fetching":
+            message = "正在抓取公开帖。不想等可随时取消。"
+        elif queue_ahead > 0:
+            minutes = max(1, (estimated_wait_seconds + 59) // 60)
+            message = f"前面还有 {queue_ahead} 人排队，大约还要等 {minutes} 分钟。不想等可随时取消。"
+        else:
+            message = "正在进入抓取队列。不想等可随时取消。"
+    return {
+        "phase": phase,
+        "queue_ahead": queue_ahead,
+        "estimated_wait_seconds": estimated_wait_seconds,
+        "queue_message": message,
+        "cancelable": True,
+    }
+
+
+def _apply_persona_hot_task_progress(task_id: str, state: Any) -> None:
+    progress = _persona_hot_progress_from_remote_job(state)
+    with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+        task = PERSONA_HOT_CANDIDATE_TASKS.get(str(task_id or "").strip())
+        if not task or str(task.get("status") or "") not in {"queued", "running"}:
+            return
+        task.update(progress)
+
+
 def _persona_hot_candidate_task_worker(
     task_id: str,
     archive_id: str,
@@ -16004,10 +16888,18 @@ def _persona_hot_candidate_task_worker(
             return
         task.update({
             "status": "running",
+            "phase": "queued",
+            "queue_ahead": 0,
+            "queue_message": "正在进入抓取队列。不想等可随时取消。",
+            "cancelable": True,
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         })
     try:
-        result = _fetch_persona_hot_candidates(archive_id, payload)
+        result = _fetch_persona_hot_candidates(
+            archive_id,
+            payload,
+            progress_callback=lambda state: _apply_persona_hot_task_progress(task_id, state),
+        )
     except HTTPException as exc:
         with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
             task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
@@ -16095,6 +16987,10 @@ def _start_persona_hot_candidate_task(
             "user_id": owner_user_id,
             "archive_id": clean_archive_id,
             "status": "queued",
+            "phase": "queued",
+            "queue_ahead": 0,
+            "queue_message": "正在进入抓取队列。不想等可随时取消。",
+            "cancelable": True,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "billing_reservation_id": str(billing_reservation_id or "").strip(),
         }
@@ -22314,6 +23210,8 @@ def _start_persona_dashboard_refresh(
 ) -> dict[str, Any]:
     task_id = f"pdr_{uuid.uuid4().hex[:12]}"
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "http_first").strip().lower() or "http_first"
+    if refresh_source == "browser":
+        refresh_source = "http_first"
     refresh_platform = _persona_dashboard_refresh_platform(platform)
     scoped_archive_ids = list(dict.fromkeys(
         str(item or "").strip() for item in (archive_ids or []) if str(item or "").strip()
@@ -22636,6 +23534,8 @@ def _persona_dashboard_refresh_worker_v2(
     stdout_file: Any | None = None
     stderr_file: Any | None = None
     refresh_source = (source or os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "http_first").strip().lower() or "http_first"
+    if refresh_source == "browser":
+        refresh_source = "http_first"
     with PERSONA_DASHBOARD_REFRESH_LOCK:
         refresh_task = PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id, {})
         refresh_user_id = int(refresh_task.get("user_id") or 0)
@@ -22643,9 +23543,9 @@ def _persona_dashboard_refresh_worker_v2(
     refresh_archive_ids = _persona_dashboard_refresh_purge_archive_ids(archive_id, archive_ids)
     for purge_id in refresh_archive_ids:
         _purge_unbound_persona_hot_metrics(purge_id, refresh_platform)
-    # http_first stays on the collector HTTP path. Browser leases remain for
-    # the explicit browser source and RSSHub detail backfill only.
-    needs_browser_lease = refresh_source in {"browser", "rsshub"}
+    # Dashboard refresh stays on the collector HTTP path. Browser leases remain
+    # for RSSHub detail backfill only.
+    needs_browser_lease = refresh_source == "rsshub"
     scope = "单个人设" if archive_id else (
         f"当前账号的 {len(archive_ids)} 个人设"
         if archive_ids is not None
@@ -22696,6 +23596,31 @@ def _persona_dashboard_refresh_worker_v2(
                 "progress": 14,
                 "message": "正在读取已绑定账号的资料...",
             })
+        try:
+            from .official_profile_sync import official_homepage_overlay_enabled, sync_official_homepage_metrics
+            if official_homepage_overlay_enabled():
+                with PERSONA_DASHBOARD_REFRESH_LOCK:
+                    PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
+                        "step": "同步账号主页数据",
+                        "progress": 10,
+                        "message": "正在读取已授权账号的主页数据...",
+                    })
+                sync_official_homepage_metrics(
+                    user_id=refresh_user_id,
+                    archive_id=archive_id,
+                    archive_ids=archive_ids,
+                    platform=refresh_platform,
+                )
+                with PERSONA_DASHBOARD_REFRESH_LOCK:
+                    PERSONA_DASHBOARD_REFRESH_TASKS[task_id].update({
+                        "step": "读取账号资料",
+                        "progress": 14,
+                        "message": "账号主页数据已更新，正在同步帖文明细...",
+                    })
+        except Exception:
+            logger.warning("official homepage overlay skipped: task=%s", task_id)
+        if _persona_dashboard_refresh_cancel_requested(task_id):
+            raise _PersonaDashboardRefreshCancelled("刷新已取消。")
         prefetched_metrics = _prefetch_persona_dashboard_remote_metrics(
             user_id=refresh_user_id,
             archive_id=archive_id,
@@ -23019,7 +23944,9 @@ def _persona_dashboard_monitor_enabled() -> bool:
 
 def _persona_dashboard_monitor_source() -> str:
     source = (os.getenv("PERSONA_DASHBOARD_REFRESH_SOURCE") or "http_first").strip().lower() or "http_first"
-    return source if source in {"http_first", "rsshub", "browser"} else "http_first"
+    if source == "browser":
+        source = "http_first"
+    return source if source in {"http_first", "rsshub"} else "http_first"
 
 
 def _persona_dashboard_refresh_timestamp(value: Any) -> float:
@@ -23167,6 +24094,11 @@ def _ensure_persona_dashboard_monitor_started() -> None:
         })
     thread = threading.Thread(target=_persona_dashboard_monitor_loop, name="persona-dashboard-full-refresh-monitor", daemon=True)
     thread.start()
+    try:
+        from .official_profile_sync import ensure_official_homepage_monitor_started
+        ensure_official_homepage_monitor_started()
+    except Exception:
+        logger.warning("official homepage monitor failed to start")
 
 
 def _build_persona_dashboard_overview(
@@ -23640,10 +24572,39 @@ def _build_persona_dashboard_overview(
     }
 
 
+def _persona_bound_publish_platforms(owner_user_id: int | None) -> dict[str, list[str]]:
+    if not owner_user_id:
+        return {}
+    bound: dict[str, list[str]] = {}
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT persona_id, lower(platform) AS platform
+                FROM social_accounts
+                WHERE user_id = ? AND trim(persona_id) <> ''
+                  AND lower(platform) IN ('threads', 'instagram')
+                """,
+                (int(owner_user_id),),
+            ).fetchall()
+    except Exception:
+        return {}
+    for row in rows:
+        persona_id = str(row["persona_id"] or "").strip()
+        platform = str(row["platform"] or "").strip().lower()
+        if not persona_id or platform not in {"threads", "instagram"}:
+            continue
+        current = bound.setdefault(persona_id, [])
+        if platform not in current:
+            current.append(platform)
+    return bound
+
+
 def _build_persona_dashboard_console_overview(
     *,
     visible_archive_ids: set[str] | None = None,
     visible_group_ids: set[str] | None = None,
+    owner_user_id: int | None = None,
 ) -> dict[str, Any]:
     archives, archives_source = _read_tool_r18_persona_archives()
     if visible_archive_ids is not None:
@@ -23653,6 +24614,7 @@ def _build_persona_dashboard_console_overview(
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     personas: list[dict[str, Any]] = []
     totals = {"posts": 0, "published": 0, "images": 0}
+    bound_by_persona = _persona_bound_publish_platforms(owner_user_id)
 
     for archive in archives:
         if not isinstance(archive, dict):
@@ -23765,6 +24727,7 @@ def _build_persona_dashboard_console_overview(
                 "auth_profile_key": threads_account.get("authProfileKey"),
                 "updated_at": threads_account.get("updatedAt"),
             },
+            "bound_platforms": bound_by_persona.get(archive_id, []),
             "setup": _compact_dashboard_setup(setup),
             "counts": {
                 "posts": post_count,
@@ -23958,6 +24921,7 @@ def create_app() -> FastAPI:
             stop_crm_runtime()
             stop_social_automation_worker()
             stop_proxy_market_health_monitor()
+            stop_telegram_bot_worker()
 
     app = FastAPI(
         title="Workflow WebApp",
@@ -24337,6 +25301,29 @@ def create_app() -> FastAPI:
             },
         )
 
+    @app.get("/console", include_in_schema=False)
+    @app.get("/console/", include_in_schema=False)
+    @app.get("/video", include_in_schema=False)
+    @app.get("/video/", include_in_schema=False)
+    @app.get("/crm", include_in_schema=False)
+    @app.get("/crm/", include_in_schema=False)
+    @app.get("/console-login", include_in_schema=False)
+    @app.get("/console-login/", include_in_schema=False)
+    @app.get("/video-login", include_in_schema=False)
+    @app.get("/video-login/", include_in_schema=False)
+    @app.get("/crm-login", include_in_schema=False)
+    @app.get("/crm-login/", include_in_schema=False)
+    @app.get("/admin-console", include_in_schema=False)
+    @app.get("/admin-console/", include_in_schema=False)
+    @app.get("/admin-video", include_in_schema=False)
+    @app.get("/admin-video/", include_in_schema=False)
+    def page_product_short_alias(request: Request) -> RedirectResponse:
+        path = _canonical_product_page_path(str(request.url.path or "/"))
+        if path == str(request.url.path or "/") or path not in set(_PRODUCT_PAGE_ALIASES.values()):
+            raise HTTPException(status_code=404, detail="页面不存在")
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"{path}{query}", status_code=302)
+
     @app.get("/console.html", include_in_schema=False)
     @app.get("/admin-console.html", include_in_schema=False)
     def page_console(
@@ -24399,6 +25386,7 @@ def create_app() -> FastAPI:
             console_bootstrap = _build_persona_dashboard_console_overview(
                 visible_archive_ids=_visible_persona_ids(user),
                 visible_group_ids=_visible_persona_group_ids(user),
+                owner_user_id=_workspace_user_id(user),
             )
             console_bootstrap["user_id"] = _workspace_user_id(user)
             if _is_admin_workspace(user):
@@ -24487,6 +25475,150 @@ def create_app() -> FastAPI:
                 "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
                 "__ADMIN_WORKSPACE_USER_ID__": str(target_user_id) if _is_admin_workspace(user) else "",
                 "__ADMIN_CONSOLE_SESSION__": "1" if admin_console else "",
+            },
+        )
+
+    def _product_login_page(
+        kind: str,
+        request: Request,
+        return_url: str,
+        session_token: str | None,
+        admin_session_token: str | None,
+    ) -> Response:
+        spec = dict(_PRODUCT_LOGIN_SPECS.get(kind) or _PRODUCT_LOGIN_SPECS["console"])
+        fallback = str(spec["redirect"])
+        safe_return = _role_safe_return_url(return_url or fallback, fallback, admin=False)
+        selected_token = session_token or admin_session_token
+        user = None
+        if selected_token:
+            try:
+                user = _get_session_user_allowing_password_change(
+                    selected_token,
+                    expected_admin_session=bool(admin_session_token and selected_token == admin_session_token),
+                )
+            except HTTPException:
+                if admin_session_token and selected_token != admin_session_token:
+                    try:
+                        user = _get_session_user_allowing_password_change(
+                            admin_session_token,
+                            expected_admin_session=True,
+                        )
+                    except HTTPException:
+                        user = None
+        if user:
+            if int(user.get("must_change_password") or 0) == 1:
+                marker = "admin_console=1&" if _is_admin(user) else ""
+                return RedirectResponse(
+                    url=f"/change-password.html?{marker}return_url={quote(safe_return, safe='')}",
+                    status_code=302,
+                )
+            if _is_admin(user):
+                return RedirectResponse(
+                    url=_role_safe_return_url(safe_return, str(spec["admin_redirect"]), admin=True),
+                    status_code=302,
+                )
+            return RedirectResponse(url=safe_return, status_code=302)
+        return _product_login_html(kind)
+
+    @app.get("/console-login.html", include_in_schema=False)
+    def page_console_login(
+        request: Request,
+        return_url: str = "/console.html",
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
+    ) -> Response:
+        return _product_login_page("console", request, return_url, session_token, admin_session_token)
+
+    @app.get("/video-login.html", include_in_schema=False)
+    def page_video_login(
+        request: Request,
+        return_url: str = "/video.html",
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
+    ) -> Response:
+        return _product_login_page("video", request, return_url, session_token, admin_session_token)
+
+    @app.get("/crm-login.html", include_in_schema=False)
+    def page_crm_login(
+        request: Request,
+        return_url: str = "/crm.html",
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
+    ) -> Response:
+        return _product_login_page("crm", request, return_url, session_token, admin_session_token)
+
+    @app.get("/video.html", include_in_schema=False)
+    @app.get("/admin-video.html", include_in_schema=False)
+    def page_video(
+        request: Request,
+        manage_user_id: int = 0,
+        admin_workspace_user_id: int = 0,
+        session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+        admin_session_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE),
+    ) -> Response:
+        if manage_user_id > 0 and admin_workspace_user_id > 0 and manage_user_id != admin_workspace_user_id:
+            raise HTTPException(status_code=400, detail="conflicting admin workspace user ids")
+        workspace_user_id = int(manage_user_id or admin_workspace_user_id or 0)
+        admin_console = request.url.path == "/admin-video.html" or request_uses_admin_session(
+            request,
+            workspace_user_id or None,
+        )
+        selected_token = admin_session_token if admin_console else session_token
+        try:
+            user = _get_session_user_allowing_password_change(
+                selected_token,
+                expected_admin_session=admin_console,
+            )
+        except HTTPException:
+            return_url = str(request.url.path or "/video.html")
+            if request.url.query:
+                return_url = f"{return_url}?{request.url.query}"
+            location = (
+                f"/admin?return_url={quote(return_url, safe='')}"
+                if admin_console
+                else _public_login_location(return_url)
+            )
+            return RedirectResponse(url=location, status_code=302)
+        if int(user.get("must_change_password") or 0) == 1:
+            target = str(request.url.path or ("/admin-video.html" if admin_console else "/video.html"))
+            if request.url.query:
+                target = f"{target}?{request.url.query}"
+            target = _role_safe_return_url(
+                target,
+                "/admin-video.html" if admin_console else "/video.html",
+                admin=admin_console,
+            )
+            marker = "admin_console=1&" if admin_console else ""
+            return RedirectResponse(
+                url=f"/change-password.html?{marker}return_url={quote(target, safe='')}",
+                status_code=302,
+            )
+        if admin_console:
+            if not _is_admin(user):
+                return RedirectResponse(url="/admin", status_code=302)
+            if workspace_user_id > 0:
+                try:
+                    user = resolve_admin_workspace_user(user, workspace_user_id)
+                except HTTPException:
+                    return RedirectResponse(url="/admin.html#admin-users", status_code=302)
+        elif _is_admin(user):
+            query = f"?{request.url.query}" if request.url.query else ""
+            return RedirectResponse(url=f"/admin-video.html{query}", status_code=302)
+        elif workspace_user_id > 0:
+            raise HTTPException(status_code=403, detail="administrator workspace access required")
+        return _html_response_with_versions(
+            "video.html",
+            replacements={
+                "__STYLE_VERSION__": _asset_version("assets", "style.css"),
+                "__CONSOLE_CSS_VERSION__": _asset_version("assets", "console.css"),
+                "__VIDEO_WORKBENCH_CSS_VERSION__": _asset_version("assets", "video-workbench.css"),
+                "__VIDEO_WORKBENCH_JS_VERSION__": _asset_version("assets", "video-workbench.js"),
+                "__VIDEO_PAGE_JS_VERSION__": _asset_version("assets", "video-page.js"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
+                "__ADMIN_WORKSPACE_USER_ID__": str(_workspace_user_id(user)) if _is_admin_workspace(user) else "",
+                "__ADMIN_CONSOLE_SESSION__": "1" if admin_console else "",
+                "__DEPLOYMENT_ROLE__": boundary.role,
             },
         )
 
@@ -24697,6 +25829,25 @@ def create_app() -> FastAPI:
         register_collector_routes(app)
     register_notification_routes(app)
     register_video_routes(app, server_video_route_dependencies(sys.modules[__name__]))
+
+    def _telegram_runtime_snapshot() -> dict[str, Any]:
+        with db() as conn:
+            return _get_runtime_config(conn)
+
+    def _telegram_runtime_save(updates: dict[str, Any]) -> None:
+        with db() as conn:
+            current = _get_runtime_config(conn)
+        merged = dict(current)
+        merged.update(updates or {})
+        _write_runtime_config_file(merged)
+
+    inject_telegram_admin(
+        app,
+        require_admin=require_admin,
+        get_runtime=_telegram_runtime_snapshot,
+        save_runtime=_telegram_runtime_save,
+    )
+    inject_telegram_internal_routes(app, sys.modules[__name__])
 
     @app.post("/api/auth/apply")
     def api_apply(payload: RegisterPayload, request: Request):
@@ -27412,6 +28563,7 @@ def create_app() -> FastAPI:
         return _build_persona_dashboard_console_overview(
             visible_archive_ids=_visible_persona_ids(user),
             visible_group_ids=_visible_persona_group_ids(user),
+            owner_user_id=_workspace_user_id(user),
         )
 
     @app.get("/api/persona_dashboard/monitor")
@@ -27841,7 +28993,8 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_cancel_hot_candidates(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         task_cancelled = _cancel_persona_hot_candidate_tasks(archive_id, _workspace_user_id(_user))
         process_cancelled = _cancel_persona_hot_workflow(archive_id)
-        return {"ok": True, "cancelled": task_cancelled or process_cancelled}
+        keyword_cancelled = _cancel_persona_hot_workflow(archive_id, "persona.hot_keywords.v1")
+        return {"ok": True, "cancelled": task_cancelled or process_cancelled or keyword_cancelled}
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/import")
     def api_persona_dashboard_import_hot_candidates(archive_id: str, payload: PersonaDashboardHotCandidatesImportPayload, user: dict[str, Any] = Depends(require_persona_owner)):
@@ -28135,8 +29288,10 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_refresh(payload: PersonaDashboardRefreshPayload, user: dict[str, Any] = Depends(get_current_user)):
         archive_ids = _persona_dashboard_refresh_archive_ids(payload.archive_id, user)
         requested_source = str(payload.source or "http_first").strip().lower() or "http_first"
-        if requested_source not in {"rsshub", "browser", "http_first"}:
-            raise HTTPException(status_code=400, detail="刷新来源仅支持 http_first、rsshub 或 browser。")
+        if requested_source == "browser":
+            requested_source = "http_first"
+        if requested_source not in {"rsshub", "http_first"}:
+            raise HTTPException(status_code=400, detail="刷新来源仅支持 http_first 或 rsshub。")
         task = _start_persona_dashboard_refresh(
             payload.archive_id,
             source=requested_source,
@@ -28156,6 +29311,17 @@ def create_app() -> FastAPI:
     @app.post("/api/persona_dashboard/refresh/{task_id}/cancel")
     def api_persona_dashboard_refresh_cancel(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
         return _cancel_persona_dashboard_refresh(task_id, _workspace_user_id(user))
+
+    @app.post("/api/integrations/official-auth/webhook")
+    async def api_official_auth_webhook(request: Request):
+        from .official_profile_sync import handle_official_auth_webhook
+
+        raw_body = await request.body()
+        signature = str(request.headers.get("x-signature") or "")
+        result = handle_official_auth_webhook(raw_body=raw_body, signature_header=signature)
+        if not result.get("ok"):
+            raise HTTPException(status_code=int(result.get("status_code") or 401), detail=result.get("detail") or "回调失败")
+        return {"ok": True}
 
     @app.get("/api/client_defaults")
     def api_client_defaults(user: dict[str, Any] = Depends(get_current_user)):
@@ -28687,7 +29853,7 @@ def create_app() -> FastAPI:
                 "user": {"id": int(user_row["id"]), "username": str(user_row["username"])},
                 "summary": commercial_billing.billing_summary(conn, int(target_user_id)),
                 "orders": commercial_billing.list_orders(conn, user_id=int(target_user_id), limit=100),
-                "ledger": commercial_billing.list_ledger(conn, user_id=int(target_user_id), limit=100),
+                "ledger": commercial_billing.list_ledger(conn, user_id=int(target_user_id), limit=1000),
             }
 
     @app.post("/api/admin/users/{target_user_id}/billing/adjustments")
@@ -29029,7 +30195,7 @@ def create_app() -> FastAPI:
         _user: dict[str, Any] = Depends(require_admin),
     ):
         from .bundle_social import BundleSocialClient, BundleSocialError
-        from .bundle_social_config import BundleSocialConfigError, candidate_configuration
+        from .bundle_social_config import BundleSocialConfigError, candidate_configuration, configuration_status
 
         _require_same_origin(request)
         try:
@@ -29044,11 +30210,18 @@ def create_app() -> FastAPI:
                 api_base=candidate["api_base_url"],
                 timeout_seconds=15,
             ).list_teams(limit=1)
+            with db() as conn:
+                status = configuration_status(conn)
         except BundleSocialConfigError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except BundleSocialError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        return {"ok": True, "team_count": int(result.get("count") or 0)}
+        status["ok"] = True
+        status["team_count"] = int(result.get("count") or 0)
+        return JSONResponse(
+            content=status,
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
 
     @app.put("/api/admin/bundle-social/config")
     def api_admin_set_bundle_social_config(
@@ -29071,7 +30244,7 @@ def create_app() -> FastAPI:
                     api_base_url=payload.api_base_url,
                     api_key=payload.api_key,
                 )
-            BundleSocialClient(
+            teams = BundleSocialClient(
                 api_key=candidate["api_key"],
                 api_base=candidate["api_base_url"],
                 timeout_seconds=15,
@@ -29082,14 +30255,46 @@ def create_app() -> FastAPI:
                     api_base_url=candidate["api_base_url"],
                     api_key=candidate["api_key"],
                     actor_user_id=int(user.get("id") or 0),
+                    webhook_secret=payload.webhook_secret,
+                    homepage_overlay_enabled=payload.homepage_overlay_enabled,
+                    homepage_read_interval_hours=payload.homepage_read_interval_hours,
+                    collect_offset_hours=payload.collect_offset_hours,
                 )
         except BundleSocialConfigError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except BundleSocialError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        status["ok"] = True
+        status["team_count"] = int(teams.get("count") or 0)
         return JSONResponse(
             content=status,
             headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
+        )
+
+    @app.post("/api/admin/bundle-social/config/secrets/{secret_name}")
+    def api_admin_reveal_bundle_social_secret(
+        secret_name: str,
+        request: Request,
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        from .bundle_social_config import resolve_configuration
+
+        _require_same_origin(request)
+        name = str(secret_name or "").strip()
+        if name not in {"api_key", "webhook_secret"}:
+            raise HTTPException(status_code=404, detail="不允许查看")
+        with db() as conn:
+            configured = resolve_configuration(conn)
+        value = str(configured.get(name) or "").strip()
+        if not value:
+            raise HTTPException(status_code=404, detail="尚未配置")
+        return JSONResponse(
+            content={"key": name, "value": value},
+            headers={
+                "Cache-Control": "no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
         )
 
     @app.post("/api/admin/runtime_config/secrets/{secret_name}")
@@ -29108,6 +30313,7 @@ def create_app() -> FastAPI:
             "runninghub_personal_api_key": ("runninghub_personal_api_key", "runninghub_api_key", "video_runninghub_api_key"),
             "runninghub_enterprise_api_key": ("runninghub_enterprise_api_key", "new_persona_runninghub_api_key"),
             "minimax_api_key": ("minimax_api_key", "video_tts_api_key"),
+            "telegram_bot_token": ("telegram_bot_token",),
         }.get(str(secret_name or "").strip())
         if not source_keys:
             raise HTTPException(status_code=404, detail="API Key 不允许查看")
@@ -29165,6 +30371,7 @@ def create_app() -> FastAPI:
             "runninghub_personal_api_key",
             "runninghub_enterprise_api_key",
             "minimax_api_key",
+            "telegram_bot_token",
         }
         for key in secret_preserve_keys:
             value = str(explicit_data.get(key) or "").strip()
@@ -32468,20 +33675,35 @@ def create_app() -> FastAPI:
         return {"ok": True}
 
     @app.get("/api/admin/tasks")
-    def api_admin_tasks(limit: int = 200, user: dict[str, Any] = Depends(require_admin)):
+    def api_admin_tasks(limit: int = 200, user_id: int = 0, user: dict[str, Any] = Depends(require_admin)):
         lim = min(max(int(limit or 200), 1), 1000)
+        owner_id = max(0, int(user_id or 0))
         with db() as conn:
-            rows = conn.execute(
-                """
-                SELECT t.id, t.user_id, u.username, t.type, t.status, t.error, t.runninghub_task_id,
-                       t.input_json, t.output_json, t.cost_cents, t.created_at, t.updated_at
-                FROM tasks t
-                LEFT JOIN users u ON u.id = t.user_id
-                ORDER BY t.created_at DESC
-                LIMIT ?
-                """,
-                (lim,),
-            ).fetchall()
+            if owner_id > 0:
+                rows = conn.execute(
+                    """
+                    SELECT t.id, t.user_id, u.username, t.type, t.status, t.error, t.runninghub_task_id,
+                           t.input_json, t.output_json, t.cost_cents, t.created_at, t.updated_at
+                    FROM tasks t
+                    LEFT JOIN users u ON u.id = t.user_id
+                    WHERE t.user_id = ?
+                    ORDER BY t.created_at DESC
+                    LIMIT ?
+                    """,
+                    (owner_id, lim),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT t.id, t.user_id, u.username, t.type, t.status, t.error, t.runninghub_task_id,
+                           t.input_json, t.output_json, t.cost_cents, t.created_at, t.updated_at
+                    FROM tasks t
+                    LEFT JOIN users u ON u.id = t.user_id
+                    ORDER BY t.created_at DESC
+                    LIMIT ?
+                    """,
+                    (lim,),
+                ).fetchall()
         items: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)

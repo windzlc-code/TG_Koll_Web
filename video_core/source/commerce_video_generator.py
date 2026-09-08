@@ -18,6 +18,7 @@ from . import create_audio
 from . import create_video
 from . import image_model_api
 from . import runninghub_common
+from . import runninghub_speech
 
 
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".webm"}
@@ -42,9 +43,9 @@ class AudioSettings:
     volume_gain_db: float = 8.0
     tts_provider: str = "runninghub"
     minimax_api_key: str = ""
-    minimax_base_url: str = MINIMAX_CN_BASE_URL
-    minimax_model: str = "speech-2.8-hd"
-    minimax_voice_id: str = "male-qn-qingse"
+    minimax_base_url: str = runninghub_speech.RUNNINGHUB_SPEECH_BASE_URL
+    minimax_model: str = runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_MODEL
+    minimax_voice_id: str = runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_VOICE
     minimax_format: str = "mp3"
     minimax_sample_rate: int = 32000
     minimax_bitrate: int = 128000
@@ -1445,64 +1446,26 @@ def _generate_minimax_audio(
 ) -> Path:
     api_key = str(getattr(settings, "minimax_api_key", "") or os.getenv("MINIMAX_API_KEY", "")).strip()
     if not api_key:
-        raise RuntimeError("缺少 MiniMax API Key，无法生成数字人口播 TTS 音频")
-    base_url = _minimax_base_url(settings)
-    model = str(getattr(settings, "minimax_model", "") or os.getenv("MINIMAX_TTS_MODEL", "speech-2.8-hd")).strip() or "speech-2.8-hd"
-    voice_id = str(getattr(settings, "minimax_voice_id", "") or os.getenv("MINIMAX_TTS_VOICE_ID", "male-qn-qingse")).strip() or "male-qn-qingse"
+        raise RuntimeError("缺少语音合成 API Key，无法生成数字人口播 TTS 音频")
     audio_format = str(getattr(settings, "minimax_format", "") or os.getenv("MINIMAX_TTS_FORMAT", "mp3")).strip().lower() or "mp3"
     if audio_format not in {"mp3", "wav", "pcm", "flac"}:
         audio_format = "mp3"
-    payload = {
-        "model": model,
-        "text": str(speech_text or ""),
-        "stream": False,
-        "voice_setting": {
-            "voice_id": voice_id,
-            "speed": 1.0,
-            "vol": 1.0,
-            "pitch": 0,
-            "emotion": str(getattr(settings, "emotion", "") or "neutral").strip() or "neutral",
-        },
-        "audio_setting": {
-            "sample_rate": max(int(getattr(settings, "minimax_sample_rate", 32000) or 32000), 8000),
-            "bitrate": max(int(getattr(settings, "minimax_bitrate", 128000) or 128000), 32000),
-            "format": audio_format,
-            "channel": max(int(getattr(settings, "minimax_channel", 1) or 1), 1),
-        },
-        "language_boost": str(getattr(settings, "minimax_language_boost", "") or "auto").strip() or "auto",
-    }
     output_path = output_path.with_suffix("." + ("wav" if audio_format == "pcm" else audio_format))
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    resp = requests.post(
-        f"{base_url}/v1/t2a_v2",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=payload,
-        timeout=180,
-    )
-    try:
-        data = resp.json()
-    except Exception:
-        data = {"raw": str(getattr(resp, "text", "") or "")[:800]}
-    if resp.status_code >= 400:
-        raise RuntimeError(f"MiniMax TTS 请求失败（HTTP {resp.status_code}）：{runninghub_common._safe_json_preview(data)}")
-    base_resp = data.get("base_resp") if isinstance(data, dict) else None
-    if isinstance(base_resp, dict) and int(base_resp.get("status_code") or 0) != 0:
-        raise RuntimeError(f"MiniMax TTS 返回错误：{runninghub_common._safe_json_preview(base_resp)}")
-    audio_hex = ""
-    if isinstance(data, dict):
-        data_obj = data.get("data")
-        if isinstance(data_obj, dict):
-            audio_hex = str(data_obj.get("audio") or "").strip()
-    if not audio_hex:
-        raise RuntimeError(f"MiniMax TTS 未返回 audio 字段：{runninghub_common._safe_json_preview(data)}")
-    try:
-        output_path.write_bytes(bytes.fromhex(audio_hex))
-    except ValueError as exc:
-        raise RuntimeError("MiniMax TTS 返回的 audio 不是有效十六进制音频") from exc
-    if not output_path.exists() or output_path.stat().st_size <= 0:
-        raise RuntimeError("MiniMax TTS 音频写入失败")
     if logger:
-        logger(f"[MiniMax TTS] 已生成音频: {output_path}")
+        logger("[TTS] 正在通过 Speech 模型合成音频")
+    output_path = runninghub_speech.generate_text_to_audio(
+        api_key=api_key,
+        base_url=runninghub_speech.speech_base_url(getattr(settings, "minimax_base_url", "")),
+        model=str(getattr(settings, "minimax_model", "") or os.getenv("MINIMAX_TTS_MODEL", "") or ""),
+        text=str(speech_text or ""),
+        output_path=output_path,
+        voice_id=str(getattr(settings, "minimax_voice_id", "") or os.getenv("MINIMAX_TTS_VOICE_ID", "") or ""),
+        emotion=str(getattr(settings, "emotion", "") or "happy").strip() or "happy",
+    )
+    if not output_path.exists() or output_path.stat().st_size <= 0:
+        raise RuntimeError("Speech 音频写入失败")
+    if logger:
+        logger(f"[TTS] 已生成音频: {output_path}")
     return _postprocess_generated_audio(input_path=output_path, output_path=output_path, settings=settings, logger=logger)
 
 

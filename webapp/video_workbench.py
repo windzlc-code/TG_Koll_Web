@@ -26,7 +26,7 @@ from video_core import (
     run_video_task,
 )
 from video_core.source.voice_presets import ELEVENLABS_VOICE_PRESETS
-from video_core.source import runninghub_common
+from video_core.source import runninghub_common, runninghub_speech
 from video_core import ecommerce_material_intelligence
 
 
@@ -52,15 +52,15 @@ VIDEO_RUNTIME_CONFIG_DEFAULTS: dict[str, Any] = {
     "video_replace_product_app_id": "",
     "video_ecommerce_app_id": "",
     "video_ecommerce_fast_app_id": "",
-    "video_tts_provider": "minimax",
-    "video_tts_base_url": "https://api.minimaxi.com",
+    "video_tts_provider": "runninghub",
+    "video_tts_base_url": runninghub_speech.RUNNINGHUB_SPEECH_BASE_URL,
     "video_tts_api_key": "",
-    "video_tts_model": "speech-2.8-hd",
-    "video_default_voice_id": "male-qn-qingse",
+    "video_tts_model": runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_MODEL,
+    "video_default_voice_id": runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_VOICE,
     "minimax_api_key": "",
-    "minimax_base_url": "https://api.minimaxi.com",
-    "minimax_tts_model": "speech-2.8-hd",
-    "minimax_tts_voice_id": "male-qn-qingse",
+    "minimax_base_url": runninghub_speech.RUNNINGHUB_SPEECH_BASE_URL,
+    "minimax_tts_model": runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_MODEL,
+    "minimax_tts_voice_id": runninghub_speech.RUNNINGHUB_SPEECH_DEFAULT_VOICE,
     "video_default_duration_seconds": 10,
     "video_default_ratio": "9:16",
     "video_default_resolution": "720p",
@@ -297,6 +297,13 @@ VIDEO_MODULE_METADATA: dict[str, dict[str, Any]] = {
         "billing_sku": "video_product_replace_second",
         "result_keys": ["download_path", "duration_seconds", "runninghub_task_ids", "raw_result"],
     },
+    "replace_productANDmodel": {
+        "key": "replace_productANDmodel",
+        "name": "视频联合替换",
+        "billing_basis": "input_video_seconds",
+        "billing_sku": "video_model_replace_second",
+        "result_keys": ["download_path", "duration_seconds", "runninghub_task_ids", "raw_result"],
+    },
     "image_generate": {
         "key": "image_generate",
         "name": "视频工作台图片生成",
@@ -409,6 +416,39 @@ def _copy_default(value: Any) -> Any:
     return value
 
 
+def public_video_runtime_defaults() -> dict[str, Any]:
+    runtime = {str(key): _copy_default(value) for key, value in VIDEO_RUNTIME_CONFIG_DEFAULTS.items()}
+    try:
+        from webapp import server as server_module
+
+        db_factory = getattr(server_module, "db", None)
+        runtime_getter = getattr(server_module, "_get_runtime_config", None)
+        if callable(db_factory) and callable(runtime_getter):
+            with db_factory() as conn:
+                live = runtime_getter(conn)
+            if isinstance(live, dict):
+                runtime.update(live)
+    except Exception:
+        pass
+    public: dict[str, Any] = {}
+    for key, value in runtime.items():
+        lowered = str(key or "").strip().lower()
+        if lowered in VIDEO_RUNTIME_SECRET_KEYS or "api_key" in lowered or "token" in lowered or "secret" in lowered:
+            continue
+        public[key] = value
+    public["video_tts_provider"] = "runninghub"
+    public["minimax_tts_model"] = runninghub_speech.normalize_speech_model(
+        public.get("minimax_tts_model") or public.get("video_tts_model")
+    )
+    public["video_tts_model"] = public["minimax_tts_model"]
+    public["minimax_tts_voice_id"] = runninghub_speech.normalize_speech_voice(
+        public.get("minimax_tts_voice_id") or public.get("video_default_voice_id")
+    )
+    public["video_default_voice_id"] = public["minimax_tts_voice_id"]
+    public["speech_models"] = list(runninghub_speech.RUNNINGHUB_SPEECH_MODELS)
+    return public
+
+
 def apply_video_runtime_defaults(
     task_type: str,
     payload: dict[str, Any] | None,
@@ -443,10 +483,21 @@ def apply_video_runtime_defaults(
     ).strip()
     source["video_runninghub_api_key"] = workflow_runninghub_key
     source["runninghub_api_key"] = workflow_runninghub_key
-    source["video_tts_api_key"] = str(source.get("minimax_api_key") or source.get("video_tts_api_key") or "").strip()
-    source["video_tts_base_url"] = "https://api.minimaxi.com"
-    source["video_tts_model"] = str(source.get("minimax_tts_model") or "speech-2.8-hd").strip() or "speech-2.8-hd"
-    source["video_default_voice_id"] = str(source.get("minimax_tts_voice_id") or "male-qn-qingse").strip() or "male-qn-qingse"
+    client_tts_model = str((payload or {}).get("minimax_tts_model") or (payload or {}).get("video_tts_model") or "").strip()
+    source["video_tts_provider"] = "runninghub"
+    source["video_tts_api_key"] = workflow_runninghub_key
+    source["video_tts_base_url"] = runninghub_speech.speech_base_url(
+        source.get("video_runninghub_base_url") or source.get("video_tts_base_url"),
+        fallback=runninghub_speech.RUNNINGHUB_SPEECH_BASE_URL,
+    )
+    source["minimax_tts_model"] = runninghub_speech.normalize_speech_model(
+        client_tts_model or source.get("minimax_tts_model") or source.get("video_tts_model")
+    )
+    source["video_tts_model"] = source["minimax_tts_model"]
+    source["minimax_tts_voice_id"] = runninghub_speech.normalize_speech_voice(
+        source.get("minimax_tts_voice_id") or source.get("video_default_voice_id")
+    )
+    source["video_default_voice_id"] = source["minimax_tts_voice_id"]
     if typ == "image_generate":
         video_image_models = [
             item.strip()
@@ -460,6 +511,23 @@ def apply_video_runtime_defaults(
         source["image_model_provider_base_url"] = "https://www.runninghub.ai"
         source["image_model_provider_api_key_gemini"] = enterprise_runninghub_key
         source["image_model_provider_api_key_gpt"] = enterprise_runninghub_key
+        video_image_modes = {
+            "product_only",
+            "model_product",
+            "scene_image",
+            "subject_replace",
+            "poster_translate",
+            "digital_human_character",
+            "three_view",
+        }
+        current_mode = str(
+            merged.get("video_image_mode") or merged.get("image_mode") or merged.get("mode") or ""
+        ).strip()
+        if current_mode in video_image_modes:
+            merged["video_image_mode"] = current_mode
+            merged["mode"] = (
+                "dual_reference" if current_mode in {"model_product", "subject_replace"} else "single_reference"
+            )
 
     common_keys = [
         "video_runninghub_base_url",
@@ -503,6 +571,15 @@ def apply_video_runtime_defaults(
         ],
         "replace_model": ["video_replace_model_app_id", "replace_model_original_workflow_ids", "replace_model_app_id", "replace_model_original_app_id"],
         "replace_product": ["video_replace_product_app_id", "replace_product_workflow_ids", "replace_product_app_id"],
+        "replace_productANDmodel": [
+            "video_replace_model_app_id",
+            "replace_model_original_workflow_ids",
+            "replace_model_app_id",
+            "replace_model_original_app_id",
+            "video_replace_product_app_id",
+            "replace_product_workflow_ids",
+            "replace_product_app_id",
+        ],
         "image_generate": [
             "image_generate_provider",
             "image_generate_mode_default",
@@ -733,6 +810,18 @@ def video_task_billing_spec(task_type: str, payload: dict[str, Any] | None) -> t
         )
         incremental = _incremental_billing_quantity(source, max(quantity, 1))
         return None if incremental == 0 else ("video_product_replace_second", incremental if incremental is not None else max(quantity, 1), False)
+    if typ == "replace_productANDmodel":
+        quantity = _positive_int(
+            source.get("source_video_duration_seconds")
+            or source.get("video_duration_seconds")
+            or source.get("duration_seconds")
+            or source.get("duration")
+            or _probe_payload_media_duration(source, "video_local_path", "source_video_local_path")
+            or 20,
+            20,
+        )
+        incremental = _incremental_billing_quantity(source, max(quantity, 1))
+        return None if incremental == 0 else ("video_model_replace_second", incremental if incremental is not None else max(quantity, 1), False)
     return None
 
 
@@ -1346,7 +1435,8 @@ def inject_video_workbench(
             existing_image_runner = task_runners[task_type]
 
             def image_generate_dispatch(task_id: str, payload: dict[str, Any], *, _existing=existing_image_runner, _video=runner):
-                if str((payload or {}).get("source") or "").strip() == "video_workbench_api":
+                source = str((payload or {}).get("source") or "").strip()
+                if source in {"video_workbench_api", "telegram", "telegram_agent", "telegram_rerun", "telegram-preview"}:
                     return _video(task_id, payload)
                 return _existing(task_id, payload)
 
@@ -1494,7 +1584,7 @@ VIDEO_UI_MODULE_METADATA: list[dict[str, Any]] = [
     {"id": "digital_human_video", "label": "数字人口播视频", "group": "视频生成", "task_type": "create_video"},
     {"id": "ecommerce_short_video", "label": "广告 / 种草视频", "group": "视频生成", "task_type": "ecommerce_short_video"},
     {"id": "video_language_replace", "label": "视频语种更换", "group": "视频生成", "task_type": "video_language_replace"},
-    {"id": "video_subject_replace", "label": "视频模特 / 商品替换", "group": "视频生成", "task_type": "replace_model", "task_types": ["replace_model", "replace_product"]},
+    {"id": "video_subject_replace", "label": "视频模特 / 商品替换", "group": "视频生成", "task_type": "replace_model", "task_types": ["replace_model", "replace_product", "replace_productANDmodel"]},
     {"id": "ecommerce_image", "label": "电商广告图", "group": "图片素材", "task_type": "image_generate", "modes": ["product_only", "model_product"]},
     {"id": "subject_replace", "label": "人物 / 商品替换", "group": "图片素材", "task_type": "image_generate", "modes": ["subject_replace"]},
     {"id": "poster_translate", "label": "电商图语种切换", "group": "图片素材", "task_type": "image_generate", "modes": ["poster_translate"]},
@@ -1540,8 +1630,11 @@ def resolve_video_ui_task(module_key: Any, params: dict[str, Any] | None = None)
     if not task_type:
         raise ValueError(f"不支持的视频工作台模块: {key or '(empty)'}")
     if key == "video_subject_replace":
-        subject_kind = str(source.get("subject_kind") or source.get("replace_kind") or "model").strip().lower()
-        task_type = "replace_product" if subject_kind in {"product", "goods", "商品"} else "replace_model"
+        subject_kind = str(source.get("subject_kind") or source.get("replace_kind") or source.get("replace_mode") or "model").strip().lower()
+        if subject_kind in {"union", "combined", "both", "model_and_product", "联合"}:
+            task_type = "replace_productANDmodel"
+        else:
+            task_type = "replace_product" if subject_kind in {"product", "goods", "商品"} else "replace_model"
     if default_mode and not str(source.get("mode") or "").strip():
         source["mode"] = default_mode
     if task_type == "image_generate":
@@ -1649,6 +1742,22 @@ def build_video_submit_payload(
             payload["model_image_local_path" if typ == "replace_model" else "product_image_local_path"] = path(images[0])
         if not videos or not images:
             raise ValueError(f"{typ} 需要上传 1 个视频和 1 张图片")
+    elif typ == "replace_productANDmodel":
+        if videos:
+            payload["video_local_path"] = path(videos[0])
+        model_file = next((item for item in images if str(item.get("role") or "").strip().lower() in {"model", "model_image", "person", "avatar"}), None)
+        product_file = next((item for item in images if str(item.get("role") or "").strip().lower() in {"product", "product_image", "goods"}), None)
+        leftover = [item for item in images if item is not model_file and item is not product_file]
+        if model_file is None and leftover:
+            model_file = leftover.pop(0)
+        if product_file is None and leftover:
+            product_file = leftover.pop(0)
+        if model_file is not None:
+            payload["model_image_local_path"] = path(model_file)
+        if product_file is not None:
+            payload["product_image_local_path"] = path(product_file)
+        if not videos or not payload.get("model_image_local_path") or not payload.get("product_image_local_path"):
+            raise ValueError("replace_productANDmodel 需要上传 1 个原视频、1 张模特图和 1 张商品图")
     elif typ == "image_generate":
         mode = str(payload.get("video_image_mode") or payload.get("mode") or "product_only").strip()
         supported_modes = {
@@ -3006,7 +3115,8 @@ def register_video_routes(app: Any, dependencies: VideoRouteDependencies) -> dic
         return {
             "module": MODULE_METADATA,
             "modules": VIDEO_UI_MODULE_METADATA,
-            "runtime_defaults": {key: value for key, value in VIDEO_RUNTIME_CONFIG_DEFAULTS.items() if "api_key" not in key},
+            "runtime_defaults": public_video_runtime_defaults(),
+            "speech_models": list(runninghub_speech.RUNNINGHUB_SPEECH_MODELS),
         }
 
     if "/api/video/modules" not in existing_paths:
@@ -4966,6 +5076,7 @@ __all__ = [
     "VIDEO_TASK_RUNNERS",
     "VideoRouteDependencies",
     "apply_video_runtime_defaults",
+    "public_video_runtime_defaults",
     "bind_video_cancel_event",
     "inject_video_workbench",
     "build_video_submit_payload",

@@ -200,12 +200,10 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
 
     def test_sensitive_one_time_values_are_cleared_on_all_boundaries(self):
         self.assertIn("scheduleUserPasswordResetClear", self.script)
-        self.assertIn("scheduleServiceCredentialClear", self.script)
-        self.assertIn("clearServiceCredential", self.script)
-        self.assertGreaterEqual(self.script.count("60000"), 3)
+        self.assertGreaterEqual(self.script.count("60000"), 2)
         visibility = self.script[self.script.index('document.addEventListener("visibilitychange"') :]
         self.assertIn("clearUserPasswordReset()", visibility)
-        self.assertIn("clearServiceCredential()", visibility)
+        self.assertNotIn("clearServiceCredential()", visibility)
 
     def test_user_bound_async_actions_and_security_owner_preservation(self):
         restore = self.script[self.script.index("async function restoreSelectedUserPassword") : self.script.index("async function loadSelectedUserPurgePreview")]
@@ -214,13 +212,13 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn("targetUserId", revoke)
         self.assertIn("selectedUserStillMatches", restore)
         self.assertIn("selectedUserStillMatches", revoke)
-        security = self.script[self.script.index("async function saveSecurityAlert") : self.script.index("function parseScopeInput")]
+        security = self.script[self.script.index("async function saveSecurityAlert") : self.script.index("function timestampFromLocalInput")]
         self.assertNotIn("assigned_admin_id", security)
 
     def test_recovery_code_fields_allow_non_numeric_codes(self):
         public_login = (ROOT / "static" / "assets" / "opc" / "script.js").read_text(encoding="utf-8")
         self.assertIn('name="mfa_code" inputmode="text"', public_login)
-        for field_id in ("userStepUpTotpCode", "serviceRotateTotpCode", "userPurgeTotpCode"):
+        for field_id in ("userStepUpTotpCode", "userPurgeTotpCode"):
             marker = self.html[self.html.index(f'id="{field_id}"') :]
             self.assertIn('inputmode="text"', marker.split(">", 1)[0])
 
@@ -263,6 +261,13 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('el("adminCreateStepUpPanel").hidden = !isAdmin', self.script)
 
     def test_account_governance_controls_are_present(self):
+        filter_bar = self.html[
+            self.html.index('id="adminUserFilterForm"') : self.html.index('id="btnCreateUser"')
+        ]
+        self.assertNotIn(">筛选</button>", filter_bar)
+        self.assertIn('id="btnResetUserFilters"', filter_bar)
+        self.assertIn("async function applyUserListFilters", self.script)
+        self.assertIn('select.addEventListener("change"', self.script)
         for control_id in (
             "adminUserFilterForm",
             "adminUserLifecycle",
@@ -367,6 +372,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             "btnTaskInspectClose",
             "btnRechargeClose",
             "btnUserDetailClose",
+            "btnUserBillingClose",
             "btnCloseMfaSetup",
         ):
             marker = self.html[self.html.index(f'id="{button_id}"') :]
@@ -388,6 +394,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             "taskInspectModal",
             "rechargeModal",
             "userDetailModal",
+            "userBillingModal",
         ):
             self.assertNotIn(f'el("{modal_id}")?.addEventListener("click"', self.script)
             self.assertNotIn(f'if (el("{modal_id}")) {{', self.script)
@@ -415,8 +422,10 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             self.script.index("const ADMIN_USER_ICONS")
             : self.script.index("function detailRow")
         ]
-        self.assertIn('addAction("查看", "user_detail", "detail")', user_rows)
-        self.assertIn('addAction("详情", "billing_detail", "billing"', user_rows)
+        self.assertIn('addAction("详情", "user_detail", "detail")', user_rows)
+        self.assertIn('addAction("算力", "user_billing", "billing"', user_rows)
+        self.assertNotIn('addAction("查看", "user_detail", "detail")', user_rows)
+        self.assertNotIn("billing_detail", user_rows)
         self.assertIn('addAction("删除", "archive_user", "delete"', user_rows)
         self.assertNotIn('addAction("查看详情"', user_rows)
         self.assertNotIn('addAction("计费详情"', user_rows)
@@ -447,21 +456,19 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertNotIn('setMsg("userMsg", "正在选择全部筛选结果...")', self.script)
 
     def test_governance_pages_and_step_up_fields_are_present(self):
-        for page in ("overview", "users", "taxonomy", "audit", "security", "serviceAccounts"):
+        for page in ("overview", "users", "tasks", "security"):
             self.assertIn(f'data-page="{page}"', self.html)
+        for page in ("taxonomy", "audit", "serviceAccounts"):
+            self.assertNotIn(f'data-page="{page}"', self.html)
         for field in ("userStepUpAdminPassword", "userStepUpTotpCode", "userStepUpReason"):
             self.assertIn(f'id="{field}"', self.html)
-        for field in (
-            "adminMfaCurrentPassword",
-            "serviceRotateAdminPassword",
-            "serviceRotateTotpCode",
-            "serviceRotateReason",
-        ):
-            self.assertIn(f'id="{field}"', self.html)
+        self.assertIn('id="adminMfaCurrentPassword"', self.html)
+        self.assertNotIn("setDefaultServiceAccountExpiry()", self.script)
+        self.assertNotIn("function renderTaxonomyList", self.script)
+        self.assertNotIn("function loadAuditEvents", self.script)
         self.assertIn('/api/auth/mfa/setup', self.script)
         self.assertIn('/api/auth/mfa/verify-setup', self.script)
         self.assertIn('current_password: currentPassword', self.script)
-        self.assertIn('setDefaultServiceAccountExpiry()', self.script)
 
     def test_status_semantics_and_responsive_layout_are_defined(self):
         for token in ("enabled", "pending", "rejected", "disabled", "locked", "archived", "deleted"):
@@ -587,15 +594,8 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertNotIn("markAdminDynamicUiElement(title)", security)
         self.assertNotIn("markAdminDynamicUiElement(summary)", security)
 
-        service_accounts = self.script[
-            self.script.index("function renderServiceAccounts")
-            : self.script.index("async function loadServiceAccounts")
-        ]
-        self.assertIn("markAdminDynamicUiElement(option)", service_accounts)
-        self.assertIn("markAdminDynamicUiElement(save)", service_accounts)
-        self.assertIn("markAdminDynamicUiElement(rotate)", service_accounts)
-        self.assertIn('purpose.value = String(item.purpose || "")', service_accounts)
-        self.assertIn('scopes.value = (item.allowed_scopes || []).join(", ")', service_accounts)
+        self.assertNotIn("function renderServiceAccounts", self.script)
+        self.assertNotIn("async function loadServiceAccounts", self.script)
 
         health = self.script[
             self.script.index("function renderGovernanceHealth")
@@ -608,13 +608,8 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn("description.textContent = String(detail ||", health)
         self.assertNotIn("createAdminDynamicUiText(vault.error)", health)
 
-        taxonomy = self.script[
-            self.script.index("function renderTaxonomyList")
-            : self.script.index("async function loadTaxonomyWorkspace")
-        ]
-        self.assertIn("markAdminDynamicUiElement(option)", taxonomy)
-        self.assertIn('createAdminDynamicUiText("位客户")', taxonomy)
-        self.assertNotIn("markAdminDynamicUiElement(name)", taxonomy)
+        self.assertNotIn("function renderTaxonomyList", self.script)
+        self.assertNotIn("function loadTaxonomyWorkspace", self.script)
 
     def test_overview_notification_queue_is_removed_at_code_level(self):
         for token in (

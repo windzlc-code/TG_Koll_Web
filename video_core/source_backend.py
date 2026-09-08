@@ -19,7 +19,7 @@ import requests
 from .contracts import VideoDependencyError, VideoTaskCancelled, VideoTaskContext
 from . import digital_human_audio_postprocess, digital_human_image_quality, digital_human_join_cleanup, digital_human_pipeline, digital_human_subtitles, digital_human_views, ecommerce_ad_prompting, ecommerce_animation_redraw, ecommerce_material_intelligence, ecommerce_reference_video, ecommerce_seeding_dynamic, ecommerce_seeding_renderer, ecommerce_segment_audio, ecommerce_segment_continuity, image_generate_dispatch, image_mode_prompts, language_voice_pipeline, replacement_pipeline, runninghub_image_models
 from .source import create_video as source_create_video
-from .source import commerce_video_generator, image_model_api, runninghub_common
+from .source import commerce_video_generator, image_model_api, runninghub_common, runninghub_speech
 from .video_language_timing import build_atempo_chain, build_timed_audio_layout, normalize_chinese_tts_text, target_lines_for_segments
 
 
@@ -46,6 +46,18 @@ _IMAGE_GENERATE_MODES = {
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _tts_api_key(payload: dict[str, Any] | None) -> str:
+    source = payload or {}
+    return _text(
+        source.get("video_tts_api_key")
+        or source.get("video_runninghub_api_key")
+        or source.get("runninghub_api_key")
+        or source.get("runninghub_personal_api_key")
+        or source.get("runninghub_enterprise_api_key")
+        or source.get("minimax_api_key")
+    )
 
 
 def _number(value: Any, default: float = 0.0) -> float:
@@ -1907,7 +1919,12 @@ class ArchivedSourceBackend:
         resume_runninghub_task_id = _text(segment_payload.pop("resume_runninghub_task_id", ""))
         segment_payload.setdefault("audio_speed", 1.08)
         cached_voice_id = _text(payload.get("_digital_human_cloned_voice_id"))
-        if not cached_voice_id and _text(payload.get("audio_local_path") or payload.get("voice_audio_local_path")):
+        tts_provider = _text(payload.get("video_tts_provider") or "runninghub").lower()
+        if (
+            not cached_voice_id
+            and tts_provider == "minimax"
+            and _text(payload.get("audio_local_path") or payload.get("voice_audio_local_path"))
+        ):
             prepared = language_voice_pipeline.prepare_language_voice_settings(payload, context, workdir)
             cached_voice_id = _text(prepared.get("cloned_voice_id"))
             if cached_voice_id:
@@ -2735,12 +2752,7 @@ class ArchivedSourceBackend:
         payload: dict[str, Any],
         context: VideoTaskContext,
     ) -> dict[str, Any]:
-        """Retain the archived hidden combined replacement capability.
-
-        It intentionally stays outside ``VIDEO_TASK_TYPES`` and the public
-        navigation, but internal callers can execute the original two-subject
-        chain through ``ArchivedSourceBackend.run_task``.
-        """
+        """Run the archived combined model-and-product replacement chain."""
 
         return replacement_pipeline.run_replacement_pipeline(
             self,
@@ -3096,7 +3108,7 @@ class ArchivedSourceBackend:
             )
 
         operation = _text(payload.get("ecommerce_seeding_operation") or "final_video").lower()
-        tts_configured = bool(_text(payload.get("video_tts_api_key") or payload.get("minimax_api_key")))
+        tts_configured = bool(_tts_api_key(payload))
         dynamic_enabled_value = payload.get("_ecommerce_seeding_dynamic_enabled")
         if dynamic_enabled_value is None:
             dynamic_enabled_value = payload.get("ecommerce_seeding_dynamic_enabled")
@@ -3283,7 +3295,7 @@ class ArchivedSourceBackend:
 
         final_path = Path(str(rendered["video_path"])).resolve()
         audio_path_text = _text(payload.get("audio_local_path") or payload.get("voice_audio_local_path"))
-        if not dynamic_rendered and not audio_path_text and speech_text and _text(payload.get("video_tts_api_key") or payload.get("minimax_api_key")):
+        if not dynamic_rendered and not audio_path_text and speech_text and _tts_api_key(payload):
             audio_path_text = str(
                 self._generate_minimax_tts(
                     speech_text=speech_text,
@@ -3936,49 +3948,36 @@ class ArchivedSourceBackend:
         text = _text(speech_text)
         if not text:
             raise RuntimeError("缺少 TTS 文本")
-        api_key = _text(payload.get("video_tts_api_key") or payload.get("minimax_api_key"))
+        api_key = _tts_api_key(payload)
         if not api_key:
             raise VideoDependencyError("缺少 video_tts_api_key，且未上传音频")
-        base_url = _text(payload.get("video_tts_base_url") or payload.get("minimax_base_url") or "https://api.minimaxi.com").rstrip("/")
-        model = _text(payload.get("video_tts_model") or payload.get("minimax_tts_model") or "speech-2.8-hd")
-        voice_id = _text(
+        model = runninghub_speech.normalize_speech_model(
+            payload.get("video_tts_model") or payload.get("minimax_tts_model")
+        )
+        voice_id = runninghub_speech.normalize_speech_voice(
             payload.get("voice_id")
             or payload.get("video_default_voice_id")
             or payload.get("minimax_tts_voice_id")
-            or "male-qn-qingse"
         )
-        body = {
-            "model": model,
-            "text": text,
-            "stream": False,
-            "voice_setting": {
-                "voice_id": voice_id,
-                "speed": _number(payload.get("audio_speed"), 1.0),
-                "vol": _number(payload.get("audio_volume"), 1.0),
-                "pitch": _integer(payload.get("audio_pitch"), 0),
-                "emotion": _text(payload.get("emotion") or "neutral"),
-            },
-            "audio_setting": {"sample_rate": 32000, "bitrate": 128000, "format": "mp3", "channel": 1},
-            "language_boost": _text(payload.get("target_language") or payload.get("language") or "auto"),
-        }
-        context.check_cancelled()
-        response = self.http.post(
-            f"{base_url}/v1/t2a_v2",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json=body,
-            timeout=180,
+        base_url = runninghub_speech.speech_base_url(
+            payload.get("video_tts_base_url") or payload.get("minimax_base_url"),
+            fallback=self._base_url(payload),
         )
-        response.raise_for_status()
-        data = response.json()
-        base_resp = data.get("base_resp") if isinstance(data, dict) else None
-        if isinstance(base_resp, dict) and int(base_resp.get("status_code") or 0) != 0:
-            raise RuntimeError(f"MiniMax TTS 返回错误: {json.dumps(base_resp, ensure_ascii=False)[:600]}")
-        audio_hex = _text((data.get("data") or {}).get("audio") if isinstance(data, dict) and isinstance(data.get("data"), dict) else "")
-        if not audio_hex:
-            raise RuntimeError("MiniMax TTS 未返回 audio")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(bytes.fromhex(audio_hex))
-        return output_path
+        return runninghub_speech.generate_text_to_audio(
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+            text=text,
+            output_path=output_path,
+            voice_id=voice_id,
+            speed=_number(payload.get("audio_speed"), 1.0),
+            volume=_number(payload.get("audio_volume"), 1.0),
+            pitch=_integer(payload.get("audio_pitch"), 0),
+            emotion=_text(payload.get("emotion") or "happy"),
+            timeout_seconds=min(max(_integer(payload.get("video_task_timeout_seconds"), 180), 30), 600),
+            poll_interval_seconds=max(_number(payload.get("video_poll_interval_seconds"), 2.0), 0.25),
+            check_cancelled=context.check_cancelled,
+        )
 
     def video_language_replace(self, *, task_id: str, payload: dict[str, Any], context: VideoTaskContext) -> dict[str, Any]:
         payload = dict(payload or {})

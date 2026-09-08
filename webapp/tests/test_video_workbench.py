@@ -124,6 +124,7 @@ class VideoWorkbenchTests(unittest.TestCase):
             "video_language_replace",
             "replace_model",
             "replace_product",
+            "replace_productANDmodel",
             "image_generate",
         }
         self.assertEqual(set(video_workbench.VIDEO_TASK_RUNNERS), expected)
@@ -138,6 +139,7 @@ class VideoWorkbenchTests(unittest.TestCase):
             ("video_language_replace", ""): "video_language_replace",
             ("replace_model", ""): "video_subject_replace",
             ("replace_product", ""): "video_subject_replace",
+            ("replace_productANDmodel", ""): "video_subject_replace",
             ("image_generate", "product_only"): "ecommerce_image",
             ("image_generate", "model_product"): "ecommerce_image",
             ("image_generate", "subject_replace"): "subject_replace",
@@ -227,10 +229,34 @@ class VideoWorkbenchTests(unittest.TestCase):
         self.assertTrue(merged["_ecommerce_seeding_dynamic_enabled"])
         merged["ecommerce_short_video_workflow_ids"].append("mutated")
         self.assertEqual(runtime["ecommerce_short_video_workflow_ids"], ["custom-workflow"])
-        self.assertEqual(video_workbench.VIDEO_RUNTIME_CONFIG_DEFAULTS["video_tts_provider"], "minimax")
+        self.assertEqual(video_workbench.VIDEO_RUNTIME_CONFIG_DEFAULTS["video_tts_provider"], "runninghub")
         self.assertIn("video_runninghub_api_key", video_workbench.VIDEO_RUNTIME_CONFIG_DEFAULTS)
         digital_human_runtime = video_workbench.apply_video_runtime_defaults("create_video", {}, {})
         self.assertEqual(digital_human_runtime["_digital_human_view_retry_count"], 2)
+
+    def test_runtime_defaults_preserve_telegram_image_modes_across_legacy_smash(self):
+        from video_core.source_backend import ArchivedSourceBackend
+
+        for mode, expected_legacy in (
+            ("three_view", "single_reference"),
+            ("product_only", "single_reference"),
+            ("model_product", "dual_reference"),
+            ("subject_replace", "dual_reference"),
+            ("poster_translate", "single_reference"),
+            ("digital_human_character", "single_reference"),
+            ("scene_image", "single_reference"),
+        ):
+            merged = video_workbench.apply_video_runtime_defaults(
+                "image_generate",
+                {"mode": mode},
+                {},
+            )
+            self.assertEqual(merged["video_image_mode"], mode)
+            self.assertEqual(merged["mode"], expected_legacy)
+            smashed = dict(merged)
+            if smashed["mode"] not in {"single_reference", "dual_reference"}:
+                smashed["mode"] = "single_reference"
+            self.assertEqual(ArchivedSourceBackend._image_generate_mode(smashed), mode)
 
     def test_billing_spec_and_actual_quantity(self):
         self.assertEqual(

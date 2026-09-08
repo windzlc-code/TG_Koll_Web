@@ -28,7 +28,6 @@ class FrontendTimezoneContractTests(unittest.TestCase):
         self.assertIn("formatShanghaiDateInputValue", self._function_source(self.admin, "syncGovernanceRangeControls"))
         self.assertNotIn("getTimezoneOffset", self._function_source(self.admin, "syncGovernanceRangeControls"))
         self.assertIn("formatShanghaiDateTimeInputValue", self._function_source(self.admin, "localInputFromTimestamp"))
-        self.assertIn("formatShanghaiDateTimeInputValue", self._function_source(self.admin, "setDefaultServiceAccountExpiry"))
         self.assertIn('`${value}:00+08:00`', self._function_source(self.admin, "timestampFromLocalInput"))
 
     def test_console_date_formatters_use_shanghai_without_touching_numeric_formatting(self):

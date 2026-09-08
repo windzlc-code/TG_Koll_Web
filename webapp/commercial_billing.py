@@ -3216,7 +3216,7 @@ def list_ledger(conn: sqlite3.Connection, *, user_id: int, limit: int = 100, bef
         params.append(int(before))
     rows = conn.execute(
         f"SELECT * FROM billing_ledger WHERE {' AND '.join(clauses)} ORDER BY created_at DESC, id DESC LIMIT ?",
-        (*params, min(max(int(limit), 1), 200)),
+        (*params, min(max(int(limit), 1), 1000)),
     ).fetchall()
     return [
         {

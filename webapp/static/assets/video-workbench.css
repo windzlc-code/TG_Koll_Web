@@ -268,12 +268,19 @@
 }
 
 .video-upload-panel .video-file-field {
-  grid-template-columns: minmax(180px, 1fr) max-content;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, max-content);
   grid-template-rows: auto auto auto minmax(0, 1fr);
   align-items: start;
   min-height: 166px;
   padding: 16px;
+  overflow: visible;
   border-radius: 18px;
+}
+
+.video-upload-panel .video-file-field.has-files {
+  background: var(--video-soft);
+  border-style: dashed;
+  border-color: var(--upload-dash);
 }
 
 .video-upload-panel .video-file-field::before {
@@ -285,7 +292,7 @@
   background: color-mix(in srgb, #20b46c 12%, var(--panel-solid));
   border-radius: 999px;
   content: "选填";
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 850;
 }
 
@@ -310,7 +317,7 @@
 }
 
 .video-upload-panel .video-file-field-copy > span {
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
@@ -326,9 +333,9 @@
 }
 
 .video-upload-panel .video-file-field-action {
-  min-height: 32px;
-  padding: 6px 10px;
-  font-size: 11px;
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 13px;
 }
 
 .video-upload-panel .video-selected-files {
@@ -339,21 +346,27 @@
 .video-upload-panel .video-upload-slots {
   grid-column: 2;
   grid-row: 1 / span 4;
+  display: flex;
+  flex-wrap: wrap;
   grid-template-columns: none;
-  grid-auto-columns: 132px;
-  grid-auto-flow: column;
+  grid-auto-columns: unset;
+  grid-auto-flow: unset;
   align-self: start;
+  justify-content: flex-end;
   justify-self: end;
-  width: max-content;
+  gap: 10px;
+  width: auto;
   max-width: 100%;
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .video-upload-panel .video-upload-slots [data-video-file-slot] {
-  width: 132px;
-  height: 132px;
-  min-height: 132px;
-  border-radius: 14px;
+  flex: 0 0 120px;
+  width: 120px;
+  height: 120px;
+  min-width: 120px;
+  min-height: 120px;
+  border-radius: 12px;
 }
 
 .video-file-field.has-files {
@@ -450,34 +463,33 @@
   position: relative;
   appearance: none;
   display: grid;
+  grid-template-rows: 1fr auto;
   min-width: 0;
   min-height: 54px;
   place-items: center;
-  padding: 6px;
+  padding: 10px 8px 8px;
   overflow: hidden;
   color: var(--video-muted);
-  background: var(--panel-2);
+  background: var(--panel-solid);
   border: 1px dashed var(--upload-dash);
   border-radius: 8px;
-  font-size: 9px;
+  font-size: 13px;
   font-style: normal;
   text-align: center;
   text-overflow: ellipsis;
   cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
 }
 
-.video-upload-slots [data-video-file-slot]:hover {
+.video-upload-slots [data-video-file-slot]:hover,
+.video-upload-slots [data-video-file-slot].is-drop-target {
   color: var(--video-ink);
   background: color-mix(in srgb, var(--accent) 6%, var(--panel-solid));
   border-color: color-mix(in srgb, var(--accent) 72%, var(--line));
-  box-shadow: var(--hover-shadow), 0 10px 22px rgba(7, 31, 31, .10);
-  transform: translateY(-3px) scale(1.015);
 }
 
 .video-upload-slots [data-video-file-slot]:active {
-  box-shadow: var(--active-shadow);
-  transform: translateY(-1px) scale(.99);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel-solid));
 }
 
 .video-upload-slots [data-video-file-slot]:focus-visible {
@@ -511,8 +523,7 @@
 }
 
 .video-upload-slots [data-video-file-slot].has-preview:hover .video-upload-slot-preview {
-  filter: saturate(1.06) contrast(1.03);
-  transform: scale(1.045);
+  filter: saturate(1.04) contrast(1.02);
 }
 
 .video-upload-slot-label {
@@ -522,6 +533,10 @@
   width: 100%;
   max-width: 100%;
   overflow: hidden;
+  color: var(--video-ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -535,16 +550,20 @@
 
 .video-upload-slot-empty-icon {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 52px;
+  height: 52px;
   place-items: center;
-  color: var(--chip-ink);
-  background: var(--chip-bg);
-  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
-  border-radius: 8px;
+  color: var(--video-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
-.video-upload-slot-empty-icon .video-ui-icon { width: 15px; height: 15px; }
+.video-upload-slot-empty-icon .video-ui-icon {
+  width: 36px;
+  height: 36px;
+  stroke-width: 2.2;
+}
 
 .video-upload-slot-action {
   position: absolute;
@@ -574,9 +593,14 @@
 
 .video-upload-slots [data-video-file-slot].is-filled {
   color: var(--video-ink);
-  background: color-mix(in srgb, var(--accent) 8%, var(--panel-solid));
+  background: var(--panel-solid);
   border-style: solid;
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.video-file-field.is-drop-target {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel-solid));
 }
 
 .video-selected-files li {
@@ -1386,13 +1410,16 @@
     grid-row: auto;
   }
   .video-upload-panel .video-upload-slots {
-    grid-auto-columns: 112px;
+    justify-content: flex-start;
     justify-self: start;
     width: 100%;
+    overflow: visible;
   }
   .video-upload-panel .video-upload-slots [data-video-file-slot] {
+    flex: 0 0 112px;
     width: 112px;
     height: 112px;
+    min-width: 112px;
     min-height: 112px;
   }
   .video-form-footer {

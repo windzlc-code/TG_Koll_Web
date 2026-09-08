@@ -58,7 +58,7 @@ def main() -> None:
         assert login.ok, f"admin login failed: {login.status} {login.text()}"
 
         page.goto(
-            f"{base_url}/admin-console.html?view=video_workspace&video_module=digital_human_video",
+            f"{base_url}/admin-video.html?video_module=digital_human_video",
             wait_until="networkidle",
         )
         page.locator("#videoWorkbenchRoot .video-workbench-shell").wait_for(state="visible")
@@ -176,7 +176,6 @@ def main() -> None:
             )
             assert hero_metrics["scrollHeight"] <= hero_metrics["clientHeight"], (module_id, hero_metrics)
             query = parse_qs(urlparse(page.url).query)
-            assert query.get("view") == ["video_workspace"]
             assert query.get("video_module") == [module_id]
 
         page.locator('[data-video-module="video_subject_replace"]').first.click(force=True)
@@ -249,7 +248,7 @@ def main() -> None:
 
         page.set_viewport_size({"width": 390, "height": 844})
         page.goto(
-            f"{base_url}/admin-console.html?view=video_workspace&video_module=digital_human_video",
+            f"{base_url}/admin-video.html?video_module=digital_human_video",
             wait_until="networkidle",
         )
         page.locator("#videoWorkbenchRoot .video-workbench-shell").wait_for(state="visible")

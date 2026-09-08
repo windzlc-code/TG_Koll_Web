@@ -1243,6 +1243,32 @@ def _ensure_bundle_social_config_schema(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(bundle_social_provider_config)").fetchall()}
+    extras = (
+        ("webhook_secret_ciphertext", "TEXT NOT NULL DEFAULT ''"),
+        ("webhook_secret_fingerprint", "TEXT NOT NULL DEFAULT ''"),
+        ("homepage_overlay_enabled", "INTEGER NOT NULL DEFAULT 1"),
+        ("allow_force_refresh", "INTEGER NOT NULL DEFAULT 0"),
+        ("homepage_read_interval_hours", "INTEGER NOT NULL DEFAULT 12"),
+        ("collect_offset_hours", "INTEGER NOT NULL DEFAULT 12"),
+        ("webhook_last_event_type", "TEXT NOT NULL DEFAULT ''"),
+        ("webhook_last_event_at", "INTEGER NOT NULL DEFAULT 0"),
+        ("webhook_last_error", "TEXT NOT NULL DEFAULT ''"),
+        ("homepage_last_sync_at", "INTEGER NOT NULL DEFAULT 0"),
+        ("homepage_last_sync_message", "TEXT NOT NULL DEFAULT ''"),
+    )
+    for name, definition in extras:
+        if name not in columns:
+            conn.execute(f"ALTER TABLE bundle_social_provider_config ADD COLUMN {name} {definition}")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bundle_social_webhook_events (
+          event_key TEXT PRIMARY KEY,
+          event_type TEXT NOT NULL DEFAULT '',
+          received_at INTEGER NOT NULL
+        )
+        """
+    )
 
 
 def ensure_crm_schema(conn: sqlite3.Connection) -> None:
@@ -2471,6 +2497,26 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS telegram_trusted_users (
+              chat_id INTEGER PRIMARY KEY,
+              label TEXT NOT NULL DEFAULT '',
+              tg_username TEXT NOT NULL DEFAULT '',
+              tg_display_name TEXT NOT NULL DEFAULT '',
+              enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+              notify_busy INTEGER NOT NULL DEFAULT 1 CHECK(notify_busy IN (0, 1)),
+              notify_available INTEGER NOT NULL DEFAULT 1 CHECK(notify_available IN (0, 1)),
+              created_at REAL NOT NULL DEFAULT 0,
+              updated_at REAL NOT NULL DEFAULT 0
+            )
+            """
+        )
+        telegram_user_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(telegram_trusted_users)").fetchall()}
+        if "tg_username" not in telegram_user_columns:
+            conn.execute("ALTER TABLE telegram_trusted_users ADD COLUMN tg_username TEXT NOT NULL DEFAULT ''")
+        if "tg_display_name" not in telegram_user_columns:
+            conn.execute("ALTER TABLE telegram_trusted_users ADD COLUMN tg_display_name TEXT NOT NULL DEFAULT ''")
         from .governance import ensure_schema as ensure_governance_schema
 
         ensure_governance_schema(conn)

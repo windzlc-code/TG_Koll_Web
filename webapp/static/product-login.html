@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>__PRODUCT_PAGE_TITLE__</title>
+  <link rel="icon" type="image/png" href="/assets/opc/vecto-logo-ui-icon.png?v=20260711" />
+  <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" />
+  <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=__SITE_NAVIGATION_CSS_VERSION__" />
+  <link rel="stylesheet" href="/assets/product-login.css?v=__PRODUCT_LOGIN_CSS_VERSION__" />
+  <script defer src="/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__"></script>
+</head>
+<body class="page-auth-shell product-login-page" data-login-redirect="__PRODUCT_REDIRECT__" data-product-kind="__PRODUCT_KIND__">
+  <a class="site-skip-link" href="#productLoginForm" data-site-copy="skip">跳至主要内容</a>
+  <header class="site-header" data-header data-site-header data-site-page="__PRODUCT_KIND__-login" data-site-mode="public" data-site-auth-state="guest" data-site-variant="solid" data-i18n-skip="true">
+    <a class="brand" href="/" aria-label="Vecto 首页" data-site-home-label>
+      <span class="brand-logo-frame" aria-hidden="true"><img class="brand-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span>
+      <span class="brand-text"><span class="brand-name">Vecto</span><span class="brand-local" data-site-copy="brandLocal">维拓</span></span>
+    </a>
+    <nav class="site-nav" aria-label="站内导航" data-site-navigation>
+      <a data-site-nav-key="solution" href="/#solution"><span data-site-copy="solution">解决方案</span></a>
+      <a data-site-nav-key="console" href="/console.html" data-console-entry><span data-site-copy="console">推文工作台</span></a>
+      <a data-site-nav-key="aboutVecto" href="/about-vecto.html"><span data-site-copy="aboutVecto">了解 Vecto</span></a>
+    </nav>
+    <div class="header-actions"></div>
+  </header>
+
+  <main class="auth-shell">
+    <section class="auth-stage">
+      <div class="auth-stage-head">
+        <div class="auth-kicker">__PRODUCT_KICKER__</div>
+        <h1 class="auth-stage-title">__PRODUCT_STAGE_TITLE__</h1>
+        <p class="auth-stage-copy">__PRODUCT_STAGE_COPY__</p>
+      </div>
+      <div class="auth-stage-grid auth-stage-grid-compact">
+        <article class="auth-stage-card">
+          <div class="auth-stage-card-title">__PRODUCT_FACT_1_TITLE__</div>
+          <div class="small">__PRODUCT_FACT_1_COPY__</div>
+        </article>
+        <article class="auth-stage-card">
+          <div class="auth-stage-card-title">__PRODUCT_FACT_2_TITLE__</div>
+          <div class="small">__PRODUCT_FACT_2_COPY__</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="auth-card auth-card-product">
+      <div class="auth-card-head">
+        <h2 class="auth-title">__PRODUCT_HEADING__</h2>
+        <p class="auth-sub">__PRODUCT_COPY__</p>
+      </div>
+      <form id="productLoginForm" class="auth-form" novalidate>
+        <label for="loginUsername">电子信箱或用户名</label>
+        <input id="loginUsername" name="username" autocomplete="username" placeholder="name@example.com 或用户名" required />
+
+        <label for="loginPassword">密码</label>
+        <span class="auth-login-password-field">
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+          <button class="auth-login-password-toggle" type="button" data-login-password-toggle aria-label="显示密码" title="显示密码" aria-controls="loginPassword" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-login-eye-slash" d="M4 20L20 4"></path></svg>
+          </button>
+        </span>
+
+        <label class="auth-login-remember">
+          <input name="remember_me" type="checkbox" />
+          <span>记住账号与登录状态</span>
+        </label>
+
+        <label id="loginMfaField" hidden for="loginMfaCode">动态验证码</label>
+        <input id="loginMfaCode" name="mfa_code" inputmode="numeric" autocomplete="one-time-code" maxlength="32" hidden />
+
+        <div class="auth-submit-row">
+          <button class="primary" type="submit">__PRODUCT_SUBMIT__</button>
+        </div>
+        <div class="auth-provider-divider"><span>或</span></div>
+        <button class="product-google-button" type="button" data-google-login>
+          <img src="/assets/opc/google-g-gradient.svg" alt="" width="20" height="20" aria-hidden="true" />
+          <span>使用 Google 账号登录</span>
+        </button>
+        <button class="auth-login-takeover" type="button" data-login-takeover hidden>退出原设备并登录</button>
+        <p class="msg" id="loginStatus" role="status" aria-live="polite"></p>
+      </form>
+      <div class="auth-quick-setup">
+        <a class="btn ghost auth-quick-setup-link" href="/?register=1">还没有账号？去首页注册</a>
+      </div>
+    </section>
+  </main>
+  <script src="/assets/product-login.js?v=__PRODUCT_LOGIN_JS_VERSION__"></script>
+</body>
+</html>

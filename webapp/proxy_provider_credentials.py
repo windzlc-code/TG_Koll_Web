@@ -78,6 +78,20 @@ def _decrypt(row: Mapping[str, Any]) -> tuple[str, str, str]:
         ) from exc
 
 
+def reveal_credential(conn: sqlite3.Connection, secret_name: str) -> str:
+    name = str(secret_name or "").strip()
+    if name not in {"api_key", "api_secret", "webhook_secret"}:
+        raise ProviderCredentialError("PROVIDER_CREDENTIAL_UNKNOWN", "不允许查看", 404)
+    row = _row(conn, "active")
+    if row is None:
+        raise ProviderCredentialError("PROVIDER_CREDENTIAL_MISSING", "尚未配置", 404)
+    api_key, api_secret, webhook_secret = _decrypt(row)
+    value = {"api_key": api_key, "api_secret": api_secret, "webhook_secret": webhook_secret}[name]
+    if not str(value or "").strip():
+        raise ProviderCredentialError("PROVIDER_CREDENTIAL_MISSING", "尚未配置", 404)
+    return str(value)
+
+
 def load_credentials(conn: sqlite3.Connection) -> tuple[str, str] | None:
     row = _row(conn, "active")
     if row is None or not row["api_key_ciphertext"] or not row["api_secret_ciphertext"]:

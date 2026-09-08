@@ -721,11 +721,11 @@ function pdRenderSummary(visiblePersonas) {
   if (!host) return;
   const summary = pdVisibleSummary(visiblePersonas);
   const cards = [
-    { label: "粉丝", value: summary.follower_count, hint: "当前平台账号粉丝总数" },
+    { label: "粉丝", value: summary.follower_count, hint: "绑定账号主页粉丝，由平台授权接口每日同步" },
     { label: "帖子", value: summary.post_count, hint: "当前平台归档帖子" },
-    { label: "发布", value: summary.published_count, hint: "当前平台发布归档" },
-    { label: "互动", value: summary.total_interactions, hint: "点赞、评论、转发、分享" },
-    { label: "主页浏览", value: summary.recent_views, hint: "账号主页浏览；没有时用已发布推文浏览加总" },
+    { label: "发布", value: summary.published_count, hint: "当前平台发布归档，与已识别列表一致" },
+    { label: "互动", value: summary.total_interactions, hint: "账号主页互动，由平台授权接口每日同步" },
+    { label: "主页浏览", value: summary.recent_views, hint: "账号主页浏览，由平台授权接口每日同步；没有时用已发布推文浏览加总" },
     { label: "逐帖浏览", value: summary.post_views, hint: "逐帖浏览，不与主页浏览合并" },
     { label: "热度", value: summary.hot_score, hint: "逐帖浏览 + 点赞 + 评论 + 分享 + 转发" },
   ];
@@ -871,10 +871,10 @@ async function pdStartRefresh() {
   if (personaDashboardRefreshTask) return;
   pdSetRefreshControlState("queued", 0);
   try {
-    pdSetMsg("");
+    pdSetMsg("先同步账号主页数据，再同步帖文明细。", "ok");
     const task = await pdApi("/api/persona_dashboard/refresh", {
       method: "POST",
-      body: { archive_id: "", source: "browser" },
+      body: { archive_id: "", source: "http_first" },
     });
     personaDashboardRefreshTask = task.id;
     pdSetRefreshControlState("queued", Number(task.progress || 0));

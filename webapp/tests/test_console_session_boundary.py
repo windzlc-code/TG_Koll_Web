@@ -521,6 +521,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("data-login-assistance-choice", self.source)
         self.assertIn('kind: "choice"', self.source)
         self.assertIn("prefillUsername", view_model)
+        self.assertIn("details: String(assistance.details || \"\")", view_model)
+        self.assertIn("model.details || \"\"", update_source)
+        self.assertIn("login-assistance-content", update_source)
+        self.assertIn("loginAssistanceChoiceIsCancel", self.source)
+        self.assertIn("login-assistance-choice--confirm", self.source)
+        self.assertIn("data-login-assistance-role", self.source)
+        self.assertIn("action_role", self.source)
+        self.assertIn('"Extra inputs are not permitted": "提交内容包含多余字段，请刷新页面后重试。"', self.source)
         self.assertIn("正在自动授权", view_model)
         self.assertIn("如需验证码或选择，会显示在本页", view_model)
         self.assertIn('value="${esc(model.prefillUsername || "")}"', self._function_source("renderLoginAssistanceAction"))
@@ -663,15 +671,27 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         busy_branch = content.split("if (activeLoginTask?.id)", 1)[1].split("return `${renderBrowserLaunchIcon()}", 1)[0]
         self.assertNotIn("renderBrowserLaunchIcon()", busy_branch)
         self.assertIn('class="primary account-card-action account-card-action--login"', actions)
-        self.assertIn('${renderBrowserLaunchIcon()}<span>打开登录</span>', content)
+        self.assertIn('${renderPlusIcon()}<span>重新添加</span>', content)
+        self.assertIn('${renderNetworkIcon()}<span>重新授权</span>', content)
+        self.assertIn('title="${usesPlatformAuthorization ? "重新授权平台账号" : "旧账号需删除后重新添加"}"', actions)
+        self.assertIn('confirmText: "删除账号"', self._function_source("promptLegacyAccountReplacement"))
+        self.assertIn("openAccountPoolCreateModal", self._function_source("promptLegacyAccountReplacement"))
+        self.assertIn("promptLegacyAccountReplacement(account, messageId)", self._function_source("requestAccountOfficialAuthorization"))
+        self.assertNotIn('confirmText: "继续授权"', self._function_source("requestAccountOfficialAuthorization"))
+        self.assertNotIn("createSocialTask(\"open_login\"", self._function_source("promptLegacyAccountReplacement"))
         self.assertIn('${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span>', actions)
         self.assertIn('${renderEditIcon()}<span>编辑</span>', actions)
         self.assertIn('${renderTrashIcon()}<span>删除</span>', actions)
         self.assertIn('class="row-actions account-pool-card-actions"', actions)
         self.assertNotIn("请先绑定人设后再打开登录", actions)
         self.assertNotIn("请先绑定人设后再打开登录", create_task)
+        self.assertIn("renderAccountAuthorizationBadge(account)", self._section("function renderAccountPoolCardFields", "function renderAccountPoolCard("))
+        self.assertIn("已授权", self._javascript_function_source(self.source, "accountAuthorizationLabel"))
+        self.assertIn("未授权", self._javascript_function_source(self.source, "accountAuthorizationLabel"))
+        self.assertIn('data-account-auth-for', self._javascript_function_source(self.source, "renderAccountAuthorizationBadge"))
+        self.assertIn('[data-account-auth-for]', self._javascript_function_source(self.source, "updateAccountStatusViews"))
         self.assertNotIn("openLiveBrowserTaskView(activeTask.id)", self.source)
-        self.assertGreaterEqual(self.source.count("openLoginAssistanceView(activeTask.id, accountId)"), 3)
+        self.assertGreaterEqual(self.source.count("openLoginAssistanceView(activeTask.id"), 2)
         self.assertGreaterEqual(self.source.count("openLoginAssistanceView(taskId, accountId)"), 3)
 
     def test_account_card_exposes_continue_login_for_any_active_login_task(self):
@@ -680,11 +700,17 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
         self.assertIn('data-account-login-resume="true"', fields)
         self.assertIn("继续登录", fields)
+        self.assertIn("account-pool-card-flag-row", fields)
+        self.assertLess(fields.index("account-pool-card-flags"), fields.index("account-pool-card-continue-login"))
+        self.assertLess(fields.index("account-pool-card-flag-row"), fields.index("account-pool-card-continue-login"))
         self.assertIn("Boolean(activeLoginTask?.id)", update)
         self.assertNotIn('=== "need_manual"', update)
         self.assertIn("Boolean(activeLoginTask?.id)", fields)
         self.assertIn("renderBrowserLaunchIcon()", update)
         self.assertIn("continue-login", self.styles)
+        self.assertIn(".account-pool-card-flag-row {", self.styles)
+        self.assertIn('"username username username username flags"', self.styles)
+        self.assertNotIn('"check platform copy resume status"', self.styles)
         continue_login_styles = self.styles.split(".account-pool-card-continue-login {", 1)[1].split(
             ".account-pool-card-continue-login[hidden]", 1
         )[0]
@@ -755,11 +781,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('button.querySelector("[data-account-proxy-label]")', update_status)
         self.assertNotIn('button.textContent = String(account.proxy_id', update_status)
         self.assertIn(".account-pool-card-actions {", self.styles)
-        self.assertIn("grid-template-columns: minmax(96px, 96px) repeat(3, max-content);", action_styles)
+        self.assertIn("grid-template-columns: minmax(112px, 112px) repeat(3, max-content);", action_styles)
         self.assertNotIn("grid-template-columns: repeat(3, minmax(0, 1fr));", action_styles)
         self.assertIn(".account-card-action--login {", action_styles)
         self.assertIn("grid-column: span 1;", action_styles)
-        self.assertIn("min-width: 96px;", action_styles)
+        self.assertIn("min-width: 112px;", action_styles)
         self.assertIn("min-height: 26px;", action_styles)
         self.assertIn("padding: 2px 6px;", action_styles)
         self.assertIn("font-size: 11px;", action_styles)
@@ -788,7 +814,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("updateAccountOpenLoginButton(button, accountId)", account_status)
         self.assertIn("activeOpenLoginTaskForAccount(accountId)", button_sync)
         self.assertIn("delete button.dataset.openLoginTaskId", button_sync)
-        self.assertIn("renderBrowserLaunchIcon()", button_content)
+        self.assertIn("renderPlusIcon()", button_content)
         self.assertNotIn("renderSocialAccounts()", account_status)
 
         harness = textwrap.dedent(
@@ -797,6 +823,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const state = {{ socialTasks: [{{ id: "login-1", account_id: "account-1", task_type: "open_login", status: "running", started_at: 100 }}] }};
             const renderBusyButtonContent = (label) => `<span class="task-button-busy">${{label}}</span>`;
             const renderBrowserLaunchIcon = () => `<svg class="browser-icon"></svg>`;
+            const renderNetworkIcon = () => `<svg class="network-icon"></svg>`;
+            const renderPlusIcon = () => `<svg class="plus-icon"></svg>`;
+            let currentAccount = null;
+            function accountById() {{ return currentAccount; }}
+            function accountIsOfficiallyAuthorized(account = null) {{
+              return String(account?.auth_provider || "browser").trim().toLowerCase() === "bundle";
+            }}
             {active_login}
             {button_content}
             {button_sync}
@@ -804,6 +837,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const button = {{
               dataset: {{ socialOpenLogin: "account-1" }},
               innerHTML: "",
+              title: "",
               setAttribute(name, value) {{ attributes[name] = value; }},
               removeAttribute(name) {{ delete attributes[name]; }},
             }};
@@ -814,11 +848,19 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             assert.equal(attributes["aria-busy"], "true");
 
             state.socialTasks[0].status = "success";
+            currentAccount = {{ auth_provider: "browser" }};
             updateAccountOpenLoginButton(button, "account-1");
-            assert.match(button.innerHTML, /browser-icon/);
-            assert.match(button.innerHTML, /打开登录/);
+            assert.match(button.innerHTML, /plus-icon/);
+            assert.match(button.innerHTML, /重新添加/);
+            assert.equal(button.title, "旧账号需删除后重新添加");
             assert.equal(button.dataset.openLoginTaskId, undefined);
             assert.equal(attributes["aria-busy"], undefined);
+
+            currentAccount = {{ auth_provider: "bundle" }};
+            updateAccountOpenLoginButton(button, "account-1");
+            assert.match(button.innerHTML, /network-icon/);
+            assert.match(button.innerHTML, /重新授权/);
+            assert.equal(button.title, "重新授权平台账号");
             """
         )
         self._run_node(harness)
@@ -1410,7 +1452,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
 
             assert.strictEqual(handleSessionBoundary(401), true);
             assert.strictEqual(cleared, 1);
-            assert.strictEqual(target, "/?login=1&return_url=%2Fconsole.html");
+            assert.strictEqual(target, "/console-login.html?return_url=%2Fconsole.html");
 
             consoleBoundaryNavigationActive = false;
             target = "";
@@ -1518,28 +1560,120 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("return isPublishPlatformAccount(account)", submit_guard)
         self.assertIn('status === "disabled"', retry_guard)
         self.assertIn('healthStatus === "banned"', retry_guard)
-        self.assertIn('confirmText: account ? "继续执行" : "绑定账号"', binding_prompt)
-        self.assertIn("if (account) return account", binding_prompt)
+        self.assertIn('confirmText: "继续执行"', binding_prompt)
+        self.assertIn('confirmText: "去我的人设"', binding_prompt)
+        self.assertIn("publishAccountRequiresExecutionConfirmation(requestedAccount)", binding_prompt)
+        self.assertIn("openPersonaAccountBindingWorkspace(persona, wantedPlatform)", binding_prompt)
+        self.assertNotIn("openPersonaAccountPoolPickerModal(persona, wantedPlatform)", binding_prompt)
+        self.assertNotIn("requestedAccount || publishAccountForPersona(persona)", binding_prompt)
         self.assertIn("await promptPersonaAccountBinding(persona, account)", direct_publish)
         self.assertIn("await promptPersonaAccountBinding(persona, account)", content_publish)
         self.assertIn("await promptPersonaAccountBinding(taskPersona, selected)", custom_publish)
+        self.assertIn("promptPersonaAccountBinding(persona, null, missing[0]", self.source)
+        self.assertIn('state.activeModule = "personas"', self._function_source("openPersonaAccountBindingWorkspace"))
+        self.assertNotIn("setPersonaContentPlatform(wantedPlatform, persona)", self._function_source("openPersonaAccountBindingWorkspace"))
+        self.assertIn("setPersonaContentPlatform(next, persona)", self._function_source("stagePersonaAccountPlatformSelection"))
+        self.assertIn("interactiveAccountPlatforms: false", self.source)
+        self.assertIn("data-persona-content-platform-static", self._function_source("renderPersonaExecutionAccountBadge"))
+        self.assertIn("is-static", self._function_source("renderPersonaExecutionAccountBadge"))
+        self.assertNotIn('if (node.dataset.publishDestinationBound !== "true")', self.source)
+        self.assertNotIn('aria-disabled="${enabled ? "false" : "true"}"', self._function_source("renderPublishDestinationPicker"))
+        destination_click = self.source[
+            self.source.index('document.querySelectorAll("[data-publish-destination]")'):
+            self.source.index('document.querySelectorAll("[data-publish-content-source]")')
+        ]
+        self.assertIn("selectPublishLibraryPlatform(persona, platform)", destination_click)
+        self.assertNotIn("promptPersonaAccountBinding", destination_click)
+        self.assertIn("setPersonaContentPlatform(wanted, persona)", self._function_source("selectPublishLibraryPlatform"))
+        self.assertIn("persona-platform-hot-badge", self._function_source("renderPublishDestinationPicker"))
+        self.assertIn("jobs.length <= 1 && totalPosts <= 1", self._function_source("confirmPublishDestinations"))
+        self.assertIn("publishQueuedSelectionCount", self.source)
+        content_platform_click = self.source[
+            self.source.index('const contentPlatformButton = event.target.closest("[data-persona-content-platform]")'):
+            self.source.index('const contentTabButton = event.target.closest("[data-persona-content-tab]")')
+        ]
+        self.assertIn('state.activeModule === "publishing"', content_platform_click)
+        self.assertIn('personaContentPlatformStatic === "true"', content_platform_click)
         self._run_node(textwrap.dedent(f"""
             const assert = require("node:assert/strict");
             const account = {{ id: "account-disabled", status: "disabled", platform: "threads" }};
             let modalOptions = null;
-            let managementOpened = false;
+            let workspacePlatform = "";
             function selectedPersona() {{ return {{ id: "persona-1" }}; }}
-            function publishAccountForPersona() {{ return account; }}
+            function platformLabel(platform) {{ return platform === "instagram" ? "Instagram" : "Threads"; }}
+            function publishAccountRequiresExecutionConfirmation(item) {{
+              return String(item?.status || "") === "disabled";
+            }}
             function publishAccountBlockMessage() {{ return "账号封控状态仍可继续执行"; }}
             async function openConsoleModal(options) {{ modalOptions = options; return true; }}
-            async function openPersonaAccountBindingPage() {{ managementOpened = true; return true; }}
+            function openPersonaAccountBindingWorkspace(_persona, platform) {{
+              workspacePlatform = String(platform || "");
+              return true;
+            }}
             async {binding_prompt}
             (async () => {{
-              const result = await promptPersonaAccountBinding(selectedPersona(), account);
-              assert.equal(result, account);
+              const continued = await promptPersonaAccountBinding(selectedPersona(), account);
+              assert.equal(continued, account);
               assert.equal(modalOptions.confirmText, "继续执行");
-              assert.equal(managementOpened, false);
+              modalOptions = null;
+              const bound = await promptPersonaAccountBinding(selectedPersona(), null, "instagram");
+              assert.equal(bound, true);
+              assert.equal(modalOptions.confirmText, "去我的人设");
+              assert.match(modalOptions.message, /Instagram/);
+              assert.match(modalOptions.message, /我的人设/);
+              assert.equal(workspacePlatform, "instagram");
             }})().catch((error) => {{ console.error(error); process.exit(1); }});
+        """))
+        self._run_node(textwrap.dedent(f"""
+            const assert = require("node:assert/strict");
+            const state = {{
+              personaAutomationPlatform: "threads",
+              preferredAccountId: "acc-1",
+              personaContentPlatforms: {{ "persona-1": "threads" }},
+              publishDestinationPlatforms: {{}},
+              personaPublishAccountIds: {{}},
+              publishSelectedPostIds: {{}},
+              publishContentSource: "posts",
+              socialDataLoadedAt: Date.now(),
+            }};
+            function clearAccountPasswordRevealState() {{}}
+            function syncPersonaAccountPlatformTabs() {{}}
+            function normalizePersonaContentPlatform(value) {{
+              return String(value || "").trim().toLowerCase() === "instagram" ? "instagram" : "threads";
+            }}
+            function publishPlatformAccountsForPersona() {{
+              return [{{ id: "th-1", platform: "threads" }}];
+            }}
+            function preferredPublishAccount(accounts) {{ return accounts[0] || null; }}
+            {self._function_source("stagePersonaAccountPlatformSelection")}
+            {self._function_source("normalizePublishDestinationPlatforms")}
+            {self._function_source("personaKnownPublishPlatforms")}
+            {self._function_source("availablePublishDestinationPlatforms")}
+            {self._function_source("choosablePublishDestinationPlatforms")}
+            {self._function_source("publishAccountForPlatform")}
+            function personaContentPlatform(persona) {{
+              return normalizePersonaContentPlatform(state.personaContentPlatforms[String(persona?.id || "")] || "threads");
+            }}
+            function setPersonaContentPlatform(platform, persona) {{
+              state.personaContentPlatforms[String(persona?.id || "")] = normalizePersonaContentPlatform(platform);
+            }}
+            function normalizePublishContentSource(source) {{
+              const key = String(source || state.publishContentSource || "posts").trim();
+              if (key === "custom") return "custom";
+              if (key === "favorites") return "favorites";
+              return "posts";
+            }}
+            {self._function_source("publishSelectionKey")}
+            {self._function_source("selectPublishLibraryPlatform")}
+            const persona = {{ id: "persona-1" }};
+            state.publishSelectedPostIds = {{ "persona-1::threads::posts": ["t1"] }};
+            state.publishContentSource = "posts";
+            stagePersonaAccountPlatformSelection(persona, "instagram");
+            assert.equal(state.personaAutomationPlatform, "instagram");
+            assert.equal(state.personaContentPlatforms["persona-1"], "instagram");
+            assert.equal(selectPublishLibraryPlatform(persona, "instagram"), "instagram");
+            assert.equal(state.personaContentPlatforms["persona-1"], "instagram");
+            assert.deepStrictEqual(state.publishSelectedPostIds["persona-1::threads::posts"], ["t1"]);
         """))
 
     def test_effective_account_status_has_deterministic_precedence(self):
@@ -1583,15 +1717,171 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("refreshLiveBrowserSessionsSoon(taskId, 40, 500)", self._function_source("submitPersonaPublishTask"))
         self.assertIn("refreshLiveBrowserSessionsSoon(String(task.id), 40, 500)", self._function_source("submitPublishContentTasks"))
         self.assertIn("openPublishAssistanceView(taskId, { accountId: account.id, personaId: persona.id })", self._function_source("submitPersonaPublishTask"))
-        self.assertIn("openPublishAssistanceView(immediateTaskId, { accountId })", self._function_source("executeSimpleFlow"))
+        self.assertIn("openPublishAssistanceView(immediateTaskId, { accountId: assistanceAccountId })", self._function_source("executeSimpleFlow"))
+        self.assertIn("平台授权接口", self._function_source("executeSimpleFlow"))
         self.assertIn("openPublishAssistanceView(firstImmediateTaskId)", self._function_source("submitMatrixPublishTask"))
         self.assertIn("function openPublishAssistanceView", self.source)
+        self.assertIn("taskUsesPlatformPublishApi", self.source)
+        self.assertIn("正在通过平台授权接口提交内容。", self._function_source("publishAssistanceProgressCopy"))
+        self.assertNotIn("正在连接指纹浏览器，请稍候。", self._function_source("publishAssistanceViewModel"))
+        self.assertIn("account_id: accountId || existingTask.account_id", self._function_source("openTaskAssistanceView"))
         self.assertIn('data-login-assistance-accept', self.source)
         self.assertIn('kind: "takeover"', self._function_source("publishAssistanceViewModel"))
         picker = self._function_source("choosePublishPlatformAccount")
-        self.assertIn("confirmOnPlatformSelect = true", picker)
-        self.assertIn('modal.querySelector("[data-console-modal-confirm]")?.click()', picker)
-        self.assertIn("点击发布平台后会立即开始执行", picker)
+        self.assertIn("confirmOnPlatformSelect = false", picker)
+        self.assertNotIn("点击发布平台后会立即开始执行", picker)
+        preflight = self._function_source("preflightSimpleFlowExecution")
+        self.assertIn("confirmPublishDestinations", preflight)
+        self.assertNotIn("choosePublishPlatformAccount", preflight)
+        self.assertIn("renderPublishDestinationPicker", self._function_source("renderPublishContentPanel"))
+        self.assertIn("data-publish-destination", self._function_source("renderPublishDestinationPicker"))
+        confirm = self._function_source("confirmPublishDestinations")
+        self.assertIn('title: "确认发布"', confirm)
+        self.assertIn('confirmText: "确定发布"', confirm)
+        self.assertIn("请确认本次发布的平台和注意事项。", confirm)
+        self.assertIn("需附带图片或视频", self._function_source("publishPlatformRequirementHint"))
+        self.assertIn("可发纯文本", self._function_source("publishPlatformRequirementHint"))
+        self.assertNotIn("正文最多2200字", self._function_source("publishPlatformRequirementHint"))
+        self.assertNotIn("正文最多500字，宽超1440px会自动压缩", self._function_source("publishPlatformRequirementHint"))
+        self.assertIn("0.05", self._function_source("publishTextOverLimitTolerance"))
+        self.assertIn("确定改写", self._function_source("confirmRewriteOverlimitText"))
+        self.assertIn("和原文长度会有差异", self._function_source("confirmRewriteOverlimitText"))
+        self.assertIn("rewriteTextToPlatformLimit", self._function_source("submitPublishContentTasks"))
+        self.assertIn("publishTextNeedsOverLimitPrompt", self._function_source("submitPublishContentTasks"))
+        self.assertIn("publishTextNeedsPlatformFit", self._function_source("submitPublishContentTasks"))
+        self.assertIn("rewriteTextToPlatformLimit", self._function_source("createSocialTask"))
+        self.assertIn("publishTextNeedsOverLimitPrompt", self._function_source("createSocialTask"))
+        self.assertIn("publishTextNeedsPlatformFit", self._function_source("createSocialTask"))
+        self.assertIn('if (normalizePublishContentSource(source) === "custom") return 0;', self._function_source("publishQueuedSelectionCount"))
+        self.assertIn("data-publish-custom-limit", self._function_source("renderPublishContentPreview"))
+        self.assertIn("publish-content-preview--custom", self._function_source("renderPublishContentPreview"))
+        self.assertIn("无法继续输入", self._function_source("publishCustomContentLimitHint"))
+        self.assertIn("applyPublishCustomContentLimit", self._function_source("bindSimpleFlowInputs"))
+        self.assertIn("compositionend", self._function_source("bindSimpleFlowInputs"))
+        self.assertNotIn("需绑定账号", self._function_source("publishPlatformRequirementHint"))
+        self.assertIn("task?.error || assistance.message", self._function_source("publishAssistanceViewModel"))
+        self.assertIn("超限图片会自动处理成平台要求的尺寸", self._function_source("publishPlatformHint"))
+        self.assertIn("publishDestinationMediaGapHint", confirm)
+        self.assertIn("requestedAccountId", self._function_source("submitPublishContentTasks"))
+        self.assertIn("publishPlatformAccountsForPersona(persona).find", self._function_source("submitPublishContentTasks"))
+        execute = self._function_source("executeSimpleFlow")
+        self.assertIn('publishSource === "custom"', execute)
+        self.assertIn('createSocialTask("publish_post"', execute)
+        picker_html = self._function_source("renderPublishDestinationPicker")
+        self.assertIn("account-pool-platforms account-pool-platform-tabs publish-destination-platform-tabs", picker_html)
+        self.assertIn("<strong>${esc(label)}</strong>", picker_html)
+        self.assertNotIn("切换查看对应草稿库，已选篇数会显示在选项卡上", picker_html)
+        self.assertIn("<strong>发布平台</strong>", picker_html)
+        self.assertIn("<span>${esc(hintText)}</span>", picker_html)
+        self.assertNotIn("publish-destination-hint", picker_html)
+        self.assertNotIn("可多选，选中的平台会一起发布", picker_html)
+        self.assertNotIn("automation-capsule-tabs", picker_html)
+        self.assertIn("personaKnownPublishPlatforms", self.source)
+        self.assertIn("尚未绑定", self._function_source("publishDestinationUnboundHint"))
+        self.assertIn("正在同步账号", self._function_source("publishDestinationPickerHint"))
+        self.assertIn("publishPlatformRequirementHint(current)", self._function_source("publishDestinationPickerHint"))
+        self.assertNotIn("unbound && requirement", self._function_source("publishDestinationPickerHint"))
+        self.assertIn("bound_platforms", self.source)
+        self.assertIn(".publish-destination-picker > .publish-panel-head span", self.styles)
+        self.assertIn(".publish-destination-platform-tabs", self.styles)
+        destination_picker = self.styles.split(".publish-destination-picker {", 1)[1].split("}", 1)[0]
+        self.assertIn("border-bottom: 1px solid var(--line)", destination_picker)
+        self.assertIn("padding-bottom: 12px", destination_picker)
+        self.assertIn(".account-pool-platform-tabs > button:not(.is-active)", self.styles)
+        self.assertIn(".publish-platform-picker-tabs > button:not(.is-active)", self.styles)
+        self.assertIn('[data-publish-destination="threads"]', self.styles)
+        confirm = self._function_source("confirmPublishDestinations")
+        self.assertIn("account-pool-platform-tabs publish-destination-platform-tabs", confirm)
+        self.assertIn("personaPublishPostsForPlatform(persona, source, platform)", self._function_source("submitPublishContentTasks"))
+        model = self._function_source("publishAssistanceViewModel")
+        self.assertIn("可查看发布链接", model)
+        self.assertIn("screenshotUrl", model)
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const state = {{
+              publishDestinationPlatforms: {{}},
+              personaPublishAccountIds: {{}},
+              personaContentPlatforms: {{}},
+              publishSelectedPostIds: {{}},
+              publishContentSource: "posts",
+              personaDraftPosts: {{
+                p1: [
+                  {{ id: "t1", platform: "threads" }},
+                  {{ id: "i1", platform: "instagram" }},
+                ],
+              }},
+              personaFavoritePosts: {{}},
+            }};
+            function publishPlatformAccountsForPersona() {{
+              return [
+                {{ id: "th-1", platform: "threads" }},
+                {{ id: "ig-1", platform: "instagram" }},
+              ];
+            }}
+            function preferredPublishAccount(accounts) {{ return accounts[0] || null; }}
+            function normalizePersonaContentPlatform(value) {{
+              return String(value || "").trim().toLowerCase() === "instagram" ? "instagram" : "threads";
+            }}
+            function personaContentPlatform(persona) {{
+              return normalizePersonaContentPlatform(state.personaContentPlatforms[String(persona?.id || "")] || "threads");
+            }}
+            function setPersonaContentPlatform(platform, persona) {{
+              state.personaContentPlatforms[String(persona?.id || "")] = normalizePersonaContentPlatform(platform);
+            }}
+            function personaPostContentPlatform(post) {{
+              return normalizePersonaContentPlatform(post?.platform || "threads");
+            }}
+            function visiblePersonaDraftPosts(rows) {{ return Array.isArray(rows) ? rows : []; }}
+            function normalizePublishContentSource(source) {{
+              const key = String(source || state.publishContentSource || "posts").trim();
+              if (key === "custom") return "custom";
+              if (key === "favorites") return "favorites";
+              return "posts";
+            }}
+            {self._function_source("normalizePublishDestinationPlatforms")}
+            {self._function_source("choosablePublishDestinationPlatforms")}
+            {self._function_source("publishAccountForPlatform")}
+            {self._function_source("publishSelectionKey")}
+            {self._function_source("personaPublishPostsForPlatform")}
+            {self._function_source("publishSelectedIdsForPlatform")}
+            {self._function_source("publishSelectedCountForPlatform")}
+            {self._function_source("publishQueuedJobs")}
+            {self._function_source("publishQueuedSelectionCount")}
+            {self._function_source("publishDestinationPlatforms")}
+            {self._function_source("selectPublishLibraryPlatform")}
+            const persona = {{ id: "p1" }};
+            assert.deepStrictEqual(publishDestinationPlatforms(persona), ["threads"]);
+            state.publishSelectedPostIds["p1::threads::posts"] = ["t1"];
+            assert.deepStrictEqual(publishDestinationPlatforms(persona), ["threads"]);
+            assert.equal(publishSelectedCountForPlatform(persona, "threads"), 1);
+            assert.equal(publishSelectedCountForPlatform(persona, "instagram"), 0);
+            assert.equal(selectPublishLibraryPlatform(persona, "instagram"), "instagram");
+            assert.equal(personaContentPlatform(persona), "instagram");
+            assert.deepStrictEqual(state.publishSelectedPostIds["p1::threads::posts"], ["t1"]);
+            assert.deepStrictEqual(state.publishSelectedPostIds["p1::instagram::posts"], []);
+            state.publishSelectedPostIds["p1::instagram::posts"] = ["i1"];
+            assert.deepStrictEqual(publishDestinationPlatforms(persona), ["threads", "instagram"]);
+            assert.equal(publishQueuedSelectionCount(persona), 2);
+            state.publishContentSource = "custom";
+            assert.equal(publishQueuedSelectionCount(persona), 0);
+            state.publishContentSource = "posts";
+            const unbound = selectPublishLibraryPlatform({{ id: "p3" }}, "instagram");
+            assert.equal(unbound, "instagram");
+            """
+        )
+        self._run_node(harness)
+        self._run_node(textwrap.dedent(f"""
+            const assert = require("node:assert/strict");
+            {self._function_source("publishTextLength")}
+            {self._function_source("clampPublishTextToPlatformLimit")}
+            assert.equal(clampPublishTextToPlatformLimit("x".repeat(500), 500), "x".repeat(500));
+            assert.equal(clampPublishTextToPlatformLimit("x".repeat(526), 500), "x".repeat(500));
+            assert.equal(clampPublishTextToPlatformLimit("hello", 500), "hello");
+            assert.equal(Array.from(clampPublishTextToPlatformLimit("😀".repeat(10), 5)).length, 5);
+            assert.equal(clampPublishTextToPlatformLimit("x".repeat(2300), 2200).length, 2200);
+            """
+        ))
         self.assertIn("function restorePublishAssistanceView", self.source)
         self.assertIn("function hidePublishAssistanceRestore", self.source)
         self.assertNotIn("function publishAssistanceTrackedTask", self.source)
@@ -1639,6 +1929,10 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             const assert = require("assert");
             const state = {{ socialAccounts: [] }};
             function selectedSocialAccount() {{ return {{}}; }}
+            function accountById() {{ return null; }}
+            function accountIsOfficiallyAuthorized(account) {{
+              return String(account && account.auth_provider || "").trim().toLowerCase() === "bundle";
+            }}
             function adminWorkspaceUrl(value) {{ return String(value || ""); }}
             function adminWorkspacePageUrl(value) {{ return String(value || ""); }}
             function directMediaPreviewUrl(value) {{ return String(value || "").trim(); }}
@@ -1649,10 +1943,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             {self._function_source("latestSocialTaskScreenshot")}
             {self._function_source("loginAssistanceTaskStatus")}
             {self._function_source("taskAssistancePayload")}
+            {self._function_source("taskUsesPlatformPublishApi")}
+            {self._function_source("publishAssistanceProgressCopy")}
             {self._function_source("loginAssistanceViewModel")}
             {self._function_source("publishAssistanceViewModel")}
             {self._function_source("taskAssistanceViewModel")}
             {self._function_source("loginAssistanceMappedInputAllowed")}
+            {self._function_source("loginAssistanceChoiceIsCancel")}
             {self._function_source("renderLoginAssistanceChoices")}
             {self._function_source("renderLoginAssistanceAction")}
             {self._function_source("renderTaskAssistanceDetails")}
@@ -1746,6 +2043,14 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             );
             assert.strictEqual(timeout.phase, "error");
             assert.ok(String(timeout.message).includes("超过"));
+
+            const apiProgress = publishAssistanceViewModel(
+              {{ task_type: "publish_post", status: "running", account_id: "acc-bundle", account_auth_provider: "bundle" }},
+              null,
+            );
+            assert.strictEqual(apiProgress.title, "正在发布");
+            assert.ok(String(apiProgress.message).includes("平台授权接口"));
+            assert.ok(!String(apiProgress.message).includes("指纹浏览器"));
             """
         )
         self._run_node(harness)
@@ -1768,9 +2073,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function loginAssistanceMappedInputAllowed() {{ return false; }}
             function renderLoginAssistanceVisual() {{ return ""; }}
             function renderTaskAssistanceDetails() {{ return ""; }}
+            function taskUsesPlatformPublishApi() {{ return false; }}
             function translateConsoleLanguage() {{}}
             function currentLanguage() {{ return "zh-Hans"; }}
             function updateLoginAssistanceDeadline() {{}}
+            {self._function_source("loginAssistanceChoiceIsCancel")}
             {self._function_source("renderLoginAssistanceChoices")}
             {self._function_source("renderLoginAssistanceAction")}
             {self._function_source("updateLoginAssistanceModal")}
@@ -1829,6 +2136,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function esc(value) {{ return String(value || ""); }}
             function liveBrowserSessionId() {{ return "live-session"; }}
             {self._function_source("loginAssistanceMappedInputAllowed")}
+            {self._function_source("loginAssistanceChoiceIsCancel")}
             {self._function_source("renderLoginAssistanceChoices")}
             {self._function_source("renderLoginAssistanceAction")}
 
@@ -2515,6 +2823,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
               accountBrowserPanel: "accounts",
               taskQueuePanel: "persona",
             }};
+            function normalizeAccountBrowserPanel(panel = "") {{
+              return String(panel || "").trim() === "browsers" ? "browsers" : "accounts";
+            }}
             function isPersonaWorkspaceModule(moduleId) {{
               return ["personas", "tweet_generation"].includes(String(moduleId || ""));
             }}
@@ -2551,7 +2862,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             }});
             state.view = "accounts";
             state.accountBrowserPanel = "proxies";
-            assert.strictEqual(currentToastTarget().accountPanel, "proxies");
+            assert.strictEqual(currentToastTarget().accountPanel, "accounts");
             """
         )
         self._run_node(harness)
@@ -3478,6 +3789,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function publishAccountForPersona() {{
               return {{ id: "account-1", platform: "threads", username: "publisher" }};
             }}
+            function publishPlatformAccountsForPersona() {{
+              return [publishAccountForPersona()];
+            }}
             async function promptPersonaAccountBinding() {{}}
             function canSubmitPublishWithAccount() {{ return true; }}
             function publishAccountRequiresExecutionConfirmation() {{ return false; }}
@@ -3613,6 +3927,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function publishAccountForPersona() {{
               return {{ id: "account-1", platform: "threads", username: "publisher" }};
             }}
+            function publishPlatformAccountsForPersona() {{
+              return [publishAccountForPersona()];
+            }}
             async function promptPersonaAccountBinding() {{}}
             function canSubmitPublishWithAccount() {{ return true; }}
             function publishAccountRequiresExecutionConfirmation() {{ return false; }}
@@ -3694,6 +4011,9 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             function normalizePublishContentSource() {{ return "posts"; }}
             function publishAccountForPersona() {{
               return {{ id: "account-instagram", platform: "instagram", username: "publisher" }};
+            }}
+            function publishPlatformAccountsForPersona() {{
+              return [publishAccountForPersona()];
             }}
             async function promptPersonaAccountBinding() {{}}
             function canSubmitPublishWithAccount() {{ return true; }}
@@ -4156,8 +4476,8 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         assistance = self._function_source("openTaskAssistanceView")
         self.assertNotIn("openBundleAuthorizationHostPopup", create_entry)
         self.assertNotIn("window.open", create_entry)
-        self.assertIn("openAccountPoolEditorModal", create_entry)
-        self.assertNotIn("startBundleAccountAuthorization", create_entry)
+        self.assertNotIn("openAccountPoolEditorModal", create_entry)
+        self.assertIn("startBundleAccountAuthorization", create_entry)
         self.assertIn("login_password", save)
         self.assertIn("startBundleAccountAuthorization", save)
         self.assertIn("accountId: account.id", save)
@@ -4176,13 +4496,22 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("小号", bundle_modal)
         self.assertNotIn("bundleAccountSwitchUrl", self.source)
         create_task = self._function_source("createSocialTask")
-        self.assertIn('taskType === "open_login" && String(selected?.auth_provider || "browser") === "bundle"', create_task)
+        self.assertIn("if (taskType === \"open_login\")", create_task)
+        self.assertIn("openBundleAccountAuthorizationModal", create_task)
+        self.assertNotIn('taskType === "open_login" && String(selected?.auth_provider || "browser") === "bundle"', create_task)
         self.assertNotIn("小号", self.source)
         self.assertNotIn("bundle-account-authorization-steps", bundle_modal)
         self.assertNotIn("bundle-account-authorization-security", bundle_modal)
         self.assertIn('.console-modal[data-modal-key="bundle-account-authorization"]', self.styles)
         self.assertIn(".bundle-account-authorization-option", self.styles)
         self.assertIn(".bundle-account-authorization-note", self.styles)
+        self.assertIn(".bundle-authorization-loading", self.styles)
+        self.assertIn(".bundle-authorization-loading-spinner", self.styles)
+        self.assertIn("will-change: transform;", self._css_block(".bundle-authorization-loading-spinner"))
+        self.assertIn("display: block;", self._css_block(".bundle-authorization-loading-spinner"))
+        self.assertNotIn(".bundle-authorization-public-dialog", self.styles)
+        self.assertIn(".console-modal[data-modal-key=\"bundle-account-authorization-result\"] .console-modal-actions > [data-console-modal-confirm]", self.styles)
+        self.assertIn(".console-modal-actions > button:only-child", self.styles)
         self.assertIn(".login-assistance-live-link", self.styles[self.styles.index('.console-modal[data-modal-key="bundle-account-authorization"] .login-assistance-live-link'):])
         self.assertNotIn(".bundle-account-authorization-steps", self.styles)
         self.assertIn("openBundleAccountAuthorizationModal", edit_modal)
@@ -4197,22 +4526,56 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn("openBundleAuthorizationPopup", bundle_start)
         self.assertNotIn("window.open", bundle_start)
         self.assertNotIn("openLiveBrowserTaskView", bundle_start)
-        self.assertIn("openTaskAssistanceView", bundle_start)
+        self.assertNotIn("openTaskAssistanceView", bundle_start)
         self.assertIn("prefillUsername", self._function_source("loginAssistanceViewModel"))
         self.assertIn('value="${esc(model.prefillUsername || "")}"', self._function_source("renderLoginAssistanceAction"))
-        self.assertIn('account_id: String(accountId || result?.account_id || "").trim()', bundle_start)
-        self.assertIn("watchBundleAuthorizationUntilSettled", bundle_start)
+        self.assertNotIn("openBundleAuthorizationPublicWindow", bundle_start)
+        self.assertNotIn("openBundleAuthorizationPublicWindow", self.source)
+        self.assertNotIn("<iframe", bundle_start)
+        self.assertNotIn("/bundle-auth-continue.html", bundle_start)
+        self.assertNotIn("/bundle-auth-handoff.html", bundle_start)
+        self.assertIn("openBundleAuthorizationLoadingWindow", bundle_start)
+        self.assertIn("jumpToOfficialAuthorization(url)", bundle_start)
+        self.assertIn("keepOfficialAuthorizationInWebBrowser", self._function_source("jumpToOfficialAuthorization"))
+        self.assertIn("window.location.assign(url)", self._function_source("jumpToOfficialAuthorization"))
+        self.assertNotIn("window.open", bundle_start)
+        self.assertNotIn("googlechrome://", self.source)
+        self.assertNotIn("intent://", self._function_source("keepOfficialAuthorizationInWebBrowser"))
+        self.assertNotIn("bindAuthorizationHandoffWatch", self._function_source("jumpToOfficialAuthorization"))
+        self.assertIn("请稍候，就绪后会立刻打开。", self._function_source("openBundleAuthorizationLoadingWindow"))
+        self.assertNotIn("preconnectOfficialAuthorizationOrigins", self.source)
+        self.assertIn("localizePlatformAuthorizationError", bundle_start)
+        self.assertIn("already_authorized", bundle_start)
+        self.assertIn("confirmAddAccountSwitch", bundle_start)
+        add_account = self._function_source("confirmAddAccountSwitch")
+        self.assertIn('confirmText: "继续授权"', add_account)
+        self.assertIn("showCancel: false", add_account)
+        self.assertNotIn("cancelText", add_account)
+        self.assertIn("renderBundleAuthPlatformIdentity", add_account)
+        self.assertIn("addAccountAuthorizationHint", add_account)
+        self.assertIn("请先在当前浏览器登录要绑定的", self._function_source("addAccountAuthorizationHint"))
+        self.assertIn("再点击「继续授权」", self._function_source("addAccountAuthorizationHint"))
+        self.assertIn("完成一键绑定", self._function_source("addAccountAuthorizationHint"))
+        self.assertNotIn("授权页支持切换账号", self._function_source("addAccountAuthorizationHint"))
+        self.assertNotIn("授权页不支持切换账号", self._function_source("addAccountAuthorizationHint"))
+        self.assertNotIn("网页无法读取手机", self._function_source("addAccountAuthorizationHint"))
+        self.assertIn('=== "instagram"', self._function_source("platformSupportsOauthAccountSwitch"))
+        self.assertNotIn("prefer_native_app", self._function_source("prepareBundleAccountAuthorization"))
+        self.assertNotIn("preferNativePlatformAppAuthorization", self.source)
+        self.assertIn('label: "发布"', self.source)
+        self.assertIn("发布推文", self.source)
         self.assertIn("preparedResult || await prepareBundleAccountAuthorization", bundle_start)
-        self.assertIn("result?.task_id", bundle_start)
+        self.assertIn("result?.url", bundle_start)
         self.assertIn("showResultModal: false", self.source)
         self.assertIn("/api/persona_dashboard/automation/accounts/bundle/status", self.source)
-        self.assertNotIn("window.location.assign", bundle_start)
         self.assertNotIn("consumeBundleAuthorizationReturnState", self.source)
         self.assertIn("state.accountPoolAccountId = authorizedAccountId", bundle_apply)
         self.assertIn("state.preferredAccountId = authorizedAccountId", bundle_apply)
         self.assertIn('type: "vecto:bundle-authorization-result"', bundle_result)
         self.assertIn('url.searchParams.get("bundle_account_id")', bundle_result)
         self.assertIn("window.opener.postMessage", bundle_result)
+        self.assertIn('status !== "success"', bundle_result)
+        self.assertNotIn("bindBundleAuthorizationResultListener", self.source)
         self.assertIn("state.accountPoolPlatform = normalizedPlatform", bundle_apply)
         self.assertIn('setAccountBrowserPanel("accounts")', bundle_apply)
         account_select = self._function_source("selectAccountPoolAccount")
@@ -4261,6 +4624,49 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('payload.proxy_id = selectedProxyId', save)
         self.assertNotIn("totp_secret_or_uri", save)
         self.assertNotIn("payload.residential_proxy", save)
+
+    def test_bundle_authorization_stays_on_account_pool_until_official_jump(self):
+        loading = self._function_source("openBundleAuthorizationLoadingWindow")
+        start = self._function_source("startBundleAccountAuthorization")
+        jump = self._function_source("jumpToOfficialAuthorization")
+        self.assertIn("bundle-account-authorization-loading", loading)
+        self.assertIn("请稍候，就绪后会立刻打开。", loading)
+        add_account = self._function_source("confirmAddAccountSwitch")
+        self.assertIn('title: "添加账号"', add_account)
+        self.assertIn('confirmText: "继续授权"', add_account)
+        self.assertIn("showCancel: false", add_account)
+        self.assertIn(".bundle-auth-platform-identity", self.styles)
+        self.assertIn(".bundle-add-account-guide", self.styles)
+        self.assertIn("justify-items: center", self._css_block(".bundle-add-account-guide"))
+        self.assertIn("justify-content: center", self._css_block(".bundle-add-account-guide .bundle-auth-platform-identity"))
+        self.assertIn("openBundleAuthorizationLoadingWindow", start)
+        self.assertIn("jumpToOfficialAuthorization(url)", start)
+        self.assertNotIn("window.open", start)
+        self.assertNotIn("/bundle-auth-continue.html", start)
+        self.assertIn("keepOfficialAuthorizationInWebBrowser", jump)
+        self.assertIn("window.location.assign(url)", jump)
+        self.assertNotIn("bindAuthorizationHandoffWatch", jump)
+        self.assertNotIn("oauthPromise", self._function_source("confirmAddAccountSwitch"))
+        self.assertNotIn("data-bundle-auth-web-link", self._function_source("confirmAddAccountSwitch"))
+        self.assertIn('data-console-modal-confirm', self.source)
+        self.assertIn('label: "发布"', self.source)
+        self.assertIn("发布推文", self.source)
+
+    def test_mobile_authorization_stays_in_the_current_web_browser(self):
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            {self._function_source("keepOfficialAuthorizationInWebBrowser")}
+            const oauth = "https://threads.net/oauth/authorize?client_id=1&redirect_uri=https%3A%2F%2Fwww.vecto-ai.cn%2Fcb";
+            const web = keepOfficialAuthorizationInWebBrowser(oauth);
+            assert.ok(web.startsWith("https://threads.net/oauth/authorize"));
+            assert.ok(web.includes("#weblink"));
+            assert.ok(!web.includes("intent://"));
+            assert.ok(!web.includes("googlechrome://"));
+            assert.strictEqual(keepOfficialAuthorizationInWebBrowser("https://instagram.com/oauth/authorize?x=1#other"), "https://instagram.com/oauth/authorize?x=1#other");
+            """
+        )
+        self._run_node(harness)
 
     def test_account_proxy_picker_matches_backend_eligibility_and_tracks_real_changes(self):
         harness = textwrap.dedent(

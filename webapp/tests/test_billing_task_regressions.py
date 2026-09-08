@@ -105,14 +105,18 @@ class BillingTaskRegressionTests(unittest.TestCase):
         self.assertIn("避免刻板化、脸谱化或夸张地域特征", prompt)
         self.assertNotIn("欧美面部骨相", prompt)
         self.assertIn("妩媚性感气质", prompt)
+        self.assertIn("美女福利向", prompt)
+        self.assertIn("高级写真气场", prompt)
         self.assertNotIn("人设核心：肥宅游戏玩家", prompt)
-        self.assertIn("性感福利风格，明显露肤、清凉妩媚、高级写真感，服装款式由模型自主设计", prompt)
+        self.assertIn("性感福利风格，明显露肤、清凉妩媚、高级写真感", prompt)
+        self.assertIn("轻透修身、肩颈锁骨有镜头感", prompt)
+        self.assertIn("服装款式由模型自主设计", prompt)
         for fixed_item in ("吊带", "短裤", "短裙", "大腿", "肚脐", "蕾丝", "缎面"):
             self.assertNotIn(fixed_item, prompt)
         self.assertIn("暖色室内环境", prompt)
         for redundant in ("最高服装优先级", "不得参与", "不得替换", "禁止", "三视图服装"):
             self.assertNotIn(redundant, prompt)
-        self.assertLess(len(prompt), 180)
+        self.assertLess(len(prompt), 260)
         self.assertNotIn("adult_glamour", prompt)
         self.assertNotIn("intimate_glamour_female", prompt)
         self.assertEqual(

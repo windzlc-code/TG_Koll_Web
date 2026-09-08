@@ -178,14 +178,14 @@ class PublicLoginPreferenceTests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(direct_admin.status_code, 302, direct_admin.text)
-        self.assertEqual(direct_admin.headers["location"], "/?login=1&return_url=%2Fconsole.html")
+        self.assertEqual(direct_admin.headers["location"], "/console-login.html?return_url=%2Fconsole.html")
 
         admin_query = client.get(
             "/login.html?return_url=%2Fabout-vecto.html%3Fadmin_console%3D1",
             follow_redirects=False,
         )
         self.assertEqual(admin_query.status_code, 302, admin_query.text)
-        self.assertEqual(admin_query.headers["location"], "/?login=1&return_url=%2Fconsole.html")
+        self.assertEqual(admin_query.headers["location"], "/console-login.html?return_url=%2Fconsole.html")
 
     def test_shared_home_login_detects_admin_role_and_uses_admin_cookie(self):
         client = TestClient(self.app)
@@ -442,7 +442,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('[data-site-home-label]', self.site_nav_script)
         self.assertIn('[data-site-nav-key="aboutVecto"]', self.site_nav_script)
         self.assertIn('"/about-vecto.html",', self.site_nav_script)
-        self.assertIn('["home", "aboutVecto", "pricing", "crm"].includes(page)', self.site_nav_script)
+        self.assertIn('["home", "aboutVecto", "pricing", "crm", "video"].includes(page)', self.site_nav_script)
         self.assertIn('url.searchParams.delete("admin_workspace_user_id")', self.site_nav_script)
         self.assertIn("function adminWorkspacePageUrl(value)", self.console_js)
         self.assertNotIn('data-proxy-market-open', self.console_js)
@@ -765,7 +765,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         )
         self.assertEqual(
             unsafe.headers["location"],
-            "/?login=1&return_url=%2Fconsole.html",
+            "/console-login.html?return_url=%2Fconsole.html",
         )
 
     def test_admin_runtime_form_exposes_cookie_policy(self):

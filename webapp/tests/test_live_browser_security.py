@@ -92,6 +92,37 @@ def test_login_assistance_queue_accepts_visible_page_choices():
     assert actions.get_nowait() == {"kind": "choice", "action_label": "Text message"}
 
 
+def test_login_assistance_queue_accepts_mapped_consent_role():
+    actions = queue.Queue(maxsize=2)
+    control = {
+        "login_assistance_queue": actions,
+        "login_assistance_lock": threading.Lock(),
+        "login_assistance_pending": False,
+        "login_assistance_state": {
+            "kind": "choice",
+            "actions": [{"label": "以 hiro504522 的身份繼續", "title": "以 hiro504522 的身份繼續", "role": "confirm"}],
+        },
+    }
+    payload = social_automation_api.LiveBrowserLoginAssistancePayload(
+        kind="choice",
+        action_label="以 hiro504522 的身份繼續",
+        action_role="confirm",
+        action_selector='[data-vecto-consent-role="confirm"]',
+    )
+    with (
+        mock.patch.object(social_automation_api, "_require_live_browser_assistance_session", return_value="task-1"),
+        mock.patch.object(social_automation_api, "_running_control_for_live_browser_session", return_value=control),
+    ):
+        result = social_automation_api.queue_live_browser_login_assistance("live-task-1", payload)
+    assert result["kind"] == "choice"
+    assert actions.get_nowait() == {
+        "kind": "choice",
+        "action_label": "以 hiro504522 的身份繼續",
+        "action_role": "confirm",
+        "action_selector": '[data-vecto-consent-role="confirm"]',
+    }
+
+
 def test_login_assistance_queue_preserves_alphanumeric_email_code_exactly():
     actions = queue.Queue(maxsize=2)
     control = {

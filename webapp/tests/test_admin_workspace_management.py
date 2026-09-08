@@ -526,7 +526,7 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
         self.assertEqual(normal_admin_console.status_code, 302, normal_admin_console.text)
         self.assertEqual(
             normal_admin_console.headers["location"],
-            "/?login=1&return_url=%2Fconsole.html",
+            "/console-login.html?return_url=%2Fconsole.html",
         )
         self.assertEqual(personal_admin_console.status_code, 200, personal_admin_console.text)
         self.assertIn('name="admin-workspace-user-id" content=""', personal_admin_console.text)

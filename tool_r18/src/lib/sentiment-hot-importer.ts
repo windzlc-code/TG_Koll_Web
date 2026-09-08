@@ -42,17 +42,23 @@ import {
 
 const require = createRequire(import.meta.url);
 const Database = require("better-sqlite3");
-// One explicit heat floor keeps selection predictable: reject everything below
-// 500, then rank every qualified candidate by real engagement from high to low.
-const MIN_SENTIMENT_HOT_SCORE = 500;
-const MIN_SENTIMENT_HOT_SCORE_FLOOR = MIN_SENTIMENT_HOT_SCORE;
+// The views metric is public views plus interaction heat. Qualify if that
+// combined reach clears 1000, or if interaction heat alone clears 200
+// (Instagram photo posts have no views, so heat >= 100 is enough there).
+// Rank qualified rows by combined reach from high to low.
+const MIN_PUBLIC_VIEW_COUNT = 1000;
+const MIN_INTERACTION_HEAT_SCORE = 200;
+const MIN_INSTAGRAM_INTERACTION_HEAT_SCORE = 100;
+const MIN_COMBINED_REACH_SCORE = MIN_PUBLIC_VIEW_COUNT;
+const MIN_SENTIMENT_HOT_SCORE = MIN_PUBLIC_VIEW_COUNT;
+const MIN_SENTIMENT_HOT_SCORE_FLOOR = MIN_INTERACTION_HEAT_SCORE;
 const SENTIMENT_HOT_SCORE_FALLBACK_STEPS = [
-  MIN_SENTIMENT_HOT_SCORE,
+  MIN_INTERACTION_HEAT_SCORE,
 ] as const;
 // High-heat results remain preferred. For a sparse niche, the browser may add
 // recent, topic-anchored posts with verified engagement fields behind them.
 const MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT = 20;
-const MIN_PUBLIC_THREADS_HOT_HAN_COUNT = 20;
+const MIN_PUBLIC_THREADS_HOT_HAN_COUNT = 8;
 const MIN_SENTIMENT_HOT_READABLE_CHARACTER_COUNT = 20;
 const SENTIMENT_HOT_CANDIDATE_POOL_TARGET = 2_000;
 const THREADS_SEARCH_CACHE_CANDIDATE_LIMIT = 2000;
@@ -99,9 +105,12 @@ export const SENTIMENT_HOT_READER_CONCURRENCY = resolveSentimentHotReaderConcurr
 const SENTIMENT_HOT_READER_SERIAL_PLATFORMS = shouldRunSentimentHotReaderPlatformsSerially();
 const THREADS_READER_TOTAL_QUERY_LIMIT = SENTIMENT_HOT_READER_CONCURRENCY;
 const THREADS_READER_QUERY_BATCH_SIZE = SENTIMENT_HOT_READER_CONCURRENCY;
-// Instagram public tag pages are complementary. Interactive collection starts
-// them beside Threads; conservative refill starts them only after Threads.
+// Instagram hotspot discovery is cookie HTTP only. Public tag/keyword pages
+// login-wall for CJK and must not run as a fallback. Interactive collection
+// starts immediately; conservative refill still waits for Threads unless this
+// request is Instagram-only.
 const INSTAGRAM_READER_QUERY_LIMIT = SENTIMENT_HOT_READER_CONCURRENCY;
+const INSTAGRAM_COOKIE_QUERY_BATCH_SIZE = 5;
 const INSTAGRAM_READER_STAGE_TIMEOUT_MS = 36_000;
 const INSTAGRAM_AUTHENTICATED_QUERY_LIMIT = 16;
 const INSTAGRAM_GRAPHQL_PAGE_QUERY_LIMIT = 10;
@@ -127,7 +136,7 @@ const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 50;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 51;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 28;
@@ -607,6 +616,7 @@ export interface FetchSentimentHotCandidatesResult {
   freshnessPolicy: SentimentHotFreshnessPolicy;
   cookieStatuses: SentimentCookieStatus[];
   warnings: string[];
+  emptyReason?: "no_source" | "below_threshold";
 }
 
 export interface PrepareSentimentHotKeywordsResult {
@@ -618,6 +628,7 @@ export interface PrepareSentimentHotKeywordsResult {
 export interface SentimentHotSearchStrategy {
   primaryQueries: string[];
   broadQueries: string[];
+  lifestyleQueries: string[];
   ecosystemQueries: string[];
   requiredAnchorTerms: string[];
   normalAnchorTerms: string[];
@@ -1212,7 +1223,7 @@ const WEAK_RELEVANCE_STOPWORDS = new Set([
   "分析",
 ]);
 
-["規劃", "规划", "人生", "方向", "海外", "華人", "华人"].forEach((keyword) => WEAK_RELEVANCE_STOPWORDS.add(keyword));
+["規劃", "规划", "人生", "方向", "海外", "華人", "华人", "修复", "修復", "清理", "打磨", "整理"].forEach((keyword) => WEAK_RELEVANCE_STOPWORDS.add(keyword));
 [
   ...SENTIMENT_HOT_GENERIC_QUERY_INTENTS,
   "经验",
@@ -1460,7 +1471,7 @@ function expandSentimentHotCoreKeywordVariants(keywords: string[]): string[] {
     // "动漫新番吐槽" or "游戏课金避坑".  Strip those suffixes iteratively
     // so the public crawler gets the stable subject ("动漫" / "游戏") in its
     // small first query batch.  The candidate still has to pass the existing
-    // Chinese, relevance and >=500 heat gates below.
+    // Chinese, relevance and combined reach (views + heat >= 1000) gates below.
     let topic = text;
     for (let depth = 0; depth < 3; depth += 1) {
       const suffix = suffixes.find((item) => topic.length > item.length + 1 && topic.endsWith(item));
@@ -1594,6 +1605,7 @@ function emptySentimentHotSearchStrategy(): SentimentHotSearchStrategy {
   return {
     primaryQueries: [],
     broadQueries: [],
+    lifestyleQueries: [],
     ecosystemQueries: [],
     requiredAnchorTerms: [],
     normalAnchorTerms: [],
@@ -1632,6 +1644,52 @@ function normalizeStrategyAnchorTermList(value: unknown, args: { archiveName?: s
 function isGenericPersonaContentTopic(value: unknown): boolean {
   const text = cleanText(value).replace(/\s+/g, "");
   return /^(?:职场趣事|職場趣事|生活日常|日常生活|生活故事|生活分享|市井生活|市井|職場故事|职场故事|搞笑|幽默|趣事|故事|经验|經驗|分享|日常|慢生活|退休生活|健康生活|家務|家务|家居清潔|家居清洁|居家清潔|居家清洁)$/u.test(text);
+}
+
+function isHollowBroadMatchTerm(value: unknown): boolean {
+  const text = cleanText(value).replace(/\s+/g, "");
+  if (!text) return true;
+  if (isWeakRelevanceKeyword(text) || isGenericSentimentKeyword(text) || isGenericPersonaContentTopic(text)) return true;
+  return /^(?:攻略|教程|教學|教学|评测|測評|测评|推荐|推薦|經驗|经验|活动|活動|好物|气氛|氣氛|爱好者|愛好者)$/u.test(text);
+}
+
+function modelLifestyleSearchTerms(strategy: SentimentHotSearchStrategy | null | undefined): string[] {
+  if (!strategy) return [];
+  return [...new Set((strategy.lifestyleQueries || [])
+    .map(cleanText)
+    .filter((term) => (
+      term.length >= 2
+      && term.length <= 5
+      && !isHollowBroadMatchTerm(term)
+      && !isHollowSearchKeyword(term)
+      && !isGenericPersonaContentTopic(term)
+      && !isPersonaVisualArtifactKeyword(term, "")
+      && isSearchableRelevanceTerm(term)
+    )))];
+}
+
+function normalModeDomainMatchTerms(strategy: SentimentHotSearchStrategy): string[] {
+  const personaGuardKeys = new Set(
+    (strategy.personaGuardTerms || []).map((term) => cleanText(term).toLowerCase()).filter(Boolean),
+  );
+  return [...new Set([
+    ...strategy.requiredAnchorTerms,
+    ...strategy.normalAnchorTerms,
+    ...strategy.primaryQueries,
+    ...strategy.strictAcceptTerms,
+    ...strategy.normalAcceptTerms,
+    ...strategy.broadQueries,
+    ...strategy.ecosystemQueries,
+    ...modelLifestyleSearchTerms(strategy),
+  ]
+    .flatMap((term) => expandSentimentHotCoreKeywordVariants([term]))
+    .map(cleanText)
+    .filter((term) => (
+      term.length >= 2
+      && !personaGuardKeys.has(term.toLowerCase())
+      && !isHollowBroadMatchTerm(term)
+      && isSearchableRelevanceTerm(term)
+    )))];
 }
 
 function filterModelQueriesByDomainAnchors(queries: string[], anchors: string[]): string[] {
@@ -1713,6 +1771,10 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
   }
   const primaryQueries = normalizeStrategyTermList((parsed as any).primaryQueries || (parsed as any).queries || (parsed as any).keywords, { ...args, limit: SENTIMENT_MODEL_KEYWORD_TARGET });
   const broadQueries = normalizeStrategyTermList((parsed as any).broadQueries || (parsed as any).domainExpansion || (parsed as any).normalQueries || (parsed as any).expandedQueries || primaryQueries, { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET });
+  const lifestyleQueries = normalizeStrategyTermList(
+    (parsed as any).lifestyleQueries || (parsed as any).dailyQueries || (parsed as any).sceneQueries || (parsed as any).lifestyleTerms,
+    { ...args, limit: 12 },
+  ).filter((term) => !isHollowBroadMatchTerm(term) && !isHollowSearchKeyword(term) && !isGenericPersonaContentTopic(term) && !isPersonaVisualArtifactKeyword(term, args.sourceText));
   const requiredAnchorTerms = normalizeStrategyAnchorTermList(
     (parsed as any).requiredAnchorTerms || (parsed as any).anchorTerms || (parsed as any).coreEntityTerms || primaryQueries.slice(0, 4),
     { ...args, limit: 16 },
@@ -1725,6 +1787,7 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
   const strategy: SentimentHotSearchStrategy = {
     primaryQueries,
     broadQueries: filterModelQueriesByDomainAnchors(broadQueries, domainAnchors),
+    lifestyleQueries,
     ecosystemQueries: filterModelQueriesByDomainAnchors(
       normalizeStrategyTermList((parsed as any).ecosystemQueries || (parsed as any).parentQueries || (parsed as any).highVolumeQueries || broadQueries, { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET }),
       domainAnchors,
@@ -1732,7 +1795,7 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
     requiredAnchorTerms,
     normalAnchorTerms,
     strictAcceptTerms: normalizeStrategyTermList((parsed as any).strictAcceptTerms || (parsed as any).strictTerms || (parsed as any).acceptTerms || [...requiredAnchorTerms, ...primaryQueries], { ...args, limit: SENTIMENT_MODEL_KEYWORD_TARGET }),
-    normalAcceptTerms: normalizeStrategyTermList((parsed as any).normalAcceptTerms || (parsed as any).broadAcceptTerms || [...normalAnchorTerms, ...primaryQueries, ...broadQueries], { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET }),
+    normalAcceptTerms: normalizeStrategyTermList((parsed as any).normalAcceptTerms || (parsed as any).broadAcceptTerms || [...normalAnchorTerms, ...primaryQueries, ...broadQueries, ...lifestyleQueries], { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET }),
     rejectTerms: normalizeStrategyTermList((parsed as any).rejectTerms || (parsed as any).excludeTerms || (parsed as any).negativeTerms, { ...args, limit: 16 }),
     domainSummary: cleanText((parsed as any).domainSummary || (parsed as any).summary),
   };
@@ -1748,6 +1811,7 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
 
 function sentimentHotStrategyHasModelTerms(strategy: SentimentHotSearchStrategy): boolean {
   return Array.isArray(strategy.primaryQueries) && strategy.primaryQueries.length >= 5
+    && Array.isArray(strategy.lifestyleQueries) && strategy.lifestyleQueries.length >= 8
     && Array.isArray(strategy.requiredAnchorTerms) && strategy.requiredAnchorTerms.length >= 3
     && Array.isArray(strategy.normalAnchorTerms) && strategy.normalAnchorTerms.length >= 3
     && strategy.normalAnchorTerms.filter((term) => term.length >= 2).length >= 2
@@ -1760,6 +1824,7 @@ function sentimentHotStrategyUsesThreadsChinese(strategy: SentimentHotSearchStra
   const text = [
     ...strategy.primaryQueries,
     ...strategy.broadQueries,
+    ...(strategy.lifestyleQueries || []),
     ...strategy.ecosystemQueries,
     ...strategy.requiredAnchorTerms,
     ...strategy.normalAnchorTerms,
@@ -1771,7 +1836,7 @@ function sentimentHotStrategyUsesThreadsChinese(strategy: SentimentHotSearchStra
 
 function sentimentHotStrategyTermsForMode(strategy: SentimentHotSearchStrategy, mode: SentimentHotSearchMode): string[] {
   const groups = mode === "normal"
-    ? [strategy.primaryQueries, strategy.ecosystemQueries, strategy.broadQueries, strategy.normalAnchorTerms, strategy.normalAcceptTerms, strategy.strictAcceptTerms]
+    ? [strategy.primaryQueries, strategy.ecosystemQueries, strategy.broadQueries, strategy.lifestyleQueries || [], strategy.normalAnchorTerms, strategy.normalAcceptTerms, strategy.strictAcceptTerms]
     : [strategy.primaryQueries, strategy.requiredAnchorTerms, strategy.strictAcceptTerms];
   const terms: string[] = [];
   for (let index = 0; index < Math.max(0, ...groups.map((group) => group.length)); index += 1) {
@@ -1785,7 +1850,7 @@ function sentimentHotStrategyTermsForMode(strategy: SentimentHotSearchStrategy, 
 
 function sentimentHotModelDispatchTermsForMode(strategy: SentimentHotSearchStrategy, mode: SentimentHotSearchMode): string[] {
   const groups = mode === "normal"
-    ? [strategy.primaryQueries, strategy.ecosystemQueries, strategy.broadQueries]
+    ? [strategy.primaryQueries, strategy.ecosystemQueries, strategy.broadQueries, strategy.lifestyleQueries || []]
     : [
         strategy.primaryQueries,
         strategy.requiredAnchorTerms.filter((term) => cleanText(term).length >= 2),
@@ -1811,27 +1876,34 @@ export function resolveSentimentHotModelStrategyKeywords(
 ): string[] {
   if (!strategy) return [];
   const primary = [...new Set((strategy.primaryQueries || []).map(cleanText).filter(Boolean))];
+  let merged: string[] = [];
   if (primary.length < 5) {
     if (!sentimentHotStrategyHasModelTerms(strategy)) return [];
-    return sentimentHotModelDispatchTermsForMode(strategy, mode);
+    merged = sentimentHotModelDispatchTermsForMode(strategy, mode);
+  } else {
+    const expansion = [...new Set([
+      ...(strategy.broadQueries || []),
+      ...(strategy.ecosystemQueries || []),
+    ]
+      .map(cleanText)
+      .filter((term) => (
+        term
+        && isConcreteSearchKeyword(term)
+        && isPublicSearchableKeywordLength(term)
+        && term.length <= 5
+        && !isGenericPersonaContentTopic(term)
+        && !isPersonaVisualArtifactKeyword(term, "")
+        && !/(?:攻略|教程|教學|教学|分享|心得|评测|測評|测评|推荐|推薦|經驗|经验)$/u.test(term)
+      )))];
+    merged = [...primary];
+    for (const term of expansion) {
+      if (!merged.some((item) => item.toLowerCase() === term.toLowerCase())) merged.push(term);
+    }
   }
-  const expansion = [...new Set([
-    ...(strategy.broadQueries || []),
-    ...(strategy.ecosystemQueries || []),
-  ]
-    .map(cleanText)
-    .filter((term) => (
-      term
-      && isConcreteSearchKeyword(term)
-      && isPublicSearchableKeywordLength(term)
-      && term.length <= 5
-      && !isGenericPersonaContentTopic(term)
-      && !isPersonaVisualArtifactKeyword(term, "")
-      && !/(?:攻略|教程|教學|教学|分享|心得|评测|測評|测评|推荐|推薦|經驗|经验)$/u.test(term)
-    )))];
-  const merged = [...primary];
-  for (const term of expansion) {
-    if (!merged.some((item) => item.toLowerCase() === term.toLowerCase())) merged.push(term);
+  if (mode === "normal") {
+    for (const term of modelLifestyleSearchTerms(strategy)) {
+      if (!merged.some((item) => item.toLowerCase() === term.toLowerCase())) merged.push(term);
+    }
   }
   return merged.slice(0, sentimentHotKeywordTargetForMode(mode));
 }
@@ -1857,10 +1929,8 @@ export function resolveSentimentHotModelQueryKeywords(
     ], "normal");
     return [...new Set([...anchors, ...broadAnchors, ...rest])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
   }
-  // Strict mode keeps its acceptance filter narrow, but discovery also needs
-  // the model's broad vertical queries. The final quality/anchor checks still
-  // reject posts that do not match the strict persona keywords.
-  return prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, mode), mode);
+  const base = prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, mode), mode);
+  return [...new Set([...base, ...modelLifestyleSearchTerms(strategy)])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
 }
 
 export function resolveSentimentHotManualQueryKeywords(
@@ -1948,6 +2018,18 @@ export function applyPersonaGuardToSentimentHotStrategy(args: {
     cleanModelTerms(splitAnchorMashupTerms(args.strategy.ecosystemQueries, domainAnchors)),
     domainAnchors,
   );
+  args.strategy.lifestyleQueries = [...new Set(
+    (args.strategy.lifestyleQueries || [])
+      .map((term) => normalizeSentimentSearchKeyword(term))
+      .filter((term) => (
+        term
+        && !isHollowSearchKeyword(term)
+        && !isGenericPersonaContentTopic(term)
+        && !isPersonaVisualArtifactKeyword(term, "")
+        && !isHollowBroadMatchTerm(term)
+        && isSearchableRelevanceTerm(term)
+      )),
+  )];
   args.strategy.strictAcceptTerms = cleanModelTerms(splitAnchorMashupTerms(args.strategy.strictAcceptTerms, domainAnchors));
   args.strategy.normalAcceptTerms = cleanModelTerms(splitAnchorMashupTerms(args.strategy.normalAcceptTerms, domainAnchors));
   args.strategy.rejectTerms = cleanModelTerms(args.strategy.rejectTerms);
@@ -1962,11 +2044,6 @@ export function candidateMatchesSentimentHotStrategyAnchors(candidate: Sentiment
   const matchesExactAnchor = (anchor: string, target: SentimentHotCandidate = candidate) => {
     const fullVariants = [...new Set([anchor, ...expandSentimentSearchKeywordVariants(anchor)].map(cleanText).filter(Boolean))];
     return countMatchedNeedles(target, fullVariants) > 0;
-  };
-  const matchesLeadingAnchor = (anchor: string) => {
-    const content = cleanSentimentCandidateContent(candidate.content);
-    const leadingLength = Math.max(120, Math.ceil(content.length * 0.45));
-    return matchesExactAnchor(anchor, { ...candidate, content: content.slice(0, leadingLength) });
   };
   const rejectTerms = strategy.rejectTerms.map(cleanText).filter((term) => term.length >= 2);
   if (rejectTerms.some((term) => countMatchedNeedles(candidate, [term]) > 0)) return false;
@@ -1995,20 +2072,12 @@ export function candidateMatchesSentimentHotStrategyAnchors(candidate: Sentiment
   const normalAnchors = expandSentimentHotCoreKeywordVariants(strategy.normalAnchorTerms).filter((term) => term.length >= 2);
   const sourceQuery = cleanText((candidate.metrics as any)?.query);
   const currentStrategyTerms = new Set(expandSentimentHotCoreKeywordVariants(sentimentHotStrategyTermsForMode(strategy, "normal")).map(cleanText));
-  if (sourceQuery && sourceQuery.length <= 3 && !currentStrategyTerms.has(sourceQuery) && normalAnchors[0]) {
+  if (mode === "strict" && sourceQuery && sourceQuery.length <= 3 && !currentStrategyTerms.has(sourceQuery) && normalAnchors[0]) {
     const leadingContent = cleanSentimentCandidateContent(candidate.content).slice(0, 120);
     if (!matchesExactAnchor(normalAnchors[0], { ...candidate, content: leadingContent })) return false;
   }
-  const personaGuardTerms = (strategy.personaGuardTerms || []).map(cleanText).filter((term) => term.length >= 2);
   if (mode === "normal") {
-    const personaGuardKeys = new Set(personaGuardTerms.map((term) => term.toLowerCase()));
-    const domainNormalAnchors = normalAnchors.filter((term) => !personaGuardKeys.has(term.toLowerCase()));
-    if (domainNormalAnchors.some(matchesLeadingAnchor)) return true;
-    const normalAcceptTerms = strategy.normalAcceptTerms
-      .map(cleanText)
-      .filter((term) => term.length >= 2 && !personaGuardKeys.has(term.toLowerCase()));
-    return [...new Set([...requiredAnchors, ...domainNormalAnchors, ...normalAcceptTerms])]
-      .filter(matchesLeadingAnchor).length >= 2;
+    return normalModeDomainMatchTerms(strategy).some((term) => matchesExactAnchor(term));
   }
   // A role-like persona name (for example "secretary") is not evidence that
   // the post belongs to the persona's actual domain. One model-selected direct
@@ -2108,16 +2177,22 @@ async function filterSentimentHotCandidatesWithModel(args: {
         "You review social hotspot candidates. Return JSON only: {\"rejectedIds\":[\"candidate alias\"]}.",
         `Full persona profile: ${cleanText(args.archive.content)}`,
         `Review mode: ${args.searchMode}. Start from every candidate and reject reverse or unrelated posts first. Do not first pick only strongly positive topical matches.`,
-        "Reject only reverse stance, same-name false hits, or content completely outside the persona. Keep weak or adjacent matches.",
+        args.searchMode === "normal"
+          ? "Normal/broad-vertical mode: reject only reverse stance, junk, or a completely different industry. Keep lifestyle, daily, weak, or one-mention adjacent posts."
+          : "Reject only reverse stance, same-name false hits, or content completely outside the persona. Keep weak or adjacent matches.",
         `Candidates: ${JSON.stringify(candidatePayload)}`,
         "你是社媒热点候选的语义审核器。只输出 JSON，不要解释，不要 Markdown。",
         "输出格式：{\"rejectedIds\":[\"候选ID\"]}",
         `人设主领域：${args.strategy.domainSummary || cleanText(args.archive.content)}`,
         `明确排除范围：${args.strategy.rejectTerms.join("、") || "无"}`,
         `抓取模式：${args.searchMode === "strict" ? "严格垂直" : "普通泛垂直"}`,
-        "优先排除反向内容、明显垃圾和无用推文、以及完全不相干的内容，而不是先挑选正向命中。",
+        args.searchMode === "normal"
+          ? "泛垂直只排除反向内容、明显垃圾，以及完全不同产业、正文与当前人设领域毫无关系的内容。生活化、日常场景、弱相关、只提到一次对象的内容必须保留。"
+          : "优先排除反向内容、明显垃圾和无用推文、以及完全不相干的内容，而不是先挑选正向命中。",
         "反向包括：明确不再购买/退出该领域、立场与人设相反。垃圾/无用包括：互关求赞、加微领券、纯表情、灌水沙发、登录墙。完全不相干是正文与当前关键词没有任何关系。",
-        "弱相关、相邻场景、只提到一次对象的内容应保留。不要因为没有复述最细职业标签就拒绝。",
+        args.searchMode === "normal"
+          ? "不要因为没有复述最细职业标签、或内容偏生活日常就拒绝。"
+          : "弱相关、相邻场景、只提到一次对象的内容应保留。不要因为没有复述最细职业标签就拒绝。",
         `候选：${JSON.stringify(candidatePayload)}`,
       ].join("\n") }] }],
       { temperature: 0, maxOutputTokens: 2048 },
@@ -2346,15 +2421,17 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "人设名称只是对外称呼。必须按内容领域和职业理解；禁止把俚语化名称理解成色情、擦边或开车含义，也不得因此拒写或返回空候选。",
             "只输出 JSON 对象，不要解释，不要 Markdown。",
             "JSON 结构：",
-            "{\"primaryQueries\":[\"...\"],\"domainExpansion\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
-            "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
-            "合计必须给出 20 个互不重复的可搜索词，供下游按 10 个一批轮换搜索。不要多也不要少。",
+            "{\"primaryQueries\":[\"...\"],\"domainExpansion\":[\"...\"],\"lifestyleQueries\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
+            "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，lifestyleQueries 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
+            "合计必须给出 30 个互不重复的可搜索词，供下游按模式切片搜索。不要多也不要少。",
             "",
             "先看人设名称和主题。若简介清楚写了职业、产品、场所或作品，就按这些扩词。",
             "若简介很难过关——只有性格、外貌、日常、搞笑、吐槽、段子，没有现成物件名词——你必须先自己扩展：这个人会持续对公众讲什么，把该主题扩成可搜索的具体对象（物、场景、作品、槽点对象、职场物件），再输出搜索词。",
             "扩展必须仍属于这个人设会讲的内容，不能换成无关行业。禁止因为简介空泛、擦边或不好写就拒写或返回空候选。",
             "primaryQueries 以 2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主，互不重复，公众会直接拿去搜。",
             "domainExpansion 再补 10 个同一领域、与 primaryQueries 不重复的可搜物件。两个主题并存时必须分别扩词。主题名本身最多保留 1 次，其余必须更具体。",
+            "lifestyleQueries 再补 10 个同一人设领域的生活化、日常场景搜索词：必须是这个人设会亲身经历或持续对公众讲的具体使用处境、日常动作或身边场景，2-4 个汉字，公众会直接拿去搜。",
+            "lifestyleQueries 必须仍属于这个人设会讲的内容，不能换成无关行业，也不能写成空词日常、生活、攻略、分享。不要把 primaryQueries 或 domainExpansion 里已经出现的物件名再重复一遍。必须按当前人设直接生成，不同人设不得套用同一批生活化词。",
             "风格意图只用于理解这类帖子常见，不要写进搜索词。禁止输出带这些后缀或整词的合成搜索词：攻略、教程、教學、教学、分享、心得、评测、測評、推荐、推薦、經驗、经验。",
             "若该领域常见攻略或教程帖，请改写成更具体的可搜物件，例如存股、融資、配息、當沖、槓桿、信用交易，而不是融資攻略、理財心得、台股分享。",
             "不要用短词再拼更长的标签。有融資可以同时保留更具体的融資券，但不要写融資攻略、融資分享、融資額這種重复加长。",
@@ -2371,7 +2448,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
           ].join("\n"),
         }],
       }],
-      { temperature: 0.1, maxOutputTokens: 1400, responseMimeType: "application/json" },
+      { temperature: 0.1, maxOutputTokens: 1800, responseMimeType: "application/json" },
       buildAbortSignalTimeout(totalTimeoutMs),
       {
         isUsableResponse: (data) => {
@@ -2381,10 +2458,11 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
           });
           const queries = [...new Set((candidate.primaryQueries || []).map(cleanText).filter(Boolean))];
           const expansion = [...new Set((candidate.broadQueries || []).map(cleanText).filter(Boolean))];
-          const uniqueCount = new Set([...queries, ...expansion]).size;
-          const hasChinese = ([...queries, ...expansion].join("").match(/[\u3400-\u9fff]/gu) || []).length >= 16;
-          if (queries.length < 10 || uniqueCount < 18 || !hasChinese) {
-            console.info(`[sentiment_hot_model_unusable] reason=${queries.length < 10 || uniqueCount < 18 ? "missing_terms" : "not_chinese"} primary=${queries.length} unique=${uniqueCount} sample=${JSON.stringify(queries.slice(0, 8))}`);
+          const lifestyle = [...new Set((candidate.lifestyleQueries || []).map(cleanText).filter(Boolean))];
+          const uniqueCount = new Set([...queries, ...expansion, ...lifestyle]).size;
+          const hasChinese = ([...queries, ...expansion, ...lifestyle].join("").match(/[\u3400-\u9fff]/gu) || []).length >= 16;
+          if (queries.length < 10 || lifestyle.length < 8 || uniqueCount < 26 || !hasChinese) {
+            console.info(`[sentiment_hot_model_unusable] reason=${queries.length < 10 || lifestyle.length < 8 || uniqueCount < 26 ? "missing_terms" : "not_chinese"} primary=${queries.length} lifestyle=${lifestyle.length} unique=${uniqueCount} sample=${JSON.stringify(queries.slice(0, 8))}`);
             return false;
           }
           return true;
@@ -2447,7 +2525,7 @@ export async function prepareSentimentHotKeywords(args: {
     // Leave enough room for the dedicated primary model plus one configured
     // fallback once per 24-hour strategy cache. Subsequent fetches reuse the
     // cached keyword plan and keep the old-host collection path fast.
-    timeoutMs: 68_000,
+    timeoutMs: 80_000,
     // Candidate refreshes reuse the remaining keyword batch. Only the new-host
     // controller can mark a complete plan exhausted and request regeneration.
     useCache: args.forceRegenerate !== true,
@@ -2805,6 +2883,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   /** Test-only mode: exclude cache/database/history backfills and do not write shown history. */
   liveOnly?: boolean;
   sourcePolicy?: "reader_first" | "reader_only" | "authenticated_only";
+  allKeywords?: string[];
   platform?: SentimentHotPlatform | string;
 }): Promise<FetchSentimentHotCandidatesResult> {
   const startedAt = Date.now();
@@ -2823,7 +2902,10 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const submittedManualKeywords = Array.isArray(args.keywords)
     ? args.keywords.map(cleanText).filter((item) => isConcreteSearchKeyword(item))
     : [];
-  const manualKeywords = resolveSentimentHotManualQueryKeywords(submittedManualKeywords, null, searchMode);
+  const submittedAllKeywords = mergeSentimentHotKeywordLists(args.allKeywords, submittedManualKeywords)
+    .filter((item) => isConcreteSearchKeyword(item));
+  const searchKeywordSource = submittedManualKeywords.length ? submittedManualKeywords : submittedAllKeywords;
+  const manualKeywords = resolveSentimentHotManualQueryKeywords(searchKeywordSource, null, searchMode);
   const freshnessPolicy = normalizeSentimentHotFreshnessPolicy(args.freshnessPolicy);
   const freshnessDays = normalizeSentimentHotFreshnessDays(
     args.freshnessDays ?? (args.refresh === true ? DEFAULT_REFRESH_FRESHNESS_DAYS : 0),
@@ -2919,14 +3001,16 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   const hasModelStrategy = Boolean(strategyResult && sentimentHotStrategyHasModelTerms(strategyResult));
   const useModelStrategyForAcceptance = manualKeywords.length === 0 && hasModelStrategy && Boolean(strategyResult);
   const deferLiveSearchRelevanceGate = manualKeywords.length > 0 || hasModelStrategy;
-  const keywords = manualKeywords.length > 0
-    ? manualKeywords
-    : resolveSentimentHotModelStrategyKeywords(strategyResult, searchMode);
+  const keywords = submittedAllKeywords.length > 0
+    ? submittedAllKeywords
+    : (manualKeywords.length > 0
+      ? manualKeywords
+      : resolveSentimentHotModelStrategyKeywords(strategyResult, searchMode));
   if (manualKeywords.length === 0 && !hasUsableSearchStrategy && !warnings.some((warning) => /关键词生成|搜索策略/.test(warning))) {
     warnings.push("热点关键词不可用，本次未执行抓取；请稍后重试。");
   }
   const queryKeywords = manualKeywords.length > 0
-    ? resolveSentimentHotManualQueryKeywords(submittedManualKeywords, strategyResult, searchMode)
+    ? resolveSentimentHotManualQueryKeywords(searchKeywordSource, strategyResult, searchMode)
     : resolveSentimentHotModelQueryKeywords(strategyResult, searchMode);
   warnings.push(searchMode === "normal" ? "热点抓取模式：普通（泛垂直）。" : "热点抓取模式：严格（垂直收口）。");
   if (liveOnlyRefresh) warnings.push(manualKeywords.length > 0
@@ -3044,30 +3128,37 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   }
   let instagramReaderCandidatesPromise: Promise<SentimentHotCandidate[]> | null = null;
   let instagramQueries: string[] = [];
+  const instagramStageTimeoutMs = (): number => Math.min(
+    fetchThreadsLive
+      ? INSTAGRAM_READER_STAGE_TIMEOUT_MS
+      : remainingSentimentHotTotalBudgetMs(startedAt, 2_000, totalTimeoutMs),
+    remainingSentimentHotTotalBudgetMs(startedAt, 4_000, totalTimeoutMs),
+  );
   const startInstagramReaderCandidates = (): Promise<SentimentHotCandidate[]> => {
-    instagramQueries = buildInstagramHotSearchQueries(queryKeywords, keywords);
+    instagramQueries = instagramTagQueriesFromKeywords(queryKeywords);
     return withSentimentTimeout(
       fetchInstagramReaderSearchCandidates({
         archiveId,
         keywords,
-        queries: instagramQueries.slice(0, INSTAGRAM_READER_QUERY_LIMIT),
+        queries: instagramQueries,
         limit: poolLimit,
         refresh: args.refresh === true,
         freshnessDays: strictFreshOnly ? operationalFreshnessDays : undefined,
         searchMode: strictFreshOnly ? searchMode : undefined,
         warnings,
       }),
-      Math.min(INSTAGRAM_READER_STAGE_TIMEOUT_MS, remainingSentimentHotTotalBudgetMs(startedAt, 4_000, totalTimeoutMs)),
+      instagramStageTimeoutMs(),
       [],
     ).catch((error) => {
       warnings.push("Instagram reader \u6293\u53d6\u5931\u6557\uff1a" + (error instanceof Error ? error.message : String(error)));
       return [];
     });
   };
-  if (shouldFetchLiveCandidates && fetchInstagramLive && !SENTIMENT_HOT_READER_SERIAL_PLATFORMS) {
+  if (shouldFetchLiveCandidates && fetchInstagramLive && (!SENTIMENT_HOT_READER_SERIAL_PLATFORMS || !fetchThreadsLive)) {
     instagramReaderCandidatesPromise = startInstagramReaderCandidates();
   }
   let liveThreadsCandidateCount = 0;
+  let liveInstagramRawCount = 0;
   if (shouldFetchLiveCandidates && fetchThreadsLive) {
     const beforeThreadsCount = candidates.length;
     const liveDeficit = Math.max(1, candidateSourceTarget - cachedReadyCount);
@@ -3139,7 +3230,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       instagramReaderCandidatesPromise = startInstagramReaderCandidates();
     }
     if (instagramReaderCandidatesPromise && instagramQueries.length > 0 && hasSentimentHotTotalBudget(startedAt, 4_000, totalTimeoutMs)) {
-      const instagramTimeoutMs = Math.min(INSTAGRAM_READER_STAGE_TIMEOUT_MS, remainingSentimentHotTotalBudgetMs(startedAt, 4_000, totalTimeoutMs));
+      const instagramTimeoutMs = instagramStageTimeoutMs();
       if (instagramTimeoutMs >= 4_000) {
         const beforeInstagramCount = candidates.length;
         const readerCandidates = await measureSentimentStage(
@@ -3166,8 +3257,9 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
           }
           candidates = normalizeCandidatePool([...byIdInstagram.values()]);
         }
-        channelStats.push(`Instagram 公开页原始 ${readerCandidates.length}，新增 ${instagramAddedCount}，补充前 ${beforeInstagramCount}`);
-        if (instagramAddedCount > 0) warnings.push(`已从 Instagram 公开页加入 ${instagramAddedCount} 篇合格候选。`);
+        liveInstagramRawCount += readerCandidates.length;
+        channelStats.push(`Instagram 登录态原始 ${readerCandidates.length}，新增 ${instagramAddedCount}，补充前 ${beforeInstagramCount}`);
+        if (instagramAddedCount > 0) warnings.push(`已从 Instagram 登录态加入 ${instagramAddedCount} 篇合格候选。`);
       }
     }
     instagramReaderCandidatesPromise = null;
@@ -3220,9 +3312,10 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         if (byId.size >= poolLimit) break;
       }
       candidates = normalizeCandidatePool([...byId.values()]);
-      warnings.push(`已从 Instagram 公开页加入 ${instagramAddedCount} 篇候选。`);
+      warnings.push(`已从 Instagram 登录态加入 ${instagramAddedCount} 篇候选。`);
     }
-    channelStats.push(`Instagram 公开页原始 ${readerCandidates.length}，新增 ${instagramAddedCount}，补充前 ${beforeInstagramCount}`);
+    liveInstagramRawCount += readerCandidates.length;
+    channelStats.push(`Instagram 登录态原始 ${readerCandidates.length}，新增 ${instagramAddedCount}，补充前 ${beforeInstagramCount}`);
   }
 
   // Hot candidates are deliberately collected from public pages only. Account
@@ -3280,6 +3373,13 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     // not sent through a second whole-content model selection pass.
     candidates = strategyCandidatePool;
   }
+  candidates = await enrichHotCandidateViewCounts(
+    candidates,
+    startedAt,
+    totalTimeoutMs,
+    warnings,
+    channelStats,
+  );
   const displayCandidatePool = strictFreshOnly
     ? candidates.filter((candidate) => (
       !isHistoricalSupplementCandidate(candidate)
@@ -3418,48 +3518,6 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings.push(`近 ${freshnessDays || operationalFreshnessDays} 天新候选不足，已在近 ${operationalFreshnessDays} 天范围内按同人设合规候选轮换补足。`);
     }
   }
-  const forceDetailRefresh = false;
-  const detailTargetCount = args.refresh === true ? 0 : candidates.filter((candidate) => (
-    candidate.platform === "threads"
-    && (
-      forceDetailRefresh
-      || (
-        typeof candidate.engagement?.viewCount !== "number"
-        && typeof (candidate.metrics as any)?.view_count !== "number"
-        && typeof (candidate.metrics as any)?.viewCount !== "number"
-        && typeof (candidate.metrics as any)?.views !== "number"
-      )
-    )
-  )).length;
-  // Post-detail reads enrich existing candidates with view counts. They must
-  // never extend the user-facing fetch beyond its total budget: each detail
-  // read can open additional browser and Reader requests, while candidates are
-  // already ready to return at this point.
-  const detailBudgetMs = remainingSentimentHotTotalBudgetMs(startedAt, 3_000, totalTimeoutMs);
-  if (detailTargetCount > 0 && detailBudgetMs >= 4_000) {
-    const detailStartedAt = Date.now();
-    candidates = await measureSentimentStage(
-      warnings,
-      "post-detail-enrichment",
-      () => withSentimentTimeout(
-        enrichThreadsCandidateDetails(candidates, { force: forceDetailRefresh }),
-        detailBudgetMs,
-        candidates,
-      ),
-    );
-    const resolvedViewCount = candidates.filter((candidate) => (
-      typeof candidate.engagement?.viewCount === "number"
-      || typeof (candidate.metrics as any)?.view_count === "number"
-      || typeof (candidate.metrics as any)?.viewCount === "number"
-      || typeof (candidate.metrics as any)?.views === "number"
-    )).length;
-    channelStats.push(`原帖浏览 ${resolvedViewCount}/${candidates.length}，耗时 ${Date.now() - detailStartedAt}ms`);
-    if (resolvedViewCount < candidates.length) {
-      warnings.push(`已从原帖详情获取 ${resolvedViewCount}/${candidates.length} 条真实浏览量；其余原帖暂未公开或详情读取失败。`);
-    }
-  } else if (detailTargetCount > 0) {
-    channelStats.push("原帖详情指标跳过（已优先返回热点候选）");
-  }
   if (requestedPlatform) {
     candidates = candidates.filter((candidate) => candidateMatchesRequestedPlatform(candidate, requestedPlatform));
     warnings.push(requestedPlatform === "instagram" ? "本次仅抓取 Instagram。" : "本次仅抓取 Threads。");
@@ -3475,10 +3533,22 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   console.info(`[sentiment_hot_channels] archiveId=${archiveId} ${channelSummary}`);
   warnings.push(`渠道統計：${channelSummary}`);
 
+  const discoveredCount = requestedPlatform === "instagram" ? liveInstagramRawCount : liveThreadsCandidateCount;
+  let emptyReason: FetchSentimentHotCandidatesResult["emptyReason"];
   if (candidates.length === 0) {
-    warnings.push("\u672a\u627e\u5230\u7b26\u5408\u689d\u4ef6\u7684\u9ad8\u71b1\u5ea6\u4e2d\u6587\u71b1\u9ede\uff1b\u8acb\u5237\u65b0\u6216\u63db\u66f4\u4eba\u8a2d\u95dc\u9375\u8a5e\u3002");
+    if (discoveredCount <= 0) {
+      emptyReason = "no_source";
+      warnings.push(requestedPlatform === "instagram"
+        ? "Instagram 这次没有搜索到帖，还没有进入热度筛选。"
+        : "Threads 这次没有搜索到帖，还没有进入热度筛选。");
+    } else {
+      emptyReason = "below_threshold";
+      warnings.push(requestedPlatform === "instagram"
+        ? "Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 100。"
+        : "Threads 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 200。");
+    }
   } else if (candidates.length < limit) {
-    warnings.push(`\u672c\u6b21\u53ea\u627e\u5230\u0020${candidates.length}/${limit}\u0020\u7bc7\u9ad8\u71b1\u5ea6\u4e2d\u6587\u71b1\u9ede\uff0c\u5df2\u904e\u6ffe\u91cd\u8907\u3001\u975e\u4e2d\u6587\u6216\u4f4e\u71b1\u5ea6\u5167\u5bb9\u3002`);
+    warnings.push(`本次只找到 ${candidates.length}/${limit} 篇符合条件的中文热点，已过滤重复、非中文或未达标内容。`);
   }
   if (candidates.length > 0 && !liveOnlyRefresh && args.recordShown !== false) {
     try {
@@ -3487,7 +3557,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings.push(`热点展示历史记录失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return { candidates, keywords, searchMode, freshnessDays, freshnessPolicy, cookieStatuses, warnings };
+  return { candidates, keywords, searchMode, freshnessDays, freshnessPolicy, cookieStatuses, warnings, emptyReason };
 }
 
 export async function fetchSentimentHotCandidates(args: {
@@ -3503,6 +3573,7 @@ export async function fetchSentimentHotCandidates(args: {
   liveOnly?: boolean;
   sourcePolicy?: "reader_first" | "reader_only" | "authenticated_only";
   keywords?: string[];
+  allKeywords?: string[];
   platform?: SentimentHotPlatform | string;
 }): Promise<FetchSentimentHotCandidatesResult> {
   const archiveId = cleanText(args.archive?.id) || "default";
@@ -3830,10 +3901,15 @@ function buildDirectRelevanceNeedles(keywords: string[]): string[] {
     .filter((keyword) => keyword.length >= 2 && isSearchableRelevanceTerm(keyword) && !isGenericSentimentKeyword(keyword.toLowerCase())))];
 }
 
-function isUsefulHotCandidate(candidate: SentimentHotCandidate): boolean {
-  // Relevance, freshness and content-quality gates run separately. Heat has
-  // one non-adaptive floor so every result follows the same rule.
-  return Number(candidate.hotScore || 0) >= MIN_SENTIMENT_HOT_SCORE_FLOOR;
+export function minInteractionHeatForCandidate(candidate: Pick<SentimentHotCandidate, "platform">): number {
+  return candidate?.platform === "instagram" ? MIN_INSTAGRAM_INTERACTION_HEAT_SCORE : MIN_INTERACTION_HEAT_SCORE;
+}
+
+export function isUsefulHotCandidate(candidate: SentimentHotCandidate): boolean {
+  // Combined views+heat >= 1000 always passes. Interaction heat can pass
+  // alone: 200 on Threads, 100 on Instagram (photo posts have no play count).
+  return combinedReachScore(candidate) >= MIN_COMBINED_REACH_SCORE
+    || interactionHeatScore(candidate) >= minInteractionHeatForCandidate(candidate);
 }
 
 function sentimentCandidateSource(candidate: SentimentHotCandidate): string {
@@ -3926,7 +4002,7 @@ function minimumSentimentHotHanCountForCandidate(candidate: SentimentHotCandidat
     (source === "threads-account-search"
       || ((source === "threads-search-page" || source === "threads-reader-search")
         && (candidate.metrics as any)?.publicSearch === true))
-    && Number(candidate.hotScore || 0) >= MIN_SENTIMENT_HOT_SCORE_FLOOR
+    && isUsefulHotCandidate(candidate)
   ) {
     // Threads search frequently returns high-engagement concise posts and
     // video captions. Keep the heat/relevance/language gates hard, but do not
@@ -4014,10 +4090,8 @@ function isReverseSentimentHotContent(candidate: SentimentHotCandidate, keywords
 
 export function resolveSentimentHotDisplayHeatThreshold(candidates: SentimentHotCandidate[], limit: number): number {
   const requested = Math.max(1, Math.floor(limit || 1));
-  for (const threshold of SENTIMENT_HOT_SCORE_FALLBACK_STEPS) {
-    if (candidates.filter((candidate) => Number(candidate.hotScore || 0) >= threshold).length >= requested) {
-      return threshold;
-    }
+  if (candidates.filter((candidate) => isUsefulHotCandidate(candidate)).length >= requested) {
+    return MIN_INTERACTION_HEAT_SCORE;
   }
   return MIN_SENTIMENT_HOT_SCORE_FLOOR;
 }
@@ -4047,12 +4121,15 @@ function candidateMeetsDisplayQuality(
   };
   if (!candidateMatchesOperationalFreshness(normalized, freshnessDays)) return reject("freshness");
   if (!skipHeatGate && !isUsefulHotCandidate(normalized)) {
-    const viewCount = Number(normalized.engagement?.viewCount ?? (normalized.metrics as any)?.view_count ?? 0);
-    return reject(viewCount >= MIN_SENTIMENT_HOT_SCORE_FLOOR ? "heat_interactions_only" : "heat");
+    return reject("heat");
   }
+  const hanFloor = minimumSentimentHotHanCountForCandidate(normalized);
+  const readableFloor = hanFloor < MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT
+    ? hanFloor
+    : MIN_SENTIMENT_HOT_READABLE_CHARACTER_COUNT;
   if (
-    sentimentHotReadableCharacterCount(content) < MIN_SENTIMENT_HOT_READABLE_CHARACTER_COUNT
-    || sentimentHotHanCount(content) < minimumSentimentHotHanCountForCandidate(normalized)
+    sentimentHotReadableCharacterCount(content) < readableFloor
+    || sentimentHotHanCount(content) < hanFloor
   ) return reject("content_length");
   if (isNoisyReaderCandidateContent(normalized, content)) return reject("reader_noise");
   if (isGarbageOrUselessSentimentContent(content)) return reject("garbage");
@@ -4113,11 +4190,11 @@ export function finalizeSentimentHotCandidatesForDisplay(candidates: SentimentHo
       }
       return 0;
     });
-  // There is one explicit 500-point floor. Qualified rows are sorted by
-  // real engagement first, then publication time.
+  // Combined views+heat >= 1000, or interaction heat >= 200. Qualified rows
+  // are sorted by combined reach first, then publication time.
   for (const threshold of SENTIMENT_HOT_SCORE_FALLBACK_STEPS) {
     for (const candidate of sorted) {
-      if (Number(candidate.hotScore || 0) < threshold) continue;
+      if (!isUsefulHotCandidate(candidate)) continue;
       const content = cleanSentimentCandidateContent(candidate.content || "");
       if (!content) continue;
       if (options?.excludeShown && getSentimentHotCandidateHistoryKeys({ ...candidate, content }).some((key) => shownHistoryKeys.has(key))) continue;
@@ -4315,10 +4392,98 @@ function countMatchedNeedlesInContent(candidate: SentimentHotCandidate, needles:
   return needles.filter((needle) => haystack.includes(needle.toLowerCase())).length;
 }
 
+export function mergeSentimentHotKeywordLists(...groups: Array<readonly string[] | string[] | undefined | null>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const group of groups) {
+    for (const item of group || []) {
+      const keyword = cleanText(item);
+      if (!keyword) continue;
+      const key = keyword.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(keyword);
+      if (out.length >= 32) return out;
+    }
+  }
+  return out;
+}
+
 function candidateTouchesCurrentKeywords(candidate: SentimentHotCandidate, keywords: string[]): boolean {
-  const needles = buildRelevanceNeedles(keywords);
+  const needles = distinctiveKeywordTokens(keywords);
   if (needles.length === 0) return false;
-  return countMatchedNeedles(candidate, needles) > 0;
+  return countMatchedNeedlesInContent(candidate, needles) > 0;
+}
+
+export function distinctiveKeywordTokens(keywords: string[]): string[] {
+  const full = meaningfulNeedles(keywords)
+    .map(cleanText)
+    .filter((keyword) => (
+      keyword.length >= 2
+      && isSearchableRelevanceTerm(keyword)
+      && !isGenericSentimentKeyword(keyword.toLowerCase())
+      && !isWeakRelevanceKeyword(keyword)
+    ));
+  const tokens: string[] = [];
+  const add = (value: string) => {
+    const keyword = cleanText(value);
+    if (
+      keyword.length < 2
+      || keyword.length > 14
+      || !isSearchableRelevanceTerm(keyword)
+      || isGenericSentimentKeyword(keyword.toLowerCase())
+      || isWeakRelevanceKeyword(keyword)
+    ) return;
+    if (!tokens.some((item) => item.toLowerCase() === keyword.toLowerCase())) tokens.push(keyword);
+  };
+  for (const keyword of full) {
+    for (const variant of expandChineseScriptVariants(keyword)) add(variant);
+    for (const latin of keyword.match(/[A-Za-z][A-Za-z0-9.+-]{2,20}/g) || []) add(latin);
+    if (/[\u3400-\u9fff]{2,}/u.test(keyword)) add(keyword.slice(-2));
+    const parts = [
+      ...splitKeywords(keyword),
+      ...segmentPersonaWords(keyword),
+      ...(keyword.match(/[\u3400-\u9fff]{2,}/gu) || []),
+    ].map(cleanText).filter((part) => (
+      part.length >= 2
+      && isSearchableRelevanceTerm(part)
+      && !isGenericSentimentKeyword(part.toLowerCase())
+      && !isWeakRelevanceKeyword(part)
+    ));
+    for (const part of parts) {
+      if (part.length >= 3) {
+        for (const variant of expandChineseScriptVariants(part)) add(variant);
+        continue;
+      }
+      if (full.some((item) => item === part)) {
+        add(part);
+        continue;
+      }
+      const prefixOf = full.find((item) => item.length > part.length && item.startsWith(part));
+      if (prefixOf && prefixOf.slice(part.length).length >= 2) continue;
+      add(part);
+    }
+  }
+  return tokens.slice(0, 96);
+}
+
+function lightRelevanceNeedles(keywords: string[]): string[] {
+  const tokens = distinctiveKeywordTokens(keywords);
+  const extra: string[] = [];
+  for (const keyword of keywords) {
+    const text = cleanText(keyword);
+    if (
+      text.length < 2
+      || isHollowBroadMatchTerm(text)
+      || !isSearchableRelevanceTerm(text)
+    ) continue;
+    extra.push(text);
+    if (/[\u3400-\u9fff]{2,}/u.test(text)) {
+      const tail = text.slice(-2);
+      if (!isHollowBroadMatchTerm(tail)) extra.push(tail);
+    }
+  }
+  return [...new Set([...tokens, ...extra].map(cleanText).filter(Boolean))].slice(0, 96);
 }
 
 export function candidateMatchesCurrentKeywords(candidate: SentimentHotCandidate, keywords: string[], searchMode: SentimentHotSearchMode = "normal"): boolean {
@@ -4328,53 +4493,13 @@ export function candidateMatchesCurrentKeywords(candidate: SentimentHotCandidate
     : "";
   const sourceQuery = sourceQueryBelongsToCurrentKeywordBatch(rawSourceQuery, keywords) ? rawSourceQuery : "";
   const relevanceKeywords = sourceQuery ? [sourceQuery, ...keywords] : keywords;
-  const needles = buildRelevanceNeedlesForMode(relevanceKeywords, searchMode);
+  const needles = searchMode === "strict"
+    ? distinctiveKeywordTokens(relevanceKeywords)
+    : lightRelevanceNeedles(relevanceKeywords);
   if (needles.length === 0) return false;
-  const strongNeedles = buildStrongRelevanceNeedlesForMode(relevanceKeywords, searchMode);
-  // Relevance must come from the post body. Author names and the search query
-  // field are not evidence that the article itself is on-topic.
-  const matchedCount = countMatchedNeedlesInContent(candidate, needles);
-  const matchedStrongCount = countMatchedNeedlesInContent(candidate, strongNeedles);
-  const spiderSourceParts = source === "threads-reader-search"
-    && (candidate.metrics as any)?.publicSearch === true
-    && (candidate.metrics as any)?.crawler === "spider-http-hydration"
-    && sourceQuery.length >= 4
-    ? segmentPersonaWords(sourceQuery).filter((part) => (
-        part.length >= 2
-        && !isWeakRelevanceKeyword(part)
-        && !isGenericSentimentKeyword(part)
-      ))
-    : [];
-  const matchesSpiderSourcePart = spiderSourceParts.length > 0
-    && countMatchedNeedlesInContent(candidate, spiderSourceParts) > 0;
-  if (matchedCount <= 0 && !matchesSpiderSourcePart) return false;
-  // Public Threads search can include recommendation cards unrelated to the
-  // submitted term. Keep a card only when its visible author/content actually
-  // contains the query or another current persona/platform tag.
-  if (
-    source === "threads-search-page"
-    || source === "threads-reader-search"
-    || (source === "threads-account-search" && (candidate.metrics as any)?.recentSearch === true)
-  ) return true;
-  if (searchMode === "normal") {
-    // Authenticated cards were produced by this exact search query and the DOM
-    // parser already proved that the visible card contains it. Preserve short
-    // Chinese topics such as "地震" instead of requiring a second unrelated
-    // persona term at the final gate.
-    if (source === "threads-account-search" && sourceQuery.length === 2
-      && isConcreteSearchKeyword(sourceQuery)
-      && Array.isArray((candidate.metrics as any)?.matchedKeywords)
-      && (candidate.metrics as any).matchedKeywords.some((item: unknown) => cleanText(item) === sourceQuery)
-      && countMatchedNeedlesInContent(candidate, buildRelevanceNeedles([sourceQuery])) > 0) return true;
-    const directNeedles = buildDirectRelevanceNeedles(relevanceKeywords);
-    const directMatchedCount = countMatchedNeedlesInContent(candidate, directNeedles);
-    const hasSpecificDirectMatch = directNeedles
-      .filter((needle) => needle.length >= 3)
-      .some((needle) => countMatchedNeedlesInContent(candidate, [needle]) > 0);
-    return hasSpecificDirectMatch || directMatchedCount >= 2;
-  }
-  if (strongNeedles.length === 0) return matchedCount >= 2;
-  return matchedStrongCount > 0 || matchedCount >= 2;
+  // Any distinctive token from the current keyword batch is enough. Do not
+  // require the full phrase, and ignore weak fragments such as 日本/比较.
+  return countMatchedNeedlesInContent(candidate, needles) > 0;
 }
 
 async function fetchThreadsSearchPageCandidates(args: {
@@ -6378,6 +6503,8 @@ async function fetchThreadsReaderSearchCandidates(args: {
           args.deferRelevanceGate ? [] : args.keywords,
           args.searchMode,
           args.freshnessDays,
+          undefined,
+          true,
         );
         if (!normalized) continue;
         const dedupeKey = sentimentCandidateDedupeKey(normalized);
@@ -6448,6 +6575,46 @@ async function fetchThreadsReaderSearchCandidates(args: {
     : sortSentimentHotCandidatePool(all, args.keywords, collectCap, args.searchMode);
 }
 
+function instagramPlayCountFromRecord(value: any): number | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const keys = [
+    "play_count",
+    "playCount",
+    "ig_play_count",
+    "igPlayCount",
+    "video_play_count",
+    "videoPlayCount",
+    "video_view_count",
+    "videoViewCount",
+    "fb_play_count",
+    "fbPlayCount",
+  ];
+  let best: number | undefined;
+  for (const key of keys) {
+    const parsed = Number((value as Record<string, unknown>)[key]);
+    if (!Number.isFinite(parsed) || parsed <= 0) continue;
+    const rounded = Math.round(parsed);
+    if (best === undefined || rounded > best) best = rounded;
+  }
+  return best;
+}
+
+export function instagramMediaPlayCount(value: any, depth = 0): number | undefined {
+  if (!value || typeof value !== "object" || depth > 3) return undefined;
+  let best = instagramPlayCountFromRecord(value);
+  const nested: unknown[] = [
+    value.clips_metadata,
+    value.media,
+    ...(Array.isArray(value.carousel_media) ? value.carousel_media : []),
+    ...(Array.isArray(value.carousel_media_items) ? value.carousel_media_items : []),
+  ];
+  for (const child of nested) {
+    const childPlay = instagramMediaPlayCount(child, depth + 1);
+    if (typeof childPlay === "number" && (best === undefined || childPlay > best)) best = childPlay;
+  }
+  return best;
+}
+
 export function parseInstagramAuthenticatedSearchPayload(args: {
   payload: any;
   query: string;
@@ -6485,12 +6652,7 @@ export function parseInstagramAuthenticatedSearchPayload(args: {
           ?? value?.commentCount
           ?? value?.edge_media_to_comment?.count
         ) || 0);
-        const rawViewCount = [
-          value?.play_count,
-          value?.view_count,
-          value?.video_view_count,
-        ].find((item) => item !== null && item !== undefined && item !== "");
-        const viewCount = rawViewCount === undefined ? undefined : Math.max(0, Number(rawViewCount) || 0);
+        const viewCount = instagramMediaPlayCount(value);
         const sourceUrl = `https://www.instagram.com/p/${encodeURIComponent(code)}/`;
         const id = buildSentimentCandidateId({ platform: "instagram", sourceUrl, content });
         if (!seenIds.has(id)) {
@@ -6518,7 +6680,7 @@ export function parseInstagramAuthenticatedSearchPayload(args: {
               matchedKeywords,
               like_count: likeCount,
               comment_count: commentCount,
-              ...(typeof viewCount === "number" ? { view_count: viewCount } : {}),
+              ...(typeof viewCount === "number" ? { view_count: viewCount, play_count: viewCount } : {}),
               realEngagementTotal: hotScore,
             },
             engagement,
@@ -6541,6 +6703,20 @@ function normalizeInstagramAuthenticatedTagQuery(value: unknown): string {
     .replace(/^#+/, "")
     .replace(/[\s#，、。.!！？?;；:：/\\|()[\]{}]+/g, "")
     .slice(0, 24);
+}
+
+export function instagramTagQueriesFromKeywords(keywords: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const keyword of keywords || []) {
+    const text = normalizeInstagramAuthenticatedTagQuery(keyword);
+    if (!text || text.length < 2) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+  }
+  return out;
 }
 
 async function fetchInstagramAuthenticatedSearchCandidates(args: {
@@ -6807,6 +6983,76 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
   return sortSentimentHotCandidatePool(results, args.keywords, args.limit, args.searchMode);
 }
 
+async function fetchInstagramCookieTagHttpCandidates(args: {
+  archiveId: string;
+  keywords: string[];
+  queries: string[];
+  limit: number;
+  freshnessDays?: number;
+  searchMode?: SentimentHotSearchMode;
+  warnings?: string[];
+}): Promise<SentimentHotCandidate[]> {
+  const cookies = readSentimentBrowserAuthCookies("instagram");
+  if (!hasValidInstagramSessionCookie(cookies)) {
+    args.warnings?.push("没有可用的 Instagram 登录态，无法抓取。");
+    return [];
+  }
+  const csrfToken = cleanText(cookies.find((cookie: any) => cleanText(cookie?.name).toLowerCase() === "csrftoken")?.value);
+  const queries = instagramTagQueriesFromKeywords(args.queries);
+  if (!queries.length) {
+    args.warnings?.push("本轮没有可用来搜索 Instagram 标签的词。");
+    return [];
+  }
+  const out: SentimentHotCandidate[] = [];
+  const seen = new Set<string>();
+  const headers = {
+    accept: "*/*",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "x-ig-app-id": "936619743392459",
+    "x-requested-with": "XMLHttpRequest",
+    referer: "https://www.instagram.com/",
+    ...(csrfToken ? { "x-csrftoken": csrfToken } : {}),
+  };
+  for (let offset = 0; offset < queries.length; offset += INSTAGRAM_COOKIE_QUERY_BATCH_SIZE) {
+    const batch = queries.slice(offset, offset + INSTAGRAM_COOKIE_QUERY_BATCH_SIZE);
+    const responses = await Promise.all(batch.map(async (query) => {
+      const response = await requestSessionHttpText({
+        url: `https://www.instagram.com/api/v1/tags/web_info/?tag_name=${encodeURIComponent(query)}`,
+        cookies,
+        headers,
+        timeoutMs: 12_000,
+      }).catch(() => null);
+      return { query, response };
+    }));
+    for (const { query, response } of responses) {
+      if (!response?.ok) continue;
+      const parsed = parseInstagramAuthenticatedSearchPayload({
+        payload: safeJson(response.text),
+        query,
+        keywords: args.keywords,
+      });
+      for (const candidate of parsed) {
+        if (args.searchMode && args.freshnessDays) {
+          const normalized = candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays, undefined, true);
+          if (!normalized) continue;
+        }
+        const key = sentimentCandidateDedupeKey(candidate);
+        if (seen.has(key) || seen.has(candidate.id)) continue;
+        seen.add(key);
+        seen.add(candidate.id);
+        out.push(candidate);
+        if (out.length >= args.limit) break;
+      }
+    }
+  }
+  if (out.length) {
+    args.warnings?.push(`已用采集登录态搜索 ${queries.length} 个标签，读取 Instagram 帖 ${out.length} 篇。`);
+  } else {
+    args.warnings?.push(`已用采集登录态搜索 ${queries.length} 个标签，本轮没有解析到可用帖。`);
+  }
+  return out;
+}
+
 async function fetchInstagramReaderSearchCandidates(args: {
   archiveId: string;
   keywords: string[];
@@ -6819,119 +7065,24 @@ async function fetchInstagramReaderSearchCandidates(args: {
   warnings?: string[];
 }): Promise<SentimentHotCandidate[]> {
   const excluded = args.excludeIds || (args.refresh ? getSentimentHotRefreshExcludedIds(args.archiveId) : getSentimentHotExcludedIds(args.archiveId));
+  const cookieCandidates = await fetchInstagramCookieTagHttpCandidates({
+    archiveId: args.archiveId,
+    keywords: args.keywords,
+    queries: args.queries,
+    limit: args.limit,
+    freshnessDays: args.freshnessDays,
+    searchMode: args.searchMode,
+    warnings: args.warnings,
+  }).catch((error) => {
+    args.warnings?.push("Instagram 登录态抓取失败：" + (error instanceof Error ? error.message : String(error)));
+    return [];
+  });
   const all: SentimentHotCandidate[] = [];
-  const allKeys = new Set<string>();
-  const globalPoolCandidates = new Map<string, SentimentHotCandidate>();
-  let plannedRequests = 0;
-  let successfulResponses = 0;
-  let failedResponses = 0;
-  let rateLimitedResponses = 0;
-  let loginWallResponses = 0;
-  let postLinkResponses = 0;
-  const searches = await Promise.all(
-    args.queries.map(async (query) => {
-      const normalizedQuery = cleanText(query).replace(/^#/, "");
-      // Chinese tag pages expose post links and engagement snippets. The
-      // keyword-search page adds no useful public result here, while doubling
-      // requests and causing the bounded live stage to time out. Keep it only
-      // for non-Han terms, where it is the applicable public endpoint.
-      const targets = hasHan(normalizedQuery)
-        ? [`https://www.instagram.com/explore/tags/${encodeURIComponent(normalizedQuery)}/`]
-        : [`https://www.instagram.com/explore/search/keyword/?q=${encodeURIComponent(normalizedQuery)}`];
-      plannedRequests += targets.length;
-      const texts: Array<{ query: string; targetUrl: string; text: string; rawHtml: string }> = [];
-      for (const targetUrl of targets) {
-        try {
-          const response = await fetchWithSharedPublicCrawlerLimit(targetUrl, {
-            headers: {
-              "user-agent": "Mozilla/5.0",
-              accept: "text/plain, text/markdown, */*",
-              "cache-control": "max-age=300",
-            },
-          // A forced Reader refresh adds a cache-busting query parameter to
-          // the Instagram public URL. Instagram can answer that artificial
-          // URL with a login-wall document even when the canonical public tag
-          // page is readable. Bypass only this app cache for an explicit
-          // refresh, while preserving the canonical public URL.
-          }, 8_000, args.refresh ? "bypass" : "swr");
-          if (!response.ok) {
-            failedResponses += 1;
-            if (response.status === 429) rateLimitedResponses += 1;
-            continue;
-          }
-          successfulResponses += 1;
-          const text = await response.text();
-          if (/Log into Instagram|登入 Instagram|登录 Instagram|Continue to Instagram/i.test(text)) {
-            loginWallResponses += 1;
-          }
-          if (/https?:\/\/(?:www\.)?instagram\.com\/(?:p|reel)\/[\w-]+/i.test(text)) {
-            postLinkResponses += 1;
-          }
-          texts.push({
-            query,
-            targetUrl,
-            text,
-            rawHtml: spiderRawHtmlByTargetUrl.get(new URL(targetUrl).toString()) || "",
-          });
-        } catch {
-          failedResponses += 1;
-          // Instagram reader is an opportunistic extra source.
-        }
-      }
-      return texts;
-    }),
-  );
-  for (const search of searches.flat()) {
-    // Spider keeps the original HTML beside the Reader-compatible text. The
-    // hydration nodes preserve the exact shortcode/caption/play-count mapping;
-    // prefer them over broad Markdown windows, which can merge adjacent cards.
-    const parsedById = new Map<string, SentimentHotCandidate>();
-    for (const candidate of parseInstagramSpiderHydrationCandidates({
-      html: search.rawHtml,
-      query: search.query,
-      keywords: args.keywords,
-      includeUnmatched: true,
-      limit: Math.max(50, args.limit * 5),
-    })) parsedById.set(candidate.id, candidate);
-    for (const candidate of parseInstagramReaderSearchMarkdownCandidates({
-      text: search.text,
-      query: search.query,
-      keywords: args.keywords,
-      includeUnmatched: true,
-      sourceUrl: search.targetUrl,
-      limit: Math.max(50, args.limit * 5),
-    })) {
-      if (!parsedById.has(candidate.id)) parsedById.set(candidate.id, candidate);
-    }
-    const parsed = [...parsedById.values()];
-    for (const candidate of parsed) globalPoolCandidates.set(candidate.id, candidate);
-    for (const candidate of parsed) {
-      if (all.length >= args.limit) continue;
-      if (excluded.has(candidate.id)) continue;
-      if (!candidateTouchesCurrentKeywords(candidate, args.keywords)) continue;
-      const normalized = args.searchMode && args.freshnessDays
-        ? candidateMeetsDisplayQuality(candidate, args.keywords, args.searchMode, args.freshnessDays)
-        : candidate;
-      if (!normalized) continue;
-      const dedupeKey = sentimentCandidateDedupeKey(normalized);
-      if (all.some((item) => item.id === normalized.id) || allKeys.has(dedupeKey)) continue;
-      allKeys.add(dedupeKey);
-      all.push(normalized);
-    }
+  for (const candidate of cookieCandidates) {
+    if (excluded.has(candidate.id)) continue;
+    all.push(candidate);
   }
-  console.info(
-    `[sentiment_hot_instagram_reader] archiveId=${args.archiveId}`
-    + ` requests=${plannedRequests} ok=${successfulResponses} failed=${failedResponses}`
-    + ` rateLimited=${rateLimitedResponses} loginWalls=${loginWallResponses}`
-    + ` postPayloads=${postLinkResponses} parsed=${all.length}`,
-  );
-  if (!all.length && plannedRequests > 0) {
-    if (rateLimitedResponses > 0) args.warnings?.push("Instagram Reader 当前被上游限流，已跳过本轮 Instagram 公开源补充。");
-    else if (loginWallResponses > 0) args.warnings?.push("Instagram Reader 当前返回登录墙，未读取到公开帖子。");
-    else if (successfulResponses > 0 && !postLinkResponses) args.warnings?.push("Instagram Reader 已返回页面，但未发现可用帖子链接。");
-  }
-  writeGlobalSentimentHotCandidatePool([...globalPoolCandidates.values()]);
-  return sortUsefulHotCandidates(all, args.limit);
+  return all;
 }
 
 function decodeMarkdownLinkText(value: string): string {
@@ -7629,9 +7780,32 @@ export function parseThreadsPostViewCountFromText(text: string): number | undefi
   );
 }
 
+export function parseInstagramPostEngagementFromHtml(html: string): NonNullable<SentimentHotCandidate["engagement"]> {
+  const source = String(html || "");
+  const engagement: NonNullable<SentimentHotCandidate["engagement"]> = {};
+  const likeCount = parseMetricNumberLoose(source.match(/"like_count"\s*:\s*(\d+)/i)?.[1]);
+  const commentCount = parseMetricNumberLoose(source.match(/"comment_count"\s*:\s*(\d+)/i)?.[1]);
+  const viewCount = [
+    parseMetricNumberLoose(source.match(/"play_count"\s*:\s*(\d+)/i)?.[1]),
+    parseMetricNumberLoose(source.match(/"ig_play_count"\s*:\s*(\d+)/i)?.[1]),
+    parseMetricNumberLoose(source.match(/"video_play_count"\s*:\s*(\d+)/i)?.[1]),
+    parseMetricNumberLoose(source.match(/"video_view_count"\s*:\s*(\d+)/i)?.[1]),
+  ].reduce<number | undefined>((best, item) => (
+    typeof item === "number" && item > 0 && (best === undefined || item > best) ? item : best
+  ), undefined);
+  if (typeof likeCount === "number") engagement.likeCount = likeCount;
+  if (typeof commentCount === "number") engagement.commentCount = commentCount;
+  if (typeof viewCount === "number") engagement.viewCount = viewCount;
+  return engagement;
+}
+
 export function parseThreadsPostViewCountFromHtml(html: string): number | undefined {
-  const match = String(html || "").match(/"view_counts"\s*:\s*(\d+(?:\.\d+)?)/i);
-  return match?.[1] ? parseMetricNumberLoose(match[1]) : undefined;
+  const source = String(html || "");
+  const loggedOut = source.match(/"view_counts"\s*:\s*(\d+(?:\.\d+)?)/i);
+  if (loggedOut?.[1]) return parseMetricNumberLoose(loggedOut[1]);
+  const graphql = source.match(/"text_post_app_info"\s*:\s*\{[\s\S]{0,1200}?"view_count"\s*:\s*(\d+)/i);
+  if (graphql?.[1]) return parseMetricNumberLoose(graphql[1]);
+  return undefined;
 }
 
 export function extractThreadsAuthenticatedViewerUsername(html: string): string {
@@ -9323,13 +9497,65 @@ function extractEngagementMetricsFromText(value: string): NonNullable<SentimentH
 }
 
 function realSentimentHotScore(engagement: NonNullable<SentimentHotCandidate["engagement"]>): number {
+  return combinedReachScore({
+    hotScore: 0,
+    engagement,
+    metrics: typeof engagement.viewCount === "number" ? { view_count: engagement.viewCount } : {},
+  } as SentimentHotCandidate);
+}
+
+export function viewCountOfCandidate(candidate: Pick<SentimentHotCandidate, "engagement" | "metrics">): number {
+  const metrics = candidate.metrics && typeof candidate.metrics === "object" ? candidate.metrics as Record<string, unknown> : {};
+  const raw = [
+    candidate.engagement?.viewCount,
+    metrics.view_count,
+    metrics.viewCount,
+    metrics.views,
+    metrics.play_count,
+    metrics.playCount,
+    metrics.ig_play_count,
+    metrics.video_play_count,
+    metrics.video_view_count,
+  ];
+  for (const item of raw) {
+    if (item === null || item === undefined || item === "") continue;
+    const parsed = Number(item);
+    if (Number.isFinite(parsed) && parsed > 0) return Math.round(parsed);
+  }
+  return 0;
+}
+
+export function interactionHeatScore(candidate: Pick<SentimentHotCandidate, "engagement" | "hotScore" | "metrics">): number {
+  const engagement = candidate.engagement || {};
   const namedTotal = Math.max(0, Number(engagement.likeCount || 0))
     + Math.max(0, Number(engagement.commentCount || 0))
     + Math.max(0, Number(engagement.shareCount || 0));
   const rawTotal = (engagement.rawSignals || [])
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0)
     .reduce((total, value) => total + value, 0);
-  return Math.round(Math.max(Number(engagement.viewCount || 0), namedTotal, rawTotal));
+  const views = viewCountOfCandidate(candidate);
+  if (namedTotal <= 0 && rawTotal <= 0) {
+    return Math.max(0, Math.round(Number(candidate.hotScore || 0) - views));
+  }
+  return Math.round(Math.max(namedTotal, rawTotal));
+}
+
+export function combinedReachScore(candidate: Pick<SentimentHotCandidate, "engagement" | "hotScore" | "metrics">): number {
+  return viewCountOfCandidate(candidate) + interactionHeatScore(candidate);
+}
+
+function stampCombinedReachScore(candidate: SentimentHotCandidate): SentimentHotCandidate {
+  const combined = combinedReachScore(candidate);
+  return {
+    ...candidate,
+    hotScore: Math.max(Number(candidate.hotScore || 0), combined),
+    metrics: {
+      ...(candidate.metrics || {}),
+      view_count: viewCountOfCandidate(candidate),
+      interaction_heat: interactionHeatScore(candidate),
+      combined_reach: combined,
+    },
+  };
 }
 
 function extractInstagramEngagementMetricsFromText(value: string): NonNullable<SentimentHotCandidate["engagement"]> {
@@ -9984,8 +10210,32 @@ async function fetchThreadsDetailData(sourceUrl: string): Promise<{
   const normalizedSourceUrl = String(sourceUrl || "").replace(/^https:\/\/www\.threads\.com\//i, "https://www.threads.net/");
   if (!/^https:\/\/www\.threads\.net\/@[^/]+\/post\//i.test(normalizedSourceUrl)) return { engagement: {}, media: [] };
   try {
-    const cacheBuster = `__r=${Date.now().toString(36)}`;
-    const readerTargetUrl = `${normalizedSourceUrl}${normalizedSourceUrl.includes("?") ? "&" : "?"}${cacheBuster}`;
+    const readerTargetUrl = normalizedSourceUrl;
+    const applyPublicViewCount = (
+      engagement: NonNullable<SentimentHotCandidate["engagement"]>,
+      text: string,
+      rawHtml = "",
+    ) => {
+      const htmlViews = parseThreadsPostViewCountFromHtml(rawHtml)
+        || parseThreadsPostViewCountFromText(text)
+        || parseThreadsPostViewCountFromHtml(text);
+      if (typeof htmlViews === "number") engagement.viewCount = htmlViews;
+      return engagement;
+    };
+    if (process.env.VITEST_WORKER_ID) {
+      const response = await fetch(readerTargetUrl, {
+        headers: {
+          "user-agent": "Mozilla/5.0",
+          accept: "text/plain, text/markdown, */*",
+        },
+      });
+      if (!response.ok) return { engagement: {}, media: [] };
+      const text = await response.text();
+      return {
+        engagement: applyPublicViewCount(parseThreadsDetailEngagementMarkdown(text), text),
+        media: parseThreadsDetailMediaMarkdown(text),
+      };
+    }
     const response = await fetchWithSharedPublicCrawlerLimit(readerTargetUrl, {
       headers: {
         "user-agent": "Mozilla/5.0",
@@ -9996,13 +10246,98 @@ async function fetchThreadsDetailData(sourceUrl: string): Promise<{
     }, 12_000, "bypass");
     if (!response.ok) return { engagement: {}, media: [] };
     const text = await response.text();
+    const rawHtml = spiderRawHtmlByTargetUrl.get(readerTargetUrl)
+      || spiderRawHtmlByTargetUrl.get(normalizedSourceUrl)
+      || "";
     return {
-      engagement: parseThreadsDetailEngagementMarkdown(text),
+      engagement: applyPublicViewCount(parseThreadsDetailEngagementMarkdown(text), text, rawHtml),
       media: parseThreadsDetailMediaMarkdown(text),
     };
   } catch {
     return { engagement: {}, media: [] };
   }
+}
+
+function normalizeInstagramPostUrl(raw: unknown): string {
+  const match = String(raw || "").trim().match(/^https?:\/\/(?:www\.)?instagram\.com\/(p|reel|tv)\/([A-Za-z0-9_-]+)/i);
+  if (!match) return "";
+  return `https://www.instagram.com/${match[1].toLowerCase()}/${match[2]}/`;
+}
+
+async function fetchInstagramDetailData(sourceUrl: string): Promise<{
+  engagement: NonNullable<SentimentHotCandidate["engagement"]>;
+  media: SentimentHotMedia[];
+}> {
+  const normalizedSourceUrl = normalizeInstagramPostUrl(sourceUrl);
+  if (!normalizedSourceUrl) return { engagement: {}, media: [] };
+  try {
+    const load = async () => {
+      if (process.env.VITEST_WORKER_ID) {
+        return fetch(normalizedSourceUrl, {
+          headers: {
+            "user-agent": "Mozilla/5.0",
+            accept: "text/plain, text/markdown, text/html, */*",
+          },
+        });
+      }
+      return fetchWithSharedPublicCrawlerLimit(normalizedSourceUrl, {
+        headers: {
+          "user-agent": "Mozilla/5.0",
+          accept: "text/plain, text/markdown, */*",
+          "cache-control": "no-cache",
+          pragma: "no-cache",
+        },
+      }, 12_000, "bypass");
+    };
+    const response = await load();
+    if (!response.ok) return { engagement: {}, media: [] };
+    const text = await response.text();
+    const rawHtml = spiderRawHtmlByTargetUrl.get(normalizedSourceUrl) || text;
+    const engagement = mergeEngagementMetrics(
+      extractInstagramEngagementMetricsFromText(text),
+      parseInstagramPostEngagementFromHtml(rawHtml),
+    );
+    return {
+      engagement,
+      media: parseThreadsDetailMediaMarkdown(text),
+    };
+  } catch {
+    return { engagement: {}, media: [] };
+  }
+}
+
+async function enrichInstagramCandidateDetails(
+  candidates: SentimentHotCandidate[],
+): Promise<SentimentHotCandidate[]> {
+  const targets = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .filter(({ candidate }) => (
+      candidate.platform === "instagram"
+      && Boolean(normalizeInstagramPostUrl(candidate.sourceUrl))
+      && viewCountOfCandidate(candidate) <= 0
+    ))
+    .slice(0, 16);
+  if (!targets.length) return candidates;
+  const enriched = [...candidates];
+  await Promise.all(targets.map(async ({ candidate, index }) => {
+    const detail = await fetchInstagramDetailData(candidate.sourceUrl);
+    if (!hasNamedEngagementMetrics(detail.engagement) && !detail.media.length) return;
+    const engagement = mergeEngagementMetrics(candidate.engagement || {}, detail.engagement);
+    if (typeof detail.engagement.viewCount === "number") engagement.viewCount = detail.engagement.viewCount;
+    const media = mergeCandidateMedia(candidate.media || [], detail.media);
+    enriched[index] = {
+      ...candidate,
+      hotScore: Math.max(candidate.hotScore, realSentimentHotScore(engagement)),
+      media,
+      engagement,
+      metrics: {
+        ...(candidate.metrics || {}),
+        mediaCount: media.length,
+        ...compactEngagementMetrics(engagement),
+      },
+    };
+  }));
+  return enriched;
 }
 
 export async function refreshSentimentSourceMetrics(args: {
@@ -10059,6 +10394,48 @@ export async function refreshSentimentSourceMetrics(args: {
   };
 }
 
+async function enrichHotCandidateViewCounts(
+  candidates: SentimentHotCandidate[],
+  startedAt: number,
+  totalTimeoutMs: number,
+  warnings: string[],
+  channelStats: string[],
+): Promise<SentimentHotCandidate[]> {
+  const threadsMissingViews = candidates.filter((candidate) => (
+    candidate.platform === "threads"
+    && viewCountOfCandidate(candidate) <= 0
+    && /^https:\/\/(?:www\.)?threads\.(?:net|com)\/@[^/]+\/post\//i.test(candidate.sourceUrl || "")
+  ));
+  const instagramMissingViews = candidates.filter((candidate) => (
+    candidate.platform === "instagram"
+    && viewCountOfCandidate(candidate) <= 0
+    && Boolean(normalizeInstagramPostUrl(candidate.sourceUrl))
+  ));
+  if (!threadsMissingViews.length) {
+    if (instagramMissingViews.length) {
+      channelStats.push("Instagram 浏览量沿用登录态字段，未再请求公开页");
+    }
+    return candidates.map(stampCombinedReachScore);
+  }
+  const detailBudgetMs = remainingSentimentHotTotalBudgetMs(startedAt, 3_000, totalTimeoutMs);
+  if (detailBudgetMs < 4_000) {
+    channelStats.push("原帖详情指标跳过（剩余时间不足）");
+    return candidates.map(stampCombinedReachScore);
+  }
+  const detailStartedAt = Date.now();
+  const enriched = await withSentimentTimeout(
+    enrichThreadsCandidateDetails(candidates, { force: true, includeReader: true }),
+    detailBudgetMs,
+    candidates,
+  );
+  const resolvedViewCount = enriched.filter((candidate) => viewCountOfCandidate(candidate) > 0).length;
+  channelStats.push(`原帖浏览 ${resolvedViewCount}/${enriched.length}，耗时 ${Date.now() - detailStartedAt}ms`);
+  if (resolvedViewCount < enriched.length) {
+    warnings.push(`已从原帖详情获取 ${resolvedViewCount}/${enriched.length} 条真实浏览量；其余原帖暂未公开或详情读取失败。`);
+  }
+  return enriched.map(stampCombinedReachScore);
+}
+
 export async function enrichThreadsCandidateDetails(
   candidates: SentimentHotCandidate[],
   options: { force?: boolean; browserContext?: any; browserConcurrency?: number; includeReader?: boolean } = {},
@@ -10078,7 +10455,7 @@ export async function enrichThreadsCandidateDetails(
         )
       )
     ))
-    .slice(0, 10);
+    .slice(0, 16);
   if (!targets.length) return candidates;
   const enriched = [...candidates];
   const browserMetricsPromise = fetchThreadsBrowserDetailMetricsBatch(
@@ -10413,7 +10790,7 @@ export function parseInstagramSpiderHydrationCandidates(args: {
     const engagement: NonNullable<SentimentHotCandidate["engagement"]> = {};
     const likeCount = instagramHydrationMetric(node, "like_count", "edge_media_preview_like.count", "edge_liked_by.count");
     const commentCount = instagramHydrationMetric(node, "comment_count", "edge_media_to_comment.count", "edge_media_to_parent_comment.count");
-    const viewCount = instagramHydrationMetric(node, "play_count", "view_count", "video_view_count");
+    const viewCount = instagramMediaPlayCount(node) ?? instagramHydrationMetric(node, "play_count", "ig_play_count", "video_play_count", "video_view_count", "view_count");
     if (typeof likeCount === "number") engagement.likeCount = likeCount;
     if (typeof commentCount === "number") engagement.commentCount = commentCount;
     if (typeof viewCount === "number") engagement.viewCount = viewCount;
@@ -11251,6 +11628,32 @@ function readInstagramCookiesFromProfileDir(profileDir: unknown): any[] {
   return readPlatformCookiesFromProfileDir(profileDir, "instagram");
 }
 
+function readCollectorPoolInstagramCookies(): any[] {
+  const dbPath = cleanText(process.env.COLLECTOR_DB_PATH);
+  if (!dbPath || !fs.existsSync(dbPath)) return [];
+  let db: any = null;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const accounts = db.prepare(`
+      SELECT profile_dir
+      FROM collector_accounts
+      WHERE lower(platform) = 'instagram'
+        AND trim(profile_dir) <> ''
+      ORDER BY last_success_at DESC, updated_at DESC
+      LIMIT 12
+    `).all();
+    for (const account of accounts) {
+      const cookies = readInstagramCookiesFromProfileDir(account?.profile_dir);
+      if (hasValidInstagramSessionCookie(cookies)) return cookies;
+    }
+  } catch {
+    return [];
+  } finally {
+    db?.close?.();
+  }
+  return [];
+}
+
 function readManagedThreadsAccountCookies(): any[] {
   const preferredProfileDir = cleanText(process.env.PERSONA_DASHBOARD_THREADS_PROFILE_DIR || process.env.THREADS_AUTH_PROFILE_DIR);
   if (preferredProfileDir) {
@@ -11381,10 +11784,14 @@ function readSentimentBrowserAuthCookies(platform: SentimentHotPlatform) {
       });
     if (platform === "instagram") {
       const managedCookies = readManagedInstagramAccountCookies();
-      if (collectorProfileRequired) return managedCookies.slice(0, 120);
-      return hasValidInstagramSessionCookie(managedCookies)
-        ? mergeBrowserAuthCookies(managedCookies, cookies).slice(0, 120)
-        : mergeBrowserAuthCookies(cookies, managedCookies).slice(0, 120);
+      const collectorCookies = readCollectorPoolInstagramCookies();
+      const preferred = hasValidInstagramSessionCookie(collectorCookies)
+        ? collectorCookies
+        : managedCookies;
+      if (collectorProfileRequired) return preferred.slice(0, 120);
+      return hasValidInstagramSessionCookie(preferred)
+        ? mergeBrowserAuthCookies(preferred, cookies).slice(0, 120)
+        : mergeBrowserAuthCookies(cookies, preferred).slice(0, 120);
     }
     if (platform !== "threads") return cookies;
     const managedCookies = readManagedThreadsAccountCookies();

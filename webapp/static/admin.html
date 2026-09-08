@@ -357,7 +357,191 @@
     .proxy-provider-credential-form label { min-width: 0; margin: 0; }
     .proxy-provider-credential-form label > span { display: block; margin-bottom: 5px; }
     .proxy-provider-credential-form .proxy-provider-credential-actions { grid-column: 1 / -1; display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-api-body { margin-top: 8px; padding-top: 8px; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-api-head { margin-bottom: 8px; gap: 8px; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-api-head p { font-size: 11px; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-credential-form { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 10px; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-credential-form label > span { margin-bottom: 3px; font-size: 12px; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-credential-form input[type="password"],
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-credential-form input[type="text"],
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-credential-form input[type="number"] { height: 34px; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .sensitive-input-wrap .sensitive-input { padding-right: 40px; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .sensitive-toggle-btn { min-width: 34px; width: 34px; height: 32px; padding: 0; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-check { display: flex; align-items: center; gap: 6px; min-height: 34px; font-size: 12px; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-check input { width: auto; margin: 0; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] #bundleSocialSyncStatus { grid-column: 1 / -1; margin: 0; }
+    .proxy-provider-tab-panel[data-model-panel="bundle-social"] .proxy-provider-secret-note { flex: 1 1 220px; }
+    .bundle-social-interval-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .proxy-provider-credential-actions button { width: auto; }
+    #secTelegram .admin-tg-split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px 36px;
+      align-items: start;
+    }
+    #secTelegram .admin-tg-bot-pane,
+    #secTelegram .admin-tg-member-pane {
+      display: grid;
+      gap: 14px;
+      min-width: 0;
+    }
+    #secTelegram .admin-tg-status-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px 20px;
+      align-items: start;
+    }
+    #secTelegram .admin-tg-token-row,
+    #secTelegram .admin-tg-member-row {
+      display: grid;
+      gap: 12px;
+    }
+    #secTelegram .admin-tg-field,
+    #secTelegram .admin-tg-token-field {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      min-width: 0;
+      width: 100%;
+    }
+    #secTelegram .admin-tg-field > span {
+      color: #51677c;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+    #secTelegram .admin-tg-token-field .sensitive-input-wrap,
+    #secTelegram .admin-tg-member-row .admin-tg-field input {
+      min-width: 0;
+      width: 100%;
+    }
+    #secTelegram .admin-tg-token-row .sensitive-input-wrap {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      position: relative;
+    }
+    #secTelegram .admin-tg-status-row label,
+    #secTelegram .admin-tg-token-row label,
+    #secTelegram .admin-tg-member-row label {
+      margin: 0;
+      min-width: 0;
+    }
+    #secTelegram .admin-tg-enable {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      margin: 0;
+      white-space: nowrap;
+    }
+    #secTelegram .admin-tg-enable input {
+      width: auto;
+      margin: 0;
+    }
+    #secTelegram .admin-tg-inline-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    #secTelegram .admin-tg-inline-actions button,
+    #secTelegram .admin-tg-member-row > button {
+      width: auto;
+      min-height: 34px;
+      white-space: nowrap;
+    }
+    #secTelegram .admin-tg-member-row > button {
+      justify-self: start;
+    }
+    #secTelegram #tgBotToken,
+    #secTelegram #tgTrustedChatId,
+    #secTelegram #tgTrustedLabel {
+      width: 100%;
+      min-width: 0;
+      max-width: none;
+      box-sizing: border-box;
+    }
+    #secTelegram #tgBotToken {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      letter-spacing: 0;
+    }
+    #secTelegram #tgBotToken.is-saved-runtime-secret {
+      letter-spacing: 0;
+    }
+    #secTelegram button.sensitive-toggle-btn {
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    #secTelegram .admin-tg-member-table-shell {
+      margin-top: 8px;
+    }
+    #secTelegram .admin-tg-member-table-shell .admin-governance-table {
+      min-width: 920px;
+    }
+    #secTelegram .admin-tg-member-table-shell td:last-child {
+      white-space: nowrap;
+    }
+    #secTelegram .admin-tg-status-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    #secTelegram .admin-tg-status-tags .admin-user-badge {
+      display: inline-flex;
+      margin: 0;
+    }
+    #secTelegram #tgBotTokenStatus.admin-tg-status-tags,
+    #secTelegram #tgBotUsername {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+    }
+    #secTelegram #tgBotUsername {
+      font-size: 13px;
+    }
+    #secTelegram .admin-tg-chat-id {
+      font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 700;
+      color: #1f2a37;
+    }
+    #secTelegram .admin-tg-member-meta {
+      display: grid;
+      gap: 2px;
+    }
+    #secTelegram .admin-tg-member-meta span {
+      color: #6b7c8d;
+      font-size: 11px;
+    }
+    #secTelegram .admin-tg-time-cell {
+      display: grid;
+      gap: 4px;
+      min-width: 148px;
+    }
+    #secTelegram .admin-tg-time-cell span {
+      display: block;
+      color: #51677c;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    #secTelegram .admin-tg-time-cell em {
+      font-style: normal;
+      color: #8a97a6;
+      margin-right: 6px;
+    }
+    @media (max-width: 980px) {
+      #secTelegram .admin-tg-split,
+      #secTelegram .admin-tg-status-row {
+        grid-template-columns: 1fr;
+      }
+    }
     .proxy-provider-secret-note { flex: 1 1 300px; margin: 0; color: #51677c; font-size: 11px; }
     .proxy-provider-field-map { margin-top: 14px; padding-top: 14px; border-top: 1px solid #d6e0e8; }
     .proxy-provider-field-map > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; cursor: pointer; list-style: none; }
@@ -646,21 +830,20 @@
         <nav id="adminPrimaryNav" class="nav admin-nav" aria-label="运营后台导航">
           <button type="button" data-page="overview">运营概览</button>
           <button type="button" data-page="users">客户账号 <span class="small" id="adminUserCount">0</span></button>
-          <button type="button" data-page="taxonomy">客户治理</button>
           <button type="button" data-page="tasks">生成记录 <span class="small" id="adminTaskCount">0</span></button>
-          <button type="button" data-page="audit">审计日志</button>
           <button type="button" data-page="security">安全告警 <span class="small" id="adminAlertCount">0</span></button>
-          <button type="button" data-page="serviceAccounts">服务账号</button>
           <button type="button" data-page="proxyMarket">代理 IP</button>
           <button type="button" data-page="pricing">套餐与客户额度</button>
-          <button type="button" data-page="crm">CRM 模块</button>
+          <button type="button" data-page="telegram">Telegram</button>
           <button type="button" data-page="runtime">系统配置</button>
           <button type="button" data-page="sentimentCookies">舆情 Cookie</button>
         </nav>
 
         <div class="admin-public-links" id="adminPublicLinks" aria-label="公共入口">
           <a class="btn ghost" href="/?admin_console=1">进入首页</a>
-          <a class="btn ghost" href="/admin-console.html">进入 Web 控制台</a>
+          <a class="btn ghost" href="/admin-console.html">进入推文工作台</a>
+          <a class="btn ghost" href="/admin-video.html">进入视频工作台</a>
+          <a class="btn ghost" href="/crm.html?admin_console=1">进入采集工作台</a>
         </div>
       </div>
     </aside>
@@ -877,7 +1060,7 @@
         <div class="section-head">
           <div>
             <h2 id="adminAccountsTitle">账号管理</h2>
-            <div class="meta" id="adminAccountsMeta">审核客户申请、查看业务数据、人工调整算力点并控制账号状态。</div>
+            <div class="meta" id="adminAccountsMeta">审核客户申请、查看账号详情与额度，并控制账号状态。</div>
           </div>
           <div class="admin-pending-count"><strong id="adminPendingCount">0</strong><span>待授权</span></div>
         </div>
@@ -897,7 +1080,6 @@
           <label><span class="sr-only">在线状态</span><select id="adminUserOnline"><option value="">全部会话</option><option value="online">在线</option><option value="offline">离线</option></select></label>
           <label class="admin-customer-filter"><span class="sr-only">认证方式</span><select id="adminUserAuthMethod"><option value="">全部认证方式</option><option value="password">密码登录</option><option value="google">Google 登录</option></select></label>
           <label class="admin-customer-filter"><span class="sr-only">邮箱状态</span><select id="adminUserEmailStatus"><option value="">全部邮箱状态</option><option value="verified">邮箱已验证</option><option value="unverified">邮箱未验证</option><option value="missing">未绑定邮箱</option></select></label>
-          <button type="submit" class="primary">筛选</button>
           <button id="btnResetUserFilters" type="button" class="ghost">重置</button>
         </form>
         <div class="admin-compose-shell">
@@ -982,38 +1164,6 @@
         </nav>
       </section>
 
-      <section class="card section admin-page-view" id="secTaxonomy" data-page-view="taxonomy">
-        <div class="section-head admin-governance-head">
-          <div>
-            <h2>客户治理</h2>
-            <div class="meta">维护客户分组和标签词表，供账号治理与批量操作使用。</div>
-          </div>
-          <button id="btnRefreshTaxonomy" type="button" class="ghost">刷新</button>
-        </div>
-        <div class="admin-taxonomy-grid">
-          <section class="admin-governance-panel" aria-labelledby="customerGroupTitle">
-            <header><div><strong id="customerGroupTitle">客户分组</strong><span>互斥的运营归属</span></div></header>
-            <form id="customerGroupForm" class="admin-inline-create-form">
-              <input id="customerGroupName" maxlength="80" placeholder="分组名称" required>
-              <input id="customerGroupDescription" maxlength="500" placeholder="用途说明">
-              <select id="customerGroupColor" aria-label="分组颜色"><option value="neutral">中性</option><option value="blue">蓝色</option><option value="green">绿色</option><option value="amber">橙色</option><option value="red">红色</option></select>
-              <button type="submit" class="primary">新增</button>
-            </form>
-            <div id="customerGroupList" class="admin-taxonomy-list"></div>
-          </section>
-          <section class="admin-governance-panel" aria-labelledby="customerTagTitle">
-            <header><div><strong id="customerTagTitle">客户标签</strong><span>可叠加的业务标记</span></div></header>
-            <form id="customerTagForm" class="admin-inline-create-form admin-inline-create-form-tags">
-              <input id="customerTagName" maxlength="80" placeholder="标签名称" required>
-              <select id="customerTagColor" aria-label="标签颜色"><option value="neutral">中性</option><option value="blue">蓝色</option><option value="green">绿色</option><option value="amber">橙色</option><option value="red">红色</option></select>
-              <button type="submit" class="primary">新增</button>
-            </form>
-            <div id="customerTagList" class="admin-taxonomy-list"></div>
-          </section>
-        </div>
-        <div id="taxonomyMsg" class="msg" role="status" aria-live="polite"></div>
-      </section>
-
       <section class="card section admin-page-view" id="secTasks" data-page-view="tasks">
         <div class="section-head">
           <div>
@@ -1093,42 +1243,6 @@
         </nav>
       </section>
 
-      <section class="card section admin-page-view" id="secAudit" data-page-view="audit">
-        <div class="section-head admin-governance-head">
-          <div>
-            <h2>审计日志</h2>
-            <div class="meta">按操作者、对象、动作、结果和风险级别追踪后台敏感操作。</div>
-          </div>
-          <div class="admin-governance-refresh">
-            <span class="small" id="auditResultSummary">尚未查询</span>
-            <button id="btnExportAudit" type="button" class="ghost">导出 CSV</button>
-            <button id="btnRefreshAudit" type="button" class="primary">查询</button>
-          </div>
-        </div>
-        <form id="auditFilterForm" class="admin-governance-filters">
-          <label><span>操作者 ID</span><input id="auditActorId" type="number" min="1" placeholder="全部"></label>
-          <label><span>目标用户 ID</span><input id="auditTargetId" type="number" min="1" placeholder="全部"></label>
-          <label><span>动作</span><input id="auditAction" placeholder="例如 user.password_reset"></label>
-          <label><span>结果</span><select id="auditOutcome"><option value="">全部</option><option value="success">成功</option><option value="denied">拒绝</option><option value="failed">失败</option></select></label>
-          <label><span>风险</span><select id="auditRisk"><option value="">全部</option><option value="critical">严重</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label>
-        </form>
-        <div class="table-wrap admin-table-shell admin-governance-table-shell">
-          <table class="table admin-governance-table">
-            <thead><tr><th>时间</th><th>动作 / 资源</th><th>操作者</th><th>目标</th><th>风险</th><th>结果</th><th>原因 / 来源</th></tr></thead>
-            <tbody id="auditBody"></tbody>
-          </table>
-        </div>
-        <nav id="auditPagination" class="admin-user-pagination admin-list-pagination" aria-label="审计日志分页" hidden>
-          <div class="admin-user-pagination-summary" id="auditPaginationSummary" aria-live="polite">共 0 条审计日志</div>
-          <div class="admin-user-pagination-actions">
-            <button id="btnAuditPagePrev" type="button" class="ghost" aria-label="上一页审计日志">上一页</button>
-            <span id="auditPageIndicator" aria-live="polite">第 1 / 1 页</span>
-            <button id="btnAuditPageNext" type="button" class="ghost" aria-label="下一页审计日志">下一页</button>
-          </div>
-        </nav>
-        <div id="auditMsg" class="msg" role="status" aria-live="polite"></div>
-      </section>
-
       <section class="card section admin-page-view" id="secSecurity" data-page-view="security">
         <div class="section-head admin-governance-head">
           <div>
@@ -1151,42 +1265,6 @@
           </div>
         </nav>
         <div id="securityMsg" class="msg" role="status" aria-live="polite"></div>
-      </section>
-
-      <section class="card section admin-page-view" id="secServiceAccounts" data-page-view="serviceAccounts">
-        <div class="section-head admin-governance-head">
-          <div>
-            <h2>服务账号</h2>
-            <div class="meta">管理系统间凭证、最小权限范围和到期时间。新凭证只显示一次。</div>
-          </div>
-          <button id="btnRefreshServiceAccounts" type="button" class="ghost">刷新</button>
-        </div>
-        <form id="serviceAccountForm" class="admin-service-account-form">
-          <label><span>名称</span><input id="serviceAccountName" maxlength="120" placeholder="例如 billing-reporter" required></label>
-          <label><span>用途</span><input id="serviceAccountPurpose" maxlength="500" placeholder="说明调用方与业务用途"></label>
-          <label><span>权限范围</span><input id="serviceAccountScopes" placeholder="逗号分隔，例如 audit:read, users:read"></label>
-          <label><span>到期时间</span><input id="serviceAccountExpiresAt" type="datetime-local" required></label>
-          <button type="submit" class="primary">创建服务账号</button>
-        </form>
-        <div class="admin-service-rotate-stepup">
-          <strong>服务凭据敏感操作确认</strong>
-          <label><span>管理员密码</span><input id="serviceRotateAdminPassword" type="password" autocomplete="current-password"></label>
-          <label><span>动态验证码或恢复码</span><input id="serviceRotateTotpCode" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" maxlength="32"></label>
-          <label><span>操作原因</span><input id="serviceRotateReason" maxlength="1000" placeholder="至少 2 个字符"></label>
-        </div>
-        <div id="serviceCredentialResult" class="admin-one-time-secret" hidden>
-          <div><strong>一次性凭证</strong><span>关闭或刷新后无法再次查看。</span></div>
-          <input id="serviceCredentialValue" readonly autocomplete="off" spellcheck="false">
-          <button id="btnCopyServiceCredential" type="button" class="ghost">复制</button>
-          <button id="btnHideServiceCredential" type="button" class="ghost">清除</button>
-        </div>
-        <div class="table-wrap admin-table-shell admin-governance-table-shell">
-          <table class="table admin-governance-table admin-service-table">
-            <thead><tr><th>服务账号</th><th>用途</th><th>权限范围</th><th>状态</th><th>到期 / 最近使用</th><th>操作</th></tr></thead>
-            <tbody id="serviceAccountBody"></tbody>
-          </table>
-        </div>
-        <div id="serviceAccountMsg" class="msg" role="status" aria-live="polite"></div>
       </section>
 
       <section class="card section admin-page-view" id="secProxyMarket" data-page-view="proxyMarket">
@@ -1551,7 +1629,7 @@
         <div class="section-head">
           <div>
             <h2>套餐与客户额度</h2>
-            <div class="meta">设置客户可购买的月度套餐和储值包，审批购买申请，并管理客户现有额度。</div>
+            <div class="meta">设置客户可购买的月度套餐和储值包，并审批购买申请。</div>
           </div>
           <div class="section-head-side">
             <span class="admin-billing-pending" id="billingPendingSummary">待审批 0</span>
@@ -1570,23 +1648,6 @@
             </div>
             <div id="billingCatalogActive" class="admin-billing-active-summary" aria-live="polite">当前没有已发布方案</div>
             <div class="admin-billing-catalog-layout">
-              <div class="table-wrap admin-billing-table-wrap">
-                <table class="table admin-billing-table">
-                  <caption class="sr-only">客户套餐历史记录</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">方案记录</th>
-                      <th scope="col">是否生效</th>
-                      <th scope="col">生效时间</th>
-                      <th scope="col">保存时间</th>
-                      <th scope="col">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody id="billingCatalogBody">
-                    <tr><td colspan="5" class="admin-billing-empty">正在读取套餐记录...</td></tr>
-                  </tbody>
-                </table>
-              </div>
               <form id="billingCatalogDraftForm" class="admin-billing-editor" novalidate>
                 <div class="admin-billing-editor-head">
                   <div>
@@ -1667,6 +1728,7 @@
                 <div class="admin-billing-form-actions">
                   <button id="btnUseActiveCatalog" class="ghost admin-compact-button" type="button">恢复已发布设置</button>
                   <button id="btnCreateCatalogDraft" class="primary admin-compact-button" type="submit">保存修改</button>
+                  <button id="btnPublishCatalogDraft" class="primary admin-compact-button" type="button">发布给客户</button>
                 </div>
                 <div id="billingCatalogMsg" class="msg" role="status" aria-live="polite"></div>
               </form>
@@ -1718,203 +1780,7 @@
             <div id="billingOrderMsg" class="msg" role="status" aria-live="polite"></div>
           </section>
 
-          <section class="admin-config-card admin-billing-panel" aria-labelledby="billingUserTitle">
-            <div class="admin-billing-panel-head">
-              <div>
-                <div class="admin-config-card-title" id="billingUserTitle">用户计费详情与人工调整</div>
-                <div class="small">按客户 ID 查看钱包、订阅、图片权益与最近流水；人工调整会保留审计记录。</div>
-              </div>
-              <form id="billingUserLookupForm" class="admin-billing-toolbar" novalidate>
-                <label for="billingUserId" class="sr-only">客户 ID</label>
-                <input id="billingUserId" type="number" min="1" inputmode="numeric" placeholder="客户 ID">
-                <button id="btnLoadUserBilling" class="primary admin-compact-button" type="submit">查询计费</button>
-              </form>
-            </div>
-            <div id="billingUserPlaceholder" class="admin-billing-empty-panel">从客户账号列表点击计费按钮，或输入客户 ID 查询。</div>
-            <div id="billingUserWorkspace" hidden>
-              <div id="billingUserSummary" class="admin-billing-summary-grid" aria-live="polite"></div>
-              <div class="table-wrap admin-billing-table-wrap">
-                <table class="table admin-billing-table">
-                  <caption class="sr-only">客户订阅明细</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">订阅</th>
-                      <th scope="col">方案</th>
-                      <th scope="col">状态</th>
-                      <th scope="col">当前周期结束</th>
-                      <th scope="col">操作</th>
-                    </tr>
-                  </thead>
-                  <tbody id="billingSubscriptionBody"></tbody>
-                </table>
-              </div>
-              <div class="admin-billing-user-layout">
-                <div class="table-wrap admin-billing-table-wrap">
-                  <table class="table admin-billing-table">
-                    <caption class="sr-only">客户最近计费流水</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">时间</th>
-                        <th scope="col">资产</th>
-                        <th scope="col">事件</th>
-                        <th scope="col">变动</th>
-                        <th scope="col">变动后</th>
-                        <th scope="col">参考</th>
-                      </tr>
-                    </thead>
-                    <tbody id="billingLedgerBody"></tbody>
-                  </table>
-                </div>
-                <form id="billingAdjustmentForm" class="admin-billing-adjustment" novalidate>
-                  <div class="admin-config-card-title">人工调整</div>
-                  <label for="billingAdjustmentType">调整类型</label>
-                  <select id="billingAdjustmentType">
-                    <option value="credit">调整算力点</option>
-                    <option value="subscription">开通订阅方案</option>
-                  </select>
-                  <label for="billingAdjustmentSubscriptionSku" id="billingAdjustmentSubscriptionSkuLabel" hidden>订阅方案</label>
-                  <select id="billingAdjustmentSubscriptionSku" hidden disabled></select>
-                  <label id="billingAdjustmentUnlimitedField" class="switch admin-billing-unlimited-option">
-                    <input id="billingAdjustmentUnlimited" type="checkbox">
-                    <span>无限算力</span>
-                  </label>
-                  <label for="billingAdjustmentAmount" id="billingAdjustmentAmountLabel">调整算力点</label>
-                  <input id="billingAdjustmentAmount" type="number" step="0.000001" placeholder="正数增加，负数扣减">
-                  <label for="billingAdjustmentNote">调整原因</label>
-                  <textarea id="billingAdjustmentNote" rows="4" maxlength="500" placeholder="必填，用于审计记录"></textarea>
-                  <button id="btnSubmitBillingAdjustment" class="primary admin-compact-button" type="submit">确认人工调整</button>
-                  <div id="billingUserMsg" class="msg" role="status" aria-live="polite"></div>
-                </form>
-              </div>
-            </div>
-          </section>
-
-          <details class="admin-config-card admin-billing-panel admin-billing-legacy">
-            <summary>
-              <span>
-                <strong>基础换算参数</strong>
-                <small>原有服务点、汇率与识别成本配置</small>
-              </span>
-            </summary>
-            <div class="admin-config-grid admin-billing-pricing-grid">
-              <div>
-                <label>视频生成额度换算：10 RMB = ? 服务点</label>
-                <input id="priceRhCoins" type="number" value="2500">
-                <label>USD→RMB 汇率</label>
-                <input id="priceUsdRmb" type="number" step="0.01" value="7.2">
-                <label>图片生成成本（USD/张）</label>
-                <input id="priceNanoUsd" type="number" step="0.001" value="0.134">
-              </div>
-              <div>
-                <label>素材识别输入成本（USD/1M tokens）</label>
-                <input id="priceGemIn" type="number" step="0.01" value="4.0">
-                <label>素材识别输出成本（USD/1M tokens）</label>
-                <input id="priceGemOut" type="number" step="0.01" value="18.0">
-              </div>
-            </div>
-            <div class="row admin-billing-pricing-actions">
-              <button id="btnSavePricing" class="primary admin-compact-button" type="button">保存额度配置</button>
-              <div id="pricingMsg" class="msg"></div>
-            </div>
-          </details>
           <div id="billingWorkspaceMsg" class="msg" role="status" aria-live="polite"></div>
-        </div>
-      </section>
-
-      <section class="card section admin-page-view crm-admin-center" id="secCrm" data-page-view="crm">
-        <div class="section-head admin-governance-head crm-admin-heading">
-          <div>
-            <div class="crm-admin-eyebrow">CRM 管理中心</div>
-            <h3>按步骤管理客户 CRM</h3>
-            <p>第一次使用也不用记技术参数：先确认服务正常，再为客户开通，需要时导入旧资料。</p>
-          </div>
-          <div class="crm-admin-heading-actions">
-            <a class="btn primary" href="/crm.html?admin_console=1">打开 CRM 工作台</a>
-            <button class="btn ghost crm-refresh-button" id="btnCrmAdminRefresh" type="button">重新检查</button>
-          </div>
-        </div>
-
-        <div class="crm-quick-guide" aria-label="CRM 操作顺序">
-          <div class="crm-guide-step"><span>1</span><div><strong>确认服务</strong><small>查看 CRM 是否可以正常使用</small></div></div>
-          <div class="crm-guide-step"><span>2</span><div><strong>开通客户</strong><small>输入客户编号并保存权限</small></div></div>
-          <div class="crm-guide-step"><span>3</span><div><strong>导入资料</strong><small>先检查文件，确认后再导入</small></div></div>
-        </div>
-
-        <div class="crm-admin-grid crm-admin-primary-grid">
-          <section class="admin-config-card crm-control-card" aria-labelledby="crmGlobalSettingsTitle">
-            <div class="crm-card-heading">
-              <span class="crm-card-number">1</span>
-              <div><h4 id="crmGlobalSettingsTitle">CRM 服务开关</h4><p>日常使用只需开启第一项；另外两项仅在维护或故障时使用。</p></div>
-            </div>
-            <form id="crmGlobalSettingsForm" class="form-grid crm-setting-list" novalidate>
-              <label class="crm-setting-option"><input id="crmGlobalEnabled" type="checkbox"><span><strong>允许客户使用 CRM</strong><small>关闭后，所有客户会暂时无法进入 CRM。</small></span></label>
-              <label class="crm-setting-option"><input id="crmMaintenance" type="checkbox"><span><strong>临时维护</strong><small>保留所有资料，但暂停新的 CRM 操作。</small></span></label>
-              <label class="crm-setting-option is-danger"><input id="crmEmergencyPause" type="checkbox"><span><strong>紧急停止所有任务</strong><small>只在发现异常或需要立即停机时开启。</small></span></label>
-              <div class="row crm-card-actions">
-                <button class="btn primary" type="submit">保存服务设置</button>
-                <button class="btn danger" id="btnCrmEmergencyPause" type="button">立即停止</button>
-              </div>
-            </form>
-            <div class="msg" id="crmGlobalMsg" role="status" aria-live="polite"></div>
-          </section>
-
-          <section class="admin-config-card crm-health-card" aria-labelledby="crmHealthTitle">
-            <div class="crm-card-heading">
-              <span class="crm-card-number">✓</span>
-              <div><h4 id="crmHealthTitle">当前运行状态</h4><p>出现“需要处理”时，按照右侧说明检查即可。</p></div>
-            </div>
-            <div id="crmHealthHeadline" class="crm-health-headline is-loading" role="status" aria-live="polite">
-              <span class="crm-health-headline-dot" aria-hidden="true"></span>
-              <div><strong>正在检查 CRM 服务</strong><small>请稍候，系统正在读取最新状态。</small></div>
-            </div>
-            <div id="crmHealthSummary" class="crm-health-list" aria-live="polite"></div>
-          </section>
-
-          <section class="admin-config-card crm-access-card" aria-labelledby="crmUserAccessTitle">
-            <div class="crm-card-heading">
-              <span class="crm-card-number">2</span>
-              <div><h4 id="crmUserAccessTitle">为客户开通 CRM</h4><p>客户编号可在“账号与登录”的客户列表中查看。</p></div>
-            </div>
-            <form id="crmUserAccessForm" class="form-grid" novalidate>
-              <label class="crm-field-label" for="crmUserAccessId">客户编号</label>
-              <div class="crm-inline-field">
-                <input id="crmUserAccessId" type="number" min="1" inputmode="numeric" placeholder="例如：12" required>
-                <button class="btn ghost" id="btnCrmUserAccessLoad" type="button">查询客户状态</button>
-              </div>
-              <div class="crm-field-help">先输入客户编号并查询，确认是正确客户后才能保存。</div>
-              <label class="crm-setting-option crm-customer-access-option"><input id="crmUserAccessEnabled" type="checkbox"><span><strong>允许这位客户使用 CRM</strong><small>取消勾选会回收权限，但不会删除客户已有资料。</small></span></label>
-              <div class="row crm-card-actions">
-                <button class="btn primary" id="btnCrmUserAccessSave" type="submit" disabled>保存开通状态</button>
-              </div>
-            </form>
-            <div class="msg" id="crmUserAccessMsg" role="status" aria-live="polite">输入客户编号后，先点击“查询客户状态”。</div>
-          </section>
-
-          <section class="admin-config-card crm-import-card" aria-labelledby="crmImportTitle">
-            <div class="crm-card-heading">
-              <span class="crm-card-number">3</span>
-              <div><h4 id="crmImportTitle">导入旧 CRM 资料</h4><p>系统会先检查文件；只有检查通过并再次确认后，资料才会写入。</p></div>
-            </div>
-            <div class="crm-import-safety-note"><strong>不会直接修改客户资料</strong><span>第一步只做安全检查，可以放心执行。</span></div>
-            <form id="crmImportDryRunForm" class="form-grid crm-import-check-form" novalidate>
-              <div class="crm-import-fields">
-                <label><span class="crm-field-label">导入到哪位客户</span><input id="crmImportUserId" type="number" min="1" inputmode="numeric" placeholder="填写客户编号" required><small>客户编号可在客户列表中查看。</small></label>
-                <label><span class="crm-field-label">备份文件名</span><input id="crmImportSource" type="text" placeholder="例如：crm-state.json" autocomplete="off" required><small>只填写文件名，不需要填写服务器路径；若文件尚未上传，请联系服务器管理员。</small></label>
-              </div>
-              <button class="btn primary crm-import-primary-action" id="btnCrmImportCheck" type="submit">第一步：检查文件</button>
-            </form>
-            <form id="crmImportActivateForm" class="crm-import-confirm-panel" novalidate>
-              <input id="crmImportBatchId" type="hidden">
-              <div id="crmImportSelectionSummary" class="crm-import-selection-summary">完成文件检查后，这里会显示是否可以继续导入。</div>
-              <div class="row crm-card-actions">
-                <button class="btn primary" id="btnCrmImportActivate" type="submit" disabled>第二步：确认导入</button>
-                <button class="btn ghost" id="btnCrmImportDismiss" type="button" disabled>取消本次导入</button>
-              </div>
-            </form>
-            <div class="msg" id="crmImportMsg" role="status" aria-live="polite"></div>
-            <div class="crm-import-history-head"><strong>最近导入记录</strong><span>只显示易懂的状态，不显示技术代码。</span></div>
-            <div id="crmImportStatus" class="crm-import-history" aria-live="polite"><div class="crm-import-empty">暂无导入记录。</div></div>
-          </section>
         </div>
       </section>
 
@@ -2022,7 +1888,6 @@
                   <label>RunningHub 企业共享 API 密钥</label>
                   <div class="admin-secret-row admin-secret-row-with-check">
                     <input id="rtNewPersonaRunningHubApiKey" type="password" placeholder="留空则保留当前密钥">
-                    <button class="ghost secret-toggle" type="button" data-secret-target="rtNewPersonaRunningHubApiKey" aria-label="显示或隐藏 RunningHub API 密钥">◉</button>
                     <button id="btnCheckRunningHubKey" class="ghost admin-provider-key-check" type="button">检测 Key</button>
                   </div>
                   <div id="rtRunningHubKeyStatus" class="msg admin-runninghub-key-status"></div>
@@ -2102,20 +1967,23 @@
                     </div>
                   </div>
 
-                  <div class="admin-config-card-title">MiniMax Audio</div>
-                  <label>MiniMax API Key</label>
-                  <input id="rtVideoMiniMaxApiKey" type="password" placeholder="留空则保留当前密钥">
-                  <label>MiniMax 国内版接口地址</label>
-                  <input id="rtVideoMiniMaxBaseUrl" type="url" value="https://api.minimaxi.com" readonly>
-                  <div class="small">系统固定使用 MiniMax 国内版主域名，不再切换海外版。</div>
+                  <div class="admin-config-card-title">MiniMax Speech</div>
+                  <div class="small">使用已配置的个人/企业 API Key 调用 Speech 文本转语音，仅显示平台支持的 Speech 模型。</div>
                   <div class="grid-2">
                     <div>
                       <label>TTS 模型 ID</label>
-                      <input id="rtVideoMiniMaxTtsModel" type="text" value="speech-2.8-hd">
+                      <select id="rtVideoMiniMaxTtsModel">
+                        <option value="speech-2.8-hd">speech-2.8-hd（高清，推荐）</option>
+                        <option value="speech-2.8-turbo">speech-2.8-turbo（快速）</option>
+                        <option value="speech-2.6-hd">speech-2.6-hd</option>
+                        <option value="speech-2.6-turbo">speech-2.6-turbo</option>
+                        <option value="speech-02-hd">speech-02-hd</option>
+                        <option value="speech-02-turbo">speech-02-turbo</option>
+                      </select>
                     </div>
                     <div>
                       <label>默认音色 ID</label>
-                      <input id="rtVideoMiniMaxTtsVoiceId" type="text" value="male-qn-qingse">
+                      <input id="rtVideoMiniMaxTtsVoiceId" type="text" value="male-qn-qingse" placeholder="male-qn-qingse">
                     </div>
                   </div>
                 </div>
@@ -2123,7 +1991,7 @@
                   <div class="proxy-provider-api-title-row">
                     <div>
                       <div class="admin-config-card-title" id="bundleSocialApiTitle">平台授权服务</div>
-                      <div class="small">集中配置 Threads 与 Instagram 官方授权、发布和评论所使用的白标接口。</div>
+                      <div class="small">配置官方授权、发布与主页数据只读同步。不会强制刷新，也不会导入历史帖。</div>
                     </div>
                     <span id="bundleSocialCredentialSummary" class="proxy-provider-credential-summary">自动检测中</span>
                   </div>
@@ -2135,8 +2003,13 @@
                     <form id="bundleSocialConfigForm" class="proxy-provider-credential-form" novalidate>
                       <label><span>API Base URL</span><input id="bundleSocialApiBaseUrl" type="url" maxlength="500" required placeholder="https://api.bundle.social/api/v1"></label>
                       <label><span>API Key</span><input id="bundleSocialApiKey" type="password" autocomplete="new-password" maxlength="512" placeholder="输入 API Key"></label>
+                      <label><span>回调签名密钥</span><input id="bundleSocialWebhookSecret" type="password" autocomplete="new-password" maxlength="512" placeholder="输入签名密钥"></label>
+                      <label class="proxy-provider-check"><input id="bundleSocialHomepageOverlay" type="checkbox" checked> 同步账号主页数据（只读缓存）</label>
+                      <label><span>主页读取间隔（小时）</span><input id="bundleSocialHomepageInterval" type="number" min="6" max="24" value="12"></label>
+                      <label><span>与明细错开（小时）</span><input id="bundleSocialCollectOffset" type="number" min="8" max="18" value="12"></label>
+                      <p id="bundleSocialSyncStatus" class="small"></p>
                       <div class="proxy-provider-credential-actions">
-                        <p class="proxy-provider-secret-note">保存前会先验证连接；验证通过后授权、发布与评论会立即读取最新配置，无需重启服务。</p>
+                        <p class="proxy-provider-secret-note">保存前会验证连接。强制刷新已关闭，避免消耗额度。</p>
                         <button id="btnSaveBundleSocialConfig" type="submit" class="primary">保存并自动验证</button>
                       </div>
                     </form>
@@ -2276,6 +2149,107 @@
         <div class="row" style="margin-top:12px">
           <button id="btnSaveRuntime" class="primary" type="button">保存运行配置</button>
           <div id="runtimeMsg" class="msg"></div>
+        </div>
+      </section>
+
+      <section class="card section admin-page-view" id="secTelegram" data-page-view="telegram">
+        <div class="section-head">
+          <div>
+            <h2>Telegram</h2>
+            <div class="meta">按工作台分别配置 Bot Token 和授权成员。当前已接入视频工作台，推文与采集版本先预留分页。</div>
+          </div>
+        </div>
+        <div class="admin-runtime-stack">
+          <div class="admin-config-card admin-runtime-panel admin-runtime-provider-shell">
+            <div class="admin-runtime-panel-head">
+              <div>
+                <div class="admin-config-card-title">Telegram 工作台版本</div>
+                <div class="small">每个工作台使用独立 Bot，互不影响。用下方分页切换版本。</div>
+              </div>
+            </div>
+            <div class="admin-model-tabs" role="tablist" aria-label="Telegram 工作台版本">
+              <button class="admin-model-tab is-active" type="button" data-tg-workbench-tab="video">视频工作台</button>
+              <button class="admin-model-tab" type="button" data-tg-workbench-tab="console">推文工作台</button>
+              <button class="admin-model-tab" type="button" data-tg-workbench-tab="crm">采集工作台</button>
+            </div>
+            <div class="admin-model-tab-panels">
+              <div class="admin-runtime-block admin-model-tab-panel is-active" data-tg-workbench-panel="video">
+                <div class="admin-tg-split">
+                  <div class="admin-tg-bot-pane">
+                    <div class="admin-config-card-title">Telegram Bot</div>
+                    <div class="small">填写 Token 并保存后自动开始轮询。授权以下方成员表为准。</div>
+                    <div class="admin-tg-status-row">
+                      <div class="admin-tg-field">
+                        <span>Bot 状态</span>
+                        <div id="tgBotTokenStatus" class="small">未读取</div>
+                      </div>
+                      <div class="admin-tg-field">
+                        <span>Bot 用户名</span>
+                        <div id="tgBotUsername" class="small">-</div>
+                      </div>
+                      <div class="admin-tg-field">
+                        <span>轮询</span>
+                        <label class="proxy-provider-check admin-tg-enable"><input id="tgBotEnabled" type="checkbox"> 启用轮询</label>
+                      </div>
+                    </div>
+                    <div class="admin-tg-token-row">
+                      <label class="admin-tg-field admin-tg-token-field">
+                        <span>Bot Token</span>
+                        <input id="tgBotToken" type="password" autocomplete="new-password" placeholder="留空保存则清除 Token">
+                      </label>
+                      <div class="admin-tg-inline-actions">
+                        <button id="btnTestTgEnv" class="ghost" type="button">检测 Token</button>
+                        <button id="btnSaveTgEnv" class="primary" type="button">保存配置</button>
+                        <button id="btnRefreshTg" class="ghost" type="button">刷新</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="admin-tg-member-pane">
+                    <div class="admin-config-card-title">允许成员</div>
+                    <div class="small">可填 Chat ID 或 @用户名。保存时自动读取 Telegram 用户名称；若只填 Chat ID 且尚未对话，等该用户给 Bot 发消息后也会回填。</div>
+                    <div class="admin-tg-member-row">
+                      <label class="admin-tg-field">
+                        <span>Chat ID</span>
+                        <input id="tgTrustedChatId" placeholder="Chat ID 或 @用户名">
+                      </label>
+                      <label class="admin-tg-field">
+                        <span>备注</span>
+                        <input id="tgTrustedLabel" placeholder="例如：客户A">
+                      </label>
+                      <button id="btnSaveTgUser" class="primary" type="button">保存成员</button>
+                    </div>
+                  </div>
+                </div>
+                <div id="tgSettingsMsg" class="msg" role="status" aria-live="polite"></div>
+                <div class="table-wrap admin-table-shell admin-tg-member-table-shell">
+                  <table class="table admin-governance-table">
+                    <caption class="sr-only">Telegram 允许成员</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">备注</th>
+                        <th scope="col">用户名称</th>
+                        <th scope="col">Chat ID</th>
+                        <th scope="col">授权状态</th>
+                        <th scope="col">时间</th>
+                        <th scope="col">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tgTrustedUserList"></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="admin-runtime-block admin-model-tab-panel" data-tg-workbench-panel="console">
+                <div class="admin-config-card-title">Telegram Bot</div>
+                <div class="small">推文工作台将单独配置 Token 与授权成员，不与视频工作台共用。</div>
+                <div class="task-empty">推文工作台 Telegram 版本已预留，接入后在此分页配置。</div>
+              </div>
+              <div class="admin-runtime-block admin-model-tab-panel" data-tg-workbench-panel="crm">
+                <div class="admin-config-card-title">Telegram Bot</div>
+                <div class="small">采集工作台将单独配置 Token 与授权成员，不与视频工作台共用。</div>
+                <div class="task-empty">采集工作台 Telegram 版本已预留，接入后在此分页配置。</div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -2539,7 +2513,7 @@
           <div class="small" id="userDetailSub">-</div>
         </div>
         <div class="admin-user-detail-header-actions">
-          <button id="btnManageUserWorkspace" type="button" class="primary">登录用户控制台</button>
+          <button id="btnManageUserWorkspace" type="button" class="primary">登录用户推文工作台</button>
           <button id="btnUserDetailClose" type="button" class="modal-close-icon" aria-label="关闭账号详细资料">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
           </button>
@@ -2547,6 +2521,33 @@
       </div>
       <div class="modal-body">
         <div class="admin-user-detail-grid" id="userDetailBody"></div>
+        <section class="admin-user-resource-section" id="userResourceSection" aria-labelledby="userResourceTitle">
+          <div class="admin-user-governance-heading">
+            <div>
+              <strong id="userResourceTitle">业务数据</strong>
+              <span>人设、分组、草稿、创建推文、已发推文、社媒账号、代理与自动化任务，以及该客户最近生成记录。</span>
+            </div>
+          </div>
+          <div id="userResourceSummary" class="admin-user-resource-grid" aria-live="polite"></div>
+          <div id="userResourceTags" class="admin-user-resource-tags"></div>
+          <div class="table-wrap admin-billing-table-wrap">
+            <table class="table admin-billing-table">
+              <caption class="sr-only">该客户最近生成记录</caption>
+              <thead>
+                <tr>
+                  <th scope="col">时间</th>
+                  <th scope="col">类型</th>
+                  <th scope="col">状态</th>
+                  <th scope="col">内部流程</th>
+                  <th scope="col">结果</th>
+                </tr>
+              </thead>
+              <tbody id="userGenerationBody">
+                <tr><td colspan="5" class="admin-billing-empty">正在读取生成记录...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
         <section class="admin-user-auth-section" id="userAuthSection" aria-labelledby="userAuthTitle">
           <div class="admin-user-auth-heading">
             <div>
@@ -2679,6 +2680,137 @@
       <div class="modal-footer admin-approval-actions">
         <button id="btnRejectUser" type="button" class="danger">拒绝授权</button>
         <button id="btnApproveUser" type="button" class="primary">授权并启用</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="userBillingModal" class="modal-overlay" style="display:none" aria-hidden="true">
+    <div id="userBillingDialog" class="modal-card admin-user-detail-modal" role="dialog" aria-modal="true" aria-labelledby="userBillingModalTitle" tabindex="-1">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="userBillingModalTitle">算力点明细</div>
+          <div class="small" id="userBillingSub">-</div>
+        </div>
+        <button id="btnUserBillingClose" type="button" class="modal-close-icon" aria-label="关闭算力点明细">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <section class="admin-user-billing-section" id="userBillingSection" aria-labelledby="userBillingTitle">
+          <div class="admin-user-governance-heading">
+            <div>
+              <strong id="userBillingTitle">账户算力</strong>
+              <span>按客户工作台流水页展示余额、订阅和变动明细；人工调整写在右侧。</span>
+            </div>
+          </div>
+          <div id="billingUserPlaceholder" class="admin-billing-empty-panel">正在读取客户额度...</div>
+          <div id="billingUserWorkspace" hidden>
+            <div id="billingUserSummary" class="admin-billing-summary-grid" aria-live="polite"></div>
+            <div class="admin-billing-user-layout">
+              <section class="admin-billing-ledger-panel" aria-labelledby="billingLedgerTitle">
+                <div class="admin-billing-ledger-toolbar">
+                  <div>
+                    <strong id="billingLedgerTitle">余额变动</strong>
+                    <span>只列出实际支出和实际入账，不含预扣返还等临时记录。</span>
+                  </div>
+                  <div class="admin-billing-ledger-controls">
+                    <div class="admin-billing-ledger-filters" id="billingLedgerFilters" role="group" aria-label="筛选余额变动">
+                      <button type="button" data-billing-ledger-filter="all" aria-pressed="true">全部</button>
+                      <button type="button" data-billing-ledger-filter="expense" aria-pressed="false">支出</button>
+                      <button type="button" data-billing-ledger-filter="income" aria-pressed="false">入账</button>
+                    </div>
+                    <label class="admin-billing-page-size">每页
+                      <select id="billingLedgerPageSize" aria-label="余额变动每页条数">
+                        <option value="10">10</option>
+                        <option value="20" selected>20</option>
+                        <option value="30">30</option>
+                        <option value="50">50</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                <div class="admin-billing-ledger-table" role="table" aria-label="账户余额变动明细">
+                  <div class="admin-billing-ledger-table-head" role="row">
+                    <span role="columnheader">时间</span>
+                    <span role="columnheader">原因</span>
+                    <span role="columnheader">变动</span>
+                    <span role="columnheader">变动后余额</span>
+                  </div>
+                  <div id="billingLedgerBody" class="admin-billing-ledger-table-body" role="rowgroup"></div>
+                </div>
+                <nav id="billingLedgerPagination" class="admin-user-pagination admin-list-pagination" aria-label="余额变动分页">
+                  <div class="admin-user-pagination-summary" id="billingLedgerPaginationSummary" aria-live="polite">共 0 条变动</div>
+                  <div class="admin-user-pagination-actions">
+                    <button id="btnBillingLedgerPrev" type="button" class="ghost" aria-label="上一页余额变动">上一页</button>
+                    <span id="billingLedgerPageIndicator" aria-live="polite">第 1 / 1 页</span>
+                    <button id="btnBillingLedgerNext" type="button" class="ghost" aria-label="下一页余额变动">下一页</button>
+                  </div>
+                </nav>
+              </section>
+              <aside class="admin-billing-side">
+                <section class="admin-billing-adjustment" aria-labelledby="billingAdjustTitle">
+                  <div class="admin-config-card-title" id="billingAdjustTitle">调整算力</div>
+                  <div class="admin-user-batch-modal-summary">将该客户的算力点替换为指定数值</div>
+                  <section id="billingCreditShortcuts" class="admin-credit-shortcuts" aria-labelledby="billingCreditShortcutsTitle">
+                    <div class="admin-credit-shortcuts-head">
+                      <span id="billingCreditShortcutsTitle">快捷输入</span>
+                      <button id="btnBillingCreditShortcutAdd" type="button" class="admin-credit-shortcut-add" aria-expanded="false" aria-controls="billingCreditShortcutForm">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+                        <span>自定义标签</span>
+                      </button>
+                    </div>
+                    <div id="billingCreditShortcutList" class="admin-credit-shortcut-list" role="list"></div>
+                    <div id="billingCreditShortcutForm" class="admin-credit-shortcut-form" hidden>
+                      <label for="billingCreditShortcutName">
+                        <span>标签名</span>
+                        <input id="billingCreditShortcutName" maxlength="16" autocomplete="off" placeholder="例如：活动额度">
+                      </label>
+                      <label for="billingCreditShortcutPoints">
+                        <span>算力点</span>
+                        <input id="billingCreditShortcutPoints" type="number" min="0" max="1000000" step="0.01" inputmode="decimal" placeholder="例如：2000">
+                      </label>
+                      <button id="btnBillingCreditShortcutSave" type="button" class="primary">添加</button>
+                    </div>
+                    <div id="billingCreditShortcutMsg" class="admin-credit-shortcut-msg" role="status" aria-live="polite"></div>
+                  </section>
+                  <form id="billingAdjustmentForm" novalidate>
+                    <select id="billingAdjustmentType" hidden>
+                      <option value="credit" selected>调整算力点</option>
+                      <option value="subscription">开通订阅方案</option>
+                    </select>
+                    <label id="billingAdjustmentUnlimitedField" class="switch admin-billing-unlimited-option" for="billingAdjustmentUnlimited">
+                      <input id="billingAdjustmentUnlimited" type="checkbox">
+                      <span>无限算力</span>
+                    </label>
+                    <label for="billingAdjustmentAmount">
+                      <span id="billingAdjustmentAmountLabel">调整后算力点</span>
+                      <input id="billingAdjustmentAmount" type="number" min="0" max="1000000" step="0.01" inputmode="decimal" placeholder="输入新的算力点">
+                    </label>
+                    <label for="billingAdjustmentNote">
+                      <span>操作原因（选填）</span>
+                      <textarea id="billingAdjustmentNote" rows="3" maxlength="500" placeholder="选填，例如：人工调整账号算力"></textarea>
+                    </label>
+                    <div class="admin-billing-adjust-actions">
+                      <button id="btnSubmitBillingAdjustment" class="primary" type="submit" data-billing-submit="credit">确认调整</button>
+                      <button id="btnResetBillingAdjustment" class="ghost" type="button">取消</button>
+                    </div>
+                    <div id="billingUserMsg" class="msg" role="status" aria-live="polite"></div>
+                    <label for="billingAdjustmentSubscriptionSku" id="billingAdjustmentSubscriptionSkuLabel" hidden>订阅方案</label>
+                    <select id="billingAdjustmentSubscriptionSku" hidden disabled></select>
+                    <label for="billingSubscriptionQuantity" hidden>
+                      <span>订阅套数</span>
+                      <input id="billingSubscriptionQuantity" type="number" min="1" max="50" step="1" value="1">
+                    </label>
+                  </form>
+                </section>
+                <section class="admin-billing-subscription-panel" aria-labelledby="billingSubscriptionTitle">
+                  <div class="admin-config-card-title" id="billingSubscriptionTitle">当前订阅</div>
+                  <div id="billingSubscriptionBody" class="admin-billing-subscription-list"></div>
+                </section>
+              </aside>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
   </div>

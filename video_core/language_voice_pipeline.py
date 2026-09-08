@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .contracts import VideoTaskContext
-from .source import commerce_video_generator
+from .source import commerce_video_generator, runninghub_speech
 
 
-_DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com"
+_DEFAULT_SPEECH_BASE_URL = runninghub_speech.RUNNINGHUB_SPEECH_BASE_URL
 _LANGUAGE_ALIASES = {
     "chinese": "Chinese",
     "中文": "Chinese",
@@ -104,15 +104,14 @@ def _build_audio_settings(payload: dict[str, Any]) -> commerce_video_generator.A
     language = _normalize_language(payload.get("target_language") or payload.get("language"))
     configured_boost = _text(payload.get("minimax_tts_language_boost"))
     language_boost = configured_boost if configured_boost.lower() not in {"", "auto"} else language
-    voice_id = _text(
+    voice_id = runninghub_speech.normalize_speech_voice(
         payload.get("voice_id")
         or payload.get("video_default_voice_id")
         or payload.get("minimax_tts_voice_id")
         or payload.get("speaker")
-        or "male-qn-qingse"
     )
     return commerce_video_generator.AudioSettings(
-        emotion=_text(payload.get("emotion") or "neutral"),
+        emotion=_text(payload.get("emotion") or "happy"),
         language=language,
         model_choice=_text(payload.get("model_choice") or "1.7B"),
         speaker=_text(payload.get("speaker") or "Ryan"),
@@ -121,17 +120,23 @@ def _build_audio_settings(payload: dict[str, Any]) -> commerce_video_generator.A
         # digital-human default (1.08) to 1.0 when no speed was supplied.
         speed=_float(payload.get("audio_speed"), 1.0),
         volume_gain_db=_float(payload.get("audio_volume_gain_db"), 8.0),
-        tts_provider="minimax",
-        minimax_api_key=_text(payload.get("video_tts_api_key") or payload.get("minimax_api_key")),
-        minimax_base_url=_text(
+        tts_provider=_text(payload.get("video_tts_provider") or "runninghub") or "runninghub",
+        minimax_api_key=_text(
+            payload.get("video_tts_api_key")
+            or payload.get("video_runninghub_api_key")
+            or payload.get("runninghub_api_key")
+            or payload.get("runninghub_personal_api_key")
+            or payload.get("runninghub_enterprise_api_key")
+            or payload.get("minimax_api_key")
+        ),
+        minimax_base_url=runninghub_speech.speech_base_url(
             payload.get("video_tts_base_url")
-            or payload.get("minimax_base_url")
-            or _DEFAULT_MINIMAX_BASE_URL
-        ).rstrip("/"),
-        minimax_model=_text(
-            payload.get("video_tts_model")
-            or payload.get("minimax_tts_model")
-            or "speech-2.8-hd"
+            or payload.get("video_runninghub_base_url")
+            or payload.get("minimax_base_url"),
+            fallback=_DEFAULT_SPEECH_BASE_URL,
+        ),
+        minimax_model=runninghub_speech.normalize_speech_model(
+            payload.get("video_tts_model") or payload.get("minimax_tts_model")
         ),
         minimax_voice_id=voice_id,
         minimax_format=_text(payload.get("minimax_tts_format") or "mp3").lower(),
@@ -207,19 +212,21 @@ def prepare_language_voice_settings(
 
     settings = _build_audio_settings(source)
     cloned_voice_id = ""
-    if reference_path is not None:
+    provider = _text(source.get("video_tts_provider") or settings.tts_provider or "runninghub").lower()
+    clone_provider = _resolve_callback(
+        source,
+        "_video_voice_clone",
+        "_clone_minimax_voice_from_reference",
+        "_clone_voice_from_reference",
+    )
+    if reference_path is not None and (clone_provider is not None or provider == "minimax"):
         context.progress(
             stage="audio_clone",
             status="running",
             message="正在克隆参考音频音色",
             progress=42,
         )
-        clone_provider = _resolve_callback(
-            source,
-            "_video_voice_clone",
-            "_clone_minimax_voice_from_reference",
-            "_clone_voice_from_reference",
-        ) or commerce_video_generator.clone_minimax_voice_from_reference
+        clone_provider = clone_provider or commerce_video_generator.clone_minimax_voice_from_reference
         context.check_cancelled()
         clone_result = _invoke_compatible(
             clone_provider,

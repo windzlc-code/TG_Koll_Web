@@ -50,7 +50,6 @@ const ADMIN_I18N_SKIP_SELECTOR = [
   ".msg",
   ".task-list",
   ".admin-health-list",
-  ".admin-taxonomy-list",
   ".admin-security-list",
   ".admin-session-list",
   ".admin-password-history-list",
@@ -378,14 +377,11 @@ function bindAdminPreferenceControls() {
 const ADMIN_PAGE_LABELS = {
   overview: "运营概览",
   users: "客户账号",
-  taxonomy: "客户治理",
   tasks: "生成记录",
-  audit: "审计日志",
   security: "安全告警",
-  serviceAccounts: "服务账号",
   proxyMarket: "代理 IP",
   pricing: "套餐与客户额度",
-  crm: "CRM 模块",
+  telegram: "Telegram",
   runtime: "系统配置",
   sentimentCookies: "舆情 Cookie",
   account: "账号设置",
@@ -457,16 +453,25 @@ function bindAdminMobileNavigation() {
 const SENSITIVE_RUNTIME_INPUT_IDS = [
   "rtLlmApiKeyGpt",
   "rtImageGeminiApiKey",
+  "rtNewPersonaRunningHubApiKey",
   "rtVideoRunningHubPersonalApiKey",
   "rtVideoRunningHubEnterpriseApiKey",
-  "rtVideoMiniMaxApiKey",
+  "tgBotToken",
 ];
 const SENSITIVE_PROVIDER_INPUT_IDS = [
   "bundleSocialApiKey",
+  "bundleSocialWebhookSecret",
   "proxyProviderApiKey",
   "proxyProviderApiSecret",
   "proxyProviderWebhookSecret",
 ];
+const PROVIDER_SECRET_REVEAL_PATHS = {
+  bundleSocialApiKey: "/api/admin/bundle-social/config/secrets/api_key",
+  bundleSocialWebhookSecret: "/api/admin/bundle-social/config/secrets/webhook_secret",
+  proxyProviderApiKey: "/api/admin/proxy-purchases/provider-credentials/secrets/api_key",
+  proxyProviderApiSecret: "/api/admin/proxy-purchases/provider-credentials/secrets/api_secret",
+  proxyProviderWebhookSecret: "/api/admin/proxy-purchases/provider-credentials/secrets/webhook_secret",
+};
 const PROVIDER_SECRET_MASK = "••••••••••••••••";
 
 const RUNTIME_SECRET_API_NAMES = {
@@ -475,7 +480,7 @@ const RUNTIME_SECRET_API_NAMES = {
   rtNewPersonaRunningHubApiKey: "new_persona_runninghub_api_key",
   rtVideoRunningHubPersonalApiKey: "runninghub_personal_api_key",
   rtVideoRunningHubEnterpriseApiKey: "runninghub_enterprise_api_key",
-  rtVideoMiniMaxApiKey: "minimax_api_key",
+  tgBotToken: "telegram_bot_token",
 };
 const VIDEO_IMAGE_MODEL_OPTIONS = [
   "gpt image 2",
@@ -486,11 +491,34 @@ const VIDEO_IMAGE_MODEL_OPTIONS = [
   "google/nano-banana-pro-official",
 ];
 const VIDEO_IMAGE_MODEL_DEFAULTS = ["gpt image 2", "nano banana 2", "nano banana pro"];
+const VIDEO_SPEECH_MODEL_OPTIONS = [
+  "speech-2.8-hd",
+  "speech-2.8-turbo",
+  "speech-2.6-hd",
+  "speech-2.6-turbo",
+  "speech-02-hd",
+  "speech-02-turbo",
+];
+const VIDEO_SPEECH_MODEL_DEFAULT = "speech-2.8-hd";
+const VIDEO_SPEECH_VOICE_DEFAULT = "male-qn-qingse";
+
+function normalizeVideoSpeechModel(value) {
+  const text = String(value || "").trim();
+  return VIDEO_SPEECH_MODEL_OPTIONS.includes(text) ? text : VIDEO_SPEECH_MODEL_DEFAULT;
+}
+
+function normalizeVideoSpeechVoice(value) {
+  const text = String(value || "").trim();
+  return !text || text === "Wise_Woman" ? VIDEO_SPEECH_VOICE_DEFAULT : text;
+}
 const SENSITIVE_EYE_ICON_SVG = `
-  <svg class="sensitive-eye-icon" viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
-    <circle cx="12" cy="12" r="3"></circle>
-    <path class="sensitive-eye-slash" d="M4 20L20 4"></path>
+  <svg class="sensitive-eye-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+    <path d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z"></path>
+    <path d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"></path>
+  </svg>`;
+const SENSITIVE_EYE_OFF_ICON_SVG = `
+  <svg class="sensitive-eye-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none">
+    <path d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88"></path>
   </svg>`;
 function getSensitiveToggleButton(inputId) {
   return document.querySelector(`.sensitive-toggle-btn[data-target="${inputId}"], [data-secret-target="${inputId}"]`);
@@ -498,7 +526,7 @@ function getSensitiveToggleButton(inputId) {
 
 function updateSensitiveToggleVisual(button, visible) {
   if (!button) return;
-  button.innerHTML = SENSITIVE_EYE_ICON_SVG;
+  button.innerHTML = visible ? SENSITIVE_EYE_OFF_ICON_SVG : SENSITIVE_EYE_ICON_SVG;
   button.classList.toggle("is-visible", !!visible);
   button.setAttribute("aria-pressed", visible ? "true" : "false");
   button.setAttribute("aria-label", visible ? "隐藏密钥内容" : "显示密钥内容");
@@ -561,9 +589,9 @@ function setProviderSecretInputState(inputId, configured, labelText) {
   const button = getSensitiveToggleButton(inputId);
   if (button) {
     updateSensitiveToggleVisual(button, false);
-    button.disabled = isConfigured;
-    button.title = isConfigured ? "密钥已加密保存，不回显原值" : "显示";
-    button.setAttribute("aria-label", isConfigured ? "密钥已加密保存" : "显示密钥内容");
+    button.disabled = false;
+    button.title = "显示";
+    button.setAttribute("aria-label", "显示密钥内容");
   }
 }
 
@@ -589,7 +617,6 @@ function setActiveAdminPage(page, updateHash = true) {
   if (nextPage !== adminState.activePage) {
     clearRevealedUserPassword();
     clearUserPasswordReset();
-    clearServiceCredential();
     clearAdminCreateStepUp();
   }
   adminState.activePage = nextPage;
@@ -621,15 +648,16 @@ function setActiveAdminPage(page, updateHash = true) {
   if (nextPage === "pricing") {
     void ensureBillingLoaded();
   }
-  if (nextPage === "crm") void loadCrmAdminModule();
+  if (nextPage === "telegram") {
+    void loadTgSettings().catch((error) => {
+      setMsg("tgSettingsMsg", `Telegram 配置读取失败：${getErrorMessage(error)}`, false);
+    });
+  }
   if (nextPage === "overview") {
     void loadGovernanceDashboard();
     void loadCollectorProxyTraffic().catch(() => null);
   }
-  if (nextPage === "taxonomy") void loadTaxonomyWorkspace();
-  if (nextPage === "audit") void loadAuditEvents();
   if (nextPage === "security") void loadSecurityAlerts();
-  if (nextPage === "serviceAccounts") void loadServiceAccounts();
   if (nextPage === "proxyMarket") void loadProxyMarketWorkspace({ silent: adminState.proxyMarketLoaded });
   if (nextPage === "runtime") {
     void loadBundleSocialConfig().catch((error) => {
@@ -681,436 +709,6 @@ function setMsg(id, message, ok = true) {
   if (!node) return;
   node.textContent = message || "";
   node.className = `msg ${ok ? "ok" : "err"}`;
-}
-
-function crmFriendlyError(err, fallback = "操作没有完成，请稍后重试。") {
-  const code = String(err?.detail?.code || err?.code || "").toLowerCase();
-  const message = getErrorMessage(err);
-  if (code.includes("import_not_found")) return "找不到这份导入记录，请重新检查文件。";
-  if (code.includes("source_changed")) return "备份文件在检查后发生了变化，请重新检查。";
-  if (code.includes("import_blocked")) return "文件中有必须处理的问题，修正后再重新检查。";
-  if (code.includes("capacity") || /space|disk|容量|空间/i.test(message)) return "服务器存储空间不足，请先清理空间后再试。";
-  if (/not found|no such file|找不到|不存在/i.test(message)) return "找不到这个备份文件，请确认文件名是否正确。";
-  if (/permission|forbidden|无权|权限/i.test(message)) return "当前账号没有执行此操作的权限。";
-  if (/^[a-z0-9_.:-]+$/i.test(message) || /crm_[a-z0-9_]+/i.test(message)) return fallback;
-  if (!/[\u3400-\u9fff]/.test(message)) return fallback;
-  return message || fallback;
-}
-
-function crmFormatStorage(bytes) {
-  const value = Math.max(0, Number(bytes || 0));
-  if (!value) return "剩余空间未知";
-  const gb = value / (1024 ** 3);
-  return `约剩余 ${gb >= 10 ? gb.toFixed(0) : gb.toFixed(1)} GB`;
-}
-
-function crmFormatDate(value) {
-  const numeric = Number(value || 0);
-  const date = numeric ? new Date(numeric < 1e12 ? numeric * 1000 : numeric) : new Date(value || "");
-  if (Number.isNaN(date.getTime())) return "时间未知";
-  return date.toLocaleString("zh-CN", { hour12: false });
-}
-
-function crmFileName(value) {
-  const parts = String(value || "").split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) || "未命名备份文件";
-}
-
-function renderCrmHealth(payload) {
-  const node = el("crmHealthSummary");
-  const headline = el("crmHealthHeadline");
-  if (!node) return;
-  const settings = payload?.settings || {};
-  const checks = payload?.checks || {};
-  const serviceReady = Boolean(payload?.ready) && !settings.emergency_pause;
-  const temporarilyStopped = !settings.enabled || settings.maintenance || settings.emergency_pause;
-  if (headline) {
-    headline.className = `crm-health-headline ${serviceReady && !temporarilyStopped ? "is-ready" : "is-warning"}`;
-    const title = headline.querySelector("strong");
-    const detail = headline.querySelector("small");
-    if (title) title.textContent = serviceReady && !temporarilyStopped ? "CRM 可以正常使用" : "CRM 当前需要处理";
-    if (detail) {
-      detail.textContent = settings.emergency_pause
-        ? "已启用紧急停止，客户任务暂时不会继续。"
-        : settings.maintenance
-          ? "当前处于维护状态，客户资料仍会保留。"
-          : !settings.enabled
-            ? "CRM 服务开关尚未开启。"
-            : !settings.hard_enabled
-              ? "服务器基础配置尚未开启，请联系技术人员处理。"
-              : "下方有服务未就绪，请按提示检查。";
-    }
-  }
-  const rows = [
-    {
-      label: "客户资料",
-      ok: Boolean(checks.database && checks.database_schema),
-      success: "资料库连接正常",
-      problem: "资料库需要技术人员检查",
-    },
-    {
-      label: "CRM 页面",
-      ok: Boolean(checks.static_html && checks.static_assets),
-      success: "页面文件完整",
-      problem: "页面文件缺失，请重新部署",
-    },
-    {
-      label: "文件与空间",
-      ok: Boolean(checks.media_writable && checks.disk_ok),
-      success: `可以保存文件，${crmFormatStorage(checks.disk_free_bytes)}`,
-      problem: checks.disk_ok ? "文件目录暂时不可写" : "服务器空间不足",
-    },
-    {
-      label: "自动化任务",
-      ok: Boolean(checks.worker_adapter_registered && checks.scheduler_lease),
-      success: "发布和定时任务可用",
-      problem: "自动化服务尚未准备好",
-    },
-    {
-      label: "费用记录",
-      ok: Boolean(checks.billing_adapter_registered),
-      success: "使用记录可以正常计费",
-      problem: "费用记录服务需要检查",
-    },
-    {
-      label: "链接安全",
-      ok: Boolean(checks.tracking_secret),
-      success: "客户链接保护正常",
-      problem: "链接保护尚未配置",
-    },
-    {
-      label: "人工确认",
-      ok: Number(payload?.unknown_actions || 0) === 0,
-      success: "没有待确认事项",
-      problem: `有 ${Number(payload?.unknown_actions || 0).toLocaleString("zh-CN")} 项需要人工确认`,
-    },
-  ];
-  node.replaceChildren(...rows.map((item) => {
-    const row = document.createElement("div");
-    row.className = `crm-health-item ${item.ok ? "is-ok" : "is-warning"}`;
-    const icon = document.createElement("span");
-    icon.className = "crm-health-item-icon";
-    icon.textContent = item.ok ? "✓" : "!";
-    const copy = document.createElement("div");
-    const label = document.createElement("strong");
-    const description = document.createElement("small");
-    label.textContent = item.label;
-    description.textContent = item.ok ? item.success : item.problem;
-    copy.append(label, description);
-    const status = document.createElement("span");
-    status.className = "crm-health-item-status";
-    status.textContent = item.ok ? "正常" : "需要处理";
-    row.append(icon, copy, status);
-    return row;
-  }));
-}
-
-let crmImportItems = [];
-
-function crmImportState(batch) {
-  const status = String(batch?.status || "").toLowerCase();
-  const blockingCount = Array.isArray(batch?.report?.blocking_errors) ? batch.report.blocking_errors.length : 0;
-  const states = {
-    dry_run: { label: blockingCount ? "检查未通过" : "等待确认", tone: blockingCount ? "error" : "ready" },
-    staged: { label: "正在准备", tone: "pending" },
-    active: { label: "已导入", tone: "success" },
-    failed: { label: "导入失败", tone: "error" },
-    dismissed: { label: "已取消", tone: "muted" },
-  };
-  const view = states[status] || { label: "等待处理", tone: "pending" };
-  return {
-    ...view,
-    status,
-    blockingCount,
-    warningCount: Array.isArray(batch?.report?.warnings) ? batch.report.warnings.length : 0,
-    canActivate: status === "dry_run" && blockingCount === 0,
-    canDismiss: Boolean(batch?.id) && !["active", "dismissed"].includes(status),
-  };
-}
-
-function crmImportRecognizedCount(batch) {
-  const reported = Number(batch?.report?.recognized_entities);
-  if (Number.isFinite(reported) && reported >= 0) return reported;
-  return Object.values(batch?.counts || {}).reduce((total, value) => total + Math.max(0, Number(value || 0)), 0);
-}
-
-function selectCrmImportBatch(batch, { announce = false } = {}) {
-  const hidden = el("crmImportBatchId");
-  const activateButton = el("btnCrmImportActivate");
-  const dismissButton = el("btnCrmImportDismiss");
-  const summary = el("crmImportSelectionSummary");
-  if (!batch) {
-    if (hidden) hidden.value = "";
-    if (activateButton) activateButton.disabled = true;
-    if (dismissButton) dismissButton.disabled = true;
-    if (summary) {
-      summary.className = "crm-import-selection-summary";
-      summary.textContent = "完成文件检查后，这里会显示是否可以继续导入。";
-    }
-    return;
-  }
-  const state = crmImportState(batch);
-  if (hidden) hidden.value = String(batch.id || "");
-  if (activateButton) activateButton.disabled = !state.canActivate;
-  if (dismissButton) dismissButton.disabled = !state.canDismiss;
-  if (summary) {
-    summary.className = `crm-import-selection-summary is-${state.tone}`;
-    summary.textContent = state.canActivate
-      ? `“${crmFileName(batch.source_path)}”检查通过，可以确认导入。`
-      : state.blockingCount
-        ? `这份文件发现 ${state.blockingCount} 个必须处理的问题，暂时不能导入。`
-        : state.status === "active"
-          ? "这份资料已经导入完成，无需重复操作。"
-          : state.status === "dismissed"
-            ? "这次导入已经取消。"
-            : "这份资料当前不能继续导入，请重新检查文件。";
-  }
-  if (announce) setMsg("crmImportMsg", `已选择“${crmFileName(batch.source_path)}”。`, true);
-}
-
-function renderCrmImportStatus(items = [], preferredBatchId = "", allowSelection = true) {
-  const node = el("crmImportStatus");
-  if (!node) return;
-  crmImportItems = Array.isArray(items) ? items : [];
-  const currentId = String(preferredBatchId || el("crmImportBatchId")?.value || "");
-  const selected = allowSelection
-    ? crmImportItems.find((item) => String(item?.id || "") === currentId)
-      || crmImportItems.find((item) => crmImportState(item).canActivate)
-      || null
-    : null;
-  selectCrmImportBatch(selected);
-  node.replaceChildren();
-  if (!crmImportItems.length) {
-    const empty = document.createElement("div");
-    empty.className = "crm-import-empty";
-    empty.textContent = "暂无导入记录。完成一次文件检查后，记录会显示在这里。";
-    node.append(empty);
-    return;
-  }
-  crmImportItems.slice(0, 6).forEach((batch) => {
-    const state = crmImportState(batch);
-    const card = document.createElement("article");
-    card.className = `crm-import-record is-${state.tone}`;
-    if (String(batch?.id || "") === String(selected?.id || "")) card.classList.add("is-selected");
-    const heading = document.createElement("div");
-    heading.className = "crm-import-record-heading";
-    const title = document.createElement("strong");
-    title.textContent = crmFileName(batch?.source_path);
-    const badge = document.createElement("span");
-    badge.className = "crm-import-record-badge";
-    badge.textContent = state.label;
-    heading.append(title, badge);
-    const meta = document.createElement("div");
-    meta.className = "crm-import-record-meta";
-    meta.textContent = `客户 ${Number(batch?.user_id || 0) || "未知"} · ${crmFormatDate(batch?.updated_at || batch?.created_at)}`;
-    const facts = document.createElement("div");
-    facts.className = "crm-import-record-facts";
-    const recognized = document.createElement("span");
-    recognized.textContent = `识别到 ${crmImportRecognizedCount(batch).toLocaleString("zh-CN")} 条资料`;
-    const issues = document.createElement("span");
-    issues.textContent = state.blockingCount
-      ? `${state.blockingCount} 个问题必须处理`
-      : state.warningCount
-        ? `${state.warningCount} 条普通提醒`
-        : "没有发现阻断问题";
-    facts.append(recognized, issues);
-    const choose = document.createElement("button");
-    choose.className = "btn ghost crm-import-record-action";
-    choose.type = "button";
-    choose.textContent = String(batch?.id || "") === String(selected?.id || "") ? "当前记录" : "查看此记录";
-    choose.disabled = String(batch?.id || "") === String(selected?.id || "");
-    choose.addEventListener("click", () => {
-      selectCrmImportBatch(batch, { announce: true });
-      renderCrmImportStatus(crmImportItems, String(batch?.id || ""), true);
-    });
-    card.append(heading, meta, facts, choose);
-    node.append(card);
-  });
-}
-
-async function loadCrmImportStatus(userId = el("crmImportUserId")?.value, preferredBatchId = "") {
-  const targetId = Math.max(0, Number(userId || 0));
-  const query = targetId ? `?user_id=${encodeURIComponent(targetId)}` : "";
-  const payload = await api(`/api/admin/modules/crm/import-status${query}`);
-  renderCrmImportStatus(payload?.items || [], preferredBatchId, Boolean(targetId || preferredBatchId));
-  return payload;
-}
-
-async function loadCrmAdminModule() {
-  try {
-    const [settings, health] = await Promise.all([
-      api("/api/admin/modules/crm"),
-      api("/api/admin/modules/crm/health"),
-    ]);
-    if (el("crmGlobalEnabled")) el("crmGlobalEnabled").checked = Boolean(settings?.enabled);
-    if (el("crmMaintenance")) el("crmMaintenance").checked = Boolean(settings?.maintenance);
-    if (el("crmEmergencyPause")) el("crmEmergencyPause").checked = Boolean(settings?.emergency_pause);
-    renderCrmHealth(health);
-    setMsg("crmGlobalMsg", settings?.hard_enabled ? "服务设置和运行状态已更新。" : "服务器基础配置尚未开启，请联系技术人员处理。", Boolean(settings?.hard_enabled));
-    await loadCrmImportStatus();
-  } catch (err) {
-    setMsg("crmGlobalMsg", crmFriendlyError(err, "CRM 状态读取失败，请稍后重试。"), false);
-  }
-}
-
-async function saveCrmGlobalSettings(event) {
-  event.preventDefault();
-  const desired = {
-    enabled: Boolean(el("crmGlobalEnabled")?.checked),
-    maintenance: Boolean(el("crmMaintenance")?.checked),
-    emergency_pause: Boolean(el("crmEmergencyPause")?.checked),
-  };
-  let confirmed = false;
-  if (!desired.enabled || desired.maintenance || desired.emergency_pause) {
-    const decision = await requestAdminPublicAction({ title: "确认暂停 CRM 服务", message: "保存后，客户将暂时无法继续新的 CRM 操作；已有资料不会被删除。确认保存吗？", confirmLabel: "确认暂停", tone: "danger" });
-    if (!decision.confirmed) return;
-    confirmed = true;
-  }
-  try {
-    const payload = await api("/api/admin/modules/crm", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...desired, confirmed }),
-    });
-    setMsg("crmGlobalMsg", `服务设置已保存；已暂停 ${Number(payload?.paused_workflows || 0)} 个等待中的任务。`, true);
-    await loadCrmAdminModule();
-  } catch (err) {
-    setMsg("crmGlobalMsg", crmFriendlyError(err, "服务设置保存失败，请稍后重试。"), false);
-  }
-}
-
-let crmUserAccessLoadedId = 0;
-let crmUserAccessLoadedEnabled = false;
-
-function resetCrmUserAccessEditor() {
-  crmUserAccessLoadedId = 0;
-  crmUserAccessLoadedEnabled = false;
-  if (el("btnCrmUserAccessSave")) el("btnCrmUserAccessSave").disabled = true;
-  setMsg("crmUserAccessMsg", "客户编号有变化，请重新查询客户状态。", true);
-}
-
-async function loadCrmUserAccess() {
-  const userId = Math.max(0, Number(el("crmUserAccessId")?.value || 0));
-  if (!userId) return setMsg("crmUserAccessMsg", "请输入正确的客户编号。", false);
-  if (el("btnCrmUserAccessSave")) el("btnCrmUserAccessSave").disabled = true;
-  try {
-    const payload = await api(`/api/admin/users/${userId}/modules/crm`);
-    const enabled = Boolean(payload?.user_access ?? payload?.enabled);
-    crmUserAccessLoadedId = userId;
-    crmUserAccessLoadedEnabled = enabled;
-    if (el("crmUserAccessEnabled")) el("crmUserAccessEnabled").checked = enabled;
-    if (el("btnCrmUserAccessSave")) el("btnCrmUserAccessSave").disabled = false;
-    setMsg("crmUserAccessMsg", `客户 ${userId} 当前${enabled ? "可以使用 CRM" : "尚未开通 CRM"}，确认无误后可保存。`, true);
-  } catch (err) {
-    crmUserAccessLoadedId = 0;
-    setMsg("crmUserAccessMsg", crmFriendlyError(err, "没有找到这位客户，请检查客户编号。"), false);
-  }
-}
-
-async function saveCrmUserAccess(event) {
-  event.preventDefault();
-  const userId = Math.max(0, Number(el("crmUserAccessId")?.value || 0));
-  if (!userId) return setMsg("crmUserAccessMsg", "请输入正确的客户编号。", false);
-  if (userId !== crmUserAccessLoadedId) return setMsg("crmUserAccessMsg", "客户编号有变化，请重新查询后再保存。", false);
-  const enabled = Boolean(el("crmUserAccessEnabled")?.checked);
-  if (crmUserAccessLoadedEnabled && !enabled) {
-    const decision = await requestAdminPublicAction({
-      title: "回收 CRM 权限",
-      message: `关闭后，客户 ${userId} 将无法继续使用 CRM，但已有资料不会被删除。确认关闭吗？`,
-      confirmLabel: "确认回收权限",
-      tone: "danger",
-    });
-    if (!decision.confirmed) return;
-  }
-  try {
-    const payload = await api(`/api/admin/users/${userId}/modules/crm`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled }),
-    });
-    crmUserAccessLoadedEnabled = Boolean(payload?.enabled);
-    if (el("crmUserAccessEnabled")) el("crmUserAccessEnabled").checked = crmUserAccessLoadedEnabled;
-    setMsg("crmUserAccessMsg", payload?.enabled ? "已为这位客户开通 CRM。" : "已关闭这位客户的 CRM 使用权限。", true);
-  } catch (err) {
-    setMsg("crmUserAccessMsg", crmFriendlyError(err, "客户开通状态保存失败，请稍后重试。"), false);
-  }
-}
-
-async function runCrmImportDryRun(event) {
-  event.preventDefault();
-  const userId = Math.max(0, Number(el("crmImportUserId")?.value || 0));
-  const source = String(el("crmImportSource")?.value || "").trim();
-  if (!userId || !source) return setMsg("crmImportMsg", "请填写客户编号和备份文件名。", false);
-  const checkButton = el("btnCrmImportCheck");
-  if (checkButton) {
-    checkButton.disabled = true;
-    checkButton.textContent = "正在检查文件…";
-  }
-  selectCrmImportBatch(null);
-  try {
-    const payload = await api("/api/admin/modules/crm/import/dry-run", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, source }),
-    });
-    const problems = Array.isArray(payload?.report?.blocking_errors) ? payload.report.blocking_errors.length : 0;
-    setMsg("crmImportMsg", problems ? `文件检查完成，发现 ${problems} 个必须处理的问题。` : "文件检查通过，可以进行第二步。", problems === 0);
-    await loadCrmImportStatus(userId, String(payload?.id || ""));
-  } catch (err) {
-    setMsg("crmImportMsg", crmFriendlyError(err, "文件检查失败，请确认客户编号和文件名。"), false);
-  } finally {
-    if (checkButton) {
-      checkButton.disabled = false;
-      checkButton.textContent = "第一步：检查文件";
-    }
-  }
-}
-
-async function activateCrmImport(event) {
-  event.preventDefault();
-  const userId = Math.max(0, Number(el("crmImportUserId")?.value || 0));
-  const batchId = String(el("crmImportBatchId")?.value || "").trim();
-  if (!userId || !batchId) return setMsg("crmImportMsg", "请先完成第一步文件检查。", false);
-  let status;
-  try { status = await loadCrmImportStatus(userId, batchId); } catch (err) { return setMsg("crmImportMsg", crmFriendlyError(err, "无法读取文件检查结果，请重新检查。"), false); }
-  const batch = (status?.items || []).find((item) => String(item?.id || "") === batchId);
-  const blocking = batch?.report?.blocking_errors || [];
-  if (!batch || String(batch.status || "") !== "dry_run") return setMsg("crmImportMsg", "这份检查结果已经失效，请重新检查文件。", false);
-  if (blocking.length) return setMsg("crmImportMsg", `文件仍有 ${blocking.length} 个必须处理的问题，暂时不能导入。`, false);
-  const decision = await requestAdminPublicAction({ title: "确认导入旧 CRM 资料", message: `系统将把“${crmFileName(batch.source_path)}”中的资料导入客户 ${userId}。操作前会自动备份当前数据，确认继续吗？`, confirmLabel: "确认导入", tone: "danger" });
-  if (!decision.confirmed) return;
-  const activateButton = el("btnCrmImportActivate");
-  if (activateButton) {
-    activateButton.disabled = true;
-    activateButton.textContent = "正在导入…";
-  }
-  try {
-    const payload = await api("/api/admin/modules/crm/import/activate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, batch_id: batchId, confirmed: true }),
-    });
-    setMsg("crmImportMsg", "旧 CRM 资料已成功导入。", true);
-    await loadCrmImportStatus(userId, String(payload?.id || batchId));
-  } catch (err) {
-    setMsg("crmImportMsg", crmFriendlyError(err, "资料导入失败，客户现有资料未受影响。"), false);
-  } finally {
-    if (activateButton) activateButton.textContent = "第二步：确认导入";
-  }
-}
-
-async function dismissCrmImport() {
-  const userId = Math.max(0, Number(el("crmImportUserId")?.value || 0));
-  const batchId = String(el("crmImportBatchId")?.value || "").trim();
-  if (!userId || !batchId) return setMsg("crmImportMsg", "当前没有可以取消的导入记录。", false);
-  const decision = await requestAdminPublicAction({ title: "取消本次资料导入", message: "取消后会清理这次尚未写入的临时资料，不会删除客户原有内容。确认取消吗？", confirmLabel: "确认取消", tone: "danger" });
-  if (!decision.confirmed) return;
-  try {
-    await api(`/api/admin/modules/crm/import/${encodeURIComponent(batchId)}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: userId, confirmed: true }) });
-    setMsg("crmImportMsg", "本次资料导入已取消。", true);
-    await loadCrmImportStatus(userId);
-    await loadCrmAdminModule();
-  } catch (err) { setMsg("crmImportMsg", crmFriendlyError(err, "取消失败，请稍后重试。"), false); }
 }
 
 function showAdminPublicPrompt({ title = "操作提示", message = "", ok = true, busy = false } = {}) {
@@ -2120,6 +1718,33 @@ function bindModelTabs() {
   activate(tabs.find((tab) => tab.classList.contains("is-active"))?.dataset.modelTab || "text");
 }
 
+function bindTelegramWorkbenchTabs() {
+  const root = el("secTelegram");
+  if (!root) return;
+  const tabs = Array.from(root.querySelectorAll("[data-tg-workbench-tab]"));
+  const panels = Array.from(root.querySelectorAll("[data-tg-workbench-panel]"));
+  if (!tabs.length || !panels.length) return;
+  const activate = (name) => {
+    tabs.forEach((tab) => {
+      const active = tab.dataset.tgWorkbenchTab === name;
+      tab.classList.toggle("is-active", active);
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", active ? "true" : "false");
+      tab.tabIndex = active ? 0 : -1;
+    });
+    panels.forEach((panel) => {
+      const active = panel.dataset.tgWorkbenchPanel === name;
+      panel.classList.toggle("is-active", active);
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-hidden", active ? "false" : "true");
+    });
+  };
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => activate(tab.dataset.tgWorkbenchTab || "video"));
+  });
+  activate(tabs.find((tab) => tab.classList.contains("is-active"))?.dataset.tgWorkbenchTab || "video");
+}
+
 
 
 function bindRunningHubSlotTabs() {
@@ -2166,12 +1791,16 @@ const adminState = {
   rechargeTarget: null,
   selectedUser: null,
   userDetailRequestId: 0,
+  userBillingRequestId: 0,
+  userBillingReturnFocus: null,
+  userBillingInertElements: [],
   userListRequestId: 0,
   userListPage: 1,
   userListPageSize: 20,
   userListTotal: 0,
   userListRole: "customer",
   userListFilters: {},
+  userListFilterTimer: 0,
   selectedUserIds: new Set(),
   userBatchSelectionMeta: new Map(),
   userBatchCreditShortcuts: [],
@@ -2226,6 +1855,11 @@ const adminState = {
   billingOrderRequestSequence: 0,
   billingOrderLoading: false,
   billingSelectedUserId: null,
+  billingSelectedPoints: 0,
+  billingLedgerRows: [],
+  billingLedgerFilter: "all",
+  billingLedgerPage: 1,
+  billingLedgerPageSize: 20,
   billingWalletPoints: new Map(),
   billingUnlimitedUsers: new Map(),
   billingLoaded: false,
@@ -2245,14 +1879,10 @@ const adminState = {
   emailDeliveryPolicySaveController: null,
   emailDeliveryPolicyAbortReason: "",
   emailDeliveryPolicyReturnFocus: null,
-  auditRows: [],
-  auditListPage: 1,
-  auditListPageSize: 20,
-  auditListTotal: 0,
   securityRows: [],
   securityListPage: 1,
   securityListPageSize: 20,
-  serviceAccountRows: [],
+
   proxyMarketItemRows: [],
   proxyMarketAllocationRows: [],
   proxyPurchasedAssetRows: [],
@@ -2270,10 +1900,6 @@ const adminState = {
   proxyPurchaseProviderOptions: null,
   proxyProviderCredentialStatus: null,
   proxyPurchaseOrders: [],
-  customerGroupRows: [],
-  customerTagRows: [],
-  taxonomyLoadingPromise: null,
-  serviceCredentialTimer: null,
   mfaStatus: null,
   mfaSetup: null,
 };
@@ -2290,18 +1916,15 @@ const TASK_TYPE_LABELS = {
   persona_post_image: "推文生成配图",
   persona_post_generation: "AI 推文草稿生成",
 };
-const ADMIN_PAGES = new Set(["overview", "users", "taxonomy", "tasks", "audit", "security", "serviceAccounts", "proxyMarket", "pricing", "crm", "runtime", "sentimentCookies", "account"]);
+const ADMIN_PAGES = new Set(["overview", "users", "tasks", "security", "proxyMarket", "pricing", "telegram", "runtime", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",
   secUsers: "users",
-  secTaxonomy: "taxonomy",
   secTasks: "tasks",
-  secAudit: "audit",
   secSecurity: "security",
-  secServiceAccounts: "serviceAccounts",
   secProxyMarket: "proxyMarket",
   secPricing: "pricing",
-  secCrm: "crm",
+  secTelegram: "telegram",
   secRuntime: "runtime",
   secSentimentCookies: "sentimentCookies",
   secAccount: "account",
@@ -3102,7 +2725,7 @@ function initSensitiveInputToggles() {
 
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "ghost sensitive-toggle-btn";
+    button.className = "sensitive-toggle-btn";
     button.dataset.target = id;
     button.innerHTML = SENSITIVE_EYE_ICON_SVG;
     button.setAttribute("aria-label", "\u663e\u793a\u5bc6\u94a5\u5185\u5bb9");
@@ -3160,27 +2783,43 @@ function initProviderSecretMaskInputs() {
 async function toggleSensitiveInput(button) {
   const input = el(button.dataset.target || button.dataset.secretTarget || "");
   if (!input) return;
-  if (hasSavedRuntimeSecret(input.id)) {
+  const revealUrl = RUNTIME_SECRET_API_NAMES[input.id]
+    ? `/api/admin/runtime_config/secrets/${encodeURIComponent(RUNTIME_SECRET_API_NAMES[input.id])}`
+    : PROVIDER_SECRET_REVEAL_PATHS[input.id];
+  const saved = hasSavedRuntimeSecret(input.id) || hasSavedProviderSecret(input.id)
+    || (revealUrl && input.dataset.providerSecretConfigured === "true" && input.type === "text")
+    || (revealUrl && input.dataset.runtimeSecretSaved === "true" && input.type === "text");
+  if (saved && revealUrl) {
     if (input.type === "text") {
       input.type = "password";
-      input.value = input.dataset.runtimeSecretMask || "";
+      if (hasSavedRuntimeSecret(input.id) || input.dataset.runtimeSecretSaved === "true") {
+        input.value = input.dataset.runtimeSecretMask || "";
+      } else {
+        input.value = input.dataset.providerSecretMask || "";
+        input.classList.add("is-saved-runtime-secret");
+      }
       updateSensitiveToggleVisual(button, false);
       return;
     }
-    const secretName = RUNTIME_SECRET_API_NAMES[input.id];
-    if (!secretName) return;
+    const savedMask = String(input.dataset.runtimeSecretMask || input.dataset.providerSecretMask || "");
+    if (savedMask && input.value === savedMask && !savedMask.includes("•")) {
+      input.type = "text";
+      input.classList.remove("is-saved-runtime-secret");
+      updateSensitiveToggleVisual(button, true);
+      return;
+    }
     button.disabled = true;
     button.setAttribute("aria-busy", "true");
     try {
-      const response = await api(`/api/admin/runtime_config/secrets/${encodeURIComponent(secretName)}`, { method: "POST" });
+      const response = await api(revealUrl, { method: "POST" });
       const value = String(response?.value || "");
-      if (!value) throw new Error("API Key 尚未配置");
+      if (!value) return;
       input.value = value;
       input.type = "text";
+      input.classList.remove("is-saved-runtime-secret");
       updateSensitiveToggleVisual(button, true);
-      setMsg("runtimeMsg", "API Key 已显示，再次点击图标可隐藏。", true);
-    } catch (error) {
-      setMsg("runtimeMsg", error.detail || error.message || "读取 API Key 失败", false);
+    } catch (_error) {
+      updateSensitiveToggleVisual(button, false);
     } finally {
       button.disabled = false;
       button.removeAttribute("aria-busy");
@@ -3250,10 +2889,11 @@ function runtimeFormToPayload() {
     runninghub_enterprise_api_key: runtimeSecretInputValue("rtVideoRunningHubEnterpriseApiKey"),
     digital_human_oral_hot_topic_mode: el("rtVideoOralHotTopicMode")?.value || "strong",
     video_image_model_priority_order: videoImagePriorityModels,
-    minimax_api_key: runtimeSecretInputValue("rtVideoMiniMaxApiKey"),
-    minimax_base_url: "https://api.minimaxi.com",
-    minimax_tts_model: el("rtVideoMiniMaxTtsModel")?.value.trim() || "speech-2.8-hd",
-    minimax_tts_voice_id: el("rtVideoMiniMaxTtsVoiceId")?.value.trim() || "male-qn-qingse",
+    video_tts_provider: "runninghub",
+    minimax_tts_model: normalizeVideoSpeechModel(el("rtVideoMiniMaxTtsModel")?.value),
+    minimax_tts_voice_id: normalizeVideoSpeechVoice(el("rtVideoMiniMaxTtsVoiceId")?.value),
+    video_tts_model: normalizeVideoSpeechModel(el("rtVideoMiniMaxTtsModel")?.value),
+    video_default_voice_id: normalizeVideoSpeechVoice(el("rtVideoMiniMaxTtsVoiceId")?.value),
     cleanup_enabled: !!el("rtCleanupEnabled").checked,
     cleanup_time: el("rtCleanupTime").value || "03:30",
     cleanup_retention_days: Number(el("rtCleanupRetentionDays").value || 7),
@@ -3317,10 +2957,8 @@ function fillRuntimeForm(data) {
   setRuntimeSecretInputState("rtVideoRunningHubPersonalApiKey", v.runninghub_personal_api_key_configured, v.runninghub_personal_api_key_masked);
   setRuntimeSecretInputState("rtVideoRunningHubEnterpriseApiKey", v.runninghub_enterprise_api_key_configured, v.runninghub_enterprise_api_key_masked);
   if (el("rtVideoOralHotTopicMode")) el("rtVideoOralHotTopicMode").value = ["off", "soft", "strong"].includes(v.digital_human_oral_hot_topic_mode) ? v.digital_human_oral_hot_topic_mode : "strong";
-  if (el("rtVideoMiniMaxBaseUrl")) el("rtVideoMiniMaxBaseUrl").value = "https://api.minimaxi.com";
-  setRuntimeSecretInputState("rtVideoMiniMaxApiKey", v.minimax_api_key_configured, v.minimax_api_key_masked);
-  if (el("rtVideoMiniMaxTtsModel")) el("rtVideoMiniMaxTtsModel").value = v.minimax_tts_model || "speech-2.8-hd";
-  if (el("rtVideoMiniMaxTtsVoiceId")) el("rtVideoMiniMaxTtsVoiceId").value = v.minimax_tts_voice_id || "male-qn-qingse";
+  if (el("rtVideoMiniMaxTtsModel")) el("rtVideoMiniMaxTtsModel").value = normalizeVideoSpeechModel(v.minimax_tts_model || v.video_tts_model);
+  if (el("rtVideoMiniMaxTtsVoiceId")) el("rtVideoMiniMaxTtsVoiceId").value = normalizeVideoSpeechVoice(v.minimax_tts_voice_id || v.video_default_voice_id);
   renderRunningHubPresetSelect("persona");
   renderRunningHubPresetSelect("tweet");
   adminState.imageGeminiModels = imageModelItems([
@@ -3528,9 +3166,185 @@ async function runBrowserCacheCleanupNow() {
   }
 }
 
+function tgStatusBadge(text, tone) {
+  return `<span class="admin-user-badge admin-user-badge-${tone}">${escapeHtml(text)}</span>`;
+}
+
+function tgFormatMemberTime(ts) {
+  const value = Number(ts || 0);
+  return value ? formatTime(value) : "-";
+}
+
+function tgMemberNameCell(item) {
+  const display = String(item?.tg_display_name || "").trim();
+  const handle = String(item?.tg_username || "").trim().replace(/^@/, "");
+  if (!display && !handle) {
+    return `<div class="admin-tg-status-tags">${tgStatusBadge("未获取", "pending")}</div>`;
+  }
+  return `<div class="admin-tg-member-meta">
+    <strong>${escapeHtml(display || `@${handle}`)}</strong>
+    ${display && handle ? `<span>@${escapeHtml(handle)}</span>` : ""}
+  </div>`;
+}
+
+function renderTgSettings(data) {
+  const rows = Array.isArray(data?.trusted_users) ? data.trusted_users : [];
+  const status = el("tgBotTokenStatus");
+  const username = el("tgBotUsername");
+  const configured = Boolean(data?.bot_token_configured);
+  if (status) {
+    const running = Boolean(data?.bot_running);
+    const error = String(data?.bot_last_error || "").trim();
+    status.className = "admin-tg-status-tags";
+    status.innerHTML = [
+      tgStatusBadge(configured ? "已配置" : "未配置", configured ? "enabled" : "disabled"),
+      tgStatusBadge(running ? "运行中" : "未运行", running ? "enabled" : (configured ? "pending" : "rejected")),
+      error ? tgStatusBadge(error, "locked") : "",
+    ].filter(Boolean).join("");
+  }
+  if (username) username.textContent = data?.bot_username ? `@${data.bot_username}` : "-";
+  if (el("tgBotEnabled")) el("tgBotEnabled").checked = Boolean(data?.bot_enabled);
+  const tokenLength = Math.max(0, Number(data?.bot_token_length || 0));
+  const tokenInput = el("tgBotToken");
+  const tokenAlreadyHydrated = Boolean(
+    tokenInput
+    && configured
+    && hasSavedRuntimeSecret("tgBotToken")
+    && tokenLength
+    && tokenInput.value.length === tokenLength
+    && !tokenInput.value.includes("•")
+  );
+  if (!tokenAlreadyHydrated) {
+    setRuntimeSecretInputState("tgBotToken", configured, configured ? "•".repeat(tokenLength || 12) : "");
+    if (configured) void hydrateTgBotTokenField(data);
+  }
+  const list = el("tgTrustedUserList");
+  if (list) {
+    list.innerHTML = rows.length ? rows.map((item) => {
+      const enabled = Boolean(item.enabled);
+      return `
+      <tr>
+        <td><strong>${escapeHtml(item.label || "TG 成员")}</strong></td>
+        <td>${tgMemberNameCell(item)}</td>
+        <td><strong class="admin-tg-chat-id">${escapeHtml(String(item.chat_id || ""))}</strong></td>
+        <td>
+          <div class="admin-tg-status-tags">
+            ${tgStatusBadge(enabled ? "启用" : "停用", enabled ? "enabled" : "disabled")}
+          </div>
+        </td>
+        <td>
+          <div class="admin-tg-time-cell">
+            <span><em>加入</em>${escapeHtml(tgFormatMemberTime(item.created_at))}</span>
+            <span><em>更新</em>${escapeHtml(tgFormatMemberTime(item.updated_at))}</span>
+          </div>
+        </td>
+        <td>
+          <button class="ghost mini-btn" type="button" data-act="tg_toggle" data-id="${escapeHtml(String(item.chat_id || ""))}" data-enabled="${enabled ? 1 : 0}">${enabled ? "停用" : "启用"}</button>
+          <button class="danger mini-btn" type="button" data-act="tg_delete" data-id="${escapeHtml(String(item.chat_id || ""))}">删除</button>
+        </td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6" class="task-empty">暂无允许成员</td></tr>`;
+  }
+}
+
+async function hydrateTgBotTokenField(data) {
+  if (!data?.bot_token_configured) return;
+  const input = el("tgBotToken");
+  if (!input || input.dataset.runtimeSecretSaved !== "true") return;
+  try {
+    const response = await api("/api/admin/runtime_config/secrets/telegram_bot_token", { method: "POST" });
+    const value = String(response?.value || "");
+    if (!value || input.dataset.runtimeSecretSaved !== "true") return;
+    input.value = value;
+    input.dataset.runtimeSecretMask = value;
+    input.type = "password";
+    input.classList.add("is-saved-runtime-secret");
+    updateSensitiveToggleVisual(getSensitiveToggleButton("tgBotToken"), false);
+  } catch (_) {}
+}
+
+async function loadTgSettings() {
+  if (!el("tgBotTokenStatus")) return null;
+  const data = await api("/api/admin/tg_settings");
+  renderTgSettings(data);
+  return data;
+}
+
+function tgBotTokenInputValue() {
+  const input = el("tgBotToken");
+  const raw = input?.value.trim() || "";
+  const mask = input?.dataset.runtimeSecretMask || "";
+  if (hasSavedRuntimeSecret("tgBotToken") && raw === mask) return null;
+  return raw;
+}
+
+async function saveTgEnv() {
+  const token = tgBotTokenInputValue();
+  const payload = {
+    bot_enabled: token ? true : Boolean(el("tgBotEnabled")?.checked),
+  };
+  if (token !== null) {
+    payload.bot_token = token;
+    if (!token) payload.bot_enabled = false;
+  }
+  const data = await api("/api/admin/tg_env", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  renderTgSettings(data.tg_settings || data);
+  const cleared = token === "";
+  setMsg(
+    "tgSettingsMsg",
+    cleared ? "Telegram Token 已清除，轮询已停止。" : "Telegram 配置已保存，Token 已检测，Bot 按开关状态运行。",
+    true,
+  );
+}
+
+async function testTgEnv() {
+  const token = tgBotTokenInputValue();
+  const data = await api("/api/admin/tg_env/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bot_token: token || "" }),
+  });
+  setMsg("tgSettingsMsg", data?.username ? `Token 有效：@${data.username}` : "Token 有效", true);
+}
+
+async function saveTgUser() {
+  const rawId = String(el("tgTrustedChatId")?.value || "").trim();
+  if (!rawId) {
+    setMsg("tgSettingsMsg", "请填写 Telegram Chat ID 或 @用户名", false);
+    return;
+  }
+  const data = await api("/api/admin/tg_trusted_users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: /^-?\d+$/.test(rawId) ? Number(rawId) : rawId,
+      label: el("tgTrustedLabel")?.value.trim() || "",
+      enabled: true,
+      notify_busy: true,
+      notify_available: true,
+    }),
+  });
+  renderTgSettings(data.tg_settings || data);
+  if (el("tgTrustedChatId")) el("tgTrustedChatId").value = "";
+  if (el("tgTrustedLabel")) el("tgTrustedLabel").value = "";
+  const savedRows = (data.tg_settings || data).trusted_users || [];
+  const normalized = rawId.replace(/^@/, "");
+  const saved = savedRows.find((item) => (
+    String(item.chat_id) === normalized
+    || String(item.tg_username || "").replace(/^@/, "") === normalized
+  ));
+  const fetchedName = String(saved?.tg_display_name || "").trim() || (saved?.tg_username ? `@${String(saved.tg_username).replace(/^@/, "")}` : "");
+  setMsg("tgSettingsMsg", fetchedName ? `TG 成员已保存：${fetchedName}` : "TG 成员已保存，暂未获取到 Telegram 用户名称", true);
+}
+
 async function loadRuntime() {
   const cfg = runtimeConfigResponseToConfig(await api("/api/admin/runtime_config"));
   fillRuntimeForm(cfg);
+  try { await loadTgSettings(); } catch (_) {}
   return cfg;
 }
 
@@ -4021,12 +3835,14 @@ async function clearSentimentCookieProfile() {
 }
 
 async function loadPricing() {
+  if (!el("priceRhCoins")) return null;
   const p = await api("/api/admin/pricing");
   el("priceRhCoins").value = p.rh_coins_per_10rmb;
   el("priceUsdRmb").value = p.usd_to_rmb;
   el("priceNanoUsd").value = p.nano_usd_per_image;
   el("priceGemIn").value = p.gemini_input_usd_per_1m;
   el("priceGemOut").value = p.gemini_output_usd_per_1m;
+  return p;
 }
 
 async function savePricing() {
@@ -4100,6 +3916,11 @@ function cloneBillingCatalog(catalog) {
   if (!catalog || typeof catalog !== "object" || Array.isArray(catalog)) return {};
   if (typeof structuredClone === "function") return structuredClone(catalog);
   return JSON.parse(JSON.stringify(catalog));
+}
+
+function isRetiredCatalogPlanSku(sku) {
+  const value = String(sku || "").trim().toLowerCase();
+  return value.startsWith("vanguard_personal_") || value.startsWith("vanguard_enterprise_");
 }
 
 function billingCatalogVersionLabel(version) {
@@ -4200,6 +4021,8 @@ function renderBillingCatalogForm(catalog, version) {
   working.subscriptions = Array.isArray(working.subscriptions) && working.subscriptions.length
     ? working.subscriptions
     : [fallbackSubscription];
+  const currentSubscriptions = working.subscriptions.filter((item) => !isRetiredCatalogPlanSku(item?.sku));
+  if (currentSubscriptions.length) working.subscriptions = currentSubscriptions;
   const defaultSku = String(fallbackSubscription.sku || working.subscriptions[0]?.sku || "");
   const defaultSubscription = working.subscriptions.find((item) => String(item?.sku || "") === defaultSku)
     || working.subscriptions[0]
@@ -4481,8 +4304,80 @@ const BILLING_STATUS_LABELS = {
   refunded: "已冲销",
   rejected: "已拒绝",
   cancelled: "已取消",
+  expired: "已到期",
   legacy: "旧额度模式",
   enforced: "商业计费",
+  commercial: "商业计费",
+  unlimited: "无限算力",
+  success: "已成功",
+  failed: "失败",
+  queued: "排队中",
+  running: "进行中",
+  unknown: "未知",
+};
+
+const BILLING_ASSET_LABELS = {
+  credit: "算力点",
+  image: "图片",
+  subscription: "订阅",
+  audit: "审计",
+};
+
+const BILLING_EVENT_LABELS = {
+  opening_balance: "期初余额",
+  reserve: "任务预扣",
+  release: "预扣返还",
+  reservation_refund: "任务退款",
+  settled: "任务结算",
+  admin_adjustment: "人工调整",
+  admin_waived: "管理员豁免",
+  order_credit: "申请批准入账",
+  credit_pack_approved: "储值申请批准入账",
+  credit_pack_bonus: "储值赠送图片",
+  credit_pack_refunded: "储值已冲销",
+  credit_pack_bonus_revoked: "储值赠送已收回",
+  subscription_period_approved: "订阅申请批准生效",
+  subscription_period_refunded: "订阅周期已冲销",
+  subscription_images_terminated: "订阅图片已终止",
+  subscription_images_refunded: "订阅图片已冲销",
+  subscription_terminated: "订阅已终止",
+  image_grant: "图片额度入账",
+  billing_enforcement_enabled: "已启用商业计费",
+  unlimited_compute_reserved: "无限算力预扣",
+  unlimited_compute_settled: "无限算力结算",
+  unlimited_compute_enabled: "已开启无限算力",
+  unlimited_compute_disabled: "已关闭无限算力",
+  exact_cash_refund: "精确退款",
+  order_refunded: "订单已冲销",
+  welcome_credit: "新账号赠送算力",
+};
+
+const BILLING_REF_TYPE_LABELS = {
+  normal_task: "素材生成任务",
+  social_task: "社媒自动化任务",
+  persona_hot_fetch_async: "人设热点抓取",
+  crm_action: "CRM 触达任务",
+  proxy_purchase: "代理采购",
+  proxy_renewal: "代理续费",
+  order: "购买订单",
+  subscription: "订阅方案",
+  admin_adjustment: "管理员人工调整",
+  migration: "系统迁移",
+  welcome_credit: "新账号赠送",
+};
+
+const BILLING_ACTION_FALLBACK = {
+  threads_text_publish: "Threads 纯文字推文发布",
+  instagram_text_publish: "Instagram 纯文字推文发布",
+  complete_image_post: "基础完整图文贴文",
+  basic_text_post: "AI 文本处理步骤",
+  tweet_generation: "AI 推文生成",
+  hot_tweet_fetch: "热点推文抓取",
+  ai_image: "单独生成或追加 AI 图片",
+  oral_video_second: "数字人口播视频",
+  threads_auto_reply_batch: "批量评论 / Quote 转发互动任务",
+  crm_direct_message_batch: "CRM 私信触达批准批次",
+  crm_group_invite_batch: "CRM 群组邀请批准批次",
 };
 
 function createBillingStatus(status) {
@@ -4557,52 +4452,28 @@ function renderBillingCatalog(payload) {
     }
   }
 
-  const body = el("billingCatalogBody");
-  if (!body) return;
-  body.replaceChildren();
-  if (!versions.length) {
-    const row = document.createElement("tr");
-    const cell = createBillingCell("还没有保存过套餐", "admin-billing-empty");
-    cell.colSpan = 5;
-    row.appendChild(cell);
-    body.appendChild(row);
-    return;
+  const publishButton = el("btnPublishCatalogDraft");
+  const draftVersion = versions.find((item) => String(item.status || "").toLowerCase() === "draft");
+  if (publishButton) {
+    publishButton.hidden = !draftVersion;
+    publishButton.disabled = !draftVersion;
+    if (draftVersion) publishButton.dataset.id = String(draftVersion.id || "");
   }
-  versions.forEach((version) => {
-    const row = document.createElement("tr");
-    const versionLabel = billingCatalogRecordLabel(version);
-    row.appendChild(createBillingCell(versionLabel, "admin-billing-strong"));
-    const statusCell = document.createElement("td");
-    statusCell.appendChild(createBillingStatus(version.status));
-    row.appendChild(statusCell);
-    row.appendChild(createBillingCell(formatBillingTime(version.effective_at || version.published_at)));
-    row.appendChild(createBillingCell(formatBillingTime(version.created_at)));
-    const actionCell = document.createElement("td");
-    actionCell.className = "admin-billing-actions";
-    const inspectButton = createBillingAction("编辑设置", "catalog-inspect", version.id);
-    inspectButton.dataset.versionIndex = String(adminState.billingCatalogVersions.indexOf(version));
-    actionCell.appendChild(inspectButton);
-    if (String(version.status || "").toLowerCase() === "draft") {
-      actionCell.appendChild(createBillingAction("发布给客户", "catalog-publish", version.id, "primary"));
-    }
-    row.appendChild(actionCell);
-    body.appendChild(row);
-  });
   if (!adminState.billingCatalogWorking) {
-    useBillingCatalog(active || versions[0], { silent: true });
+    useBillingCatalog(active || draftVersion || versions[0], { silent: true });
   }
 }
 
 async function loadBillingCatalog() {
-  const body = el("billingCatalogBody");
-  body?.setAttribute("aria-busy", "true");
+  const editor = el("billingCatalogDraftForm");
+  editor?.setAttribute("aria-busy", "true");
   setMsg("billingCatalogMsg", "");
   try {
     const payload = await api("/api/admin/billing/catalog/versions");
     renderBillingCatalog(payload || {});
     return payload;
   } finally {
-    body?.removeAttribute("aria-busy");
+    editor?.removeAttribute("aria-busy");
   }
 }
 
@@ -4651,7 +4522,7 @@ async function createBillingCatalogDraft() {
     await loadBillingCatalog();
     const savedVersion = adminState.billingCatalogVersions.find((item) => String(item.id || "") === draftId);
     if (savedVersion) useBillingCatalog(savedVersion, { silent: true });
-    setMsg("billingCatalogMsg", "套餐设置已保存，确认无误后可在左侧发布给客户", true);
+    setMsg("billingCatalogMsg", "套餐设置已保存，确认无误后可发布给客户", true);
   } finally {
     adminState.billingCatalogSaving = false;
     if (saveButton) {
@@ -4672,7 +4543,10 @@ async function publishBillingCatalog(versionId) {
     confirmLabel: "确认发布",
   });
   if (!decision.confirmed) return;
-  const publishButtons = [...document.querySelectorAll('[data-billing-action="catalog-publish"]')];
+  const publishButtons = [
+    ...document.querySelectorAll('[data-billing-action="catalog-publish"]'),
+    el("btnPublishCatalogDraft"),
+  ].filter(Boolean);
   adminState.billingCatalogPublishing = true;
   publishButtons.forEach((button) => { button.disabled = true; });
   try {
@@ -4940,6 +4814,167 @@ async function terminateBillingSubscription(subscriptionId) {
   setMsg("billingUserMsg", "订阅已终止，剩余订阅权益已撤销", true);
 }
 
+function billingLedgerAmount(entry = {}) {
+  const amount = Number(entry.amount_points ?? entry.amount_units ?? 0);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function billingLedgerUnit(entry = {}) {
+  const asset = String(entry.asset_type || entry.asset || "credit").toLowerCase();
+  if (asset === "image") return "张";
+  if (asset === "subscription") return "期";
+  return "点";
+}
+
+function billingCatalogItemName(sku) {
+  const clean = String(sku || "").trim();
+  if (!clean) return "";
+  const catalog = adminState.billingActiveCatalog || {};
+  const lists = [catalog.actions, catalog.packages, catalog.subscriptions];
+  for (const list of lists) {
+    const item = (Array.isArray(list) ? list : []).find((row) => String(row?.sku || "") === clean);
+    if (item?.name) return String(item.name);
+  }
+  return BILLING_ACTION_FALLBACK[clean] || "";
+}
+
+function billingLedgerMeta(entry = {}) {
+  const meta = entry.meta && typeof entry.meta === "object" ? entry.meta : {};
+  return meta.meta && typeof meta.meta === "object" ? { ...meta, ...meta.meta } : meta;
+}
+
+function billingLedgerEventLabel(entry = {}) {
+  return billingLedgerCoreReason(entry);
+}
+
+function billingLedgerCoreReason(entry = {}) {
+  const meta = billingLedgerMeta(entry);
+  const sku = String(meta.sku || entry.sku || "").trim();
+  const actionName = billingCatalogItemName(sku);
+  if (actionName) return actionName;
+  const eventType = String(entry.event_type || entry.type || "").trim().toLowerCase();
+  if (eventType === "admin_adjustment") return "人工调整";
+  if (eventType === "welcome_credit") return "商家赠送";
+  if (eventType === "credit_pack_approved" || eventType === "order_credit") return "账户充值";
+  if (eventType === "credit_pack_bonus") return "储值赠送";
+  if (BILLING_EVENT_LABELS[eventType]) return BILLING_EVENT_LABELS[eventType];
+  return billingLedgerAmount(entry) < 0 ? "任务执行" : "算力入账";
+}
+
+const BILLING_LEDGER_TEMPORARY_EVENTS = new Set([
+  "release",
+  "reservation_refund",
+  "admin_waived",
+  "unlimited_compute_reserved",
+  "unlimited_compute_settled",
+  "billing_enforcement_enabled",
+]);
+
+function billingLedgerRefundedReservationIds(rows = []) {
+  const ids = new Set();
+  rows.forEach((entry) => {
+    const eventType = String(entry.event_type || entry.type || "").trim().toLowerCase();
+    const reservationId = String(entry.reservation_id || "").trim();
+    if (reservationId && (eventType === "release" || eventType === "reservation_refund")) ids.add(reservationId);
+  });
+  return ids;
+}
+
+function billingLedgerVisibleRows() {
+  const rows = Array.isArray(adminState.billingLedgerRows) ? adminState.billingLedgerRows : [];
+  const filter = ["all", "expense", "income"].includes(adminState.billingLedgerFilter)
+    ? adminState.billingLedgerFilter
+    : "all";
+  const refunded = billingLedgerRefundedReservationIds(rows);
+  return rows.filter((entry) => {
+    const amount = billingLedgerAmount(entry);
+    if (amount === 0) return false;
+    const eventType = String(entry.event_type || entry.type || "").trim().toLowerCase();
+    if (BILLING_LEDGER_TEMPORARY_EVENTS.has(eventType)) return false;
+    const reservationId = String(entry.reservation_id || "").trim();
+    if (eventType === "reserve" && reservationId && refunded.has(reservationId)) return false;
+    if (filter === "expense") return amount < 0;
+    if (filter === "income") return amount > 0;
+    return true;
+  });
+}
+
+function renderBillingLedgerPage() {
+  const body = el("billingLedgerBody");
+  if (!body) return;
+  const filter = ["all", "expense", "income"].includes(adminState.billingLedgerFilter)
+    ? adminState.billingLedgerFilter
+    : "all";
+  adminState.billingLedgerFilter = filter;
+  document.querySelectorAll("#billingLedgerFilters [data-billing-ledger-filter]").forEach((button) => {
+    const active = button.dataset.billingLedgerFilter === filter;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  const pageSizeSelect = el("billingLedgerPageSize");
+  const selectedSize = Math.max(10, Math.min(50, Number(pageSizeSelect?.value || adminState.billingLedgerPageSize || 20)));
+  adminState.billingLedgerPageSize = selectedSize;
+  if (pageSizeSelect && Number(pageSizeSelect.value) !== selectedSize) pageSizeSelect.value = String(selectedSize);
+  const visible = billingLedgerVisibleRows();
+  const totalPages = Math.max(1, Math.ceil(visible.length / selectedSize) || 1);
+  const page = Math.min(Math.max(1, Number(adminState.billingLedgerPage || 1)), totalPages);
+  adminState.billingLedgerPage = page;
+  const start = (page - 1) * selectedSize;
+  const pageRows = visible.slice(start, start + selectedSize);
+  body.replaceChildren();
+  if (!visible.length) {
+    const empty = document.createElement("div");
+    empty.className = "admin-billing-ledger-empty";
+    empty.textContent = filter === "all" ? "暂无扣费或入账记录" : "当前筛选条件下暂无扣费或入账";
+    body.appendChild(empty);
+  } else {
+    const unlimited = adminState.billingUnlimitedUsers.get(String(adminState.billingSelectedUserId || "")) === true;
+    pageRows.forEach((entry) => {
+      const amount = billingLedgerAmount(entry);
+      const unit = billingLedgerUnit(entry);
+      const tone = amount > 0 ? "is-positive" : amount < 0 ? "is-negative" : "is-neutral";
+      const sign = amount > 0 ? "+" : "";
+      const balanceAfter = entry.asset_type === "credit" && entry.balance_after_points != null
+        ? Number(entry.balance_after_points)
+        : Number(entry.balance_after_points ?? entry.balance_after_units);
+      const row = document.createElement("div");
+      row.className = "admin-billing-ledger-row";
+      row.setAttribute("role", "row");
+      const time = document.createElement("time");
+      time.className = "admin-billing-ledger-time";
+      time.setAttribute("role", "cell");
+      time.textContent = formatBillingTime(entry.created_at);
+      const event = document.createElement("div");
+      event.className = "admin-billing-ledger-event";
+      event.setAttribute("role", "cell");
+      event.title = billingLedgerCoreReason(entry);
+      const label = document.createElement("strong");
+      label.textContent = billingLedgerCoreReason(entry);
+      event.appendChild(label);
+      const amountNode = document.createElement("span");
+      amountNode.className = `admin-billing-ledger-amount ${tone}`;
+      amountNode.setAttribute("role", "cell");
+      amountNode.textContent = `${sign}${Number(amount).toLocaleString("zh-CN", { maximumFractionDigits: 6 })} ${unit}`;
+      const balance = document.createElement("strong");
+      balance.className = "admin-billing-ledger-balance";
+      balance.setAttribute("role", "cell");
+      balance.textContent = unlimited
+        ? "不限"
+        : (Number.isFinite(balanceAfter)
+          ? `${balanceAfter.toLocaleString("zh-CN", { maximumFractionDigits: 6 })} ${unit}`
+          : "—");
+      row.append(time, event, amountNode, balance);
+      body.appendChild(row);
+    });
+  }
+  const pagination = el("billingLedgerPagination");
+  if (pagination) pagination.hidden = false;
+  setText("billingLedgerPaginationSummary", `共 ${visible.length} 条变动 · 每页 ${selectedSize} 条`);
+  setText("billingLedgerPageIndicator", `第 ${page} / ${totalPages} 页`);
+  if (el("btnBillingLedgerPrev")) el("btnBillingLedgerPrev").disabled = page <= 1;
+  if (el("btnBillingLedgerNext")) el("btnBillingLedgerNext").disabled = page >= totalPages;
+}
+
 function createBillingSummaryItem(label, value, tone = "") {
   const item = document.createElement("div");
   item.className = `admin-billing-summary-item${tone ? ` is-${tone}` : ""}`;
@@ -4989,77 +5024,68 @@ function renderUserBilling(payload, userId) {
 
   adminState.billingSelectedUserId = Number(user.id || root.user_id || userId);
   adminState.billingUnlimitedUsers.set(String(adminState.billingSelectedUserId), unlimited);
-  if (el("billingUserId")) el("billingUserId").value = String(adminState.billingSelectedUserId);
+  adminState.billingSelectedPoints = unlimited ? 0 : creditPoints;
+  adminState.billingLedgerRows = ledger;
+  adminState.billingLedgerPage = 1;
   const summary = el("billingUserSummary");
+  if (!summary) return;
+  const currentPlan = subscriptions.find((item) => String(item.status || "").toLowerCase() === "active") || subscriptions[0] || {};
+  const planName = currentPlan.plan_name || currentPlan.name || (activeSubscriptions ? "已启用订阅" : "暂无订阅");
   summary.replaceChildren(
-    createBillingSummaryItem("客户", `${user.username || root.username || `ID ${adminState.billingSelectedUserId}`}`),
     createBillingSummaryItem("算力点余额", unlimited ? "∞" : formatBillingPoints(creditPoints), unlimited || creditPoints > 0 ? "positive" : "neutral"),
     createBillingSummaryItem("可用图片", `${formatBillingUnits(availableImages)} 张`, availableImages > 0 ? "positive" : "neutral"),
-    createBillingSummaryItem("有效订阅", `${activeSubscriptions} 个`),
-    createBillingSummaryItem("计费模式", BILLING_STATUS_LABELS[billingMode] || billingMode),
+    createBillingSummaryItem("当前订阅", planName),
+    createBillingSummaryItem("计费模式", BILLING_STATUS_LABELS[billingMode] || "商业计费"),
   );
 
-  const body = el("billingLedgerBody");
-  body.replaceChildren();
-  if (!ledger.length) {
-    const row = document.createElement("tr");
-    const cell = createBillingCell("暂无计费流水", "admin-billing-empty");
-    cell.colSpan = 6;
-    row.appendChild(cell);
-    body.appendChild(row);
-  } else {
-    ledger.forEach((entry) => {
-      const row = document.createElement("tr");
-      const amount = Number(entry.amount_points ?? entry.amount_units ?? 0);
-      const balanceAfter = Number(entry.balance_after_points ?? entry.balance_after_units ?? 0);
-      row.appendChild(createBillingCell(formatBillingTime(entry.created_at)));
-      row.appendChild(createBillingCell(entry.asset_type || "-"));
-      row.appendChild(createBillingCell(entry.event_type || entry.type || "-"));
-      row.appendChild(createBillingCell(`${amount > 0 ? "+" : ""}${amount.toLocaleString("zh-CN", { maximumFractionDigits: 6 })}`, amount > 0 ? "admin-billing-positive" : (amount < 0 ? "admin-billing-negative" : "")));
-      row.appendChild(createBillingCell(unlimited ? "∞" : balanceAfter.toLocaleString("zh-CN", { maximumFractionDigits: 6 })));
-      row.appendChild(createBillingCell(entry.order_id || entry.ref_id || entry.ref_type || "-", "admin-billing-reference"));
-      body.appendChild(row);
-    });
-  }
+  renderBillingLedgerPage();
   const subscriptionBody = el("billingSubscriptionBody");
   subscriptionBody?.replaceChildren();
   if (subscriptionBody && !subscriptions.length) {
-    const row = document.createElement("tr");
-    const cell = createBillingCell("暂无订阅记录", "admin-billing-empty");
-    cell.colSpan = 5;
-    row.appendChild(cell);
-    subscriptionBody.appendChild(row);
+    const empty = document.createElement("div");
+    empty.className = "admin-billing-ledger-empty";
+    empty.textContent = "暂无订阅记录";
+    subscriptionBody.appendChild(empty);
   } else if (subscriptionBody) {
     subscriptions.forEach((subscription) => {
-      const row = document.createElement("tr");
       const status = String(subscription.status || "expired").toLowerCase();
-      row.appendChild(createBillingCell(subscription.id || "-"));
-      row.appendChild(createBillingCell(subscription.plan_sku || "-"));
-      const statusCell = document.createElement("td");
-      statusCell.appendChild(createBillingStatus(status));
-      row.appendChild(statusCell);
-      row.appendChild(createBillingCell(formatBillingTime(subscription.current_period_end)));
-      const actions = document.createElement("td");
-      actions.className = "admin-billing-actions";
+      const card = document.createElement("article");
+      card.className = "admin-billing-subscription-card";
+      const head = document.createElement("div");
+      head.className = "admin-billing-subscription-head";
+      const title = document.createElement("strong");
+      title.textContent = subscription.plan_name || subscription.name || "订阅方案";
+      head.append(title, createBillingStatus(status));
+      const meta = document.createElement("div");
+      meta.className = "admin-billing-subscription-meta";
+      const periodEnd = subscription.current_period_end || subscription.period_end || subscription.expires_at;
+      meta.textContent = periodEnd ? `有效至 ${formatBillingTime(periodEnd)}` : "未设置周期";
+      card.append(head, meta);
       if (status === "active") {
+        const actions = document.createElement("div");
+        actions.className = "admin-billing-actions";
         actions.appendChild(createBillingAction("终止订阅", "subscription-terminate", subscription.id, "danger"));
-      } else {
-        actions.textContent = "无需操作";
+        card.appendChild(actions);
       }
-      row.appendChild(actions);
-      subscriptionBody.appendChild(row);
+      subscriptionBody.appendChild(card);
     });
   }
-  el("billingUserPlaceholder").hidden = true;
-  el("billingUserWorkspace").hidden = false;
+  if (el("billingUserPlaceholder")) el("billingUserPlaceholder").hidden = true;
+  if (el("billingUserWorkspace")) el("billingUserWorkspace").hidden = false;
   const unlimitedInput = el("billingAdjustmentUnlimited");
   if (unlimitedInput) unlimitedInput.checked = unlimited;
+  if (el("billingAdjustmentAmount") && !unlimited) {
+    el("billingAdjustmentAmount").value = String(Number.isFinite(creditPoints) ? creditPoints : "");
+  }
+  if (el("billingAdjustmentType")) el("billingAdjustmentType").value = "credit";
+  loadAdminCreditShortcuts();
+  renderAdminCreditShortcuts();
   syncBillingAdjustmentType();
 }
 
-async function loadUserBilling(userId = el("billingUserId")?.value) {
+async function loadUserBilling(userId = adminState.billingSelectedUserId) {
   const targetUserId = Math.floor(Number(userId || 0));
-  if (targetUserId <= 0) throw new Error("请输入有效的客户 ID");
+  if (targetUserId <= 0) throw new Error("请先打开客户算力明细");
   setMsg("billingUserMsg", "");
   el("billingUserWorkspace")?.setAttribute("aria-busy", "true");
   try {
@@ -5072,17 +5098,15 @@ async function loadUserBilling(userId = el("billingUserId")?.value) {
 }
 
 async function submitBillingAdjustment() {
-  const userId = Math.floor(Number(adminState.billingSelectedUserId || el("billingUserId")?.value || 0));
+  const userId = Math.floor(Number(adminState.billingSelectedUserId || 0));
   const adjustmentType = String(el("billingAdjustmentType")?.value || "credit");
-  const amount = Number(el("billingAdjustmentAmount")?.value || 0);
   const unlimited = adjustmentType === "credit" && Boolean(el("billingAdjustmentUnlimited")?.checked);
-  const note = String(el("billingAdjustmentNote")?.value || "").trim();
-  if (userId <= 0) throw new Error("请先查询客户计费详情");
-  if (!note) throw new Error("请填写调整原因");
+  const note = String(el("billingAdjustmentNote")?.value || "").trim() || "人工调整账号算力";
+  if (userId <= 0) throw new Error("请先打开客户算力明细");
   if (adjustmentType === "subscription") {
-    const quantity = Math.floor(amount);
+    const quantity = Math.floor(Number(el("billingSubscriptionQuantity")?.value || el("billingAdjustmentAmount")?.value || 0));
     const subscriptionSku = String(el("billingAdjustmentSubscriptionSku")?.value || "").trim();
-    if (!Number.isInteger(amount) || quantity < 1 || quantity > 50) throw new Error("订阅套数必须是 1-50 的整数");
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 50) throw new Error("订阅套数必须是 1-50 的整数");
     if (!subscriptionSku) throw new Error("请选择订阅方案");
     const subscriptionName = String(el("billingAdjustmentSubscriptionSku")?.selectedOptions?.[0]?.textContent || subscriptionSku);
     const decision = await requestAdminPublicAction({
@@ -5097,8 +5121,13 @@ async function submitBillingAdjustment() {
       body: JSON.stringify({ sku: subscriptionSku, quantity, renewal_subscription_ids: [], note }),
     });
   } else {
-    const deltaPoints = unlimited ? 0 : amount;
+    const currentPoints = Number(adminState.billingSelectedPoints || 0);
+    const targetPoints = Number(el("billingAdjustmentAmount")?.value || 0);
     const wasUnlimited = adminState.billingUnlimitedUsers.get(String(userId)) === true;
+    const deltaPoints = unlimited ? 0 : Math.round((targetPoints - currentPoints) * 1_000_000) / 1_000_000;
+    if (!unlimited && (!Number.isFinite(targetPoints) || targetPoints < 0)) {
+      throw new Error("调整后算力点必须是 0 或正数");
+    }
     if (!Number.isFinite(deltaPoints) || (!unlimited && deltaPoints === 0 && !wasUnlimited)) {
       throw new Error("调整算力点必须是非零数值");
     }
@@ -5106,7 +5135,7 @@ async function submitBillingAdjustment() {
       ? "设为无限算力"
       : (wasUnlimited && deltaPoints === 0
         ? "关闭无限算力"
-        : `调整 ${deltaPoints > 0 ? "+" : ""}${deltaPoints} 点并使用普通算力`);
+        : `将算力点调整为 ${targetPoints} 点（${deltaPoints > 0 ? "+" : ""}${deltaPoints}）`);
     const decision = await requestAdminPublicAction({
       title: "调整客户算力",
       message: `确认将客户 ID ${userId} ${actionText}吗？`,
@@ -5122,8 +5151,8 @@ async function submitBillingAdjustment() {
       body: JSON.stringify(adjustmentPayload),
     });
   }
-  el("billingAdjustmentAmount").value = "";
-  el("billingAdjustmentNote").value = "";
+  if (el("billingAdjustmentAmount")) el("billingAdjustmentAmount").value = "";
+  if (el("billingAdjustmentNote")) el("billingAdjustmentNote").value = "";
   await loadUserBilling(userId);
   setMsg("billingUserMsg", "人工调整已完成并写入审计流水", true);
   await loadUsers();
@@ -5144,16 +5173,16 @@ function syncBillingAdjustmentType() {
   const unlimited = !isSubscription && Boolean(unlimitedInput?.checked);
   const amount = el("billingAdjustmentAmount");
   const wasUnlimited = adminState.billingUnlimitedUsers.get(String(adminState.billingSelectedUserId || "")) === true;
-  setText("billingAdjustmentAmountLabel", isSubscription ? "订阅套数" : "调整算力点");
+  setText("billingAdjustmentAmountLabel", isSubscription ? "订阅套数" : "调整后算力点");
   if (amount) {
     amount.disabled = unlimited;
     if (unlimited) amount.value = "";
-    amount.step = isSubscription ? "1" : "0.000001";
-    amount.min = isSubscription ? "1" : "";
-    amount.max = isSubscription ? "50" : "";
+    amount.step = isSubscription ? "1" : "0.01";
+    amount.min = isSubscription ? "1" : "0";
+    amount.max = isSubscription ? "50" : "1000000";
     amount.placeholder = isSubscription
       ? "1-50 套（每套按所选周期开通）"
-      : (unlimited ? "无限模式无需填写" : (wasUnlimited ? "填 0 仅关闭无限，正负数同时调整" : "正数增加，负数扣减"));
+      : (unlimited ? "无限模式无需填写" : "输入新的算力点");
   }
 }
 
@@ -5292,6 +5321,25 @@ function readUserListFilters() {
   };
 }
 
+async function applyUserListFilters({ debounceMs = 0 } = {}) {
+  const run = async () => {
+    adminState.userListFilters = readUserListFilters();
+    adminState.userListPage = 1;
+    clearUserBatchSelection();
+    try {
+      await loadUsers(1);
+    } catch (error) {
+      setMsg("userMsg", getErrorMessage(error), false);
+    }
+  };
+  window.clearTimeout(adminState.userListFilterTimer);
+  if (debounceMs > 0) {
+    adminState.userListFilterTimer = window.setTimeout(() => { void run(); }, debounceMs);
+    return;
+  }
+  await run();
+}
+
 function syncUserBatchSelection() {
   const isCustomer = adminState.userListRole === "customer";
   const batchBar = el("adminUserBatchBar");
@@ -5421,36 +5469,38 @@ function persistAdminCreditShortcuts() {
 }
 
 function renderAdminCreditShortcuts() {
-  const list = el("adminUserBatchCreditShortcutList");
-  if (!list) return;
-  list.replaceChildren();
-  adminState.userBatchCreditShortcuts.forEach((shortcut) => {
-    const item = document.createElement("div");
-    item.className = "admin-credit-shortcut";
-    item.setAttribute("role", "listitem");
-    const applyButton = document.createElement("button");
-    applyButton.type = "button";
-    applyButton.className = "admin-credit-shortcut-apply";
-    applyButton.dataset.creditShortcutApply = shortcut.id;
-    applyButton.setAttribute("aria-label", `填入 ${shortcut.name} ${shortcut.points} 点`);
-    const name = document.createElement("span");
-    name.textContent = shortcut.name;
-    const points = document.createElement("strong");
-    points.textContent = `${Number(shortcut.points).toLocaleString()} 点`;
-    applyButton.append(name, points);
-    const removeButton = document.createElement("button");
-    removeButton.type = "button";
-    removeButton.className = "admin-credit-shortcut-remove";
-    removeButton.dataset.creditShortcutRemove = shortcut.id;
-    removeButton.setAttribute("aria-label", `删除快捷标签 ${shortcut.name}`);
-    removeButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>';
-    item.append(applyButton, removeButton);
-    list.appendChild(markAdminDynamicUiElement(item));
+  ["adminUserBatchCreditShortcutList", "billingCreditShortcutList"].forEach((listId) => {
+    const list = el(listId);
+    if (!list) return;
+    list.replaceChildren();
+    adminState.userBatchCreditShortcuts.forEach((shortcut) => {
+      const item = document.createElement("div");
+      item.className = "admin-credit-shortcut";
+      item.setAttribute("role", "listitem");
+      const applyButton = document.createElement("button");
+      applyButton.type = "button";
+      applyButton.className = "admin-credit-shortcut-apply";
+      applyButton.dataset.creditShortcutApply = shortcut.id;
+      applyButton.setAttribute("aria-label", `填入 ${shortcut.name} ${shortcut.points} 点`);
+      const name = document.createElement("span");
+      name.textContent = shortcut.name;
+      const points = document.createElement("strong");
+      points.textContent = `${Number(shortcut.points).toLocaleString()} 点`;
+      applyButton.append(name, points);
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "admin-credit-shortcut-remove";
+      removeButton.dataset.creditShortcutRemove = shortcut.id;
+      removeButton.setAttribute("aria-label", `删除快捷标签 ${shortcut.name}`);
+      removeButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>';
+      item.append(applyButton, removeButton);
+      list.appendChild(markAdminDynamicUiElement(item));
+    });
   });
 }
 
-function syncAdminCreditShortcutToggle(open) {
-  const toggle = el("btnAdminUserBatchCreditShortcutAdd");
+function syncAdminCreditShortcutToggle(toggleId, formId, open) {
+  const toggle = el(toggleId);
   if (!toggle) return;
   const path = toggle.querySelector("svg path");
   const label = toggle.querySelector("span");
@@ -5460,24 +5510,33 @@ function syncAdminCreditShortcutToggle(open) {
   toggle.setAttribute("aria-expanded", String(open));
 }
 
-function toggleAdminCreditShortcutForm(forceOpen = null) {
-  const form = el("adminUserBatchCreditShortcutForm");
+function toggleAdminCreditShortcutForm(forceOpen = null, formId = "adminUserBatchCreditShortcutForm", toggleId = "btnAdminUserBatchCreditShortcutAdd", nameId = "adminUserBatchCreditShortcutName") {
+  const form = el(formId);
   if (!form) return;
   const open = forceOpen === null ? form.hidden : Boolean(forceOpen);
   form.hidden = !open;
-  syncAdminCreditShortcutToggle(open);
-  if (open) el("adminUserBatchCreditShortcutName")?.focus();
+  syncAdminCreditShortcutToggle(toggleId, formId, open);
+  if (open) el(nameId)?.focus();
 }
 
 function applyAdminCreditShortcut(shortcutId) {
   const shortcut = adminState.userBatchCreditShortcuts.find((item) => item.id === String(shortcutId || ""));
-  const credit = el("adminUserBatchCredit");
-  if (!shortcut || !credit) return;
-  if (el("adminUserBatchUnlimited")) el("adminUserBatchUnlimited").checked = false;
-  syncUserBatchUnlimitedMode();
+  if (!shortcut) return;
+  const billingOpen = el("userBillingModal")?.getAttribute("aria-hidden") === "false";
+  const credit = billingOpen ? el("billingAdjustmentAmount") : el("adminUserBatchCredit");
+  if (!credit) return;
+  if (billingOpen) {
+    if (el("billingAdjustmentUnlimited")) el("billingAdjustmentUnlimited").checked = false;
+    syncBillingAdjustmentType();
+    setText("billingCreditShortcutMsg", "");
+  } else {
+    if (el("adminUserBatchUnlimited")) el("adminUserBatchUnlimited").checked = false;
+    syncUserBatchUnlimitedMode();
+    setText("adminUserBatchCreditShortcutMsg", "");
+  }
+  credit.disabled = false;
   credit.value = String(shortcut.points);
   credit.focus();
-  setText("adminUserBatchCreditShortcutMsg", "");
 }
 
 function removeAdminCreditShortcut(shortcutId) {
@@ -5487,21 +5546,21 @@ function removeAdminCreditShortcut(shortcutId) {
   renderAdminCreditShortcuts();
 }
 
-function saveAdminCreditShortcut() {
-  const nameInput = el("adminUserBatchCreditShortcutName");
-  const pointsInput = el("adminUserBatchCreditShortcutPoints");
+function saveAdminCreditShortcut(nameId = "adminUserBatchCreditShortcutName", pointsId = "adminUserBatchCreditShortcutPoints", msgId = "adminUserBatchCreditShortcutMsg") {
+  const nameInput = el(nameId);
+  const pointsInput = el(pointsId);
   const name = String(nameInput?.value || "").trim();
   const points = Math.round(Number(pointsInput?.value || 0) * 1_000_000) / 1_000_000;
   if (!name || !Number.isFinite(points) || points < 0 || points > 1_000_000) {
-    setText("adminUserBatchCreditShortcutMsg", "请填写标签名和 0–1,000,000 之间的算力点。");
+    setText(msgId, "请填写标签名和 0–1,000,000 之间的算力点。");
     return;
   }
   if (adminState.userBatchCreditShortcuts.length >= 12) {
-    setText("adminUserBatchCreditShortcutMsg", "最多保存 12 个快捷标签。");
+    setText(msgId, "最多保存 12 个快捷标签。");
     return;
   }
   if (adminState.userBatchCreditShortcuts.some((item) => item.name.toLowerCase() === name.toLowerCase())) {
-    setText("adminUserBatchCreditShortcutMsg", "标签名已存在，请换一个名称。");
+    setText(msgId, "标签名已存在，请换一个名称。");
     return;
   }
   const shortcut = normalizeAdminCreditShortcut({
@@ -5515,8 +5574,12 @@ function saveAdminCreditShortcut() {
   renderAdminCreditShortcuts();
   if (nameInput) nameInput.value = "";
   if (pointsInput) pointsInput.value = "";
-  setText("adminUserBatchCreditShortcutMsg", "");
-  toggleAdminCreditShortcutForm(false);
+  setText(msgId, "");
+  if (nameId === "billingCreditShortcutName") {
+    toggleAdminCreditShortcutForm(false, "billingCreditShortcutForm", "btnBillingCreditShortcutAdd", "billingCreditShortcutName");
+  } else {
+    toggleAdminCreditShortcutForm(false);
+  }
 }
 
 function openUserBatchModal(action) {
@@ -5856,9 +5919,9 @@ async function loadUsers(page = adminState.userListPage) {
       markAdminDynamicUiElement(button);
       actions.appendChild(button);
     };
-    addAction("查看", "user_detail", "detail");
-    if (!u.is_admin) addAction("详情", "billing_detail", "billing", { name: u.username });
+    addAction("详情", "user_detail", "detail");
     if (!u.is_admin) {
+      addAction("算力", "user_billing", "billing", { name: u.username, unlimited: unlimited ? 1 : 0 });
       if (lifecycle === "deleted") addAction("恢复", "restore_user", "restore", { name: u.username });
       else addAction("删除", "archive_user", "delete", { name: u.username });
     }
@@ -6266,6 +6329,21 @@ function setUserDetailBackgroundInert(enabled) {
   adminState.userDetailInertElements = [];
 }
 
+function setUserBillingBackgroundInert(enabled) {
+  const modal = el("userBillingModal");
+  if (!modal) return;
+  if (enabled) {
+    if (adminState.userBillingInertElements.length) return;
+    adminState.userBillingInertElements = Array.from(document.body.children).filter((node) => {
+      return node instanceof HTMLElement && node !== modal && !node.inert;
+    });
+    adminState.userBillingInertElements.forEach((node) => { node.inert = true; });
+    return;
+  }
+  adminState.userBillingInertElements.forEach((node) => { node.inert = false; });
+  adminState.userBillingInertElements = [];
+}
+
 function userDetailFocusableElements() {
   const modal = el("userDetailModal");
   if (!modal || modal.getAttribute("aria-hidden") === "true") return [];
@@ -6306,7 +6384,7 @@ function syncUserDetailActionState() {
   if (el("btnManageUserWorkspace")) {
     el("btnManageUserWorkspace").hidden = !user || !!user.is_admin;
     el("btnManageUserWorkspace").disabled = busy || !user || !!user.is_admin;
-    el("btnManageUserWorkspace").textContent = Number(user?.deleted_at || 0) > 0 ? "查看归档数据" : "登录用户控制台";
+    el("btnManageUserWorkspace").textContent = Number(user?.deleted_at || 0) > 0 ? "查看归档数据" : "登录用户推文工作台";
   }
   if (el("btnResetUserPassword")) el("btnResetUserPassword").disabled = busy || !user || !!user.is_admin;
   if (el("btnOpenSetUserPassword")) el("btnOpenSetUserPassword").disabled = busy || !user || !!user.is_admin;
@@ -6699,6 +6777,95 @@ async function purgeSelectedUser(event) {
   setMsg("userMsg", `客户 ${user.username} 及关联数据已永久删除。`, true);
 }
 
+function renderUserDetailResources(payload) {
+  const summary = el("userResourceSummary");
+  const tagsHost = el("userResourceTags");
+  const resourceSection = el("userResourceSection");
+  if (!summary) return;
+  const counts = payload?.resource_counts || {};
+  const user = payload?.user || {};
+  if (resourceSection) resourceSection.hidden = !!user.is_admin;
+  const cards = [
+    ["人设", Number(counts.personas || counts.persona_count || 0)],
+    ["人设分组", Number(counts.persona_groups || 0)],
+    ["草稿推文", Number(counts.draft_post_count || 0)],
+    ["创建推文", Number(counts.created_post_count || 0)],
+    ["已发推文", Number(counts.published_post_count || 0)],
+    ["社媒账号", Number(counts.social_accounts || 0)],
+    ["代理", Number(counts.social_proxies || 0)],
+    ["自动化任务", Number(counts.social_tasks || 0)],
+  ];
+  summary.replaceChildren(...cards.map(([label, value]) => createBillingSummaryItem(label, String(value), value > 0 ? "positive" : "neutral")));
+  if (tagsHost) {
+    tagsHost.replaceChildren();
+    const groups = Array.isArray(payload?.groups) ? payload.groups : [];
+    const tags = Array.isArray(payload?.tags) ? payload.tags : [];
+    if (!groups.length && !tags.length) {
+      const empty = document.createElement("span");
+      empty.textContent = "未分配客户分组或标签";
+      tagsHost.appendChild(empty);
+    } else {
+      groups.forEach((group) => {
+        const chip = createAdminUserBadge(group.name || "分组", "customer");
+        chip.title = "客户分组";
+        tagsHost.appendChild(chip);
+      });
+      tags.forEach((tag) => {
+        const chip = createAdminUserBadge(tag.name || "标签", "enabled");
+        chip.title = "客户标签";
+        tagsHost.appendChild(chip);
+      });
+    }
+  }
+}
+
+async function loadUserGenerationTasks(userId) {
+  const body = el("userGenerationBody");
+  if (!body) return;
+  const targetUserId = Math.floor(Number(userId || 0));
+  body.replaceChildren();
+  const loading = document.createElement("tr");
+  const loadingCell = createBillingCell("正在读取生成记录...", "admin-billing-empty");
+  loadingCell.colSpan = 5;
+  loading.appendChild(loadingCell);
+  body.appendChild(loading);
+  if (targetUserId <= 0) return;
+  try {
+    const payload = await api(`/api/admin/tasks?limit=20&user_id=${encodeURIComponent(targetUserId)}`);
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    body.replaceChildren();
+    if (!items.length) {
+      const row = document.createElement("tr");
+      const cell = createBillingCell("暂无生成记录", "admin-billing-empty");
+      cell.colSpan = 5;
+      row.appendChild(cell);
+      body.appendChild(row);
+      return;
+    }
+    items.forEach((task) => {
+      const row = document.createElement("tr");
+      row.appendChild(createBillingCell(formatTime(task.created_at || task.updated_at)));
+      row.appendChild(createBillingCell(taskTypeLabel(task.type)));
+      const statusCell = document.createElement("td");
+      statusCell.appendChild(createBillingStatus(String(task.status || "unknown").toLowerCase()));
+      row.appendChild(statusCell);
+      row.appendChild(createBillingCell(task.workflow_name || task.workflow_id || "-"));
+      const result = Number(task.total_count) > 0
+        ? `成功 ${task.success_count || 0}/${task.total_count || 0}`
+        : (task.has_download ? "可下载" : (task.error || "-"));
+      row.appendChild(createBillingCell(result, "admin-billing-reference"));
+      body.appendChild(row);
+    });
+  } catch (error) {
+    body.replaceChildren();
+    const row = document.createElement("tr");
+    const cell = createBillingCell(getErrorMessage(error) || "生成记录读取失败", "admin-billing-empty");
+    cell.colSpan = 5;
+    row.appendChild(cell);
+    body.appendChild(row);
+  }
+}
+
 async function openUserDetailModal(id) {
   if (adminState.userPasswordResetInFlight || adminState.userPasswordSetInFlight || adminState.userAuthMethodsInFlight) {
     setMsg("userDetailMsg", "账号设置正在保存，请等待操作完成后再切换账号。", false);
@@ -6713,73 +6880,110 @@ async function openUserDetailModal(id) {
   const user = response.user || {};
   const resourceCounts = response.resource_counts || {};
   adminState.selectedUser = user;
-  el("userDetailSub").textContent = `${user.username || "-"} · ID ${user.id || "-"}`;
+  const lifecycleLabel = (USER_LIFECYCLE_META[String(user.lifecycle_status || "")] || [user.is_admin ? "管理员" : "客户"])[0];
+  if (el("userDetailSub")) {
+    el("userDetailSub").textContent = `${user.username || "-"} · ID ${user.id || "-"} · ${lifecycleLabel}`;
+  }
   const body = el("userDetailBody");
-  body.replaceChildren(
-    detailRow("登录账号", user.username),
-    detailRow("账号 ID", user.id),
-    detailRow("姓名", user.full_name),
-    detailRow("公司 / 团队", user.company),
-    detailRow("资料邮箱", user.email),
-    detailRow("已验证登录邮箱", user.verified_email || "未绑定"),
-    detailRow("邮箱验证时间", user.email_verified_at ? formatTime(user.email_verified_at) : "尚未验证"),
-    detailRow("联系电话", user.phone),
-    detailRow("账号角色", user.is_admin ? "管理员" : "客户"),
-    detailRow("账号状态", (USER_LIFECYCLE_META[String(user.lifecycle_status || "")] || [user.is_disabled ? "已禁用" : "已启用"])[0]),
-    detailRow(
-      "密码状态",
-      user.password_configured
-        ? (user.password_reveal_available === false ? "已设置（历史账号，重置后可查看）" : "已设置")
-        : "未设置",
-    ),
-    detailRow("可用认证方式", userAuthMethodsLabel(user), "auth-methods"),
-    detailRow("最近登录方式", userLoginMethodLabel(user.last_login_method)),
-    detailRow("申请类型", user.account_type === "guest" ? "游客申请" : "后台创建"),
-    detailRow("审核状态", user.approval_status),
-    detailRow(
-      "算力点余额",
-      user.is_admin
-        ? "-"
-        : (billingUnlimitedFrom(user, user.wallet, user.billing_wallet) || adminState.billingUnlimitedUsers.get(String(user.id)) === true
-          ? "无限"
-          : (adminState.billingWalletPoints.has(String(user.id))
-          ? `${formatBillingPoints(adminState.billingWalletPoints.get(String(user.id)))} 算力点`
-          : "请在计费详情查看")),
-    ),
-    detailRow("最后登录", user.last_login_at ? formatTime(user.last_login_at) : "尚未登录"),
-    detailRow("创建时间", user.created_at ? formatTime(user.created_at) : "-"),
-    detailRow("更新时间", user.updated_at ? formatTime(user.updated_at) : "-"),
-    detailRow("授权时间", user.approved_at ? formatTime(user.approved_at) : "尚未授权"),
-    detailRow("授权管理员", user.approved_by_username ? `${user.approved_by_username} · ID ${user.approved_by}` : "-"),
-    detailRow("删除状态", Number(user.deleted_at || 0) > 0 ? `已软删除 · ${formatTime(user.deleted_at)}` : "正常"),
-    detailRow("人设 / 分组", `${Number(resourceCounts.personas || 0)} / ${Number(resourceCounts.persona_groups || 0)}`),
-    detailRow("社媒账号 / 代理", `${Number(resourceCounts.social_accounts || 0)} / ${Number(resourceCounts.social_proxies || 0)}`),
-    detailRow("自动化任务", Number(resourceCounts.social_tasks || 0)),
-  );
-  const useCase = detailRow("使用情境", user.use_case);
-  useCase.classList.add("admin-user-detail-item-wide");
-  body.appendChild(useCase);
+  if (body) {
+    body.replaceChildren(
+      detailRow("姓名", user.full_name),
+      detailRow("公司 / 团队", user.company),
+      detailRow("资料邮箱", user.email),
+      detailRow("联系电话", user.phone),
+      detailRow("申请类型", user.account_type === "guest" ? "游客申请" : "后台创建"),
+      detailRow("最近登录", user.last_login_at ? `${formatTime(user.last_login_at)} · ${userLoginMethodLabel(user.last_login_method)}` : "尚未登录"),
+      detailRow("创建时间", user.created_at ? formatTime(user.created_at) : "-"),
+      detailRow("授权时间", user.approved_at ? formatTime(user.approved_at) : "尚未授权"),
+      detailRow("授权管理员", user.approved_by_username ? `${user.approved_by_username} · ID ${user.approved_by}` : "-"),
+      detailRow("登录来源", [user.last_login_ip, user.last_device_id].filter(Boolean).join(" · ") || "-"),
+    );
+    const useCase = detailRow("使用情境", user.use_case);
+    useCase.classList.add("admin-user-detail-item-wide");
+    body.appendChild(useCase);
+  }
+  renderUserDetailResources(response);
   clearUserPasswordReset();
   clearManualUserPassword();
   setUserPasswordRevealAvailability(user.password_reveal_available);
   setMsg("userAuthMethodMsg", "");
   syncSelectedUserAuthControls();
-  el("userPasswordSection").hidden = !!user.is_admin;
-  el("userPasswordHistorySection").hidden = !!user.is_admin;
+  if (el("userPasswordSection")) el("userPasswordSection").hidden = !!user.is_admin;
+  if (el("userPasswordHistorySection")) el("userPasswordHistorySection").hidden = !!user.is_admin;
   const purgeSection = el("userPurgeSection");
   if (purgeSection) purgeSection.hidden = !!user.is_admin || String(user.lifecycle_status || "") !== "deleted";
   if (el("userPurgePreview")) { el("userPurgePreview").hidden = true; el("userPurgePreview").replaceChildren(); }
   if (el("userPurgeForm")) { el("userPurgeForm").hidden = true; el("userPurgeForm").reset(); }
   el("userSessionList")?.replaceChildren(createEmptyState("正在读取会话..."));
   el("userPasswordHistoryList")?.replaceChildren(createEmptyState("正在读取密码历史..."));
-  el("userApprovalNote").value = user.admin_note || "";
+  if (el("userApprovalNote")) el("userApprovalNote").value = user.admin_note || "";
   setMsg("userDetailMsg", "");
-  el("userDetailModal").style.display = "grid";
-  el("userDetailModal").setAttribute("aria-hidden", "false");
+  const modal = el("userDetailModal");
+  if (!modal) throw new Error("账号详情窗口缺失，请刷新后台后重试。");
+  modal.style.display = "grid";
+  modal.setAttribute("aria-hidden", "false");
   setUserDetailBackgroundInert(true);
   syncUserDetailActionState();
+  const resourceSection = el("userResourceSection");
+  if (resourceSection) resourceSection.hidden = !!user.is_admin;
   void Promise.all([loadSelectedUserSessions(), loadSelectedPasswordHistory()]);
+  if (!user.is_admin) void loadUserGenerationTasks(user.id);
   window.setTimeout(() => el("btnUserDetailClose")?.focus(), 0);
+}
+
+async function openUserBillingModal(id, name = "") {
+  const targetUserId = Math.floor(Number(id || 0));
+  if (targetUserId <= 0) throw new Error("请先选择客户账号");
+  adminState.userBillingReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const requestId = ++adminState.userBillingRequestId;
+  adminState.billingSelectedUserId = targetUserId;
+  const subtitle = String(name || "").trim();
+  if (el("userBillingSub")) {
+    el("userBillingSub").textContent = subtitle
+      ? `${subtitle} · ID ${targetUserId}`
+      : `客户 ID ${targetUserId}`;
+  }
+  if (el("billingUserPlaceholder")) {
+    el("billingUserPlaceholder").hidden = false;
+    el("billingUserPlaceholder").textContent = "正在读取客户额度...";
+  }
+  if (el("billingUserWorkspace")) el("billingUserWorkspace").hidden = true;
+  adminState.billingLedgerRows = [];
+  adminState.billingLedgerFilter = "all";
+  adminState.billingLedgerPage = 1;
+  setMsg("billingUserMsg", "");
+  const modal = el("userBillingModal");
+  if (!modal) throw new Error("算力明细窗口缺失，请刷新后台后重试。");
+  modal.style.display = "grid";
+  modal.setAttribute("aria-hidden", "false");
+  setUserBillingBackgroundInert(true);
+  window.setTimeout(() => el("btnUserBillingClose")?.focus(), 0);
+  try {
+    await ensureBillingLoaded();
+    if (requestId !== adminState.userBillingRequestId) return;
+    await loadUserBilling(targetUserId);
+  } catch (err) {
+    if (requestId !== adminState.userBillingRequestId) return;
+    setMsg("billingUserMsg", getErrorMessage(err), false);
+    if (el("billingUserPlaceholder")) {
+      el("billingUserPlaceholder").hidden = false;
+      el("billingUserPlaceholder").textContent = "额度读取失败，请稍后重试。";
+    }
+  }
+}
+
+function closeUserBillingModal() {
+  const modal = el("userBillingModal");
+  if (!modal || modal.getAttribute("aria-hidden") === "true") return;
+  adminState.userBillingRequestId += 1;
+  modal.style.display = "none";
+  modal.setAttribute("aria-hidden", "true");
+  setUserBillingBackgroundInert(false);
+  adminState.billingSelectedUserId = 0;
+  const returnFocus = adminState.userBillingReturnFocus;
+  adminState.userBillingReturnFocus = null;
+  if (returnFocus?.isConnected) returnFocus.focus();
+  return true;
 }
 
 function closeUserDetailModal() {
@@ -7753,114 +7957,6 @@ function appendCell(row, primary, secondary = "") {
   return cell;
 }
 
-function auditQuery() {
-  const pageSize = Math.max(1, Number(adminState.auditListPageSize || 20));
-  const page = Math.max(1, Number(adminState.auditListPage || 1));
-  const query = new URLSearchParams({
-    limit: String(pageSize),
-    offset: String((page - 1) * pageSize),
-  });
-  const values = {
-    actor_user_id: el("auditActorId")?.value,
-    target_user_id: el("auditTargetId")?.value,
-    action: el("auditAction")?.value?.trim(),
-    outcome: el("auditOutcome")?.value,
-    risk_level: el("auditRisk")?.value,
-  };
-  Object.entries(values).forEach(([key, value]) => {
-    if (String(value || "").trim()) query.set(key, String(value).trim());
-  });
-  return query;
-}
-
-function renderAuditEvents(payload = {}) {
-  const body = el("auditBody");
-  if (!body) return;
-  const rows = Array.isArray(payload.items) ? payload.items : [];
-  const total = Math.max(0, Number(payload.total || rows.length));
-  const pageSize = Math.max(1, Number(adminState.auditListPageSize || 20));
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  adminState.auditListTotal = total;
-  adminState.auditListPage = Math.min(Math.max(1, Number(adminState.auditListPage || 1)), totalPages);
-  adminState.auditRows = rows;
-  body.replaceChildren();
-  if (!rows.length) {
-    const row = document.createElement("tr");
-    const cell = document.createElement("td");
-    cell.colSpan = 7;
-    cell.appendChild(createEmptyState("当前筛选条件下没有审计事件"));
-    row.appendChild(cell);
-    body.appendChild(row);
-  } else {
-    rows.forEach((item) => {
-      const row = document.createElement("tr");
-      appendCell(row, formatTime(item.created_at), item.request_id ? `请求 ${item.request_id}` : "");
-      appendCell(row, item.action, `${item.resource_type || "resource"} · ${item.resource_id || "-"}`);
-      appendCell(row, item.actor_username || `ID ${item.actor_user_id || "-"}`, item.ip_address || "");
-      appendCell(row, item.target_username || `ID ${item.target_user_id || "-"}`);
-      const risk = document.createElement("td");
-      risk.appendChild(createGovernanceBadge(item.risk_level));
-      row.appendChild(risk);
-      const outcome = document.createElement("td");
-      outcome.appendChild(createGovernanceBadge(item.outcome));
-      row.appendChild(outcome);
-      appendCell(row, oneLine(item.reason || item.error_code || "-"), item.user_agent || "");
-      body.appendChild(row);
-    });
-  }
-  setText("auditResultSummary", `第 ${adminState.auditListPage} / ${totalPages} 页 · 共 ${total} 条`);
-  if (el("auditPagination")) el("auditPagination").hidden = !total;
-  setText("auditPaginationSummary", `共 ${total} 条审计日志 · 每页 ${pageSize} 条`);
-  setText("auditPageIndicator", `第 ${adminState.auditListPage} / ${totalPages} 页`);
-  if (el("btnAuditPagePrev")) el("btnAuditPagePrev").disabled = adminState.auditListPage <= 1;
-  if (el("btnAuditPageNext")) el("btnAuditPageNext").disabled = adminState.auditListPage >= totalPages;
-}
-
-async function loadAuditEvents() {
-  const body = el("auditBody");
-  body?.setAttribute("aria-busy", "true");
-  try {
-    const payload = await api(`/api/admin/audit/events?${auditQuery().toString()}`);
-    renderAuditEvents(payload || {});
-    setMsg("auditMsg", "");
-    return payload;
-  } catch (error) {
-    setMsg("auditMsg", `审计日志读取失败：${getErrorMessage(error)}`, false);
-    return null;
-  } finally {
-    body?.removeAttribute("aria-busy");
-  }
-}
-
-async function exportAuditEvents() {
-  const button = el("btnExportAudit");
-  if (button) button.disabled = true;
-  try {
-    const response = await fetch("/api/admin/audit/export", {
-      method: "POST",
-      credentials: "include",
-      cache: "no-store",
-      headers: { "X-Admin-Console": "1" },
-    });
-    if (!response.ok) throw new Error(`导出失败：HTTP ${response.status}`);
-    const blob = await response.blob();
-    const disposition = response.headers.get("Content-Disposition") || "";
-    const match = disposition.match(/filename="?([^";]+)"?/i);
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = match?.[1] || "vecto-audit.csv";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(link.href);
-    setMsg("auditMsg", "审计日志已导出", true);
-  } catch (error) {
-    setMsg("auditMsg", getErrorMessage(error), false);
-  } finally {
-    if (button) button.disabled = false;
-  }
-}
-
 function renderSecurityAlerts(payload = {}) {
   const container = el("securityAlertList");
   if (!container) return;
@@ -7975,10 +8071,6 @@ async function saveSecurityAlert(button) {
   }
 }
 
-function parseScopeInput(value) {
-  return [...new Set(String(value || "").split(/[，,\s]+/).map((item) => item.trim()).filter(Boolean))];
-}
-
 function timestampFromLocalInput(value) {
   const date = value ? new Date(`${value}:00+08:00`) : null;
   return date && Number.isFinite(date.getTime()) ? Math.floor(date.getTime() / 1000) : 0;
@@ -7988,229 +8080,6 @@ function localInputFromTimestamp(value) {
   const date = new Date(Number(value || 0) * 1000);
   if (!Number(value) || !Number.isFinite(date.getTime())) return "";
   return formatShanghaiDateTimeInputValue(date);
-}
-
-function setDefaultServiceAccountExpiry() {
-  const input = el("serviceAccountExpiresAt");
-  if (!input || input.value) return;
-  const expires = new Date(Date.now() + 30 * 86400000);
-  input.value = formatShanghaiDateTimeInputValue(expires);
-}
-
-function renderServiceAccounts(payload = {}) {
-  const body = el("serviceAccountBody");
-  if (!body) return;
-  const rows = Array.isArray(payload.items) ? payload.items : [];
-  adminState.serviceAccountRows = rows;
-  body.replaceChildren();
-  if (!rows.length) {
-    const row = document.createElement("tr");
-    const cell = document.createElement("td");
-    cell.colSpan = 6;
-    cell.appendChild(markAdminDynamicUiElement(createEmptyState("尚未创建服务账号")));
-    row.appendChild(cell);
-    body.appendChild(row);
-    return;
-  }
-  rows.forEach((item) => {
-    const row = document.createElement("tr");
-    appendCell(row, item.name, item.id);
-    const purposeCell = document.createElement("td");
-    const purpose = document.createElement("input");
-    purpose.value = String(item.purpose || "");
-    purpose.maxLength = 500;
-    purpose.setAttribute("aria-label", `用途 ${item.id}`);
-    markAdminDynamicUiElement(purpose);
-    purposeCell.appendChild(purpose);
-    row.appendChild(purposeCell);
-    const scopeCell = document.createElement("td");
-    const scopes = document.createElement("input");
-    scopes.value = (item.allowed_scopes || []).join(", ");
-    scopes.setAttribute("aria-label", `权限范围 ${item.id}`);
-    markAdminDynamicUiElement(scopes);
-    scopeCell.appendChild(scopes);
-    row.appendChild(scopeCell);
-    const statusCell = document.createElement("td");
-    const status = document.createElement("select");
-    status.setAttribute("aria-label", `服务账号状态 ${item.id}`);
-    markAdminDynamicUiElement(status);
-    ["active", "disabled", "revoked"].forEach((value) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = governanceLabel(value);
-      option.selected = String(item.status) === value;
-      markAdminDynamicUiElement(option);
-      status.appendChild(option);
-    });
-    statusCell.appendChild(status);
-    row.appendChild(statusCell);
-    const timeCell = document.createElement("td");
-    const expires = document.createElement("input");
-    expires.type = "datetime-local";
-    expires.value = localInputFromTimestamp(item.expires_at);
-    expires.setAttribute("aria-label", `到期时间 ${item.id}`);
-    markAdminDynamicUiElement(expires);
-    const lastUsed = document.createElement("span");
-    if (item.last_used_at) {
-      lastUsed.append(
-        createAdminDynamicUiText("最近使用"),
-        ` ${formatTime(item.last_used_at)} · ${item.last_used_ip || "-"}`,
-      );
-    } else {
-      lastUsed.appendChild(createAdminDynamicUiText("尚未使用"));
-    }
-    timeCell.append(expires, lastUsed);
-    row.appendChild(timeCell);
-    const actionCell = document.createElement("td");
-    actionCell.className = "admin-service-actions";
-    const save = document.createElement("button");
-    save.type = "button";
-    save.className = "primary";
-    save.textContent = "保存";
-    save.dataset.serviceSave = String(item.id || "");
-    markAdminDynamicUiElement(save);
-    const rotate = document.createElement("button");
-    rotate.type = "button";
-    rotate.className = "ghost";
-    rotate.textContent = "轮换";
-    rotate.dataset.serviceRotate = String(item.id || "");
-    rotate.disabled = String(item.status || "") === "revoked";
-    markAdminDynamicUiElement(rotate);
-    actionCell.append(save, rotate);
-    row.appendChild(actionCell);
-    body.appendChild(row);
-  });
-}
-
-async function loadServiceAccounts() {
-  try {
-    const payload = await api("/api/admin/service-accounts");
-    renderServiceAccounts(payload || {});
-    setMsg("serviceAccountMsg", "");
-    return payload;
-  } catch (error) {
-    setMsg("serviceAccountMsg", `服务账号读取失败：${getErrorMessage(error)}`, false);
-    return null;
-  }
-}
-
-async function createServiceAccount() {
-  const stepUp = readServiceAccountStepUp();
-  if (!stepUp) return;
-  const payload = {
-    name: el("serviceAccountName")?.value?.trim() || "",
-    purpose: el("serviceAccountPurpose")?.value?.trim() || "",
-    allowed_scopes: parseScopeInput(el("serviceAccountScopes")?.value),
-    expires_at: timestampFromLocalInput(el("serviceAccountExpiresAt")?.value),
-    ...stepUp,
-  };
-  if (payload.name.length < 2) throw new Error("服务账号名称至少 2 个字符");
-  if (!payload.expires_at) throw new Error("请选择服务凭据到期时间");
-  const result = await api("/api/admin/service-accounts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  el("serviceCredentialValue").value = String(result.credential || "");
-  el("serviceCredentialResult").hidden = false;
-  scheduleServiceCredentialClear();
-  el("serviceAccountForm")?.reset();
-  setDefaultServiceAccountExpiry();
-  clearServiceAccountStepUp();
-  await loadServiceAccounts();
-  setMsg("serviceAccountMsg", "服务账号已创建，请立即保存一次性凭证", true);
-}
-
-async function saveServiceAccount(button) {
-  const row = button.closest("tr");
-  const controls = row ? Array.from(row.querySelectorAll("input, select")) : [];
-  const [purpose, scopes, status, expires] = controls;
-  const stepUp = readServiceAccountStepUp();
-  if (!stepUp) return;
-  button.disabled = true;
-  try {
-    await api(`/api/admin/service-accounts/${encodeURIComponent(button.dataset.serviceSave || "")}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        purpose: purpose?.value?.trim() || "",
-        allowed_scopes: parseScopeInput(scopes?.value),
-        status: status?.value || "active",
-        expires_at: timestampFromLocalInput(expires?.value),
-        ...stepUp,
-      }),
-    });
-    await loadServiceAccounts();
-    clearServiceAccountStepUp();
-    setMsg("serviceAccountMsg", "服务账号已更新", true);
-  } catch (error) {
-    setMsg("serviceAccountMsg", getErrorMessage(error), false);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-async function rotateServiceAccount(button) {
-  const payload = readServiceAccountStepUp();
-  if (!payload) return;
-  const decision = await requestAdminPublicAction({
-    title: "轮换服务凭证",
-    message: "轮换后旧凭证会立即失效，确认继续吗？",
-    confirmLabel: "确认轮换",
-    tone: "danger",
-  });
-  if (!decision.confirmed) return;
-  button.disabled = true;
-  try {
-    const result = await api(`/api/admin/service-accounts/${encodeURIComponent(button.dataset.serviceRotate || "")}/rotate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    el("serviceCredentialValue").value = String(result.credential || "");
-    el("serviceCredentialResult").hidden = false;
-    scheduleServiceCredentialClear();
-    clearServiceAccountStepUp();
-    await loadServiceAccounts();
-    setMsg("serviceAccountMsg", "凭证已轮换，请立即保存新凭证", true);
-  } catch (error) {
-    setMsg("serviceAccountMsg", getErrorMessage(error), false);
-  } finally {
-    button.disabled = false;
-  }
-}
-
-function clearServiceCredential() {
-  if (adminState.serviceCredentialTimer) {
-    window.clearTimeout(adminState.serviceCredentialTimer);
-    adminState.serviceCredentialTimer = null;
-  }
-  if (el("serviceCredentialValue")) el("serviceCredentialValue").value = "";
-  if (el("serviceCredentialResult")) el("serviceCredentialResult").hidden = true;
-}
-
-function scheduleServiceCredentialClear() {
-  if (adminState.serviceCredentialTimer) window.clearTimeout(adminState.serviceCredentialTimer);
-  adminState.serviceCredentialTimer = window.setTimeout(() => {
-    clearServiceCredential();
-    setMsg("serviceAccountMsg", "一次性凭证已自动清除", true);
-  }, 60000);
-}
-
-function readServiceAccountStepUp() {
-  const payload = {
-    admin_password: String(el("serviceRotateAdminPassword")?.value || ""),
-    totp_code: String(el("serviceRotateTotpCode")?.value || "").trim(),
-    reason: String(el("serviceRotateReason")?.value || "").trim(),
-  };
-  if (!payload.admin_password) return setMsg("serviceAccountMsg", "请输入管理员当前密码", false);
-  if (!payload.totp_code) return setMsg("serviceAccountMsg", "请输入动态验证码或恢复码", false);
-  if (payload.reason.length < 2) return setMsg("serviceAccountMsg", "请输入至少 2 个字符的操作原因", false);
-  return payload;
-}
-
-function clearServiceAccountStepUp() {
-  ["serviceRotateAdminPassword", "serviceRotateTotpCode", "serviceRotateReason"].forEach((id) => { if (el(id)) el(id).value = ""; });
 }
 
 const PROXY_MARKET_STATUS_LABELS = {
@@ -9495,6 +9364,21 @@ function renderBundleSocialConfig(status = {}) {
   const apiBaseInput = el("bundleSocialApiBaseUrl");
   if (apiBaseInput) apiBaseInput.value = String(status?.api_base_url || "https://api.bundle.social/api/v1");
   setProviderSecretInputState("bundleSocialApiKey", status?.api_key_configured === true, "API Key");
+  setProviderSecretInputState("bundleSocialWebhookSecret", status?.webhook_secret_configured === true, "回调签名密钥");
+  const overlay = el("bundleSocialHomepageOverlay");
+  if (overlay) overlay.checked = status?.homepage_overlay_enabled !== false;
+  const interval = el("bundleSocialHomepageInterval");
+  if (interval) interval.value = String(status?.homepage_read_interval_hours || 12);
+  const offset = el("bundleSocialCollectOffset");
+  if (offset) offset.value = String(status?.collect_offset_hours || 12);
+  const syncStatus = el("bundleSocialSyncStatus");
+  if (syncStatus) {
+    const parts = [];
+    if (status?.homepage_last_sync_message) parts.push(String(status.homepage_last_sync_message));
+    if (status?.webhook_last_event_type) parts.push(`最近回调：${status.webhook_last_event_type}`);
+    if (status?.webhook_last_error) parts.push(`回调异常：${status.webhook_last_error}`);
+    syncStatus.textContent = parts.join(" · ");
+  }
   const tab = document.querySelector('[data-model-tab="bundle-social"]');
   if (tab) tab.classList.toggle("has-attention", !configured || !verified);
 }
@@ -9509,7 +9393,30 @@ function bundleSocialConfigPayload() {
   return {
     api_base_url: String(el("bundleSocialApiBaseUrl")?.value || "").trim(),
     api_key: providerSecretInputValue("bundleSocialApiKey"),
+    webhook_secret: providerSecretInputValue("bundleSocialWebhookSecret"),
+    homepage_overlay_enabled: Boolean(el("bundleSocialHomepageOverlay")?.checked),
+    homepage_read_interval_hours: Number(el("bundleSocialHomepageInterval")?.value || 12),
+    collect_offset_hours: Number(el("bundleSocialCollectOffset")?.value || 12),
   };
+}
+
+function formatBundleSocialStatusMessage(payload = {}, action = "test") {
+  const teams = Number(payload?.team_count || 0);
+  const overlay = payload?.homepage_overlay_enabled !== false;
+  const webhook = payload?.webhook_secret_configured === true;
+  const interval = Number(payload?.homepage_read_interval_hours || 12);
+  const offset = Number(payload?.collect_offset_hours || 12);
+  const sync = String(payload?.homepage_last_sync_message || "").trim().replace(/。$/, "");
+  const prefix = action === "save"
+    ? `已保存并验证，工作区 ${teams} 个`
+    : `连接成功，工作区 ${teams} 个`;
+  const parts = [
+    prefix,
+    overlay ? `主页数据只读同步已开启（间隔 ${interval} 小时，与明细错开 ${offset} 小时）` : "主页数据只读同步已关闭",
+    webhook ? "回调签名已配置" : "回调签名未配置，发布回调暂不可用",
+  ];
+  if (sync) parts.push(sync);
+  return `${parts.join("；")}。`;
 }
 
 async function testBundleSocialConfig() {
@@ -9521,7 +9428,7 @@ async function testBundleSocialConfig() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(bundleSocialConfigPayload()),
   });
-  setMsg("bundleSocialConfigMsg", `连接成功，当前工作区数量 ${Number(payload?.team_count || 0)}`, true);
+  setMsg("bundleSocialConfigMsg", formatBundleSocialStatusMessage(payload, "test"), true);
   return true;
 }
 
@@ -9537,7 +9444,7 @@ async function saveBundleSocialConfig() {
       body: JSON.stringify(bundleSocialConfigPayload()),
     });
     renderBundleSocialConfig(saved || {});
-    setMsg("bundleSocialConfigMsg", "配置已加密保存，授权、发布与评论链路已切换到最新配置", true);
+    setMsg("bundleSocialConfigMsg", formatBundleSocialStatusMessage(saved, "save"), true);
     return true;
   } finally {
     form.removeAttribute("aria-busy");
@@ -10316,121 +10223,6 @@ async function saveProxyMarketUserLimit() {
   return result;
 }
 
-function renderTaxonomyList(containerId, items, kind) {
-  const container = el(containerId);
-  if (!container) return;
-  container.replaceChildren();
-  if (!items.length) {
-    container.appendChild(markAdminDynamicUiElement(
-      createEmptyState(kind === "group" ? "尚未创建客户分组" : "尚未创建客户标签"),
-    ));
-    return;
-  }
-  items.forEach((item) => {
-    const row = document.createElement("div");
-    row.className = `admin-taxonomy-item${kind === "tag" ? " is-tag" : ""}`;
-    const name = document.createElement("input");
-    name.value = String(item.name || "");
-    name.maxLength = 80;
-    row.appendChild(name);
-    if (kind === "group") {
-      const description = document.createElement("input");
-      description.value = String(item.description || "");
-      description.maxLength = 500;
-      row.appendChild(description);
-    }
-    const color = document.createElement("select");
-    ["neutral", "blue", "green", "amber", "red"].forEach((value) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = ({ neutral: "中性", blue: "蓝色", green: "绿色", amber: "橙色", red: "红色" })[value];
-      option.selected = String(item.color || "neutral") === value;
-      markAdminDynamicUiElement(option);
-      color.appendChild(option);
-    });
-    const count = document.createElement("span");
-    count.className = "admin-taxonomy-count";
-    count.append(
-      String(Number(item.member_count || 0)),
-      " ",
-      createAdminDynamicUiText("位客户"),
-    );
-    const save = document.createElement("button");
-    save.type = "button";
-    save.className = "ghost";
-    save.textContent = "保存";
-    save.dataset.taxonomySave = String(item.id || "");
-    save.dataset.taxonomyKind = kind;
-    markAdminDynamicUiElement(save);
-    row.append(color, count, save);
-    container.appendChild(row);
-  });
-}
-
-async function loadTaxonomyWorkspace() {
-  if (adminState.taxonomyLoadingPromise) return adminState.taxonomyLoadingPromise;
-  const request = Promise.all([api("/api/admin/customer-groups"), api("/api/admin/tags")])
-    .then(([groups, tags]) => {
-      adminState.customerGroupRows = groups?.items || [];
-      adminState.customerTagRows = tags?.items || [];
-      renderTaxonomyList("customerGroupList", adminState.customerGroupRows, "group");
-      renderTaxonomyList("customerTagList", adminState.customerTagRows, "tag");
-      setMsg("taxonomyMsg", "");
-      return { groups, tags };
-    })
-    .catch((error) => {
-      setMsg("taxonomyMsg", `客户治理数据读取失败：${getErrorMessage(error)}`, false);
-      return null;
-    })
-    .finally(() => {
-      if (adminState.taxonomyLoadingPromise === request) adminState.taxonomyLoadingPromise = null;
-    });
-  adminState.taxonomyLoadingPromise = request;
-  return request;
-}
-
-async function createTaxonomyItem(kind) {
-  const isGroup = kind === "group";
-  const payload = {
-    name: el(isGroup ? "customerGroupName" : "customerTagName")?.value?.trim() || "",
-    color: el(isGroup ? "customerGroupColor" : "customerTagColor")?.value || "neutral",
-  };
-  if (isGroup) payload.description = el("customerGroupDescription")?.value?.trim() || "";
-  if (!payload.name) throw new Error("名称不能为空");
-  await api(isGroup ? "/api/admin/customer-groups" : "/api/admin/tags", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  el(isGroup ? "customerGroupForm" : "customerTagForm")?.reset();
-  await loadTaxonomyWorkspace();
-}
-
-async function saveTaxonomyItem(button) {
-  const kind = button.dataset.taxonomyKind;
-  const row = button.closest(".admin-taxonomy-item");
-  const controls = row ? Array.from(row.querySelectorAll("input, select")) : [];
-  const payload = kind === "group"
-    ? { name: controls[0]?.value?.trim() || "", description: controls[1]?.value?.trim() || "", color: controls[2]?.value || "neutral" }
-    : { name: controls[0]?.value?.trim() || "", color: controls[1]?.value || "neutral" };
-  if (!payload.name) return setMsg("taxonomyMsg", "名称不能为空", false);
-  button.disabled = true;
-  try {
-    const base = kind === "group" ? "/api/admin/customer-groups" : "/api/admin/tags";
-    await api(`${base}/${encodeURIComponent(button.dataset.taxonomySave || "")}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    await loadTaxonomyWorkspace();
-    setMsg("taxonomyMsg", "客户治理词表已更新", true);
-  } catch (error) {
-    setMsg("taxonomyMsg", getErrorMessage(error), false);
-  } finally {
-    button.disabled = false;
-  }
-}
-
 function renderMfaStatus(status = {}) {
   adminState.mfaStatus = status;
   const banner = el("adminMfaBanner");
@@ -10805,18 +10597,11 @@ function bindBillingActions() {
       setMsg("billingCatalogMsg", getErrorMessage(err), false);
     }
   });
-  el("billingCatalogBody")?.addEventListener("click", async (event) => {
-    const button = event.target.closest("button[data-billing-action]");
-    if (!button) return;
-    event.stopPropagation();
-    const action = button.dataset.billingAction;
+  el("btnPublishCatalogDraft")?.addEventListener("click", async () => {
+    setMsg("billingCatalogMsg", "");
     try {
-      if (action === "catalog-inspect") {
-        const version = adminState.billingCatalogVersions[Number(button.dataset.versionIndex || -1)];
-        if (version) useBillingCatalog(version);
-      } else if (action === "catalog-publish") {
-        await publishBillingCatalog(button.dataset.id);
-      }
+      const draftId = String(el("btnPublishCatalogDraft")?.dataset.id || adminState.billingCatalogDraftId || "");
+      await publishBillingCatalog(draftId);
     } catch (err) {
       setMsg("billingCatalogMsg", getErrorMessage(err), false);
     }
@@ -10871,23 +10656,64 @@ function bindBillingActions() {
     }
   });
 
-  el("billingUserLookupForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    setMsg("billingUserMsg", "");
-    try {
-      await loadUserBilling();
-    } catch (err) {
-      setMsg("billingUserMsg", getErrorMessage(err), false);
-    }
+  el("billingLedgerFilters")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-billing-ledger-filter]");
+    if (!button) return;
+    const nextFilter = String(button.dataset.billingLedgerFilter || "all");
+    if (!["all", "expense", "income"].includes(nextFilter)) return;
+    adminState.billingLedgerFilter = nextFilter;
+    adminState.billingLedgerPage = 1;
+    renderBillingLedgerPage();
+  });
+  el("billingLedgerPageSize")?.addEventListener("change", () => {
+    adminState.billingLedgerPage = 1;
+    adminState.billingLedgerPageSize = Math.max(10, Math.min(50, Number(el("billingLedgerPageSize").value || 20)));
+    renderBillingLedgerPage();
+  });
+  el("btnBillingLedgerPrev")?.addEventListener("click", () => {
+    adminState.billingLedgerPage = Math.max(1, Number(adminState.billingLedgerPage || 1) - 1);
+    renderBillingLedgerPage();
+  });
+  el("btnBillingLedgerNext")?.addEventListener("click", () => {
+    adminState.billingLedgerPage = Number(adminState.billingLedgerPage || 1) + 1;
+    renderBillingLedgerPage();
   });
   el("billingAdjustmentForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     setMsg("billingUserMsg", "");
+    if (el("billingAdjustmentType") && event.submitter?.dataset?.billingSubmit) {
+      el("billingAdjustmentType").value = event.submitter.dataset.billingSubmit;
+    }
     try {
       await submitBillingAdjustment();
     } catch (err) {
       setMsg("billingUserMsg", getErrorMessage(err), false);
     }
+  });
+  el("btnResetBillingAdjustment")?.addEventListener("click", () => {
+    const unlimited = adminState.billingUnlimitedUsers.get(String(adminState.billingSelectedUserId || "")) === true;
+    if (el("billingAdjustmentUnlimited")) el("billingAdjustmentUnlimited").checked = unlimited;
+    if (el("billingAdjustmentAmount")) {
+      el("billingAdjustmentAmount").disabled = unlimited;
+      el("billingAdjustmentAmount").value = unlimited ? "" : String(adminState.billingSelectedPoints || "");
+    }
+    if (el("billingAdjustmentNote")) el("billingAdjustmentNote").value = "";
+    setMsg("billingUserMsg", "");
+  });
+  el("btnBillingCreditShortcutAdd")?.addEventListener("click", () => {
+    toggleAdminCreditShortcutForm(null, "billingCreditShortcutForm", "btnBillingCreditShortcutAdd", "billingCreditShortcutName");
+  });
+  el("btnBillingCreditShortcutSave")?.addEventListener("click", () => {
+    saveAdminCreditShortcut("billingCreditShortcutName", "billingCreditShortcutPoints", "billingCreditShortcutMsg");
+  });
+  el("billingCreditShortcutList")?.addEventListener("click", (event) => {
+    const removeButton = event.target.closest?.("[data-credit-shortcut-remove]");
+    if (removeButton) {
+      removeAdminCreditShortcut(removeButton.dataset.creditShortcutRemove);
+      return;
+    }
+    const applyButton = event.target.closest?.("[data-credit-shortcut-apply]");
+    if (applyButton) applyAdminCreditShortcut(applyButton.dataset.creditShortcutApply);
   });
   el("billingAdjustmentType")?.addEventListener("change", syncBillingAdjustmentType);
   el("billingAdjustmentUnlimited")?.addEventListener("change", syncBillingAdjustmentType);
@@ -10895,42 +10721,8 @@ function bindBillingActions() {
 
 function bindActions() {
   bindBillingActions();
-  el("btnCrmAdminRefresh")?.addEventListener("click", () => void loadCrmAdminModule());
-  el("crmGlobalSettingsForm")?.addEventListener("submit", saveCrmGlobalSettings);
-  el("btnCrmUserAccessLoad")?.addEventListener("click", () => void loadCrmUserAccess());
-  el("crmUserAccessId")?.addEventListener("input", resetCrmUserAccessEditor);
-  el("crmUserAccessForm")?.addEventListener("submit", saveCrmUserAccess);
-  el("crmImportDryRunForm")?.addEventListener("submit", runCrmImportDryRun);
-  el("crmImportActivateForm")?.addEventListener("submit", activateCrmImport);
-  el("btnCrmImportDismiss")?.addEventListener("click", () => void dismissCrmImport());
-  el("crmImportUserId")?.addEventListener("input", () => {
-    selectCrmImportBatch(null);
-    setMsg("crmImportMsg", "客户编号有变化，请重新检查文件。", true);
-  });
-  el("crmImportUserId")?.addEventListener("change", () => {
-    void loadCrmImportStatus().catch((err) => setMsg("crmImportMsg", crmFriendlyError(err, "导入记录读取失败，请稍后重试。"), false));
-  });
-  el("crmImportSource")?.addEventListener("input", () => {
-    selectCrmImportBatch(null);
-    setMsg("crmImportMsg", "文件名有变化，请重新执行第一步检查。", true);
-  });
-  el("btnCrmEmergencyPause")?.addEventListener("click", async () => {
-    const decision = await requestAdminPublicAction({
-      title: "立即停止 CRM",
-      message: "系统会停止等待中的 CRM 任务；正在保存的单个操作会安全结束，客户资料不会被删除。确认继续吗？",
-      confirmLabel: "确认停止",
-      tone: "danger",
-    });
-    if (!decision.confirmed) return;
-    try {
-      const payload = await api("/api/admin/modules/crm/emergency-pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmed: true }) });
-      setMsg("crmGlobalMsg", `CRM 已停止；共暂停 ${Number(payload?.paused_workflows || 0)} 个等待中的任务。`, true);
-      await loadCrmAdminModule();
-    } catch (err) {
-      setMsg("crmGlobalMsg", crmFriendlyError(err, "CRM 未能停止，请稍后重试。"), false);
-    }
-  });
   bindModelTabs();
+  bindTelegramWorkbenchTabs();
   bindTextModelContentTabs();
   bindRunningHubSlotTabs();
   el("btnRefreshGovernance")?.addEventListener("click", () => void loadGovernanceDashboard({ force: true }));
@@ -10977,16 +10769,6 @@ function bindActions() {
   el("emailDeliveryLimitMode")?.addEventListener("change", syncEmailDeliveryPolicyFields);
   el("emailDeliveryPolicyModal")?.addEventListener("keydown", handleEmailDeliveryPolicyModalKeydown);
   syncGovernanceRangeControls();
-  el("btnRefreshAudit")?.addEventListener("click", () => {
-    adminState.auditListPage = 1;
-    void loadAuditEvents();
-  });
-  el("btnExportAudit")?.addEventListener("click", () => void exportAuditEvents());
-  el("auditFilterForm")?.addEventListener("submit", (event) => {
-    event.preventDefault();
-    adminState.auditListPage = 1;
-    void loadAuditEvents();
-  });
   el("btnRefreshSecurity")?.addEventListener("click", () => {
     adminState.securityListPage = 1;
     void loadSecurityAlerts();
@@ -10994,21 +10776,6 @@ function bindActions() {
   el("securityFilterForm")?.addEventListener("change", () => {
     adminState.securityListPage = 1;
     void loadSecurityAlerts();
-  });
-  el("btnRefreshServiceAccounts")?.addEventListener("click", () => void loadServiceAccounts());
-  setDefaultServiceAccountExpiry();
-  el("serviceAccountForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try { await createServiceAccount(); } catch (error) { setMsg("serviceAccountMsg", getErrorMessage(error), false); }
-  });
-  el("btnCopyServiceCredential")?.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(el("serviceCredentialValue")?.value || "");
-      setMsg("serviceAccountMsg", "一次性凭证已复制", true);
-    } catch { setMsg("serviceAccountMsg", "复制失败，请手动复制已选中的凭证", false); }
-  });
-  el("btnHideServiceCredential")?.addEventListener("click", () => {
-    clearServiceCredential();
   });
   el("btnRefreshProxyMarket")?.addEventListener("click", async () => {
     setMsg("proxyMarketMsg", "正在同步最新代理数据...");
@@ -11256,15 +11023,6 @@ function bindActions() {
     }
   });
   resetProxyMarketEditor();
-  el("btnRefreshTaxonomy")?.addEventListener("click", () => void loadTaxonomyWorkspace());
-  el("customerGroupForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try { await createTaxonomyItem("group"); setMsg("taxonomyMsg", "客户分组已创建", true); } catch (error) { setMsg("taxonomyMsg", getErrorMessage(error), false); }
-  });
-  el("customerTagForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try { await createTaxonomyItem("tag"); setMsg("taxonomyMsg", "客户标签已创建", true); } catch (error) { setMsg("taxonomyMsg", getErrorMessage(error), false); }
-  });
   el("btnRefreshUserSessions")?.addEventListener("click", () => void loadSelectedUserSessions());
   el("btnRevokeUserSessions")?.addEventListener("click", () => void revokeSelectedUserSessions());
   el("btnRefreshPasswordHistory")?.addEventListener("click", () => void loadSelectedPasswordHistory());
@@ -11281,6 +11039,34 @@ function bindActions() {
   el("btnCopyMfaSetup")?.addEventListener("click", () => void copyMfaSetup());
   el("adminMfaVerifyCode")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); void verifyMfaSetup(); }
+  });
+  el("btnSaveTgEnv")?.addEventListener("click", () => saveTgEnv().catch((err) => setMsg("tgSettingsMsg", getErrorMessage(err), false)));
+  el("btnTestTgEnv")?.addEventListener("click", () => testTgEnv().catch((err) => setMsg("tgSettingsMsg", getErrorMessage(err), false)));
+  el("btnRefreshTg")?.addEventListener("click", () => loadTgSettings().catch((err) => setMsg("tgSettingsMsg", getErrorMessage(err), false)));
+  el("btnSaveTgUser")?.addEventListener("click", () => saveTgUser().catch((err) => setMsg("tgSettingsMsg", getErrorMessage(err), false)));
+  el("tgTrustedUserList")?.addEventListener("click", async (event) => {
+    const btn = event.target?.closest?.("[data-act]");
+    if (!btn) return;
+    const id = String(btn.dataset.id || "").trim();
+    if (!id) return;
+    try {
+      if (btn.dataset.act === "tg_toggle") {
+        const data = await api(`/api/admin/tg_trusted_users/${encodeURIComponent(id)}/toggle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: btn.dataset.enabled !== "1" }),
+        });
+        renderTgSettings(data.tg_settings || data);
+        setMsg("tgSettingsMsg", "成员状态已更新", true);
+      }
+      if (btn.dataset.act === "tg_delete") {
+        const data = await api(`/api/admin/tg_trusted_users/${encodeURIComponent(id)}`, { method: "DELETE" });
+        renderTgSettings(data.tg_settings || data);
+        setMsg("tgSettingsMsg", "成员已删除", true);
+      }
+    } catch (err) {
+      setMsg("tgSettingsMsg", getErrorMessage(err), false);
+    }
   });
   el("btnSaveRuntime").addEventListener("click", async () => {
     setMsg("runtimeMsg", "");
@@ -11392,7 +11178,7 @@ function bindActions() {
     });
   }
 
-  el("btnSavePricing").addEventListener("click", async () => {
+  el("btnSavePricing")?.addEventListener("click", async () => {
     setMsg("pricingMsg", "");
     try {
       await savePricing();
@@ -11416,12 +11202,14 @@ function bindActions() {
 
   el("adminUserFilterForm")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    adminState.userListFilters = readUserListFilters();
-    adminState.userListPage = 1;
-    clearUserBatchSelection();
-    try { await loadUsers(1); } catch (error) { setMsg("userMsg", getErrorMessage(error), false); }
+    await applyUserListFilters();
   });
+  el("adminUserFilterForm")?.querySelectorAll("select").forEach((select) => {
+    select.addEventListener("change", () => { void applyUserListFilters(); });
+  });
+  el("adminUserQuery")?.addEventListener("input", () => { void applyUserListFilters({ debounceMs: 250 }); });
   el("btnResetUserFilters")?.addEventListener("click", async () => {
+    window.clearTimeout(adminState.userListFilterTimer);
     el("adminUserFilterForm")?.reset();
     adminState.userListFilters = {};
     adminState.userListPage = 1;
@@ -11593,20 +11381,6 @@ function bindActions() {
     taskState.page = Number(taskState.page || 1) + 1;
     renderTasks();
   });
-  el("btnAuditPagePrev")?.addEventListener("click", () => {
-    if (adminState.auditListPage <= 1) return;
-    adminState.auditListPage -= 1;
-    void loadAuditEvents();
-  });
-  el("btnAuditPageNext")?.addEventListener("click", () => {
-    const totalPages = Math.max(
-      1,
-      Math.ceil(Number(adminState.auditListTotal || 0) / Number(adminState.auditListPageSize || 20)),
-    );
-    if (adminState.auditListPage >= totalPages) return;
-    adminState.auditListPage += 1;
-    void loadAuditEvents();
-  });
   el("btnSecurityPagePrev")?.addEventListener("click", () => {
     adminState.securityListPage = Math.max(1, Number(adminState.securityListPage || 1) - 1);
     renderSecurityAlerts({ items: adminState.securityRows });
@@ -11726,6 +11500,7 @@ function bindActions() {
   if (el("btnUserDetailClose")) {
     el("btnUserDetailClose").addEventListener("click", closeUserDetailModal);
   }
+  el("btnUserBillingClose")?.addEventListener("click", closeUserBillingModal);
   el("btnSaveUserAuthMethods")?.addEventListener("click", () => void saveSelectedUserAuthMethods());
   el("btnUnlinkUserGoogle")?.addEventListener("click", () => void unlinkSelectedUserGoogle());
   if (el("btnManageUserWorkspace")) {
@@ -11867,6 +11642,7 @@ function bindActions() {
       closeTaskInspectModal();
       closeRechargeModal();
       closeUserDetailModal();
+      closeUserBillingModal();
       closeEmailDeliveryPolicyModal();
       setMfaModalOpen(false);
     }
@@ -11875,8 +11651,7 @@ function bindActions() {
     if (document.hidden) {
       clearRevealedUserPassword();
       clearUserPasswordReset();
-      clearServiceCredential();
-      clearAdminCreateStepUp();
+        clearAdminCreateStepUp();
       if (!adminState.userPasswordSetInFlight) clearManualUserPassword();
       if (el("adminMfaModal")?.getAttribute("aria-hidden") === "false") setMfaModalOpen(false);
       return;
@@ -11915,18 +11690,6 @@ function bindActions() {
     }
     if (btn.dataset?.securitySave) {
       await saveSecurityAlert(btn);
-      return;
-    }
-    if (btn.dataset?.serviceSave) {
-      await saveServiceAccount(btn);
-      return;
-    }
-    if (btn.dataset?.serviceRotate) {
-      await rotateServiceAccount(btn);
-      return;
-    }
-    if (btn.dataset?.taxonomySave) {
-      await saveTaxonomyItem(btn);
       return;
     }
     if (btn.dataset?.passwordRestore) {
@@ -12003,20 +11766,17 @@ function bindActions() {
       openRechargeModal(id, btn.dataset.name || id, btn.dataset.unlimited);
       return;
     }
-    if (act === "billing_detail") {
-      setActiveAdminPage("pricing", true);
-      if (el("billingUserId")) el("billingUserId").value = id;
-      try {
-        await loadUserBilling(id);
-        el("billingUserTitle")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      } catch (err) {
-        setMsg("billingUserMsg", getErrorMessage(err), false);
-      }
-      return;
-    }
     if (act === "user_detail") {
       try {
         await openUserDetailModal(id);
+      } catch (err) {
+        setMsg("userMsg", getErrorMessage(err), false);
+      }
+      return;
+    }
+    if (act === "user_billing") {
+      try {
+        await openUserBillingModal(id, btn.dataset.name || id);
       } catch (err) {
         setMsg("userMsg", getErrorMessage(err), false);
       }
@@ -12166,7 +11926,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   try {
     await loadPricing();
   } catch (err) {
-    setMsg("pricingMsg", getErrorMessage(err), false);
+    if (el("pricingMsg")) setMsg("pricingMsg", getErrorMessage(err), false);
   }
 
   try {
@@ -12185,7 +11945,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     try {
       const usersFocused = el("secUsers")?.contains(document.activeElement);
       const detailOpen = el("userDetailModal")?.getAttribute("aria-hidden") === "false";
-      if (!usersFocused && !detailOpen) await loadUsers();
+      const billingOpen = el("userBillingModal")?.getAttribute("aria-hidden") === "false";
+      if (!usersFocused && !detailOpen && !billingOpen) await loadUsers();
       if (!el("taskAutoRefresh") || el("taskAutoRefresh").checked) {
         await loadTasks();
       }

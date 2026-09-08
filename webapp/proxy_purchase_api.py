@@ -325,6 +325,23 @@ def register_proxy_purchase_routes(
             )
         return JSONResponse(content={"ok": True, **status}, headers={"Cache-Control": "no-store"})
 
+    @app.post("/api/admin/proxy-purchases/provider-credentials/secrets/{secret_name}")
+    def api_admin_reveal_proxy_provider_secret(
+        secret_name: str,
+        request: Request,
+        _admin: dict[str, Any] = Depends(admin_dependency),
+    ):
+        guard_write(request)
+        try:
+            with db() as conn:
+                value = proxy_provider_credentials.reveal_credential(conn, secret_name)
+        except proxy_provider_credentials.ProviderCredentialError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        return JSONResponse(
+            content={"key": str(secret_name or "").strip(), "value": value},
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache", "Expires": "0"},
+        )
+
     @app.get("/api/admin/proxy-purchases/provider-credentials")
     def api_admin_proxy_provider_credentials(_admin: dict[str, Any] = Depends(admin_dependency)):
         with db() as conn:

@@ -270,6 +270,23 @@ class DailyPublishLimitTests(unittest.TestCase):
             ),
             "",
         )
+        self.assertEqual(
+            social_automation_api._confirmed_published_url(
+                {
+                    "ok": True,
+                    "provider": "bundle",
+                    "status": "POSTED",
+                    "url": "https://www.threads.net/@hiro504522/post/abc123",
+                    "published": {
+                        "confirmed": True,
+                        "permalink": "https://www.threads.net/@hiro504522/post/abc123",
+                        "status": "POSTED",
+                    },
+                },
+                "threads",
+            ),
+            "https://www.threads.net/@hiro504522/post/abc123",
+        )
 
     def test_cancelled_and_failed_tasks_release_daily_capacity(self):
         tasks = [self._create(self._payload()) for _ in range(15)]

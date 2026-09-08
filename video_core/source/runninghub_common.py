@@ -387,12 +387,13 @@ def query_task(*, task_id: str, api_key: str, video_output_path: str, base_url: 
         results = query_result.get("results") or []
         video_formats = {"mp4", "mov", "avi", "mkv", "flv", "wmv", "webm"}
         image_formats = {"png", "jpg", "jpeg", "webp", "bmp", "gif", "tif", "tiff"}
+        audio_formats = {"mp3", "wav", "m4a", "aac", "flac", "ogg", "wma", "audio"}
         if isinstance(results, list):
             for entry in results:
                 if not isinstance(entry, dict):
                     continue
-                file_url = str(entry.get("url", "")).strip()
-                format_name = str(entry.get("outputType", "")).strip().lower()
+                file_url = str(entry.get("url") or entry.get("fileUrl") or entry.get("file_url") or "").strip()
+                format_name = str(entry.get("outputType") or entry.get("output_type") or "").strip().lower()
                 if not file_url:
                     continue
                 if format_name in video_formats:
@@ -434,6 +435,28 @@ def query_task(*, task_id: str, api_key: str, video_output_path: str, base_url: 
                             message=(
                                 "[*] Image download failed; RunningHub task is SUCCESS, "
                                 f"will retry collection. Image URL: {file_url} Error: {e}"
+                            ),
+                            progress=progress,
+                            raw=query_result,
+                            file_url=file_url,
+                        )
+                if format_name in audio_formats or file_url.lower().endswith(tuple('.' + x for x in audio_formats if x != "audio")):
+                    try:
+                        download_file(file_url=file_url, output_path=video_output_path)
+                        return {
+                            "message": "[*] Audio Download successfully!"
+                                       f"    Audio path: {video_output_path}"
+                                       f"    Audio format: {format_name or 'audio'}"
+                                       f"    Audio URL: {file_url}",
+                            "status": "success",
+                            "progress": 100.0,
+                            "raw": query_result,
+                        }
+                    except Exception as e:
+                        return _transient_collect_response(
+                            message=(
+                                "[*] Audio download failed; RunningHub task is SUCCESS, "
+                                f"will retry collection. Audio URL: {file_url} Error: {e}"
                             ),
                             progress=progress,
                             raw=query_result,

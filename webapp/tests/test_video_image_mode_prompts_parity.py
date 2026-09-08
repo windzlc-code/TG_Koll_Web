@@ -96,14 +96,18 @@ def test_digital_human_options_expand_to_model_instructions_instead_of_raw_value
     assert "23至27岁的成年女性" in prompt
     assert "微卷发" in prompt
     assert "妩媚性感气质" in prompt
+    assert "美女福利向" in prompt
+    assert "高级写真气场" in prompt
     assert "人设核心：肥宅游戏玩家" not in prompt
-    assert "性感福利风格，明显露肤、清凉妩媚、高级写真感，服装款式由模型自主设计" in prompt
+    assert "性感福利风格，明显露肤、清凉妩媚、高级写真感" in prompt
+    assert "轻透修身、肩颈锁骨有镜头感" in prompt
+    assert "服装款式由模型自主设计" in prompt
     for fixed_item in ("吊带", "短裤", "短裙", "大腿", "肚脐", "蕾丝", "缎面"):
         assert fixed_item not in prompt
     assert "暖色卧室氛围" in prompt
     for redundant in ("最高服装优先级", "不得参与", "不得替换", "禁止", "三视图服装"):
         assert redundant not in prompt
-    assert len(selection_prompt) < 130
+    assert len(selection_prompt) < 200
     for raw_value in ("europe_america", "23_27", "soft_wave", "adult_glamour", "intimate_glamour_female"):
         assert raw_value not in prompt
 

@@ -7,11 +7,13 @@ from pathlib import Path
 
 STATIC_ROOT = Path(__file__).resolve().parents[1] / "static"
 CONSOLE_HTML = STATIC_ROOT / "console.html"
+VIDEO_HTML = STATIC_ROOT / "video.html"
 CONSOLE_JS = STATIC_ROOT / "assets" / "console.js"
 CONSOLE_CSS = STATIC_ROOT / "assets" / "console.css"
 PROFILE_HTML = STATIC_ROOT / "profile.html"
 WORKBENCH_JS = STATIC_ROOT / "assets" / "video-workbench.js"
 WORKBENCH_CSS = STATIC_ROOT / "assets" / "video-workbench.css"
+VIDEO_PAGE_JS = STATIC_ROOT / "assets" / "video-page.js"
 
 VIDEO_MODULES = (
     "digital_human_video",
@@ -29,22 +31,26 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.html = CONSOLE_HTML.read_text(encoding="utf-8")
+        cls.video_html = VIDEO_HTML.read_text(encoding="utf-8")
         cls.console_js = CONSOLE_JS.read_text(encoding="utf-8")
         cls.console_css = CONSOLE_CSS.read_text(encoding="utf-8")
         cls.profile_html = PROFILE_HTML.read_text(encoding="utf-8")
         cls.workbench_js = WORKBENCH_JS.read_text(encoding="utf-8")
         cls.workbench_css = WORKBENCH_CSS.read_text(encoding="utf-8")
+        cls.video_page_js = VIDEO_PAGE_JS.read_text(encoding="utf-8")
 
     def test_console_loads_native_video_workspace_assets_and_panel(self):
-        self.assertIn('/assets/video-workbench.css?v=__VIDEO_WORKBENCH_CSS_VERSION__', self.html)
-        self.assertIn('/assets/video-workbench.js?v=__VIDEO_WORKBENCH_JS_VERSION__', self.html)
-        self.assertIn('data-view="video_workspace" aria-expanded="false" hidden', self.html)
-        self.assertIn('id="videoWorkspaceFlow" hidden', self.html)
+        self.assertIn('/assets/video-workbench.css?v=__VIDEO_WORKBENCH_CSS_VERSION__', self.video_html)
+        self.assertIn('/assets/video-workbench.js?v=__VIDEO_WORKBENCH_JS_VERSION__', self.video_html)
+        self.assertIn('/assets/video-page.js?v=__VIDEO_PAGE_JS_VERSION__', self.video_html)
+        self.assertNotIn('href="/video.html" data-video-entry', self.html)
+        self.assertNotIn('data-site-nav-key="video"', self.html)
+        self.assertIn('data-site-page="video"', self.video_html)
         self.assertIn('.video-workbench-nav-toggle[hidden]', self.console_css)
-        self.assertIn('data-panel="video_workspace"', self.html)
-        self.assertIn('id="videoWorkspaceFlow"', self.html)
-        self.assertIn('id="videoModuleMenu"', self.html)
-        panel = self.html.split('data-panel="video_workspace"', 1)[1].split('</section>', 1)[0]
+        self.assertIn('data-panel="video_workspace"', self.video_html)
+        self.assertIn('id="videoWorkspaceFlow"', self.video_html)
+        self.assertIn('id="videoModuleMenu"', self.video_html)
+        panel = self.video_html.split('data-panel="video_workspace"', 1)[1].split('</section>', 1)[0]
         self.assertNotIn("<iframe", panel.lower())
 
     def test_all_eight_video_modules_are_declared(self):
@@ -94,19 +100,17 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertEqual(result["genderChange"]["character_clothing"], "")
 
     def test_deep_link_and_navigation_contract_is_present(self):
-        self.assertIn('const VIDEO_WORKBENCH_ENABLED = ADMIN_CONSOLE_SESSION', self.console_js)
+        self.assertIn('const VIDEO_WORKBENCH_ENABLED = false', self.console_js)
         self.assertIn('entry.hidden = !VIDEO_WORKBENCH_ENABLED', self.console_js)
         self.assertIn('const showVideoButton = VIDEO_WORKBENCH_ENABLED', self.console_js)
-        self.assertIn('&& state.view === "workspace"', self.console_js)
-        self.assertIn('&& state.activeModule === "tweet_generation";', self.console_js)
+        self.assertIn('"/admin-video.html"', self.console_js)
+        self.assertIn('"/video.html"', self.console_js)
         self.assertIn('initialConsoleParams.get("video_module")', self.console_js)
-        self.assertIn('url.searchParams.set("view", "video_workspace")', self.console_js)
-        self.assertIn('url.searchParams.set("video_module", state.activeVideoModule)', self.console_js)
-        self.assertIn('if (state.view === "video_workspace") return "workspace";', self.console_js)
         self.assertIn('openVideoWorkspace', self.console_js)
-        self.assertIn('syncVideoModuleMenuState', self.console_js)
-        self.assertIn('id="mobileVideoWorkspaceButton"', self.html)
-        self.assertIn('data-view="video_workspace"', self.html)
+        self.assertIn('id="videoModuleMenu"', self.video_html)
+        self.assertIn('id="mobileVideoWorkspaceButton"', self.video_html)
+        self.assertIn('data-view="video_workspace"', self.video_html)
+        self.assertIn('data-video-module', self.video_page_js)
         self.assertNotIn('...(VIDEO_WORKBENCH_ENABLED ? [{ id: "video_workspace", label: "视频", view: "video_workspace" }] : []),', self.console_js)
 
     def test_module_planning_and_task_apis_are_used(self):
@@ -166,7 +170,7 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn("formPanel.innerHTML = renderForm(module)", self.workbench_js)
         self.assertIn("selectModule, refresh: loadTasks", self.workbench_js)
         self.assertIn('if (state.view === "video_workspace") {', self.console_js)
-        self.assertIn("window.VideoWorkbench?.selectModule?.(nextModule)", self.console_js)
+        self.assertIn("window.location.assign", self.console_js)
         self.assertIn("openVideoWorkspace(button.dataset.videoModule", self.console_js)
         self.assertIn('[data-workspace-view], [data-video-module]', self.console_js)
         self.assertNotIn("animation: video-workbench-enter", self.workbench_css)
@@ -187,7 +191,7 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn('data-video-file-required="${field.required ? "true" : "false"}"', self.workbench_js)
         self.assertIn("function openFilePicker(fieldKey, slotIndex = null)", self.workbench_js)
         self.assertIn("input.dataset.videoFileSlotTarget = String(slotIndex)", self.workbench_js)
-        self.assertIn("next[targetSlot] = selected[0]", self.workbench_js)
+        self.assertIn("next[slotIndex] = selected[0]", self.workbench_js)
         self.assertIn("return selectedFileSlots(moduleId, fieldKey).filter(Boolean)", self.workbench_js)
         self.assertIn("function localFilePreviewUrl(file)", self.workbench_js)
         self.assertIn("URL.createObjectURL(file)", self.workbench_js)
@@ -203,14 +207,19 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
 
     def test_upload_placeholders_respond_to_pointer_hover_without_selecting(self):
         self.assertNotIn(".video-file-field:hover", self.workbench_css)
-        self.assertIn(".video-upload-slots [data-video-file-slot]:hover {", self.workbench_css)
-        self.assertIn("transform: translateY(-3px) scale(1.015);", self.workbench_css)
+        self.assertIn(".video-upload-slots [data-video-file-slot]:hover", self.workbench_css)
+        self.assertNotIn("transform: translateY(-3px) scale(1.015);", self.workbench_css)
         self.assertIn(".video-upload-slot-preview", self.workbench_css)
         self.assertIn("object-fit: cover", self.workbench_css)
         self.assertIn(
             ".video-upload-slots [data-video-file-slot]:focus-visible",
             self.workbench_css,
         )
+        self.assertIn('workbenchIcon("add")', self.workbench_js)
+        self.assertIn("function assignFilesToField", self.workbench_js)
+        self.assertIn('event.dataTransfer.dropEffect = "copy"', self.workbench_js)
+        self.assertIn("overflow: visible", self.workbench_css)
+        self.assertNotIn("overflow-x: auto", self.workbench_css)
 
     def test_editor_header_and_icons_follow_compact_vecto_visual_system(self):
         hero = self.workbench_css.split(".video-workbench-hero {", 1)[1].split("}", 1)[0]
@@ -343,6 +352,10 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn("script_segments", self.workbench_js)
         self.assertIn("submitValues.source_segments =", self.workbench_js)
         self.assertIn("values.video_tts_model = values.minimax_tts_model", self.workbench_js)
+        self.assertIn('select("minimax_tts_model", "音频模型"', self.workbench_js)
+        self.assertIn("RUNNINGHUB_SPEECH_MODEL_OPTIONS", self.workbench_js)
+        self.assertNotIn("speech-01-hd", self.workbench_js)
+        self.assertNotIn("MiniMax 音频模型", self.workbench_js)
         self.assertIn("data-video-parse-script", self.workbench_js)
         self.assertIn("data-video-timeline-field", self.workbench_js)
         self.assertIn("data-video-add-timeline", self.workbench_js)

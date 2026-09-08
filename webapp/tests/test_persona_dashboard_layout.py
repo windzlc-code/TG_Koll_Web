@@ -260,6 +260,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("pdPlatformLabel(platform)", self.dashboard_script)
         self.assertIn(".account-pool-platform-tabs button > svg", self.styles)
         self.assertIn("svg.platform-brand-icon", self.styles)
+        self.assertIn(".account-pool-platform-tabs > button:not(.is-active)", self.styles)
+        fade_start = self.styles.index(".account-pool-platform-tabs > button:not(.is-active)")
+        fade_rule = self.styles[fade_start:self.styles.index("}", fade_start) + 1]
+        self.assertIn("opacity: 0.48;", fade_rule)
 
         context_selector = ".persona-dashboard-view .persona-dashboard-context {"
         context_start = self.styles.index(context_selector)
@@ -1396,6 +1400,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
 
         self.assertNotIn('class="account-pool-head"', account_pool)
         self.assertIn('data-account-pool-platform-tabs', platform_tabs)
+        self.assertNotIn("<strong>平台</strong>", platform_tabs)
         self.assertIn("renderAccountPoolPlatformIcon(value)", platform_tabs)
         self.assertIn('class="platform-brand-icon"', self.console_script)
         self.assertIn('class="platform-brand-icon platform-outline-icon platform-outline-icon--instagram"', self.console_script)
@@ -2272,28 +2277,16 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn("const renderPlatformTab = (value) =>", panel)
         self.assertIn("renderAccountPoolPlatformIcon(value)", panel)
         self.assertIn('data-matrix-publish-platform-option="${esc(value)}"', panel)
-        self.assertIn('class="matrix-publish-platform-trigger" data-account-platform="${esc(platform)}" data-matrix-publish-platform-trigger', panel)
-        self.assertIn('class="matrix-publish-platform-menu" data-matrix-publish-platform-menu', panel)
-        self.assertIn('class="account-pool-platforms account-pool-platform-tabs matrix-publish-platform-options"', panel)
+        self.assertNotIn("matrix-publish-platform-trigger", panel)
+        self.assertNotIn("matrix-publish-platform-menu", panel)
+        self.assertIn("account-pool-platforms account-pool-platform-tabs publish-destination-platform-tabs matrix-publish-platform-tabs", panel)
         self.assertIn('id="matrixPublishPlatform" type="hidden"', panel)
         self.assertNotIn('<select id="matrixPublishPlatform">', panel)
         self.assertNotIn("matrix-publish-account-notice", panel)
+        self.assertNotIn("每个人设任务数量", panel)
+        self.assertNotIn("matrixPublishCount", panel)
         self.assertIn('document.querySelectorAll("[data-matrix-publish-platform-option]")', self.console_script)
-        self.assertIn(".matrix-publish-settings {\n  display: grid;\n  grid-template-columns: repeat(2, minmax(0, 1fr));", self.styles)
-        self.assertIn(".matrix-publish-platform-options {\n  position: static;\n  grid-template-columns: minmax(0, 1fr);", self.styles)
-        self.assertIn(".console-page .matrix-publish-platform-options.account-pool-platforms.account-pool-platform-tabs {\n    display: grid;\n    grid-template-columns: minmax(0, 1fr);", self.styles)
-        self.assertIn(
-            ".matrix-publish-platform-trigger,\n"
-            ".matrix-publish-count-field select {\n"
-            "  box-sizing: border-box;\n"
-            "  width: 100%;\n"
-            "  height: 50px;\n"
-            "  min-height: 50px;\n"
-            "  padding: 10px 11px;\n"
-            "  border: 1px solid var(--line);\n"
-            "  border-radius: var(--radius);",
-            self.styles,
-        )
+        self.assertIn(".matrix-publish-settings {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);", self.styles)
         self.assertIn(".matrix-toolbar {\n  display: flex;\n  align-items: center;", self.styles)
         self.assertIn(
             ".console-page .matrix-publish-panel {\n"
@@ -2303,21 +2296,16 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
 
     def test_matrix_publish_count_select_is_limited_to_current_common_capacity(self):
         update_start = self.console_script.index("function updateMatrixPublishStateFromForm()")
-        update_end = self.console_script.index("\nfunction closeMatrixPublishPlatformPicker", update_start)
+        update_end = self.console_script.index("\nfunction ensureMatrixDraftLoads", update_start)
         update = self.console_script[update_start:update_end]
         panel_start = self.console_script.index("function renderMatrixPublishPanel(")
         panel_end = self.console_script.index("\nasync function submitMatrixPublishTask", panel_start)
         panel = self.console_script[panel_start:panel_end]
 
-        self.assertIn("matrixPublishCommonLimit(matrixPublishAvailabilityRows(selectedIds, source, platform))", update)
-        self.assertIn(
-            "const availableLimit = Math.min(matrixPublishCommonLimit(availability), publishBatchLimit(platform));",
-            panel,
-        )
-        self.assertIn("const countOptions = availableLimit", panel)
-        self.assertIn('<select id="matrixPublishCount" ${countOptions.length ? "" : "disabled"}>', panel)
-        self.assertIn("Array.from({ length: availableLimit }, (_, index) => index + 1)", panel)
-        self.assertIn('<option value="0">暂无可执行内容</option>', panel)
+        self.assertIn("perPersonaCount: 1", update)
+        self.assertIn("const perCount = 1;", panel)
+        self.assertNotIn('<select id="matrixPublishCount"', panel)
+        self.assertNotIn("每个人设任务数量", panel)
 
     def test_non_matrix_publish_modes_render_persona_summary_below_mode_tabs(self):
         publishing_start = self.console_script.index('if (moduleId === "publishing")')
@@ -2727,6 +2715,10 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
             'refresh.addEventListener("click", pdStartRefresh)',
             self.dashboard_script,
         )
+        refresh_start = self.dashboard_script.index("async function pdStartRefresh")
+        refresh_fn = self.dashboard_script[refresh_start:self.dashboard_script.index("async function pdPollRefresh", refresh_start)]
+        self.assertIn('body: { archive_id: "", source: "http_first" }', refresh_fn)
+        self.assertNotIn('source: "browser"', refresh_fn)
         self.assertIn(
             'function pdSetRefreshControlState(status = "idle", progress = 0)',
             self.dashboard_script,
@@ -3371,18 +3363,26 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn("await slideSegmentedButtonBackground(taskQueuePanelButton, {", queue_panel)
         self.assertIn("resolveButton: () => document.querySelector(", queue_panel)
 
-    def test_account_pool_and_proxy_tabs_reuse_the_task_segment_slide(self):
-        handler_start = self.console_script.index('const tab = event.target.closest("[data-account-browser-tab]")')
-        account_browser_handler = self.console_script[
-            handler_start:
-            self.console_script.index('const accountPasswordToggle = event.target.closest("[data-account-password-toggle]")', handler_start)
-        ]
-
-        self.assertIn('".account-browser-tabs > button"', self.console_script)
-        self.assertIn("event.__vectoSegmentSlideHandled = true;", account_browser_handler)
-        self.assertIn("await slideSegmentedButtonBackground(tab, {", account_browser_handler)
-        self.assertIn("commit: () => setAccountBrowserPanel(nextPanel)", account_browser_handler)
-        self.assertIn("resolveButton: () => document.querySelector(", account_browser_handler)
+    def test_account_management_page_is_account_pool_without_proxy_capsule_tabs(self):
+        accounts_start = self.markup.index('<section class="view" data-panel="accounts">')
+        accounts = self.markup[accounts_start:self.markup.index('<section class="view billing-view"', accounts_start)]
+        self.assertNotIn("account-browser-toolbar", accounts)
+        self.assertNotIn("account-browser-tabs", accounts)
+        self.assertNotIn('id="accountBrowserProxiesTab"', accounts)
+        self.assertNotIn('data-account-browser-tab="proxies"', accounts)
+        self.assertNotIn('id="accountBrowserProxiesPage"', accounts)
+        self.assertNotIn("账号与代理切换", accounts)
+        self.assertIn('id="accountGrid"', accounts)
+        self.assertIn('data-account-pool-loading="true"', accounts)
+        self.assertIn("account-pool-card--skeleton", accounts)
+        self.assertIn("正在加载账号", accounts)
+        self.assertIn("function renderAccountPoolLoading()", self.console_script)
+        self.assertIn("function accountPoolDataPending()", self.console_script)
+        self.assertIn("if (view === \"accounts\") renderSocialAccounts();", self.console_script)
+        self.assertIn("state.view === \"accounts\" || window.matchMedia(\"(max-width: 820px)\").matches", self.console_script)
+        self.assertIn('function normalizeAccountBrowserPanel', self.console_script)
+        self.assertIn('return String(panel || "").trim() === "browsers" ? "browsers" : "accounts";', self.console_script)
+        self.assertNotIn('const tab = event.target.closest("[data-account-browser-tab]")', self.console_script)
 
     def test_mobile_task_dock_reuses_fixed_size_segment_slide_without_delaying_navigation(self):
         renderer = self.console_script[
@@ -4113,7 +4113,8 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
 
         self.assertIn('"platform status"', main_rule)
         self.assertIn('"username username"', main_rule)
-        self.assertIn("display: contents;", flags_rule)
+        self.assertIn("display: flex;", flags_rule)
+        self.assertIn("grid-area: status;", flags_rule)
         self.assertIn("grid-area: status;", self.styles)
         self.assertNotIn("grid-area: totp;", self.styles)
 

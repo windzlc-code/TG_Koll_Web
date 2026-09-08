@@ -6,7 +6,7 @@
   <meta name="admin-workspace-user-id" content="__ADMIN_WORKSPACE_USER_ID__" />
   <meta name="admin-console-session" content="__ADMIN_CONSOLE_SESSION__" />
   <meta name="deployment-role" content="__DEPLOYMENT_ROLE__" />
-  <title>Web 任务控制台</title>
+  <title>推文工作台 · Vecto</title>
   <link rel="preload" as="style" href="/assets/style.css?v=__STYLE_VERSION__" />
   <link id="personaDashboardStyles" rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__" media="not all" />
   <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=__SITE_NAVIGATION_CSS_VERSION__" />
@@ -24,8 +24,7 @@
       </a>
       <nav class="site-nav" aria-label="站内导航" data-site-navigation>
         <a data-site-nav-key="solution" href="/#solution"><span data-site-copy="solution">解决方案</span></a>
-        <a data-site-nav-key="console" href="/console.html" aria-current="page" data-console-entry><span data-site-copy="console">控制台</span></a>
-        <a data-site-nav-key="crm" href="/crm.html" data-crm-entry hidden><span data-site-copy="crm">CRM 工作台</span></a>
+        <a data-site-nav-key="console" href="/console.html" aria-current="page" data-console-entry><span data-site-copy="console">推文工作台</span></a>
         <a data-site-nav-key="aboutVecto" href="/about-vecto.html"><span data-site-copy="aboutVecto">了解 Vecto</span></a>
       </nav>
       <div class="header-actions">
@@ -36,8 +35,7 @@
           </summary>
           <nav class="site-mobile-menu-panel" aria-label="站内导航" data-site-navigation>
             <a href="/#solution"><span data-site-copy="solution">解决方案</span></a>
-            <a href="/console.html" aria-current="page" data-console-entry><span data-site-copy="console">控制台</span></a>
-            <a href="/crm.html" data-crm-entry hidden><span data-site-copy="crm">CRM 工作台</span></a>
+            <a href="/console.html" aria-current="page" data-console-entry><span data-site-copy="console">推文工作台</span></a>
             <a href="/about-vecto.html"><span data-site-copy="aboutVecto">了解 Vecto</span></a>
           </nav>
         </details>
@@ -86,7 +84,7 @@
                 <button type="button" data-site-open-billing data-site-copy="billingView">查看详情</button>
                 <button type="button" data-site-open-settings data-site-copy="personalProfile">个人资料</button>
               </div>
-              <div class="site-account-action-row site-account-workspace-actions" aria-label="控制台快捷操作">
+              <div class="site-account-action-row site-account-workspace-actions" aria-label="快捷操作">
                 <button type="button" data-console-account-view="tasks">任务队列</button>
                 <button type="button" data-console-account-view="console_settings" data-site-copy="personalSettings">个人设置</button>
               </div>
@@ -107,20 +105,20 @@
       <div class="console-page-loading-orbit" aria-hidden="true">
         <span style="--loader-dot: 0"></span><span style="--loader-dot: 1"></span><span style="--loader-dot: 2"></span><span style="--loader-dot: 3"></span><span style="--loader-dot: 4"></span><span style="--loader-dot: 5"></span><span style="--loader-dot: 6"></span><span style="--loader-dot: 7"></span><span style="--loader-dot: 8"></span><span style="--loader-dot: 9"></span>
       </div>
-      <span class="sr-only">正在加载控制台</span>
+      <span class="sr-only">正在加载推文工作台</span>
     </div>
     <div class="console-shell">
     <aside id="consoleSidebar" class="console-sidebar">
       <div class="console-brand">
         <div class="brand-mark"><img src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="32" height="32" /></div>
         <div>
-          <h1>任务控制台</h1>
+          <h1>推文工作台</h1>
           <p>Vecto OS 运营工作区</p>
         </div>
         <button id="mobileNavClose" class="mobile-nav-close" type="button" aria-label="关闭导航">×</button>
       </div>
 
-      <nav class="console-nav" aria-label="控制台导航">
+      <nav class="console-nav" aria-label="推文工作台导航">
         <button type="button" class="is-active nav-parent-toggle" data-view="workspace" aria-expanded="true">
           <span>任务工作台</span>
           <span class="nav-toggle-arrow" aria-hidden="true"></span>
@@ -130,14 +128,6 @@
           <div class="module-menu" id="moduleMenu"></div>
         </div>
 
-        <button type="button" class="nav-parent-toggle video-workbench-nav-toggle" data-view="video_workspace" aria-expanded="false" hidden>
-          <span>视频工作台</span>
-          <span class="nav-toggle-arrow" aria-hidden="true"></span>
-        </button>
-        <div class="sidebar-flow video-workspace-flow" id="videoWorkspaceFlow" hidden>
-          <div class="sidebar-flow-divider" aria-hidden="true"></div>
-          <div class="module-menu video-module-menu" id="videoModuleMenu" aria-label="视频工作台模块"></div>
-        </div>
       </nav>
 
       <div class="sidebar-bottom-actions">
@@ -160,8 +150,8 @@
         class="mobile-nav-toggle"
         type="button"
         hidden
-        aria-label="打开控制台导航"
-        title="打开控制台导航"
+        aria-label="打开推文工作台导航"
+        title="打开推文工作台导航"
         aria-controls="consoleSidebar"
         aria-expanded="false"
       >
@@ -259,19 +249,33 @@
 
       <section class="view" data-panel="accounts">
         <div class="account-browser-shell" id="accountBrowserShell" data-account-browser-panel="accounts">
-          <div class="account-browser-toolbar">
-            <div class="account-browser-tabs" role="tablist" aria-label="账号与代理切换">
-              <button id="accountBrowserAccountsTab" type="button" class="is-active" data-account-browser-tab="accounts" role="tab" aria-selected="true" aria-controls="accountBrowserAccountsPage">账号池</button>
-              <button id="accountBrowserProxiesTab" type="button" data-account-browser-tab="proxies" role="tab" aria-selected="false" aria-controls="accountBrowserProxiesPage">代理 IP</button>
+          <section id="accountBrowserAccountsPage" class="account-browser-page is-active" data-account-browser-page="accounts">
+            <div class="account-grid" id="accountGrid">
+              <div class="account-pool-layout account-pool-layout--standalone" data-account-pool-loading="true">
+                <section class="account-pool-main">
+                  <div class="account-pool-body">
+                    <section class="account-pool-account-panel">
+                      <div class="account-pool-section-head">
+                        <strong>账号</strong>
+                        <span class="account-pool-loading-copy">正在加载账号</span>
+                      </div>
+                      <div class="account-pool-content-window">
+                        <div class="account-pool-content">
+                          <div class="account-pool-list" aria-busy="true" aria-live="polite">
+                            <article class="account-card account-pool-card account-pool-card--skeleton" aria-hidden="true"><span class="account-pool-skeleton-line"></span><span class="account-pool-skeleton-line is-short"></span><span class="account-pool-skeleton-line is-medium"></span></article>
+                            <article class="account-card account-pool-card account-pool-card--skeleton" aria-hidden="true"><span class="account-pool-skeleton-line"></span><span class="account-pool-skeleton-line is-short"></span><span class="account-pool-skeleton-line is-medium"></span></article>
+                            <article class="account-card account-pool-card account-pool-card--skeleton" aria-hidden="true"><span class="account-pool-skeleton-line"></span><span class="account-pool-skeleton-line is-short"></span><span class="account-pool-skeleton-line is-medium"></span></article>
+                            <article class="account-card account-pool-card account-pool-card--skeleton" aria-hidden="true"><span class="account-pool-skeleton-line"></span><span class="account-pool-skeleton-line is-short"></span><span class="account-pool-skeleton-line is-medium"></span></article>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </section>
+              </div>
             </div>
-          </div>
-          <section id="accountBrowserAccountsPage" class="account-browser-page is-active" data-account-browser-page="accounts" role="tabpanel" aria-labelledby="accountBrowserAccountsTab">
-            <div class="account-grid" id="accountGrid"></div>
           </section>
-          <section id="accountBrowserProxiesPage" class="account-browser-page" data-account-browser-page="proxies" role="tabpanel" aria-labelledby="accountBrowserProxiesTab" hidden>
-            <div id="proxyPool"></div>
-          </section>
-          <section id="accountBrowserBrowsersPage" class="account-browser-page" data-account-browser-page="browsers" role="tabpanel" aria-label="浏览器列表" hidden>
+          <section id="accountBrowserBrowsersPage" class="account-browser-page" data-account-browser-page="browsers" hidden>
             <div id="liveBrowserSessions"></div>
           </section>
         </div>

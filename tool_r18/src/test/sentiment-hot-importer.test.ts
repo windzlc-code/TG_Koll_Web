@@ -29,6 +29,13 @@ import {
   candidateMatchesRequestedFreshness,
   candidateMatchesSentimentHotStrategyAnchors,
   candidateMatchesCurrentKeywords,
+  combinedReachScore,
+  instagramMediaPlayCount,
+  instagramTagQueriesFromKeywords,
+  interactionHeatScore,
+  isUsefulHotCandidate,
+  viewCountOfCandidate,
+  distinctiveKeywordTokens,
   cleanSentimentCandidateContent,
   enrichThreadsCandidateDetails,
   ensureSentimentHotPlatformContributions,
@@ -59,6 +66,7 @@ import {
   isSentimentHotCandidateRepeatEligible,
   parseThreadsPostViewCountFromText,
   parseThreadsPostViewCountFromHtml,
+  parseInstagramPostEngagementFromHtml,
   extractThreadsAuthenticatedViewerUsername,
   parseThreadsReaderSearchMarkdownCandidates,
   persistSentimentReaderMarkdown,
@@ -518,6 +526,7 @@ describe("sentiment hot importer", () => {
       normalAcceptTerms: ["护发", "染发", "烫发", "发型设计", "美发造型"],
       rejectTerms: [],
       personaGuardTerms: [],
+      lifestyleQueries: ["预约", "到店", "排队", "洗头", "吹干", "刘海", "分缝", "碎发"],
       domainSummary: "理发与美发行业",
     } as any;
     expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).not.toContain("染发烫发价格踩雷");
@@ -569,6 +578,7 @@ describe("sentiment hot importer", () => {
       normalAcceptTerms: ["\u7406\u53d1\u5e97", "\u526a\u5934\u53d1", "\u53d1\u578b\u5e08", "\u7406\u53d1\u771f\u5b9e\u4f53\u9a8c", "\u53d1\u578b\u670d\u52a1"],
       rejectTerms: [],
       personaGuardTerms: [],
+      lifestyleQueries: ["预约", "到店", "排队", "洗头", "吹干", "刘海", "分缝", "碎发"],
       domainSummary: "\u7406\u53d1\u4e0e\u7f8e\u53d1\u884c\u4e1a",
     } as any;
 
@@ -715,6 +725,7 @@ describe("sentiment hot importer", () => {
       normalAcceptTerms: ["染发", "烫发", "刘海", "短发", "男士发型"],
       rejectTerms: [],
       personaGuardTerms: [],
+      lifestyleQueries: ["预约", "到店", "排队", "洗头", "吹干", "刘海", "分缝", "碎发"],
       domainSummary: "理发与美发行业",
     } as any;
 
@@ -743,11 +754,12 @@ describe("sentiment hot importer", () => {
     expect(queries.indexOf("\u7406\u53d1")).toBeLessThan(queries.indexOf("\u7406\u53d1\u907f\u5751"));
   });
 
-  it("clamps custom freshness to fifteen days", () => {
+  it("clamps custom freshness to thirty days", () => {
     expect(normalizeSentimentHotFreshnessDays(0)).toBe(0);
     expect(normalizeSentimentHotFreshnessDays(7)).toBe(7);
     expect(normalizeSentimentHotFreshnessDays(15)).toBe(15);
-    expect(normalizeSentimentHotFreshnessDays(30)).toBe(15);
+    expect(normalizeSentimentHotFreshnessDays(30)).toBe(30);
+    expect(normalizeSentimentHotFreshnessDays(90)).toBe(30);
   });
 
   it("keeps freshness policy explicit so strict tests cannot silently use legacy backfill", () => {
@@ -795,7 +807,7 @@ describe("sentiment hot importer", () => {
       publishedAt: new Date().toISOString(),
       capturedAt: new Date().toISOString(),
     } as any;
-    const belowHeat = { ...shown, id: "below-heat", hotScore: 499 } as any;
+    const belowHeat = { ...shown, id: "below-heat", hotScore: 199 } as any;
     const belowLength = { ...shown, id: "below-length", content: "金融理財" } as any;
     rememberSentimentHotShown(archiveId, [shown]);
 
@@ -1343,7 +1355,7 @@ describe("sentiment hot importer", () => {
     expect(isObviouslyLowQualitySentimentHotCandidate({
       ...base,
       content: "女仔望過嚟，過來人警世，唔好太快同居，一定要帶套，問你借錢就原地分手，人工和存款都不要太快讓對方知道。",
-    } as any, ["海外信貸", "工薪信貸", "借錢"])).toBe(true);
+    } as any, ["海外信貸", "工薪信貸", "借錢"])).toBe(false);
   });
 
   it("sorts final hot candidates by heat and removes duplicates before display", () => {
@@ -1650,21 +1662,52 @@ describe("sentiment hot importer", () => {
     expect(candidates).toEqual([]);
   });
 
-  it("does not accept an ambiguous single keyword in normal mode", () => {
+  it("treats a distinctive keyword token as related even when the full phrase is absent", () => {
     const candidate = {
-      id: "jingxin-school",
+      id: "california-property",
       platform: "threads",
-      sourceUrl: "https://www.threads.net/@news/post/jingxin-school",
-      author: "news",
-      content: "这篇人物资料介绍某位政治人物早年就读静心国民中学，之后进入高中与大学，并整理历年求学经历、选举过程和公开活动纪录。全文主题是教育背景与政治生涯，不是健康练习内容。",
+      sourceUrl: "https://www.threads.net/@ruby/post/california-property",
+      author: "ruby",
+      content: "加州置產最近有人在討論稅務、過戶流程和貸款成數，也有人分享實際看房與交屋經驗，內容圍繞海外置業而不是觀光行程。",
       media: [],
-      hotScore: 9000,
-      metrics: { source: "threads-account-search", query: "静心" },
+      hotScore: 2200,
+      metrics: { source: "threads-reader-search", query: "海外置產", publicSearch: true },
       publishedAt: new Date().toISOString(),
       capturedAt: new Date().toISOString(),
-    } as const;
+    } as any;
 
-    expect(candidateMatchesCurrentKeywords(candidate as any, ["静心", "冥想", "身心灵疗愈"], "normal")).toBe(false);
+    expect(distinctiveKeywordTokens(["海外置產", "日本豪宅"])).toEqual(expect.arrayContaining(["置產", "豪宅", "海外置產", "日本豪宅"]));
+    expect(distinctiveKeywordTokens(["海外置產", "日本豪宅"])).not.toEqual(expect.arrayContaining(["日本"]));
+    expect(distinctiveKeywordTokens(["日本不动产", "东京豪宅"])).not.toEqual(expect.arrayContaining(["日本"]));
+    expect(candidateMatchesCurrentKeywords(candidate, ["海外置產", "日本豪宅"], "strict")).toBe(true);
+  });
+
+  it("treats unused model-batch keywords as related even when they are not in the current search batch", () => {
+    const candidate = {
+      id: "japan-mansion",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@ruby/post/japan-mansion",
+      author: "ruby",
+      content: "日本豪宅最近成交價和看房流程討論很多，也有人分享貸款成數、過戶稅務與交屋經驗，內容圍繞置業而不是觀光行程。",
+      media: [],
+      hotScore: 2200,
+      metrics: { source: "threads-reader-search", query: "海外置產", publicSearch: true },
+      publishedAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
+    } as any;
+    const currentBatch = ["海外置產", "白金台", "高級物件"];
+    const allKeywords = ["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件", "東京置產"];
+
+    expect(candidateMatchesCurrentKeywords(candidate, currentBatch, "strict")).toBe(false);
+    expect(candidateMatchesCurrentKeywords(candidate, allKeywords, "strict")).toBe(true);
+    expect(finalizeSentimentHotCandidatesForDisplay([candidate], 10, {
+      keywords: allKeywords,
+      searchMode: "strict",
+    }).map((item) => item.id)).toEqual(["japan-mansion"]);
+    expect(finalizeSentimentHotCandidatesForDisplay([candidate], 10, {
+      keywords: currentBatch,
+      searchMode: "strict",
+    })).toEqual([]);
   });
 
   it("does not accept a single broad strategy term as normal persona relevance", () => {
@@ -1765,8 +1808,10 @@ describe("sentiment hot importer", () => {
       strategy,
     });
 
-    expect(strategy.requiredAnchorTerms).toEqual(["\u52a8\u6f2b", "\u4e8c\u6b21\u5143"]);
-    expect(strategy.primaryQueries).toEqual(["\u52a8\u6f2b\u65b0\u756a"]);
+    expect(strategy.requiredAnchorTerms).toEqual(expect.arrayContaining(["\u52a8\u6f2b", "\u4e8c\u6b21\u5143"]));
+    expect(strategy.requiredAnchorTerms).not.toContain("\u523a\u9752");
+    expect(strategy.requiredAnchorTerms).not.toContain("\u6295\u8d44\u7406\u8d22");
+    expect(strategy.primaryQueries).toEqual(expect.arrayContaining(["\u52a8\u6f2b\u65b0\u756a"]));
     expect(strategy.primaryQueries).not.toContain("\u523a\u9752");
     expect(strategy.primaryQueries).not.toContain("\u6295\u8d44\u7406\u8d22");
   });
@@ -1856,6 +1901,61 @@ describe("sentiment hot importer", () => {
     } as any;
 
     expect(candidateMatchesSentimentHotStrategyAnchors(candidate, strategy, "normal")).toBe(true);
+  });
+
+  it("accepts a light late-mention lifestyle post in normal mode only", () => {
+    const strategy = {
+      primaryQueries: ["机油", "刹车片", "轮胎", "电瓶", "火花塞"],
+      broadQueries: ["汽车维修", "车辆保养"],
+      ecosystemQueries: ["修车店", "保养厂"],
+      requiredAnchorTerms: ["机油", "刹车片", "轮胎"],
+      normalAnchorTerms: ["汽车维修", "车辆保养", "洗车"],
+      rejectTerms: ["手机"],
+      strictAcceptTerms: ["机油", "刹车片", "轮胎", "电瓶", "火花塞"],
+      normalAcceptTerms: ["汽车维修", "车辆保养", "洗车", "年检", "通勤路况"],
+      personaGuardTerms: ["修车师傅"],
+      lifestyleQueries: ["通勤", "停车", "洗车", "年检", "仪表灯", "下班堵车", "路边停车", "自助洗车"],
+      domainSummary: "汽车维修与保养",
+    } as any;
+    const lifestyle = {
+      id: "commute-oil-light",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@life/post/commute-oil-light",
+      author: "life",
+      content: "今天下班通勤堵得要命，回家才想起仪表亮过机油灯，周末准备去洗车顺便让店里看一下。",
+      media: [],
+      hotScore: 9000,
+      metrics: { query: "机油" },
+    } as any;
+    const commuteOnly = {
+      ...lifestyle,
+      id: "commute-only",
+      sourceUrl: "https://www.threads.net/@life/post/commute-only",
+      content: "今天下班通勤堵了四十分钟，到家只想先吃饭洗澡，完全没提车子保养。",
+      metrics: { query: "通勤" },
+    } as any;
+    const unrelatedPhone = {
+      ...lifestyle,
+      id: "phone-unrelated",
+      sourceUrl: "https://www.threads.net/@tech/post/phone-unrelated",
+      content: "新手机拍照很清楚，系统更新后耗电也正常，这篇只讨论手机续航和相机，没有汽车内容。",
+      metrics: { query: "手机" },
+    } as any;
+
+    expect(candidateMatchesSentimentHotStrategyAnchors(lifestyle, strategy, "normal")).toBe(true);
+    expect(candidateMatchesSentimentHotStrategyAnchors(lifestyle, strategy, "strict")).toBe(true);
+    expect(candidateMatchesSentimentHotStrategyAnchors(commuteOnly, strategy, "normal")).toBe(true);
+    expect(candidateMatchesSentimentHotStrategyAnchors(commuteOnly, strategy, "strict")).toBe(false);
+    expect(candidateMatchesSentimentHotStrategyAnchors(unrelatedPhone, strategy, "normal")).toBe(false);
+    expect(candidateMatchesSentimentHotStrategyAnchors(unrelatedPhone, strategy, "strict")).toBe(false);
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "normal")).toEqual(expect.arrayContaining(["通勤", "停车", "洗车"]));
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).not.toContain("通勤");
+    expect(candidateMatchesCurrentKeywords(lifestyle, ["机油", "刹车片"], "normal")).toBe(true);
+    expect(candidateMatchesCurrentKeywords(unrelatedPhone, ["机油", "刹车片"], "normal")).toBe(false);
+    const withoutModelLifestyle = { ...strategy, lifestyleQueries: [] };
+    expect(resolveSentimentHotModelStrategyKeywords(withoutModelLifestyle, "normal")).not.toContain("通勤");
+    expect(resolveSentimentHotModelStrategyKeywords(withoutModelLifestyle, "normal")).not.toContain("停车");
+    expect(candidateMatchesSentimentHotStrategyAnchors(commuteOnly, withoutModelLifestyle, "normal")).toBe(false);
   });
 
   it("accepts one direct domain anchor in strict mode", () => {
@@ -1997,14 +2097,14 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesCurrentKeywords(relevant, keywords, "strict")).toBe(true);
   });
 
-  it("does not display hot candidates shorter than 25 Chinese characters", () => {
+  it("does not display hot candidates shorter than 20 Chinese characters", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
         id: "short-hot",
         platform: "threads",
         sourceUrl: "https://www.threads.net/@demo/post/short",
         author: "demo",
-        content: "海外信貸最近討論很多，信用卡和銀行貸款都很熱門。",
+        content: "海外信贷讨论信用卡银行贷款利率现金流",
         media: [],
         hotScore: 90000,
         metrics: {},
@@ -2026,7 +2126,7 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(["long-hot"]);
   });
 
-  it("uses a 25 Chinese character floor for hot candidates", () => {
+  it("uses a 20 Chinese character floor for hot candidates", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -2038,19 +2138,19 @@ describe("sentiment hot importer", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       {
         ...base,
-        id: "under-25",
-        sourceUrl: "https://www.threads.net/@demo/post/under-25",
-        content: "\u7406".repeat(24),
+        id: "under-20",
+        sourceUrl: "https://www.threads.net/@demo/post/under-20",
+        content: "海外信贷讨论信用卡银行贷款利率现金流",
       },
       {
         ...base,
-        id: "at-25",
-        sourceUrl: "https://www.threads.net/@demo/post/at-25",
-        content: "\u7406".repeat(25),
+        id: "at-20",
+        sourceUrl: "https://www.threads.net/@demo/post/at-20",
+        content: "海外信贷讨论信用卡银行贷款利率现金流安排",
       },
     ] as any, 10);
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["at-25"]);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["at-20"]);
   });
 
   it("keeps concise authenticated Threads search posts above the hard heat floor", () => {
@@ -2543,7 +2643,7 @@ Sorry, we're having trouble playing this video.
       sourceUrl: "https://www.threads.com/@demo_doctor/post/DZ1ABCxyz",
       author: "demo_doctor",
       content: "急診醫生分享醫療現場，今天醫院候診區真的塞滿人，病人等待和醫療流程都被拿出來討論。",
-      hotScore: 4321,
+      hotScore: 5493,
       metrics: {
         source: "threads-account-search",
         like_count: 954,
@@ -2552,7 +2652,7 @@ Sorry, we're having trouble playing this video.
         reshare_count: 58,
         share_count: 58,
         view_count: 4321,
-        realEngagementTotal: 4321,
+        realEngagementTotal: 5493,
       },
       engagement: {
         likeCount: 954,
@@ -2716,11 +2816,11 @@ Sorry, we're having trouble playing this video.
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
       sourceUrl: "https://www.threads.com/@storage_demo/post/HYDRATION123",
-      hotScore: 12000,
+      hotScore: 13015,
       metrics: {
         source: "threads-account-search",
         view_count: 12000,
-        realEngagementTotal: 12000,
+        realEngagementTotal: 13015,
       },
     });
   });
@@ -2782,7 +2882,7 @@ Demo post body
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(candidate.engagement?.viewCount).toBe(186_000);
     expect(candidate.metrics).toMatchObject({ view_count: 186_000 });
-    expect(candidate.hotScore).toBe(186_000);
+    expect(candidate.hotScore).toBe(210_551);
   });
 
   it("keeps authenticated detail rescue browser-only when the public Reader is disabled", async () => {
@@ -2851,7 +2951,7 @@ Demo post body
       keywords: ["\u8336\u6587\u5316", "\u54c1\u8336", "\u8336\u9053\u9ad4\u9a57"],
       searchMode: "strict",
     })).toHaveLength(0);
-    expect(enriched[0].hotScore).toBe(12_000);
+    expect(enriched[0].hotScore).toBe(12_191);
   });
 
   it("forces a fresh detail read when a cached candidate already has views", async () => {
@@ -2879,7 +2979,7 @@ Demo post body
     expect(candidate.metrics).toMatchObject({ view_count: 99 });
   });
 
-  it("sorts all candidates at or above the 500 heat floor from high to low", () => {
+  it("sorts qualified candidates from high to low and drops rows below both floors", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -2901,7 +3001,7 @@ Demo post body
         id: `below-threshold-${index}`,
         sourceUrl: `https://www.threads.net/@demo/post/below-threshold-${index}`,
         content: `${content} 候選來源編號${index + 1}。`,
-        hotScore: 999,
+        hotScore: 199,
         metrics: { source },
       })),
     ] as any, 1, { keywords: ["醫療", "醫生", "醫院"] });
@@ -2909,7 +3009,7 @@ Demo post body
     expect(candidates.map((candidate) => candidate.id)).toEqual(["account-accepted"]);
   });
 
-  it("keeps the explicit 500 heat floor and rejects everything below it", () => {
+  it("qualifies a post when combined views-plus-heat reaches 1000 or interaction heat reaches 200", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -2921,16 +3021,30 @@ Demo post body
     const keyword = "热点";
     const content = "热点内容完整展示并包含足够长度的中文说明，确保通过内容质量和语言筛选。";
     const candidates = finalizeSentimentHotCandidatesForDisplay([
-      { ...base, id: "standard", author: "standard-author", sourceUrl: "https://www.threads.net/@demo/post/standard", content, hotScore: 1200 },
-      { ...base, id: "fallback-700", author: "fallback-author", sourceUrl: "https://www.threads.net/@demo/post/fallback-700", content: `${content} 补足候选，包含不同的实操建议与案例细节。`, hotScore: 700 },
-      { ...base, id: "floor-500", author: "floor-author", sourceUrl: "https://www.threads.net/@demo/post/floor-500", content: `${content} 最低候选，补充另一组不同的执行经验。`, hotScore: 500 },
-      { ...base, id: "below-floor", author: "below-author", sourceUrl: "https://www.threads.net/@demo/post/below-floor", content: `${content} 不展示，低于硬性下限。`, hotScore: 499 },
+      { ...base, id: "combined-views", author: "views-author", sourceUrl: "https://www.threads.net/@demo/post/combined-views", content, hotScore: 1000, engagement: { viewCount: 900, likeCount: 80, commentCount: 10, shareCount: 10 }, metrics: { ...base.metrics, view_count: 900 } },
+      { ...base, id: "heat-only", author: "heat-author", sourceUrl: "https://www.threads.net/@demo/post/heat-only", content: `${content} 补足候选，包含不同的实操建议与案例细节。`, hotScore: 200, engagement: { likeCount: 150, commentCount: 30, shareCount: 20 } },
+      { ...base, id: "below-both", author: "below-author", sourceUrl: "https://www.threads.net/@demo/post/below-both", content: `${content} 不展示，合计浏览量和互动热度都低于下限。`, hotScore: 150, engagement: { viewCount: 500, likeCount: 80, commentCount: 40, shareCount: 30 }, metrics: { ...base.metrics, view_count: 500 } },
     ] as any, 3, { keywords: [keyword] });
 
+    expect(isUsefulHotCandidate({
+      hotScore: 187,
+      engagement: { likeCount: 123, commentCount: 4, shareCount: 26, rawSignals: [123, 4, 34, 26] },
+      metrics: {},
+    } as any)).toBe(false);
+    expect(isUsefulHotCandidate({
+      hotScore: 150,
+      engagement: { likeCount: 80, commentCount: 10, shareCount: 10, viewCount: 900 },
+      metrics: { view_count: 900 },
+    } as any)).toBe(true);
+    expect(isUsefulHotCandidate({
+      hotScore: 200,
+      engagement: { likeCount: 150, commentCount: 30, shareCount: 20 },
+      metrics: {},
+    } as any)).toBe(true);
     expect(resolveSentimentHotDisplayHeatThreshold([
-      { hotScore: 1200 }, { hotScore: 700 }, { hotScore: 500 }, { hotScore: 499 },
-    ] as any, 3)).toBe(500);
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["standard", "fallback-700", "floor-500"]);
+      { hotScore: 2200 }, { hotScore: 200 }, { hotScore: 199 },
+    ] as any, 2)).toBe(200);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["combined-views", "heat-only"]);
   });
 
   it("supplements after final deduplication instead of counting duplicate high-score candidates", () => {
@@ -2946,7 +3060,7 @@ Demo post body
     const candidates = finalizeSentimentHotCandidatesForDisplay([
       { ...base, id: "standard", sourceUrl: "https://www.threads.net/@demo/post/standard", content, hotScore: 1200 },
       { ...base, id: "standard-copy", sourceUrl: "https://www.threads.net/@demo/post/standard-copy", content, hotScore: 1150 },
-      { ...base, id: "fallback", author: "fallback-author", sourceUrl: "https://www.threads.net/@demo/post/fallback", content: `${content} 补足另一组不同的执行经验。`, hotScore: 700 },
+      { ...base, id: "fallback", author: "fallback-author", sourceUrl: "https://www.threads.net/@demo/post/fallback", content: `${content} 补足另一组不同的执行经验。`, hotScore: 1100 },
     ] as any, 2, { keywords: ["热点"] });
 
     expect(candidates.map((candidate) => candidate.id)).toEqual(["standard", "fallback"]);
@@ -3048,6 +3162,104 @@ Title: Instagram
     expect((candidates[0].metrics as any).source).toBe("instagram-account-search");
   });
 
+  it("scores Instagram cookie posts with the same views-plus-heat formula as Threads", () => {
+    const takenAt = Math.floor(Date.now() / 1000);
+    const caption = "海外置產實測分享，這篇完整記錄看房流程、貸款條件與近一個月的現場體驗。";
+    const parseOne = (media: Record<string, unknown>) => parseInstagramAuthenticatedSearchPayload({
+      query: "海外置產",
+      keywords: ["海外置產", "家族傳承"],
+      payload: { items: [{ code: "IgHeatPost", taken_at: takenAt, user: { username: "ig.demo" }, caption: { text: caption }, ...media }] },
+    })[0];
+
+    const heatOnly = parseOne({ like_count: 150, comment_count: 50 });
+    expect(interactionHeatScore(heatOnly)).toBe(200);
+    expect(combinedReachScore(heatOnly)).toBe(200);
+    expect(isUsefulHotCandidate(heatOnly)).toBe(true);
+
+    const combinedVideo = parseOne({ like_count: 34, comment_count: 2, play_count: 1481 });
+    expect(interactionHeatScore(combinedVideo)).toBe(36);
+    expect(combinedReachScore(combinedVideo)).toBe(1517);
+    expect(isUsefulHotCandidate(combinedVideo)).toBe(true);
+    expect(viewCountOfCandidate(combinedVideo)).toBe(1481);
+    expect((combinedVideo.metrics as any).play_count).toBe(1481);
+
+    const igPlayOnly = parseOne({ like_count: 10, comment_count: 5, ig_play_count: 1200 });
+    expect(viewCountOfCandidate(igPlayOnly)).toBe(1200);
+    expect(combinedReachScore(igPlayOnly)).toBe(1215);
+    expect(isUsefulHotCandidate(igPlayOnly)).toBe(true);
+
+    const preferredTotalPlay = parseOne({ like_count: 8, comment_count: 2, play_count: 12220, ig_play_count: 2939, fb_play_count: 9281 });
+    expect(instagramMediaPlayCount({ play_count: 12220, ig_play_count: 2939, fb_play_count: 9281 })).toBe(12220);
+    expect(viewCountOfCandidate(preferredTotalPlay)).toBe(12220);
+    expect(combinedReachScore(preferredTotalPlay)).toBe(12230);
+
+    const carouselPlay = parseOne({
+      like_count: 40,
+      comment_count: 10,
+      media_type: 8,
+      carousel_media: [{ media_type: 2, play_count: 980 }],
+    });
+    expect(viewCountOfCandidate(carouselPlay)).toBe(980);
+    expect(combinedReachScore(carouselPlay)).toBe(1030);
+    expect(isUsefulHotCandidate(carouselPlay)).toBe(true);
+
+    const belowBoth = parseOne({ like_count: 23, comment_count: 0 });
+    expect(interactionHeatScore(belowBoth)).toBe(23);
+    expect(combinedReachScore(belowBoth)).toBe(23);
+    expect(isUsefulHotCandidate(belowBoth)).toBe(false);
+
+    const heat100 = parseOne({ like_count: 90, comment_count: 10 });
+    expect(interactionHeatScore(heat100)).toBe(100);
+    expect(isUsefulHotCandidate(heat100)).toBe(true);
+    const heat99 = parseOne({ like_count: 99, comment_count: 0 });
+    expect(isUsefulHotCandidate(heat99)).toBe(false);
+    expect(isUsefulHotCandidate({
+      platform: "threads",
+      hotScore: 100,
+      engagement: { likeCount: 90, commentCount: 10 },
+      metrics: {},
+    } as any)).toBe(false);
+
+    expect(viewCountOfCandidate({
+      engagement: { viewCount: 0 },
+      metrics: { view_count: 0, play_count: 1481 },
+    } as any)).toBe(1481);
+    expect(isUsefulHotCandidate({
+      platform: "instagram",
+      hotScore: 50,
+      engagement: { likeCount: 40, commentCount: 10 },
+      metrics: { play_count: 900 },
+    } as any)).toBe(false);
+    expect(isUsefulHotCandidate({
+      platform: "instagram",
+      hotScore: 50,
+      engagement: { likeCount: 40, commentCount: 10 },
+      metrics: { play_count: 960 },
+    } as any)).toBe(true);
+  });
+
+  it("keeps Instagram hotspot discovery on the cookie HTTP path only", () => {
+    const source = fs.readFileSync(path.resolve("src/lib/sentiment-hot-importer.ts"), "utf8");
+    const start = source.indexOf("async function fetchInstagramReaderSearchCandidates");
+    const end = source.indexOf("function decodeMarkdownLinkText");
+    const reader = source.slice(start, end);
+    expect(reader).toContain("fetchInstagramCookieTagHttpCandidates");
+    expect(reader).not.toContain("explore/tags");
+    expect(reader).not.toContain("explore/search/keyword");
+    expect(reader).not.toContain("fetchWithSharedPublicCrawlerLimit");
+    expect(source).toContain("instagramTagQueriesFromKeywords");
+    expect(source).toContain("INSTAGRAM_COOKIE_QUERY_BATCH_SIZE = 5");
+    expect(source).toContain("MIN_INSTAGRAM_INTERACTION_HEAT_SCORE = 100");
+    expect(source).toContain("Instagram 登录态原始");
+    expect(source).toContain("Instagram 浏览量沿用登录态字段，未再请求公开页");
+    expect(source).not.toContain("Instagram 公开页原始");
+    expect(instagramTagQueriesFromKeywords([
+      "非居貸款", "日本融資", "家族傳承", "麻布一戶建", "日幣配置", "頂級物件", "資產避險", "灣景塔廈", "跨境理財", "海外置產",
+    ])).toEqual([
+      "非居貸款", "日本融資", "家族傳承", "麻布一戶建", "日幣配置", "頂級物件", "資產避險", "灣景塔廈", "跨境理財", "海外置產",
+    ]);
+  });
+
   it("does not synthesize Instagram freshness when the original timestamp is missing", () => {
     const candidates = parseInstagramAuthenticatedSearchPayload({
       query: "\u53f0\u5317\u7f8e\u98df",
@@ -3088,20 +3300,26 @@ Title: Instagram
     expect(source).toContain("primaryQueries");
     expect(source).toContain("rejectTerms");
     expect(source).toContain("domainSummary");
-    expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个");
+    expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，lifestyleQueries 正好 10 个");
     expect(source).toContain("domainExpansion");
-    expect(source).toContain("合计必须给出 20 个互不重复");
+    expect(source).toContain("lifestyleQueries");
+    expect(source).toContain("合计必须给出 30 个互不重复");
     expect(source).toContain("2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主");
     expect(source).toContain("禁止输出带这些后缀或整词的合成搜索词");
     expect(source).toContain("存股、融資、配息、當沖、槓桿、信用交易");
     expect(source).toContain("禁止单独输出空词");
     expect(source).toContain("生活状态词（慢生活、退休生活、健康生活、家务、居家清洁）");
-    expect(source).toContain("maxOutputTokens: 1400");
+    expect(source).toContain("maxOutputTokens: 1800");
     expect(source).toContain("const SENTIMENT_MODEL_KEYWORD_TARGET = 24");
     expect(source).toContain("人设名称只是对外称呼");
     expect(source).not.toContain("primaryQueries 恰好 12 个");
     expect(source).not.toContain("maxOutputTokens: 360");
+    expect(source).not.toContain("maxOutputTokens: 1400");
     expect(source).not.toContain("茶具攻略、收纳教程、贷款分享");
+    expect(source).not.toContain("expandNormalLifestyleSearchTerms");
+    expect(source).not.toContain('["通勤", "停车", "洗车", "年检"]');
+    expect(source).not.toContain('["约会妆", "换季", "赶时间"]');
+    expect(source).toContain("const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 51");
   });
 
   it("indexes and reads the global hotspot pool by platform", () => {
@@ -3125,6 +3343,13 @@ Title: Instagram
     for (const target of [missing, threads, instagram, mixed]) {
       expect(Number(target.threads) + Number(target.instagram)).toBe(1);
     }
+  });
+
+  it("starts Instagram-only live search even when refill platforms are serial", () => {
+    const source = fs.readFileSync(path.resolve("src/lib/sentiment-hot-importer.ts"), "utf8");
+    expect(source).toContain("(!SENTIMENT_HOT_READER_SERIAL_PLATFORMS || !fetchThreadsLive)");
+    expect(source).toContain("const instagramStageTimeoutMs = (): number => Math.min(");
+    expect(source).toContain("fetchThreadsLive\n      ? INSTAGRAM_READER_STAGE_TIMEOUT_MS");
   });
 
   it("does not force a platform contribution from low-heat candidates", () => {
@@ -3357,7 +3582,7 @@ Demo post body
       repost_count: 0,
       send_count: 0,
     });
-    expect(refreshed.hotScore).toBe(250);
+    expect(refreshed.hotScore).toBe(366);
   });
 
   it("keeps only top-level media files from Threads detail markdown", () => {
@@ -4242,7 +4467,21 @@ Thread
     expect(parseThreadsPostViewCountFromHtml(`
       ["BarcelonaLoggedOutExpansionGating",[],{"enable_view_counts":false,"view_counts":175},7623]
     `)).toBe(175);
+    expect(parseThreadsPostViewCountFromHtml(`
+      {"text_post_app_info":{"direct_reply_count":4,"view_count":186000}}
+    `)).toBe(186000);
     expect(parseThreadsPostViewCountFromHtml("<html>no target view count</html>")).toBeUndefined();
+  });
+
+  it("parses Instagram public post play counts from permalink HTML", () => {
+    expect(parseInstagramPostEngagementFromHtml(`
+      {"like_count":210,"comment_count":12,"play_count":8600,"video_view_count":8600}
+    `)).toMatchObject({
+      likeCount: 210,
+      commentCount: 12,
+      viewCount: 8600,
+    });
+    expect(parseInstagramPostEngagementFromHtml("<html>no play count</html>")).toEqual({});
   });
 
   it("verifies the authenticated Threads viewer instead of trusting cookie presence", () => {

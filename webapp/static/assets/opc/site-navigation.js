@@ -62,7 +62,8 @@
       scenarios: "应用场景",
       pricing: "订阅方案",
       difference: "服务差异",
-      console: "控制台",
+      console: "推文工作台",
+      video: "视频工作台",
       crm: "采集工作台",
       adminConsole: "运营后台",
       aboutVecto: "了解 Vecto",
@@ -97,7 +98,7 @@
       personalProfile: "个人信息",
       taskQueue: "任务队列",
       settings: "设置",
-      workspaceActions: "控制台快捷操作",
+      workspaceActions: "快捷操作",
       close: "关闭",
       billingPoints: "算力余额",
       billingSubscription: "当前订阅",
@@ -164,7 +165,8 @@
       scenarios: "應用場景",
       pricing: "訂閱方案",
       difference: "服務差異",
-      console: "控制台",
+      console: "推文工作台",
+      video: "視頻工作台",
       crm: "採集工作台",
       adminConsole: "營運後台",
       aboutVecto: "了解 Vecto",
@@ -199,7 +201,7 @@
       personalProfile: "個人資訊",
       taskQueue: "任務佇列",
       settings: "設定",
-      workspaceActions: "控制台快速操作",
+      workspaceActions: "快捷操作",
       close: "關閉",
       billingPoints: "算力餘額",
       billingSubscription: "目前訂閱",
@@ -344,6 +346,7 @@
       "/subscription.html",
       "/pricing.html",
       "/crm.html",
+      "/video.html",
     ].includes(url.pathname);
     if (workspaceUserId && preservesWorkspace) {
       url.searchParams.set("admin_workspace_user_id", workspaceUserId);
@@ -373,7 +376,7 @@
 
   function publicPagePreservesAdminWorkspace() {
     const page = document.querySelector("[data-site-header]")?.dataset.sitePage || "";
-    return ["home", "aboutVecto", "pricing", "crm"].includes(page)
+    return ["home", "aboutVecto", "pricing", "crm", "video"].includes(page)
       || (window.location.pathname === "/admin-profile.html" && Boolean(storedAdminWorkspaceUserId()));
   }
 
@@ -420,6 +423,26 @@
     });
   }
 
+  function syncVideoEntryTargets() {
+    const adminSessionMeta = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
+    const adminContext = adminSessionMeta || currentSessionMode === "admin" || hasAdminConsoleContext();
+    const workspaceUserId = adminContext ? storedAdminWorkspaceUserId() : "";
+    const params = new URLSearchParams();
+    if (workspaceUserId) params.set("manage_user_id", workspaceUserId);
+    const path = adminContext ? "/admin-video.html" : "/video.html";
+    const target = `${path}${params.size ? `?${params}` : ""}`;
+    document.querySelectorAll("[data-video-entry]").forEach((link) => {
+      link.setAttribute("href", target);
+      if (link.dataset.siteVideoBoundaryReady === "true") return;
+      link.dataset.siteVideoBoundaryReady = "true";
+      link.addEventListener("click", () => {
+        if (!adminContext) return;
+        markAdminConsoleContext();
+        if (workspaceUserId) writeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY, workspaceUserId);
+      });
+    });
+  }
+
   async function syncCrmEntryVisibility() {
     const entries = [...document.querySelectorAll("[data-crm-entry]")];
     if (!entries.length) return;
@@ -445,7 +468,11 @@
     if (entry.dataset.siteAdminReady !== "true") {
       entry.dataset.siteAdminReady = "true";
       entry.addEventListener("click", () => {
-        if (document.body.classList.contains("console-page")) return;
+        const page = document.querySelector("[data-site-header]")?.dataset.sitePage || "";
+        const isolated = isolatedWorkspacePage(page)
+          || document.body.classList.contains("video-page")
+          || document.body.classList.contains("crm-page");
+        if (document.body.classList.contains("console-page") && !isolated) return;
         removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
         markAdminConsoleContext();
         window.location.assign("/admin.html");
@@ -508,37 +535,58 @@
 
   function navLink({ key, href, current, className = "" }) {
     const busy = key === "console" ? " data-console-entry" : "";
+    const videoEntry = key === "video" ? " data-video-entry" : "";
     const crmEntry = key === "crm" ? " data-crm-entry" : "";
     const register = key === "guest" ? " data-open-register" : "";
     const active = current === key ? ' aria-current="page"' : "";
     const classAttribute = className ? ` class="${className}"` : "";
-    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}${crmEntry}${register}><span data-site-copy="${key}"></span></a>`;
+    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}${videoEntry}${crmEntry}${register}><span data-site-copy="${key}"></span></a>`;
+  }
+
+  function publicPageKeepsTweetWorkbench(page) {
+    return ["", "home", "aboutVecto", "pricing", "console", "console-login"].includes(String(page || ""));
+  }
+
+  function isolatedWorkspacePage(page) {
+    return ["video", "crm", "video-login", "crm-login"].includes(String(page || ""));
   }
 
   function navigationLinks(page, current) {
-    return [
+    if (isolatedWorkspacePage(page)) return "";
+    const links = [
       navLink({ key: "solution", href: navHref(page, "#solution"), current }),
-      navLink({ key: "console", href: "/console.html", current }),
-      navLink({ key: "crm", href: "/crm.html", current }),
-      navLink({ key: "aboutVecto", href: "/about-vecto.html", current }),
-    ].join("");
+    ];
+    if (publicPageKeepsTweetWorkbench(page)) {
+      links.push(navLink({ key: "console", href: "/console.html", current }));
+    }
+    links.push(navLink({ key: "aboutVecto", href: "/about-vecto.html", current }));
+    return links.join("");
   }
 
-  function installCrmDesktopEntry(header, current) {
-    const nav = header?.querySelector(":scope > .site-nav");
-    if (!nav) return null;
-    let entry = nav.querySelector('[data-site-nav-key="crm"]');
-    if (!entry) {
-      const template = document.createElement("template");
-      template.innerHTML = navLink({ key: "crm", href: "/crm.html", current }).trim();
-      entry = template.content.firstElementChild;
-      const consoleEntry = nav.querySelector('[data-site-nav-key="console"]');
-      if (consoleEntry) consoleEntry.after(entry);
-      else nav.appendChild(entry);
+  function stripPublicWorkspaceSwitcher(header) {
+    if (!header) return;
+    header.querySelectorAll(':scope > .site-nav [data-site-nav-key="video"], :scope > .site-nav [data-site-nav-key="crm"]').forEach((node) => node.remove());
+    header.querySelectorAll(".site-mobile-menu-panel a[data-site-nav-key=\"video\"], .site-mobile-menu-panel a[data-site-nav-key=\"crm\"], .site-mobile-menu-panel a[data-video-entry], .site-mobile-menu-panel a[data-crm-entry]").forEach((node) => node.remove());
+    if (isolatedWorkspacePage(header.dataset.sitePage || "")) {
+      header.querySelectorAll(':scope > .site-nav [data-site-nav-key="solution"], :scope > .site-nav [data-site-nav-key="aboutVecto"]').forEach((node) => node.remove());
+      header.querySelectorAll(".site-mobile-menu-panel a[data-site-nav-key=\"solution\"], .site-mobile-menu-panel a[data-site-nav-key=\"aboutVecto\"]").forEach((node) => node.remove());
+      header.querySelectorAll(':scope > .site-nav').forEach((node) => {
+        if (!node.querySelector("[data-site-nav-key]")) node.remove();
+      });
     }
-    if (current === "crm") entry.setAttribute("aria-current", "page");
-    else entry.removeAttribute("aria-current");
-    return entry;
+    if (publicPageKeepsTweetWorkbench(header.dataset.sitePage || "")) return;
+    header.querySelectorAll(':scope > .site-nav [data-site-nav-key="console"]').forEach((node) => node.remove());
+    header.querySelectorAll(".site-mobile-menu-panel a[data-site-nav-key=\"console\"], .site-mobile-menu-panel a[data-console-entry]").forEach((node) => node.remove());
+  }
+
+  function installCrmDesktopEntry(header, _current) {
+    stripPublicWorkspaceSwitcher(header);
+    return null;
+  }
+
+  function installVideoDesktopEntry(header, _current) {
+    stripPublicWorkspaceSwitcher(header);
+    return null;
   }
 
   function languageIcon() {
@@ -606,6 +654,7 @@
       solution: '<path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="m18.5 16 .7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"></path>',
       pricing: '<rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16M8 14h3"></path><path d="m16 12 .7 1.4 1.6.2-1.2 1.1.3 1.6-1.4-.8-1.4.8.3-1.6-1.2-1.1 1.6-.2z"></path>',
       console: '<rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><path d="M15 17h5M17.5 14.5v5"></path>',
+      video: '<path d="M4 5h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path><path d="m17 10 5-3v10l-5-3z"></path>',
       crm: '<path d="M5 4h14v16H5z"></path><path d="M8 8h8M8 12h5M8 16h3"></path><circle cx="17" cy="16" r="2.5"></circle>',
       aboutVecto: '<circle cx="12" cy="12" r="8"></circle><path d="M12 10v5M12 7h.01"></path>',
     };
@@ -647,7 +696,7 @@
   }
 
   function accountMenuMarkup(page = "console") {
-    const workspaceActions = `<div class="site-account-action-row site-account-workspace-actions" aria-label="控制台快捷操作" data-site-workspace-actions>
+    const workspaceActions = `<div class="site-account-action-row site-account-workspace-actions" aria-label="快捷操作" data-site-workspace-actions>
           <button type="button" data-site-open-console-view="tasks" data-site-copy="taskQueue">任务队列</button>
           <button type="button" data-site-open-console-view="console_settings" data-site-copy="personalSettings">个人设置</button>
         </div>`;
@@ -711,20 +760,24 @@
   }
 
   function mobileNavigationLinks(page, current) {
-    return [
+    if (isolatedWorkspacePage(page)) return "";
+    const items = [
       { group: "mobileExplore", key: "solution", href: navHref(page, "#solution") },
       { group: "mobileExplore", key: "aboutVecto", href: "/about-vecto.html" },
       { group: "mobileServices", key: "pricing", href: "/subscription.html" },
-      { group: "mobileWorkspace", key: "console", href: "/console.html" },
-      { group: "mobileWorkspace", key: "crm", href: "/crm.html" },
-    ].map(({ group, key, href }, index, items) => {
+    ];
+    if (publicPageKeepsTweetWorkbench(page)) {
+      items.push({ group: "mobileWorkspace", key: "console", href: "/console.html" });
+    }
+    return items.map(({ group, key, href }, index, items) => {
       const active = current === key ? ' aria-current="page"' : "";
       const consoleEntry = key === "console" ? " data-console-entry" : "";
+      const videoEntry = key === "video" ? " data-video-entry" : "";
       const crmEntry = key === "crm" ? " data-crm-entry" : "";
       const groupLabel = index === 0 || items[index - 1].group !== group
         ? `<span class="site-mobile-menu-group-label" data-site-copy="${group}"></span>`
         : "";
-      return `${groupLabel}<a class="site-mobile-menu-link" data-site-nav-key="${key}" href="${href}"${active}${consoleEntry}${crmEntry}><span class="site-mobile-menu-link-icon">${mobileMenuItemIcon(key)}</span><span data-site-copy="${key}"></span></a>`;
+      return `${groupLabel}<a class="site-mobile-menu-link" data-site-nav-key="${key}" href="${href}"${active}${consoleEntry}${videoEntry}${crmEntry}><span class="site-mobile-menu-link-icon">${mobileMenuItemIcon(key)}</span><span data-site-copy="${key}"></span></a>`;
     }).join("");
   }
 
@@ -771,12 +824,14 @@
   }
 
   function fallbackMarkup(page, mode, current) {
+    const nav = isolatedWorkspacePage(page) ? "" : `<nav class="site-nav" data-site-navigation>${navigationLinks(page, current)}</nav>`;
+    const mobile = isolatedWorkspacePage(page) ? "" : renderMobileMenu(page, current);
     return `
-      <div class="site-header-branding">${renderMobileMenu(page, current)}<a class="brand" href="/" data-site-home-label>
+      <div class="site-header-branding">${mobile}<a class="brand" href="/" data-site-home-label>
         <span class="brand-logo-frame" aria-hidden="true"><img class="brand-logo" src="/assets/opc/vecto-logo-ui-icon.png?v=20260711" alt="" width="1024" height="1024" /></span>
         <span class="brand-text"><span class="brand-name">Vecto</span><span class="brand-local" data-site-copy="brandLocal"></span></span>
       </a></div>
-      <nav class="site-nav" data-site-navigation>${navigationLinks(page, current)}</nav>
+      ${nav}
       <div class="header-actions">${renderActions(mode, page, current)}</div>`;
   }
 
@@ -1152,6 +1207,7 @@
     renderAccountBilling();
     syncConsoleEntryTargets();
     syncCrmEntryTargets();
+    syncVideoEntryTargets();
     syncPublicAdminEntry();
   }
 
@@ -2224,15 +2280,20 @@
     const page = header.dataset.sitePage || "home";
     const mode = header.dataset.siteMode || "public";
     const resolvedMode = mode === "public" ? page : mode;
-    const current = ["pricing", "console", "crm", "aboutVecto"].includes(page) ? page : "";
+    const current = ["pricing", "console", "video", "crm", "aboutVecto"].includes(page) ? page : "";
 
     if (mode === "public" && !header.dataset.siteAuthState) header.dataset.siteAuthState = "pending";
 
     if (!header.querySelector(".brand")) {
       header.innerHTML = fallbackMarkup(page, resolvedMode, current);
     }
+    installVideoDesktopEntry(header, current);
     installCrmDesktopEntry(header, current);
-    installMobileMenu(header, page, current);
+    if (isolatedWorkspacePage(page)) {
+      header.querySelectorAll("[data-site-mobile-menu]").forEach((node) => node.remove());
+    } else {
+      installMobileMenu(header, page, current);
+    }
     installLanguageControls(header);
     if (mode === "authenticated") {
       installUnifiedAccountMenu(header, page);
@@ -2353,6 +2414,21 @@
   window.addEventListener("vecto:notifications-updated", () => void loadNotifications({ force: true, announce: false }));
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") void loadNotifications({ force: true });
+  });
+
+  document.addEventListener("click", (event) => {
+    const trigger = event.target.closest("[data-open-login]");
+    if (!trigger || document.querySelector("#loginModal")) return;
+    event.preventDefault();
+    const page = document.querySelector("[data-site-header]")?.dataset.sitePage || "";
+    const loginByPage = {
+      console: "/console-login.html",
+      video: "/video-login.html",
+      crm: "/crm-login.html",
+    };
+    const fallback = loginByPage[page] || "/console-login.html";
+    const redirect = String(document.body.dataset.loginRedirect || fallback.replace("-login.html", ".html"));
+    window.location.assign(`${fallback}?return_url=${encodeURIComponent(redirect)}`);
   });
 
   syncAdminWorkspaceContext();

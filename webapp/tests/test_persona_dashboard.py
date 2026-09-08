@@ -1574,6 +1574,27 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(messages, ["热点来源抓取超时，本次未获得候选，请稍后重试。"])
         self.assertNotIn("暂未找到", " ".join(messages))
 
+    def test_hot_warning_distinguishes_no_source_from_below_threshold(self):
+        no_source = server._persona_hot_user_warnings(
+            ["Instagram 这次没有搜索到帖，还没有进入热度筛选。"],
+            0,
+            10,
+            [],
+            empty_reason="no_source",
+            platform="instagram",
+        )
+        below = server._persona_hot_user_warnings(
+            ["Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 100。"],
+            0,
+            10,
+            [],
+            empty_reason="below_threshold",
+            platform="instagram",
+        )
+        self.assertEqual(no_source, ["Instagram 这次没有搜索到帖，还没有进入热度筛选。"])
+        self.assertEqual(below, ["Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 100。"])
+        self.assertNotIn("暂未找到", " ".join(no_source + below))
+
     def test_public_persona_profile_persists_avatar_crop_without_replacing_reference(self):
         self._write_archives()
         resp = self.client.patch(
@@ -1898,6 +1919,47 @@ class PersonaDashboardApiTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PERSONA_DASHBOARD_REFRESH_SOURCE": "http_first"}):
             self.assertEqual(server._persona_dashboard_monitor_source(), "http_first")
 
+    def test_public_refresh_maps_browser_source_to_http_first(self):
+        self._write_archives()
+        with mock.patch.object(
+            server,
+            "_start_persona_dashboard_refresh",
+            return_value={"id": "pdr_all", "status": "queued", "message": "queued"},
+        ) as start:
+            response = self.client.post(
+                "/api/persona_dashboard/refresh",
+                json={"archive_id": "", "source": "browser"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(start.call_args.kwargs["source"], "http_first")
+
+    def test_background_refresh_maps_browser_source_to_http_first(self):
+        with mock.patch.dict(os.environ, {"PERSONA_DASHBOARD_REFRESH_SOURCE": "browser"}):
+            self.assertEqual(server._persona_dashboard_monitor_source(), "http_first")
+
+    def test_start_refresh_maps_browser_source_to_http_first(self):
+        class _FakeThread:
+            def __init__(self, *args, **kwargs):
+                return None
+
+            def start(self):
+                return None
+
+        self._write_archives()
+        with mock.patch.object(server.threading, "Thread", _FakeThread):
+            task = server._start_persona_dashboard_refresh(
+                "",
+                source="browser",
+                archive_ids=["persona-1"],
+                user_id=self._admin_user_id(),
+            )
+        try:
+            self.assertEqual(task["source"], "http_first")
+        finally:
+            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(str(task.get("id") or ""), None)
+
     def test_http_first_refresh_does_not_prelaunch_cookie_browser(self):
         script = (server.ROOT_DIR / "tool_r18" / "scripts" / "skills" / "persona-dashboard-refresh.ts").read_text(encoding="utf-8")
         worker = inspect.getsource(server._persona_dashboard_refresh_worker_v2)
@@ -1906,7 +1968,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn('PERSONA_DASHBOARD_REFRESH_SOURCE || "http_first"', script)
         self.assertIn('const useHttpFirst = source === "http_first";', script)
         self.assertIn("const threadsBrowserNotNeeded = useRssHub || useHttpFirst || !hasBrowserThreadsTargets;", script)
-        self.assertIn('refresh_source in {"browser", "rsshub"}', worker)
+        self.assertIn('needs_browser_lease = refresh_source == "rsshub"', worker)
+        self.assertNotIn('refresh_source in {"browser", "rsshub"}', worker)
         self.assertNotIn('"http_first", "browser", "rsshub"', worker)
         self.assertIn('env["TG_THREADS_PROFILE_HTTP_ONLY"] = "1"', worker)
         self.assertIn("first: 50", importer)
@@ -1943,6 +2006,35 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(task_id, None)
         acquire_lease.assert_not_called()
         release_lease.assert_not_called()
+
+    def test_legacy_browser_source_dashboard_refresh_does_not_lease_browser(self):
+        task_id = "pdr_browser_no_lease"
+        process = mock.Mock()
+        process.poll.return_value = 0
+        process.returncode = 0
+        process.wait.return_value = 0
+        with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+            server.PERSONA_DASHBOARD_REFRESH_TASKS[task_id] = {
+                "id": task_id,
+                "status": "queued",
+                "user_id": self._admin_user_id(),
+            }
+        try:
+            with mock.patch.object(server, "acquire_external_browser_lease") as acquire_lease, \
+                 mock.patch.object(server, "release_external_browser_lease") as release_lease, \
+                 mock.patch.object(server.subprocess, "Popen", return_value=process) as popen:
+                server._persona_dashboard_refresh_worker_v2(
+                    task_id,
+                    archive_id="persona-1",
+                    source="browser",
+                )
+        finally:
+            with server.PERSONA_DASHBOARD_REFRESH_LOCK:
+                server.PERSONA_DASHBOARD_REFRESH_TASKS.pop(task_id, None)
+        acquire_lease.assert_not_called()
+        release_lease.assert_not_called()
+        self.assertIn("--source=http_first", popen.call_args[0][0])
+        self.assertNotIn("--source=browser", popen.call_args[0][0])
 
     def test_dashboard_refresh_resolves_bound_proxy_credentials_before_node_fetch(self):
         self._write_archives()
@@ -4826,7 +4918,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "cancelled": True})
-        cancel.assert_called_once_with("persona-1")
+        self.assertEqual(cancel.call_count, 2)
+        cancel.assert_any_call("persona-1")
+        cancel.assert_any_call("persona-1", "persona.hot_keywords.v1")
 
     def test_hot_candidate_task_endpoint_returns_before_worker_finishes(self):
         self._write_archives()
@@ -5116,8 +5210,13 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("if (!keywords.length)", fetch_source)
         self.assertIn("platform: personaContentPlatform(persona)", fetch_source)
         self.assertIn("搜索词已就绪，正在抓取帖子", fetch_source)
+        self.assertIn("personaHotQueueHint", fetch_source)
+        self.assertIn("queue_message", fetch_source)
+        self.assertIn("if (Number(error?.status || 0) === 499) throw error;", fetch_source)
         self.assertIn("首次生成搜索词", source)
         self.assertIn("第一次会现场生成，大约 10–20 秒", source)
+        self.assertIn("不想等可随时取消", source)
+        self.assertIn("排队中 前面还有", source)
 
     def test_console_hot_cancel_updates_ui_before_waiting_for_backend(self):
         source = (Path(server.__file__).parent / "static" / "assets" / "console.js").read_text(encoding="utf-8")
@@ -5134,6 +5233,27 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertLess(render_at, await_at)
         self.assertIn('status: "idle"', cancel_source)
         self.assertIn('message: "热点抓取已取消"', cancel_source)
+        self.assertIn("personaHotKeywordControllers", cancel_source)
+        self.assertIn('setActionLocked(["persona", persona.id, "hot_keywords"], false)', cancel_source)
+
+    def test_hot_task_progress_uses_worker_queue_message(self):
+        progress = server._persona_hot_progress_from_remote_job({
+            "status": "queued",
+            "queue": {
+                "phase": "queued",
+                "queue_ahead": 3,
+                "estimated_wait_seconds": 100,
+                "message": "前面还有 3 人排队，大约还要等 2 分钟。不想等可随时取消。",
+            },
+        })
+        self.assertEqual(progress["phase"], "queued")
+        self.assertEqual(progress["queue_ahead"], 3)
+        self.assertTrue(progress["cancelable"])
+        self.assertIn("前面还有 3 人", progress["queue_message"])
+
+        fetching = server._persona_hot_progress_from_remote_job({"status": "running"})
+        self.assertEqual(fetching["phase"], "fetching")
+        self.assertIn("正在抓取公开帖", fetching["queue_message"])
 
     def test_fetch_persona_hot_candidates_calls_hot_workflow_cli(self):
         self._write_archives()
@@ -5210,6 +5330,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["searchMode"], "strict")
         self.assertEqual(payload["freshnessDays"], 30)
         self.assertEqual(payload["keywords"], ["history", "teacher"])
+        self.assertEqual(payload["allKeywords"], ["history", "teacher"])
         self.assertEqual(payload["platform"], "threads")
         self.assertNotIn("memorySummaries", payload)
         self.assertIs(payload["userInitiated"], True)
@@ -5262,18 +5383,22 @@ class PersonaDashboardApiTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("人设名称只是对外称呼", importer)
         self.assertIn("禁止把俚语化名称理解成色情、擦边或开车含义", importer)
-        self.assertIn("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个", importer)
+        self.assertIn("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，lifestyleQueries 正好 10 个", importer)
         self.assertIn("domainExpansion", importer)
-        self.assertIn("合计必须给出 20 个互不重复", importer)
+        self.assertIn("lifestyleQueries", importer)
+        self.assertIn("合计必须给出 30 个互不重复", importer)
         self.assertIn("2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主", importer)
         self.assertIn("禁止输出带这些后缀或整词的合成搜索词", importer)
         self.assertIn("存股、融資、配息、當沖、槓桿、信用交易", importer)
         self.assertIn("domainSummary", importer)
-        self.assertIn("maxOutputTokens: 1400", importer)
+        self.assertIn("maxOutputTokens: 1800", importer)
         self.assertIn("人设名称只是对外称呼", importer)
         self.assertNotIn("primaryQueries 恰好 12 个", importer)
         self.assertNotIn("maxOutputTokens: 360", importer)
+        self.assertNotIn("maxOutputTokens: 1400", importer)
         self.assertNotIn("茶具攻略、收纳教程、贷款分享", importer)
+        self.assertNotIn("expandNormalLifestyleSearchTerms", importer)
+        self.assertNotIn('["通勤", "停车", "洗车", "年检"]', importer)
 
     def test_hot_live_fetch_targets_never_enable_both_platforms(self):
         importer = (
@@ -5288,6 +5413,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("const liveFetchTargets = resolveHotLiveFetchTargets(requestedPlatform);", importer)
         self.assertIn("const fetchThreadsLive = liveFetchTargets.threads;", importer)
         self.assertIn("const fetchInstagramLive = liveFetchTargets.instagram;", importer)
+        self.assertIn("(!SENTIMENT_HOT_READER_SERIAL_PLATFORMS || !fetchThreadsLive)", importer)
+        self.assertIn("const instagramStageTimeoutMs = (): number => Math.min(", importer)
         self.assertIn("proxy_${viaProxy.status || \"empty\"}_direct_fallback", importer)
         self.assertIn("platform: String(input.platform || \"\").trim() || undefined", workflow)
 
@@ -5377,8 +5504,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("只输出最终正文", captured["system"])
         self.assertIn("热点原文约", captured["user"])
         self.assertIn("不得少于", captured["user"])
-        self.assertIn("超过原文字数允许", captured["user"])
-        self.assertIn("发布字数上限压缩", captured["user"])
+        self.assertIn("不得超过 500 字", captured["user"])
+        self.assertNotIn("发布字数上限压缩", captured["user"])
         self.assertEqual(captured["temperature"], 0.55)
         self.assertGreaterEqual(captured["max_output_tokens"], 2048)
 
@@ -5419,8 +5546,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["label"], "热点按提示改写")
 
     def test_hot_rewrite_length_bounds_allow_five_percent_shorter_without_an_upper_limit(self):
-        self.assertEqual(server._persona_hot_rewrite_length_bounds(100), (95, None))
-        self.assertEqual(server._persona_hot_rewrite_length_bounds(500), (475, None))
+        self.assertEqual(server._persona_hot_rewrite_length_bounds(100, "threads"), (95, 500))
+        self.assertEqual(server._persona_hot_rewrite_length_bounds(500, "threads"), (475, 500))
+        self.assertEqual(server._persona_hot_rewrite_length_bounds(761, "threads", "x" * 761), (425, 500))
+        self.assertEqual(server._persona_hot_rewrite_length_bounds(100, "instagram"), (95, 2200))
         self.assertEqual(server._persona_hot_rewrite_char_count("改 写 后 正文"), 5)
 
     def test_hot_rewrite_retries_when_result_is_too_similar(self):
@@ -5508,7 +5637,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(body["rewritten_length"], 95)
         self.assertEqual(body["min_length"], 95)
-        self.assertIsNone(body["max_length"])
+        self.assertEqual(body["max_length"], 500)
 
     def test_hot_rewrite_accepts_overlong_result_without_retry(self):
         self._write_archives()
@@ -5533,7 +5662,34 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(body["rewritten_length"], source_length + 30)
         self.assertEqual(body["min_length"], source_length - max(1, int(round(source_length * 0.05))))
-        self.assertIsNone(body["max_length"])
+        self.assertEqual(body["max_length"], 500)
+
+    def test_hot_rewrite_retries_when_result_exceeds_platform_limit(self):
+        self._write_archives()
+        calls = []
+        source = self._hot_rewrite_text_of_length(761)
+
+        def fake_llm(**kwargs):
+            calls.append(kwargs.get("user_input") or "")
+            seed = "先說結論。雨勢一大，就別急著催油門，以維修老師的經驗來看。"
+            if len(calls) == 1:
+                return {"ok": True, "raw_text": self._hot_rewrite_text_of_length(600, seed=seed)}, {}, []
+            return {"ok": True, "raw_text": self._hot_rewrite_text_of_length(480, seed=seed)}, {}, []
+
+        with mock.patch.object(server, "_request_llm_text_with_fallback", side_effect=fake_llm):
+            body = server._rewrite_persona_hot_candidate_content(
+                "persona-1",
+                server.PersonaDashboardHotRewritePayload(
+                    source_content=source,
+                    writing_locale="zh-TW",
+                    platform="threads",
+                ),
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("超过平台上限", calls[1])
+        self.assertEqual(body["max_length"], 500)
+        self.assertLessEqual(len(body["content"]), 500)
 
     def test_hot_rewrite_retries_when_length_drifts_too_far(self):
         self._write_archives()
@@ -5787,9 +5943,39 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["action"], "fetch-hot-candidates")
         self.assertEqual(payload["archiveId"], "persona-1")
         self.assertEqual(payload["keywords"], ["历史老师", "历史课堂"])
+        self.assertEqual(payload["allKeywords"], ["历史老师", "历史课堂"])
         self.assertEqual(payload["keywordStrategyVersion"], server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION)
         self.assertRegex(payload["keywordDigest"], r"^[0-9a-f]{64}$")
         self.assertEqual(payload["archiveSnapshot"]["id"], "persona-1")
+
+    def test_fetch_persona_hot_candidates_sends_full_keyword_table_for_relevance(self):
+        self._write_archives()
+        fetched = {
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": ["海外置產", "白金台"],
+            "searchMode": "strict",
+            "warnings": [],
+            "candidates": [],
+        }
+
+        with (
+            mock.patch.object(server, "configured_remote_fetch_mode", return_value="remote_required"),
+            mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fetched) as mocked,
+        ):
+            body = server._fetch_persona_hot_candidates(
+                "persona-1",
+                server.PersonaDashboardHotCandidatesFetchPayload(
+                    keywords=["海外置產", "白金台"],
+                    all_keywords=["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"],
+                    search_mode="strict",
+                ),
+            )
+
+        self.assertTrue(body["ok"])
+        payload = mocked.call_args.args[0]
+        self.assertEqual(payload["keywords"], ["海外置產", "白金台"])
+        self.assertEqual(payload["allKeywords"], ["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"])
 
     def test_hot_keyword_gateway_html_error_is_not_exposed(self):
         detail = server._normalize_persona_hot_workflow_error_detail(

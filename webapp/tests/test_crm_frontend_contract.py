@@ -9,9 +9,13 @@ NAVIGATION_CSS = (ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigati
 
 def test_crm_shell_is_native_and_uses_shared_navigation():
     shell = (ROOT / "webapp" / "static" / "crm.html").read_text(encoding="utf-8")
+    header = shell.split("<header", 1)[1].split("</header>", 1)[0]
     assert 'data-site-page="crm"' in shell
     assert 'data-site-mode="public"' in shell
     assert 'data-site-auth-state="pending"' in shell
+    assert "解决方案" not in header
+    assert "了解 Vecto" not in header
+    assert 'data-site-admin-entry' in header
     assert '/assets/opc/site-navigation.js' in shell
     assert '/assets/fixed-light.css' in shell
     assert '<iframe' not in shell.lower()
@@ -20,14 +24,19 @@ def test_crm_shell_is_native_and_uses_shared_navigation():
     assert ':8091' not in shell
 
 
-def test_shared_navigation_adds_crm_immediately_after_console():
+def test_shared_navigation_does_not_merge_workspaces_into_public_bar():
     desktop = NAVIGATION.index('navLink({ key: "console", href: "/console.html", current })')
-    crm = NAVIGATION.index('navLink({ key: "crm", href: "/crm.html", current })', desktop)
-    about = NAVIGATION.index('navLink({ key: "aboutVecto", href: "/about-vecto.html", current })', crm)
-    assert desktop < crm < about
+    about = NAVIGATION.index('navLink({ key: "aboutVecto", href: "/about-vecto.html", current })', desktop)
+    assert "function isolatedWorkspacePage" in NAVIGATION
+    links = NAVIGATION[NAVIGATION.index("function navigationLinks"):NAVIGATION.index("function stripPublicWorkspaceSwitcher")]
+    assert desktop < about
+    assert 'key: "video", href: "/video.html"' not in links
+    assert 'key: "crm", href: "/crm.html"' not in links
     mobile_console = NAVIGATION.index('{ group: "mobileWorkspace", key: "console", href: "/console.html" }')
-    mobile_crm = NAVIGATION.index('{ group: "mobileWorkspace", key: "crm", href: "/crm.html" }', mobile_console)
-    assert mobile_crm > mobile_console
+    mobile = NAVIGATION[NAVIGATION.index("function mobileNavigationLinks"):NAVIGATION.index("function renderMobileMenu")]
+    assert mobile_console > 0
+    assert 'key: "video", href: "/video.html"' not in mobile
+    assert 'key: "crm", href: "/crm.html"' not in mobile
 
 
 def test_crm_navigation_entry_is_always_visible_and_keeps_auth_boundary():
@@ -42,7 +51,11 @@ def test_crm_navigation_entry_is_always_visible_and_keeps_auth_boundary():
     assert 'data-site-mode="public"' in source_shell
     assert 'data-site-auth-state="pending"' in source_shell
     assert 'data-crm-entry hidden' not in source_shell
-    assert '>采集工作台</span>' in source_shell
+    assert 'data-site-nav-key="crm"' not in source_shell
+    assert 'data-site-nav-key="console"' not in source_shell
+    assert "采集工作台 · Vecto" in source_shell
+    crm_header = production_shell.split("<header", 1)[1].split("</header>", 1)[0]
+    assert "推文工作台" not in crm_header
     for control in (
         "data-site-mobile-menu",
         "data-site-subscription-entry",
@@ -79,6 +92,10 @@ def test_crm_page_and_container_use_native_authenticated_single_service_runtime(
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     entrypoint = (ROOT / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
     assert '@app.get("/crm.html"' in server
+    assert '@app.get("/crm-login.html"' in server
+    assert '@app.get("/video.html"' in server
+    assert '@app.get("/video-login.html"' in server
+    assert '@app.get("/console-login.html"' in server
     assert "effective_module_state" in server
     assert "_get_session_user_allowing_password_change" in server
     assert "install_crm(" in server
@@ -119,49 +136,20 @@ def test_crm_frontend_has_cursor_review_and_single_poll_contracts():
     assert "if (inFlight)" in helper_source
 
 
-def test_crm_admin_access_editor_requires_loading_current_permission():
-    admin_html = (ROOT / "webapp" / "static" / "admin.html").read_text(encoding="utf-8")
-    admin_js = (ROOT / "webapp" / "static" / "assets" / "admin.js").read_text(encoding="utf-8")
-    assert 'id="btnCrmUserAccessSave" type="submit" disabled' in admin_html
-    assert 'id="btnCrmUserAccessLoad"' in admin_html
-    assert "loadCrmUserAccess" in admin_js
-    assert "crmUserAccessLoadedId" in admin_js
-    assert "回收 CRM 权限" in admin_js
-
-
-def test_crm_admin_center_is_novice_friendly_and_hides_technical_payloads():
+def test_admin_console_does_not_host_crm_module_controls():
     admin_html = (ROOT / "webapp" / "static" / "admin.html").read_text(encoding="utf-8")
     admin_js = (ROOT / "webapp" / "static" / "assets" / "admin.js").read_text(encoding="utf-8")
     admin_css = (ROOT / "webapp" / "static" / "assets" / "style.css").read_text(encoding="utf-8")
-    crm_section = admin_html[
-        admin_html.index('id="secCrm"') : admin_html.index('id="secRuntime"')
-    ]
-
-    for copy in (
-        "按步骤管理客户 CRM",
-        "打开 CRM 工作台",
-        "确认服务",
-        "开通客户",
-        "导入资料",
-        "第一步：检查文件",
-        "第二步：确认导入",
-        "只显示易懂的状态，不显示技术代码",
-    ):
-        assert copy in crm_section
-
-    for technical_copy in (
-        "CRM_ENABLED",
-        "dry-run",
-        "批次 ID",
-        "crm_imports",
-        "source_sha256",
-        "code-box",
-    ):
-        assert technical_copy not in crm_section
-
-    assert 'id="crmImportBatchId" type="hidden"' in crm_section
-    assert "renderCrmImportStatus" in admin_js
-    assert "crmFriendlyError" in admin_js
-    assert "JSON.stringify(payload?.items" not in admin_js
-    assert ".page-admin #secCrm .crm-quick-guide" in admin_css
-    assert ".page-admin #secCrm .crm-import-record" in admin_css
+    router = (ROOT / "webapp" / "crm" / "router.py").read_text(encoding="utf-8")
+    assert 'href="/crm.html?admin_console=1">进入采集工作台</a>' in admin_html
+    assert 'data-page="crm"' not in admin_html
+    assert 'id="secCrm"' not in admin_html
+    assert "允许客户使用 CRM" not in admin_html
+    assert "为客户开通 CRM" not in admin_html
+    assert "loadCrmAdminModule" not in admin_js
+    assert "crmFriendlyError" not in admin_js
+    assert ".page-admin #secCrm" not in admin_css
+    assert "@router.get(\"/api/admin/modules/crm/health\")" in router
+    assert "@router.patch(\"/api/admin/modules/crm\")" not in router
+    assert "/api/admin/users/{target_user_id}/modules/crm" not in router
+    assert "/api/admin/modules/crm/import/dry-run" not in router
