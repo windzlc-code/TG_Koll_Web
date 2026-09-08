@@ -30,6 +30,15 @@
       phonePlaceholder: "填写联系电话",
       email: "邮箱",
       changePassword: "修改密码",
+      redeemCode: "兑换码",
+      redeemDialogTitle: "兑换积分",
+      redeemDialogHelp: "输入管理员提供的兑换码，核验成功后积分会立即到账。",
+      redeemCodeLabel: "兑换码",
+      redeemCodePlaceholder: "请输入兑换码",
+      confirmRedeem: "确认兑换",
+      redeeming: "正在兑换…",
+      redeemSuccess: "兑换成功",
+      redeemSuccessMessage: "已到账 {added} 点，当前共有 {balance} 点。",
       passwordDialogTitle: "通过邮箱修改密码",
       passwordDialogHelp: "验证码将发送至已验证的账号邮箱。",
       sendVerificationCode: "发送验证码",
@@ -91,6 +100,15 @@
       phonePlaceholder: "填寫聯絡電話",
       email: "電子郵件",
       changePassword: "修改密碼",
+      redeemCode: "兌換碼",
+      redeemDialogTitle: "兌換積分",
+      redeemDialogHelp: "輸入管理員提供的兌換碼，核驗成功後積分會立即到帳。",
+      redeemCodeLabel: "兌換碼",
+      redeemCodePlaceholder: "請輸入兌換碼",
+      confirmRedeem: "確認兌換",
+      redeeming: "正在兌換…",
+      redeemSuccess: "兌換成功",
+      redeemSuccessMessage: "已到帳 {added} 點，目前共有 {balance} 點。",
       passwordDialogTitle: "透過電子郵件修改密碼",
       passwordDialogHelp: "驗證碼將發送至已驗證的帳號電子郵件。",
       sendVerificationCode: "發送驗證碼",
@@ -398,6 +416,9 @@
     $("profileUsername").textContent = String(account?.username || "-");
     $("profileAccountId").textContent = account?.id ? `#${account.id}` : "-";
     $("profileAccountEmail").textContent = String(account?.email || "-").trim() || "-";
+    if ($("profileRedeemCode")) {
+      $("profileRedeemCode").hidden = isAdminSession || Boolean(account?.is_admin);
+    }
     $("profileBackLink").href = isAdminSession
       ? `/admin-console.html${returnManageUserId ? `?manage_user_id=${encodeURIComponent(returnManageUserId)}` : ""}`
       : "/console.html";
@@ -611,12 +632,77 @@
     });
   }
 
+  function openRedemptionCodeDialog() {
+    const language = currentProfileLanguage();
+    const showAuthFeedback = window.VectoSiteNavigation?.showAuthFeedback;
+    if (typeof showAuthFeedback !== "function") {
+      setStatus(profileText("profileSaveFailed", {}, language), "error");
+      return;
+    }
+    showAuthFeedback({
+      kind: "success",
+      title: profileText("redeemDialogTitle", {}, language),
+      message: profileText("redeemDialogHelp", {}, language),
+      actionText: false,
+      dialogClass: "is-form",
+      contentHtml: `<form class="site-auth-feedback-form" novalidate>
+        <label><span>${profileText("redeemCodeLabel", {}, language)}</span><input name="code" type="text" minlength="16" maxlength="128" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="${profileText("redeemCodePlaceholder", {}, language)}" required /></label>
+        <p class="site-auth-feedback-form-status" role="status" aria-live="polite"></p>
+        <button type="submit" class="site-auth-feedback-form-action is-primary" data-redemption-submit>${profileText("confirmRedeem", {}, language)}</button>
+      </form>`,
+      onOpen(modal, close) {
+        const form = modal.querySelector(".site-auth-feedback-form");
+        const input = form.elements.code;
+        const status = modal.querySelector(".site-auth-feedback-form-status");
+        const submit = modal.querySelector("[data-redemption-submit]");
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const code = String(input.value || "").trim();
+          if (!code) {
+            status.textContent = profileText("redeemCodePlaceholder", {}, language);
+            status.className = "site-auth-feedback-form-status is-error";
+            input.focus();
+            return;
+          }
+          submit.disabled = true;
+          submit.textContent = profileText("redeeming", {}, language);
+          status.textContent = "";
+          try {
+            const result = await api("/api/billing/redemption-codes/redeem", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ code }),
+            });
+            close();
+            await showAuthFeedback({
+              kind: "success",
+              title: profileText("redeemSuccess", {}, language),
+              message: profileText("redeemSuccessMessage", {
+                added: result.redeemed_points,
+                balance: result.points,
+              }, language),
+              actionText: profileText("understood", {}, language),
+            });
+          } catch (error) {
+            status.textContent = error.message || profileText("requestFailed", { status: error.status || 0 }, language);
+            status.className = "site-auth-feedback-form-status is-error";
+          } finally {
+            submit.disabled = false;
+            submit.textContent = profileText("confirmRedeem", {}, language);
+          }
+        });
+        input.focus({ preventScroll: true });
+      },
+    });
+  }
+
   $("profileAvatarButton")?.addEventListener("click", () => $("profileAvatarFile")?.click());
   $("profileAvatarFile")?.addEventListener("change", (event) => {
     readAvatarFile(event.target.files?.[0]);
     event.target.value = "";
   });
   $("profileChangePassword")?.addEventListener("click", openPasswordResetDialog);
+  $("profileRedeemCode")?.addEventListener("click", openRedemptionCodeDialog);
   $("profileTagAdd")?.addEventListener("click", addTagFromInput);
   $("profileTagInput")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
 import json
 import math
 import os
 import sqlite3
+import secrets
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -3137,6 +3139,266 @@ def set_unlimited_compute(
             int(wallet.get("cash_backed_credit_units") or 0)
         ),
         "unlimited_compute": after,
+    }
+
+
+_REDEMPTION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def _new_redemption_code() -> str:
+    body = "".join(secrets.choice(_REDEMPTION_CODE_ALPHABET) for _ in range(30))
+    return "VCTO-" + "-".join(body[index:index + 5] for index in range(0, len(body), 5))
+
+
+def _normalize_redemption_code(raw_code: Any) -> str:
+    compact = "".join(
+        character
+        for character in str(raw_code or "").strip().upper()
+        if character not in {"-", " ", "\t", "\r", "\n"}
+    )
+    if not compact.startswith("VCTO") or len(compact) != 34:
+        return ""
+    body = compact[4:]
+    if any(character not in _REDEMPTION_CODE_ALPHABET for character in body):
+        return ""
+    return compact
+
+
+def _redemption_code_digest(raw_code: Any) -> str:
+    normalized = _normalize_redemption_code(raw_code)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else ""
+
+
+def _redemption_code_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    item = dict(row)
+    hint = str(item.get("code_hint") or "")[-4:]
+    return {
+        "id": str(item.get("id") or ""),
+        "code_masked": f"VCTO-••••-••••-{hint}",
+        "points": points_from_units(int(item.get("credit_units") or 0)),
+        "credit_units": int(item.get("credit_units") or 0),
+        "status": str(item.get("status") or "active"),
+        "note": str(item.get("note") or ""),
+        "created_by": int(item.get("created_by") or 0),
+        "created_by_username": str(item.get("created_by_username") or ""),
+        "created_at": int(item.get("created_at") or 0),
+        "redeemed_by": int(item.get("redeemed_by") or 0),
+        "redeemed_by_username": str(item.get("redeemed_by_username") or ""),
+        "redeemed_at": int(item.get("redeemed_at") or 0),
+        "revoked_by": int(item.get("revoked_by") or 0),
+        "revoked_at": int(item.get("revoked_at") or 0),
+        "revoke_reason": str(item.get("revoke_reason") or ""),
+    }
+
+
+def create_redemption_codes(
+    conn: sqlite3.Connection,
+    *,
+    credit_units: int,
+    quantity: int,
+    actor_user_id: int,
+    note: str = "",
+    now: int | None = None,
+) -> list[dict[str, Any]]:
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    units = int(credit_units or 0)
+    count = int(quantity or 0)
+    if units <= 0:
+        raise BillingError("REDEMPTION_POINTS_INVALID", "兑换积分必须大于 0", 422)
+    if count < 1 or count > 100:
+        raise BillingError("REDEMPTION_QUANTITY_INVALID", "单次生成数量必须为 1 至 100", 422)
+    created: list[dict[str, Any]] = []
+    for _ in range(count):
+        for _attempt in range(8):
+            code = _new_redemption_code()
+            digest = _redemption_code_digest(code)
+            code_id = _id("redeem")
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO billing_redemption_codes(
+                      id, code_digest, code_hint, credit_units, status, created_by,
+                      note, created_at
+                    ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+                    """,
+                    (code_id, digest, _normalize_redemption_code(code)[-4:], units,
+                     int(actor_user_id), str(note or "").strip()[:200], current),
+                )
+                created.append({
+                    "id": code_id,
+                    "code": code,
+                    "code_masked": f"VCTO-••••-••••-{_normalize_redemption_code(code)[-4:]}",
+                    "points": points_from_units(units),
+                    "credit_units": units,
+                    "status": "active",
+                    "created_at": current,
+                })
+                break
+            except sqlite3.IntegrityError:
+                continue
+        else:
+            raise BillingError("REDEMPTION_CODE_GENERATION_FAILED", "兑换码生成失败，请重试", 500)
+    return created
+
+
+def list_redemption_codes(
+    conn: sqlite3.Connection,
+    *,
+    status: str = "",
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status and normalized_status not in {"active", "redeemed", "revoked"}:
+        raise BillingError("REDEMPTION_STATUS_INVALID", "兑换码状态无效", 422)
+    where = "WHERE code.status = ?" if normalized_status else ""
+    params: list[Any] = [normalized_status] if normalized_status else []
+    rows = conn.execute(
+        f"""
+        SELECT code.*,
+               creator.username AS created_by_username,
+               redeemer.username AS redeemed_by_username
+        FROM billing_redemption_codes AS code
+        LEFT JOIN users AS creator ON creator.id = code.created_by
+        LEFT JOIN users AS redeemer ON redeemer.id = code.redeemed_by
+        {where}
+        ORDER BY code.created_at DESC, code.id DESC
+        LIMIT ? OFFSET ?
+        """,
+        (*params, min(max(int(limit), 1), 500), max(int(offset), 0)),
+    ).fetchall()
+    return [_redemption_code_public(row) for row in rows]
+
+
+def redeem_redemption_code(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    raw_code: str,
+    now: int | None = None,
+) -> dict[str, Any]:
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    digest = _redemption_code_digest(raw_code)
+    row = conn.execute(
+        "SELECT * FROM billing_redemption_codes WHERE code_digest = ?",
+        (digest,),
+    ).fetchone() if digest else None
+    if row is None:
+        raise BillingError("REDEMPTION_CODE_INVALID", "兑换码无效或已失效", 409)
+    code_id = str(row["id"])
+    status = str(row["status"] or "")
+    if status == "redeemed" and int(row["redeemed_by"] or 0) == int(user_id):
+        wallet = ensure_wallet(conn, int(user_id), now=current)
+        return {
+            "code_id": code_id,
+            "redeemed_points": points_from_units(int(row["credit_units"] or 0)),
+            "points": points_from_units(int(wallet["credit_units"] or 0)),
+            "credit_units": int(wallet["credit_units"] or 0),
+            "already_redeemed": True,
+        }
+    if status != "active":
+        raise BillingError("REDEMPTION_CODE_INVALID", "兑换码无效或已失效", 409)
+    user = conn.execute(
+        "SELECT id, is_admin FROM users WHERE id = ?",
+        (int(user_id),),
+    ).fetchone()
+    if user is None:
+        raise BillingError("USER_NOT_FOUND", "账号不存在", 404)
+    if bool(int(user["is_admin"] or 0)):
+        raise BillingError("REDEMPTION_ADMIN_NOT_SUPPORTED", "管理员账号不参与积分兑换", 409)
+    updated = conn.execute(
+        """
+        UPDATE billing_redemption_codes
+        SET status = 'redeemed', redeemed_by = ?, redeemed_at = ?, version = version + 1
+        WHERE id = ? AND status = 'active'
+        """,
+        (int(user_id), current, code_id),
+    )
+    if updated.rowcount != 1:
+        raise BillingError("REDEMPTION_CODE_INVALID", "兑换码无效或已失效", 409)
+    wallet = ensure_wallet(conn, int(user_id), now=current)
+    units = int(row["credit_units"] or 0)
+    new_balance = int(wallet["credit_units"] or 0) + units
+    conn.execute(
+        "UPDATE billing_wallets SET credit_units = ?, updated_at = ? WHERE user_id = ?",
+        (new_balance, current, int(user_id)),
+    )
+    _insert_ledger(
+        conn,
+        user_id=int(user_id),
+        asset_type="credit",
+        event_type="redemption_code_redeemed",
+        amount_units=units,
+        balance_after_units=new_balance,
+        ref_type="redemption_code",
+        ref_id=code_id,
+        idempotency_key=f"redemption-code:{code_id}:redeemed",
+        meta={"code_hint": str(row["code_hint"] or "")},
+        now=current,
+    )
+    return {
+        "code_id": code_id,
+        "redeemed_points": points_from_units(units),
+        "points": points_from_units(new_balance),
+        "credit_units": new_balance,
+        "already_redeemed": False,
+    }
+
+
+def revoke_redemption_code(
+    conn: sqlite3.Connection,
+    *,
+    code_id: str,
+    actor_user_id: int,
+    reason: str = "",
+    now: int | None = None,
+) -> dict[str, Any]:
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    updated = conn.execute(
+        """
+        UPDATE billing_redemption_codes
+        SET status = 'revoked', revoked_by = ?, revoked_at = ?, revoke_reason = ?,
+            version = version + 1
+        WHERE id = ? AND status = 'active'
+        """,
+        (int(actor_user_id), current, str(reason or "").strip()[:200], str(code_id)),
+    )
+    if updated.rowcount != 1:
+        raise BillingError("REDEMPTION_CODE_NOT_ACTIVE", "兑换码不存在或已不可作废", 409)
+    row = conn.execute("SELECT * FROM billing_redemption_codes WHERE id = ?", (str(code_id),)).fetchone()
+    return _redemption_code_public(row)
+
+
+def redemption_code_health(conn: sqlite3.Connection) -> dict[str, Any]:
+    counts = {"active": 0, "redeemed": 0, "revoked": 0}
+    for row in conn.execute(
+        "SELECT status, COUNT(*) AS count FROM billing_redemption_codes GROUP BY status"
+    ).fetchall():
+        counts[str(row["status"])] = int(row["count"] or 0)
+    inconsistent = int(conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM billing_redemption_codes AS code
+        WHERE (code.status = 'redeemed' AND (code.redeemed_by <= 0 OR code.redeemed_at <= 0))
+           OR (code.status != 'redeemed' AND (code.redeemed_by > 0 OR code.redeemed_at > 0))
+           OR (code.status = 'redeemed' AND NOT EXISTS (
+                 SELECT 1 FROM billing_ledger AS ledger
+                 WHERE ledger.ref_type = 'redemption_code'
+                   AND ledger.ref_id = code.id
+                   AND ledger.event_type = 'redemption_code_redeemed'
+                   AND ledger.amount_units = code.credit_units
+               ))
+        """
+    ).fetchone()[0] or 0)
+    return {
+        "ok": inconsistent == 0,
+        "counts": counts,
+        "total": sum(counts.values()),
+        "inconsistent": inconsistent,
+        "checked_at": _now(),
     }
 
 

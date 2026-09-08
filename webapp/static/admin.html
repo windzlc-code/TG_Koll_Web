@@ -1780,6 +1780,47 @@
             <div id="billingOrderMsg" class="msg" role="status" aria-live="polite"></div>
           </section>
 
+          <section class="admin-config-card admin-billing-panel" aria-labelledby="redemptionCodesTitle">
+            <div class="admin-billing-panel-head">
+              <div>
+                <div class="admin-config-card-title" id="redemptionCodesTitle">兑换码管理</div>
+                <div class="small">按指定积分生成一次性安全兑换码；兑换后立即作废并写入积分流水。</div>
+              </div>
+              <div class="admin-billing-toolbar">
+                <select id="redemptionCodeStatus" aria-label="兑换码状态">
+                  <option value="">全部状态</option>
+                  <option value="active">可兑换</option>
+                  <option value="redeemed">已兑换</option>
+                  <option value="revoked">已作废</option>
+                </select>
+                <button id="btnCheckRedemptionCodes" class="ghost admin-compact-button" type="button">检测兑换码</button>
+                <button id="btnReloadRedemptionCodes" class="ghost admin-compact-button" type="button">刷新列表</button>
+              </div>
+            </div>
+            <form id="redemptionCodeForm" class="admin-redemption-form" novalidate>
+              <label><span>每个兑换码积分</span><input id="redemptionCodePoints" type="number" min="0.01" max="1000000" step="0.01" inputmode="decimal" required></label>
+              <label><span>生成数量</span><input id="redemptionCodeQuantity" type="number" min="1" max="100" step="1" value="1" inputmode="numeric" required></label>
+              <label class="admin-redemption-note"><span>备注（可选）</span><input id="redemptionCodeNote" type="text" maxlength="200" placeholder="例如：9 月成员奖励"></label>
+              <button id="btnCreateRedemptionCodes" class="primary admin-compact-button" type="submit">生成兑换码</button>
+            </form>
+            <div id="redemptionCodeCreated" class="admin-redemption-created" hidden>
+              <div class="admin-billing-panel-head">
+                <strong>本次生成（完整代码仅显示一次，请立即复制）</strong>
+                <button id="btnCopyRedemptionCodes" class="ghost admin-compact-button" type="button">复制全部</button>
+              </div>
+              <pre id="redemptionCodeCreatedList"></pre>
+            </div>
+            <div id="redemptionCodeHealth" class="admin-billing-active-summary" aria-live="polite">尚未检测</div>
+            <div class="table-wrap admin-billing-table-wrap">
+              <table class="table admin-billing-table admin-redemption-table">
+                <caption class="sr-only">兑换码列表</caption>
+                <thead><tr><th>兑换码</th><th>积分</th><th>状态</th><th>创建</th><th>兑换</th><th>操作</th></tr></thead>
+                <tbody id="redemptionCodeBody"><tr><td colspan="6" class="admin-billing-empty">正在读取兑换码...</td></tr></tbody>
+              </table>
+            </div>
+            <div id="redemptionCodeMsg" class="msg" role="status" aria-live="polite"></div>
+          </section>
+
           <div id="billingWorkspaceMsg" class="msg" role="status" aria-live="polite"></div>
         </div>
       </section>
