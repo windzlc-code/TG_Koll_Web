@@ -1380,6 +1380,16 @@ body.site-mobile-menu-active {
   border-color: #f2c7c7;
 }
 
+.site-auth-feedback.is-no-icon .site-auth-feedback-dialog {
+  grid-template-columns: minmax(0, 1fr) 34px;
+}
+
+.site-auth-feedback.is-redemption-success .site-auth-feedback-icon {
+  color: #16866f;
+  background: #e8f8f2;
+  border-color: #9bd8c4;
+}
+
 .site-auth-feedback-copy {
   display: grid;
   gap: 5px;
@@ -2134,7 +2144,7 @@ body.site-account-panel-active {
 }
 
 .site-account-workspace-actions {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
   margin-top: 0;
   padding: 12px;

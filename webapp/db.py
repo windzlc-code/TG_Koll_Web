@@ -400,6 +400,25 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
           created_at INTEGER NOT NULL
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_redemption_codes (
+          id TEXT PRIMARY KEY,
+          code_digest TEXT NOT NULL UNIQUE,
+          code_hint TEXT NOT NULL,
+          credit_units INTEGER NOT NULL CHECK(credit_units > 0),
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK(status IN ('active', 'redeemed', 'revoked')),
+          created_by INTEGER NOT NULL,
+          redeemed_by INTEGER NOT NULL DEFAULT 0,
+          note TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          redeemed_at INTEGER NOT NULL DEFAULT 0,
+          revoked_at INTEGER NOT NULL DEFAULT 0,
+          revoked_by INTEGER NOT NULL DEFAULT 0,
+          revoke_reason TEXT NOT NULL DEFAULT '',
+          version INTEGER NOT NULL DEFAULT 1
+        )
+        """,
     )
     for statement in statements:
         conn.execute(statement)
@@ -612,6 +631,14 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_grants_user ON billing_image_grants(user_id, available_at, expires_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_reservations_ref ON billing_reservations(ref_type, ref_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_billing_ledger_user ON billing_ledger(user_id, created_at DESC)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_redemption_codes_status "
+        "ON billing_redemption_codes(status, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_redemption_codes_redeemer "
+        "ON billing_redemption_codes(redeemed_by, redeemed_at DESC)"
+    )
 
     task_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}
     for column, definition in {
