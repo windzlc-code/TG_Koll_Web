@@ -23164,6 +23164,21 @@ function personaHotEmptyFetchMessage(platformLabel, result = {}) {
   return `${platformLabel} 这次没有搜索到可用热点。`;
 }
 
+function personaHotFailureMessage(value, fallback = "热点抓取服务暂时不可用，请稍后重试。") {
+  const detail = String(value || "").trim();
+  const lowered = detail.toLowerCase();
+  if (lowered.includes("persona hot keywords must use the current new-host strategy")) {
+    return "热点关键词配置未同步，请重新生成关键词后再试。";
+  }
+  if (/<\s*(?:!doctype|html|head|body|title)\b|\b(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable|remote fetch|worker|collector|timeout|timed out|connection|protocol error/i.test(detail)) {
+    return fallback;
+  }
+  // Errors arriving from the collector must be Chinese before they reach a
+  // toast or run-state panel. Existing Chinese guidance remains intact.
+  if (/[A-Za-z]/.test(detail) && !/[\u4e00-\u9fff]/.test(detail)) return fallback;
+  return detail || fallback;
+}
+
 async function preparePersonaHotKeywords(refresh = false) {
   const persona = selectedPersona();
   if (!persona) {
@@ -23248,14 +23263,15 @@ async function preparePersonaHotKeywords(refresh = false) {
       });
       throw error;
     }
-    const detail = String(error?.detail || error?.message || "");
+    const detail = personaHotFailureMessage(
+      error?.detail || error?.message,
+      "热点抓取准备服务暂时不可用，请稍后重试。",
+    );
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
       status: "error",
       message: "热点抓取准备失败",
-      error: /<\s*(?:!doctype|html|head|body|title)\b|\b(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable/i.test(detail)
-        ? "热点抓取准备服务暂时不可用，请稍后重试。"
-        : (detail || "热点抓取准备失败"),
+      error: detail,
     });
     throw error;
   } finally {
@@ -23387,7 +23403,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
         break;
       }
       if (status === "failed") {
-        throw { detail: current.error || "热点候选抓取失败。", status: 500 };
+        throw { detail: personaHotFailureMessage(current.error), status: 500 };
       }
       if (status === "cancelled") {
         throw { detail: "热点抓取已取消。", status: 499 };
@@ -23480,11 +23496,13 @@ async function fetchPersonaHotCandidates(refresh = false) {
       });
       return;
     }
+    const detail = personaHotFailureMessage(error?.detail || error?.message, "热点抓取失败，请稍后重试。");
+    if (error && typeof error === "object") error.detail = detail;
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
       status: "error",
       message: "热点候选抓取失败",
-      error: error.detail || error.message || "抓取失败",
+      error: detail,
     });
     throw error;
   } finally {
