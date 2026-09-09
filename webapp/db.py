@@ -405,6 +405,7 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
           id TEXT PRIMARY KEY,
           code_digest TEXT NOT NULL UNIQUE,
           code_hint TEXT NOT NULL,
+          code_ciphertext TEXT NOT NULL DEFAULT '',
           credit_units INTEGER NOT NULL CHECK(credit_units > 0),
           status TEXT NOT NULL DEFAULT 'active'
             CHECK(status IN ('active', 'redeemed', 'revoked')),
@@ -416,6 +417,8 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
           revoked_at INTEGER NOT NULL DEFAULT 0,
           revoked_by INTEGER NOT NULL DEFAULT 0,
           revoke_reason TEXT NOT NULL DEFAULT '',
+          deleted_at INTEGER NOT NULL DEFAULT 0,
+          deleted_by INTEGER NOT NULL DEFAULT 0,
           version INTEGER NOT NULL DEFAULT 1
         )
         """,
@@ -507,6 +510,19 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
         if column not in ledger_columns:
             conn.execute(
                 f"ALTER TABLE billing_ledger ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0"
+            )
+    redemption_code_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(billing_redemption_codes)").fetchall()
+    }
+    for column, definition in {
+        "code_ciphertext": "TEXT NOT NULL DEFAULT ''",
+        "deleted_at": "INTEGER NOT NULL DEFAULT 0",
+        "deleted_by": "INTEGER NOT NULL DEFAULT 0",
+    }.items():
+        if column not in redemption_code_columns:
+            conn.execute(
+                f"ALTER TABLE billing_redemption_codes ADD COLUMN {column} {definition}"
             )
     conn.execute(
         "UPDATE billing_wallets SET cash_backed_credit_units = "
@@ -638,6 +654,10 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_redemption_codes_redeemer "
         "ON billing_redemption_codes(redeemed_by, redeemed_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_redemption_codes_visible "
+        "ON billing_redemption_codes(deleted_at, created_at DESC)"
     )
 
     task_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}

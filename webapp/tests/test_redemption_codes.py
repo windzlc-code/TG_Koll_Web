@@ -183,6 +183,48 @@ class RedemptionCodeClosedLoopTests(unittest.TestCase):
         self.assertTrue(health.json()["ok"])
         self.assertEqual(health.json()["counts"]["revoked"], 1)
 
+    def test_admin_can_reveal_copy_source_and_hide_code_records_without_reuse(self):
+        codes = [self._create_code(points) for points in (11, 12, 13)]
+        first_page = self.admin.get(
+            "/api/admin/billing/redemption-codes?limit=2&offset=0"
+        )
+        self.assertEqual(first_page.status_code, 200, first_page.text)
+        self.assertEqual(first_page.json()["total"], 3)
+        self.assertEqual(len(first_page.json()["items"]), 2)
+        self.assertEqual(first_page.json()["next_offset"], 2)
+        second_page = self.admin.get(
+            "/api/admin/billing/redemption-codes?limit=2&offset=2"
+        )
+        self.assertEqual(len(second_page.json()["items"]), 1)
+        code_id = first_page.json()["items"][0]["id"]
+
+        revealed = self.admin.post(
+            f"/api/admin/billing/redemption-codes/{code_id}/reveal"
+        )
+        self.assertEqual(revealed.status_code, 200, revealed.text)
+        self.assertIn(revealed.json()["item"]["code"], codes)
+        self.assertEqual(revealed.headers.get("cache-control"), "no-store")
+
+        removed = self.admin.post(
+            f"/api/admin/billing/redemption-codes/{code_id}/delete"
+        )
+        self.assertEqual(removed.status_code, 200, removed.text)
+        after_delete = self.admin.get("/api/admin/billing/redemption-codes?limit=10")
+        self.assertEqual(after_delete.json()["total"], 2)
+        self.assertNotIn(code_id, [item["id"] for item in after_delete.json()["items"]])
+        redeem_deleted = self.customer.post(
+            "/api/billing/redemption-codes/redeem",
+            json={"code": revealed.json()["item"]["code"]},
+        )
+        self.assertEqual(redeem_deleted.status_code, 409, redeem_deleted.text)
+        with db_module.db() as conn:
+            row = conn.execute(
+                "SELECT deleted_at, code_digest FROM billing_redemption_codes WHERE id = ?",
+                (code_id,),
+            ).fetchone()
+        self.assertGreater(int(row["deleted_at"]), 0)
+        self.assertNotEqual(str(row["code_digest"]), revealed.json()["item"]["code"])
+
     def test_health_accepts_anonymized_redeemed_receipt_after_user_purge(self):
         code = self._create_code(8)
         redeemed = self.customer.post(

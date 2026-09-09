@@ -29763,8 +29763,15 @@ def create_app() -> FastAPI:
                 limit=limit,
                 offset=offset,
             )
+            total = commercial_billing.count_redemption_codes(conn, status=status)
         return JSONResponse(
-            content={"items": items},
+            content={
+                "items": items,
+                "total": total,
+                "limit": min(max(int(limit), 1), 500),
+                "offset": max(int(offset), 0),
+                "next_offset": max(int(offset), 0) + len(items) if max(int(offset), 0) + len(items) < total else 0,
+            },
             headers={"Cache-Control": "no-store"},
         )
 
@@ -29801,6 +29808,31 @@ def create_app() -> FastAPI:
                 code_id=code_id,
                 actor_user_id=_identity_user_id(user),
                 reason=payload.reason,
+            )
+        return {"ok": True, "item": item}
+
+    @app.post("/api/admin/billing/redemption-codes/{code_id}/reveal")
+    def api_admin_billing_redemption_code_reveal(
+        code_id: str,
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        with db() as conn:
+            item = commercial_billing.reveal_redemption_code(conn, code_id=code_id)
+        return JSONResponse(
+            content={"ok": True, "item": item},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/admin/billing/redemption-codes/{code_id}/delete")
+    def api_admin_billing_redemption_code_delete(
+        code_id: str,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        with db() as conn:
+            item = commercial_billing.delete_redemption_code_record(
+                conn,
+                code_id=code_id,
+                actor_user_id=_identity_user_id(user),
             )
         return {"ok": True, "item": item}
 

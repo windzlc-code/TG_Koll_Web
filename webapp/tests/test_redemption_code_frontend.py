@@ -49,3 +49,18 @@ def test_admin_redemption_controls_share_one_aligned_row_with_spacing():
     assert ".page-admin #secRedemptionCodes .admin-billing-toolbar" in STYLE_CSS
     assert "align-items: flex-end" in STYLE_CSS
     assert "column-gap: 14px" in STYLE_CSS
+
+
+def test_admin_redemption_list_has_compact_presets_pagination_and_record_actions():
+    assert 'id="redemptionCodePageSize"' in ADMIN_HTML
+    assert 'id="btnRedemptionCodePrevious"' in ADMIN_HTML
+    assert 'id="btnRedemptionCodeNext"' in ADMIN_HTML
+    assert "redemptionCodeOffset" in ADMIN_JS
+    assert "redemptionCodeTotal" in ADMIN_JS
+    assert "renderRedemptionCodePagination" in ADMIN_JS
+    assert "/reveal" in ADMIN_JS
+    assert "/delete" in ADMIN_JS
+    assert 'copy.dataset.redemptionAction = "copy"' in ADMIN_JS
+    assert 'remove.dataset.redemptionAction = "delete"' in ADMIN_JS
+    assert "min-height: 62px" in STYLE_CSS
+    assert ".admin-redemption-pagination" in STYLE_CSS

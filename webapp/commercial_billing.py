@@ -13,6 +13,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .password_vault import (
+    PasswordVaultError,
+    decrypt_secret as decrypt_vault_secret,
+    encrypt_secret as encrypt_vault_secret,
+)
+
 
 POINT_SCALE = 100
 NEW_USER_WELCOME_POINTS = 20
@@ -3169,6 +3175,10 @@ def _redemption_code_digest(raw_code: Any) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else ""
 
 
+def _redemption_code_secret_purpose(code_id: str) -> str:
+    return f"billing-redemption-code:{str(code_id)}"
+
+
 def _redemption_code_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
     hint = str(item.get("code_hint") or "")[-4:]
@@ -3188,6 +3198,7 @@ def _redemption_code_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]
         "revoked_by": int(item.get("revoked_by") or 0),
         "revoked_at": int(item.get("revoked_at") or 0),
         "revoke_reason": str(item.get("revoke_reason") or ""),
+        "deleted_at": int(item.get("deleted_at") or 0),
     }
 
 
@@ -3215,15 +3226,20 @@ def create_redemption_codes(
             digest = _redemption_code_digest(code)
             code_id = _id("redeem")
             try:
+                ciphertext = encrypt_vault_secret(
+                    int(actor_user_id),
+                    _redemption_code_secret_purpose(code_id),
+                    code,
+                )
                 conn.execute(
                     """
                     INSERT INTO billing_redemption_codes(
                       id, code_digest, code_hint, credit_units, status, created_by,
-                      note, created_at
-                    ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+                      note, code_ciphertext, created_at
+                    ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)
                     """,
                     (code_id, digest, _normalize_redemption_code(code)[-4:], units,
-                     int(actor_user_id), str(note or "").strip()[:200], current),
+                     int(actor_user_id), str(note or "").strip()[:200], ciphertext, current),
                 )
                 created.append({
                     "id": code_id,
@@ -3252,8 +3268,11 @@ def list_redemption_codes(
     normalized_status = str(status or "").strip().lower()
     if normalized_status and normalized_status not in {"active", "redeemed", "revoked"}:
         raise BillingError("REDEMPTION_STATUS_INVALID", "兑换码状态无效", 422)
-    where = "WHERE code.status = ?" if normalized_status else ""
-    params: list[Any] = [normalized_status] if normalized_status else []
+    where = "WHERE code.deleted_at = 0"
+    params: list[Any] = []
+    if normalized_status:
+        where += " AND code.status = ?"
+        params.append(normalized_status)
     rows = conn.execute(
         f"""
         SELECT code.*,
@@ -3271,6 +3290,76 @@ def list_redemption_codes(
     return [_redemption_code_public(row) for row in rows]
 
 
+def count_redemption_codes(conn: sqlite3.Connection, *, status: str = "") -> int:
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status and normalized_status not in {"active", "redeemed", "revoked"}:
+        raise BillingError("REDEMPTION_STATUS_INVALID", "兑换码状态无效", 422)
+    if normalized_status:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM billing_redemption_codes WHERE deleted_at = 0 AND status = ?",
+            (normalized_status,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM billing_redemption_codes WHERE deleted_at = 0"
+        ).fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def reveal_redemption_code(
+    conn: sqlite3.Connection,
+    *,
+    code_id: str,
+) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM billing_redemption_codes WHERE id = ? AND deleted_at = 0",
+        (str(code_id),),
+    ).fetchone()
+    if row is None:
+        raise BillingError("REDEMPTION_CODE_NOT_FOUND", "兑换码不存在或已删除", 404)
+    ciphertext = str(row["code_ciphertext"] or "")
+    if not ciphertext:
+        raise BillingError("REDEMPTION_CODE_NOT_RECOVERABLE", "此旧兑换码未保存可恢复密文，无法重新查看", 409)
+    try:
+        code = decrypt_vault_secret(
+            int(row["created_by"] or 0),
+            _redemption_code_secret_purpose(str(row["id"])),
+            ciphertext,
+        )
+    except PasswordVaultError as exc:
+        raise BillingError("REDEMPTION_CODE_REVEAL_FAILED", "兑换码无法安全读取，请检查密钥配置", 503) from exc
+    if not secrets.compare_digest(_redemption_code_digest(code), str(row["code_digest"] or "")):
+        raise BillingError("REDEMPTION_CODE_REVEAL_FAILED", "兑换码记录校验失败", 409)
+    return {**_redemption_code_public(row), "code": code}
+
+
+def delete_redemption_code_record(
+    conn: sqlite3.Connection,
+    *,
+    code_id: str,
+    actor_user_id: int,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Hide an admin record without destroying the digest or billing receipt."""
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    updated = conn.execute(
+        """
+        UPDATE billing_redemption_codes
+        SET deleted_at = ?, deleted_by = ?, version = version + 1
+        WHERE id = ? AND deleted_at = 0
+        """,
+        (current, int(actor_user_id), str(code_id)),
+    )
+    if updated.rowcount != 1:
+        raise BillingError("REDEMPTION_CODE_NOT_FOUND", "兑换码不存在或已删除", 404)
+    row = conn.execute(
+        "SELECT * FROM billing_redemption_codes WHERE id = ?",
+        (str(code_id),),
+    ).fetchone()
+    return _redemption_code_public(row)
+
+
 def redeem_redemption_code(
     conn: sqlite3.Connection,
     *,
@@ -3282,7 +3371,7 @@ def redeem_redemption_code(
     current = int(now or _now())
     digest = _redemption_code_digest(raw_code)
     row = conn.execute(
-        "SELECT * FROM billing_redemption_codes WHERE code_digest = ?",
+        "SELECT * FROM billing_redemption_codes WHERE code_digest = ? AND deleted_at = 0",
         (digest,),
     ).fetchone() if digest else None
     if row is None:
@@ -3303,7 +3392,7 @@ def redeem_redemption_code(
         """
         UPDATE billing_redemption_codes
         SET status = 'redeemed', redeemed_by = ?, redeemed_at = ?, version = version + 1
-        WHERE id = ? AND status = 'active'
+        WHERE id = ? AND status = 'active' AND deleted_at = 0
         """,
         (int(user_id), current, code_id),
     )
@@ -3353,7 +3442,7 @@ def revoke_redemption_code(
         UPDATE billing_redemption_codes
         SET status = 'revoked', revoked_by = ?, revoked_at = ?, revoke_reason = ?,
             version = version + 1
-        WHERE id = ? AND status = 'active'
+        WHERE id = ? AND status = 'active' AND deleted_at = 0
         """,
         (int(actor_user_id), current, str(reason or "").strip()[:200], str(code_id)),
     )
@@ -3364,16 +3453,17 @@ def revoke_redemption_code(
 
 
 def redemption_code_health(conn: sqlite3.Connection) -> dict[str, Any]:
-    counts = {"active": 0, "redeemed": 0, "revoked": 0}
+    counts = {"active": 0, "redeemed": 0, "revoked": 0, "deleted": 0}
     for row in conn.execute(
-        "SELECT status, COUNT(*) AS count FROM billing_redemption_codes GROUP BY status"
+        "SELECT status, COUNT(*) AS count FROM billing_redemption_codes WHERE deleted_at = 0 GROUP BY status"
     ).fetchall():
         counts[str(row["status"])] = int(row["count"] or 0)
     inconsistent = int(conn.execute(
         """
         SELECT COUNT(*)
         FROM billing_redemption_codes AS code
-        WHERE (code.status = 'redeemed' AND code.redeemed_at <= 0)
+        WHERE code.deleted_at = 0 AND (
+              (code.status = 'redeemed' AND code.redeemed_at <= 0)
            OR (code.status != 'redeemed' AND (code.redeemed_by > 0 OR code.redeemed_at > 0))
            OR (code.status = 'redeemed' AND NOT EXISTS (
                  SELECT 1 FROM billing_ledger AS ledger
@@ -3382,7 +3472,7 @@ def redemption_code_health(conn: sqlite3.Connection) -> dict[str, Any]:
                    AND ledger.event_type = 'redemption_code_redeemed'
                    AND ledger.amount_units = code.credit_units
                    AND ledger.user_id = code.redeemed_by
-               ))
+               )))
         """
     ).fetchone()[0] or 0)
     return {
