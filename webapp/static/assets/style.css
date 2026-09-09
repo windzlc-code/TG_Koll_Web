@@ -7067,6 +7067,54 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   margin-bottom: 12px;
 }
 
+.page-admin #secRedemptionCodes .admin-redemption-presets {
+  display: grid;
+  gap: 9px;
+  margin: 12px 0;
+  padding: 11px 12px;
+  border: 1px solid var(--admin-line);
+  border-radius: 9px;
+  background: #f8fbfd;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-preset-groups {
+  display: grid;
+  gap: 9px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-preset-group {
+  display: grid;
+  gap: 6px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-preset {
+  display: flex;
+  min-height: 62px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  text-align: center;
+  color: var(--admin-ink);
+  background: #fff;
+  border: 1px solid #b8cbd8;
+  border-radius: 8px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-preset:hover,
+.page-admin #secRedemptionCodes .admin-redemption-preset:focus-visible {
+  color: #fff;
+  background: #1c658f;
+  border-color: #1c658f;
+}
+
 .page-admin #secRedemptionCodes .admin-billing-panel-head {
   align-items: flex-end;
   gap: 16px;
@@ -7126,7 +7174,50 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 }
 
 .page-admin #secRedemptionCodes .admin-redemption-table {
-  min-width: 820px;
+  min-width: 1320px;
+  table-layout: auto;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-detail {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-icon-button {
+  display: inline-grid;
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 7px;
+  place-items: center;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-icon-button svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  margin-top: 10px;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-pagination > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .page-admin #secRedemptionCodes #redemptionCodeHealth.is-error {

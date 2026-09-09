@@ -60,7 +60,15 @@ def test_admin_redemption_list_has_compact_presets_pagination_and_record_actions
     assert "renderRedemptionCodePagination" in ADMIN_JS
     assert "/reveal" in ADMIN_JS
     assert "/delete" in ADMIN_JS
-    assert 'copy.dataset.redemptionAction = "copy"' in ADMIN_JS
-    assert 'remove.dataset.redemptionAction = "delete"' in ADMIN_JS
+    assert 'redemptionCodeIconButton("view"' in ADMIN_JS
+    assert 'redemptionCodeIconButton("copy"' in ADMIN_JS
+    assert 'redemptionCodeIconButton("edit"' in ADMIN_JS
+    assert 'id="redemptionCodeEditModal"' in ADMIN_HTML
+    assert 'id="btnRedemptionCodeEditRevoke"' in ADMIN_HTML
+    assert 'id="btnRedemptionCodeEditDelete"' in ADMIN_HTML
+    assert "admin-redemption-detail" in ADMIN_JS
+    assert ".admin-redemption-detail" in STYLE_CSS
+    assert ".admin-redemption-icon-button" in STYLE_CSS
+    assert "justify-content: center" in STYLE_CSS
     assert "min-height: 62px" in STYLE_CSS
     assert ".admin-redemption-pagination" in STYLE_CSS

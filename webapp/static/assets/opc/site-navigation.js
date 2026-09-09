@@ -96,6 +96,14 @@
       billingView: "查看详情",
       accountSettings: "账户设置",
       personalProfile: "个人信息",
+      redeemCode: "兑换码",
+      redeemDialogTitle: "兑换积分",
+      redeemDialogHelp: "输入管理员提供的兑换码，核验成功后积分会立即到账。",
+      redeemCodePlaceholder: "请输入兑换码",
+      confirmRedeem: "确认兑换",
+      redeeming: "正在兑换…",
+      redeemSuccess: "兑换成功",
+      redeemSuccessMessage: "已到账 {added} 点，当前共有 {balance} 点。",
       taskQueue: "任务队列",
       settings: "设置",
       workspaceActions: "快捷操作",
@@ -199,6 +207,14 @@
       billingView: "查看詳情",
       accountSettings: "帳戶設定",
       personalProfile: "個人資訊",
+      redeemCode: "兌換碼",
+      redeemDialogTitle: "兌換積分",
+      redeemDialogHelp: "輸入管理員提供的兌換碼，核驗成功後積分會立即到帳。",
+      redeemCodePlaceholder: "請輸入兌換碼",
+      confirmRedeem: "確認兌換",
+      redeeming: "正在兌換…",
+      redeemSuccess: "兌換成功",
+      redeemSuccessMessage: "已到帳 {added} 點，目前共有 {balance} 點。",
       taskQueue: "任務佇列",
       settings: "設定",
       workspaceActions: "快捷操作",
@@ -697,6 +713,7 @@
 
   function accountMenuMarkup(page = "console") {
     const workspaceActions = `<div class="site-account-action-row site-account-workspace-actions" aria-label="快捷操作" data-site-workspace-actions>
+          <button type="button" data-site-open-redemption data-site-copy="redeemCode" hidden>兑换码</button>
           <button type="button" data-site-open-console-view="tasks" data-site-copy="taskQueue">任务队列</button>
           <button type="button" data-site-open-console-view="console_settings" data-site-copy="personalSettings">个人设置</button>
         </div>`;
@@ -1279,6 +1296,25 @@
     return payload;
   }
 
+  async function postAccountJson(path, body) {
+    const headers = accountRequestHeaders();
+    headers.set("Content-Type", "application/json");
+    const response = await fetch(path, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers,
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(String(payload?.detail || payload?.message || `HTTP ${response.status}`));
+      error.status = response.status;
+      throw error;
+    }
+    return payload;
+  }
+
   async function loadAccountProfile() {
     if (currentAccount || currentSessionMode === "guest") return currentAccount;
     if (accountProfileLoadPromise) return accountProfileLoadPromise;
@@ -1534,6 +1570,7 @@
     actionText = undefined,
     contentHtml = "",
     dialogClass = "",
+    showIcon = true,
     onOpen = null,
   } = {}) {
     const labels = copy[currentLanguage()];
@@ -1542,10 +1579,10 @@
     });
     return new Promise((resolve) => {
       const modal = document.createElement("div");
-      modal.className = `site-auth-feedback is-${kind}${dialogClass ? ` ${dialogClass}` : ""}`;
+      modal.className = `site-auth-feedback is-${kind}${showIcon ? "" : " is-no-icon"}${dialogClass ? ` ${dialogClass}` : ""}`;
       modal.dataset.siteAuthFeedback = "true";
       modal.innerHTML = `<section class="site-auth-feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="siteAuthFeedbackTitle">
-        <div class="site-auth-feedback-icon">${authFeedbackIcon(kind)}</div>
+        ${showIcon ? `<div class="site-auth-feedback-icon">${authFeedbackIcon(kind)}</div>` : ""}
         <div class="site-auth-feedback-copy"><strong id="siteAuthFeedbackTitle"></strong><p></p></div>
         <button type="button" class="site-auth-feedback-close" aria-label="${labels.close}">${closeIcon()}</button>
         ${contentHtml ? `<div class="site-auth-feedback-content">${contentHtml}</div>` : ""}
@@ -1579,6 +1616,67 @@
       document.body.append(modal);
       if (typeof onOpen === "function") onOpen(modal, close);
       (confirm || modal.querySelector("input, button:not(.site-auth-feedback-close)"))?.focus({ preventScroll: true });
+    });
+  }
+
+  function redemptionText(template, values = {}) {
+    return String(template || "").replace(/\{(\w+)\}/g, (_match, key) => String(values[key] ?? ""));
+  }
+
+  function openRedemptionCodeDialog() {
+    const labels = copy[currentLanguage()];
+    showAuthFeedback({
+      kind: "success",
+      showIcon: false,
+      title: labels.redeemDialogTitle,
+      message: labels.redeemDialogHelp,
+      actionText: false,
+      dialogClass: "is-form",
+      contentHtml: `<form class="site-auth-feedback-form" novalidate>
+        <label><span>${labels.redeemCode}</span><input name="code" type="text" minlength="16" maxlength="128" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="${labels.redeemCodePlaceholder}" required /></label>
+        <p class="site-auth-feedback-form-status" role="status" aria-live="polite"></p>
+        <button type="submit" class="site-auth-feedback-form-action is-primary" data-redemption-submit>${labels.confirmRedeem}</button>
+      </form>`,
+      onOpen(modal, close) {
+        const form = modal.querySelector(".site-auth-feedback-form");
+        const input = form?.elements.code;
+        const status = modal.querySelector(".site-auth-feedback-form-status");
+        const submit = modal.querySelector("[data-redemption-submit]");
+        form?.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const code = String(input?.value || "").trim();
+          if (!code) {
+            status.textContent = labels.redeemCodePlaceholder;
+            status.className = "site-auth-feedback-form-status is-error";
+            input?.focus();
+            return;
+          }
+          submit.disabled = true;
+          submit.textContent = labels.redeeming;
+          status.textContent = "";
+          try {
+            const result = await postAccountJson("/api/billing/redemption-codes/redeem", { code });
+            close(true);
+            await showAuthFeedback({
+              kind: "success",
+              title: labels.redeemSuccess,
+              message: redemptionText(labels.redeemSuccessMessage, {
+                added: result.redeemed_points,
+                balance: result.points,
+              }),
+              actionText: labels.know,
+              dialogClass: "is-form is-redemption-success",
+            });
+          } catch (error) {
+            status.textContent = error.message || `HTTP ${error.status || 0}`;
+            status.className = "site-auth-feedback-form-status is-error";
+          } finally {
+            submit.disabled = false;
+            submit.textContent = labels.confirmRedeem;
+          }
+        });
+        input?.focus({ preventScroll: true });
+      },
     });
   }
 
@@ -2017,6 +2115,10 @@
       menu.querySelector("[data-site-open-subscription]")?.addEventListener("click", () => {
         setAccountMenuOpen(menu, false);
         window.location.assign(adminOperationalPublicTarget("/subscription.html"));
+      });
+      menu.querySelector("[data-site-open-redemption]")?.addEventListener("click", () => {
+        setAccountMenuOpen(menu, false);
+        openRedemptionCodeDialog();
       });
       menu.querySelectorAll("[data-site-open-console-view]").forEach((button) => {
         button.addEventListener("click", () => {
