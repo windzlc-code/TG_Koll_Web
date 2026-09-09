@@ -165,28 +165,28 @@ class TelegramTweetAdminTests(unittest.TestCase):
                 session_cookie_secure=lambda _request: False,
             )
         token = tweet_tg._create_ticket(101, "home", self._get).split("ticket=", 1)[1]
-        client = TestClient(app)
-        landing = client.get(f"/telegram/tweet/open?ticket={token}")
-        self.assertEqual(landing.status_code, 200)
-        self.assertIn("telegram-web-app.js", landing.text)
-        self.assertNotIn("session_token=", landing.headers.get("set-cookie", ""))
-        response = client.post(
-            "/telegram/tweet/exchange",
-            json={"ticket": token, "init_data": self._signed_init_data(101)},
-        )
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["target"], "/console.html?view=persona_dashboard")
-        self.assertIn("session_token=", response.headers.get("set-cookie", ""))
-        with db() as conn:
-            session = conn.execute("SELECT token, user_id, expires_at, created_at, revoked_at FROM sessions ORDER BY created_at DESC LIMIT 1").fetchone()
-        self.assertEqual(int(session["user_id"]), self.alice_id)
-        self.assertLessEqual(int(session["expires_at"]) - int(session["created_at"]), tweet_tg.SESSION_TTL_SECONDS)
-        tweet_tg._create_ticket(101, "tasks", self._get)
-        blocked = client.patch("/api/persona_dashboard/personas/example/profile", json={})
-        self.assertEqual(blocked.status_code, 403)
-        self.assertEqual(blocked.json()["code"], "tg_tweet_content_settings_disabled")
-        toggled = client.post("/api/admin/tg_tweet/members/101/toggle", json={"enabled": False})
-        self.assertEqual(toggled.status_code, 200, toggled.text)
+        with TestClient(app) as client:
+            landing = client.get(f"/telegram/tweet/open?ticket={token}")
+            self.assertEqual(landing.status_code, 200)
+            self.assertIn("telegram-web-app.js", landing.text)
+            self.assertNotIn("session_token=", landing.headers.get("set-cookie", ""))
+            response = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": token, "init_data": self._signed_init_data(101)},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["target"], "/console.html?view=persona_dashboard")
+            self.assertIn("session_token=", response.headers.get("set-cookie", ""))
+            with db() as conn:
+                session = conn.execute("SELECT token, user_id, expires_at, created_at, revoked_at FROM sessions ORDER BY created_at DESC LIMIT 1").fetchone()
+            self.assertEqual(int(session["user_id"]), self.alice_id)
+            self.assertLessEqual(int(session["expires_at"]) - int(session["created_at"]), tweet_tg.SESSION_TTL_SECONDS)
+            tweet_tg._create_ticket(101, "tasks", self._get)
+            blocked = client.patch("/api/persona_dashboard/personas/example/profile", json={})
+            self.assertEqual(blocked.status_code, 403)
+            self.assertEqual(blocked.json()["code"], "tg_tweet_content_settings_disabled")
+            toggled = client.post("/api/admin/tg_tweet/members/101/toggle", json={"enabled": False})
+            self.assertEqual(toggled.status_code, 200, toggled.text)
         with db() as conn:
             revoked = conn.execute("SELECT revoked_at FROM sessions WHERE token = ?", (session["token"],)).fetchone()
         self.assertGreater(int(revoked["revoked_at"]), 0)
@@ -205,11 +205,12 @@ class TelegramTweetAdminTests(unittest.TestCase):
                 session_cookie_secure=lambda _request: False,
             )
         token = tweet_tg._create_ticket(101, "home", self._get).split("ticket=", 1)[1]
-        response = TestClient(app).post(
-            "/telegram/tweet/exchange",
-            json={"ticket": token, "init_data": self._signed_init_data(202)},
-        )
-        self.assertEqual(response.status_code, 403)
+        with TestClient(app) as client:
+            response = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": token, "init_data": self._signed_init_data(202)},
+            )
+            self.assertEqual(response.status_code, 403)
         with db() as conn:
             ticket = conn.execute("SELECT used_at FROM telegram_tweet_tickets").fetchone()
         self.assertEqual(float(ticket["used_at"]), 0)
