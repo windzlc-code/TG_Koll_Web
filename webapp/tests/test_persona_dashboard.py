@@ -5383,10 +5383,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("人设名称只是对外称呼", importer)
         self.assertIn("禁止把俚语化名称理解成色情、擦边或开车含义", importer)
-        self.assertIn("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，lifestyleQueries 正好 10 个", importer)
+        self.assertIn("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 5 个，lifestyleQueries 正好 5 个", importer)
         self.assertIn("domainExpansion", importer)
         self.assertIn("lifestyleQueries", importer)
-        self.assertIn("合计必须给出 30 个互不重复", importer)
+        self.assertIn("合计必须给出 20 个互不重复、语义完整的可搜索词", importer)
         self.assertIn("2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主", importer)
         self.assertIn("禁止输出带这些后缀或整词的合成搜索词", importer)
         self.assertIn("存股、融資、配息、當沖、槓桿、信用交易", importer)
@@ -5974,6 +5974,20 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         self.assertTrue(body["ok"])
         payload = mocked.call_args.args[0]
+        self.assertEqual(payload["keywords"], ["海外置產", "白金台"])
+        self.assertEqual(payload["allKeywords"], ["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"])
+
+    def test_remote_hot_request_keeps_full_keyword_table_for_old_worker_relevance(self):
+        payload = server._remote_fetch_persona_hot_request({
+            "action": "fetch-hot-candidates",
+            "archiveId": "persona-1",
+            "keywords": ["海外置產", "白金台"],
+            "allKeywords": ["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"],
+            "keywordStrategyVersion": server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
+            "keywordDigest": "digest",
+            "archiveSnapshot": {"id": "persona-1", "name": "History Teacher", "content": "", "setup": {}},
+        })
+
         self.assertEqual(payload["keywords"], ["海外置產", "白金台"])
         self.assertEqual(payload["allKeywords"], ["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"])
 

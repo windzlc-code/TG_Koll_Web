@@ -1710,6 +1710,29 @@ describe("sentiment hot importer", () => {
     })).toEqual([]);
   });
 
+  it("keeps both modes on a 20-term plan and drops clipped model fragments", () => {
+    const strategy = {
+      primaryQueries: ["麻布宅", "灣景塔", "台籍融資", "跨境貸", "日幣資產", "豪宅投", "資產避險", "租金收益", "家族傳承", "置產服務", "收益算"],
+      broadQueries: ["銀座宅", "澀谷宅", "海外置產", "銀行貸款", "房屋估價", "過戶手續", "物件檢"],
+      ecosystemQueries: [],
+      lifestyleQueries: ["自住用", "看屋日記", "交屋流程", "資產配置", "置產諮詢"],
+      requiredAnchorTerms: ["海外置產", "銀行貸款", "資產配置"],
+      normalAnchorTerms: ["海外置產", "置產諮詢", "看屋日記"],
+      strictAcceptTerms: ["豪宅投", "資產避險", "租金收益", "家族傳承", "置產服務", "房屋稅務", "產權登記", "地段分析", "租約管理", "房價評估"],
+      normalAcceptTerms: ["看屋日記", "交屋流程", "資產配置", "置產諮詢", "自住用"],
+      rejectTerms: [],
+      domainSummary: "高資產不動產配置",
+    } as any;
+
+    const normal = resolveSentimentHotModelStrategyKeywords(strategy, "normal");
+    const strict = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
+    expect(normal).toHaveLength(20);
+    expect(strict).toHaveLength(20);
+    expect(normal.slice(0, 10)).toEqual(expect.arrayContaining(["看屋日記", "交屋流程"]));
+    expect(strict).not.toEqual(expect.arrayContaining(["看屋日記", "交屋流程"]));
+    expect([...normal, ...strict]).not.toEqual(expect.arrayContaining(["收益算", "物件檢", "自住用"]));
+  });
+
   it("does not accept a single broad strategy term as normal persona relevance", () => {
     const candidate = {
       id: "generic-guide",
@@ -3300,10 +3323,10 @@ Title: Instagram
     expect(source).toContain("primaryQueries");
     expect(source).toContain("rejectTerms");
     expect(source).toContain("domainSummary");
-    expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，lifestyleQueries 正好 10 个");
+    expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 5 个，lifestyleQueries 正好 5 个");
     expect(source).toContain("domainExpansion");
     expect(source).toContain("lifestyleQueries");
-    expect(source).toContain("合计必须给出 30 个互不重复");
+    expect(source).toContain("合计必须给出 20 个互不重复、语义完整的可搜索词");
     expect(source).toContain("2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主");
     expect(source).toContain("禁止输出带这些后缀或整词的合成搜索词");
     expect(source).toContain("存股、融資、配息、當沖、槓桿、信用交易");

@@ -15581,13 +15581,14 @@ def _remote_fetch_persona_hot_request(payload: dict[str, Any]) -> dict[str, Any]
     archive_id = str(payload.get("archiveId") or "").strip()
     if archive_id:
         remote_payload["archiveId"] = archive_id
-    keywords = [
-        str(item)[:300]
-        for item in (payload.get("keywords") if isinstance(payload.get("keywords"), list) else [])
-        if isinstance(item, str) and str(item).strip()
-    ][:32]
-    if keywords:
-        remote_payload["keywords"] = keywords
+    for field in ("keywords", "allKeywords"):
+        keywords = [
+            str(item)[:300]
+            for item in (payload.get(field) if isinstance(payload.get(field), list) else [])
+            if isinstance(item, str) and str(item).strip()
+        ][:32]
+        if keywords:
+            remote_payload[field] = keywords
     if str(payload.get("action") or "").strip() == "recycle-hot-candidates":
         recycled = []
         for item in payload.get("candidates") if isinstance(payload.get("candidates"), list) else []:

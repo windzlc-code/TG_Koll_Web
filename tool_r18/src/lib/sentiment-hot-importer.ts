@@ -139,7 +139,9 @@ const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
 const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 51;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
-const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 28;
+// Both modes rotate the same-sized plan. Normal mode differs only in the
+// lifestyle-first ordering and looser relevance acceptance, not in plan size.
+const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 20;
 const SENTIMENT_HOT_STRICT_KEYWORD_TARGET = 20;
 const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE = resolveRuntimeFile("sentiment_hot_search_strategy_cache.json");
 const SENTIMENT_HOT_GLOBAL_POOL_FILE = resolveRuntimeFile("sentiment_hot_global_pool.json");
@@ -1513,7 +1515,10 @@ function isConcreteSearchKeyword(value: unknown): boolean {
   // Discovery intents are useful only when attached to a persona-domain
   // subject. Bare intent words drift into unrelated high-traffic topics.
   if (/韭菜/u.test(keyword)) return false;
-  if (/^(?:價格|价格|真實|真实|搞笑|吐槽|避坑|踩雷|翻車|翻车|推薦|推荐|測評|测评|體驗|体验|互動|互动|對比|对比)$/u.test(keyword)) return false;
+  if (/^(?:價格|价格|真實|真实|問題|问题|系統|系统|搞笑|吐槽|避坑|踩雷|翻車|翻车|推薦|推荐|測評|测评|體驗|体验|互動|互动|對比|对比)$/u.test(keyword)) return false;
+  // Reject clipped model fragments such as "收益算" and "物件檢". They are
+  // neither natural search queries nor meaningful persona-domain anchors.
+  if (/^(?:自住用|收益算|貸款通|贷款通|物件檢|物件检|置產流|置产流|融資通|融资通|一站式服|傳承拼|传承拼)$/u.test(keyword)) return false;
   if (isWeakRelevanceKeyword(keyword) || isGenericSentimentKeyword(keyword)) return false;
   if (/[()[\]{}]|(?:^|[^\d])\d{2,}(?:公分|cm|CM)?/u.test(keyword)) return false;
   if (/(?:幽默|接地氣|接地气|宅氣|宅气|善良|智慧|愛心|爱心|溫柔|温柔|鼓勵|鼓励|耐心|致力|充滿|充满|治癒感|疗愈感|自律感|反差魅力|視覺|视觉|傾向|倾向)/u.test(keyword)) return false;
@@ -1664,6 +1669,7 @@ function modelLifestyleSearchTerms(strategy: SentimentHotSearchStrategy | null |
       && !isHollowSearchKeyword(term)
       && !isGenericPersonaContentTopic(term)
       && !isPersonaVisualArtifactKeyword(term, "")
+      && isConcreteSearchKeyword(term)
       && isSearchableRelevanceTerm(term)
     )))];
 }
@@ -1688,6 +1694,7 @@ function normalModeDomainMatchTerms(strategy: SentimentHotSearchStrategy): strin
       term.length >= 2
       && !personaGuardKeys.has(term.toLowerCase())
       && !isHollowBroadMatchTerm(term)
+      && isConcreteSearchKeyword(term)
       && isSearchableRelevanceTerm(term)
     )))];
 }
@@ -1811,7 +1818,7 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
 
 function sentimentHotStrategyHasModelTerms(strategy: SentimentHotSearchStrategy): boolean {
   return Array.isArray(strategy.primaryQueries) && strategy.primaryQueries.length >= 5
-    && Array.isArray(strategy.lifestyleQueries) && strategy.lifestyleQueries.length >= 8
+    && Array.isArray(strategy.lifestyleQueries) && strategy.lifestyleQueries.length >= 5
     && Array.isArray(strategy.requiredAnchorTerms) && strategy.requiredAnchorTerms.length >= 3
     && Array.isArray(strategy.normalAnchorTerms) && strategy.normalAnchorTerms.length >= 3
     && strategy.normalAnchorTerms.filter((term) => term.length >= 2).length >= 2
@@ -1875,34 +1882,54 @@ export function resolveSentimentHotModelStrategyKeywords(
   mode: SentimentHotSearchMode,
 ): string[] {
   if (!strategy) return [];
-  const primary = [...new Set((strategy.primaryQueries || []).map(cleanText).filter(Boolean))];
+  const usablePrimary = (term: unknown) => {
+    const value = cleanText(term);
+    return Boolean(
+      value
+      && isConcreteSearchKeyword(value)
+      && value.length <= 14
+      && !isGenericPersonaContentTopic(value)
+      && !isPersonaVisualArtifactKeyword(value, ""),
+    );
+  };
+  const usableExpansion = (term: unknown) => {
+    const value = cleanText(term);
+    return Boolean(
+      usablePrimary(value)
+      && isPublicSearchableKeywordLength(value)
+      && value.length <= 5
+      && !/(?:攻略|教程|教學|教学|分享|心得|评测|測評|测评|推荐|推薦|經驗|经验)$/u.test(value),
+    );
+  };
+  const primary = [...new Set((strategy.primaryQueries || []).map(cleanText).filter(usablePrimary))];
+  const expansion = [...new Set([
+    ...(strategy.broadQueries || []),
+    ...(strategy.ecosystemQueries || []),
+  ].map(cleanText).filter(usableExpansion))];
+  const lifestyle = modelLifestyleSearchTerms(strategy).filter(usablePrimary);
+  const strictSupplements = [...new Set([
+    ...strategy.strictAcceptTerms,
+    ...strategy.requiredAnchorTerms,
+  ].map(cleanText).filter((term) => (
+    usablePrimary(term)
+    && !isHollowBroadMatchTerm(term)
+    && isSearchableRelevanceTerm(term)
+  )))];
   let merged: string[] = [];
   if (primary.length < 5) {
     if (!sentimentHotStrategyHasModelTerms(strategy)) return [];
     merged = sentimentHotModelDispatchTermsForMode(strategy, mode);
   } else {
-    const expansion = [...new Set([
-      ...(strategy.broadQueries || []),
-      ...(strategy.ecosystemQueries || []),
-    ]
-      .map(cleanText)
-      .filter((term) => (
-        term
-        && isConcreteSearchKeyword(term)
-        && isPublicSearchableKeywordLength(term)
-        && term.length <= 5
-        && !isGenericPersonaContentTopic(term)
-        && !isPersonaVisualArtifactKeyword(term, "")
-        && !/(?:攻略|教程|教學|教学|分享|心得|评测|測評|测评|推荐|推薦|經驗|经验)$/u.test(term)
-      )))];
-    merged = [...primary];
-    for (const term of expansion) {
-      if (!merged.some((item) => item.toLowerCase() === term.toLowerCase())) merged.push(term);
-    }
-  }
-  if (mode === "normal") {
-    for (const term of modelLifestyleSearchTerms(strategy)) {
-      if (!merged.some((item) => item.toLowerCase() === term.toLowerCase())) merged.push(term);
+    // Both modes share one fixed model plan. Normal mode promotes lifestyle
+    // terms into its first search batch; strict mode deliberately keeps only
+    // core/domain terms and strict anchors before its narrower relevance gate.
+    const ordered = mode === "normal"
+      ? [...primary.slice(0, 5), ...lifestyle, ...primary.slice(5), ...expansion]
+      : [...primary, ...expansion, ...strictSupplements];
+    for (const term of ordered) {
+      if (!merged.some((item) => item.toLowerCase() === term.toLowerCase())) {
+        merged.push(term);
+      }
     }
   }
   return merged.slice(0, sentimentHotKeywordTargetForMode(mode));
@@ -1927,10 +1954,10 @@ export function resolveSentimentHotModelQueryKeywords(
       ...strategy.strictAcceptTerms,
       ...strategy.normalAcceptTerms,
     ], "normal");
-    return [...new Set([...anchors, ...broadAnchors, ...rest])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
+    return [...new Set([...anchors, ...broadAnchors, ...rest])].slice(0, sentimentHotKeywordTargetForMode(mode));
   }
   const base = prepareSentimentHotKeywordsForMode(sentimentHotStrategyTermsForMode(strategy, mode), mode);
-  return [...new Set([...base, ...modelLifestyleSearchTerms(strategy)])].slice(0, SENTIMENT_HOT_NORMAL_KEYWORD_TARGET);
+  return [...new Set([...base, ...modelLifestyleSearchTerms(strategy)])].slice(0, sentimentHotKeywordTargetForMode(mode));
 }
 
 export function resolveSentimentHotManualQueryKeywords(
@@ -2422,15 +2449,15 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "只输出 JSON 对象，不要解释，不要 Markdown。",
             "JSON 结构：",
             "{\"primaryQueries\":[\"...\"],\"domainExpansion\":[\"...\"],\"lifestyleQueries\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
-            "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，lifestyleQueries 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
-            "合计必须给出 30 个互不重复的可搜索词，供下游按模式切片搜索。不要多也不要少。",
+            "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，domainExpansion 正好 5 个，lifestyleQueries 正好 5 个，rejectTerms 4-8 个，domainSummary 一句话。",
+            "合计必须给出 20 个互不重复、语义完整的可搜索词，供下游按 10 个一批轮换搜索。不要多也不要少。",
             "",
             "先看人设名称和主题。若简介清楚写了职业、产品、场所或作品，就按这些扩词。",
             "若简介很难过关——只有性格、外貌、日常、搞笑、吐槽、段子，没有现成物件名词——你必须先自己扩展：这个人会持续对公众讲什么，把该主题扩成可搜索的具体对象（物、场景、作品、槽点对象、职场物件），再输出搜索词。",
             "扩展必须仍属于这个人设会讲的内容，不能换成无关行业。禁止因为简介空泛、擦边或不好写就拒写或返回空候选。",
             "primaryQueries 以 2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主，互不重复，公众会直接拿去搜。",
-            "domainExpansion 再补 10 个同一领域、与 primaryQueries 不重复的可搜物件。两个主题并存时必须分别扩词。主题名本身最多保留 1 次，其余必须更具体。",
-            "lifestyleQueries 再补 10 个同一人设领域的生活化、日常场景搜索词：必须是这个人设会亲身经历或持续对公众讲的具体使用处境、日常动作或身边场景，2-4 个汉字，公众会直接拿去搜。",
+            "domainExpansion 再补 5 个同一领域、与 primaryQueries 不重复的可搜物件。两个主题并存时必须分别扩词。主题名本身最多保留 1 次，其余必须更具体。",
+            "lifestyleQueries 再补 5 个同一人设领域的生活化、日常场景搜索词：必须是这个人设会亲身经历或持续对公众讲的具体使用处境、日常动作或身边场景，2-4 个汉字，公众会直接拿去搜。",
             "lifestyleQueries 必须仍属于这个人设会讲的内容，不能换成无关行业，也不能写成空词日常、生活、攻略、分享。不要把 primaryQueries 或 domainExpansion 里已经出现的物件名再重复一遍。必须按当前人设直接生成，不同人设不得套用同一批生活化词。",
             "风格意图只用于理解这类帖子常见，不要写进搜索词。禁止输出带这些后缀或整词的合成搜索词：攻略、教程、教學、教学、分享、心得、评测、測評、推荐、推薦、經驗、经验。",
             "若该领域常见攻略或教程帖，请改写成更具体的可搜物件，例如存股、融資、配息、當沖、槓桿、信用交易，而不是融資攻略、理財心得、台股分享。",
@@ -2461,8 +2488,8 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
           const lifestyle = [...new Set((candidate.lifestyleQueries || []).map(cleanText).filter(Boolean))];
           const uniqueCount = new Set([...queries, ...expansion, ...lifestyle]).size;
           const hasChinese = ([...queries, ...expansion, ...lifestyle].join("").match(/[\u3400-\u9fff]/gu) || []).length >= 16;
-          if (queries.length < 10 || lifestyle.length < 8 || uniqueCount < 26 || !hasChinese) {
-            console.info(`[sentiment_hot_model_unusable] reason=${queries.length < 10 || lifestyle.length < 8 || uniqueCount < 26 ? "missing_terms" : "not_chinese"} primary=${queries.length} lifestyle=${lifestyle.length} unique=${uniqueCount} sample=${JSON.stringify(queries.slice(0, 8))}`);
+          if (queries.length < 10 || expansion.length < 5 || lifestyle.length < 5 || uniqueCount < 20 || !hasChinese) {
+            console.info(`[sentiment_hot_model_unusable] reason=${queries.length < 10 || expansion.length < 5 || lifestyle.length < 5 || uniqueCount < 20 ? "missing_terms" : "not_chinese"} primary=${queries.length} expansion=${expansion.length} lifestyle=${lifestyle.length} unique=${uniqueCount} sample=${JSON.stringify(queries.slice(0, 8))}`);
             return false;
           }
           return true;
