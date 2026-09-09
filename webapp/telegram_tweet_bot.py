@@ -331,7 +331,7 @@ class NativeTweetBotController:
             [button(text="📝 草稿", callback_data="tt:drafts:0"), button(text="⭐ 收藏", callback_data="tt:favorites:0")],
             [button(text="🔥 热点", callback_data="tt:hot"), button(text="🚀 矩阵发布", callback_data="tt:matrix")],
             [button(text="📋 任务中心", callback_data="tt:tasks:0"), button(text="⚙️ 内容设置", callback_data="tt:profile")],
-            [button(text="🔐 账号与浏览器", callback_data="tt:accounts")],
+            [button(text="🔐 账号与浏览器", callback_data="tt:accounts"), button(text="ℹ️ 使用提示", callback_data="tt:help")],
         ])
 
     async def send_main_menu(self, message: Any, types: Any) -> None:
@@ -535,6 +535,15 @@ class NativeTweetBotController:
             if action == "menu":
                 clear_pending_state(chat_id)
                 await query.message.edit_text("请选择功能。", reply_markup=self._main_keyboard(types))
+            elif action == "help":
+                await query.message.edit_text(
+                    "使用提示\n\n"
+                    "• 管理员在后台加入当前 Chat ID 后，即可使用全部推文 Bot 功能。\n"
+                    "• 人设、生成、草稿、收藏、媒体、热点和任务均可直接在 Telegram 内操作。\n"
+                    "• 首次发布前需已有可用的 Threads 账号；若尚未授权，请从“账号与浏览器”进入网页完成一次 OAuth。\n"
+                    "• Bot 不接收账号密码、验证码或浏览器凭证。",
+                    reply_markup=self._main_keyboard(types),
+                )
             elif action == "personas":
                 await self._persona_list(query, types, member, int(parts[2]) if len(parts) > 2 else 0)
             elif action == "p" and len(parts) > 2:

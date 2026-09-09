@@ -404,6 +404,18 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:bio", message), _Types))
         self.assertEqual(load_state(101)["mode"], "profile_content")
 
+    def test_help_keeps_account_prerequisites_inside_telegram(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:help", message), _Types))
+        self.assertIn("加入当前 Chat ID", message.edits[-1][0])
+        self.assertIn("Threads 账号", message.edits[-1][0])
+        self.assertIn("不接收账号密码", message.edits[-1][0])
+
     def test_slow_poller_shutdown_is_restarted_after_exit(self):
         class _OldThread:
             def __init__(self):
