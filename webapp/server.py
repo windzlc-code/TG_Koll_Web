@@ -24,6 +24,7 @@ import threading
 import time
 import uuid
 import zipfile
+from io import BytesIO
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -164,6 +165,7 @@ from .telegram_tweet_admin import (
     start_tweet_telegram_bot_worker,
     stop_tweet_telegram_bot_worker,
 )
+from .telegram_tweet_bot import TweetWorkbenchOps
 from .telegram_internal import inject_telegram_internal_routes
 from .video_workbench import (
     cancel_video_remote_tasks,
@@ -25862,11 +25864,292 @@ def create_app() -> FastAPI:
             return _get_runtime_config(conn)
 
     def _telegram_runtime_save(updates: dict[str, Any]) -> None:
+        # Keep Telegram's read/merge/write transaction under the same lock so
+        # a settings save cannot overwrite a concurrent runtime-config update.
+        # Callers may pass either field-level updates (preferred) or the legacy
+        # full runtime snapshot; both remain compatible with this merge path.
+        with _RUNTIME_CONFIG_LOCK:
+            with db() as conn:
+                current = _get_runtime_config(conn)
+            merged = dict(current)
+            merged.update(updates or {})
+            _write_runtime_config_file(merged)
+
+    def _tweet_bot_user(web_user_id: int) -> dict[str, Any]:
         with db() as conn:
-            current = _get_runtime_config(conn)
-        merged = dict(current)
-        merged.update(updates or {})
-        _write_runtime_config_file(merged)
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (int(web_user_id),)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=403, detail="绑定的 VECTO 用户不存在")
+        user = dict(row)
+        if (
+            int(user.get("is_disabled") or 0)
+            or int(user.get("deleted_at") or 0)
+            or str(user.get("lifecycle_status") or "active") != "active"
+            or (not int(user.get("is_admin") or 0) and str(user.get("approval_status") or "") != "approved")
+        ):
+            raise HTTPException(status_code=403, detail="绑定的 VECTO 用户当前不可用")
+        _require_active_workspace_user(user)
+        return user
+
+    def _tweet_bot_dispatch(web_user_id: int, action: str, payload: dict[str, Any]) -> Any:
+        from . import social_automation_api as social_api
+
+        user = _tweet_bot_user(web_user_id)
+        user_id = _workspace_user_id(user)
+        action = str(action or "").strip()
+        payload = payload if isinstance(payload, dict) else {}
+        persona_id = str(payload.get("persona_id") or "").strip()
+
+        if action == "personas.list":
+            overview = _build_persona_dashboard_console_overview(
+                visible_archive_ids=_visible_persona_ids(user),
+                visible_group_ids=_visible_persona_group_ids(user),
+                owner_user_id=user_id,
+            )
+            return list(overview.get("personas") or [])
+        if action == "personas.create":
+            with TENANT_RESOURCE_LIFECYCLE_LOCK:
+                return _create_persona_with_owner(
+                    user,
+                    lambda: _create_persona_archive(
+                        PersonaDashboardPersonaCreatePayload(
+                            name=str(payload.get("name") or "").strip(),
+                            content=str(payload.get("content") or "").strip(),
+                        )
+                    ),
+                )
+        if action in {"profile.get", "profile.update", "posts.list", "posts.create", "posts.update", "posts.delete", "posts.favorite", "generation.start", "generation.status", "publish.start", "hot.start", "hot.status", "hot.import", "hot.cancel", "media.delete"}:
+            _require_persona_access(persona_id, user)
+        if action == "profile.get":
+            return _read_persona_dashboard_profile(persona_id)
+        if action == "profile.update":
+            if not bool(_telegram_runtime_snapshot().get("telegram_tweet_content_settings_enabled")):
+                raise HTTPException(status_code=403, detail="管理员尚未开放内容设置")
+            allowed = {
+                key: payload.get(key)
+                for key in ("content", "tweet_style_sample")
+                if key in payload
+            }
+            if not allowed:
+                raise HTTPException(status_code=400, detail="没有可更新的内容设置")
+            return _update_persona_dashboard_profile(
+                persona_id,
+                PersonaDashboardPersonaProfilePayload(**allowed),
+            )
+        if action == "posts.list":
+            source = "favorites" if str(payload.get("source") or "") == "favorites" else "posts"
+            return _list_persona_archive_posts(persona_id, source)
+        if action == "posts.create":
+            draft_payload = PersonaDashboardDraftPostPayload(
+                content=str(payload.get("content") or "").strip(),
+                platform=str(payload.get("platform") or "threads").strip() or "threads",
+            )
+            _require_user_draft_media_paths(draft_payload, user)
+            result = _create_persona_archive_post(persona_id, draft_payload)
+            _apply_persona_post_retention({}, user)
+            return result
+        if action == "posts.update":
+            source = "favorites" if str(payload.get("source") or "") == "favorites" else "posts"
+            draft_payload = PersonaDashboardDraftPostPayload(
+                content=str(payload.get("content") or "").strip(),
+            )
+            _require_user_draft_media_paths(draft_payload, user)
+            return _update_persona_archive_post(
+                persona_id,
+                str(payload.get("post_id") or "").strip(),
+                draft_payload,
+                source=source,
+            )
+        if action == "posts.delete":
+            post_id = str(payload.get("post_id") or "").strip()
+            if str(payload.get("source") or "") == "favorites":
+                return _delete_persona_favorite_post(persona_id, post_id)
+            return _delete_persona_dashboard_post_by_id(persona_id, post_id)
+        if action == "posts.favorite":
+            return _add_persona_favorite_post(persona_id, str(payload.get("post_id") or "").strip())
+        if action == "media.delete":
+            return _delete_persona_archive_post_media_item(
+                persona_id,
+                str(payload.get("post_id") or "").strip(),
+                max(0, int(payload.get("index") or 0)),
+                source="favorites" if str(payload.get("source") or "") == "favorites" else "posts",
+            )
+        if action == "generation.start":
+            generation_payload = PersonaDashboardGeneratePostsPayload(
+                count=max(1, min(int(payload.get("count") or 3), 5)),
+                prompt=str(payload.get("prompt") or "").strip(),
+                platform="threads",
+                target_words=max(20, min(int(payload.get("target_words") or 120), 1000)),
+                writing_locale="zh-TW",
+                selection_required=False,
+            )
+            task_id, replayed = _enqueue_persona_post_generation_task(
+                archive_id=persona_id,
+                payload=generation_payload.model_dump(mode="json"),
+                user=user,
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+            )
+            return {"ok": True, "task_id": task_id, "replayed": bool(replayed)}
+        if action == "generation.status":
+            task = _persona_post_generation_task_row(
+                str(payload.get("task_id") or "").strip(), user_id, persona_id,
+            )
+            return _build_task_detail_payload(task=task, include_logs=False, log_limit=0)
+        if action == "publish.start":
+            publish_payload = PersonaDashboardDraftPublishPayload(
+                platform=str(payload.get("platform") or "threads").strip() or "threads",
+                account_id=str(payload.get("account_id") or "").strip(),
+                scheduled_at=max(0, int(payload.get("scheduled_at") or 0)),
+                max_retries=2,
+            )
+            if publish_payload.account_id:
+                _require_social_account_access(publish_payload.account_id, user)
+            return _publish_persona_archive_post(
+                persona_id,
+                str(payload.get("post_id") or "").strip(),
+                publish_payload,
+                source="favorites" if str(payload.get("source") or "") == "favorites" else "posts",
+                owner_user_id=user_id,
+                billing_admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+            )
+        if action == "publish.matrix":
+            persona_ids = list(dict.fromkeys(
+                str(item or "").strip() for item in payload.get("persona_ids") or [] if str(item or "").strip()
+            ))
+            for selected_id in persona_ids:
+                _require_persona_access(selected_id, user)
+            return _publish_persona_matrix(
+                PersonaDashboardMatrixPublishPayload(
+                    persona_ids=persona_ids,
+                    source="posts",
+                    per_persona_count=1,
+                    platform="threads",
+                    max_retries=2,
+                    skip_active=True,
+                ),
+                owner_user_id=user_id,
+                billing_admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+            )
+        if action == "accounts.list":
+            with db() as conn:
+                rows = conn.execute(
+                    "SELECT id, persona_id, platform, username, display_name, status, health_status "
+                    "FROM social_accounts WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100",
+                    (user_id,),
+                ).fetchall()
+            return [dict(row) for row in rows]
+        if action == "tasks.list":
+            limit = max(1, min(int(payload.get("limit") or 30), 100))
+            with db() as conn:
+                normal_rows = conn.execute(
+                    "SELECT id, type, status, error, created_at, updated_at FROM tasks "
+                    "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (user_id, limit),
+                ).fetchall()
+            normal = [{**dict(row), "_tg_task_kind": "normal"} for row in normal_rows]
+            social = [{**item, "type": item.get("task_type"), "_tg_task_kind": "social"}
+                      for item in social_api.list_social_tasks(limit=limit, user_id=user_id)]
+            return sorted(normal + social, key=lambda item: int(item.get("created_at") or 0), reverse=True)[:limit]
+        if action in {"tasks.get", "tasks.cancel", "tasks.retry"}:
+            task_id = str(payload.get("task_id") or "").strip()
+            with db() as conn:
+                normal_row = conn.execute(
+                    "SELECT * FROM tasks WHERE id = ? AND user_id = ?", (task_id, user_id)
+                ).fetchone()
+            if normal_row is not None:
+                if action == "tasks.get":
+                    return _build_task_detail_payload(task=dict(normal_row), include_logs=False, log_limit=0)
+                if action == "tasks.cancel":
+                    return _cancel_task_record_for_user(
+                        task_id=task_id, user_id=user_id, requested_by="Telegram 推文 Bot",
+                    )
+                raise HTTPException(status_code=409, detail="生成任务请从推文生成重新提交")
+            social_api._require_task_access(task_id, user)
+            if action == "tasks.get":
+                return social_api.get_social_task(task_id)
+            if action == "tasks.cancel":
+                return social_api.cancel_social_task(task_id, "Telegram 用户取消")
+            result = social_api.retry_social_task(
+                task_id,
+                billing_admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+            )
+            if isinstance(result, dict) and not result.get("message"):
+                result["message"] = "任务已重新入队"
+            return result
+        if action == "hot.start":
+            cooldown = _require_persona_hot_fetch_ready(user)
+            return _start_billable_persona_hot_candidate_task(
+                persona_id,
+                PersonaDashboardHotCandidatesFetchPayload(
+                    prompt=str(payload.get("prompt") or "").strip(),
+                    refresh=True,
+                    limit=5,
+                    platform="threads",
+                ),
+                user,
+                cooldown_bypassed=bool(cooldown["bypassed"]),
+            )
+        if action == "hot.status":
+            task_id = str(payload.get("task_id") or "").strip()
+            with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+                task = PERSONA_HOT_CANDIDATE_TASKS.get(task_id)
+                if (
+                    not task
+                    or int(task.get("user_id") or 0) != user_id
+                    or str(task.get("archive_id") or "") != persona_id
+                ):
+                    raise HTTPException(status_code=404, detail="热点任务不存在")
+                return dict(task)
+        if action == "hot.import":
+            candidates = [item for item in payload.get("candidates") or [] if isinstance(item, dict)]
+            result = _import_persona_hot_candidates(
+                persona_id,
+                PersonaDashboardHotCandidatesImportPayload(candidates=candidates, platform="threads"),
+            )
+            return _apply_persona_post_retention(result, user)
+        if action == "hot.cancel":
+            task_cancelled = _cancel_persona_hot_candidate_tasks(persona_id, user_id)
+            process_cancelled = _cancel_persona_hot_workflow(persona_id)
+            return {"ok": True, "cancelled": bool(task_cancelled or process_cancelled)}
+        raise HTTPException(status_code=400, detail=f"不支持的 Telegram 推文操作：{action}")
+
+    async def _tweet_bot_dispatch_async(web_user_id: int, action: str, payload: dict[str, Any]) -> Any:
+        user = _tweet_bot_user(web_user_id)
+        if action != "media.add":
+            return await asyncio.to_thread(_tweet_bot_dispatch, web_user_id, action, payload)
+        persona_id = str(payload.get("persona_id") or "").strip()
+        _require_persona_access(persona_id, user)
+        content = payload.get("content")
+        if not isinstance(content, (bytes, bytearray)) or not content:
+            raise HTTPException(status_code=400, detail="媒体内容为空")
+        upload = UploadFile(
+            file=BytesIO(bytes(content)),
+            filename=str(payload.get("filename") or "telegram-media")[:180],
+        )
+        saved = await _save_upload_file(
+            _workspace_username(user),
+            _new_id("personamedia"),
+            "telegram_media",
+            upload,
+        )
+        if not saved:
+            raise HTTPException(status_code=400, detail="媒体保存失败")
+        return _update_persona_archive_post_media(
+            persona_id,
+            str(payload.get("post_id") or "").strip(),
+            media_paths=[saved],
+            source="favorites" if str(payload.get("source") or "") == "favorites" else "posts",
+            replace_index=(
+                max(0, int(payload.get("replace_index")))
+                if payload.get("replace_index") is not None
+                else None
+            ),
+        )
+
+    tweet_workbench_ops = TweetWorkbenchOps(
+        dispatch=_tweet_bot_dispatch,
+        dispatch_async=_tweet_bot_dispatch_async,
+    )
 
     inject_telegram_admin(
         app,
@@ -25881,7 +26164,7 @@ def create_app() -> FastAPI:
             require_admin=require_admin,
             get_runtime=_telegram_runtime_snapshot,
             save_runtime=_telegram_runtime_save,
-            session_cookie_secure=_session_cookie_secure,
+            workbench_ops=tweet_workbench_ops,
         )
 
     @app.post("/api/auth/apply")

@@ -1,19 +1,72 @@
-import hashlib
-import hmac
-import json
+import asyncio
 import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
-from urllib.parse import urlencode
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from webapp import telegram_admin, telegram_tweet_admin as tweet_tg
 from webapp.db import db, init_db
+from webapp.telegram_tweet_bot import (
+    NativeTweetBotController,
+    TweetWorkbenchOps,
+    callback_token,
+    load_state,
+    resolve_callback_token,
+    save_state,
+)
+
+
+async def _unused_async_dispatch(_user_id, _action, _payload):
+    return {}
+
+
+class _Button:
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
+class _Markup:
+    def __init__(self, *, inline_keyboard):
+        self.inline_keyboard = inline_keyboard
+
+
+class _Types:
+    InlineKeyboardButton = _Button
+    InlineKeyboardMarkup = _Markup
+
+
+class _Message:
+    def __init__(self, chat_id=101, text="", message_id=1):
+        self.chat = SimpleNamespace(id=chat_id, type="private")
+        self.from_user = SimpleNamespace(id=chat_id)
+        self.text = text
+        self.message_id = message_id
+        self.answers = []
+        self.edits = []
+        self.bot = SimpleNamespace()
+
+    async def answer(self, text, **kwargs):
+        self.answers.append((text, kwargs))
+
+    async def edit_text(self, text, **kwargs):
+        self.edits.append((text, kwargs))
+
+
+class _Query:
+    def __init__(self, data, message):
+        self.data = data
+        self.message = message
+        self.from_user = message.from_user
+        self.answers = []
+
+    async def answer(self, text="", **kwargs):
+        self.answers.append((text, kwargs))
 
 
 class TelegramTweetAdminTests(unittest.TestCase):
@@ -39,13 +92,14 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.runtime = {
             "telegram_bot_token": "video-token-must-not-change",
             "telegram_bot_enabled": True,
-            "telegram_tweet_bot_token": "",
+            "telegram_tweet_bot_token": "123456:tweet-token",
             "telegram_tweet_bot_enabled": False,
             "telegram_tweet_public_base_url": "https://console.example.test",
             "telegram_tweet_content_settings_enabled": False,
         }
 
     def tearDown(self):
+        tweet_tg.stop_tweet_telegram_bot_worker()
         if self.old_db is None:
             os.environ.pop("APP_DB_PATH", None)
         else:
@@ -58,178 +112,215 @@ class TelegramTweetAdminTests(unittest.TestCase):
     def _save(self, updates):
         self.runtime.update(updates)
 
-    def _member(self, chat_id, web_user):
-        tweet_tg.upsert_tweet_member(
-            tweet_tg.TweetTgMemberPayload(chat_id=chat_id, web_user=web_user, label="test"),
-            self._get,
-        )
+    def _member(self, chat_id, web_user, *, enabled=True):
+        with mock.patch.object(tweet_tg, "fetch_telegram_chat_profile", return_value={
+            "chat_id": int(chat_id), "username": f"tg{chat_id}", "display_name": f"TG {chat_id}",
+        }):
+            tweet_tg.upsert_tweet_member(
+                tweet_tg.TweetTgMemberPayload(
+                    chat_id=chat_id, web_user=web_user, label="test", enabled=enabled,
+                ),
+                self._get,
+            )
 
-    def _signed_init_data(self, chat_id):
-        values = {
-            "auth_date": str(int(time.time())),
-            "query_id": "AAE-test-query",
-            "user": json.dumps({"id": int(chat_id), "first_name": "Tester"}, separators=(",", ":")),
-        }
-        data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
-        secret = hmac.new(b"WebAppData", self.runtime["telegram_tweet_bot_token"].encode(), hashlib.sha256).digest()
-        values["hash"] = hmac.new(secret, data_check.encode(), hashlib.sha256).hexdigest()
-        return urlencode(values)
+    def _app(self):
+        app = FastAPI()
+        ops = TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch)
+        with mock.patch.object(tweet_tg, "start_tweet_telegram_bot_worker"):
+            tweet_tg.inject_tweet_telegram_admin(
+                app,
+                require_admin=lambda: {"id": 1, "is_admin": 1},
+                get_runtime=self._get,
+                save_runtime=self._save,
+                workbench_ops=ops,
+            )
+        return app
 
-    def test_members_are_bound_to_distinct_web_users(self):
+    def test_members_are_verified_and_bound_to_distinct_web_users(self):
         self._member(101, "tweet_alice")
         self._member(202, self.bob_id)
         rows = {row["chat_id"]: row for row in tweet_tg._list_members()}
         self.assertEqual(rows[101]["web_user_id"], self.alice_id)
-        self.assertEqual(rows[101]["web_username"], "tweet_alice")
         self.assertEqual(rows[202]["web_user_id"], self.bob_id)
-        alice_url = tweet_tg._create_ticket(101, "personas", self._get)
-        bob_url = tweet_tg._create_ticket(202, "publishing", self._get)
-        alice_token = alice_url.split("ticket=", 1)[1]
-        bob_token = bob_url.split("ticket=", 1)[1]
-        self.assertEqual(tweet_tg._consume_ticket(alice_token, self._get), (self.alice_id, "/console.html?view=workspace&module=personas"))
-        self.assertEqual(tweet_tg._consume_ticket(bob_token, self._get), (self.bob_id, "/console.html?view=workspace&module=publishing"))
+        with mock.patch.object(tweet_tg, "fetch_telegram_chat_profile", side_effect=RuntimeError("offline")):
+            with self.assertRaisesRegex(HTTPException, "无法验证"):
+                tweet_tg.upsert_tweet_member(
+                    tweet_tg.TweetTgMemberPayload(chat_id=303, web_user=self.alice_id), self._get,
+                )
+        self.assertIsNone(tweet_tg._load_enabled_member(303))
 
-    def test_ticket_is_one_time_and_member_disable_revokes_unused_ticket(self):
-        self._member(101, "tweet_alice")
-        token = tweet_tg._create_ticket(101, "tasks", self._get).split("ticket=", 1)[1]
-        tweet_tg._consume_ticket(token, self._get)
-        with self.assertRaisesRegex(Exception, "已失效"):
-            tweet_tg._consume_ticket(token, self._get)
-
-        unused = tweet_tg._create_ticket(101, "accounts", self._get).split("ticket=", 1)[1]
+    def test_disable_rebind_and_delete_clear_native_state(self):
+        self._member(101, self.alice_id)
+        save_state(101, selected_persona_id="persona-a", mode="draft_edit", payload={"post_id": "p1"})
+        callback_token(101, "d", {"post_id": "p1"})
+        with TestClient(self._app()) as client:
+            response = client.post("/api/admin/tg_tweet/members/101/toggle", json={"enabled": False})
+            self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(load_state(101)["selected_persona_id"], "")
         with db() as conn:
-            conn.execute("UPDATE telegram_tweet_members SET enabled = 0 WHERE chat_id = 101")
-        with self.assertRaisesRegex(Exception, "停用"):
-            tweet_tg._consume_ticket(unused, self._get)
+            count = conn.execute("SELECT COUNT(*) AS count FROM telegram_tweet_bot_callbacks WHERE chat_id=101").fetchone()
+        self.assertEqual(int(count["count"]), 0)
+        self._member(101, self.alice_id)
+        save_state(101, selected_persona_id="persona-a")
+        self._member(101, self.bob_id)
+        self.assertEqual(load_state(101)["selected_persona_id"], "")
+        with TestClient(self._app()) as client:
+            self.assertEqual(client.delete("/api/admin/tg_tweet/members/101").status_code, 200)
+        self.assertIsNone(tweet_tg._load_enabled_member(101))
 
-    def test_content_settings_requires_feature_flag_at_issue_and_consume(self):
-        self._member(101, "tweet_alice")
-        with self.assertRaisesRegex(RuntimeError, "尚未开放"):
-            tweet_tg._create_ticket(101, "content_settings", self._get)
-        self.runtime["telegram_tweet_content_settings_enabled"] = True
-        token = tweet_tg._create_ticket(101, "content_settings", self._get).split("ticket=", 1)[1]
-        self.runtime["telegram_tweet_content_settings_enabled"] = False
-        with self.assertRaisesRegex(Exception, "尚未开放"):
-            tweet_tg._consume_ticket(token, self._get)
+    def test_callback_tokens_are_short_chat_bound_and_capped(self):
+        first = callback_token(101, "d", {"post_id": "secret-post"})
+        self.assertLessEqual(len(first.encode("utf-8")), 64)
+        _, action, token = first.split(":")
+        self.assertEqual(resolve_callback_token(101, action, token)["post_id"], "secret-post")
+        with self.assertRaisesRegex(HTTPException, "已过期"):
+            resolve_callback_token(202, action, token)
+        self.assertEqual(resolve_callback_token(101, action, token, consume=True)["post_id"], "secret-post")
+        with self.assertRaisesRegex(HTTPException, "已过期"):
+            resolve_callback_token(101, action, token, consume=True)
+        for index in range(210):
+            callback_token(101, "d", {"post_id": str(index)})
+        with db() as conn:
+            count = conn.execute("SELECT COUNT(*) AS count FROM telegram_tweet_bot_callbacks WHERE chat_id=101").fetchone()
+        self.assertLessEqual(int(count["count"]), 200)
 
-    def test_tweet_config_does_not_mutate_video_bot_config(self):
+    def test_native_controller_persists_persona_creation_flow(self):
+        calls = []
+
+        def dispatch(user_id, action, payload):
+            calls.append((user_id, action, payload))
+            if action == "personas.create":
+                return {"id": "persona-new", "name": payload["name"]}
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id, "web_username": "tweet_alice"},
+        )
+        prompt = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:persona_new", prompt), _Types))
+        self.assertEqual(load_state(101)["mode"], "persona_new")
+        answer = _Message(text="科技观察员｜关注 AI 产品")
+        asyncio.run(controller.handle_text(answer, _Types))
+        self.assertEqual(load_state(101)["selected_persona_id"], "persona-new")
+        self.assertEqual(calls[-1][1], "personas.create")
+        self.assertEqual(calls[-1][2]["content"], "关注 AI 产品")
+
+    def test_native_publish_selects_bound_account_and_requires_confirmation(self):
+        calls = []
+
+        def dispatch(user_id, action, payload):
+            calls.append((user_id, action, payload))
+            if action == "accounts.list":
+                return [{
+                    "id": "account-1", "persona_id": "persona-a", "platform": "threads",
+                    "username": "alice_threads", "status": "authorized",
+                }]
+            if action == "publish.start":
+                return {"task": {}}
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id, "web_username": "tweet_alice"},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        message = _Message()
+        publish_button = callback_token(101, "pub", {"source": "posts", "post_id": "post-1"})
+        asyncio.run(controller.handle_callback(_Query(publish_button, message), _Types))
+        picker = message.edits[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
+        self.assertTrue(picker.startswith("tt:pa:"))
+        asyncio.run(controller.handle_callback(_Query(picker, message), _Types))
+        confirmation = message.edits[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
+        self.assertTrue(confirmation.startswith("tt:pubok:"))
+        asyncio.run(controller.handle_callback(_Query(confirmation, message), _Types))
+        published = [item for item in calls if item[1] == "publish.start"]
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0][2]["account_id"], "account-1")
+        with self.assertLogs("webapp.telegram_tweet_bot", level="ERROR"):
+            asyncio.run(controller.handle_callback(_Query(confirmation, message), _Types))
+        self.assertEqual(len([item for item in calls if item[1] == "publish.start"]), 1)
+
+    def test_tweet_config_is_field_scoped_and_token_conflict_requires_both_enabled(self):
+        captured = []
+
+        def save(updates):
+            captured.append(dict(updates))
+            self._save(updates)
+
         with mock.patch.object(tweet_tg, "verify_bot_token", return_value={"username": "tweet_bot", "id": 10}), \
              mock.patch.object(tweet_tg, "reload_tweet_telegram_bot_worker"):
             result = tweet_tg.save_tweet_tg_env(
-                tweet_tg.TweetTgEnvPayload(
-                    bot_token="123456:tweet-token",
-                    bot_enabled=True,
-                    public_base_url="https://console.example.test/",
-                    content_settings_enabled=True,
-                ),
-                self._get,
-                self._save,
+                tweet_tg.TweetTgEnvPayload(content_settings_enabled=True), self._get, save,
             )
+        self.assertEqual(captured, [{"telegram_tweet_content_settings_enabled": True}])
         self.assertEqual(self.runtime["telegram_bot_token"], "video-token-must-not-change")
-        self.assertTrue(self.runtime["telegram_bot_enabled"])
-        self.assertEqual(self.runtime["telegram_tweet_bot_token"], "123456:tweet-token")
         self.assertTrue(result["tg_settings"]["content_settings_enabled"])
-
-    def test_rejects_group_chat_ids_and_video_bot_token_reuse(self):
-        with self.assertRaisesRegex(Exception, "私聊"):
-            self._member(-100123456, "tweet_alice")
         with mock.patch.object(tweet_tg, "verify_bot_token", return_value={"username": "same_bot", "id": 10}), \
              mock.patch.object(tweet_tg, "reload_tweet_telegram_bot_worker"):
-            with self.assertRaisesRegex(Exception, "不能与视频工作台共用"):
+            with self.assertRaisesRegex(HTTPException, "不能与视频工作台共用"):
                 tweet_tg.save_tweet_tg_env(
                     tweet_tg.TweetTgEnvPayload(bot_token="video-token-must-not-change", bot_enabled=True),
                     self._get,
                     self._save,
                 )
-        self.runtime["telegram_tweet_bot_token"] = "123456:tweet-token"
+        self.runtime.update({"telegram_tweet_bot_token": "123456:tweet-token", "telegram_tweet_bot_enabled": False})
         with mock.patch.object(telegram_admin, "verify_bot_token", return_value={"username": "same_bot", "id": 10}), \
              mock.patch.object(telegram_admin, "reload_telegram_bot_worker"):
-            with self.assertRaisesRegex(Exception, "不能与推文 Bot 共用"):
-                telegram_admin.save_tg_env(
-                    telegram_admin.TgEnvPayload(bot_token="123456:tweet-token", bot_enabled=True),
-                    self._get,
-                    self._save,
-                )
+            allowed = telegram_admin.save_tg_env(
+                telegram_admin.TgEnvPayload(bot_token="123456:tweet-token", bot_enabled=True),
+                self._get,
+                self._save,
+            )
+        self.assertTrue(allowed["ok"])
 
-    def test_public_entry_sets_short_user_session_and_redirects(self):
-        self._member(101, "tweet_alice")
-        self.runtime["telegram_tweet_bot_token"] = "123456:tweet-token"
-        self.runtime["telegram_tweet_bot_enabled"] = True
-        app = FastAPI()
-        with mock.patch.object(tweet_tg, "start_tweet_telegram_bot_worker"):
-            tweet_tg.inject_tweet_telegram_admin(
-                app,
-                require_admin=lambda: {"id": 1, "is_admin": 1},
-                get_runtime=self._get,
-                save_runtime=self._save,
-                session_cookie_secure=lambda _request: False,
-            )
-        token = tweet_tg._create_ticket(101, "home", self._get).split("ticket=", 1)[1]
-        with TestClient(app) as client:
-            landing = client.get(f"/telegram/tweet/open?ticket={token}")
-            self.assertEqual(landing.status_code, 200)
-            self.assertIn("telegram-web-app.js", landing.text)
-            self.assertNotIn("session_token=", landing.headers.get("set-cookie", ""))
-            response = client.post(
-                "/telegram/tweet/exchange",
-                json={"ticket": token, "init_data": self._signed_init_data(101)},
-            )
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(response.json()["target"], "/console.html?view=persona_dashboard")
-            self.assertIn("session_token=", response.headers.get("set-cookie", ""))
-            with db() as conn:
-                session = conn.execute("SELECT token, user_id, expires_at, created_at, revoked_at FROM sessions ORDER BY created_at DESC LIMIT 1").fetchone()
-            self.assertEqual(int(session["user_id"]), self.alice_id)
-            self.assertLessEqual(int(session["expires_at"]) - int(session["created_at"]), tweet_tg.SESSION_TTL_SECONDS)
-            tweet_tg._create_ticket(101, "tasks", self._get)
-            blocked = client.patch("/api/persona_dashboard/personas/example/profile", json={})
-            self.assertEqual(blocked.status_code, 403)
-            self.assertEqual(blocked.json()["code"], "tg_tweet_content_settings_disabled")
-            toggled = client.post("/api/admin/tg_tweet/members/101/toggle", json={"enabled": False})
-            self.assertEqual(toggled.status_code, 200, toggled.text)
+    def test_database_lease_allows_only_one_poller_owner(self):
+        token = "123456:tweet-token"
         with db() as conn:
-            revoked = conn.execute("SELECT revoked_at FROM sessions WHERE token = ?", (session["token"],)).fetchone()
-        self.assertGreater(int(revoked["revoked_at"]), 0)
-
-    def test_exchange_rejects_different_telegram_user(self):
-        self._member(101, "tweet_alice")
-        self.runtime["telegram_tweet_bot_token"] = "123456:tweet-token"
-        self.runtime["telegram_tweet_bot_enabled"] = True
-        app = FastAPI()
-        with mock.patch.object(tweet_tg, "start_tweet_telegram_bot_worker"):
-            tweet_tg.inject_tweet_telegram_admin(
-                app,
-                require_admin=lambda: {"id": 1, "is_admin": 1},
-                get_runtime=self._get,
-                save_runtime=self._save,
-                session_cookie_secure=lambda _request: False,
+            tweet_tg.ensure_tweet_telegram_schema(conn)
+            conn.execute(
+                "INSERT INTO telegram_tweet_bot_leases(name,owner_id,expires_at,updated_at) VALUES (?,?,?,?)",
+                (tweet_tg._lease_name(token), "other-process", time.time() + 60, time.time()),
             )
-        token = tweet_tg._create_ticket(101, "home", self._get).split("ticket=", 1)[1]
-        with TestClient(app) as client:
-            response = client.post(
-                "/telegram/tweet/exchange",
-                json={"ticket": token, "init_data": self._signed_init_data(202)},
-            )
-            self.assertEqual(response.status_code, 403)
+        self.assertFalse(tweet_tg._acquire_or_renew_bot_lease(token))
         with db() as conn:
-            ticket = conn.execute("SELECT used_at FROM telegram_tweet_tickets").fetchone()
-        self.assertEqual(float(ticket["used_at"]), 0)
+            conn.execute("UPDATE telegram_tweet_bot_leases SET expires_at = 0")
+        self.assertTrue(tweet_tg._acquire_or_renew_bot_lease(token))
+        tweet_tg._release_bot_lease(token)
 
-    def test_admin_and_console_frontend_contracts(self):
-        static = Path(__file__).resolve().parents[1] / "static"
-        html = (static / "admin.html").read_text(encoding="utf-8")
-        admin_js = (static / "assets" / "admin.js").read_text(encoding="utf-8")
-        console_js = (static / "assets" / "console.js").read_text(encoding="utf-8")
+    def test_disabled_worker_is_not_started_and_legacy_web_session_routes_are_gone(self):
+        tweet_tg._BOT_OPS = TweetWorkbenchOps(
+            dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch,
+        )
+        with mock.patch.object(tweet_tg.threading, "Thread") as thread:
+            tweet_tg.start_tweet_telegram_bot_worker(self._get)
+        thread.assert_not_called()
+        with TestClient(self._app()) as client:
+            landing = client.get("/telegram/tweet/open?ticket=anything")
+            exchange = client.post("/telegram/tweet/exchange", json={"ticket": "x", "init_data": "y"})
+        self.assertEqual(landing.status_code, 410)
+        self.assertEqual(exchange.status_code, 410)
+        self.assertNotIn("session_token=", landing.headers.get("set-cookie", ""))
+        self.assertNotIn("session_token=", exchange.headers.get("set-cookie", ""))
+
+    def test_admin_and_native_bot_frontend_contracts(self):
+        webapp = Path(__file__).resolve().parents[1]
+        html = (webapp / "static" / "admin.html").read_text(encoding="utf-8")
+        admin_js = (webapp / "static" / "assets" / "admin.js").read_text(encoding="utf-8")
+        console_js = (webapp / "static" / "assets" / "console.js").read_text(encoding="utf-8")
+        bot_source = (webapp / "telegram_tweet_bot.py").read_text(encoding="utf-8")
+        admin_source = (webapp / "telegram_tweet_admin.py").read_text(encoding="utf-8")
         console_panel = html[html.index('data-tg-workbench-panel="console"'):html.index('data-tg-workbench-panel="crm"')]
         self.assertIn('id="tgTweetContentSettingsEnabled"', console_panel)
-        self.assertIn('id="btnClearTgTweetToken"', console_panel)
         self.assertIn('id="tgTweetWebUser"', console_panel)
-        self.assertIn('id="tgTweetMemberList"', console_panel)
         self.assertIn('/api/admin/tg_tweet/settings', admin_js)
-        self.assertIn('/api/admin/tg_tweet/members', admin_js)
-        self.assertIn('callback_data="tw:personas"', (Path(__file__).resolve().parents[1] / "telegram_tweet_admin.py").read_text(encoding="utf-8"))
-        self.assertIn('initialConsoleParams.get("module")', console_js)
-        self.assertIn('url.searchParams.delete("module")', console_js)
+        self.assertIn('callback_data="tt:personas:0"', bot_source)
+        self.assertIn('F.photo | F.video | F.document', bot_source)
+        self.assertNotIn("WebAppInfo", bot_source)
+        self.assertNotIn("create_session(", admin_source)
+        self.assertNotIn('initialConsoleParams.get("module")', console_js)
 
 
 if __name__ == "__main__":

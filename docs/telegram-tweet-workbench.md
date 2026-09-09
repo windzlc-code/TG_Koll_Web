@@ -1,49 +1,50 @@
 # Telegram 推文工作台
 
-## 设计边界
+## 运行边界
 
-推文 Bot 使用独立 Token、worker、成员表和管理 API。它不读取旧 VMOS 文件，不调用旧 Telegram 内部提交接口，也不复制人设、草稿、媒体或发布队列。
+推文 Bot 使用独立 Token、成员表、FSM 状态、callback token、审计表、worker 和跨进程租约。它不调用视频工作台内部接口，不读取旧 VMOS 数据，也不复制网页端的发布、计费或任务执行器。
 
 ```text
 Telegram 私聊用户
   -> telegram_tweet_members (Chat ID -> VECTO user_id)
-  -> Telegram initData 签名和 user.id 校验
-  -> 3 分钟一次性 ticket
-  -> 1 小时 VECTO 用户会话
-  -> 现有 console / persona dashboard / social automation API
+  -> Telegram 原生菜单 / 持久化 FSM / 短 callback token
+  -> 带 web_user_id 的 TweetWorkbenchOps
+  -> 既有人设、计费、热点、媒体和 social task 服务
 ```
 
-Bot 原生菜单按网页能力分为：我的人设、推文生成、发布与自动化、账号与浏览器、任务中心。具体操作在 Telegram Mini App 中运行，所以网页端已有的租户校验、额度、冷却、OAuth 身份核验、任务幂等、日志、截图、取消与重试保持为唯一实现。
+Bot 不创建 VECTO Web session，因此不会绕过网页端密码、MFA、新设备验证或单会话策略。OAuth、账号凭证、代理和浏览器人工接管只提供普通 HTTPS 网页链接，用户仍须按网页端原有流程登录。
+
+## 核心闭环
+
+- 人设：分页查看、选择和新建。
+- 生成：输入主题后进入既有异步生成队列，并在完成时回传草稿。
+- 草稿与收藏：分页、详情、编辑、收藏和二次确认删除。
+- 媒体：从 Telegram 上传图片、视频或文件，支持追加、替换和移除。
+- 热点：进入既有热点任务，完成后选择候选保存为草稿。
+- 发布：立即发布、北京时间定时发布和矩阵发布，全部二次确认后进入既有队列。
+- 任务：按 VECTO 用户隔离查看、取消和重试。
+- 内容设置：管理员开关启用后，可在 Bot 内编辑人设简介和推文风格。
 
 ## 启用
 
-1. 在 BotFather 为独立的推文 Bot 配置 Mini App 域名。
-2. 打开运营后台的 `Telegram -> 推文工作台`。
-3. 填写独立 Bot Token 和当前新服务器的 HTTPS 公网地址。
-4. 保持“内容设置”开启；该开关控制 Bot 菜单入口及 TG 会话对人设 profile 写接口的访问。
-5. 将每个私聊 Chat ID 绑定到明确的 VECTO 用户 ID 或用户名。
-6. 检测 Token 后启用轮询并保存。
+1. 在运营后台 `Telegram -> 推文工作台` 配置独立 Bot Token。
+2. 确保该 Token 与已启用的视频工作台 Token 不同。
+3. 让目标 Telegram 用户先向推文 Bot 发送 `/start`，取得 Chat ID。
+4. 管理员将经 Bot API 验证的 Chat ID 绑定到明确的 VECTO 用户。
+5. 保持“内容设置”开启并启用推文 Bot 轮询。
 
-视频工作台 Token 不能与推文 Bot Token 相同。成员停用、删除或换绑时，由该成员兑换的 Telegram 工作台会话会立即撤销。
+## 部署与隔离
 
-## 部署边界
+- 只在 application/new-console 角色注册路由和启动 worker；collector/old-worker 不启动。
+- 同一个推文 Token 通过 SQLite 租约保证最多一个活跃 long-poll 实例；滚动发布时待命实例不会调用 `getUpdates`。
+- 启动前再次检查视频和推文 Token。发生冲突只拒绝推文 Bot，不停止、不重启视频 Bot。
+- runtime 配置采用字段级更新，读取、合并和写入位于同一把锁内。
+- callback token 与 Chat ID 绑定且 15 分钟过期；FSM 状态和关键动作审计持久化到新服务器数据库。
 
-- 仅发布到新服务器应用容器 `tg-koll-web-console`。
-- `TG_DEPLOYMENT_ROLE=collector` 时不注册推文 Bot 管理、兑换路由，也不启动 worker。
-- 不向旧服务器 `tg-koll-capture-worker` 或 `tg-koll-collector-admin` 分发 Token、成员映射或数据库。
+## 验收
 
-## 验证
-
-```powershell
-py -3 -m unittest webapp.tests.test_telegram_tweet_admin webapp.tests.test_telegram_admin webapp.tests.test_telegram_closed_loop webapp.tests.test_automation_plan_frontend_contract
-node --check webapp/static/assets/admin.js
-node --check webapp/static/assets/console.js
-```
-
-移动端 UI 校验脚本只允许显式指定 Windows 临时目录下的隔离数据库：
-
-```powershell
-$env:TG_TWEET_UI_ALLOW_DB_MUTATION = "1"
-$env:APP_DB_PATH = "$env:TEMP\vecto-tg-ui\app.db"
-py -3 scripts\verify-telegram-tweet-ui.py
-```
+- 使用两个 Telegram 私聊账号分别绑定两个 VECTO 用户，确认彼此看不到人设、草稿、账号和任务。
+- 完成“选择人设 -> 生成 -> 编辑/媒体 -> 发布确认 -> 任务状态/结果”的真实 Telegram 流程。
+- 验证内容设置关闭后，Bot 的简介和风格更新被服务端拒绝。
+- 启动两个 application 实例，确认只有租约持有者轮询且没有 Telegram 409。
+- 同时运行视频 Bot，确认两个 Token、线程、菜单、成员和业务队列完全独立。

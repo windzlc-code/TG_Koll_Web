@@ -333,14 +333,22 @@ def save_tg_env(payload: TgEnvPayload, get_runtime: GetRuntime, save_runtime: Sa
     next_runtime.update(updates)
     next_token = str(next_runtime.get("telegram_bot_token") or "").strip()
     tweet_token = str(next_runtime.get("telegram_tweet_bot_token") or "").strip()
-    if next_token and tweet_token and secrets.compare_digest(next_token, tweet_token):
+    video_enabled = bool(next_runtime.get("telegram_bot_enabled"))
+    tweet_enabled = bool(next_runtime.get("telegram_tweet_bot_enabled"))
+    if (
+        video_enabled
+        and tweet_enabled
+        and next_token
+        and tweet_token
+        and secrets.compare_digest(next_token, tweet_token)
+    ):
         raise HTTPException(status_code=400, detail="视频工作台不能与推文 Bot 共用同一个 Token")
     if not next_token:
         next_runtime["telegram_bot_enabled"] = False
         updates["telegram_bot_enabled"] = False
     if next_runtime.get("telegram_bot_enabled") and next_token:
         verify_bot_token(next_token)
-    save_runtime(next_runtime)
+    save_runtime(updates)
     reload_telegram_bot_worker(get_runtime)
     settings = load_tg_settings(get_runtime)
     settings["restart_required"] = False
