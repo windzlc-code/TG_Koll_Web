@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .db import db
-from .telegram_admin import fetch_telegram_chat_profile, verify_bot_token
+from .telegram_admin import verify_bot_token
 from .telegram_tweet_bot import TweetWorkbenchOps, ensure_native_bot_schema, run_native_tweet_bot
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ DEFAULT_PUBLIC_BASE_URL = "https://www.vecto-ai.cn"
 _BOT_LOCK = threading.RLock()
 _BOT_STOP = threading.Event()
 _BOT_THREAD: threading.Thread | None = None
+_BOT_RELOAD_THREAD: threading.Thread | None = None
 _BOT_OPS: TweetWorkbenchOps | None = None
 _BOT_OWNER_ID = f"{uuid.uuid4().hex}:{threading.get_native_id()}"
 _BOT_STATUS: dict[str, Any] = {
@@ -41,12 +42,10 @@ class TweetTgEnvPayload(BaseModel):
     bot_token: str | None = None
     bot_enabled: bool | None = None
     public_base_url: str | None = None
-    content_settings_enabled: bool | None = None
 
 
 class TweetTgMemberPayload(BaseModel):
     chat_id: int | str
-    web_user: int | str
     label: str = Field(default="", max_length=120)
     enabled: bool = True
 
@@ -138,33 +137,17 @@ def _resolve_web_user(conn, value: int | str):
     return row
 
 
-def _resolve_chat_id(token: str, chat_ref: int | str) -> tuple[int, str, str]:
+def _resolve_chat_id(chat_ref: int | str) -> int:
     raw = str(chat_ref or "").strip()
     if not raw:
-        raise HTTPException(status_code=400, detail="请填写 Telegram Chat ID 或 @用户名")
-    if not token:
-        raise HTTPException(status_code=400, detail="请先配置并检测推文 Bot Token")
+        raise HTTPException(status_code=400, detail="请填写 Telegram Chat ID")
     try:
-        numeric_id = int(raw)
+        chat_id = int(raw)
     except ValueError:
-        numeric_id = 0
-    try:
-        profile = fetch_telegram_chat_profile(token, numeric_id or raw)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"无法验证该 Telegram 私聊用户。请让用户先向推文 Bot 发送 /start，再重试：{exc}",
-        ) from exc
-    chat_id = int(profile.get("chat_id") or 0)
+        raise HTTPException(status_code=400, detail="Telegram Chat ID 必须是正整数") from None
     if chat_id <= 0:
         raise HTTPException(status_code=400, detail="推文工作台只允许绑定私聊用户的正数 Chat ID")
-    if numeric_id and chat_id != numeric_id:
-        raise HTTPException(status_code=400, detail="Telegram 返回的 Chat ID 与输入不一致")
-    return (
-        chat_id,
-        str(profile.get("username") or "").strip().lstrip("@"),
-        str(profile.get("display_name") or "").strip(),
-    )
+    return chat_id
 
 
 def _member_payload(row) -> dict[str, Any]:
@@ -230,7 +213,6 @@ def load_tweet_tg_settings(get_runtime: GetRuntime) -> dict[str, Any]:
         "bot_token_masked": _mask_token(token),
         "bot_token_length": len(token),
         "bot_enabled": bool(runtime.get("telegram_tweet_bot_enabled")),
-        "content_settings_enabled": bool(runtime.get("telegram_tweet_content_settings_enabled")),
         "public_base_url": str(runtime.get("telegram_tweet_public_base_url") or DEFAULT_PUBLIC_BASE_URL).rstrip("/"),
         "bot_running": bool(status.get("running")),
         "bot_username": str(status.get("bot_username") or ""),
@@ -253,8 +235,6 @@ def save_tweet_tg_env(payload: TweetTgEnvPayload, get_runtime: GetRuntime, save_
             updates["telegram_tweet_bot_enabled"] = False
     if payload.bot_enabled is not None:
         updates["telegram_tweet_bot_enabled"] = bool(payload.bot_enabled)
-    if payload.content_settings_enabled is not None:
-        updates["telegram_tweet_content_settings_enabled"] = bool(payload.content_settings_enabled)
     if payload.public_base_url is not None:
         public_base = str(payload.public_base_url or "").strip().rstrip("/")
         if not public_base.startswith("https://"):
@@ -284,14 +264,20 @@ def save_tweet_tg_env(payload: TweetTgEnvPayload, get_runtime: GetRuntime, save_
     return {"ok": True, "tg_settings": load_tweet_tg_settings(get_runtime), "restart_required": False}
 
 
-def upsert_tweet_member(payload: TweetTgMemberPayload, get_runtime: GetRuntime) -> None:
-    runtime = get_runtime() or {}
-    token = str(runtime.get("telegram_tweet_bot_token") or "").strip()
-    chat_id, tg_username, tg_display_name = _resolve_chat_id(token, payload.chat_id)
+def upsert_tweet_member(
+    payload: TweetTgMemberPayload,
+    get_runtime: GetRuntime,
+    *,
+    default_web_user: int | str = "",
+) -> None:
+    del get_runtime
+    chat_id = _resolve_chat_id(payload.chat_id)
+    tg_username = ""
+    tg_display_name = ""
     now = time.time()
     with db() as conn:
         ensure_tweet_telegram_schema(conn)
-        web_user = _resolve_web_user(conn, payload.web_user)
+        web_user = _resolve_web_user(conn, default_web_user)
         existing = conn.execute(
             "SELECT * FROM telegram_tweet_members WHERE chat_id = ?", (chat_id,)
         ).fetchone()
@@ -457,7 +443,7 @@ def start_tweet_telegram_bot_worker(get_runtime: GetRuntime) -> None:
         _BOT_THREAD.start()
 
 
-def stop_tweet_telegram_bot_worker() -> None:
+def stop_tweet_telegram_bot_worker() -> bool:
     global _BOT_THREAD
     _BOT_STOP.set()
     with _BOT_LOCK:
@@ -467,13 +453,40 @@ def stop_tweet_telegram_bot_worker() -> None:
     with _BOT_LOCK:
         if _BOT_THREAD is not None and not _BOT_THREAD.is_alive():
             _BOT_THREAD = None
+        return _BOT_THREAD is None
+
+
+def _restart_after_old_poller(thread: threading.Thread, get_runtime: GetRuntime) -> None:
+    global _BOT_THREAD, _BOT_RELOAD_THREAD
+    thread.join()
+    with _BOT_LOCK:
+        if _BOT_THREAD is thread:
+            _BOT_THREAD = None
+        _BOT_RELOAD_THREAD = None
+    start_tweet_telegram_bot_worker(get_runtime)
 
 
 def reload_tweet_telegram_bot_worker(get_runtime: GetRuntime) -> None:
+    global _BOT_RELOAD_THREAD
     # Complete the old poller's shutdown before accepting a new token. This
     # also prevents a brief getUpdates overlap when configuration is rotated.
-    stop_tweet_telegram_bot_worker()
-    start_tweet_telegram_bot_worker(get_runtime)
+    if stop_tweet_telegram_bot_worker():
+        start_tweet_telegram_bot_worker(get_runtime)
+        return
+    with _BOT_LOCK:
+        old_thread = _BOT_THREAD
+        if old_thread is None:
+            start_tweet_telegram_bot_worker(get_runtime)
+            return
+        if _BOT_RELOAD_THREAD and _BOT_RELOAD_THREAD.is_alive():
+            return
+        _BOT_RELOAD_THREAD = threading.Thread(
+            target=_restart_after_old_poller,
+            args=(old_thread, get_runtime),
+            name="vecto-tweet-telegram-bot-reloader",
+            daemon=True,
+        )
+        _BOT_RELOAD_THREAD.start()
 
 
 def inject_tweet_telegram_admin(
@@ -506,7 +519,7 @@ def inject_tweet_telegram_admin(
 
     @router.post("/api/admin/tg_tweet/members")
     def save_member(payload: TweetTgMemberPayload, _user: dict[str, Any] = Depends(require_admin)):
-        upsert_tweet_member(payload, get_runtime)
+        upsert_tweet_member(payload, get_runtime, default_web_user=int(_user["id"]))
         return {"ok": True, "tg_settings": load_tweet_tg_settings(get_runtime)}
 
     @router.post("/api/admin/tg_tweet/members/{chat_id}/toggle")

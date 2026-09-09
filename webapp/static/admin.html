@@ -2273,23 +2273,14 @@
                       <span>网页安全操作地址</span>
                       <input id="tgTweetPublicBaseUrl" type="url" placeholder="https://www.vecto-ai.cn">
                     </label>
-                    <div class="admin-config-card-title" style="margin-top:16px">内容设置</div>
-                    <label class="proxy-provider-check admin-tg-enable">
-                      <input id="tgTweetContentSettingsEnabled" type="checkbox"> 在 Bot 菜单开放内容设置
-                    </label>
-                    <div class="small">开启后成员可在 Bot 内编辑网页端同一份人设简介和推文风格；关闭后服务端原生操作会同时拒绝。</div>
                   </div>
                   <div class="admin-tg-member-pane">
-                    <div class="admin-config-card-title">授权成员与 VECTO 用户</div>
-                    <div class="small">用户需先向推文 Bot 发送 /start。每个 Chat ID 必须经 Bot API 验证并绑定一个明确的 VECTO 用户，所有人设、账号、额度和任务均按该用户校验。</div>
+                    <div class="admin-config-card-title">授权成员</div>
+                    <div class="small">填写正数 Telegram Chat ID 即可授权，无需用户预先发送 /start。成员使用当前管理员工作区中的人设、账号与任务。</div>
                     <div class="admin-tg-member-row">
                       <label class="admin-tg-field">
                         <span>Chat ID</span>
-                        <input id="tgTweetChatId" placeholder="Chat ID 或 @用户名">
-                      </label>
-                      <label class="admin-tg-field">
-                        <span>VECTO 用户</span>
-                        <input id="tgTweetWebUser" placeholder="用户 ID 或用户名">
+                        <input id="tgTweetChatId" inputmode="numeric" placeholder="例如：123456789">
                       </label>
                       <label class="admin-tg-field">
                         <span>备注</span>
@@ -2308,7 +2299,6 @@
                         <th scope="col">备注</th>
                         <th scope="col">Telegram</th>
                         <th scope="col">Chat ID</th>
-                        <th scope="col">VECTO 用户</th>
                         <th scope="col">状态</th>
                         <th scope="col">操作</th>
                       </tr>

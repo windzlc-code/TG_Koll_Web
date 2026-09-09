@@ -375,7 +375,6 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "telegram_tweet_bot_token": "",
     "telegram_tweet_bot_enabled": False,
     "telegram_tweet_public_base_url": "https://www.vecto-ai.cn",
-    "telegram_tweet_content_settings_enabled": True,
     "video_default_duration_seconds": 10,
     "video_default_ratio": "9:16",
     "video_default_resolution": "720p",
@@ -5545,12 +5544,6 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     ).strip().rstrip("/")
     merged["telegram_tweet_public_base_url"] = (
         tweet_public_base if tweet_public_base.startswith("https://") else DEFAULT_RUNTIME_CONFIG["telegram_tweet_public_base_url"]
-    )
-    merged["telegram_tweet_content_settings_enabled"] = bool(
-        current.get(
-            "telegram_tweet_content_settings_enabled",
-            DEFAULT_RUNTIME_CONFIG["telegram_tweet_content_settings_enabled"],
-        )
     )
     for key in (
         "video_create_audio_app_id",
@@ -25923,8 +25916,6 @@ def create_app() -> FastAPI:
         if action == "profile.get":
             return _read_persona_dashboard_profile(persona_id)
         if action == "profile.update":
-            if not bool(_telegram_runtime_snapshot().get("telegram_tweet_content_settings_enabled")):
-                raise HTTPException(status_code=403, detail="管理员尚未开放内容设置")
             allowed = {
                 key: payload.get(key)
                 for key in ("content", "tweet_style_sample")
@@ -26043,7 +26034,8 @@ def create_app() -> FastAPI:
             with db() as conn:
                 normal_rows = conn.execute(
                     "SELECT id, type, status, error, created_at, updated_at FROM tasks "
-                    "WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                    "WHERE user_id = ? AND type = 'persona_post_generation' "
+                    "ORDER BY created_at DESC LIMIT ?",
                     (user_id, limit),
                 ).fetchall()
             normal = [{**dict(row), "_tg_task_kind": "normal"} for row in normal_rows]
@@ -26054,11 +26046,16 @@ def create_app() -> FastAPI:
             task_id = str(payload.get("task_id") or "").strip()
             with db() as conn:
                 normal_row = conn.execute(
-                    "SELECT * FROM tasks WHERE id = ? AND user_id = ?", (task_id, user_id)
+                    "SELECT * FROM tasks WHERE id = ? AND user_id = ? "
+                    "AND type = 'persona_post_generation'",
+                    (task_id, user_id),
                 ).fetchone()
             if normal_row is not None:
                 if action == "tasks.get":
-                    return _build_task_detail_payload(task=dict(normal_row), include_logs=False, log_limit=0)
+                    return {
+                        **_build_task_detail_payload(task=dict(normal_row), include_logs=False, log_limit=0),
+                        "_tg_task_kind": "normal",
+                    }
                 if action == "tasks.cancel":
                     return _cancel_task_record_for_user(
                         task_id=task_id, user_id=user_id, requested_by="Telegram 推文 Bot",
@@ -26066,7 +26063,7 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=409, detail="生成任务请从推文生成重新提交")
             social_api._require_task_access(task_id, user)
             if action == "tasks.get":
-                return social_api.get_social_task(task_id)
+                return {**social_api.get_social_task(task_id), "_tg_task_kind": "social"}
             if action == "tasks.cancel":
                 return social_api.cancel_social_task(task_id, "Telegram 用户取消")
             result = social_api.retry_social_task(
@@ -26078,7 +26075,7 @@ def create_app() -> FastAPI:
             return result
         if action == "hot.start":
             cooldown = _require_persona_hot_fetch_ready(user)
-            return _start_billable_persona_hot_candidate_task(
+            task = _start_billable_persona_hot_candidate_task(
                 persona_id,
                 PersonaDashboardHotCandidatesFetchPayload(
                     prompt=str(payload.get("prompt") or "").strip(),
@@ -26089,6 +26086,7 @@ def create_app() -> FastAPI:
                 user,
                 cooldown_bypassed=bool(cooldown["bypassed"]),
             )
+            return {**task, "task_id": str(task.get("id") or "")}
         if action == "hot.status":
             task_id = str(payload.get("task_id") or "").strip()
             with PERSONA_HOT_CANDIDATE_TASKS_LOCK:

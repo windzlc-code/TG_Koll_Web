@@ -210,7 +210,13 @@ def save_state(
 
 
 def clear_pending_state(chat_id: int) -> dict[str, Any]:
-    return save_state(chat_id, mode="", payload={})
+    current = load_state(chat_id)
+    retained = {
+        key: value
+        for key, value in current["payload"].items()
+        if str(key).startswith("last_")
+    }
+    return save_state(chat_id, mode="", payload=retained)
 
 
 def audit_action(
@@ -296,6 +302,10 @@ class NativeTweetBotController:
         row = self.load_member(int(chat_id))
         return dict(row) if row is not None else None
 
+    def _member_still_bound(self, chat_id: int, user_id: int) -> bool:
+        member = self._member(chat_id)
+        return member is not None and int(member.get("web_user_id") or 0) == int(user_id)
+
     async def _call(self, user_id: int, action: str, payload: dict[str, Any] | None = None) -> Any:
         return await asyncio.to_thread(self.ops.dispatch, int(user_id), action, payload or {})
 
@@ -309,7 +319,7 @@ class NativeTweetBotController:
             return None
         member = self._member(chat_id)
         if member is None:
-            await reply(f"当前 Chat ID：{chat_id}\n请先向管理员提供该 ID 完成 VECTO 用户绑定，然后重新发送 /start。")
+            await reply(f"当前 Chat ID：{chat_id}\n请让管理员在推文工作台授权列表中加入该 ID，然后重新发送 /start。")
             return None
         return member
 
@@ -340,7 +350,7 @@ class NativeTweetBotController:
                 selected = ""
         clear_pending_state(int(message.chat.id))
         await message.answer(
-            f"已绑定 VECTO 用户：{member.get('web_username') or member['web_user_id']}{selected}\n"
+            f"当前 Chat ID 已授权。{selected}\n"
             "可直接在 Telegram 内完成人设、生成、草稿、媒体、发布和任务操作。",
             reply_markup=self._main_keyboard(types),
         )
@@ -488,8 +498,14 @@ class NativeTweetBotController:
         rows = []
         for item in tasks[start:start + PAGE_SIZE]:
             task_id = str(item.get("id") or "")
+            task_kind = str(item.get("_tg_task_kind") or "social")
             label = f"{_task_status(item)} · {str(item.get('type') or item.get('task_type') or 'task')[:18]}"
-            rows.append([types.InlineKeyboardButton(text=label, callback_data=callback_token(int(query.message.chat.id), "t", {"task_id": task_id}))])
+            rows.append([types.InlineKeyboardButton(
+                text=label,
+                callback_data=callback_token(
+                    int(query.message.chat.id), "t", {"task_id": task_id, "task_kind": task_kind},
+                ),
+            )])
         nav = []
         if page > 0:
             nav.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"tt:tasks:{page - 1}"))
@@ -652,8 +668,95 @@ class NativeTweetBotController:
             elif action == "hot":
                 if not load_state(chat_id)["selected_persona_id"]:
                     raise HTTPException(status_code=400, detail="请先选择人设")
+                state = load_state(chat_id)
+                last_hot_task_id = str(state["payload"].get("last_hot_task_id") or "")
+                last_hot_persona_id = str(state["payload"].get("last_hot_persona_id") or state["selected_persona_id"])
                 save_state(chat_id, mode="hot_prompt", payload={})
-                await query.message.edit_text("请输入热点主题或关键词。Bot 会调用现有热点任务，完成后可选入草稿。\n发送 /cancel 取消。")
+                rows = []
+                if last_hot_task_id:
+                    rows.append([
+                        types.InlineKeyboardButton(
+                            text="查看上次热点任务",
+                            callback_data=callback_token(chat_id, "hotstatus", {
+                                "task_id": last_hot_task_id, "persona_id": last_hot_persona_id,
+                            }),
+                        ),
+                        types.InlineKeyboardButton(
+                            text="取消上次热点任务",
+                            callback_data=callback_token(chat_id, "hotcancel", {
+                                "task_id": last_hot_task_id, "persona_id": last_hot_persona_id,
+                            }),
+                        ),
+                    ])
+                await query.message.edit_text(
+                    "请输入热点主题或关键词。Bot 会调用现有热点任务，完成后可选入草稿。\n发送 /cancel 取消。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
+                )
+            elif action in {"hotstatus", "hotcancel"} and len(parts) > 2:
+                reference = resolve_callback_token(
+                    chat_id, action, parts[2], consume=(action == "hotcancel"),
+                )
+                task_id = str(reference.get("task_id") or "")
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"])
+                if action == "hotcancel":
+                    result = await self._call(user_id, "hot.cancel", {
+                        "persona_id": persona_id, "task_id": task_id,
+                    })
+                    clear_pending_state(chat_id)
+                    audit_action(
+                        chat_id, user_id, "hot.cancel", status="success",
+                        resource_type="task", resource_id=task_id,
+                    )
+                    await query.message.edit_text(
+                        "热点任务已取消。" if result.get("cancelled") else "热点任务已结束或无需取消。",
+                        reply_markup=self._main_keyboard(types),
+                    )
+                else:
+                    task = await self._call(user_id, "hot.status", {
+                        "persona_id": persona_id, "task_id": task_id,
+                    })
+                    status = _task_status(task)
+                    if status == "success":
+                        candidates = task.get("candidates") or (task.get("result") or {}).get("candidates") or []
+                        candidates = [item for item in candidates if isinstance(item, dict)][:5]
+                        save_state(
+                            chat_id, selected_persona_id=persona_id, mode="hot_select",
+                            payload={"hot_candidates": candidates, "last_hot_task_id": task_id,
+                                     "last_hot_persona_id": persona_id},
+                        )
+                        rows = [[types.InlineKeyboardButton(
+                            text=str(item.get("title") or item.get("content") or f"候选 {index + 1}")[:28],
+                            callback_data=callback_token(chat_id, "hotpick", {"index": index}),
+                        )] for index, item in enumerate(candidates)]
+                        rows.append([types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")])
+                        await query.message.edit_text(
+                            "热点候选已完成，选择一条保存为草稿。" if candidates else "热点任务已完成，但没有可导入候选。",
+                            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                        )
+                    elif status in {"queued", "running"}:
+                        rows = [[
+                            types.InlineKeyboardButton(
+                                text="刷新状态",
+                                callback_data=callback_token(chat_id, "hotstatus", {
+                                    "task_id": task_id, "persona_id": persona_id,
+                                }),
+                            ),
+                            types.InlineKeyboardButton(
+                                text="取消任务",
+                                callback_data=callback_token(chat_id, "hotcancel", {
+                                    "task_id": task_id, "persona_id": persona_id,
+                                }),
+                            ),
+                        ]]
+                        await query.message.edit_text(
+                            f"热点任务进行中：{task_id}",
+                            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                        )
+                    else:
+                        await query.message.edit_text(
+                            f"热点任务 {status}：{str(task.get('error') or '')[:1200]}",
+                            reply_markup=self._main_keyboard(types),
+                        )
             elif action == "hotpick" and len(parts) > 2:
                 state = load_state(chat_id)
                 candidates = state["payload"].get("hot_candidates") if isinstance(state["payload"].get("hot_candidates"), list) else []
@@ -686,19 +789,38 @@ class NativeTweetBotController:
                 persona_ids = reference.get("persona_ids") if isinstance(reference.get("persona_ids"), list) else []
                 result = await self._call(user_id, "publish.matrix", {"persona_ids": persona_ids})
                 clear_pending_state(chat_id)
-                audit_action(chat_id, user_id, "publish.matrix", status="success", detail=str(result.get("batch_id") or ""))
-                await query.message.edit_text(f"矩阵发布已入队：{result.get('batch_id') or '已创建'}", reply_markup=self._main_keyboard(types))
+                if not bool(result.get("ok")):
+                    errors = result.get("errors") if isinstance(result.get("errors"), list) else []
+                    skipped = result.get("skipped") if isinstance(result.get("skipped"), list) else []
+                    detail = "；".join(str(item.get("message") or item) for item in (errors + skipped)[:5])
+                    audit_action(chat_id, user_id, "publish.matrix", status="failed", detail=detail)
+                    await query.message.edit_text(
+                        f"矩阵发布未入队。{detail or '没有符合条件的草稿或账号。'}"[:3500],
+                        reply_markup=self._main_keyboard(types),
+                    )
+                else:
+                    created = result.get("created") if isinstance(result.get("created"), list) else []
+                    audit_action(chat_id, user_id, "publish.matrix", status="success", detail=str(result.get("batch_id") or ""))
+                    await query.message.edit_text(
+                        f"矩阵发布已入队：{result.get('batch_id') or '已创建'}\n已创建 {len(created)} 个任务。",
+                        reply_markup=self._main_keyboard(types),
+                    )
             elif action == "tasks":
                 await self._tasks(query, types, member, int(parts[2]) if len(parts) > 2 else 0)
             elif action == "t" and len(parts) > 2:
-                task_id = str(resolve_callback_token(chat_id, "t", parts[2]).get("task_id") or "")
+                reference = resolve_callback_token(chat_id, "t", parts[2])
+                task_id = str(reference.get("task_id") or "")
+                task_kind = str(reference.get("task_kind") or "social")
                 task = await self._call(user_id, "tasks.get", {"task_id": task_id})
+                task_kind = str(task.get("_tg_task_kind") or task_kind)
                 status = _task_status(task)
                 rows = []
                 if status in {"queued", "running", "scheduled", "pending"}:
-                    rows.append([types.InlineKeyboardButton(text="取消任务", callback_data=callback_token(chat_id, "tcancel", {"task_id": task_id}))])
-                if status == "failed":
-                    rows.append([types.InlineKeyboardButton(text="重试任务", callback_data=callback_token(chat_id, "tretry", {"task_id": task_id}))])
+                    rows.append([types.InlineKeyboardButton(text="取消任务", callback_data=callback_token(chat_id, "tcancel", {"task_id": task_id, "task_kind": task_kind}))])
+                if status == "failed" and task_kind == "social":
+                    rows.append([types.InlineKeyboardButton(text="重试任务", callback_data=callback_token(chat_id, "tretry", {"task_id": task_id, "task_kind": task_kind}))])
+                elif status == "failed" and task_kind == "normal":
+                    rows.append([types.InlineKeyboardButton(text="重新生成", callback_data="tt:generate")])
                 rows.append([types.InlineKeyboardButton(text="返回任务", callback_data="tt:tasks:0")])
                 await query.message.edit_text(
                     f"任务：{task_id}\n类型：{task.get('type') or task.get('task_type')}\n状态：{status}\n{str(task.get('error') or task.get('message') or '')[:1500]}",
@@ -706,14 +828,14 @@ class NativeTweetBotController:
                 )
             elif action in {"tcancel", "tretry"} and len(parts) > 2:
                 task_action = "tasks.cancel" if action == "tcancel" else "tasks.retry"
-                task_id = str(resolve_callback_token(chat_id, action, parts[2], consume=True).get("task_id") or "")
+                reference = resolve_callback_token(chat_id, action, parts[2], consume=True)
+                task_id = str(reference.get("task_id") or "")
+                if action == "tretry" and str(reference.get("task_kind") or "") != "social":
+                    raise HTTPException(status_code=409, detail="生成任务请从推文生成重新提交")
                 result = await self._call(user_id, task_action, {"task_id": task_id})
                 audit_action(chat_id, user_id, task_action, status="success", resource_type="task", resource_id=task_id)
                 await query.message.edit_text(str(result.get("message") or "操作已提交"), reply_markup=self._main_keyboard(types))
             elif action == "profile":
-                runtime = self.get_runtime() or {}
-                if not bool(runtime.get("telegram_tweet_content_settings_enabled")):
-                    raise HTTPException(status_code=403, detail="管理员尚未开放内容设置")
                 state = load_state(chat_id)
                 if not state["selected_persona_id"]:
                     raise HTTPException(status_code=400, detail="请先选择人设")
@@ -727,9 +849,6 @@ class NativeTweetBotController:
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
             elif action in {"bio", "style"}:
-                runtime = self.get_runtime() or {}
-                if not bool(runtime.get("telegram_tweet_content_settings_enabled")):
-                    raise HTTPException(status_code=403, detail="管理员尚未开放内容设置")
                 save_state(chat_id, mode="profile_content" if action == "bio" else "profile_style", payload={})
                 await query.message.edit_text("请发送新的内容。发送 /cancel 取消。")
             elif action == "accounts":
@@ -822,8 +941,6 @@ class NativeTweetBotController:
                 audit_action(chat_id, user_id, "publish.schedule", status="success", resource_type="task", resource_id=str((task or {}).get("id") or ""))
                 await message.answer(f"定时发布已入队：{(task or {}).get('id') or '已创建'}", reply_markup=self._main_keyboard(types))
             elif mode in {"profile_content", "profile_style"}:
-                if not bool((self.get_runtime() or {}).get("telegram_tweet_content_settings_enabled")):
-                    raise HTTPException(status_code=403, detail="管理员尚未开放内容设置")
                 key = "content" if mode == "profile_content" else "tweet_style_sample"
                 await self._call(user_id, "profile.update", {"persona_id": persona_id, key: text})
                 clear_pending_state(chat_id)
@@ -831,9 +948,31 @@ class NativeTweetBotController:
                 await message.answer("内容设置已保存。", reply_markup=self._main_keyboard(types))
             elif mode == "hot_prompt":
                 result = await self._call(user_id, "hot.start", {"persona_id": persona_id, "prompt": text})
-                task_id = str(result.get("task_id") or "")
-                save_state(chat_id, mode="", payload={"last_hot_task_id": task_id})
-                await message.answer(f"热点任务已提交：{task_id}\n完成后 Bot 会返回候选。", reply_markup=self._main_keyboard(types))
+                task_id = str(result.get("task_id") or result.get("id") or "")
+                if not task_id:
+                    raise HTTPException(status_code=502, detail="热点任务未返回任务 ID")
+                save_state(chat_id, mode="", payload={
+                    "last_hot_task_id": task_id,
+                    "last_hot_persona_id": persona_id,
+                })
+                rows = [[
+                    types.InlineKeyboardButton(
+                        text="查看状态",
+                        callback_data=callback_token(chat_id, "hotstatus", {
+                            "task_id": task_id, "persona_id": persona_id,
+                        }),
+                    ),
+                    types.InlineKeyboardButton(
+                        text="取消任务",
+                        callback_data=callback_token(chat_id, "hotcancel", {
+                            "task_id": task_id, "persona_id": persona_id,
+                        }),
+                    ),
+                ], [types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")]]
+                await message.answer(
+                    f"热点任务已提交：{task_id}\n完成后 Bot 会返回候选。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                )
                 asyncio.create_task(self._watch_hot(message.bot, chat_id, user_id, persona_id, task_id, types))
             else:
                 await message.answer("当前操作状态已失效，请重新选择。", reply_markup=self._main_keyboard(types))
@@ -907,6 +1046,8 @@ class NativeTweetBotController:
     async def _watch_generation(self, bot: Any, chat_id: int, user_id: int, persona_id: str, task_id: str, types: Any) -> None:
         for _ in range(180):
             await asyncio.sleep(3)
+            if not self._member_still_bound(chat_id, user_id):
+                return
             try:
                 task = await self._call(user_id, "generation.status", {"persona_id": persona_id, "task_id": task_id})
             except Exception:
@@ -917,14 +1058,20 @@ class NativeTweetBotController:
             if status == "success":
                 posts = await self._call(user_id, "posts.list", {"persona_id": persona_id, "source": "posts"})
                 preview = "\n\n".join(f"{index + 1}. {str(post.get('content') or '')[:600]}" for index, post in enumerate(posts[:3]))
+                if not self._member_still_bound(chat_id, user_id):
+                    return
                 await bot.send_message(chat_id, f"推文生成完成。\n\n{preview}"[:4000], reply_markup=self._main_keyboard(types))
             else:
+                if not self._member_still_bound(chat_id, user_id):
+                    return
                 await bot.send_message(chat_id, f"推文生成{status}：{str(task.get('error') or '')[:1200]}", reply_markup=self._main_keyboard(types))
             return
 
     async def _watch_publish(self, bot: Any, chat_id: int, user_id: int, task_id: str, types: Any) -> None:
         for _ in range(240):
             await asyncio.sleep(3)
+            if not self._member_still_bound(chat_id, user_id):
+                return
             try:
                 task = await self._call(user_id, "tasks.get", {"task_id": task_id})
             except Exception:
@@ -943,6 +1090,8 @@ class NativeTweetBotController:
                 or ""
             ).strip()
             suffix = f"\n{url}" if url.startswith(("https://", "http://")) else ""
+            if not self._member_still_bound(chat_id, user_id):
+                return
             await bot.send_message(
                 chat_id,
                 f"发布任务 {status}：{task_id}{suffix}"[:4000],
@@ -953,6 +1102,8 @@ class NativeTweetBotController:
     async def _watch_hot(self, bot: Any, chat_id: int, user_id: int, persona_id: str, task_id: str, types: Any) -> None:
         for _ in range(180):
             await asyncio.sleep(3)
+            if not self._member_still_bound(chat_id, user_id):
+                return
             try:
                 task = await self._call(user_id, "hot.status", {"persona_id": persona_id, "task_id": task_id})
             except Exception:
@@ -963,7 +1114,13 @@ class NativeTweetBotController:
             if status == "success":
                 candidates = task.get("candidates") or (task.get("result") or {}).get("candidates") or []
                 candidates = [item for item in candidates if isinstance(item, dict)][:5]
-                save_state(chat_id, mode="hot_select", payload={"hot_candidates": candidates})
+                if not self._member_still_bound(chat_id, user_id):
+                    return
+                save_state(chat_id, selected_persona_id=persona_id, mode="hot_select", payload={
+                    "hot_candidates": candidates,
+                    "last_hot_task_id": task_id,
+                    "last_hot_persona_id": persona_id,
+                })
                 rows = [[types.InlineKeyboardButton(
                     text=str(item.get("title") or item.get("content") or f"候选 {index + 1}")[:28],
                     callback_data=callback_token(chat_id, "hotpick", {"index": index}),
@@ -971,6 +1128,8 @@ class NativeTweetBotController:
                 rows.append([types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")])
                 await bot.send_message(chat_id, "热点候选已完成，选择一条保存为草稿。", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows))
             else:
+                if not self._member_still_bound(chat_id, user_id):
+                    return
                 await bot.send_message(chat_id, f"热点任务{status}：{str(task.get('error') or '')[:1200]}", reply_markup=self._main_keyboard(types))
             return
 

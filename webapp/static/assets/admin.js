@@ -3360,7 +3360,6 @@ function renderTgTweetSettings(data) {
   }
   if (el("tgTweetBotUsername")) el("tgTweetBotUsername").textContent = data?.bot_username ? `@${data.bot_username}` : "-";
   if (el("tgTweetBotEnabled")) el("tgTweetBotEnabled").checked = Boolean(data?.bot_enabled);
-  if (el("tgTweetContentSettingsEnabled")) el("tgTweetContentSettingsEnabled").checked = Boolean(data?.content_settings_enabled);
   if (el("tgTweetPublicBaseUrl")) el("tgTweetPublicBaseUrl").value = String(data?.public_base_url || "https://www.vecto-ai.cn");
   const tokenInput = el("tgTweetBotToken");
   if (tokenInput) {
@@ -3377,14 +3376,13 @@ function renderTgTweetSettings(data) {
       <td><strong>${escapeHtml(item.label || "TG 成员")}</strong></td>
       <td>${tgMemberNameCell(item)}</td>
       <td><strong class="admin-tg-chat-id">${escapeHtml(String(item.chat_id || ""))}</strong></td>
-      <td><strong>${escapeHtml(item.web_username || `#${item.web_user_id}`)}</strong><div class="small">ID ${escapeHtml(String(item.web_user_id || ""))}</div></td>
       <td>${tgStatusBadge(enabled ? "启用" : "停用", enabled ? "enabled" : "disabled")}</td>
       <td>
         <button class="ghost mini-btn" type="button" data-act="tg_tweet_toggle" data-id="${escapeHtml(String(item.chat_id || ""))}" data-enabled="${enabled ? 1 : 0}">${enabled ? "停用" : "启用"}</button>
         <button class="danger mini-btn" type="button" data-act="tg_tweet_delete" data-id="${escapeHtml(String(item.chat_id || ""))}">删除</button>
       </td>
     </tr>`;
-  }).join("") : `<tr><td colspan="6" class="task-empty">暂无推文 Bot 授权成员</td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="task-empty">暂无推文 Bot 授权成员</td></tr>`;
 }
 
 async function loadTgTweetSettings() {
@@ -3398,7 +3396,6 @@ async function saveTgTweetEnv() {
   const token = String(el("tgTweetBotToken")?.value || "").trim();
   const payload = {
     bot_enabled: Boolean(el("tgTweetBotEnabled")?.checked),
-    content_settings_enabled: Boolean(el("tgTweetContentSettingsEnabled")?.checked),
     public_base_url: String(el("tgTweetPublicBaseUrl")?.value || "").trim(),
   };
   if (token) payload.bot_token = token;
@@ -3435,24 +3432,22 @@ async function clearTgTweetToken() {
 
 async function saveTgTweetUser() {
   const chatId = String(el("tgTweetChatId")?.value || "").trim();
-  const webUser = String(el("tgTweetWebUser")?.value || "").trim();
-  if (!chatId || !webUser) {
-    setMsg("tgTweetSettingsMsg", "请同时填写 Chat ID 和 VECTO 用户", false);
+  if (!/^\d+$/.test(chatId) || Number(chatId) <= 0) {
+    setMsg("tgTweetSettingsMsg", "请填写正数 Telegram Chat ID", false);
     return;
   }
   const data = await api("/api/admin/tg_tweet/members", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      chat_id: /^-?\d+$/.test(chatId) ? Number(chatId) : chatId,
-      web_user: /^\d+$/.test(webUser) ? Number(webUser) : webUser,
+      chat_id: Number(chatId),
       label: String(el("tgTweetLabel")?.value || "").trim(),
       enabled: true,
     }),
   });
   renderTgTweetSettings(data.tg_settings || data);
-  ["tgTweetChatId", "tgTweetWebUser", "tgTweetLabel"].forEach((id) => { if (el(id)) el(id).value = ""; });
-  setMsg("tgTweetSettingsMsg", "成员已绑定到 VECTO 用户。", true);
+  ["tgTweetChatId", "tgTweetLabel"].forEach((id) => { if (el(id)) el(id).value = ""; });
+  setMsg("tgTweetSettingsMsg", "成员已授权，可直接向推文 Bot 发送 /start 使用。", true);
 }
 
 async function loadRuntime() {

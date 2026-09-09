@@ -43,11 +43,15 @@ with sync_playwright() as playwright:
     announcement = page.locator(".site-notification-broadcast-confirm")
     if announcement.count() and announcement.first.is_visible():
         announcement.first.click()
-    page.locator('[data-tg-workbench-tab="console"]').click()
+    tab = page.locator('[data-tg-workbench-tab="console"]')
+    if tab.count() != 1:
+        raise RuntimeError(f"Telegram workbench tab missing at {page.url}; title={page.title()!r}")
+    tab.click()
     panel = page.locator('[data-tg-workbench-panel="console"]')
     panel.locator("#tgTweetBotToken").wait_for(state="visible")
-    assert panel.locator("#tgTweetContentSettingsEnabled").is_visible()
-    assert panel.locator("#tgTweetWebUser").is_visible()
+    assert panel.locator("#tgTweetChatId").is_visible()
+    assert panel.locator("#tgTweetContentSettingsEnabled").count() == 0
+    assert panel.locator("#tgTweetWebUser").count() == 0
     assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
     page.screenshot(path=str(screenshot_dir / "telegram-tweet-admin-mobile.png"), full_page=True)
 
