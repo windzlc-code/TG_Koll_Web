@@ -2239,9 +2239,83 @@
                 </div>
               </div>
               <div class="admin-runtime-block admin-model-tab-panel" data-tg-workbench-panel="console">
-                <div class="admin-config-card-title">Telegram Bot</div>
-                <div class="small">推文工作台将单独配置 Token 与授权成员，不与视频工作台共用。</div>
-                <div class="task-empty">推文工作台 Telegram 版本已预留，接入后在此分页配置。</div>
+                <div class="admin-tg-split">
+                  <div class="admin-tg-bot-pane">
+                    <div class="admin-config-card-title">推文工作台 Telegram Bot</div>
+                    <div class="small">独立 Token、独立轮询和独立成员映射。TG 内打开的仍是现有推文工作台与发布队列。</div>
+                    <div class="admin-tg-status-row">
+                      <div class="admin-tg-field">
+                        <span>Bot 状态</span>
+                        <div id="tgTweetBotStatus" class="small">未读取</div>
+                      </div>
+                      <div class="admin-tg-field">
+                        <span>Bot 用户名</span>
+                        <div id="tgTweetBotUsername" class="small">-</div>
+                      </div>
+                      <div class="admin-tg-field">
+                        <span>轮询</span>
+                        <label class="proxy-provider-check admin-tg-enable"><input id="tgTweetBotEnabled" type="checkbox"> 启用轮询</label>
+                      </div>
+                    </div>
+                    <div class="admin-tg-token-row">
+                      <label class="admin-tg-field admin-tg-token-field">
+                        <span>Bot Token</span>
+                        <input id="tgTweetBotToken" type="password" autocomplete="new-password" placeholder="留空表示保留已保存 Token">
+                      </label>
+                      <div class="admin-tg-inline-actions">
+                        <button id="btnTestTgTweetEnv" class="ghost" type="button">检测 Token</button>
+                        <button id="btnSaveTgTweetEnv" class="primary" type="button">保存配置</button>
+                        <button id="btnClearTgTweetToken" class="danger" type="button">清除 Token</button>
+                        <button id="btnRefreshTgTweet" class="ghost" type="button">刷新</button>
+                      </div>
+                    </div>
+                    <label class="admin-tg-field">
+                      <span>WebApp 公网地址</span>
+                      <input id="tgTweetPublicBaseUrl" type="url" placeholder="https://www.vecto-ai.cn">
+                    </label>
+                    <div class="admin-config-card-title" style="margin-top:16px">内容设置</div>
+                    <label class="proxy-provider-check admin-tg-enable">
+                      <input id="tgTweetContentSettingsEnabled" type="checkbox"> 在 Bot 菜单开放内容设置
+                    </label>
+                    <div class="small">开启后成员可编辑网页端同一份人设简介、内容主题、推文风格与结尾链接；关闭时菜单和入口校验会同时禁用。</div>
+                  </div>
+                  <div class="admin-tg-member-pane">
+                    <div class="admin-config-card-title">授权成员与 VECTO 用户</div>
+                    <div class="small">每个 Chat ID 必须绑定一个明确的 VECTO 用户，所有人设、账号、额度和任务均按该用户校验。</div>
+                    <div class="admin-tg-member-row">
+                      <label class="admin-tg-field">
+                        <span>Chat ID</span>
+                        <input id="tgTweetChatId" placeholder="Chat ID 或 @用户名">
+                      </label>
+                      <label class="admin-tg-field">
+                        <span>VECTO 用户</span>
+                        <input id="tgTweetWebUser" placeholder="用户 ID 或用户名">
+                      </label>
+                      <label class="admin-tg-field">
+                        <span>备注</span>
+                        <input id="tgTweetLabel" placeholder="例如：客户A">
+                      </label>
+                      <button id="btnSaveTgTweetUser" class="primary" type="button">保存成员</button>
+                    </div>
+                  </div>
+                </div>
+                <div id="tgTweetSettingsMsg" class="msg" role="status" aria-live="polite"></div>
+                <div class="table-wrap admin-table-shell admin-tg-member-table-shell">
+                  <table class="table admin-governance-table">
+                    <caption class="sr-only">推文工作台 Telegram 授权成员</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">备注</th>
+                        <th scope="col">Telegram</th>
+                        <th scope="col">Chat ID</th>
+                        <th scope="col">VECTO 用户</th>
+                        <th scope="col">状态</th>
+                        <th scope="col">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tgTweetMemberList"></tbody>
+                  </table>
+                </div>
               </div>
               <div class="admin-runtime-block admin-model-tab-panel" data-tg-workbench-panel="crm">
                 <div class="admin-config-card-title">Telegram Bot</div>

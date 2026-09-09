@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import threading
 import time
 import urllib.error
@@ -331,6 +332,9 @@ def save_tg_env(payload: TgEnvPayload, get_runtime: GetRuntime, save_runtime: Sa
     next_runtime = dict(runtime)
     next_runtime.update(updates)
     next_token = str(next_runtime.get("telegram_bot_token") or "").strip()
+    tweet_token = str(next_runtime.get("telegram_tweet_bot_token") or "").strip()
+    if next_token and tweet_token and secrets.compare_digest(next_token, tweet_token):
+        raise HTTPException(status_code=400, detail="视频工作台不能与推文 Bot 共用同一个 Token")
     if not next_token:
         next_runtime["telegram_bot_enabled"] = False
         updates["telegram_bot_enabled"] = False

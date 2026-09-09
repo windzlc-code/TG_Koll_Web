@@ -652,6 +652,9 @@ function setActiveAdminPage(page, updateHash = true) {
     void loadTgSettings().catch((error) => {
       setMsg("tgSettingsMsg", `Telegram 配置读取失败：${getErrorMessage(error)}`, false);
     });
+    void loadTgTweetSettings().catch((error) => {
+      setMsg("tgTweetSettingsMsg", `推文 Bot 配置读取失败：${getErrorMessage(error)}`, false);
+    });
   }
   if (nextPage === "overview") {
     void loadGovernanceDashboard();
@@ -3341,10 +3344,122 @@ async function saveTgUser() {
   setMsg("tgSettingsMsg", fetchedName ? `TG 成员已保存：${fetchedName}` : "TG 成员已保存，暂未获取到 Telegram 用户名称", true);
 }
 
+function renderTgTweetSettings(data) {
+  const rows = Array.isArray(data?.trusted_users) ? data.trusted_users : [];
+  const configured = Boolean(data?.bot_token_configured);
+  const running = Boolean(data?.bot_running);
+  const error = String(data?.bot_last_error || "").trim();
+  const status = el("tgTweetBotStatus");
+  if (status) {
+    status.className = "admin-tg-status-tags";
+    status.innerHTML = [
+      tgStatusBadge(configured ? "已配置" : "未配置", configured ? "enabled" : "disabled"),
+      tgStatusBadge(running ? "运行中" : "未运行", running ? "enabled" : (configured ? "pending" : "rejected")),
+      error ? tgStatusBadge(error, "locked") : "",
+    ].filter(Boolean).join("");
+  }
+  if (el("tgTweetBotUsername")) el("tgTweetBotUsername").textContent = data?.bot_username ? `@${data.bot_username}` : "-";
+  if (el("tgTweetBotEnabled")) el("tgTweetBotEnabled").checked = Boolean(data?.bot_enabled);
+  if (el("tgTweetContentSettingsEnabled")) el("tgTweetContentSettingsEnabled").checked = Boolean(data?.content_settings_enabled);
+  if (el("tgTweetPublicBaseUrl")) el("tgTweetPublicBaseUrl").value = String(data?.public_base_url || "https://www.vecto-ai.cn");
+  const tokenInput = el("tgTweetBotToken");
+  if (tokenInput) {
+    tokenInput.value = "";
+    tokenInput.placeholder = configured
+      ? `${String(data?.bot_token_masked || "已保存")}（留空保留）`
+      : "请输入推文 Bot Token";
+  }
+  const list = el("tgTweetMemberList");
+  if (!list) return;
+  list.innerHTML = rows.length ? rows.map((item) => {
+    const enabled = Boolean(item.enabled);
+    return `<tr>
+      <td><strong>${escapeHtml(item.label || "TG 成员")}</strong></td>
+      <td>${tgMemberNameCell(item)}</td>
+      <td><strong class="admin-tg-chat-id">${escapeHtml(String(item.chat_id || ""))}</strong></td>
+      <td><strong>${escapeHtml(item.web_username || `#${item.web_user_id}`)}</strong><div class="small">ID ${escapeHtml(String(item.web_user_id || ""))}</div></td>
+      <td>${tgStatusBadge(enabled ? "启用" : "停用", enabled ? "enabled" : "disabled")}</td>
+      <td>
+        <button class="ghost mini-btn" type="button" data-act="tg_tweet_toggle" data-id="${escapeHtml(String(item.chat_id || ""))}" data-enabled="${enabled ? 1 : 0}">${enabled ? "停用" : "启用"}</button>
+        <button class="danger mini-btn" type="button" data-act="tg_tweet_delete" data-id="${escapeHtml(String(item.chat_id || ""))}">删除</button>
+      </td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="6" class="task-empty">暂无推文 Bot 授权成员</td></tr>`;
+}
+
+async function loadTgTweetSettings() {
+  if (!el("tgTweetBotStatus")) return null;
+  const data = await api("/api/admin/tg_tweet/settings");
+  renderTgTweetSettings(data);
+  return data;
+}
+
+async function saveTgTweetEnv() {
+  const token = String(el("tgTweetBotToken")?.value || "").trim();
+  const payload = {
+    bot_enabled: Boolean(el("tgTweetBotEnabled")?.checked),
+    content_settings_enabled: Boolean(el("tgTweetContentSettingsEnabled")?.checked),
+    public_base_url: String(el("tgTweetPublicBaseUrl")?.value || "").trim(),
+  };
+  if (token) payload.bot_token = token;
+  const data = await api("/api/admin/tg_tweet/env", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  renderTgTweetSettings(data.tg_settings || data);
+  setMsg("tgTweetSettingsMsg", "推文 Bot 配置已保存并热重载。", true);
+}
+
+async function testTgTweetEnv() {
+  const token = String(el("tgTweetBotToken")?.value || "").trim();
+  const payload = token ? { bot_token: token } : {};
+  const data = await api("/api/admin/tg_tweet/env/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  setMsg("tgTweetSettingsMsg", data?.username ? `Token 有效：@${data.username}` : "Token 有效", true);
+}
+
+async function clearTgTweetToken() {
+  if (!window.confirm("确定清除推文 Bot Token 并停止轮询吗？")) return;
+  const data = await api("/api/admin/tg_tweet/env", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bot_token: "", bot_enabled: false }),
+  });
+  renderTgTweetSettings(data.tg_settings || data);
+  setMsg("tgTweetSettingsMsg", "推文 Bot Token 已清除，轮询已停止。", true);
+}
+
+async function saveTgTweetUser() {
+  const chatId = String(el("tgTweetChatId")?.value || "").trim();
+  const webUser = String(el("tgTweetWebUser")?.value || "").trim();
+  if (!chatId || !webUser) {
+    setMsg("tgTweetSettingsMsg", "请同时填写 Chat ID 和 VECTO 用户", false);
+    return;
+  }
+  const data = await api("/api/admin/tg_tweet/members", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: /^-?\d+$/.test(chatId) ? Number(chatId) : chatId,
+      web_user: /^\d+$/.test(webUser) ? Number(webUser) : webUser,
+      label: String(el("tgTweetLabel")?.value || "").trim(),
+      enabled: true,
+    }),
+  });
+  renderTgTweetSettings(data.tg_settings || data);
+  ["tgTweetChatId", "tgTweetWebUser", "tgTweetLabel"].forEach((id) => { if (el(id)) el(id).value = ""; });
+  setMsg("tgTweetSettingsMsg", "成员已绑定到 VECTO 用户。", true);
+}
+
 async function loadRuntime() {
   const cfg = runtimeConfigResponseToConfig(await api("/api/admin/runtime_config"));
   fillRuntimeForm(cfg);
   try { await loadTgSettings(); } catch (_) {}
+  try { await loadTgTweetSettings(); } catch (_) {}
   return cfg;
 }
 
@@ -11066,6 +11181,35 @@ function bindActions() {
       }
     } catch (err) {
       setMsg("tgSettingsMsg", getErrorMessage(err), false);
+    }
+  });
+  el("btnSaveTgTweetEnv")?.addEventListener("click", () => saveTgTweetEnv().catch((err) => setMsg("tgTweetSettingsMsg", getErrorMessage(err), false)));
+  el("btnTestTgTweetEnv")?.addEventListener("click", () => testTgTweetEnv().catch((err) => setMsg("tgTweetSettingsMsg", getErrorMessage(err), false)));
+  el("btnClearTgTweetToken")?.addEventListener("click", () => clearTgTweetToken().catch((err) => setMsg("tgTweetSettingsMsg", getErrorMessage(err), false)));
+  el("btnRefreshTgTweet")?.addEventListener("click", () => loadTgTweetSettings().catch((err) => setMsg("tgTweetSettingsMsg", getErrorMessage(err), false)));
+  el("btnSaveTgTweetUser")?.addEventListener("click", () => saveTgTweetUser().catch((err) => setMsg("tgTweetSettingsMsg", getErrorMessage(err), false)));
+  el("tgTweetMemberList")?.addEventListener("click", async (event) => {
+    const btn = event.target?.closest?.("[data-act]");
+    if (!btn) return;
+    const id = String(btn.dataset.id || "").trim();
+    if (!id) return;
+    try {
+      let data = null;
+      if (btn.dataset.act === "tg_tweet_toggle") {
+        data = await api(`/api/admin/tg_tweet/members/${encodeURIComponent(id)}/toggle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: btn.dataset.enabled !== "1" }),
+        });
+        setMsg("tgTweetSettingsMsg", "成员状态已更新。", true);
+      }
+      if (btn.dataset.act === "tg_tweet_delete") {
+        data = await api(`/api/admin/tg_tweet/members/${encodeURIComponent(id)}`, { method: "DELETE" });
+        setMsg("tgTweetSettingsMsg", "成员已删除。", true);
+      }
+      if (data) renderTgTweetSettings(data.tg_settings || data);
+    } catch (err) {
+      setMsg("tgTweetSettingsMsg", getErrorMessage(err), false);
     }
   });
   el("btnSaveRuntime").addEventListener("click", async () => {

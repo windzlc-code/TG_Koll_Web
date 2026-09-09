@@ -159,6 +159,11 @@ from .remote_fetch_client import (
     configured_mode as configured_remote_fetch_mode,
 )
 from .telegram_admin import inject_telegram_admin, stop_telegram_bot_worker
+from .telegram_tweet_admin import (
+    inject_tweet_telegram_admin,
+    start_tweet_telegram_bot_worker,
+    stop_tweet_telegram_bot_worker,
+)
 from .telegram_internal import inject_telegram_internal_routes
 from .video_workbench import (
     cancel_video_remote_tasks,
@@ -365,6 +370,10 @@ DEFAULT_RUNTIME_CONFIG: dict[str, Any] = {
     "telegram_allowed_chat_ids": "",
     "telegram_bot_enabled": False,
     "telegram_video_entry_url": "/video.html",
+    "telegram_tweet_bot_token": "",
+    "telegram_tweet_bot_enabled": False,
+    "telegram_tweet_public_base_url": "https://www.vecto-ai.cn",
+    "telegram_tweet_content_settings_enabled": True,
     "video_default_duration_seconds": 10,
     "video_default_ratio": "9:16",
     "video_default_resolution": "720p",
@@ -5527,6 +5536,20 @@ def _normalize_runtime_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     merged["telegram_bot_enabled"] = bool(current.get("telegram_bot_enabled"))
     video_entry = str(current.get("telegram_video_entry_url") or "/video.html").strip() or "/video.html"
     merged["telegram_video_entry_url"] = video_entry if video_entry.startswith("/") else "/video.html"
+    merged["telegram_tweet_bot_token"] = str(current.get("telegram_tweet_bot_token") or "").strip()
+    merged["telegram_tweet_bot_enabled"] = bool(current.get("telegram_tweet_bot_enabled"))
+    tweet_public_base = str(
+        current.get("telegram_tweet_public_base_url") or DEFAULT_RUNTIME_CONFIG["telegram_tweet_public_base_url"]
+    ).strip().rstrip("/")
+    merged["telegram_tweet_public_base_url"] = (
+        tweet_public_base if tweet_public_base.startswith("https://") else DEFAULT_RUNTIME_CONFIG["telegram_tweet_public_base_url"]
+    )
+    merged["telegram_tweet_content_settings_enabled"] = bool(
+        current.get(
+            "telegram_tweet_content_settings_enabled",
+            DEFAULT_RUNTIME_CONFIG["telegram_tweet_content_settings_enabled"],
+        )
+    )
     for key in (
         "video_create_audio_app_id",
         "video_create_video_app_id",
@@ -24909,6 +24932,8 @@ def create_app() -> FastAPI:
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
+        if not boundary.collector:
+            start_tweet_telegram_bot_worker(_telegram_runtime_snapshot)
         _ensure_persona_dashboard_monitor_started()
         ensure_social_automation_worker_started()
         ensure_crm_runtime_started()
@@ -24923,6 +24948,7 @@ def create_app() -> FastAPI:
             stop_social_automation_worker()
             stop_proxy_market_health_monitor()
             stop_telegram_bot_worker()
+            stop_tweet_telegram_bot_worker()
 
     app = FastAPI(
         title="Workflow WebApp",
@@ -25849,6 +25875,14 @@ def create_app() -> FastAPI:
         save_runtime=_telegram_runtime_save,
     )
     inject_telegram_internal_routes(app, sys.modules[__name__])
+    if not boundary.collector:
+        inject_tweet_telegram_admin(
+            app,
+            require_admin=require_admin,
+            get_runtime=_telegram_runtime_snapshot,
+            save_runtime=_telegram_runtime_save,
+            session_cookie_secure=_session_cookie_secure,
+        )
 
     @app.post("/api/auth/apply")
     def api_apply(payload: RegisterPayload, request: Request):
@@ -30315,6 +30349,7 @@ def create_app() -> FastAPI:
             "runninghub_enterprise_api_key": ("runninghub_enterprise_api_key", "new_persona_runninghub_api_key"),
             "minimax_api_key": ("minimax_api_key", "video_tts_api_key"),
             "telegram_bot_token": ("telegram_bot_token",),
+            "telegram_tweet_bot_token": ("telegram_tweet_bot_token",),
         }.get(str(secret_name or "").strip())
         if not source_keys:
             raise HTTPException(status_code=404, detail="API Key 不允许查看")
@@ -30373,6 +30408,7 @@ def create_app() -> FastAPI:
             "runninghub_enterprise_api_key",
             "minimax_api_key",
             "telegram_bot_token",
+            "telegram_tweet_bot_token",
         }
         for key in secret_preserve_keys:
             value = str(explicit_data.get(key) or "").strip()

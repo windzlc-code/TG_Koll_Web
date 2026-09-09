@@ -355,6 +355,8 @@ function applyPersonaOverviewPostRows(persona) {
 
 const initialConsoleParams = new URLSearchParams(window.location.search);
 const initialConsoleView = initialConsoleParams.get("view");
+const initialConsoleModule = initialConsoleParams.get("module");
+const initialPersonaGroup = initialConsoleParams.get("persona_group");
 const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
 const initialGoogleAccountSessionResult = initialConsoleParams.get("google_account_session");
 let googleAccountSessionResultConsumed = false;
@@ -378,13 +380,17 @@ if (initialConsoleView === "video_workspace") {
   window.location.replace(`${target.pathname}${target.search}`);
 }
 const initialConsoleViewIsSupported = ["workspace", "tasks", "accounts", "billing", "console_settings", "persona_dashboard"].includes(initialConsoleView);
+const initialConsoleModuleIsSupported = ["personas", "tweet_generation", "publishing", "accounts", "browser_list"].includes(initialConsoleModule);
+const initialPersonaGroupIsSupported = ["settings", "content"].includes(initialPersonaGroup);
 const initialAccountBrowserPanelIsSupported = initialAccountBrowserPanel === "browsers";
 
 function clearInitialConsoleRouteHint() {
   if (initialConsoleView === "video_workspace" && initialVideoModuleIsSupported) return;
-  if (!initialConsoleViewIsSupported && !initialAccountBrowserPanelIsSupported) return;
+  if (!initialConsoleViewIsSupported && !initialConsoleModuleIsSupported && !initialPersonaGroupIsSupported && !initialAccountBrowserPanelIsSupported) return;
   const url = new URL(window.location.href);
   url.searchParams.delete("view");
+  url.searchParams.delete("module");
+  url.searchParams.delete("persona_group");
   url.searchParams.delete("browser_panel");
   url.searchParams.delete("video_module");
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
@@ -418,7 +424,9 @@ const state = {
     : (COLLECTOR_DEPLOYMENT ? "accounts" : "persona_dashboard"),
   personalSettingsSection: "console",
   personalSecurity: { loaded: false, loading: false, mfa: null },
-  activeModule: COLLECTOR_DEPLOYMENT ? "tweet_generation" : "personas",
+  activeModule: initialConsoleModuleIsSupported
+    ? initialConsoleModule
+    : (COLLECTOR_DEPLOYMENT ? "tweet_generation" : "personas"),
   transientWorkspaceLeaveAcknowledgement: "",
   transientWorkspaceAllowNextUnload: false,
   accountBrowserPanel: initialAccountBrowserPanelIsSupported ? initialAccountBrowserPanel : "accounts",
@@ -443,7 +451,7 @@ const state = {
     ledgerFilter: "all",
     errors: {},
   },
-  personaGroup: "settings",
+  personaGroup: initialPersonaGroupIsSupported ? initialPersonaGroup : "settings",
   personaPanels: {
     content: "generate",
     settings: "profile",
