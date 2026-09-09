@@ -398,6 +398,8 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("mergedCandidates", fetcher)
         self.assertIn("currentIds.length", fetcher)
         self.assertIn("personaHotEmptyFetchMessage", fetcher)
+        self.assertIn("function personaHotFailureMessage", self.script)
+        self.assertIn("热点关键词配置未同步，请重新生成关键词后再试。", self.script)
         self.assertIn("这次没有搜索到帖，还没有进入热度筛选", fetcher)
         self.assertIn("搜到了帖，但没有符合条件的结果", fetcher)
         self.assertNotIn("本次没有抓到浏览量加互动热度合计满 1000、或互动热度满 200、且近 30 天的公开帖。", fetcher)

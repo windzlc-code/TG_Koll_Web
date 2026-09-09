@@ -5035,6 +5035,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         settle.assert_not_called()
         release.assert_called_once()
         self.assertEqual(task["billing"]["status"], "released")
+        self.assertEqual(task["error"], "热点抓取服务返回异常，请稍后重试。")
 
     def test_async_hot_candidate_cancel_releases_reservation(self):
         self._write_archives()
@@ -5998,6 +5999,14 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
 
         self.assertEqual(detail, "热点关键词服务暂时不可用，请稍后重试。")
+
+    def test_hot_keyword_strategy_error_is_not_exposed_in_english(self):
+        detail = server._normalize_persona_hot_workflow_error_detail(
+            "persona hot keywords must use the current new-host strategy",
+            action="fetch-hot-candidates",
+        )
+
+        self.assertEqual(detail, "热点关键词配置未同步，请重新生成关键词后再试。")
 
     def test_hot_candidate_normalization_keeps_every_media_item(self):
         media = [

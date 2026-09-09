@@ -15476,10 +15476,21 @@ def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> Non
 
 def _normalize_persona_hot_workflow_error_detail(value: Any, *, action: str = "") -> str:
     detail = str(value or "").strip()
+    lowered = detail.lower()
+    # The old collector validates the keyword plan before it starts a search.
+    # Its internal exception must never leak into the user-facing hot-topic UI.
+    if "persona hot keywords must use the current new-host strategy" in lowered:
+        return "热点关键词配置未同步，请重新生成关键词后再试。"
     if re.search(r"<\s*(?:!doctype|html|head|body|title)\b|\b(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable", detail, re.IGNORECASE):
         if action == "prepare-hot-keywords":
             return "热点关键词服务暂时不可用，请稍后重试。"
         return "热点服务暂时不可用，请稍后重试。"
+    if re.search(r"\b(?:remote fetch|worker|collector|timeout|timed out|connection|protocol error)\b", detail, re.IGNORECASE):
+        return "热点抓取服务暂时不可用，请稍后重试。"
+    # Preserve existing Chinese guidance, but do not expose an arbitrary raw
+    # English exception from a remote collector or subprocess.
+    if re.search(r"[A-Za-z]", detail) and not re.search(r"[\u4e00-\u9fff]", detail):
+        return "热点抓取服务返回异常，请稍后重试。"
     if detail:
         return detail
     return "热点关键词生成失败，请稍后重试。" if action == "prepare-hot-keywords" else "热点任务执行失败，请稍后重试。"
@@ -16921,7 +16932,10 @@ def _persona_hot_candidate_task_worker(
                 billing = _finalize_persona_hot_candidate_reservation(task, success=False)
                 task.update({
                     "status": "failed",
-                    "error": str(exc or "热点候选抓取失败。"),
+                    "error": _normalize_persona_hot_workflow_error_detail(
+                        exc or "热点候选抓取失败。",
+                        action="fetch-hot-candidates",
+                    ),
                     "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "billing": billing,
                 })
