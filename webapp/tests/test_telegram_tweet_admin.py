@@ -608,6 +608,25 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("未入队", message.edits[-1][0])
         self.assertIn("未绑定账号", message.edits[-1][0])
 
+    def test_matrix_all_skipped_is_not_reported_as_enqueued(self):
+        def dispatch(_user_id, action, _payload):
+            if action == "publish.matrix":
+                return {"ok": True, "created": [], "skipped": [{"reason": "没有可发布内容"}]}
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        token = callback_token(101, "matrixok", {
+            "persona_ids": ["persona-a"], "source": "posts", "platform": "threads",
+        })
+        asyncio.run(controller.handle_callback(_Query(token, message), _Types))
+        self.assertIn("未入队", message.edits[-1][0])
+        self.assertIn("没有可发布内容", message.edits[-1][0])
+
     def test_matrix_publish_selects_personas_before_confirmation(self):
         calls = []
 
@@ -618,6 +637,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
                     {"id": "persona-a", "name": "A", "counts": {"posts": 2}},
                     {"id": "persona-b", "name": "B", "counts": {"posts": 1}},
                 ]
+            if action == "accounts.list":
+                return [{"id": "account-a", "persona_id": "persona-a", "platform": "threads"}]
             if action == "publish.matrix":
                 return {"ok": True, "batch_id": "batch-1", "created": [{}]}
             return []
@@ -635,11 +656,130 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query(first_persona, message), _Types))
         self.assertEqual(load_state(101)["payload"]["matrix_persona_ids"], ["persona-a"])
         asyncio.run(controller.handle_callback(_Query("tt:matrixnext", message), _Types))
+        self.assertEqual(load_state(101)["mode"], "matrix_source")
+        self.assertIn("第 2/4 步", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:mxsource:posts", message), _Types))
+        self.assertEqual(load_state(101)["mode"], "matrix_platform")
+        self.assertIn("第 3/4 步", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:mxplatform:threads", message), _Types))
         self.assertEqual(load_state(101)["mode"], "matrix_confirm")
+        self.assertIn("第 4/4 步", message.edits[-1][0])
         confirm = message.edits[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
         asyncio.run(controller.handle_callback(_Query(confirm, message), _Types))
         published = [payload for action, payload in calls if action == "publish.matrix"]
-        self.assertEqual(published, [{"persona_ids": ["persona-a"]}])
+        self.assertEqual(published, [{
+            "persona_ids": ["persona-a"],
+            "source": "posts",
+            "platform": "threads",
+            "per_persona_count": 1,
+        }])
+
+    def test_scheduled_publish_requires_final_confirmation_and_keeps_platform(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "publish.start":
+                return {"task": {"id": "scheduled-1"}}
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        future = time.time() + 600
+        schedule_text = time.strftime("%Y-%m-%d %H:%M", time.localtime(future))
+        save_state(101, selected_persona_id="persona-a", mode="schedule_time", payload={
+            "persona_id": "persona-a",
+            "source": "posts",
+            "post_id": "post-a",
+            "account_id": "account-a",
+            "platform": "instagram",
+        })
+        message = _Message(text=schedule_text)
+        asyncio.run(controller.handle_text(message, _Types))
+        self.assertEqual(load_state(101)["mode"], "schedule_confirm")
+        self.assertFalse(any(action == "publish.start" for action, _payload in calls))
+        self.assertIn("最终确认", message.answers[-1][0])
+        confirm = message.answers[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
+        with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
+            asyncio.run(controller.handle_callback(_Query(confirm, message), _Types))
+        published = [payload for action, payload in calls if action == "publish.start"]
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0]["persona_id"], "persona-a")
+        self.assertEqual(published[0]["platform"], "instagram")
+        self.assertGreater(int(published[0]["scheduled_at"]), int(time.time()))
+
+    def test_publish_callbacks_keep_original_persona_and_instagram_account(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "accounts.list":
+                return [{
+                    "id": "instagram-a",
+                    "persona_id": "persona-a",
+                    "platform": "instagram",
+                    "username": "ig-a",
+                }]
+            if action == "publish.start":
+                return {"task": {"id": "publish-a"}}
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        message = _Message()
+        open_publish = callback_token(101, "pub", {
+            "persona_id": "persona-a", "source": "posts", "post_id": "post-a",
+        })
+        asyncio.run(controller.handle_callback(_Query(open_publish, message), _Types))
+        account_button = message.edits[-1][1]["reply_markup"].inline_keyboard[0][0]
+        self.assertIn("Instagram", account_button.text)
+        save_state(101, selected_persona_id="persona-b")
+        asyncio.run(controller.handle_callback(_Query(account_button.callback_data, message), _Types))
+        confirm = message.edits[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
+        with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
+            asyncio.run(controller.handle_callback(_Query(confirm, message), _Types))
+        published = [payload for action, payload in calls if action == "publish.start"]
+        self.assertEqual(published[0]["persona_id"], "persona-a")
+        self.assertEqual(published[0]["platform"], "instagram")
+
+    def test_generation_completion_previews_only_current_task_output(self):
+        calls = []
+
+        def dispatch(_user_id, action, _payload):
+            calls.append(action)
+            if action == "generation.status":
+                return {
+                    "status": "success",
+                    "output": {
+                        "post_ids": ["new-1"],
+                        "posts": [{"id": "new-1", "content": "本次生成的内容"}],
+                    },
+                }
+            if action == "posts.list":
+                return [{"id": "old-1", "content": "旧草稿不应出现"}]
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        bot = SimpleNamespace(send_message=mock.AsyncMock())
+        with mock.patch("webapp.telegram_tweet_bot.asyncio.sleep", new=mock.AsyncMock()):
+            asyncio.run(controller._watch_generation(bot, 101, self.alice_id, "persona-a", "task-a", _Types))
+        rendered = bot.send_message.await_args.args[1]
+        self.assertIn("本次生成的内容", rendered)
+        self.assertNotIn("旧草稿不应出现", rendered)
+        self.assertNotIn("posts.list", calls)
+        callback = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data
+        self.assertTrue(callback.startswith("tt:gendrafts:"))
 
     def test_task_submenu_filters_before_opening_task_detail(self):
         def dispatch(_user_id, action, _payload):
@@ -710,7 +850,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         message = _Message()
         asyncio.run(controller.handle_callback(_Query("tt:help", message), _Types))
         self.assertIn("加入当前 Chat ID", message.edits[-1][0])
-        self.assertIn("Threads 账号", message.edits[-1][0])
+        self.assertIn("Threads 或 Instagram 账号", message.edits[-1][0])
         self.assertIn("不接收账号密码", message.edits[-1][0])
 
     def test_slow_poller_shutdown_is_restarted_after_exit(self):

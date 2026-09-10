@@ -26023,12 +26023,15 @@ def create_app() -> FastAPI:
             ))
             for selected_id in persona_ids:
                 _require_persona_access(selected_id, user)
+            source = str(payload.get("source") or "posts").strip().lower()
+            platform = str(payload.get("platform") or "threads").strip().lower()
+            per_persona_count = max(1, int(payload.get("per_persona_count") or 1))
             return _publish_persona_matrix(
                 PersonaDashboardMatrixPublishPayload(
                     persona_ids=persona_ids,
-                    source="posts",
-                    per_persona_count=1,
-                    platform="threads",
+                    source=source,
+                    per_persona_count=per_persona_count,
+                    platform=platform,
                     max_retries=2,
                     skip_active=True,
                 ),
