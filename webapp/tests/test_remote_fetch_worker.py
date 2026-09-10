@@ -24,6 +24,7 @@ from webapp.worker_server import (
     PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
     WorkerRuntime,
     WorkerSettings,
+    _persona_available_candidate_count,
     _apply_hot_reader_execution_profile,
     _validate_envelope,
     create_worker_app,
@@ -159,7 +160,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
             target_count = connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0]
         self.assertEqual(target_count, 0)
 
-    def pool_payload(self, archive_id: str, *, user_initiated: bool) -> dict:
+    def pool_payload(self, archive_id: str, *, user_initiated: bool, search_mode: str = "strict") -> dict:
         return {
             "action": "fetch-hot-candidates",
             "archiveId": archive_id,
@@ -168,8 +169,99 @@ class RemoteFetchStoreTests(unittest.TestCase):
             "liveOnly": False,
             "recordShown": False,
             "userInitiated": user_initiated,
+            "searchMode": search_mode,
             "limit": 10,
         }
+
+    def test_refill_targets_are_isolated_by_archive_and_search_mode(self) -> None:
+        archive_id = "archive_mode_isolation"
+        for index, mode in enumerate(("strict", "normal"), start=1):
+            payload = self.pool_payload(archive_id, user_initiated=True, search_mode=mode)
+            payload.update(current_keyword_strategy([f"{mode} keyword", f"{mode} topic"]))
+            self.store.submit(
+                idempotency_key=f"capture:mode-isolation:{index}",
+                request_digest=str(index) * 64,
+                capability="persona.hot_candidates.v1",
+                unit_id=f"{archive_id}_{mode}",
+                payload=payload,
+            )
+
+        with self.store._connection() as connection:
+            rows = connection.execute(
+                "SELECT search_mode,payload_json FROM fetch_pool_targets WHERE archive_id=? ORDER BY search_mode",
+                (archive_id,),
+            ).fetchall()
+        self.assertEqual([row["search_mode"] for row in rows], ["normal", "strict"])
+        self.assertEqual(
+            [json.loads(row["payload_json"])["searchMode"] for row in rows],
+            ["normal", "strict"],
+        )
+
+    def test_available_candidate_count_reads_only_the_requested_mode_shard(self) -> None:
+        now = int(time.time())
+        archive_id = "archive_mode_count"
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        cache_dir.mkdir()
+        for mode, count in (("strict", 3), ("normal", 7)):
+            candidates = [
+                {
+                    "id": f"{mode}-{index}",
+                    "content": f"{mode} candidate {index} " + ("content " * 12),
+                    "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+                }
+                for index in range(count)
+            ]
+            (cache_dir / f"{archive_id}-keywords-{mode}.json").write_text(
+                json.dumps({f"{archive_id}::{mode}::query": {"candidates": candidates}}),
+                encoding="utf-8",
+            )
+
+        self.assertEqual(
+            _persona_available_candidate_count(self.runtime_dir, archive_id, now=now, search_mode="strict"),
+            3,
+        )
+        self.assertEqual(
+            _persona_available_candidate_count(self.runtime_dir, archive_id, now=now, search_mode="normal"),
+            7,
+        )
+
+    def test_legacy_refill_target_schema_migrates_without_losing_mode(self) -> None:
+        legacy_path = Path(self.temp.name) / "legacy-jobs.db"
+        connection = sqlite3.connect(legacy_path)
+        try:
+            connection.execute(
+                """
+                CREATE TABLE fetch_pool_targets(
+                  archive_id TEXT PRIMARY KEY,payload_json TEXT NOT NULL,next_run_at INTEGER NOT NULL,
+                  last_run_at INTEGER NOT NULL DEFAULT 0,last_user_fetch_at INTEGER NOT NULL DEFAULT 0,
+                  active_until INTEGER NOT NULL DEFAULT 0,low_watermark INTEGER NOT NULL DEFAULT 15,
+                  target_watermark INTEGER NOT NULL DEFAULT 15,last_available_count INTEGER NOT NULL DEFAULT 0,
+                  updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO fetch_pool_targets VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "archive-legacy",
+                    json.dumps({"archiveId": "archive-legacy", "searchMode": "normal"}),
+                    10, 0, 5, 20, 15, 15, 0, 5,
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        migrated = JobStore(legacy_path, runtime_dir=self.runtime_dir)
+        with migrated._connection() as connection:
+            primary_key = [
+                row["name"]
+                for row in sorted(connection.execute("PRAGMA table_info(fetch_pool_targets)"), key=lambda row: row["pk"])
+                if row["pk"]
+            ]
+            row = connection.execute("SELECT archive_id,search_mode FROM fetch_pool_targets").fetchone()
+        self.assertEqual(primary_key, ["archive_id", "search_mode"])
+        self.assertEqual(dict(row), {"archive_id": "archive-legacy", "search_mode": "normal"})
 
     def test_only_user_initiated_persona_hot_submit_registers_refill_target(self) -> None:
         self.store.submit(

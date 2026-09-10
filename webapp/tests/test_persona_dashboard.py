@@ -5456,10 +5456,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
             ]
         }, ensure_ascii=False), encoding="utf-8")
 
+        generated_keywords = [f"history-keyword-{index}" for index in range(20)]
         fake_result = {
             "ok": True,
             "archiveName": "History Teacher",
-            "keywords": ["history", "teacher"],
+            "keywords": generated_keywords,
             "searchMode": "normal",
             "warnings": [],
         }
@@ -5475,7 +5476,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
             )
 
         self.assertEqual(body["archive_name"], "History Teacher")
-        self.assertEqual(body["keywords"], ["history", "teacher"])
+        self.assertEqual(body["keywords"], generated_keywords[:10])
+        self.assertEqual(body["all_keywords"], generated_keywords)
         self.assertEqual(body["search_mode"], "normal")
         payload = mocked.call_args.args[0]
         self.assertEqual(payload["action"], "prepare-hot-keywords")
@@ -5858,10 +5860,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 "cursor": 0,
             },
         })
+        new_keywords = [f"new-keyword-{index}" for index in range(20)]
         fake_result = {
             "ok": True,
             "archiveName": "History Teacher",
-            "keywords": ["new-keyword"],
+            "keywords": new_keywords,
             "searchMode": "strict",
             "warnings": [],
         }
@@ -5869,12 +5872,31 @@ class PersonaDashboardApiTests(unittest.TestCase):
         with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fake_result) as mocked:
             result = server._prepare_persona_hot_keywords("persona-1", payload)
 
-        self.assertEqual(result["keywords"], ["new-keyword"])
+        self.assertEqual(result["keywords"], new_keywords[:10])
         self.assertFalse(mocked.call_args.args[0]["forceRegenerate"])
+
+    def test_persona_hot_keyword_plan_rejects_less_than_twenty_generated_terms(self):
+        self._write_archives()
+        payload = server.PersonaDashboardHotCandidatesFetchPayload(
+            search_mode="normal",
+            writing_locale="zh-CN",
+        )
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value={
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": [f"short-{index}" for index in range(19)],
+            "searchMode": "normal",
+            "warnings": [],
+        }):
+            result = server._prepare_persona_hot_keywords("persona-1", payload)
+
+        self.assertEqual(result["keywords"], [])
+        self.assertEqual(result["all_keywords"], [])
+        self.assertTrue(any("必须返回 20 个" in item for item in result["warnings"]))
 
     def test_persona_hot_keyword_batch_is_not_consumed_when_collection_fails(self):
         self._write_archives()
-        keywords = [f"keyword-{index}" for index in range(30)]
+        keywords = [f"keyword-{index}" for index in range(20)]
         payload = server.PersonaDashboardHotCandidatesFetchPayload(
             keywords=keywords[:10],
             search_mode="strict",
@@ -5903,10 +5925,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_fetch_persona_hot_candidates_prepares_missing_keywords_on_new_host(self):
         self._write_archives()
+        prepared_keywords = [f"history-keyword-{index}" for index in range(20)]
         prepared = {
             "ok": True,
             "archiveName": "History Teacher",
-            "keywords": ["历史老师", "历史课堂"],
+            "keywords": prepared_keywords,
             "searchMode": "strict",
             "warnings": [],
         }
@@ -5936,7 +5959,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(mocked.call_count, 2)
         self.assertEqual(mocked.call_args_list[0].args[0]["action"], "prepare-hot-keywords")
         self.assertEqual(mocked.call_args_list[1].args[0]["action"], "fetch-hot-candidates")
-        self.assertEqual(mocked.call_args_list[1].args[0]["keywords"], ["历史老师", "历史课堂"])
+        self.assertEqual(mocked.call_args_list[1].args[0]["keywords"], prepared_keywords[:10])
         self.assertEqual(
             mocked.call_args_list[1].args[0]["keywordStrategyVersion"],
             server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION,

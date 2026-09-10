@@ -96,6 +96,8 @@ import {
   resolveSentimentHotManualQueryKeywords,
   resolveSentimentHotStrategyTimeoutMs,
   resolveSentimentHotDisplayHeatThreshold,
+  sentimentHotKeywordModelInstructionForMode,
+  stampCombinedReachScore,
   resolveSentimentHotReaderConcurrency,
   resolveSentimentHotReaderTotalTimeoutMs,
   resolveAnonymousReaderJitterMaxMs,
@@ -461,6 +463,20 @@ describe("sentiment hot importer", () => {
 
     expect(buildSentimentHotSearchStrategyCacheKey({ ...base, writingLocale: "zh-CN" }))
       .not.toBe(buildSentimentHotSearchStrategyCacheKey({ ...base, writingLocale: "zh-TW" }));
+  });
+
+  it("separates strict and normal model strategy caches and instructions", () => {
+    const base = {
+      archive: { id: "persona-1", name: "property advisor", content: "Japan property" },
+      prompt: "",
+      personaText: "persona: property advisor",
+      writingLocale: "zh-TW",
+    };
+
+    expect(buildSentimentHotSearchStrategyCacheKey({ ...base, searchMode: "strict" }))
+      .not.toBe(buildSentimentHotSearchStrategyCacheKey({ ...base, searchMode: "normal" }));
+    expect(sentimentHotKeywordModelInstructionForMode("strict")).toContain("严格垂直");
+    expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("泛垂直");
   });
 
   it("ignores free-form user supplements in hot-keyword strategy cache identity", () => {
@@ -1743,6 +1759,24 @@ describe("sentiment hot importer", () => {
     expect(normal.slice(0, 10)).toEqual(strategy.primaryQueries);
     expect(strict.slice(0, 10)).toEqual(strategy.primaryQueries);
     expect([...normal, ...strict]).not.toEqual(expect.arrayContaining(["看屋日記", "交屋流程", "自住用"]));
+  });
+
+  it("caps both independently generated mode plans at exactly twenty keywords", () => {
+    const strategy = {
+      primaryQueries: Array.from({ length: 10 }, (_, index) => `核心词${index}`),
+      broadQueries: Array.from({ length: 14 }, (_, index) => `扩展词${index}`),
+      ecosystemQueries: [],
+      lifestyleQueries: [],
+      requiredAnchorTerms: ["核心词0", "核心词1", "核心词2"],
+      normalAnchorTerms: ["扩展词0", "扩展词1", "扩展词2"],
+      strictAcceptTerms: Array.from({ length: 10 }, (_, index) => `核心词${index}`),
+      normalAcceptTerms: Array.from({ length: 14 }, (_, index) => `扩展词${index}`),
+      rejectTerms: [],
+      domainSummary: "独立二十词计划",
+    } as any;
+
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).toHaveLength(20);
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "normal")).toHaveLength(20);
   });
 
   it("does not accept a single broad strategy term as normal persona relevance", () => {
@@ -3279,6 +3313,25 @@ Title: Instagram
       engagement: { likeCount: 40, commentCount: 10 },
       metrics: { play_count: 960 },
     } as any)).toBe(true);
+  });
+
+  it("does not stamp an unavailable view count as a measured zero", () => {
+    const stamped = stampCombinedReachScore({
+      id: "missing-view",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/missing-view",
+      author: "demo",
+      content: "这是一条互动量足够但原帖没有返回浏览量字段的热点候选内容。",
+      media: [],
+      hotScore: 0,
+      metrics: { source: "threads-reader-search" },
+      engagement: { likeCount: 180, commentCount: 20, shareCount: 10 },
+      capturedAt: new Date().toISOString(),
+    });
+
+    expect(stamped.hotScore).toBe(210);
+    expect(stamped.metrics).not.toHaveProperty("view_count");
+    expect(stamped.metrics).toMatchObject({ interaction_heat: 210, combined_reach: 210 });
   });
 
   it("keeps shown history isolated between strict and normal modes", () => {

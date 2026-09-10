@@ -46,7 +46,7 @@ ALLOWED_CAPABILITIES = {
     "persona.profile_metrics.v1": "refresh-profile-metrics",
 }
 TERMINAL_STATES = {"success", "failed", "cancelled"}
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 62
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 64
 PERSONA_HOT_POOL_LOW_WATERMARK = 15
 PERSONA_HOT_POOL_TARGET_WATERMARK = 15
 PERSONA_HOT_POOL_CAPACITY = 30
@@ -58,6 +58,10 @@ _PERSONA_ARCHIVE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 def _truthy_environment(name: str) -> bool:
     return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _normalize_hot_search_mode(value: Any) -> str:
+    return "normal" if str(value or "").strip().lower() == "normal" else "strict"
 
 
 def _hot_public_probe_enabled() -> bool:
@@ -202,7 +206,13 @@ def _candidate_is_fresh(value: Mapping[str, Any], *, now: int, freshness_days: i
         return False
 
 
-def _persona_available_candidate_count(runtime_dir: Path, archive_id: str, *, now: int) -> int:
+def _persona_available_candidate_count(
+    runtime_dir: Path,
+    archive_id: str,
+    *,
+    now: int,
+    search_mode: str | None = None,
+) -> int:
     """Count fresh, useful and not-yet-shown candidates for one persona only."""
 
     blocked_ids: set[str] = set()
@@ -212,9 +222,21 @@ def _persona_available_candidate_count(runtime_dir: Path, archive_id: str, *, no
     except (OSError, json.JSONDecodeError):
         store = {}
     if isinstance(store, dict):
+        normalized_mode = _normalize_hot_search_mode(search_mode) if search_mode else ""
         for section in ("shown", "selected", "imported"):
             rows = store.get(section)
-            archive_rows = rows.get(archive_id) if isinstance(rows, dict) else None
+            if not isinstance(rows, dict):
+                continue
+            if section == "shown" and normalized_mode:
+                archive_rows = rows.get(f"{archive_id}::{normalized_mode}")
+            elif section == "shown":
+                archive_rows = [
+                    item
+                    for key in (archive_id, f"{archive_id}::strict", f"{archive_id}::normal")
+                    for item in (rows.get(key) if isinstance(rows.get(key), list) else [])
+                ]
+            else:
+                archive_rows = rows.get(archive_id)
             if isinstance(archive_rows, list):
                 for row in archive_rows:
                     if not isinstance(row, dict):
@@ -234,6 +256,8 @@ def _persona_available_candidate_count(runtime_dir: Path, archive_id: str, *, no
     prefix = f"{archive_id}-"
     for cache_file in cache_files:
         if not cache_file.is_file() or not cache_file.name.startswith(prefix) or cache_file.suffix != ".json":
+            continue
+        if search_mode and not cache_file.name.endswith(f"-{_normalize_hot_search_mode(search_mode)}.json"):
             continue
         try:
             cache = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -642,7 +666,8 @@ class JobStore:
                 CREATE INDEX IF NOT EXISTS idx_fetch_nonces_expiry
                   ON fetch_nonces(expires_at);
                 CREATE TABLE IF NOT EXISTS fetch_pool_targets (
-                  archive_id TEXT PRIMARY KEY,
+                  archive_id TEXT NOT NULL,
+                  search_mode TEXT NOT NULL DEFAULT 'strict',
                   payload_json TEXT NOT NULL,
                   next_run_at INTEGER NOT NULL,
                   last_run_at INTEGER NOT NULL DEFAULT 0,
@@ -651,10 +676,9 @@ class JobStore:
                   low_watermark INTEGER NOT NULL DEFAULT 15,
                   target_watermark INTEGER NOT NULL DEFAULT 15,
                   last_available_count INTEGER NOT NULL DEFAULT 0,
-                  updated_at INTEGER NOT NULL
+                  updated_at INTEGER NOT NULL,
+                  PRIMARY KEY(archive_id, search_mode)
                 );
-                CREATE INDEX IF NOT EXISTS idx_fetch_pool_targets_due
-                  ON fetch_pool_targets(next_run_at, archive_id);
                 CREATE TABLE IF NOT EXISTS hot_dataset_snapshots (
                   dataset_id TEXT PRIMARY KEY,
                   dataset_name TEXT NOT NULL,
@@ -693,6 +717,65 @@ class JobStore:
             ):
                 if name not in existing_columns:
                     connection.execute(f"ALTER TABLE fetch_pool_targets ADD COLUMN {name} {definition}")
+            pool_columns = list(connection.execute("PRAGMA table_info(fetch_pool_targets)"))
+            pool_primary_key = [
+                str(row["name"])
+                for row in sorted(pool_columns, key=lambda row: int(row["pk"] or 0))
+                if int(row["pk"] or 0) > 0
+            ]
+            if pool_primary_key != ["archive_id", "search_mode"]:
+                legacy_rows = [dict(row) for row in connection.execute("SELECT * FROM fetch_pool_targets")]
+                connection.execute("DROP INDEX IF EXISTS idx_fetch_pool_targets_due")
+                connection.execute("ALTER TABLE fetch_pool_targets RENAME TO fetch_pool_targets_legacy")
+                connection.execute(
+                    """
+                    CREATE TABLE fetch_pool_targets (
+                      archive_id TEXT NOT NULL,
+                      search_mode TEXT NOT NULL DEFAULT 'strict',
+                      payload_json TEXT NOT NULL,
+                      next_run_at INTEGER NOT NULL,
+                      last_run_at INTEGER NOT NULL DEFAULT 0,
+                      last_user_fetch_at INTEGER NOT NULL DEFAULT 0,
+                      active_until INTEGER NOT NULL DEFAULT 0,
+                      low_watermark INTEGER NOT NULL DEFAULT 15,
+                      target_watermark INTEGER NOT NULL DEFAULT 15,
+                      last_available_count INTEGER NOT NULL DEFAULT 0,
+                      updated_at INTEGER NOT NULL,
+                      PRIMARY KEY(archive_id, search_mode)
+                    )
+                    """
+                )
+                for row in legacy_rows:
+                    try:
+                        payload = json.loads(str(row.get("payload_json") or "{}"))
+                    except json.JSONDecodeError:
+                        payload = {}
+                    search_mode = _normalize_hot_search_mode(payload.get("searchMode"))
+                    connection.execute(
+                        """
+                        INSERT OR REPLACE INTO fetch_pool_targets(
+                          archive_id,search_mode,payload_json,next_run_at,last_run_at,last_user_fetch_at,
+                          active_until,low_watermark,target_watermark,last_available_count,updated_at
+                        ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            str(row.get("archive_id") or "").strip(),
+                            search_mode,
+                            str(row.get("payload_json") or "{}"),
+                            int(row.get("next_run_at") or 0),
+                            int(row.get("last_run_at") or 0),
+                            int(row.get("last_user_fetch_at") or 0),
+                            int(row.get("active_until") or 0),
+                            int(row.get("low_watermark") or 15),
+                            int(row.get("target_watermark") or 15),
+                            int(row.get("last_available_count") or 0),
+                            int(row.get("updated_at") or 0),
+                        ),
+                    )
+                connection.execute("DROP TABLE fetch_pool_targets_legacy")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fetch_pool_targets_due ON fetch_pool_targets(next_run_at,archive_id,search_mode)"
+            )
             low_watermark, target_watermark = _persona_hot_pool_watermarks()
             refill_seconds = _persona_hot_pool_refill_seconds()
             active_seconds = _persona_hot_pool_active_seconds()
@@ -823,6 +906,7 @@ class JobStore:
             ):
                 archive_id = str(payload.get("archiveId") or "").strip()
                 if archive_id:
+                    search_mode = _normalize_hot_search_mode(payload.get("searchMode"))
                     low_watermark, target_watermark = _persona_hot_pool_watermarks()
                     active_seconds = _persona_hot_pool_active_seconds()
                     initial_delay = max(10, int(os.getenv("TG_HOT_POOL_INITIAL_DELAY_SECONDS", str(_persona_hot_pool_refill_seconds())) or _persona_hot_pool_refill_seconds()))
@@ -836,10 +920,10 @@ class JobStore:
                     connection.execute(
                         """
                         INSERT INTO fetch_pool_targets(
-                          archive_id,payload_json,next_run_at,last_run_at,last_user_fetch_at,
+                          archive_id,search_mode,payload_json,next_run_at,last_run_at,last_user_fetch_at,
                           active_until,low_watermark,target_watermark,last_available_count,updated_at
-                        ) VALUES(?,?,?,0,?,?,?,?,0,?)
-                        ON CONFLICT(archive_id) DO UPDATE SET
+                        ) VALUES(?,?,?, ?,0,?,?,?,?,0,?)
+                        ON CONFLICT(archive_id,search_mode) DO UPDATE SET
                           payload_json=excluded.payload_json,
                           next_run_at=excluded.next_run_at,
                           last_run_at=0,
@@ -851,6 +935,7 @@ class JobStore:
                         """,
                         (
                             archive_id,
+                            search_mode,
                             json.dumps(refill_payload, ensure_ascii=False, separators=(",", ":")),
                             now + initial_delay,
                             now,
@@ -870,17 +955,23 @@ class JobStore:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute("DELETE FROM fetch_pool_targets WHERE active_until <= ?", (timestamp,))
             target = connection.execute(
-                "SELECT * FROM fetch_pool_targets WHERE active_until > ? AND next_run_at <= ? ORDER BY next_run_at,archive_id LIMIT 1",
+                "SELECT * FROM fetch_pool_targets WHERE active_until > ? AND next_run_at <= ? ORDER BY next_run_at,archive_id,search_mode LIMIT 1",
                 (timestamp, timestamp),
             ).fetchone()
             if target is None:
                 return False
             archive_id = str(target["archive_id"])
-            available_count = _persona_available_candidate_count(self.runtime_dir, archive_id, now=timestamp)
+            search_mode = _normalize_hot_search_mode(target["search_mode"])
+            available_count = _persona_available_candidate_count(
+                self.runtime_dir,
+                archive_id,
+                now=timestamp,
+                search_mode=search_mode,
+            )
             next_run = timestamp + interval
             connection.execute(
-                "UPDATE fetch_pool_targets SET next_run_at=?,last_available_count=?,updated_at=? WHERE archive_id=?",
-                (next_run, available_count, timestamp, archive_id),
+                "UPDATE fetch_pool_targets SET next_run_at=?,last_available_count=?,updated_at=? WHERE archive_id=? AND search_mode=?",
+                (next_run, available_count, timestamp, archive_id, search_mode),
             )
             configured_low, configured_target = _persona_hot_pool_watermarks()
             low_watermark = max(1, int(target["low_watermark"] or configured_low))
@@ -888,22 +979,22 @@ class JobStore:
             refilling = int(target["last_run_at"] or 0) >= int(target["last_user_fetch_at"] or 0) > 0
             if available_count >= target_watermark:
                 connection.execute(
-                    "UPDATE fetch_pool_targets SET last_run_at=0,updated_at=? WHERE archive_id=?",
-                    (timestamp, archive_id),
+                    "UPDATE fetch_pool_targets SET last_run_at=0,updated_at=? WHERE archive_id=? AND search_mode=?",
+                    (timestamp, archive_id, search_mode),
                 )
                 return False
             if not refilling and available_count >= low_watermark:
                 return False
             payload = json.loads(str(target["payload_json"] or "{}"))
             if not str(payload.get("archiveId") or "").strip():
-                connection.execute("DELETE FROM fetch_pool_targets WHERE archive_id=?", (archive_id,))
+                connection.execute("DELETE FROM fetch_pool_targets WHERE archive_id=? AND search_mode=?", (archive_id, search_mode))
                 return False
             # Deployments may restore an earlier keyword protocol while a
             # scheduled refill still carries the later version. Do not keep
             # enqueueing a payload that the worker will deterministically
             # reject; the next user-initiated fetch registers a current target.
             if not _has_current_hot_keyword_strategy(payload):
-                connection.execute("DELETE FROM fetch_pool_targets WHERE archive_id=?", (archive_id,))
+                connection.execute("DELETE FROM fetch_pool_targets WHERE archive_id=? AND search_mode=?", (archive_id, search_mode))
                 return False
             active_rows = connection.execute(
                 "SELECT payload_json FROM fetch_jobs WHERE capability='persona.hot_candidates.v1' AND status IN ('queued','running')"
@@ -911,22 +1002,24 @@ class JobStore:
             active_payloads = [json.loads(str(row["payload_json"] or "{}")) for row in active_rows]
             same_archive_active = any(
                 str(item.get("archiveId") or "").strip() == archive_id
+                and _normalize_hot_search_mode(item.get("searchMode")) == search_mode
                 for item in active_payloads
             )
             interactive_active = any(not item.get("_poolRefill") for item in active_payloads)
             if same_archive_active or interactive_active:
                 connection.execute(
-                    "UPDATE fetch_pool_targets SET next_run_at=?,updated_at=? WHERE archive_id=?",
-                    (timestamp + 60, timestamp, archive_id),
+                    "UPDATE fetch_pool_targets SET next_run_at=?,updated_at=? WHERE archive_id=? AND search_mode=?",
+                    (timestamp + 60, timestamp, archive_id, search_mode),
                 )
                 return False
             payload["limit"] = min(20, max(1, target_watermark - available_count))
             connection.execute(
-                "UPDATE fetch_pool_targets SET last_run_at=?,updated_at=? WHERE archive_id=?",
-                (timestamp, timestamp, archive_id),
+                "UPDATE fetch_pool_targets SET last_run_at=?,updated_at=? WHERE archive_id=? AND search_mode=?",
+                (timestamp, timestamp, archive_id, search_mode),
             )
-            unit_id = f"pool_{hashlib.sha256(archive_id.encode('utf-8')).hexdigest()[:24]}"
-            idempotency_key = f"pool:{hashlib.sha256(f'{archive_id}:{timestamp // interval}'.encode('utf-8')).hexdigest()[:24]}"
+            target_scope = f"{archive_id}:{search_mode}"
+            unit_id = f"pool_{hashlib.sha256(target_scope.encode('utf-8')).hexdigest()[:24]}"
+            idempotency_key = f"pool:{hashlib.sha256(f'{target_scope}:{timestamp // interval}'.encode('utf-8')).hexdigest()[:24]}"
             job_id = f"job_{uuid.uuid4().hex[:24]}"
             try:
                 connection.execute(

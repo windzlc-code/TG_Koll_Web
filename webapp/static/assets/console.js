@@ -4826,7 +4826,7 @@ function personaHotMetricNumber(...values) {
 }
 
 function personaHotViewMetric(candidate) {
-  return personaHotMetricNumber(
+  const number = personaHotMetricNumber(
     candidate?.view_count,
     candidate?.viewCount,
     candidate?.views,
@@ -4841,16 +4841,13 @@ function personaHotViewMetric(candidate) {
     candidate?.metrics?.play_count,
     candidate?.metrics?.playCount,
   );
-}
-
-function personaHotCombinedViewMetric(candidate) {
-  return personaHotViewMetric(candidate)
-    ?? personaHotMetricNumber(candidate?.hot_score, candidate?.hotScore, candidate?.score);
+  return number !== null && number > 0 ? number : null;
 }
 
 function personaHotMetricSummary(candidate) {
   const fields = [
-    ["热度/浏览", personaHotCombinedViewMetric(candidate)],
+    ["浏览", personaHotViewMetric(candidate)],
+    ["热度", personaHotMetricNumber(candidate?.hot_score, candidate?.hotScore, candidate?.score)],
     ["点赞", personaHotMetricNumber(candidate?.like_count, candidate?.engagement?.likeCount, candidate?.metrics?.like_count, candidate?.metrics?.likeCount, candidate?.metrics?.likes)],
     ["评论", personaHotMetricNumber(candidate?.comment_count, candidate?.engagement?.commentCount, candidate?.metrics?.comment_count, candidate?.metrics?.commentCount, candidate?.metrics?.comments)],
     ["转发", personaHotMetricNumber(candidate?.repost_count, candidate?.engagement?.repostCount, candidate?.metrics?.repost_count, candidate?.metrics?.repostCount, candidate?.metrics?.reposts)],
@@ -5956,7 +5953,8 @@ function renderPersonaHotOrigin(meta, { compact = false, showMetricSummary = tru
 function renderPersonaHotMetricStrip(meta, postId = "") {
   if (!meta) return "";
   const metrics = [
-    ["热度/浏览", personaHotCombinedViewMetric(meta)],
+    ["浏览", personaHotViewMetric(meta)],
+    ["热度", personaHotMetricNumber(meta?.hot_score, meta?.hotScore, meta?.score)],
     ["点赞", meta.like_count],
     ["评论", meta.comment_count],
     ["转发", meta.repost_count],

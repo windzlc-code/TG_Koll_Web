@@ -337,6 +337,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
             self.script.index("function personaHotMetricSummary"):
             self.script.index("\nfunction normalizePersonaHotSearchMode")
         ]
+        view_metric = self.script[
+            self.script.index("function personaHotViewMetric"):
+            self.script.index("\nfunction personaHotMetricSummary")
+        ]
 
         self.assertIn("renderPersonaHotSourceIdentity(candidate)", picker)
         self.assertIn("renderPersonaHotMediaPreview(persona, candidate)", picker)
@@ -359,9 +363,10 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("platformLabel(platform)", source_identity)
         self.assertNotIn("persona-hot-source-platform-field", source_identity)
         self.assertNotIn("platform.toUpperCase()", source_identity)
-        self.assertIn('["热度/浏览", personaHotCombinedViewMetric(candidate)]', metrics)
-        self.assertNotIn('["热度",', metrics)
-        self.assertNotIn('["浏览",', metrics)
+        self.assertIn('["浏览", personaHotViewMetric(candidate)]', metrics)
+        self.assertIn('["热度", personaHotMetricNumber(candidate?.hot_score', metrics)
+        self.assertNotIn('["热度/浏览",', metrics)
+        self.assertIn('number > 0 ? number : null', view_metric)
 
     def test_hotspot_import_stays_on_the_current_candidate_platform(self):
         importer = self.script[

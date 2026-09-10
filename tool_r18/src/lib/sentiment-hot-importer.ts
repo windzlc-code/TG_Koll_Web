@@ -138,7 +138,7 @@ const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
 const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 50;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
-const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 28;
+const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 20;
 const SENTIMENT_HOT_STRICT_KEYWORD_TARGET = 20;
 const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_FILE = resolveRuntimeFile("sentiment_hot_search_strategy_cache.json");
 const SENTIMENT_HOT_GLOBAL_POOL_FILE = resolveRuntimeFile("sentiment_hot_global_pool.json");
@@ -2274,6 +2274,7 @@ export function buildSentimentHotSearchStrategyCacheKey(args: {
   /** Accepted for payload compatibility, but deliberately excluded from hot-search strategy. */
   memorySummaries?: string[];
   writingLocale?: string;
+  searchMode?: SentimentHotSearchMode;
   personaText: string;
 }): string {
   const archive = args.archive || {};
@@ -2291,6 +2292,7 @@ export function buildSentimentHotSearchStrategyCacheKey(args: {
     // Free-form user supplements are deliberately excluded from both model
     // input and cache identity. The persona's stable topic fields are enough.
     writingLocale: cleanText(args.writingLocale),
+    searchMode: normalizeSentimentHotSearchMode(args.searchMode),
   };
   return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex");
 }
@@ -2315,6 +2317,7 @@ function readCachedSentimentHotSearchStrategyForArgs(args: {
   archive?: Partial<Pick<PersonaArchive, "name" | "content" | "setup">>;
   prompt?: string;
   writingLocale?: string;
+  searchMode?: SentimentHotSearchMode;
 }): SentimentHotSearchStrategy | null {
   const cacheKey = buildSentimentHotSearchStrategyCacheKey({ ...args, personaText: "" });
   return readCachedSentimentHotSearchStrategy(cacheKey);
@@ -2359,15 +2362,33 @@ export function resolveSentimentHotTextModelPreference(): string {
     .join(",");
 }
 
+export function sentimentHotKeywordModelInstructionForMode(value: unknown): string {
+  const mode = normalizeSentimentHotSearchMode(value);
+  if (mode === "normal") {
+    return [
+      "当前模式：泛垂直。必须独立生成本模式自己的 20 个搜索词，不得复用严格垂直模式的关键词计划。",
+      "primaryQueries 的 10 个词覆盖人设核心领域；domainExpansion 的 10 个词覆盖该领域相邻的使用场景、消费决策、行业生态和真实痛点。",
+      "相邻扩展仍必须能解释为这个人设会持续讨论的内容，禁止跨到无关行业，也禁止只输出日常、生活、分享等空泛词。",
+    ].join("\n");
+  }
+  return [
+    "当前模式：严格垂直。必须独立生成本模式自己的 20 个搜索词，不得复用泛垂直模式的关键词计划。",
+    "primaryQueries 和 domainExpansion 的全部词都必须直接指向人设的核心行业、核心对象或核心服务。",
+    "禁止单独输出资产配置、理财、家族传承、生活、职场等上位宽词；若确属核心业务，必须和具体行业对象组合成可搜索词。",
+  ].join("\n");
+}
+
 async function buildSentimentHotSearchStrategyWithModel(args: {
   archive?: Partial<Pick<PersonaArchive, "name" | "content" | "setup">>;
   prompt?: string;
   writingLocale?: string;
+  searchMode?: SentimentHotSearchMode;
   warnings: string[];
   timeoutMs?: number;
   useCache?: boolean;
 }): Promise<SentimentHotSearchStrategy> {
   const archive = args.archive || {};
+  const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
   const setup = archive.setup || {};
   const personaText = personaHotStrategySourceText(archive);
   if (!personaText.trim()) return emptySentimentHotSearchStrategy();
@@ -2386,11 +2407,13 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
     // be stable for the same persona instead of creating a new strategy/cache
     // branch for every ad-hoc sentence.
     writingLocale: args.writingLocale,
+    searchMode,
     personaText,
   });
   const cached = args.useCache === false ? null : readCachedSentimentHotSearchStrategyForArgs({
     archive,
     writingLocale: args.writingLocale,
+    searchMode,
   });
   if (cached) return cached;
 
@@ -2425,6 +2448,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "你是 Threads / Instagram 热点搜索策略模型。必须为当前这个人设生成搜索策略，不得套用其他人设的行业词，也不得因为简介难写就拒写或交空结果。",
             "人设名称只是对外称呼。必须按内容领域和职业理解；禁止把俚语化名称理解成色情、擦边或开车含义，也不得因此拒写或返回空候选。",
             "只输出 JSON 对象，不要解释，不要 Markdown。",
+            sentimentHotKeywordModelInstructionForMode(searchMode),
             "JSON 结构：",
             "{\"primaryQueries\":[\"...\"],\"domainExpansion\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
             "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
@@ -2461,10 +2485,10 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
           });
           const queries = [...new Set((candidate.primaryQueries || []).map(cleanText).filter(Boolean))];
           const expansion = [...new Set((candidate.broadQueries || []).map(cleanText).filter(Boolean))];
-          const uniqueCount = new Set([...queries, ...expansion]).size;
+          const uniqueCount = resolveSentimentHotModelStrategyKeywords(candidate, searchMode).length;
           const hasChinese = ([...queries, ...expansion].join("").match(/[\u3400-\u9fff]/gu) || []).length >= 16;
-          if (queries.length < 10 || uniqueCount < 18 || !hasChinese) {
-            console.info(`[sentiment_hot_model_unusable] reason=${queries.length < 10 || uniqueCount < 18 ? "missing_terms" : "not_chinese"} primary=${queries.length} unique=${uniqueCount} sample=${JSON.stringify(queries.slice(0, 8))}`);
+          if (queries.length !== 10 || uniqueCount !== sentimentHotKeywordTargetForMode(searchMode) || !hasChinese) {
+            console.info(`[sentiment_hot_model_unusable] reason=${queries.length !== 10 || uniqueCount !== sentimentHotKeywordTargetForMode(searchMode) ? "missing_terms" : "not_chinese"} mode=${searchMode} primary=${queries.length} unique=${uniqueCount} sample=${JSON.stringify(queries.slice(0, 8))}`);
             return false;
           }
           return true;
@@ -2480,7 +2504,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
       archiveName: cleanText(archive.name),
       sourceText: personaText,
     });
-    if (resolveSentimentHotModelStrategyKeywords(strategy, "strict").length >= 8) {
+    if (resolveSentimentHotModelStrategyKeywords(strategy, searchMode).length === sentimentHotKeywordTargetForMode(searchMode)) {
       console.info(`[sentiment_hot_model_strategy] model=${JSON.stringify(result.model)} domain=${JSON.stringify(strategy.domainSummary)}`);
       writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
       return strategy;
@@ -2504,6 +2528,7 @@ export async function warmSentimentHotSearchStrategy(archive: PersonaArchive): P
   const warnings: string[] = [];
   const strategy = await buildSentimentHotSearchStrategyWithModel({
     archive,
+    searchMode: "strict",
     warnings,
     timeoutMs: 58_000,
   });
@@ -2523,6 +2548,7 @@ export async function prepareSentimentHotKeywords(args: {
   const strategy = await buildSentimentHotSearchStrategyWithModel({
     archive: args.archive,
     writingLocale: args.writingLocale,
+    searchMode,
     warnings,
     // Leave enough room for the dedicated primary model plus one configured
     // fallback once per 24-hour strategy cache. Subsequent fetches reuse the
@@ -2931,6 +2957,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     : readCachedSentimentHotSearchStrategyForArgs({
         archive,
         writingLocale: args.writingLocale,
+        searchMode,
       });
   if (prefetchedStrategy) {
     applyPersonaGuardToSentimentHotStrategy({ strategy: prefetchedStrategy });
@@ -2992,7 +3019,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
       warnings,
       "search-strategy",
       () => withSentimentTimeout(
-        buildSentimentHotSearchStrategyWithModel({ archive, writingLocale: args.writingLocale, warnings, timeoutMs: strategyTimeoutMs, useCache: true }),
+        buildSentimentHotSearchStrategyWithModel({ archive, writingLocale: args.writingLocale, searchMode, warnings, timeoutMs: strategyTimeoutMs, useCache: true }),
         strategyTimeoutMs + 250,
         emptySentimentHotSearchStrategy(),
       ),
@@ -9578,14 +9605,15 @@ export function combinedReachScore(candidate: Pick<SentimentHotCandidate, "engag
   return viewCountOfCandidate(candidate) + interactionHeatScore(candidate);
 }
 
-function stampCombinedReachScore(candidate: SentimentHotCandidate): SentimentHotCandidate {
+export function stampCombinedReachScore(candidate: SentimentHotCandidate): SentimentHotCandidate {
+  const viewCount = viewCountOfCandidate(candidate);
   const combined = combinedReachScore(candidate);
   return {
     ...candidate,
     hotScore: Math.max(Number(candidate.hotScore || 0), combined),
     metrics: {
       ...(candidate.metrics || {}),
-      view_count: viewCountOfCandidate(candidate),
+      ...(viewCount > 0 ? { view_count: viewCount } : {}),
       interaction_heat: interactionHeatScore(candidate),
       combined_reach: combined,
     },
@@ -11559,13 +11587,14 @@ export function listSentimentHotCandidatePoolStats(archives: PersonaArchive[] = 
   const stats: SentimentHotCandidatePoolStat[] = [];
   for (const archiveId of archiveIds) {
     const archive = archiveById.get(archiveId);
-    const strategy = archive ? readCachedSentimentHotSearchStrategyForArgs({
-      archive,
-    }) : null;
-    if (strategy && archive) {
-      applyPersonaGuardToSentimentHotStrategy({ strategy });
-    }
     for (const searchMode of ["normal", "strict"] as const) {
+      const strategy = archive ? readCachedSentimentHotSearchStrategyForArgs({
+        archive,
+        searchMode,
+      }) : null;
+      if (strategy && archive) {
+        applyPersonaGuardToSentimentHotStrategy({ strategy });
+      }
       const state = readThreadsSearchCacheState(false, archiveId, searchMode);
       const keywords = resolveSentimentHotModelStrategyKeywords(strategy, searchMode);
       const cachedCandidates = keywords.length > 0
