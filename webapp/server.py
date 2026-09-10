@@ -15820,6 +15820,9 @@ def _run_remote_persona_hot_workflow(
     if capability == "persona.profile_metrics.v1":
         unit_descriptor["username"] = str(remote_payload.get("username") or "")
         unit_descriptor["platform"] = str(remote_payload.get("platform") or "")
+    elif capability == "persona.hot_candidates.v1":
+        unit_descriptor["searchMode"] = "normal" if str(payload.get("searchMode") or "").strip().lower() == "normal" else "strict"
+        unit_descriptor["platform"] = str(payload.get("platform") or "threads").strip().lower() or "threads"
     elif capability != "crm.threads_live_search.v1":
         unit_descriptor["accountId"] = str(payload.get("accountId") or "")
     unit_digest = hashlib.sha256(
@@ -16156,7 +16159,8 @@ def _persona_hot_user_warnings(
         if empty_reason == "no_source" or "没有搜索到帖" in warning_text:
             return [specific_message or f"{platform_label} 这次没有搜索到帖，还没有进入热度筛选。"]
         if empty_reason == "below_threshold" or "搜到了帖，但没有符合条件" in warning_text:
-            return [specific_message or f"{platform_label} 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量或互动热度至少达到 500。"]
+            heat_floor = 100 if platform_label == "Instagram" else 200
+            return [specific_message or f"{platform_label} 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 {heat_floor}。"]
         return [specific_message or "暂未找到符合条件的热点，请稍后刷新候选。"]
     messages = [f"已找到 {count} 条符合条件的热点，暂不足 {target} 条。" if count < target else f"已获取 {count} 条热点候选。"]
     if specific_message:
@@ -16213,6 +16217,9 @@ def _persona_hot_relevance_keywords(
     payload: PersonaDashboardHotCandidatesFetchPayload,
     batch_keywords: list[str],
 ) -> list[str]:
+    search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
+    if search_mode == "strict":
+        return list(batch_keywords)
     explicit = _persona_hot_payload_keywords(getattr(payload, "all_keywords", None))
     if explicit:
         return _merge_hot_keyword_lists(explicit, batch_keywords)
@@ -16977,12 +16984,14 @@ def _start_persona_hot_candidate_task(
 ) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     owner_user_id = max(0, int(user_id or 0))
+    search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
     with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
         active = next((
             task
             for task in PERSONA_HOT_CANDIDATE_TASKS.values()
             if int(task.get("user_id") or 0) == owner_user_id
             and str(task.get("archive_id") or "") == clean_archive_id
+            and str(task.get("search_mode") or "strict") == search_mode
             and str(task.get("status") or "") in {"queued", "running"}
         ), None)
         if active:
@@ -17005,6 +17014,7 @@ def _start_persona_hot_candidate_task(
             "id": task_id,
             "user_id": owner_user_id,
             "archive_id": clean_archive_id,
+            "search_mode": search_mode,
             "status": "queued",
             "phase": "queued",
             "queue_ahead": 0,
@@ -17041,6 +17051,7 @@ def _start_billable_persona_hot_candidate_task(
 ) -> dict[str, Any]:
     clean_archive_id = str(archive_id or "").strip()
     owner_user_id = _workspace_user_id(user)
+    search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
     with PERSONA_HOT_CANDIDATE_START_LOCK:
         with PERSONA_HOT_CANDIDATE_TASKS_LOCK:
             active = next((
@@ -17048,6 +17059,7 @@ def _start_billable_persona_hot_candidate_task(
                 for task in PERSONA_HOT_CANDIDATE_TASKS.values()
                 if int(task.get("user_id") or 0) == owner_user_id
                 and str(task.get("archive_id") or "") == clean_archive_id
+                and str(task.get("search_mode") or "strict") == search_mode
                 and str(task.get("status") or "") in {"queued", "running"}
             ), None)
             if active:

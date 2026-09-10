@@ -1440,7 +1440,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(len(responses), 0)
         sent = json.loads(popen.call_args.args[0][-1])
         self.assertEqual(sent["sourcePolicy"], "reader_only")
-        self.assertTrue(sent["recordShown"])
+        self.assertFalse(sent["recordShown"])
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "24")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "0")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "45000")

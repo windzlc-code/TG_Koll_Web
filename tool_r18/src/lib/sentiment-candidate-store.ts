@@ -45,6 +45,15 @@ type StoreState = {
   imported: Record<string, string[]>;
 };
 
+type SentimentHotSearchMode = "normal" | "strict";
+
+function sentimentHotHistoryScope(archiveId: string, searchMode?: SentimentHotSearchMode): string {
+  const cleanArchiveId = String(archiveId || "").trim() || "default";
+  return searchMode === "normal" || searchMode === "strict"
+    ? `${cleanArchiveId}::${searchMode}`
+    : cleanArchiveId;
+}
+
 const STORE_FILE = resolveRuntimeFile("sentiment_hot_candidates.json");
 
 function emptyState(): StoreState {
@@ -129,9 +138,9 @@ export function getSentimentHotCandidateHistoryKeys(candidate: Partial<Sentiment
   return [...keys];
 }
 
-export function getSentimentHotShownHistoryKeys(archiveId: string): Set<string> {
+export function getSentimentHotShownHistoryKeys(archiveId: string, searchMode?: SentimentHotSearchMode): Set<string> {
   const keys = new Set<string>();
-  for (const entry of readState().shown[archiveId] || []) {
+  for (const entry of readState().shown[sentimentHotHistoryScope(archiveId, searchMode)] || []) {
     const id = shownEntryId(entry);
     if (id) keys.add(`id:${id}`);
     if (typeof entry === "string") continue;
@@ -141,23 +150,24 @@ export function getSentimentHotShownHistoryKeys(archiveId: string): Set<string> 
   return keys;
 }
 
-export function getSentimentHotRefreshExcludedIds(archiveId: string): Set<string> {
+export function getSentimentHotRefreshExcludedIds(archiveId: string, searchMode?: SentimentHotSearchMode): Set<string> {
   const state = readState();
+  const historyScope = sentimentHotHistoryScope(archiveId, searchMode);
   return new Set([
-    ...(state.shown[archiveId] || []).map(shownEntryId).filter(Boolean),
+    ...(state.shown[historyScope] || []).map(shownEntryId).filter(Boolean),
     ...(state.imported[archiveId] || []),
   ]);
 }
 
-export function getSentimentHotShownIds(archiveId: string): Set<string> {
+export function getSentimentHotShownIds(archiveId: string, searchMode?: SentimentHotSearchMode): Set<string> {
   const state = readState();
-  return new Set((state.shown[archiveId] || []).map(shownEntryId).filter(Boolean));
+  return new Set((state.shown[sentimentHotHistoryScope(archiveId, searchMode)] || []).map(shownEntryId).filter(Boolean));
 }
 
-export function getSentimentHotShownAtMap(archiveId: string): Map<string, number> {
+export function getSentimentHotShownAtMap(archiveId: string, searchMode?: SentimentHotSearchMode): Map<string, number> {
   const state = readState();
   const result = new Map<string, number>();
-  for (const entry of state.shown[archiveId] || []) {
+  for (const entry of state.shown[sentimentHotHistoryScope(archiveId, searchMode)] || []) {
     const id = shownEntryId(entry);
     if (!id) continue;
     const at = typeof entry === "string" ? "" : String(entry.at || "");
@@ -167,10 +177,10 @@ export function getSentimentHotShownAtMap(archiveId: string): Map<string, number
   return result;
 }
 
-export function getSentimentHotShownHistoryAtMap(archiveId: string): Map<string, number> {
+export function getSentimentHotShownHistoryAtMap(archiveId: string, searchMode?: SentimentHotSearchMode): Map<string, number> {
   const state = readState();
   const result = new Map<string, number>();
-  for (const entry of state.shown[archiveId] || []) {
+  for (const entry of state.shown[sentimentHotHistoryScope(archiveId, searchMode)] || []) {
     const id = shownEntryId(entry);
     if (!id) continue;
     const at = typeof entry === "string" ? "" : String(entry.at || "");
@@ -191,11 +201,12 @@ export function getSentimentHotShownHistoryAtMap(archiveId: string): Map<string,
   return result;
 }
 
-export function rememberSentimentHotShown(archiveId: string, candidates: SentimentHotCandidate[]) {
+export function rememberSentimentHotShown(archiveId: string, candidates: SentimentHotCandidate[], searchMode?: SentimentHotSearchMode) {
   updateState((state) => {
+    const historyScope = sentimentHotHistoryScope(archiveId, searchMode);
     const now = new Date().toISOString();
     const current = new Map<string, ShownEntry>();
-    for (const entry of state.shown[archiveId] || []) {
+    for (const entry of state.shown[historyScope] || []) {
       const id = shownEntryId(entry);
       if (!id) continue;
       const at = typeof entry === "string" ? "" : String(entry.at || "");
@@ -209,7 +220,7 @@ export function rememberSentimentHotShown(archiveId: string, candidates: Sentime
         contentKey: historyContentKey(candidate.content) || undefined,
       });
     }
-    state.shown[archiveId] = [...current.values()].slice(-2000);
+    state.shown[historyScope] = [...current.values()].slice(-2000);
   });
 }
 
@@ -221,11 +232,12 @@ export function rememberSentimentHotSelected(archiveId: string, candidateId: str
   });
 }
 
-export function forgetSentimentHotShown(archiveId: string, candidateIds: string[]) {
+export function forgetSentimentHotShown(archiveId: string, candidateIds: string[], searchMode?: SentimentHotSearchMode) {
   const forget = new Set((candidateIds || []).map((item) => String(item || "").trim()).filter(Boolean));
   if (!forget.size) return;
   updateState((state) => {
-    state.shown[archiveId] = (state.shown[archiveId] || []).filter((entry) => !forget.has(shownEntryId(entry)));
+    const historyScope = sentimentHotHistoryScope(archiveId, searchMode);
+    state.shown[historyScope] = (state.shown[historyScope] || []).filter((entry) => !forget.has(shownEntryId(entry)));
   });
 }
 

@@ -1584,7 +1584,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             platform="instagram",
         )
         below = server._persona_hot_user_warnings(
-            ["Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量或互动热度至少达到 500。"],
+            ["Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 100。"],
             0,
             10,
             [],
@@ -1592,7 +1592,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             platform="instagram",
         )
         self.assertEqual(no_source, ["Instagram 这次没有搜索到帖，还没有进入热度筛选。"])
-        self.assertEqual(below, ["Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量或互动热度至少达到 500。"])
+        self.assertEqual(below, ["Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 100。"])
         self.assertNotIn("暂未找到", " ".join(no_source + below))
 
     def test_public_persona_profile_persists_avatar_crop_without_replacing_reference(self):
@@ -5100,6 +5100,35 @@ class PersonaDashboardApiTests(unittest.TestCase):
             release_worker.set()
             self._wait_for_hot_candidate_task_status(first.json()["id"], "success")
 
+    def test_async_hot_candidate_does_not_reuse_a_task_from_another_search_mode(self):
+        self._write_archives()
+        release_worker = threading.Event()
+        with server.PERSONA_HOT_CANDIDATE_TASKS_LOCK:
+            server.PERSONA_HOT_CANDIDATE_TASKS.clear()
+
+        def blocked_fetch(*_args, **_kwargs):
+            release_worker.wait(timeout=1)
+            return {"ok": True, "candidates": []}
+
+        with (
+            mock.patch.object(server, "_fetch_persona_hot_candidates", side_effect=blocked_fetch),
+            mock.patch.object(server.commercial_billing, "reserve_charge", side_effect=[{"id": "strict-hold"}, {"id": "normal-hold"}]) as reserve,
+            mock.patch.object(server.commercial_billing, "settle_reservation", return_value={"status": "settled"}),
+        ):
+            strict = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates/tasks",
+                json={"refresh": True, "limit": 10, "search_mode": "strict"},
+            )
+            normal = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/hot_candidates/tasks",
+                json={"refresh": True, "limit": 10, "search_mode": "normal"},
+            )
+            self.assertNotEqual(strict.json()["id"], normal.json()["id"])
+            self.assertEqual(reserve.call_count, 2)
+            release_worker.set()
+            self._wait_for_hot_candidate_task_status(strict.json()["id"], "success")
+            self._wait_for_hot_candidate_task_status(normal.json()["id"], "success")
+
     def test_startup_releases_only_orphaned_async_hot_candidate_holds(self):
         with server.db() as conn:
             for reservation_id, ref_type, status in (
@@ -5948,7 +5977,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertRegex(payload["keywordDigest"], r"^[0-9a-f]{64}$")
         self.assertEqual(payload["archiveSnapshot"]["id"], "persona-1")
 
-    def test_fetch_persona_hot_candidates_sends_full_keyword_table_for_relevance(self):
+    def test_fetch_persona_hot_candidates_keeps_strict_relevance_on_current_batch(self):
         self._write_archives()
         fetched = {
             "ok": True,
@@ -5975,7 +6004,21 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(body["ok"])
         payload = mocked.call_args.args[0]
         self.assertEqual(payload["keywords"], ["海外置產", "白金台"])
-        self.assertEqual(payload["allKeywords"], ["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"])
+        self.assertEqual(payload["allKeywords"], ["海外置產", "白金台"])
+
+    def test_fetch_persona_hot_candidates_keeps_full_keyword_table_for_normal_mode(self):
+        self._write_archives()
+        fetched = {"ok": True, "keywords": ["海外置產", "白金台"], "searchMode": "normal", "warnings": [], "candidates": []}
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fetched) as mocked:
+            server._fetch_persona_hot_candidates(
+                "persona-1",
+                server.PersonaDashboardHotCandidatesFetchPayload(
+                    keywords=["海外置產", "白金台"],
+                    all_keywords=["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"],
+                    search_mode="normal",
+                ),
+            )
+        self.assertEqual(mocked.call_args.args[0]["allKeywords"], ["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"])
 
     def test_remote_hot_request_keeps_full_keyword_table_for_old_worker_relevance(self):
         payload = server._remote_fetch_persona_hot_request({

@@ -43,7 +43,7 @@ describe("sentiment hot cache sharding", () => {
           ...candidate,
           id: "candidate-existing",
           sourceUrl: "https://www.threads.net/@demo/post/existing",
-          content: "汽车发动机维修诊断与零件更换经验。".repeat(8),
+          content: "汽车维修与发动机诊断、零件更换经验。".repeat(8),
         }],
       },
     }), "utf8");
@@ -68,5 +68,18 @@ describe("sentiment hot cache sharding", () => {
     expect(fs.existsSync(path.join(shardDir, ".legacy-migrated"))).toBe(true);
     expect(fs.existsSync(path.join(runtimeDir, "sentiment_threads_search_cache.json"))).toBe(false);
     expect(fs.readdirSync(runtimeDir).some((name) => name.startsWith("sentiment_threads_search_cache.json.migrated-"))).toBe(true);
+  });
+
+  it("does not merge strict cache rows into normal mode reads", async () => {
+    const source = fs.readFileSync(path.resolve("src/lib/sentiment-hot-importer.ts"), "utf8");
+    const archiveKeysStart = source.indexOf("function threadsSearchArchiveCacheKeys");
+    const archiveKeysEnd = source.indexOf("function threadsSearchStoredKeyword", archiveKeysStart);
+    const archiveKeys = source.slice(archiveKeysStart, archiveKeysEnd);
+    const readStateStart = source.indexOf("function readThreadsSearchCacheState");
+    const readStateEnd = source.indexOf("function writeThreadsSearchCandidateCache", readStateStart);
+    const readState = source.slice(readStateStart, readStateEnd);
+
+    expect(archiveKeys).not.toContain('mode === "normal" && key.startsWith(strictPrefix)');
+    expect(readState).not.toContain('readThreadsSearchCacheShardState(archiveId, "strict"');
   });
 });

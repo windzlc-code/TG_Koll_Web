@@ -4891,6 +4891,25 @@ function normalizePersonaHotSearchMode(value) {
   return String(value || "").trim() === "normal" ? "normal" : "strict";
 }
 
+function personaHotResultStateKey(personaId, searchMode) {
+  return `${String(personaId || "").trim()}::${normalizePersonaHotSearchMode(searchMode)}`;
+}
+
+function personaHotResultState(persona = selectedPersona(), searchMode) {
+  const personaId = String(persona?.id || persona || "").trim();
+  if (!personaId) return {};
+  const form = personaFormState(personaId).generate;
+  const mode = normalizePersonaHotSearchMode(searchMode || form.hotSearchMode);
+  const scoped = state.personaHotCandidateResults[personaHotResultStateKey(personaId, mode)];
+  if (scoped && typeof scoped === "object") return scoped;
+  const legacy = state.personaHotCandidateResults[personaId];
+  return legacy && normalizePersonaHotSearchMode(legacy.search_mode) === mode ? legacy : {};
+}
+
+function setPersonaHotResultState(personaId, searchMode, value) {
+  state.personaHotCandidateResults[personaHotResultStateKey(personaId, searchMode)] = value;
+}
+
 function parsePersonaHotKeywordText(value) {
   return [...new Set(String(value || "")
     .split(/[\n\r/／,，;；|]+/u)
@@ -4907,7 +4926,10 @@ function formatPersonaHotKeywordText(keywords) {
 }
 
 function personaHotKeywordText(form, hotState = {}) {
-  const existing = String(form?.hotKeywordText || "").trim();
+  const mode = normalizePersonaHotSearchMode(form?.hotSearchMode);
+  const existing = normalizePersonaHotSearchMode(form?.hotKeywordMode) === mode
+    ? String(form?.hotKeywordText || "").trim()
+    : "";
   return existing || formatPersonaHotKeywordText(hotState.keywords);
 }
 
@@ -4920,8 +4942,7 @@ function personaHotKeywordChips(keywords = [], current = []) {
 }
 
 function personaHotAllCandidates(persona = selectedPersona()) {
-  const personaKey = String(persona?.id || "").trim();
-  const fetchedRows = state.personaHotCandidateResults[personaKey]?.candidates;
+  const fetchedRows = personaHotResultState(persona)?.candidates;
   const rows = Array.isArray(fetchedRows) ? fetchedRows : [];
   const deduped = new Map();
   rows.forEach((row, index) => {
@@ -4961,15 +4982,13 @@ function personaHotCandidates(persona = selectedPersona(), platform = personaCon
 }
 
 function personaHotUnreadCount(persona = selectedPersona(), platform = personaContentPlatform(persona)) {
-  const personaKey = String(persona?.id || "").trim();
   const targetPlatform = normalizePersonaContentPlatform(platform);
-  return Math.max(0, Number(state.personaHotCandidateResults[personaKey]?.unread_counts?.[targetPlatform] || 0));
+  return Math.max(0, Number(personaHotResultState(persona)?.unread_counts?.[targetPlatform] || 0));
 }
 
 function clearPersonaHotUnreadCount(persona = selectedPersona(), platform = personaContentPlatform(persona)) {
-  const personaKey = String(persona?.id || "").trim();
   const targetPlatform = normalizePersonaContentPlatform(platform);
-  const hotState = state.personaHotCandidateResults[personaKey];
+  const hotState = personaHotResultState(persona);
   if (!hotState || !personaHotUnreadCount(persona, targetPlatform)) return false;
   hotState.unread_counts = {
     ...(hotState.unread_counts || {}),
@@ -23193,7 +23212,7 @@ async function preparePersonaHotKeywords(refresh = false) {
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
-  const existingKeywords = parsePersonaHotKeywordText(personaHotKeywordText(form, state.personaHotCandidateResults[String(persona.id)] || {}));
+  const existingKeywords = parsePersonaHotKeywordText(personaHotKeywordText(form, personaHotResultState(persona, form.hotSearchMode)));
   const firstGenerate = existingKeywords.length < 6;
   setPersonaGenerateRunState(persona.id, {
     kind: "hot",
@@ -23230,8 +23249,9 @@ async function preparePersonaHotKeywords(refresh = false) {
     const keywords = Array.isArray(result.keywords) ? result.keywords.map((item) => String(item || "").trim()).filter(Boolean) : [];
     const allKeywords = Array.isArray(result.all_keywords) ? result.all_keywords.map((item) => String(item || "").trim()).filter(Boolean) : keywords;
     form.hotKeywordText = formatPersonaHotKeywordText(keywords);
-    state.personaHotCandidateResults[String(persona.id)] = {
-      ...(state.personaHotCandidateResults[String(persona.id)] || {}),
+    form.hotKeywordMode = form.hotSearchMode;
+    setPersonaHotResultState(persona.id, form.hotSearchMode, {
+      ...personaHotResultState(persona, form.hotSearchMode),
       keywords,
       all_keywords: allKeywords,
       batch_index: Number(result.batch_index || 1),
@@ -23243,7 +23263,7 @@ async function preparePersonaHotKeywords(refresh = false) {
       search_mode: normalizePersonaHotSearchMode(result.search_mode || form.hotSearchMode),
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
       keyword_prepared_at: new Date().toISOString(),
-    };
+    });
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
       status: keywords.length ? "success" : "error",
@@ -23302,7 +23322,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
   const form = personaFormState(persona.id).generate;
   const previousCandidates = personaHotAllCandidates(persona);
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
-  let hotState = state.personaHotCandidateResults[String(persona.id)] || {};
+  let hotState = personaHotResultState(persona, form.hotSearchMode);
   let keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
   const cooldown = await apiWithTimeout(
     `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/cooldown`,
@@ -23313,7 +23333,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
     ...hotState,
     cooldown: cooldown && typeof cooldown === "object" ? cooldown : {},
   };
-  state.personaHotCandidateResults[String(persona.id)] = hotState;
+  setPersonaHotResultState(persona.id, form.hotSearchMode, hotState);
   if (Boolean(cooldown?.active) && Number(cooldown?.remaining_seconds || 0) > 0) {
     showMsg("commandMsg", `热点抓取冷却中，请在 ${Number(cooldown.remaining_seconds)} 秒后重试。`, false);
     renderPersonaDetail();
@@ -23335,6 +23355,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
   state.personaHotFetchControllers[personaKey]?.abort?.(new DOMException("Request replaced", "AbortError"));
   state.personaHotFetchControllers[personaKey] = controller;
   form.hotKeywordText = formatPersonaHotKeywordText(keywords);
+  form.hotKeywordMode = form.hotSearchMode;
   setPersonaGenerateRunState(persona.id, {
     kind: "hot",
     status: "running",
@@ -23345,7 +23366,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
-    hotState = state.personaHotCandidateResults[String(persona.id)] || {};
+    hotState = personaHotResultState(persona, form.hotSearchMode);
     const allKeywords = Array.isArray(hotState.all_keywords) && hotState.all_keywords.length
       ? hotState.all_keywords.map((item) => String(item || "").trim()).filter(Boolean)
       : keywords;
@@ -23423,14 +23444,14 @@ async function fetchPersonaHotCandidates(refresh = false) {
     ));
     const mergedCandidates = [...previousOther, ...platformCandidates];
     const unreadCounts = {
-      ...(state.personaHotCandidateResults[String(persona.id)]?.unread_counts || {}),
+      ...(personaHotResultState(persona, form.hotSearchMode)?.unread_counts || {}),
     };
     accountPoolPlatforms.forEach(([platform]) => {
       if (!(platform in unreadCounts)) unreadCounts[platform] = 0;
     });
     unreadCounts[currentPlatform] = platformCandidates.length;
-    const previousHot = state.personaHotCandidateResults[String(persona.id)] || {};
-    state.personaHotCandidateResults[String(persona.id)] = {
+    const previousHot = personaHotResultState(persona, form.hotSearchMode);
+    setPersonaHotResultState(persona.id, form.hotSearchMode, {
       ...previousHot,
       candidates: mergedCandidates,
       keywords,
@@ -23444,8 +23465,9 @@ async function fetchPersonaHotCandidates(refresh = false) {
       cooldown: result.cooldown && typeof result.cooldown === "object" ? result.cooldown : {},
       unread_counts: unreadCounts,
       fetched_at: new Date().toISOString(),
-    };
+    });
     form.hotKeywordText = formatPersonaHotKeywordText(keywords);
+    form.hotKeywordMode = form.hotSearchMode;
     const nextCandidates = personaHotAllCandidates(persona);
     reconcilePersonaHotMediaStateAfterRefresh(persona.id, previousCandidates, nextCandidates);
     state.transientWorkspaceLeaveAcknowledgement = "";
@@ -26255,7 +26277,8 @@ function renderPersonaHotCandidatePreview(candidate) {
 }
 
 function renderPersonaHotCandidatePicker(persona, form) {
-  const hotState = state.personaHotCandidateResults[String(persona?.id || "").trim()] || {};
+  form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
+  const hotState = personaHotResultState(persona, form.hotSearchMode);
   const candidates = personaHotCandidates(persona);
   const selectedIds = new Set((form.hotSelectedIds || []).map((item) => String(item || "").trim()).filter(Boolean));
   const allCandidatesSelected = Boolean(candidates.length)
@@ -36704,7 +36727,14 @@ function bindEvents() {
         await slideSegmentedButtonBackground(hotSearchModeButton, {
           commit: () => {
             snapshotPersonaCurrentForm();
-            personaFormState(persona.id).generate.hotSearchMode = mode;
+            const form = personaFormState(persona.id).generate;
+            form.hotSearchMode = mode;
+            const modeState = personaHotResultState(persona, mode);
+            form.hotKeywordText = formatPersonaHotKeywordText(modeState.keywords || []);
+            form.hotKeywordMode = mode;
+            form.hotSelectedIds = [];
+            form.hotPreviewId = "";
+            form.hotEditingCandidateId = "";
             renderPersonaDetail();
             renderConfirmSummary();
           },

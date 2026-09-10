@@ -1810,7 +1810,9 @@ def run_tool_r18_job(
                 **payload,
                 "sourcePolicy": "reader_only",
                 "refresh": True,
-                "recordShown": not background_refill,
+                # The new host controls when a candidate was actually shown.
+                # A remote fetch itself must not consume the mode-scoped pool.
+                "recordShown": False,
             },
             cancel_event,
             timeout_seconds=timeout_seconds,
