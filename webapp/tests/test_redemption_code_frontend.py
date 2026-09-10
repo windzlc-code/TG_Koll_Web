@@ -52,6 +52,13 @@ def test_admin_redemption_controls_share_one_aligned_row_with_spacing():
     assert "column-gap: 14px" in STYLE_CSS
 
 
+def test_admin_redemption_statuses_keep_the_shared_billing_badge_palette():
+    assert ".page-admin #secRedemptionCodes .admin-billing-status" in STYLE_CSS
+    assert ".page-admin #secRedemptionCodes .admin-billing-status.is-active" in STYLE_CSS
+    assert ".page-admin #secRedemptionCodes .admin-billing-status.is-redeemed" in STYLE_CSS
+    assert ".page-admin #secRedemptionCodes .admin-billing-status.is-revoked" in STYLE_CSS
+
+
 def test_admin_redemption_list_has_compact_presets_pagination_and_record_actions():
     assert 'id="redemptionCodePageSize"' in ADMIN_HTML
     assert 'id="btnRedemptionCodePrevious"' in ADMIN_HTML
