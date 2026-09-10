@@ -6573,6 +6573,100 @@ body.persona-touch-dragging .persona-list-card:active {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.console-modal-dialog.persona-create-choice-modal {
+  width: min(680px, calc(100vw - 32px));
+}
+
+.persona-create-choice,
+.persona-create-copy-workbench {
+  display: grid;
+  gap: 16px;
+}
+
+.persona-create-choice-intro,
+.persona-create-copy-intro {
+  display: grid;
+  gap: 6px;
+}
+
+.persona-create-choice-intro span,
+.persona-create-copy-intro span,
+.persona-create-copy-muted,
+.persona-create-copy-bio {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.persona-create-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.persona-create-choice-grid button {
+  display: grid;
+  gap: 8px;
+  min-height: 148px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+
+.persona-create-choice-grid button:hover,
+.persona-create-choice-grid button:focus-visible {
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+
+.persona-create-choice-grid button span {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.persona-create-copy-source,
+.persona-create-copy-result {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--soft);
+}
+
+.persona-create-copy-source .persona-workbench-head,
+.persona-create-copy-result .persona-workbench-head {
+  margin: 0;
+}
+
+.persona-create-copy-posts {
+  display: grid;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.persona-create-copy-posts p {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-solid);
+  color: var(--ink);
+  line-height: 1.55;
+}
+
+@media (max-width: 560px) {
+  .persona-create-choice-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .persona-create-modal .console-modal-content {
   gap: 0;
   padding-right: 0;

@@ -1513,6 +1513,52 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("[401, 428]", fallback)
         self.assertNotIn("403", fallback)
 
+    def test_persona_copy_operation_key_reuses_same_payload_and_rekeys_changed_payload(self):
+        storage_helper = self._function_source("personaStepOperationStorageKey")
+        new_key_helper = self._function_source("newPersonaStepOperationKey")
+        operation_helper = self._function_source("personaStepOperationKey")
+        harness = textwrap.dedent(
+            f"""
+            const assert = require("assert");
+            const values = new Map();
+            const sessionStorage = {{
+              getItem(key) {{ return values.has(key) ? values.get(key) : null; }},
+              setItem(key, value) {{ values.set(key, String(value)); }},
+              removeItem(key) {{ values.delete(key); }},
+            }};
+            const PERSONA_STEP_OPERATION_TTL_MS = 30 * 60 * 1000;
+            {storage_helper}
+            {new_key_helper}
+            {operation_helper}
+
+            const firstPayload = {{ url: "https://www.threads.com/@alice", name: "Alice" }};
+            const firstKey = personaStepOperationKey("copy-analyze", firstPayload, "");
+            const samePayloadKey = personaStepOperationKey("copy-analyze", firstPayload, firstKey);
+            assert.strictEqual(samePayloadKey, firstKey);
+
+            const changedPayload = {{ url: "https://www.threads.com/@bob", name: "Bob" }};
+            const changedKey = personaStepOperationKey("copy-analyze", changedPayload, firstKey);
+            assert.notStrictEqual(changedKey, firstKey);
+            assert.strictEqual(
+              personaStepOperationKey("copy-analyze", changedPayload, changedKey),
+              changedKey,
+            );
+            """
+        )
+        self._run_node(harness)
+
+    def test_tenant_reset_clears_persona_copy_busy_state_and_operation_key(self):
+        clear_state = self._function_source("clearTenantInMemoryState")
+        for assignment in (
+            "state.personaCreateBusy.copyAnalyze = false",
+            "state.personaCreateBusy.copyAnalyzeStartedAt = 0",
+            "state.personaCreateBusy.copyCreate = false",
+            "state.personaCreateBusy.copyCreateStartedAt = 0",
+            'clearPersonaStepOperationKey("copy-analyze")',
+            'clearPersonaStepOperationKey("copy-create")',
+        ):
+            self.assertIn(assignment, clear_state)
+
     def test_unfinished_manual_tasks_keep_status_refresh_active(self):
         active_task = self._function_source("activeSocialAutomationTask")
         refresh_check = self._function_source("hasActiveSocialTaskToast")

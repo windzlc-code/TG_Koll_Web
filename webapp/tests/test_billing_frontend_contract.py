@@ -588,6 +588,18 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         ]
         self.assertIn("personaCreateKeywordController === controller", keywords)
 
+    def test_persona_copy_create_retries_with_stable_idempotency_key(self):
+        create = self.console_script[
+            self.console_script.index("async function createPersonaArchiveFromCopy")
+            : self.console_script.index("function generatePersonaPayloadFromState")
+        ]
+        self.assertIn("copyCreateOperationKey", create)
+        self.assertIn('personaStepOperationKey(\n    "copy-create"', create)
+        self.assertIn('"Idempotency-Key": operationKey', create)
+        self.assertIn("requestPayload", create)
+        self.assertIn("personaStepErrorKeepsOperationKey", create)
+        self.assertIn('clearPersonaStepOperationKey("copy-create", operationKey)', create)
+
     def test_mobile_toasts_enter_from_top_and_busy_spinner_has_distinct_track(self):
         mobile_start = self.console_styles.index(
             "@media (max-width: 760px)",

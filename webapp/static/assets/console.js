@@ -623,6 +623,7 @@ const state = {
   automationPlanEditorPayload: {},
   renderedPersonaId: "",
   personaCreateMode: false,
+  personaCreateBranch: "normal",
   personaCreate: null,
   actionLocks: {},
   personaCreateBusy: {
@@ -632,9 +633,14 @@ const state = {
     keywordsStartedAt: 0,
     aiCreate: false,
     aiCreateStartedAt: 0,
+    copyAnalyze: false,
+    copyAnalyzeStartedAt: 0,
+    copyCreate: false,
+    copyCreateStartedAt: 0,
     profileContent: false,
   },
   personaCreateKeywordController: null,
+  personaCreateCopyController: null,
   personaLinkPresetId: "",
   selectedPersonaId: "",
   selectedPersonaPostId: "",
@@ -798,6 +804,15 @@ function clearTenantInMemoryState() {
   if (state.personaCreateKeywordController) {
     state.personaCreateKeywordController.abort?.(new DOMException("Session boundary", "AbortError"));
   }
+  if (state.personaCreateCopyController) {
+    state.personaCreateCopyController.abort?.(new DOMException("Session boundary", "AbortError"));
+  }
+  clearPersonaStepOperationKey("copy-analyze");
+  clearPersonaStepOperationKey("copy-create");
+  state.personaCreateBusy.copyAnalyze = false;
+  state.personaCreateBusy.copyAnalyzeStartedAt = 0;
+  state.personaCreateBusy.copyCreate = false;
+  state.personaCreateBusy.copyCreateStartedAt = 0;
   Object.values(state.personaHotFetchControllers || {}).forEach((controller) => {
     controller?.abort?.(new DOMException("Session boundary", "AbortError"));
   });
@@ -888,7 +903,9 @@ function clearTenantInMemoryState() {
   state.personaSelectedMediaIndexes = {};
   state.personaMediaBulkSelections = {};
   state.personaCreate = null;
+  state.personaCreateBranch = "normal";
   state.personaCreateKeywordController = null;
+  state.personaCreateCopyController = null;
   state.actionLocks = {};
   state.selectedPersonaId = "";
   state.selectedPersonaPostId = "";
@@ -1055,6 +1072,11 @@ function defaultPersonaCreateState() {
     aiResult: null,
     aiKeywordOperationKey: "",
     aiCreateOperationKey: "",
+    copyUrl: "",
+    copyName: "",
+    copyAnalysis: null,
+    copyAnalyzeOperationKey: "",
+    copyCreateOperationKey: "",
   };
 }
 
@@ -1072,17 +1094,18 @@ function personaStepOperationStorageKey(step) {
 
 function personaStepOperationKey(step, payload, currentKey = "") {
   const activeKey = String(currentKey || "").trim();
-  if (activeKey) return activeKey;
   const fingerprint = JSON.stringify(payload || {});
   const storageKey = personaStepOperationStorageKey(step);
+  let stored = null;
   try {
-    const stored = JSON.parse(sessionStorage.getItem(storageKey) || "null");
+    stored = JSON.parse(sessionStorage.getItem(storageKey) || "null");
     const age = Date.now() - Number(stored?.createdAt || 0);
     if (
       String(stored?.fingerprint || "") === fingerprint
       && String(stored?.operationKey || "")
       && age >= 0
       && age <= PERSONA_STEP_OPERATION_TTL_MS
+      && (!activeKey || String(stored.operationKey) === activeKey)
     ) {
       return String(stored.operationKey);
     }
@@ -1107,7 +1130,7 @@ function clearPersonaStepOperationKey(step, operationKey = "") {
 }
 
 function personaStepErrorKeepsOperationKey(error) {
-  if (error?.code === "BILLABLE_OPERATION_IN_PROGRESS") return true;
+  if (["BILLABLE_OPERATION_IN_PROGRESS", "PERSONA_CREATE_IN_PROGRESS"].includes(String(error?.code || ""))) return true;
   if (error?.name === "AbortError" || Number(error?.status) === 499) return false;
   const status = Number(error?.status);
   if (!Number.isFinite(status)) return true;
@@ -1124,6 +1147,8 @@ function ensurePersonaCreateState() {
 function personaCreateBusyKind() {
   const busy = state.personaCreateBusy || {};
   if (busy.profileContent) return "AI 生成简介";
+  if (busy.copyCreate) return "创建复制人设";
+  if (busy.copyAnalyze) return "分析公开资料";
   if (busy.aiCreate) return "AI 生成人设";
   if (busy.keywords) return "关键词提炼";
   if (busy.manual) return "手动创建人设";
@@ -1143,8 +1168,23 @@ function snapshotPersonaCreateInputs() {
   return createState;
 }
 
+function snapshotPersonaCopyInputs() {
+  const createState = ensurePersonaCreateState();
+  const copyUrl = $("personaCopyUrl");
+  const copyName = $("personaCopyName");
+  const resultName = $("personaCopyResultName");
+  const resultContent = $("personaCopyResultContent");
+  if (copyUrl) createState.copyUrl = copyUrl.value || "";
+  if (copyName) createState.copyName = copyName.value || "";
+  if (resultName && createState.copyAnalysis?.profile) createState.copyAnalysis.profile.name = resultName.value || "";
+  if (resultContent && createState.copyAnalysis?.profile) createState.copyAnalysis.profile.content = resultContent.value || "";
+  return createState;
+}
+
 function personaCreateHasPendingChanges() {
-  const createState = snapshotPersonaCreateInputs();
+  const createState = state.personaCreateBranch === "copy"
+    ? snapshotPersonaCopyInputs()
+    : snapshotPersonaCreateInputs();
   const hasTextInput = Boolean(
     String(createState.aiName || "").trim()
     || String(createState.aiPrompt || "").trim()
@@ -1153,9 +1193,15 @@ function personaCreateHasPendingChanges() {
     (Array.isArray(createState.aiKeywords) && createState.aiKeywords.length)
     || (Array.isArray(createState.aiSelectedKeywords) && createState.aiSelectedKeywords.length)
   );
+  const hasCopyState = Boolean(
+    String(createState.copyUrl || "").trim()
+    || String(createState.copyName || "").trim()
+    || createState.copyAnalysis
+  );
   return Boolean(
     hasTextInput
     || hasKeywordState
+    || hasCopyState
     || createState.aiResult
     || String(createState.aiStep || "input") !== "input"
   );
@@ -1889,8 +1935,9 @@ async function api(path, options = {}) {
     if (data && typeof data === "object") {
       data.detail = detail;
       data.status = response.status;
+      if (boundaryCode) data.code = boundaryCode;
     } else {
-      data = { detail, status: response.status };
+      data = { detail, status: response.status, ...(boundaryCode ? { code: boundaryCode } : {}) };
     }
     throw data;
   }
@@ -22078,6 +22125,230 @@ async function createPersonaArchiveWithAi() {
   }
 }
 
+function renderPersonaCopySourceSummary(source = {}) {
+  const posts = Array.isArray(source.posts) ? source.posts : [];
+  const metrics = [
+    source.followers != null ? `粉丝 ${source.followers}` : "",
+    source.following != null ? `关注 ${source.following}` : "",
+  ].filter(Boolean).join(" · ");
+  return `
+    <div class="persona-create-copy-source">
+      <div class="persona-workbench-head">
+        <div class="persona-head-copy">
+          <strong>${esc(source.display_name || source.username || "公开用户")}</strong>
+          <span>${esc(source.platform || "社媒平台")} · ${source.username ? `@${esc(source.username)}` : "已抓取公开页面"}${metrics ? ` · ${esc(metrics)}` : ""}</span>
+        </div>
+        <span class="module-chip">公开资料</span>
+      </div>
+      <p class="persona-create-copy-bio">${esc(source.bio || "页面未公开可识别的简介。")}</p>
+      ${posts.length ? `
+        <div class="persona-create-copy-posts">
+          <strong>公开文字样本（${posts.length} 条）</strong>
+          ${posts.slice(0, 5).map((post) => `<p>${esc(post?.content || "")}</p>`).join("")}
+        </div>
+      ` : `<p class="persona-create-copy-muted">页面未公开可识别的近期文字内容，AI 将基于现有公开资料给出有限分析。</p>`}
+    </div>
+  `;
+}
+
+function renderPersonaCopyCreateWorkbench() {
+  const createState = snapshotPersonaCopyInputs();
+  const busy = state.personaCreateBusy || {};
+  const analysis = createState.copyAnalysis && typeof createState.copyAnalysis === "object"
+    ? createState.copyAnalysis
+    : null;
+  const source = analysis?.source && typeof analysis.source === "object" ? analysis.source : null;
+  const profile = analysis?.profile && typeof analysis.profile === "object" ? analysis.profile : null;
+  const busyLabel = personaCreateBusyKind();
+  const anyBusy = personaCreateIsBusy();
+  if (analysis && source && profile) {
+    return `
+      <div class="persona-inline-panel persona-create-workbench persona-create-copy-workbench is-flat">
+        ${renderPersonaCopySourceSummary(source)}
+        <div class="persona-create-copy-result">
+          <div class="persona-workbench-head">
+            <div class="persona-head-copy">
+              <strong>AI 分析结果</strong>
+              <span>请确认或修改后，再创建为新的人设。</span>
+            </div>
+            <span class="module-chip">可编辑</span>
+          </div>
+          <label>人设名称
+            <input id="personaCopyResultName" value="${esc(profile.name || createState.copyName || source.display_name || "复制创建人设")}" ${anyBusy ? "readonly aria-readonly=\"true\"" : ""} />
+          </label>
+          <label>人设简介
+            <textarea id="personaCopyResultContent" rows="12" ${anyBusy ? "readonly aria-readonly=\"true\"" : ""}>${esc(profile.content || "")}</textarea>
+          </label>
+        </div>
+        <div class="persona-create-actions">
+          <button type="button" data-persona-copy-back ${anyBusy ? "disabled" : ""}>返回修改链接</button>
+          <button type="button" class="primary" data-persona-copy-create aria-busy="${busy.copyCreate ? "true" : "false"}" ${anyBusy ? "disabled" : ""}>${busy.copyCreate ? renderBusyButtonContent("正在创建复制人设", true, busy.copyCreateStartedAt) : (anyBusy ? `${busyLabel}中` : "确认并创建人设")}</button>
+        </div>
+      </div>
+    `;
+  }
+  const analyzeBusy = Boolean(busy.copyAnalyze);
+  return `
+    <div class="persona-inline-panel persona-create-workbench persona-create-copy-workbench is-flat">
+      <div class="persona-create-copy-intro">
+        <strong>根据公开社媒资料快速创建</strong>
+        <span>仅抓取公开页面中的简介和文字内容，不读取登录态，也不会绑定对方账号。</span>
+      </div>
+      <label>社媒用户主页链接
+        <input id="personaCopyUrl" value="${esc(createState.copyUrl || "")}" placeholder="https://www.threads.com/@username" ${anyBusy ? "readonly aria-readonly=\"true\"" : ""} />
+      </label>
+      <label>新建人设名称（可选）
+        <input id="personaCopyName" value="${esc(createState.copyName || "")}" placeholder="留空则使用公开显示名" ${anyBusy ? "readonly aria-readonly=\"true\"" : ""} />
+      </label>
+      <div class="persona-create-actions">
+        <button type="button" class="primary" data-persona-copy-analyze aria-busy="${analyzeBusy ? "true" : "false"}" ${anyBusy ? "disabled" : ""}>${analyzeBusy ? renderBusyButtonContent("正在抓取并分析公开资料", true, busy.copyAnalyzeStartedAt) : (anyBusy ? `${busyLabel}中` : "抓取并分析")}</button>
+      </div>
+      <p class="persona-create-copy-muted">支持 Threads / Instagram 公开用户主页。若平台限制匿名访问，会保留链接并提示重试。</p>
+    </div>
+  `;
+}
+
+async function analyzePersonaCopy() {
+  const busyKind = personaCreateBusyKind();
+  if (busyKind) {
+    showMsg("commandMsg", `${busyKind}正在执行，请等待当前任务完成。`, false);
+    return;
+  }
+  const createState = snapshotPersonaCopyInputs();
+  const url = String(createState.copyUrl || "").trim();
+  const name = String(createState.copyName || "").trim();
+  if (!url) {
+    showMsg("commandMsg", "请先填写社媒用户主页链接。", false);
+    return;
+  }
+  const requestPayload = { url, name };
+  const operationKey = personaStepOperationKey(
+    "copy-analyze",
+    requestPayload,
+    createState.copyAnalyzeOperationKey,
+  );
+  createState.copyAnalyzeOperationKey = operationKey;
+  const controller = new AbortController();
+  state.personaCreateBusy.copyAnalyze = true;
+  state.personaCreateBusy.copyAnalyzeStartedAt = Date.now();
+  state.personaCreateCopyController = controller;
+  renderPersonaCreateSurface();
+  try {
+    showMsg("commandMsg", "正在抓取并分析公开资料...", true);
+    const result = await apiWithTimeout("/api/persona_dashboard/personas/copy_analyze", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": operationKey,
+      },
+      body: JSON.stringify(requestPayload),
+      signal: controller.signal,
+    }, 150000);
+    const profile = result.profile && typeof result.profile === "object" ? result.profile : {};
+    createState.copyAnalysis = {
+      source: result.source && typeof result.source === "object" ? result.source : {},
+      profile: {
+        name: profile.name || name,
+        content: profile.content || "",
+        setup: profile.setup && typeof profile.setup === "object" ? profile.setup : {},
+      },
+    };
+    clearPersonaStepOperationKey("copy-analyze", operationKey);
+    createState.copyAnalyzeOperationKey = "";
+    renderPersonaCreateSurface();
+    showMsg("commandMsg", withBillingChargeMessage("公开资料分析完成，请确认人设简介。", result), true);
+  } catch (error) {
+    const cancelled = error?.name === "AbortError" || Number(error?.status) === 499;
+    if (cancelled || !personaStepErrorKeepsOperationKey(error)) {
+      clearPersonaStepOperationKey("copy-analyze", operationKey);
+      createState.copyAnalyzeOperationKey = "";
+    }
+    if (cancelled) {
+      showMsg("commandMsg", "已取消公开资料分析。", true);
+    } else {
+      showMsg("commandMsg", error?.detail || "公开资料分析失败，请稍后重试。", false);
+    }
+  } finally {
+    if (state.personaCreateCopyController === controller) {
+      state.personaCreateBusy.copyAnalyze = false;
+      state.personaCreateBusy.copyAnalyzeStartedAt = 0;
+      state.personaCreateCopyController = null;
+      if (state.personaCreateMode) renderPersonaCreateSurface();
+    }
+  }
+}
+
+async function createPersonaArchiveFromCopy() {
+  const busyKind = personaCreateBusyKind();
+  if (busyKind) {
+    showMsg("commandMsg", `${busyKind}正在执行，请等待当前任务完成。`, false);
+    return;
+  }
+  const createState = snapshotPersonaCopyInputs();
+  const analysis = createState.copyAnalysis && typeof createState.copyAnalysis === "object"
+    ? createState.copyAnalysis
+    : null;
+  const profile = analysis?.profile && typeof analysis.profile === "object" ? analysis.profile : null;
+  if (!analysis || !profile) {
+    showMsg("commandMsg", "请先抓取并分析公开资料。", false);
+    return;
+  }
+  const name = String(profile.name || createState.copyName || "").trim();
+  const content = String(profile.content || "").trim();
+  if (!name) {
+    showMsg("commandMsg", "请先确认人设名称。", false);
+    return;
+  }
+  if (!content) {
+    showMsg("commandMsg", "请先确认人设简介。", false);
+    return;
+  }
+  const requestPayload = {
+    name,
+    content,
+    setup: profile.setup && typeof profile.setup === "object" ? profile.setup : {},
+    copy_source: analysis.source && typeof analysis.source === "object" ? analysis.source : {},
+  };
+  const operationKey = personaStepOperationKey(
+    "copy-create",
+    requestPayload,
+    createState.copyCreateOperationKey,
+  );
+  createState.copyCreateOperationKey = operationKey;
+  state.personaCreateBusy.copyCreate = true;
+  state.personaCreateBusy.copyCreateStartedAt = Date.now();
+  renderPersonaCreateSurface();
+  try {
+    showMsg("commandMsg", "正在创建复制人设...", true);
+    const result = await api("/api/persona_dashboard/personas", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": operationKey,
+      },
+      body: JSON.stringify(requestPayload),
+    });
+    clearPersonaStepOperationKey("copy-create", operationKey);
+    createState.copyCreateOperationKey = "";
+    state.personaCreate = defaultPersonaCreateState();
+    showMsg("commandMsg", `复制人设已创建：${result.name || result.id || name}`, true);
+    state.personaCreateMode = false;
+    if (isPersonaCreateModalOpen()) closeConsoleModal(true);
+    await activateCreatedPersona(result.id || state.selectedPersonaId, { group: "settings", step: "profile" });
+    renderWorkspace();
+  } catch (error) {
+    if (!personaStepErrorKeepsOperationKey(error)) {
+      clearPersonaStepOperationKey("copy-create", operationKey);
+      createState.copyCreateOperationKey = "";
+    }
+    throw error;
+  } finally {
+    state.personaCreateBusy.copyCreate = false;
+    state.personaCreateBusy.copyCreateStartedAt = 0;
+    if (state.personaCreateMode) renderPersonaCreateSurface();
+  }
+}
+
 function generatePersonaPayloadFromState(persona, profile = selectedPersonaProfile()) {
   const personaForm = personaFormState(persona.id);
   const form = personaForm.generate;
@@ -27391,10 +27662,12 @@ function renderPersonaCreateModal() {
   const modal = $("consoleModal");
   const content = modal?.querySelector(".console-modal-content");
   if (!modal || modal.dataset.modalKey !== "persona-create" || !content) return false;
-  content.innerHTML = renderPersonaCreateWorkbench();
+  content.innerHTML = state.personaCreateBranch === "copy"
+    ? renderPersonaCopyCreateWorkbench()
+    : renderPersonaCreateWorkbench();
   content.querySelectorAll("strong, p, label, button, [title], [aria-label], [placeholder]").forEach(markConsoleUiElement);
   translateConsoleLanguage(content, currentLanguage());
-  content.querySelector("#personaCreateAiName, [data-persona-create-ai-keyword], [data-persona-create-ai-open-profile]")?.focus();
+  content.querySelector("#personaCreateAiName, #personaCopyUrl, #personaCopyResultName, [data-persona-create-ai-keyword], [data-persona-create-ai-open-profile]")?.focus();
   return true;
 }
 
@@ -27408,11 +27681,64 @@ function closePersonaCreateModal(result = null) {
     return;
   }
   state.personaCreate = defaultPersonaCreateState();
+  state.personaCreateBranch = "normal";
   state.personaCreateMode = false;
   renderPersonaDetail();
 }
 
+function openPersonaCreateChoiceModal() {
+  const request = openConsoleModal({
+    title: "新建人设",
+    contentHtml: `
+      <div class="persona-create-choice">
+        <div class="persona-create-choice-intro">
+          <strong>选择创建方式</strong>
+          <span>普通创建保留原有流程；复制创建会根据公开社媒主页快速生成可编辑人设。</span>
+        </div>
+        <div class="persona-create-choice-grid">
+          <button type="button" data-persona-create-branch="normal">
+            <strong>普通创建</strong>
+            <span>手动填写人设名称和简介，沿用传统创建流程。</span>
+          </button>
+          <button type="button" data-persona-create-branch="copy">
+            <strong>复制创建</strong>
+            <span>输入 Threads 或 Instagram 公开用户链接，抓取公开资料并由 AI 分析。</span>
+          </button>
+        </div>
+      </div>
+    `,
+    showCancel: false,
+    showConfirm: false,
+    modalKey: "persona-create-choice",
+  });
+  const modal = $("consoleModal");
+  const dialog = modal?.querySelector(".console-modal-dialog");
+  if (!modal || !dialog) return request;
+  dialog.classList.add("persona-create-choice-modal");
+  modal.__requestClose = () => closeConsoleModal(null, modal);
+  modal.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-persona-create-branch]");
+    if (!button || !modal.isConnected) return;
+    const branch = button.dataset.personaCreateBranch === "copy" ? "copy" : "normal";
+    closeConsoleModal(branch, modal);
+  });
+  return request.then((branch) => {
+    if (!branch) return null;
+    state.personaCreate = defaultPersonaCreateState();
+    state.personaCreateBranch = branch;
+    state.personaCreateMode = true;
+    setPersonaMobileSidebarOpen(false, "personaWorkspaceSidebar");
+    return openPersonaCreateModal();
+  });
+}
+
 function openPersonaCreateModal() {
+  if (!state.personaCreateMode) {
+    return openPersonaCreateChoiceModal().catch((error) => {
+      showMsg("commandMsg", error?.detail || error?.message || "打开新建人设入口失败。", false);
+      return null;
+    });
+  }
   const request = openConsoleModal({
     title: "新建人设",
     contentHtml: " ",
@@ -27450,10 +27776,19 @@ function openPersonaCreateModal() {
     if (state.personaCreateKeywordController && !state.personaCreateKeywordController.signal.aborted) {
       state.personaCreateKeywordController.abort(new DOMException("Create dialog closed", "AbortError"));
     }
+    if (state.personaCreateCopyController && !state.personaCreateCopyController.signal.aborted) {
+      state.personaCreateCopyController.abort(new DOMException("Create dialog closed", "AbortError"));
+    }
     state.personaCreateKeywordController = null;
+    state.personaCreateCopyController = null;
     state.personaCreateBusy.keywords = false;
     state.personaCreateBusy.keywordsStartedAt = 0;
+    state.personaCreateBusy.copyAnalyze = false;
+    state.personaCreateBusy.copyAnalyzeStartedAt = 0;
+    state.personaCreateBusy.copyCreate = false;
+    state.personaCreateBusy.copyCreateStartedAt = 0;
     state.personaCreate = defaultPersonaCreateState();
+    state.personaCreateBranch = "normal";
     state.personaCreateMode = false;
     if (state.activeModule === "personas") renderPersonaDetail();
   };
@@ -27463,6 +27798,20 @@ function openPersonaCreateModal() {
     const run = (action, failureText) => {
       action().catch((error) => showMsg("commandMsg", error?.detail || error?.message || failureText, false));
     };
+    if (event.target.closest("[data-persona-copy-analyze]")) {
+      run(analyzePersonaCopy, "公开资料分析失败");
+      return;
+    }
+    if (event.target.closest("[data-persona-copy-create]")) {
+      run(createPersonaArchiveFromCopy, "复制创建人设失败");
+      return;
+    }
+    if (event.target.closest("[data-persona-copy-back]")) {
+      const createState = snapshotPersonaCopyInputs();
+      createState.copyAnalysis = null;
+      renderPersonaCreateSurface();
+      return;
+    }
     if (event.target.closest("[data-persona-create]")) {
       run(createPersonaArchive, "创建人设失败");
       return;
@@ -37464,8 +37813,6 @@ function bindEvents() {
       if (!(await canLeaveCurrentPersonaDraftEdit("leave"))) return;
       if (!(await confirmLeaveTransientWorkspaceState())) return;
       clearMsg("commandMsg");
-      state.personaCreate = defaultPersonaCreateState();
-      state.personaCreateMode = true;
       setPersonaMobileSidebarOpen(false, "personaWorkspaceSidebar");
       void openPersonaCreateModal();
     }

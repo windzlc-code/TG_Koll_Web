@@ -91,6 +91,27 @@ class PersonaAiBillingBoundaryTests(unittest.TestCase):
         })
         self.assertEqual({str(row["status"]) for row in rows}, {"released"})
 
+    def test_startup_cleanup_releases_orphaned_persona_copy_analyze_hold(self):
+        with db_module.db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            commercial_billing.reserve_charge(
+                conn,
+                user_id=self.user_id,
+                ref_type="persona_copy_analyze",
+                ref_id="persona-copy-orphan",
+                sku="basic_text_post",
+                quantity=1,
+                now=100,
+            )
+
+        with mock.patch.object(server, "_now_ts", return_value=1_000):
+            server._resume_pending_tasks()
+
+        rows = self._reservation_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(str(rows[0]["ref_type"]), "persona_copy_analyze")
+        self.assertEqual(str(rows[0]["status"]), "released")
+
     def test_empty_derived_profile_fails_and_releases_reservation(self):
         payload = server.PersonaDashboardPersonaAiProfilePayload(
             name="Night Driver",

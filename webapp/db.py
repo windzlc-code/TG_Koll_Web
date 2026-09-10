@@ -2110,6 +2110,25 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS persona_create_idempotency (
+              user_id INTEGER NOT NULL,
+              key_digest TEXT NOT NULL,
+              request_hash TEXT NOT NULL,
+              archive_id TEXT NOT NULL DEFAULT '',
+              response_json TEXT NOT NULL DEFAULT '{}',
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              PRIMARY KEY(user_id, key_digest),
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_persona_create_idempotency_archive "
+            "ON persona_create_idempotency(archive_id)"
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS persona_group_owners (
               group_id TEXT PRIMARY KEY,
               user_id INTEGER NOT NULL DEFAULT 0,

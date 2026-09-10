@@ -135,6 +135,12 @@ from .social_automation_api import (
 )
 from .crm import install_crm
 from .crm.service import effective_module_state
+from .persona_copy import (
+    PublicPersonaProfileError,
+    build_persona_copy_prompt,
+    fetch_public_persona_profile,
+    normalize_public_persona_url,
+)
 from .crm_integration import (
     crm_billing_adapter,
     crm_post_commit_callback,
@@ -2038,6 +2044,7 @@ _PERSONA_AI_BILLING_REF_TYPES = (
     "persona_ai_keywords",
     "persona_ai_create",
     "persona_ai_profile",
+    "persona_copy_analyze",
 )
 
 
@@ -13431,6 +13438,8 @@ class PersonaDashboardThreadsBindingPayload(BaseModel):
 class PersonaDashboardPersonaCreatePayload(BaseModel):
     name: str = ""
     content: str = ""
+    setup: dict[str, Any] = Field(default_factory=dict)
+    copy_source: dict[str, Any] = Field(default_factory=dict)
 
 
 class PersonaDashboardPersonaBatchDeletePayload(BaseModel):
@@ -13476,6 +13485,11 @@ class PersonaDashboardPersonaAiProfilePayload(BaseModel):
     name: str = ""
     prompt: str = ""
     selected_keywords: list[str] = Field(default_factory=list)
+
+
+class PersonaDashboardPersonaCopyAnalyzePayload(BaseModel):
+    url: str = ""
+    name: str = ""
 
 
 class PersonaDashboardGroupCreatePayload(BaseModel):
@@ -19027,25 +19041,35 @@ def _create_persona_archive(payload: PersonaDashboardPersonaCreatePayload) -> di
         raise HTTPException(status_code=400, detail="人设简介不能为空。")
     path, raw, archives = _persona_archive_source_for_write()
     now = _persona_dashboard_iso_now()
+    setup = {
+        "personaName": name,
+        "personaDescription": content,
+        "contentTheme": content,
+        "customTopic": content,
+        "tweetStyleSample": "",
+        "tweetStyleProfile": "",
+        "tweetStyleUpdatedAt": "",
+        "activeLinkEndingPresetId": "",
+        "linkEndingPresets": [],
+        "hotMetrics": {},
+        "accountManagement": {"threads": {}},
+    }
+    setup.update(_sanitize_persona_setup(payload.setup))
+    setup["personaName"] = name
+    setup["personaDescription"] = content
+    setup["contentTheme"] = content
+    setup["customTopic"] = content
+    setup["accountManagement"] = {"threads": {}}
+    copy_source = _sanitize_persona_copy_source(payload.copy_source)
+    if copy_source:
+        setup["copySource"] = copy_source
     archive = {
         "id": _new_persona_archive_id(),
         "name": name,
         "content": content,
         "createdAt": now,
         "updatedAt": now,
-        "setup": {
-            "personaName": name,
-            "personaDescription": content,
-            "contentTheme": content,
-            "customTopic": content,
-            "tweetStyleSample": "",
-            "tweetStyleProfile": "",
-            "tweetStyleUpdatedAt": "",
-            "activeLinkEndingPresetId": "",
-            "linkEndingPresets": [],
-            "hotMetrics": {},
-            "accountManagement": {"threads": {}},
-        },
+        "setup": setup,
         "posts": [],
         "platformPosts": {"threads": [], "instagram": [], "telegram": []},
         "publishHistory": [],
@@ -19360,6 +19384,155 @@ def _persona_dashboard_generate_profile_content(payload: PersonaDashboardPersona
         "content": content,
         "setup": result.get("setup") if isinstance(result.get("setup"), dict) else {},
         "selected_keywords": selected_keywords,
+    }
+
+
+def _copy_safe_json_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > 3:
+        return None
+    if isinstance(value, str):
+        return value.strip()[:4_000]
+    if isinstance(value, (bool, int, float)) or value is None:
+        return value
+    if isinstance(value, list):
+        return [
+            item
+            for item in (_copy_safe_json_value(item, depth=depth + 1) for item in value[:30])
+            if item is not None
+        ]
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in list(value.items())[:80]:
+            clean_key = re.sub(r"[^A-Za-z0-9_-]", "", str(key or ""))[:80]
+            if not clean_key:
+                continue
+            safe_value = _copy_safe_json_value(item, depth=depth + 1)
+            if safe_value is not None:
+                result[clean_key] = safe_value
+        return result
+    return None
+
+
+_PERSONA_COPY_SETUP_FIELDS = frozenset({
+    *_REMOTE_FETCH_SAFE_SETUP_FIELDS,
+    "personaGender",
+    "gender",
+    "isGirlPersona",
+    "isMemePersona",
+    "totalEpisodes",
+    "stylePrompt",
+})
+
+
+def _sanitize_persona_copy_source(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    if not source:
+        return {}
+    raw_url = str(source.get("url") or "").strip()
+    if not raw_url:
+        raise HTTPException(status_code=422, detail="复制来源缺少有效公开链接。")
+    try:
+        normalized_url = normalize_public_persona_url(raw_url)
+    except PublicPersonaProfileError as exc:
+        raise HTTPException(status_code=422, detail=exc.message) from exc
+    host = str(urlsplit(normalized_url).hostname or "").lower()
+    platform = "instagram" if "instagram" in host else "threads"
+    requested_platform = str(source.get("platform") or "").strip().lower()
+    if requested_platform and requested_platform not in {"threads", "instagram"}:
+        raise HTTPException(status_code=422, detail="复制来源平台不受支持。")
+    if requested_platform and requested_platform != platform:
+        raise HTTPException(status_code=422, detail="复制来源平台与公开链接不匹配。")
+
+    result: dict[str, Any] = {
+        "platform": platform,
+        "url": normalized_url,
+        "source": "public_http",
+    }
+    for key in ("username", "display_name", "fetched_at"):
+        clean_value = str(source.get(key) or "").strip()
+        if clean_value:
+            result[key] = clean_value[:500]
+    bio = str(source.get("bio") or "").strip()
+    if bio:
+        result["bio"] = bio[:2_000]
+    for key in ("followers", "following"):
+        try:
+            metric = int(source.get(key))
+        except (TypeError, ValueError):
+            metric = None
+        if metric is not None and metric >= 0:
+            result[key] = min(metric, 2_000_000_000)
+    posts = source.get("posts") if isinstance(source.get("posts"), list) else []
+    safe_posts: list[dict[str, str]] = []
+    for item in posts[:12]:
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content") or "").strip()[:2_000]
+        if not content:
+            continue
+        post_url = str(item.get("url") or "").strip()[:500]
+        if post_url:
+            try:
+                post_url = normalize_public_persona_url(post_url)
+            except PublicPersonaProfileError:
+                post_url = ""
+        safe_posts.append({
+            "content": content,
+            "url": post_url,
+            "published_at": str(item.get("published_at") or "").strip()[:80],
+        })
+    if safe_posts:
+        result["posts"] = safe_posts
+    warnings = source.get("warnings") if isinstance(source.get("warnings"), list) else []
+    safe_warnings = [str(item or "").strip()[:200] for item in warnings[:10] if str(item or "").strip()]
+    if safe_warnings:
+        result["warnings"] = safe_warnings
+    return result
+
+
+def _sanitize_persona_setup(value: Any) -> dict[str, Any]:
+    source = value if isinstance(value, dict) else {}
+    result: dict[str, Any] = {}
+    for key in _PERSONA_COPY_SETUP_FIELDS:
+        if key not in source:
+            continue
+        safe_value = _copy_safe_json_value(source.get(key))
+        if isinstance(safe_value, dict):
+            continue
+        if isinstance(safe_value, list):
+            safe_value = [item for item in safe_value if isinstance(item, str)][:30]
+        if safe_value is not None:
+            result[key] = safe_value
+    return result
+
+
+def _persona_dashboard_analyze_copy(payload: PersonaDashboardPersonaCopyAnalyzePayload) -> dict[str, Any]:
+    requested_name = str(payload.name or "").strip()[:160]
+    source = fetch_public_persona_profile(str(payload.url or "").strip())
+    source = _sanitize_persona_copy_source(source)
+    fallback_name = str(source.get("display_name") or source.get("username") or "复制创建人设").strip()
+    persona_name = requested_name or fallback_name
+    prompt = build_persona_copy_prompt(source, persona_name)
+    result = _run_persona_create_cli({
+        "action": "derive-profile",
+        "personaName": persona_name,
+        "userPrompt": prompt,
+        "selectedKeywords": [],
+    }, timeout_seconds=120)
+    content = str(result.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=502, detail="复制创建分析失败：模型未返回有效人设简介，请稍后重试。")
+    profile_name = str(result.get("name") or persona_name).strip()[:160] or persona_name
+    return {
+        "ok": True,
+        "branch": "copy",
+        "source": source,
+        "profile": {
+            "id": "",
+            "name": profile_name,
+            "content": content,
+            "setup": _sanitize_persona_setup(result.get("setup")),
+        },
     }
 
 
@@ -19850,6 +20023,32 @@ def _persona_ai_request_fingerprint(payload: BaseModel) -> str:
         ]
     encoded = json.dumps(
         normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _persona_copy_request_fingerprint(payload: PersonaDashboardPersonaCopyAnalyzePayload) -> str:
+    raw = payload.model_dump(mode="json") if hasattr(payload, "model_dump") else payload.dict()
+    raw_url = str(raw.get("url") or "").strip()
+    try:
+        parts = urlsplit(raw_url)
+        normalized_url = urlunsplit((
+            parts.scheme.lower(),
+            str(parts.netloc or "").lower(),
+            parts.path.rstrip("/") or "/",
+            parts.query,
+            "",
+        ))
+    except ValueError:
+        normalized_url = raw_url
+    encoded = json.dumps(
+        {
+            "url": normalized_url,
+            "name": str(raw.get("name") or "").strip(),
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -24923,6 +25122,111 @@ def _create_persona_with_owner(user: dict[str, Any], operation: Any) -> dict[str
     return result
 
 
+_PERSONA_CREATE_IDEMPOTENCY_TTL_SECONDS = 10 * 60
+
+
+def _persona_create_idempotency_key(value: Any) -> str:
+    clean_key = str(value or "").strip()
+    if not clean_key:
+        return ""
+    if len(clean_key) > 160 or not clean_key.isascii():
+        raise HTTPException(status_code=400, detail="Idempotency-Key 格式无效。")
+    return clean_key
+
+
+def _persona_create_request_fingerprint(payload: PersonaDashboardPersonaCreatePayload) -> str:
+    normalized = {
+        "name": str(payload.name or "").strip(),
+        "content": str(payload.content or "").strip(),
+        "setup": _sanitize_persona_setup(payload.setup),
+        "copy_source": _sanitize_persona_copy_source(payload.copy_source),
+    }
+    encoded = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _create_persona_with_idempotency(
+    user: dict[str, Any],
+    payload: PersonaDashboardPersonaCreatePayload,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    clean_key = _persona_create_idempotency_key(idempotency_key)
+    if not clean_key:
+        return _create_persona_with_owner(user, lambda: _create_persona_archive(payload))
+
+    user_id = _workspace_user_id(user)
+    request_hash = _persona_create_request_fingerprint(payload)
+    key_digest = hashlib.sha256(f"{user_id}:{clean_key}".encode("utf-8")).hexdigest()
+    now = _now_ts()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT request_hash, archive_id, response_json, updated_at "
+            "FROM persona_create_idempotency WHERE user_id = ? AND key_digest = ?",
+            (user_id, key_digest),
+        ).fetchone()
+        if existing is not None:
+            if str(existing["request_hash"] or "") != request_hash:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "IDEMPOTENCY_KEY_REUSED",
+                        "message": "该请求标识已用于不同的人设创建内容。",
+                    },
+                )
+            cached_response = _json_loads(existing["response_json"], {})
+            if str(existing["archive_id"] or "").strip() and isinstance(cached_response, dict):
+                return cached_response
+            age = now - int(existing["updated_at"] or 0)
+            if 0 <= age < _PERSONA_CREATE_IDEMPOTENCY_TTL_SECONDS:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "PERSONA_CREATE_IN_PROGRESS",
+                        "message": "该人设创建请求仍在处理中，请稍后重试。",
+                    },
+                )
+            conn.execute(
+                "DELETE FROM persona_create_idempotency WHERE user_id = ? AND key_digest = ?",
+                (user_id, key_digest),
+            )
+        conn.execute(
+            "INSERT INTO persona_create_idempotency "
+            "(user_id, key_digest, request_hash, archive_id, response_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, '', '{}', ?, ?)",
+            (user_id, key_digest, request_hash, now, now),
+        )
+
+    try:
+        result = _create_persona_with_owner(user, lambda: _create_persona_archive(payload))
+        archive_id = _created_persona_id(result)
+        response_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE persona_create_idempotency "
+                "SET archive_id = ?, response_json = ?, updated_at = ? "
+                "WHERE user_id = ? AND key_digest = ? AND request_hash = ?",
+                (archive_id, response_json, _now_ts(), user_id, key_digest, request_hash),
+            )
+        return result
+    except Exception:
+        with contextlib.suppress(Exception):
+            with db() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "DELETE FROM persona_create_idempotency "
+                    "WHERE user_id = ? AND key_digest = ? AND request_hash = ?",
+                    (user_id, key_digest, request_hash),
+                )
+        raise
+
+
 def _create_persona_group_with_owner(user: dict[str, Any], operation: Any) -> dict[str, Any]:
     result = operation()
     group = result.get("group") if isinstance(result.get("group"), dict) else {}
@@ -25261,6 +25565,19 @@ def create_app() -> FastAPI:
                 "__OPC_PRICING_JS_VERSION__": _asset_version("assets", "opc", "pricing.js"),
                 "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
                 "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
+            },
+        )
+
+    @app.get("/case-studies.html", include_in_schema=False)
+    def page_case_studies() -> HTMLResponse:
+        return _html_response_with_versions(
+            "case-studies.html",
+            replacements={
+                "__OPC_STYLES_VERSION__": _asset_version("assets", "opc", "styles.css"),
+                "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
+                "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
+                "__CASE_STUDIES_CSS_VERSION__": _asset_version("assets", "opc", "case-studies.css"),
+                "__CASE_STUDIES_JS_VERSION__": _asset_version("assets", "opc", "case-studies.js"),
             },
         )
 
@@ -28629,11 +28946,38 @@ def create_app() -> FastAPI:
         return dict(PERSONA_DASHBOARD_MONITOR_STATE)
 
     @app.post("/api/persona_dashboard/personas")
-    def api_persona_dashboard_create_persona(payload: PersonaDashboardPersonaCreatePayload, user: dict[str, Any] = Depends(get_current_user)):
+    def api_persona_dashboard_create_persona(
+        payload: PersonaDashboardPersonaCreatePayload,
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
         with TENANT_RESOURCE_LIFECYCLE_LOCK:
             _require_active_workspace_user(user)
-            result = _create_persona_with_owner(user, lambda: _create_persona_archive(payload))
+            result = _create_persona_with_idempotency(
+                user,
+                payload,
+                str(request.headers.get("idempotency-key") or ""),
+            )
         return result
+
+    @app.post("/api/persona_dashboard/personas/copy_analyze")
+    def api_persona_dashboard_persona_copy_analyze(
+        payload: PersonaDashboardPersonaCopyAnalyzePayload,
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        try:
+            return _run_billable_operation(
+                user,
+                ref_type="persona_copy_analyze",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: _persona_dashboard_analyze_copy(payload),
+                idempotency_key=str(request.headers.get("idempotency-key") or ""),
+                request_fingerprint=_persona_copy_request_fingerprint(payload),
+            )
+        except PublicPersonaProfileError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
     @app.post("/api/persona_dashboard/personas/ai_keywords")
     def api_persona_dashboard_persona_ai_keywords(

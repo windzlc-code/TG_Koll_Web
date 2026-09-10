@@ -2408,6 +2408,138 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["action"], "create-from-prompt")
         self.assertEqual(payload["selectedKeywords"], ["夜班司机", "城市见闻"])
 
+    def test_persona_copy_analyze_fetches_public_source_and_derives_profile(self):
+        public_source = {
+            "platform": "threads",
+            "url": "https://www.threads.com/@alice",
+            "username": "alice",
+            "display_name": "Alice",
+            "bio": "城市观察与咖啡。",
+            "followers": 1234,
+            "following": 56,
+            "posts": [{"content": "一条公开内容", "url": "https://www.threads.com/@alice/post/1"}],
+        }
+        with mock.patch.object(server, "fetch_public_persona_profile", return_value=public_source) as fetch_mock, \
+            mock.patch.object(server, "build_persona_copy_prompt", return_value="公开资料分析提示词") as prompt_mock, \
+            mock.patch.object(
+                server,
+                "_run_persona_create_cli",
+                return_value={
+                    "ok": True,
+                    "name": "Alice 观察者",
+                    "content": "一位分享城市观察与咖啡内容的人设。",
+                    "setup": {"personaDescription": "城市观察与咖啡内容。"},
+                },
+            ) as cli_mock:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/copy_analyze",
+                headers={"Idempotency-Key": "persona-copy-test-1"},
+                json={"url": public_source["url"], "name": "Alice 观察者"},
+            )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["branch"], "copy")
+        self.assertEqual(body["source"]["username"], "alice")
+        self.assertEqual(body["profile"]["name"], "Alice 观察者")
+        self.assertIn("城市观察", body["profile"]["content"])
+        fetch_mock.assert_called_once_with(public_source["url"])
+        prompt_mock.assert_called_once()
+        self.assertEqual(cli_mock.call_args.args[0]["action"], "derive-profile")
+        self.assertEqual(cli_mock.call_args.args[0]["selectedKeywords"], [])
+
+    def test_persona_create_persists_sanitized_copy_source(self):
+        self._write_archives()
+        resp = self.client.post(
+            "/api/persona_dashboard/personas",
+            json={
+                "name": "Copied Alice",
+                "content": "城市观察与咖啡内容。",
+                "setup": {"personaDescription": "模型生成的详细简介。"},
+                "copy_source": {
+                    "platform": "threads",
+                    "url": "https://www.threads.com/@alice",
+                    "username": "alice",
+                    "bio": "公开简介",
+                    "posts": [{"content": "公开帖子"}],
+                },
+            },
+        )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        copied = next(item for item in archives if item.get("name") == "Copied Alice")
+        self.assertEqual(copied["setup"]["copySource"]["username"], "alice")
+        self.assertEqual(copied["setup"]["personaDescription"], "城市观察与咖啡内容。")
+
+    def test_persona_copy_create_replays_same_request_without_duplicate_archive(self):
+        self._write_archives()
+        payload = {
+            "name": "Copied Alice Replay",
+            "content": "城市观察与咖啡内容。",
+            "setup": {"personaDescription": "模型生成的详细简介。"},
+            "copy_source": {
+                "platform": "threads",
+                "url": "https://www.threads.com/@alice",
+                "username": "alice",
+                "posts": [{"content": "公开帖子"}],
+            },
+        }
+        headers = {"Idempotency-Key": "persona-copy-create-replay-1"}
+        first = self.client.post("/api/persona_dashboard/personas", headers=headers, json=payload)
+        second = self.client.post("/api/persona_dashboard/personas", headers=headers, json=payload)
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertEqual(first.json()["id"], second.json()["id"])
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        self.assertEqual(sum(item.get("name") == payload["name"] for item in archives), 1)
+
+        conflict = self.client.post(
+            "/api/persona_dashboard/personas",
+            headers=headers,
+            json={**payload, "content": "同一个幂等键不能创建另一份内容。"},
+        )
+        self.assertEqual(conflict.status_code, 409, conflict.text)
+        self.assertEqual(conflict.json().get("detail", {}).get("code"), "IDEMPOTENCY_KEY_REUSED")
+
+    def test_persona_copy_create_rejects_invalid_source_and_drops_non_allowlisted_setup(self):
+        self._write_archives()
+        invalid = self.client.post(
+            "/api/persona_dashboard/personas",
+            json={
+                "name": "Invalid Source",
+                "content": "不应持久化。",
+                "copy_source": {"platform": "evil", "url": "https://example.com/profile"},
+            },
+        )
+        self.assertIn(invalid.status_code, (400, 422))
+
+        valid = self.client.post(
+            "/api/persona_dashboard/personas",
+            json={
+                "name": "Allowlisted Setup",
+                "content": "应保留安全字段。",
+                "setup": {
+                    "personaDescription": "安全简介",
+                    "personaImageReferenceUrl": "file:///etc/passwd",
+                    "accountManagement": {"cookie": "secret"},
+                    "unexpected": "drop me",
+                },
+                "copy_source": {
+                    "platform": "threads",
+                    "url": "https://www.threads.com/@alice",
+                    "username": "alice",
+                },
+            },
+        )
+        self.assertEqual(valid.status_code, 200, valid.text)
+        archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
+        copied = next(item for item in archives if item.get("name") == "Allowlisted Setup")
+        self.assertEqual(copied["setup"]["personaDescription"], "应保留安全字段。")
+        self.assertNotIn("personaImageReferenceUrl", copied["setup"])
+        self.assertEqual(copied["setup"]["accountManagement"], {"threads": {}})
+        self.assertNotIn("unexpected", copied["setup"])
+
     def test_create_persona_post_lists_draft(self):
         self._write_archives()
         create_resp = self.client.post(
