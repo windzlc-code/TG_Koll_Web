@@ -62,6 +62,7 @@
       scenarios: "应用场景",
       pricing: "订阅方案",
       difference: "服务差异",
+      caseStudies: "热门案例",
       console: "推文工作台",
       video: "视频工作台",
       crm: "采集工作台",
@@ -165,6 +166,7 @@
       scenarios: "應用場景",
       pricing: "訂閱方案",
       difference: "服務差異",
+      caseStudies: "熱門案例",
       console: "推文工作台",
       video: "視頻工作台",
       crm: "採集工作台",
@@ -343,6 +345,7 @@
       "/",
       "/index.html",
       "/about-vecto.html",
+      "/case-studies.html",
       "/subscription.html",
       "/pricing.html",
       "/crm.html",
@@ -376,7 +379,7 @@
 
   function publicPagePreservesAdminWorkspace() {
     const page = document.querySelector("[data-site-header]")?.dataset.sitePage || "";
-    return ["home", "aboutVecto", "pricing", "crm", "video"].includes(page)
+    return ["home", "aboutVecto", "pricing", "caseStudies", "crm", "video"].includes(page)
       || (window.location.pathname === "/admin-profile.html" && Boolean(storedAdminWorkspaceUserId()));
   }
 
@@ -544,7 +547,7 @@
   }
 
   function publicPageKeepsTweetWorkbench(page) {
-    return ["", "home", "aboutVecto", "pricing", "console", "console-login"].includes(String(page || ""));
+    return ["", "home", "aboutVecto", "pricing", "caseStudies", "console", "console-login"].includes(String(page || ""));
   }
 
   function isolatedWorkspacePage(page) {
@@ -560,6 +563,9 @@
       links.push(navLink({ key: "console", href: "/console.html", current }));
     }
     links.push(navLink({ key: "aboutVecto", href: "/about-vecto.html", current }));
+    if (String(page || "") === "console") {
+      links.push(navLink({ key: "caseStudies", href: "/case-studies.html", current }));
+    }
     return links.join("");
   }
 
@@ -587,6 +593,33 @@
   function installVideoDesktopEntry(header, _current) {
     stripPublicWorkspaceSwitcher(header);
     return null;
+  }
+
+  function installCaseStudiesDesktopEntry(header, current) {
+    if (!header || isolatedWorkspacePage(header.dataset.sitePage || "")) return null;
+    if (String(header.dataset.sitePage || "") !== "console") {
+      header.querySelectorAll(':scope > .site-nav [data-site-nav-key="caseStudies"], .site-mobile-menu-panel a[data-site-nav-key="caseStudies"], .site-console-case-entry').forEach((node) => node.remove());
+      return null;
+    }
+    const nav = header.querySelector(":scope > .site-nav");
+    let entry = nav?.querySelector('[data-site-nav-key="caseStudies"]') || null;
+    if (nav && !entry) {
+      const template = document.createElement("template");
+      template.innerHTML = navLink({ key: "caseStudies", href: "/case-studies.html", current }).trim();
+      entry = template.content.firstElementChild;
+      if (entry) nav.appendChild(entry);
+    }
+    if (!header.querySelector('.site-console-case-entry')) {
+      const compact = document.createElement("a");
+      compact.className = "site-console-case-entry";
+      compact.href = "/case-studies.html";
+      compact.dataset.siteNavKey = "caseStudies";
+      compact.setAttribute("data-site-copy", "caseStudies");
+      compact.setAttribute("aria-label", copy[currentLanguage()].caseStudies);
+      compact.textContent = copy[currentLanguage()].caseStudies;
+      header.querySelector(".header-actions")?.before(compact);
+    }
+    return entry;
   }
 
   function languageIcon() {
@@ -2280,7 +2313,7 @@
     const page = header.dataset.sitePage || "home";
     const mode = header.dataset.siteMode || "public";
     const resolvedMode = mode === "public" ? page : mode;
-    const current = ["pricing", "console", "video", "crm", "aboutVecto"].includes(page) ? page : "";
+    const current = ["pricing", "console", "video", "crm", "aboutVecto", "caseStudies"].includes(page) ? page : "";
 
     if (mode === "public" && !header.dataset.siteAuthState) header.dataset.siteAuthState = "pending";
 
@@ -2289,6 +2322,7 @@
     }
     installVideoDesktopEntry(header, current);
     installCrmDesktopEntry(header, current);
+    installCaseStudiesDesktopEntry(header, current);
     if (isolatedWorkspacePage(page)) {
       header.querySelectorAll("[data-site-mobile-menu]").forEach((node) => node.remove());
     } else {
