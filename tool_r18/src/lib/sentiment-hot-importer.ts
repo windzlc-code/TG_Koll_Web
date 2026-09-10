@@ -6128,6 +6128,7 @@ export function buildSpiderSearchMarkdownFromHotCandidates(candidates: Sentiment
     const dateLabel = published.replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$2/$3/$1") || "post";
     const likes = Number(candidate.engagement?.likeCount || (candidate.metrics as any)?.like_count || 0);
     const comments = Number(candidate.engagement?.commentCount || (candidate.metrics as any)?.comment_count || 0);
+    const views = viewCountOfCandidate(candidate);
     const mediaLines = (candidate.media || [])
       .map((item, index) => {
         const url = cleanText(item?.url);
@@ -6143,6 +6144,7 @@ export function buildSpiderSearchMarkdownFromHotCandidates(candidates: Sentiment
       ...mediaLines,
       likes ? `讚 ${likes}` : "",
       comments ? `留言 ${comments}` : "",
+      views ? `浏览 ${views}` : "",
     ].filter(Boolean).join("\n");
   }).filter(Boolean);
   return formatPublicThreadsReaderMarkdown(cards.join("\n\n"));
@@ -10725,6 +10727,8 @@ export function parseThreadsReaderSearchMarkdownCandidates(args: {
     const matchedNeedles = needles.filter((needle) => haystack.includes(needle.toLowerCase()));
     if (needles.length && matchedNeedles.length === 0 && args.includeUnmatched !== true) continue;
     const engagement = extractEngagementMetricsFromText(block);
+    const viewCount = parseThreadsPostViewCountFromText(block);
+    if (typeof viewCount === "number") engagement.viewCount = viewCount;
     const media = extractThreadsMediaFromMarkdown(block, 12);
     const id = buildSentimentCandidateId({ platform: "threads", sourceUrl, content });
     out.push({
@@ -10791,6 +10795,8 @@ export function parseThreadsReaderSearchMarkdownCandidates(args: {
     const matchedNeedles = needles.filter((needle) => haystack.includes(needle.toLowerCase()));
     if (needles.length && matchedNeedles.length === 0 && args.includeUnmatched !== true) continue;
     const engagement = extractEngagementMetricsFromText(block);
+    const viewCount = parseThreadsPostViewCountFromText(block);
+    if (typeof viewCount === "number") engagement.viewCount = viewCount;
     const media = extractThreadsMediaFromMarkdown(block, 12);
     const publishedAt = publishedAtFromThreadsShortcode(sourceUrl);
     const id = buildSentimentCandidateId({ platform: "threads", sourceUrl, content });

@@ -4880,6 +4880,7 @@ function personaHotViewMetric(candidate) {
     candidate?.play_count,
     candidate?.playCount,
     candidate?.engagement?.viewCount,
+    candidate?.engagement?.view_count,
     candidate?.engagement?.views,
     candidate?.engagement?.playCount,
     candidate?.metrics?.view_count,
@@ -4887,6 +4888,9 @@ function personaHotViewMetric(candidate) {
     candidate?.metrics?.views,
     candidate?.metrics?.play_count,
     candidate?.metrics?.playCount,
+    candidate?.metrics?.ig_play_count,
+    candidate?.metrics?.video_play_count,
+    candidate?.metrics?.video_view_count,
   );
   return number !== null && number > 0 ? number : null;
 }

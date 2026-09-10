@@ -66,7 +66,8 @@
     : `${money(catalog.point_unit_ntd || 2, "TWD")} = 1 點`;
   const discountLabel = (item) => {
     const percent = Math.max(0, Math.min(99, Number(item?.discount_percent || 0)));
-    return percent ? `${100 - percent} 折` : "原價";
+    const fold = (100 - percent) / 10;
+    return `${Number.isInteger(fold) ? fold : fold.toFixed(1)}折`;
   };
   const skuOf = (item) => String(item?.sku || "").trim();
   const subscriptionPlanFamily = (sku) => {

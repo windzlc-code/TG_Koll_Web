@@ -156,6 +156,33 @@ function normalizeCandidate(input: Partial<SentimentHotCandidate>, index = 0): S
   const media = rawMedia.length
     ? rawMedia.map((item: any) => normalizeMediaItem(item)).filter((item: SentimentHotMedia | null): item is SentimentHotMedia => Boolean(item))
     : [];
+  const metrics = raw?.metrics && typeof raw.metrics === "object" ? { ...raw.metrics } : {};
+  const engagement = raw?.engagement && typeof raw.engagement === "object" ? { ...raw.engagement } : {};
+  const viewCount = [
+    raw?.view_count,
+    raw?.viewCount,
+    raw?.views,
+    raw?.play_count,
+    raw?.playCount,
+    engagement.viewCount,
+    engagement.view_count,
+    engagement.views,
+    engagement.playCount,
+    metrics.view_count,
+    metrics.viewCount,
+    metrics.views,
+    metrics.play_count,
+    metrics.playCount,
+    metrics.ig_play_count,
+    metrics.video_play_count,
+    metrics.video_view_count,
+  ]
+    .map((value: unknown) => Number(value))
+    .find((value: number) => Number.isFinite(value) && value > 0);
+  if (typeof viewCount === "number") {
+    engagement.viewCount = Math.round(viewCount);
+    metrics.view_count = Math.round(viewCount);
+  }
   return {
     id: String(raw?.id || raw?.candidate_id || `hot-${index}`).trim(),
     platform: String(raw?.platform || "").trim() === "instagram" ? "instagram" : "threads",
@@ -164,8 +191,9 @@ function normalizeCandidate(input: Partial<SentimentHotCandidate>, index = 0): S
     content: cleanSentimentCandidateContent(raw?.content || raw?.full_content || ""),
     media,
     hotScore: Number(raw?.hotScore ?? raw?.hot_score ?? 0),
-    metrics: raw?.metrics && typeof raw.metrics === "object" ? raw.metrics : {},
-    engagement: raw?.engagement && typeof raw.engagement === "object" ? raw.engagement : undefined,
+    ...(typeof viewCount === "number" ? { view_count: Math.round(viewCount), viewCount: Math.round(viewCount), views: Math.round(viewCount) } : {}),
+    metrics,
+    engagement: Object.keys(engagement).length ? engagement : undefined,
     publishedAt: String(raw?.publishedAt || raw?.published_at || "").trim() || undefined,
     capturedAt: String(raw?.capturedAt || raw?.captured_at || "").trim() || new Date().toISOString(),
     warnings: Array.isArray(raw?.warnings) ? raw.warnings.map((item: unknown) => String(item || "").trim()).filter(Boolean) : [],
