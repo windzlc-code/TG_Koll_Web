@@ -1584,7 +1584,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             platform="instagram",
         )
         below = server._persona_hot_user_warnings(
-            ["Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 100。"],
+            ["Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量或互动热度至少达到 500。"],
             0,
             10,
             [],
@@ -1592,7 +1592,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             platform="instagram",
         )
         self.assertEqual(no_source, ["Instagram 这次没有搜索到帖，还没有进入热度筛选。"])
-        self.assertEqual(below, ["Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 100。"])
+        self.assertEqual(below, ["Instagram 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量或互动热度至少达到 500。"])
         self.assertNotIn("暂未找到", " ".join(no_source + below))
 
     def test_public_persona_profile_persists_avatar_crop_without_replacing_reference(self):
@@ -5384,10 +5384,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("人设名称只是对外称呼", importer)
         self.assertIn("禁止把俚语化名称理解成色情、擦边或开车含义", importer)
-        self.assertIn("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 5 个，lifestyleQueries 正好 5 个", importer)
+        self.assertIn("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个", importer)
         self.assertIn("domainExpansion", importer)
-        self.assertIn("lifestyleQueries", importer)
-        self.assertIn("合计必须给出 20 个互不重复、语义完整的可搜索词", importer)
+        self.assertIn("合计必须给出 20 个互不重复的可搜索词", importer)
         self.assertIn("2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主", importer)
         self.assertIn("禁止输出带这些后缀或整词的合成搜索词", importer)
         self.assertIn("存股、融資、配息、當沖、槓桿、信用交易", importer)
@@ -5825,9 +5824,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
         server._write_persona_hot_keyword_batch_state({
             key: {
                 "archive_name": "History Teacher",
-                "keywords": ["old-keyword"],
+                "keywords": ["old-keyword", "old-second-keyword"],
                 "strategy_version": server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION - 1,
-                "cursor": 1,
+                "cursor": 0,
             },
         })
         fake_result = {

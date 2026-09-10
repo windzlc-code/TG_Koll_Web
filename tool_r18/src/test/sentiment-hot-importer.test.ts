@@ -824,6 +824,17 @@ describe("sentiment hot importer", () => {
     })).toEqual([]);
   });
 
+  it("does not erase shown candidates before the cooldown rotation can reuse them", () => {
+    const source = fs.readFileSync(path.resolve("src/lib/sentiment-hot-importer.ts"), "utf8");
+    const start = source.indexOf("async function fillSentimentHotCandidatesToLimit");
+    const end = source.indexOf("export function isObviouslyLowQualitySentimentHotCandidate", start);
+    const fill = source.slice(start, end);
+
+    expect(fill).toContain("getSentimentHotShownHistoryAtMap(args.archiveId)");
+    expect(fill).toContain("isSentimentHotCandidateRepeatEligibleWithState");
+    expect(fill).not.toContain("some((key) => shownHistoryKeys.has(key))) return;");
+  });
+
   it("gives a live refresh enough time to obtain a model search strategy", () => {
     expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(8_000);
     expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(8_000);
@@ -1710,10 +1721,10 @@ describe("sentiment hot importer", () => {
     })).toEqual([]);
   });
 
-  it("keeps both modes on a 20-term plan and drops clipped model fragments", () => {
+  it("restores the September 6 concrete 10 plus 10 keyword plan", () => {
     const strategy = {
-      primaryQueries: ["麻布宅", "灣景塔", "台籍融資", "跨境貸", "日幣資產", "豪宅投", "資產避險", "租金收益", "家族傳承", "置產服務", "收益算"],
-      broadQueries: ["銀座宅", "澀谷宅", "海外置產", "銀行貸款", "房屋估價", "過戶手續", "物件檢"],
+      primaryQueries: ["銀行貸款", "家族傳承", "海外置產", "渡假宅", "租金收益", "匯率避險", "高級物件", "頂級建案", "房屋估價", "過戶手續"],
+      broadQueries: ["豪宅市場", "資產配置", "跨境融資", "房貸利率", "產權登記", "地段分析", "租約管理", "房價評估", "置產諮詢", "不動產稅"],
       ecosystemQueries: [],
       lifestyleQueries: ["自住用", "看屋日記", "交屋流程", "資產配置", "置產諮詢"],
       requiredAnchorTerms: ["海外置產", "銀行貸款", "資產配置"],
@@ -1728,9 +1739,9 @@ describe("sentiment hot importer", () => {
     const strict = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
     expect(normal).toHaveLength(20);
     expect(strict).toHaveLength(20);
-    expect(normal.slice(0, 10)).toEqual(expect.arrayContaining(["看屋日記", "交屋流程"]));
-    expect(strict).not.toEqual(expect.arrayContaining(["看屋日記", "交屋流程"]));
-    expect([...normal, ...strict]).not.toEqual(expect.arrayContaining(["收益算", "物件檢", "自住用"]));
+    expect(normal.slice(0, 10)).toEqual(strategy.primaryQueries);
+    expect(strict.slice(0, 10)).toEqual(strategy.primaryQueries);
+    expect([...normal, ...strict]).not.toEqual(expect.arrayContaining(["看屋日記", "交屋流程", "自住用"]));
   });
 
   it("does not accept a single broad strategy term as normal persona relevance", () => {
@@ -1971,7 +1982,8 @@ describe("sentiment hot importer", () => {
     expect(candidateMatchesSentimentHotStrategyAnchors(commuteOnly, strategy, "strict")).toBe(false);
     expect(candidateMatchesSentimentHotStrategyAnchors(unrelatedPhone, strategy, "normal")).toBe(false);
     expect(candidateMatchesSentimentHotStrategyAnchors(unrelatedPhone, strategy, "strict")).toBe(false);
-    expect(resolveSentimentHotModelStrategyKeywords(strategy, "normal")).toEqual(expect.arrayContaining(["通勤", "停车", "洗车"]));
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "normal")).not.toEqual(expect.arrayContaining(["通勤", "停车"]));
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "normal")).not.toContain("洗车");
     expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).not.toContain("通勤");
     expect(candidateMatchesCurrentKeywords(lifestyle, ["机油", "刹车片"], "normal")).toBe(true);
     expect(candidateMatchesCurrentKeywords(unrelatedPhone, ["机油", "刹车片"], "normal")).toBe(false);
@@ -2176,7 +2188,7 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(["at-20"]);
   });
 
-  it("keeps concise authenticated Threads search posts above the hard heat floor", () => {
+  it("keeps the September 6 twenty-Han content floor for Threads posts", () => {
     const candidates = finalizeSentimentHotCandidatesForDisplay([{
       id: "short-threads-search",
       platform: "threads",
@@ -2189,7 +2201,7 @@ describe("sentiment hot importer", () => {
       capturedAt: new Date().toISOString(),
     }] as any, 10);
 
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["short-threads-search"]);
+    expect(candidates).toEqual([]);
   });
 
   it("rejects marked recent fallbacks when they are still below the heat gate", () => {
@@ -2666,7 +2678,7 @@ Sorry, we're having trouble playing this video.
       sourceUrl: "https://www.threads.com/@demo_doctor/post/DZ1ABCxyz",
       author: "demo_doctor",
       content: "急診醫生分享醫療現場，今天醫院候診區真的塞滿人，病人等待和醫療流程都被拿出來討論。",
-      hotScore: 5493,
+      hotScore: 4321,
       metrics: {
         source: "threads-account-search",
         like_count: 954,
@@ -2675,7 +2687,7 @@ Sorry, we're having trouble playing this video.
         reshare_count: 58,
         share_count: 58,
         view_count: 4321,
-        realEngagementTotal: 5493,
+        realEngagementTotal: 4321,
       },
       engagement: {
         likeCount: 954,
@@ -2839,11 +2851,11 @@ Sorry, we're having trouble playing this video.
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
       sourceUrl: "https://www.threads.com/@storage_demo/post/HYDRATION123",
-      hotScore: 13015,
+      hotScore: 12000,
       metrics: {
         source: "threads-account-search",
         view_count: 12000,
-        realEngagementTotal: 13015,
+        realEngagementTotal: 12000,
       },
     });
   });
@@ -2905,7 +2917,7 @@ Demo post body
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(candidate.engagement?.viewCount).toBe(186_000);
     expect(candidate.metrics).toMatchObject({ view_count: 186_000 });
-    expect(candidate.hotScore).toBe(210_551);
+    expect(candidate.hotScore).toBe(186_000);
   });
 
   it("keeps authenticated detail rescue browser-only when the public Reader is disabled", async () => {
@@ -2974,7 +2986,7 @@ Demo post body
       keywords: ["\u8336\u6587\u5316", "\u54c1\u8336", "\u8336\u9053\u9ad4\u9a57"],
       searchMode: "strict",
     })).toHaveLength(0);
-    expect(enriched[0].hotScore).toBe(12_191);
+    expect(enriched[0].hotScore).toBe(12_000);
   });
 
   it("forces a fresh detail read when a cached candidate already has views", async () => {
@@ -3032,7 +3044,7 @@ Demo post body
     expect(candidates.map((candidate) => candidate.id)).toEqual(["account-accepted"]);
   });
 
-  it("qualifies a post when combined views-plus-heat reaches 1000 or interaction heat reaches 200", () => {
+  it("uses the September 6 single 500-point heat floor", () => {
     const base = {
       platform: "threads",
       author: "demo",
@@ -3058,16 +3070,16 @@ Demo post body
       hotScore: 150,
       engagement: { likeCount: 80, commentCount: 10, shareCount: 10, viewCount: 900 },
       metrics: { view_count: 900 },
-    } as any)).toBe(true);
+    } as any)).toBe(false);
     expect(isUsefulHotCandidate({
       hotScore: 200,
       engagement: { likeCount: 150, commentCount: 30, shareCount: 20 },
       metrics: {},
-    } as any)).toBe(true);
+    } as any)).toBe(false);
     expect(resolveSentimentHotDisplayHeatThreshold([
       { hotScore: 2200 }, { hotScore: 200 }, { hotScore: 199 },
-    ] as any, 2)).toBe(200);
-    expect(candidates.map((candidate) => candidate.id)).toEqual(["combined-views", "heat-only"]);
+    ] as any, 2)).toBe(500);
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["combined-views"]);
   });
 
   it("supplements after final deduplication instead of counting duplicate high-score candidates", () => {
@@ -3185,7 +3197,7 @@ Title: Instagram
     expect((candidates[0].metrics as any).source).toBe("instagram-account-search");
   });
 
-  it("scores Instagram cookie posts with the same views-plus-heat formula as Threads", () => {
+  it("applies the September 6 single heat floor to Instagram cookie posts", () => {
     const takenAt = Math.floor(Date.now() / 1000);
     const caption = "海外置產實測分享，這篇完整記錄看房流程、貸款條件與近一個月的現場體驗。";
     const parseOne = (media: Record<string, unknown>) => parseInstagramAuthenticatedSearchPayload({
@@ -3197,7 +3209,7 @@ Title: Instagram
     const heatOnly = parseOne({ like_count: 150, comment_count: 50 });
     expect(interactionHeatScore(heatOnly)).toBe(200);
     expect(combinedReachScore(heatOnly)).toBe(200);
-    expect(isUsefulHotCandidate(heatOnly)).toBe(true);
+    expect(isUsefulHotCandidate(heatOnly)).toBe(false);
 
     const combinedVideo = parseOne({ like_count: 34, comment_count: 2, play_count: 1481 });
     expect(interactionHeatScore(combinedVideo)).toBe(36);
@@ -3233,7 +3245,7 @@ Title: Instagram
 
     const heat100 = parseOne({ like_count: 90, comment_count: 10 });
     expect(interactionHeatScore(heat100)).toBe(100);
-    expect(isUsefulHotCandidate(heat100)).toBe(true);
+    expect(isUsefulHotCandidate(heat100)).toBe(false);
     const heat99 = parseOne({ like_count: 99, comment_count: 0 });
     expect(isUsefulHotCandidate(heat99)).toBe(false);
     expect(isUsefulHotCandidate({
@@ -3258,7 +3270,7 @@ Title: Instagram
       hotScore: 50,
       engagement: { likeCount: 40, commentCount: 10 },
       metrics: { play_count: 960 },
-    } as any)).toBe(true);
+    } as any)).toBe(false);
   });
 
   it("keeps Instagram hotspot discovery on the cookie HTTP path only", () => {
@@ -3272,7 +3284,7 @@ Title: Instagram
     expect(reader).not.toContain("fetchWithSharedPublicCrawlerLimit");
     expect(source).toContain("instagramTagQueriesFromKeywords");
     expect(source).toContain("INSTAGRAM_COOKIE_QUERY_BATCH_SIZE = 5");
-    expect(source).toContain("MIN_INSTAGRAM_INTERACTION_HEAT_SCORE = 100");
+    expect(source).toContain("MIN_INSTAGRAM_INTERACTION_HEAT_SCORE = 500");
     expect(source).toContain("Instagram 登录态原始");
     expect(source).toContain("Instagram 浏览量沿用登录态字段，未再请求公开页");
     expect(source).not.toContain("Instagram 公开页原始");
@@ -3323,10 +3335,9 @@ Title: Instagram
     expect(source).toContain("primaryQueries");
     expect(source).toContain("rejectTerms");
     expect(source).toContain("domainSummary");
-    expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 5 个，lifestyleQueries 正好 5 个");
+    expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个");
     expect(source).toContain("domainExpansion");
-    expect(source).toContain("lifestyleQueries");
-    expect(source).toContain("合计必须给出 20 个互不重复、语义完整的可搜索词");
+    expect(source).toContain("合计必须给出 20 个互不重复的可搜索词");
     expect(source).toContain("2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主");
     expect(source).toContain("禁止输出带这些后缀或整词的合成搜索词");
     expect(source).toContain("存股、融資、配息、當沖、槓桿、信用交易");
@@ -3342,7 +3353,7 @@ Title: Instagram
     expect(source).not.toContain("expandNormalLifestyleSearchTerms");
     expect(source).not.toContain('["通勤", "停车", "洗车", "年检"]');
     expect(source).not.toContain('["约会妆", "换季", "赶时间"]');
-    expect(source).toContain("const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 51");
+    expect(source).toContain("const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 50");
   });
 
   it("indexes and reads the global hotspot pool by platform", () => {
@@ -3605,7 +3616,7 @@ Demo post body
       repost_count: 0,
       send_count: 0,
     });
-    expect(refreshed.hotScore).toBe(366);
+    expect(refreshed.hotScore).toBe(250);
   });
 
   it("keeps only top-level media files from Threads detail markdown", () => {

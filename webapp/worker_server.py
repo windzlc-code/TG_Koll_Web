@@ -46,7 +46,7 @@ ALLOWED_CAPABILITIES = {
     "persona.profile_metrics.v1": "refresh-profile-metrics",
 }
 TERMINAL_STATES = {"success", "failed", "cancelled"}
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 63
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 62
 PERSONA_HOT_POOL_LOW_WATERMARK = 15
 PERSONA_HOT_POOL_TARGET_WATERMARK = 15
 PERSONA_HOT_POOL_CAPACITY = 30
@@ -1616,7 +1616,7 @@ def _apply_hot_reader_execution_profile(
 ) -> None:
     runtime_environment["SENTIMENT_HOT_READER_CONCURRENCY"] = "2" if background_refill else "24"
     runtime_environment["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"] = "1" if background_refill else "0"
-    runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "40000" if background_refill else "50000"
+    runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "55000" if background_refill else "45000"
     runtime_environment["SENTIMENT_HOT_READER_JITTER_MAX_MS"] = "5000" if background_refill else "200"
     runtime_environment["SENTIMENT_HOT_READER_MAX_ATTEMPTS"] = "2" if background_refill else "1"
     requested = str(platform or "").strip().lower()
