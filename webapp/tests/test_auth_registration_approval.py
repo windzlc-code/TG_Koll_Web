@@ -56,7 +56,6 @@ class RegistrationApprovalTests(unittest.TestCase):
             "email": "guest@example.com",
             "phone": "0912345678",
             "company": "Vecto Test",
-            "use_case": "OPC 导入测试",
         }
 
     def admin_step_up(self, admin: TestClient, reason: str = "security regression") -> dict[str, str]:

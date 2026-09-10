@@ -127,7 +127,6 @@ class AccountSettingsApiTests(unittest.TestCase):
                 "email": "profile@example.test",
                 "phone": "0912345678",
                 "company": "Vecto Profile QA",
-                "use_case": "Verify the independent profile page",
             },
         )
         self.assertEqual(applied.status_code, 200, applied.text)
@@ -237,7 +236,6 @@ class AccountSettingsApiTests(unittest.TestCase):
                 "email": "reserved@example.test",
                 "phone": "0912345678",
                 "company": "Isolation QA",
-                "use_case": "Verify historical usernames cannot cross tenant boundaries",
             },
         )
         self.assertEqual(old_name_application.status_code, 409, old_name_application.text)

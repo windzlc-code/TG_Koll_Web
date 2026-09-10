@@ -37,7 +37,6 @@ function registrationPanelMarkup() {
               <label class="field auth-placeholder-field" for="registerPassword"><span class="field-label">登入密碼</span><span class="auth-password-field"><input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="至少 8 位" aria-describedby="registerPasswordError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPassword" aria-label="顯示登入密碼" title="顯示登入密碼" aria-controls="registerPassword" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordError"></small></label>
               <label class="field auth-placeholder-field" for="registerPasswordConfirmation"><span class="field-label">再次確認密碼</span><span class="auth-password-field"><input id="registerPasswordConfirmation" name="password_confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="請再次輸入密碼" aria-describedby="registerPasswordConfirmationError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPasswordConfirmation" aria-label="顯示確認密碼" title="顯示確認密碼" aria-controls="registerPasswordConfirmation" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordConfirmationError"></small></label>
               <label class="field auth-placeholder-field" for="registerCompany"><span class="field-label">公司 / 團隊（選填）</span><input id="registerCompany" name="company" autocomplete="organization" maxlength="120" placeholder="請輸入公司或團隊名稱" aria-describedby="registerCompanyError" /><small class="field-error" id="registerCompanyError"></small></label>
-              <label class="field auth-placeholder-field" for="registerUseCase"><span class="field-label">預計使用情境</span><select id="registerUseCase" name="use_case" aria-describedby="registerUseCaseError" required><option value="">請選擇預計使用情境</option><option value="OPC導入">OPC 導入與三帳代營運</option><option value="算力計費">算力計費與預算規劃</option><option value="私域轉化">獨立站與私域轉化閉環</option><option value="企業多套">企業多套 OPC 批量部署</option></select><small class="field-error" id="registerUseCaseError"></small></label>
             </div>
             <button class="submit-button auth-primary auth-registration-next" type="button" data-register-next><span>下一步</span><span aria-hidden="true">→</span></button>
           </section>
@@ -553,7 +552,6 @@ function validateRegistrationProfile({ focusInvalid = true } = {}) {
   if (!applicationForm) return false;
   const fullName = applicationForm.elements.full_name.value.trim();
   const company = applicationForm.elements.company.value.trim();
-  const useCase = applicationForm.elements.use_case.value.trim();
   const password = applicationForm.elements.password.value;
   const passwordConfirmation = applicationForm.elements.password_confirmation.value;
   const checks = [
@@ -562,7 +560,6 @@ function validateRegistrationProfile({ focusInvalid = true } = {}) {
     [applicationForm.elements.password, password.length >= 8 && password.length <= 256, "密碼需要 8-256 位。"],
     [applicationForm.elements.password_confirmation, password === passwordConfirmation && Boolean(passwordConfirmation), "兩次輸入的密碼不一致。"],
     [applicationForm.elements.company, company.length <= 120, "公司或團隊名稱不能超過 120 個字元。"],
-    [applicationForm.elements.use_case, Boolean(useCase), "請選擇預計使用情境。"],
   ];
   let firstInvalid = null;
   checks.forEach(([input, passed, message]) => {
@@ -662,9 +659,6 @@ function registrationErrorField(code) {
   }
   if (["company_invalid", "invalid_company"].includes(normalized)) {
     return applicationForm.elements.company;
-  }
-  if (["use_case_invalid", "invalid_use_case"].includes(normalized)) {
-    return applicationForm.elements.use_case;
   }
   if (["password_invalid", "weak_password"].includes(normalized)) {
     return applicationForm.elements.password;
@@ -1098,7 +1092,6 @@ applicationForm?.addEventListener("submit", async (event) => {
         username: applicationForm.elements.username.value.trim(),
         password: applicationForm.elements.password.value,
         company: applicationForm.elements.company.value.trim(),
-        use_case: applicationForm.elements.use_case.value,
         consent: applicationForm.elements.consent.checked,
       }),
     });

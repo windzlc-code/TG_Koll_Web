@@ -6901,9 +6901,6 @@ async function openUserDetailModal(id) {
       detailRow("授权管理员", user.approved_by_username ? `${user.approved_by_username} · ID ${user.approved_by}` : "-"),
       detailRow("登录来源", [user.last_login_ip, user.last_device_id].filter(Boolean).join(" · ") || "-"),
     );
-    const useCase = detailRow("使用情境", user.use_case);
-    useCase.classList.add("admin-user-detail-item-wide");
-    body.appendChild(useCase);
   }
   renderUserDetailResources(response);
   clearUserPasswordReset();

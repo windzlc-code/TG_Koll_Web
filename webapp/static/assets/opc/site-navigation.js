@@ -563,7 +563,7 @@
       links.push(navLink({ key: "console", href: "/console.html", current }));
     }
     links.push(navLink({ key: "aboutVecto", href: "/about-vecto.html", current }));
-    if (String(page || "") === "console") {
+    if (String(page || "") === "home") {
       links.push(navLink({ key: "caseStudies", href: "/case-studies.html", current }));
     }
     return links.join("");
@@ -597,7 +597,7 @@
 
   function installCaseStudiesDesktopEntry(header, current) {
     if (!header || isolatedWorkspacePage(header.dataset.sitePage || "")) return null;
-    if (String(header.dataset.sitePage || "") !== "console") {
+    if (String(header.dataset.sitePage || "") !== "home") {
       header.querySelectorAll(':scope > .site-nav [data-site-nav-key="caseStudies"], .site-mobile-menu-panel a[data-site-nav-key="caseStudies"], .site-console-case-entry').forEach((node) => node.remove());
       return null;
     }

@@ -27,7 +27,7 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn("verification_code: applicationForm.elements.verification_code.value.trim()", self.script)
         self.assertIn("full_name: applicationForm.elements.full_name.value.trim()", self.script)
         self.assertIn("company: applicationForm.elements.company.value.trim()", self.script)
-        self.assertIn("use_case: applicationForm.elements.use_case.value", self.script)
+        self.assertNotIn("use_case: applicationForm.elements.use_case.value", self.script)
         self.assertIn("consent: applicationForm.elements.consent.checked", self.script)
         self.assertNotIn("phone: applicationForm.elements.phone", self.script)
         self.assertIn('api("/api/auth/register"', self.script)
@@ -64,7 +64,6 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             "password",
             "password_confirmation",
             "company",
-            "use_case",
         ):
             with self.subTest(page="details", field=field):
                 self.assertIn(f'name="{field}"', details_page_markup)
@@ -86,12 +85,13 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             "登入密碼",
             "再次確認密碼",
             "公司 / 團隊（選填）",
-            "預計使用情境",
         ):
             with self.subTest(label=label):
                 self.assertIn(f'<span class="field-label">{label}</span>', registration_markup)
         self.assertIn('placeholder="請輸入姓名"', registration_markup)
         self.assertIn('placeholder="請輸入公司或團隊名稱"', registration_markup)
+        self.assertNotIn('name="use_case"', registration_markup)
+        self.assertNotIn("預計使用情境", registration_markup)
         self.assertIn(
             "我已閱讀並同意《用戶服務協議》和《隱私政策》",
             registration_markup,

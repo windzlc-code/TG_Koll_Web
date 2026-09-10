@@ -1244,7 +1244,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
             "email": "group-batch@example.com",
             "phone": "0912345678",
             "company": "Vecto Test",
-            "use_case": "Group batch permission regression",
         })
         self.assertEqual(application.status_code, 200, application.text)
         user_id = int(application.json()["id"])
@@ -1854,7 +1853,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
             "email": "batch-delete@example.com",
             "phone": "0912345678",
             "company": "Vecto Test",
-            "use_case": "Batch delete permission regression",
         })
         self.assertEqual(application.status_code, 200, application.text)
         user_id = int(application.json()["id"])
@@ -7032,7 +7030,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
             "email": "persona-billing@example.com",
             "phone": "0912345678",
             "company": "Vecto Test",
-            "use_case": "Persona generation billing regression",
         })
         self.assertEqual(application.status_code, 200, application.text)
         user_id = int(application.json()["id"])

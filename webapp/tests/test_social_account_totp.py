@@ -121,7 +121,6 @@ class SocialAccountTotpApiTests(unittest.TestCase):
                     "email": f"{username}@example.com",
                     "phone": "0912345678",
                     "company": "TOTP Test",
-                    "use_case": "Social account TOTP regression",
                 },
             )
             self.assertEqual(applied.status_code, 200, applied.text)

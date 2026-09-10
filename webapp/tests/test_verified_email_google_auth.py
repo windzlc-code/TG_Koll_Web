@@ -134,7 +134,6 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
                 "password": "registered-pass-123",
                 "full_name": "Verified Email User",
                 "company": "Vecto QA",
-                "use_case": "OPC導入",
                 "consent": True,
             },
         )
@@ -186,7 +185,6 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         self.assertEqual(user["full_name"], "Verified Email User")
         self.assertEqual(user["phone"], "")
         self.assertEqual(user["company"], "Vecto QA")
-        self.assertEqual(user["use_case"], "OPC導入")
         self.assertEqual(verified["email_normalized"], "new.user@gmail.com")
         self.assertNotEqual(challenge["code_digest"], "")
         self.assertGreater(int(challenge["consumed_at"]), 0)
@@ -264,7 +262,6 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
             "password": "registered-pass-123",
             "full_name": "Guess Limit User",
             "company": "",
-            "use_case": "算力計費",
             "consent": True,
         }
         for attempt in range(5):
@@ -301,12 +298,10 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
             "password": "registered-pass-123",
             "full_name": "Required Fields",
             "company": "",
-            "use_case": "私域轉化",
             "consent": True,
         }
         for field, value, expected_code in (
             ("full_name", "", "full_name_invalid"),
-            ("use_case", "", "use_case_invalid"),
             ("consent", False, "consent_required"),
         ):
             with self.subTest(field=field):
@@ -331,7 +326,6 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
                 "email": "legacy@gmail.com",
                 "phone": "0912345678",
                 "company": "Vecto",
-                "use_case": "legacy compatibility",
             },
         )
         self.assertEqual(applied.status_code, 200, applied.text)

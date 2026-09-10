@@ -13105,7 +13105,6 @@ class RegisterPayload(BaseModel):
     email: str = ""
     phone: str = ""
     company: str = ""
-    use_case: str = ""
     challenge_id: str = Field(default="", max_length=120)
     verification_code: str = Field(default="", max_length=16)
     consent: bool = False
@@ -26236,7 +26235,6 @@ def create_app() -> FastAPI:
         email = str(payload.email or "").strip().lower()
         phone = str(payload.phone or "").strip()
         company = str(payload.company or "").strip()
-        use_case = str(payload.use_case or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9._-]{3,32}", username):
             raise HTTPException(status_code=400, detail="用户名需为 3-32 位字母、数字或 ._- ")
         if len(full_name) < 2 or len(full_name) > 80:
@@ -26245,7 +26243,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="邮箱格式不正确")
         if len(phone) < 6 or len(phone) > 32:
             raise HTTPException(status_code=400, detail="请填写有效联系电话")
-        if len(company) > 120 or len(use_case) > 1000:
+        if len(company) > 120:
             raise HTTPException(status_code=400, detail="申请资料过长")
         if len(password) > 256:
             raise HTTPException(status_code=400, detail="密码长度不能超过 256 位")
@@ -26262,11 +26260,11 @@ def create_app() -> FastAPI:
                     """
                     INSERT INTO users(
                       username, password_hash, is_admin, is_disabled, balance_cents,
-                      account_type, approval_status, full_name, email, phone, company, use_case,
+                      account_type, approval_status, full_name, email, phone, company,
                       lifecycle_status, source_channel, created_at, updated_at
-                    ) VALUES (?, ?, 0, 1, 0, 'guest', 'pending', ?, ?, ?, ?, ?, 'pending', 'public_application', ?, ?)
+                    ) VALUES (?, ?, 0, 1, 0, 'guest', 'pending', ?, ?, ?, ?, 'pending', 'public_application', ?, ?)
                     """,
-                    (username, password_hash, full_name, email, phone, company, use_case, now, now),
+                    (username, password_hash, full_name, email, phone, company, now, now),
                 )
                 user_id = int(inserted.lastrowid or 0)
                 _initialize_new_customer_benefits(
@@ -26552,7 +26550,6 @@ def create_app() -> FastAPI:
         full_name = str(payload.full_name or "").strip()
         phone = str(payload.phone or "").strip()
         company = str(payload.company or "").strip()
-        use_case = str(payload.use_case or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9._-]{3,32}", username):
             raise HTTPException(status_code=400, detail="username must be 3-32 letters, numbers, or ._-")
         if len(password) < _minimum_password_length(is_admin=False) or len(password) > 256:
@@ -26571,11 +26568,6 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 status_code=400,
                 detail={"code": "company_invalid", "message": "公司或团队名称不能超过 120 个字符"},
-            )
-        if not use_case or len(use_case) > 1000:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "use_case_invalid", "message": "请选择有效的预计使用情境"},
             )
         if payload.consent is not True:
             raise HTTPException(
@@ -26620,13 +26612,13 @@ def create_app() -> FastAPI:
                     """
                     INSERT INTO users(
                       username, password_hash, is_admin, is_disabled, balance_cents,
-                      account_type, approval_status, full_name, email, phone, company, use_case,
+                      account_type, approval_status, full_name, email, phone, company,
                       lifecycle_status, source_channel, approved_at,
                       password_login_enabled, created_at, updated_at
-                    ) VALUES (?, ?, 0, 0, 0, 'self_service', 'approved', ?, ?, ?, ?, ?,
+                    ) VALUES (?, ?, 0, 0, 0, 'self_service', 'approved', ?, ?, ?, ?,
                               'active', 'email_verification', ?, 1, ?, ?)
                     """,
-                    (username, password_hash, full_name, email, phone, company, use_case, now, now, now),
+                    (username, password_hash, full_name, email, phone, company, now, now, now),
                 )
                 user_id = int(inserted.lastrowid or 0)
                 _reserve_username(conn, user_id, username, now)
@@ -32635,7 +32627,7 @@ def create_app() -> FastAPI:
             rows = conn.execute(
                 f"""
                 SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
-                       approval_status, full_name, email, phone, company, use_case, admin_note,
+                       approval_status, full_name, email, phone, company, admin_note,
                        approved_at, approved_by, last_login_at, last_login_method,
                        password_login_enabled, must_change_password,
                        password_expires_at, deleted_at, deleted_by, created_at, updated_at,
@@ -32785,7 +32777,7 @@ def create_app() -> FastAPI:
                 raise
             row = conn.execute(
                 """SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
-                           approval_status, full_name, email, phone, company, use_case, admin_note,
+                           approval_status, full_name, email, phone, company, admin_note,
                            approved_at, approved_by, last_login_at, must_change_password,
                            password_expires_at, deleted_at, deleted_by, created_at, updated_at
                     FROM users WHERE username = ?""",
@@ -32802,7 +32794,7 @@ def create_app() -> FastAPI:
                 """SELECT target.id, target.username, target.is_admin, target.is_disabled,
                           target.balance_cents, target.account_type, target.approval_status,
                           target.full_name, target.email, target.phone, target.company,
-                          target.use_case, target.admin_note, target.approved_at, target.approved_by,
+                          target.admin_note, target.approved_at, target.approved_by,
                            target.last_login_at, target.last_login_method,
                            target.password_login_enabled, target.must_change_password,
                            target.password_expires_at,

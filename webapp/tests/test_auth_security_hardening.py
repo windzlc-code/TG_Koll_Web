@@ -89,7 +89,6 @@ class AuthSecurityHardeningTests(unittest.TestCase):
             "email": f"{username}@example.com",
             "phone": "0912345678",
             "company": "Vecto Test",
-            "use_case": "Security regression testing",
         }
 
     def _configure_environment(self, data_dir: Path, *, bootstrap_password: str | None) -> None:

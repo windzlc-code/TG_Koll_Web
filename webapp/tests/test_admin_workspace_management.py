@@ -109,7 +109,6 @@ class AdminWorkspaceManagementTests(unittest.TestCase):
                 "email": f"{username}@example.com",
                 "phone": "0912345678",
                 "company": "Workspace Test",
-                "use_case": "Admin workspace management regression",
             },
         )
         self.assertEqual(applied.status_code, 200, applied.text)

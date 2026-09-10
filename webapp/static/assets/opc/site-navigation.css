@@ -2251,7 +2251,7 @@ body.site-account-panel-active {
     display: none;
   }
 
-  .site-header[data-site-page="console"] .site-console-case-entry {
+  .site-header[data-site-page="home"] .site-console-case-entry {
     display: inline-flex;
   }
 
@@ -2275,7 +2275,7 @@ body.site-account-panel-active {
     min-width: 0;
   }
 
-  .site-header[data-site-page="console"] .site-console-case-entry {
+  .site-header[data-site-page="home"] .site-console-case-entry {
     min-height: 30px;
     padding-inline: 8px;
     font-size: 12px;
