@@ -1241,6 +1241,35 @@ describe("sentiment hot importer", () => {
     }).map((item) => item.id)).toEqual(["cosplay-strict"]);
   });
 
+  it("does not let one derived strict token admit an unrelated Reader result", () => {
+    const base = {
+      id: "reader-derived-token",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/reader-derived-token",
+      author: "demo",
+      media: [],
+      hotScore: 5000,
+      metrics: {
+        source: "threads-reader-search",
+        query: "資產配置",
+        publicSearch: true,
+        crawler: "spider-http-hydration",
+      },
+      capturedAt: new Date().toISOString(),
+    } as any;
+    const keywords = ["日本房地產", "東京豪宅", "資產配置"];
+
+    expect(candidateMatchesCurrentKeywords({
+      ...base,
+      content: "教會財務報表與資產公開引發爭議，內容只討論帳目、修繕費與組織治理。",
+    }, keywords, "strict")).toBe(false);
+    expect(candidateMatchesCurrentKeywords({
+      ...base,
+      id: "reader-direct-phrase",
+      content: "整理日本房地產投資的資產配置方式，包含東京豪宅持有成本與房貸風險。",
+    }, keywords, "strict")).toBe(true);
+  });
+
   it("rejects unrelated recommendation cards returned by public Threads search", () => {
     const base = {
       id: "public-search-card",

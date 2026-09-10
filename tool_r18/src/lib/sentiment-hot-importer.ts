@@ -4559,8 +4559,15 @@ export function candidateMatchesCurrentKeywords(candidate: SentimentHotCandidate
   const needles = buildRelevanceNeedlesForMode(relevanceKeywords, "strict");
   if (needles.length === 0) return false;
   const strongNeedles = buildStrongRelevanceNeedlesForMode(relevanceKeywords, "strict");
+  const directNeedles = [...new Set(
+    [
+      ...buildDirectRelevanceNeedles(relevanceKeywords).flatMap((keyword) => expandChineseScriptVariants(keyword)),
+      ...relevanceKeywords.flatMap((keyword) => cleanText(keyword).match(/[A-Za-z][A-Za-z0-9.+-]{2,20}/g) || []),
+    ].map(cleanText).filter(Boolean),
+  )];
   const matchedCount = countMatchedNeedlesInContent(candidate, needles);
   const matchedStrongCount = countMatchedNeedlesInContent(candidate, strongNeedles);
+  const matchedDirectCount = countMatchedNeedlesInContent(candidate, directNeedles);
   const spiderSourceParts = source === "threads-reader-search"
     && (candidate.metrics as any)?.publicSearch === true
     && (candidate.metrics as any)?.crawler === "spider-http-hydration"
@@ -4578,7 +4585,7 @@ export function candidateMatchesCurrentKeywords(candidate: SentimentHotCandidate
     source === "threads-search-page"
     || source === "threads-reader-search"
     || (source === "threads-account-search" && (candidate.metrics as any)?.recentSearch === true)
-  ) return true;
+  ) return matchedDirectCount > 0 || matchedStrongCount >= 2 || (matchesSpiderSourcePart && matchedCount >= 2);
   if (strongNeedles.length === 0) return matchedCount >= 2;
   return matchedStrongCount > 0 || matchedCount >= 2;
 }
