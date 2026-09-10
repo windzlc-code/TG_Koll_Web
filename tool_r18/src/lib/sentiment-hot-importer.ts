@@ -1720,7 +1720,7 @@ function filterModelQueriesByDomainAnchors(queries: string[], anchors: string[])
   // primaryQueries empty even though the model already stayed in-domain.
   const objectNouns = cleanQueries.filter((query) => (
     isPublicSearchableKeywordLength(query)
-    && query.length <= 8
+    && query.length <= 5
     && !isGenericPersonaContentTopic(query)
     && !isPersonaVisualArtifactKeyword(query, "")
     && isConcreteSearchKeyword(query)
@@ -2371,14 +2371,14 @@ export function sentimentHotKeywordModelInstructionForMode(value: unknown): stri
       "当前模式：泛垂直。必须独立生成本模式自己的 20 个搜索词，不得复用严格垂直模式的关键词计划。",
       "primaryQueries 的 10 个词覆盖人设核心领域；domainExpansion 的 10 个词覆盖该领域相邻的使用场景、消费决策、行业生态和真实痛点。",
       "相邻扩展仍必须能解释为这个人设会持续讨论的内容，禁止跨到无关行业，也禁止只输出日常、生活、分享等空泛词。",
-      "每个词必须是平台用户会自然输入的完整词语，允许 2-8 个汉字，不得为了缩短长度而截断词尾。",
+      "每个词必须是平台用户会自然输入的完整词语，允许 2-5 个汉字，不得为了缩短长度而截断词尾。",
     ].join("\n");
   }
   return [
     "当前模式：严格垂直。必须独立生成本模式自己的 20 个搜索词，不得复用泛垂直模式的关键词计划。",
     "primaryQueries 和 domainExpansion 的全部词都必须直接指向人设的核心行业、核心对象或核心服务。",
     "禁止单独输出资产配置、理财、家族传承、生活、职场等上位宽词；若确属核心业务，必须和具体行业对象组合成可搜索词。",
-    "每个词必须是平台用户会自然输入的完整词语，允许 2-8 个汉字；不得截断、造简称或输出東京宅、豪宅貸、傳承策这类残缺词。",
+    "每个词必须是平台用户会自然输入的完整词语，允许 2-5 个汉字；不得截断、造简称或输出東京宅、豪宅貸、傳承策这类残缺词。",
   ].join("\n");
 }
 
@@ -2461,7 +2461,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "先看人设名称和主题。若简介清楚写了职业、产品、场所或作品，就按这些扩词。",
             "若简介很难过关——只有性格、外貌、日常、搞笑、吐槽、段子，没有现成物件名词——你必须先自己扩展：这个人会持续对公众讲什么，把该主题扩成可搜索的具体对象（物、场景、作品、槽点对象、职场物件），再输出搜索词。",
             "扩展必须仍属于这个人设会讲的内容，不能换成无关行业。禁止因为简介空泛、擦边或不好写就拒写或返回空候选。",
-            "primaryQueries 以 2-8 个汉字的完整自然词语为主，描述具体物件、服务、场所、工具、产品或作品，互不重复，公众会直接拿去搜；禁止为了凑长度而截断词尾或自造简称。",
+            "primaryQueries 以 2-5 个汉字的完整自然词语为主，描述具体物件、服务、场所、工具、产品或作品，互不重复，公众会直接拿去搜；禁止为了凑长度而截断词尾或自造简称。",
             "domainExpansion 再补 10 个同一领域、与 primaryQueries 不重复的可搜物件。两个主题并存时必须分别扩词。主题名本身最多保留 1 次，其余必须更具体。",
             "风格意图只用于理解这类帖子常见，不要写进搜索词。禁止输出带这些后缀或整词的合成搜索词：攻略、教程、教學、教学、分享、心得、评测、測評、推荐、推薦、經驗、经验。",
             "若该领域常见攻略或教程帖，请改写成更具体的可搜物件，例如存股、融資、配息、當沖、槓桿、信用交易，而不是融資攻略、理財心得、台股分享。",

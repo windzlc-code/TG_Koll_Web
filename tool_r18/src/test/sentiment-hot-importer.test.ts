@@ -1765,13 +1765,13 @@ describe("sentiment hot importer", () => {
   it("caps both independently generated mode plans at exactly twenty keywords", () => {
     const strategy = {
       primaryQueries: Array.from({ length: 10 }, (_, index) => `核心词${index}`),
-      broadQueries: Array.from({ length: 14 }, (_, index) => `扩展词${index}`),
+      broadQueries: ["日本豪宅", "東京豪宅", "大阪豪宅", "麻布豪宅", "一戶建", "灣景塔廈", "台籍融資", "日本房貸", "日幣資產", "海外置產", "港區物件", "房產稅務", "租金收益", "持有成本"],
       ecosystemQueries: [],
       lifestyleQueries: [],
       requiredAnchorTerms: ["核心词0", "核心词1", "核心词2"],
-      normalAnchorTerms: ["扩展词0", "扩展词1", "扩展词2"],
+      normalAnchorTerms: ["日本豪宅", "東京豪宅", "大阪豪宅"],
       strictAcceptTerms: Array.from({ length: 10 }, (_, index) => `核心词${index}`),
-      normalAcceptTerms: Array.from({ length: 14 }, (_, index) => `扩展词${index}`),
+      normalAcceptTerms: ["日本豪宅", "東京豪宅", "大阪豪宅", "麻布豪宅", "一戶建", "灣景塔廈", "台籍融資", "日本房貸", "日幣資產", "海外置產", "港區物件", "房產稅務", "租金收益", "持有成本"],
       rejectTerms: [],
       domainSummary: "独立二十词计划",
     } as any;
@@ -3418,7 +3418,7 @@ Title: Instagram
     expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个");
     expect(source).toContain("domainExpansion");
     expect(source).toContain("合计必须给出 20 个互不重复的可搜索词");
-    expect(source).toContain("2-8 个汉字的完整自然词语为主");
+    expect(source).toContain("2-5 个汉字的完整自然词语为主");
     expect(source).toContain("禁止为了凑长度而截断词尾或自造简称");
     expect(source).toContain("禁止输出带这些后缀或整词的合成搜索词");
     expect(source).toContain("存股、融資、配息、當沖、槓桿、信用交易");
