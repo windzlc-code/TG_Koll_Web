@@ -39,10 +39,28 @@
   };
   const list = (value) => Array.isArray(value) ? value : [];
   const object = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const CNY_PER_TWD = 0.23;
+  const CNY_CREDITS_PER_YUAN = 2.5;
+  const currentLanguage = () => window.VectoSiteNavigation?.currentLanguage?.() === "zh-Hans" ? "zh-Hans" : "zh-Hant";
+  const usesSimplifiedChinese = () => currentLanguage() === "zh-Hans";
   const escapeHtml = (value) => String(value == null ? "" : value).replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[character]));
-  const money = (value) => `NT$${Number(value || 0).toLocaleString("zh-TW", { maximumFractionDigits: 2 })}`;
+  const money = (value) => {
+    const amount = Number(value || 0);
+    if (!usesSimplifiedChinese()) {
+      return `NT$${amount.toLocaleString("zh-TW", { maximumFractionDigits: 2 })}`;
+    }
+    return `¥${(amount * CNY_PER_TWD).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
+  };
+  const packageMoney = (item) => {
+    if (!usesSimplifiedChinese()) return money(item?.price_ntd);
+    const paidPoints = Number(item?.paid_points ?? item?.total_points ?? 0);
+    return `¥${(paidPoints / CNY_CREDITS_PER_YUAN).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
+  };
+  const pointPriceFact = (catalog) => usesSimplifiedChinese()
+    ? `¥1 = ${CNY_CREDITS_PER_YUAN} 点`
+    : `1 點 = ${money(catalog.point_unit_ntd || 10)}`;
   const skuOf = (item) => String(item?.sku || "").trim();
   const subscriptionPlanFamily = (sku) => {
     const clean = String(sku || "").trim();
@@ -228,7 +246,7 @@
     document.querySelector("#pricingFactSubscription").textContent = `${money(startingMonthlyPrice)} 起 / 月`;
     document.querySelector("#pricingFactAccounts").textContent = "1–3 帳號";
     document.querySelector("#pricingFactImages").textContent = "每月 10 張";
-    document.querySelector("#pricingFactPoint").textContent = `1 點 = ${money(catalog.point_unit_ntd || 10)}`;
+    document.querySelector("#pricingFactPoint").textContent = pointPriceFact(catalog);
 
     renderSubscriptionPlans(subscriptions);
 
@@ -242,10 +260,13 @@
 
     document.querySelector("#pricingPackages").innerHTML = list(catalog.packages).map((item, index) => {
       const bonuses = [item.bonus_points ? `加贈 ${Number(item.bonus_points).toLocaleString("zh-TW")} 點` : "", item.bonus_images ? `加贈 ${Number(item.bonus_images)} 張永久圖片` : ""].filter(Boolean);
+      const packageCopy = usesSimplifiedChinese()
+        ? [`按 ¥1 = ${CNY_CREDITS_PER_YUAN} 点计算`, ...bonuses].join("，")
+        : bonuses.join("，") || "無加贈，算力點永久有效";
       return `<article class="pricing-package-card">
         <span class="pricing-label">${escapeHtml(item.name)}</span><h3>${escapeHtml(item.name)}</h3>
         <div class="pricing-package-points">${Number(item.total_points || 0).toLocaleString("zh-TW")} 點</div>
-        <p class="pricing-package-price">${money(item.price_ntd)}</p><p class="pricing-package-copy">${escapeHtml(bonuses.join("，") || "無加贈，算力點永久有效")}</p>
+        <p class="pricing-package-price">${packageMoney(item)}</p><p class="pricing-package-copy">${escapeHtml(packageCopy)}</p>
         <button class="button button-primary" type="button" data-purchase-sku="${escapeHtml(skuOf(item))}">申請購買</button>
       </article>`;
     }).join("");
@@ -281,6 +302,12 @@
     document.body.classList.remove("modal-open");
   }
 
+  function renderOrderDescription(item = state.selected) {
+    if (!item) return;
+    const displayPrice = item.kind === "subscription" ? money(item.price_ntd) : packageMoney(item);
+    document.querySelector("#pricingOrderDescription").textContent = `在線申請「${item.name}」，目前單價 ${displayPrice}。管理員將按送出時的價格快照審核。`;
+  }
+
   function openLoginForProduct(sku) {
     redirectToSelectedLogin(publicPricingUrl(sku));
   }
@@ -307,7 +334,7 @@
     const blockReason = submissionBlockReason(item);
     submit.disabled = Boolean(blockReason);
     submit.textContent = "提交申請";
-    document.querySelector("#pricingOrderDescription").textContent = `在線申請「${item.name}」，目前單價 ${money(item.price_ntd)}。管理員將按送出時的價格快照審核。`;
+    renderOrderDescription(item);
     const renewalField = document.querySelector("#pricingRenewalField");
     const renewalSelect = form.elements.renewal_subscription_id;
     const selectedPlanFamily = subscriptionPlanFamily(skuOf(item));
@@ -433,6 +460,11 @@
     } finally {
       if (!submitted) submit.disabled = false;
     }
+  });
+
+  window.addEventListener("vecto:language-change", () => {
+    if (state.catalog) renderPage(state.catalog);
+    renderOrderDescription();
   });
 
   const comparisonTable = document.querySelector(".pricing-comparison-table");
