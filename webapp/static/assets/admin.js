@@ -381,6 +381,7 @@ const ADMIN_PAGE_LABELS = {
   security: "安全告警",
   proxyMarket: "代理 IP",
   pricing: "套餐与客户额度",
+  redemptionCodes: "兑换码",
   telegram: "Telegram",
   runtime: "系统配置",
   sentimentCookies: "舆情 Cookie",
@@ -647,6 +648,11 @@ function setActiveAdminPage(page, updateHash = true) {
   }
   if (nextPage === "pricing") {
     void ensureBillingLoaded();
+  }
+  if (nextPage === "redemptionCodes") {
+    void Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]).catch((error) => {
+      setMsg("redemptionCodeMsg", getErrorMessage(error), false);
+    });
   }
   if (nextPage === "telegram") {
     void loadTgSettings().catch((error) => {
@@ -1854,6 +1860,14 @@ const adminState = {
   billingOrderHasMore: false,
   billingOrderRequestSequence: 0,
   billingOrderLoading: false,
+  redemptionCodeRows: [],
+  redemptionCodePlaintext: [],
+  redemptionCodeCreateInFlight: false,
+  redemptionCodeOffset: 0,
+  redemptionCodeLimit: 20,
+  redemptionCodeTotal: 0,
+  redemptionCodeEditTarget: null,
+  redemptionCodeEditRestoreFocus: null,
   billingSelectedUserId: null,
   billingSelectedPoints: 0,
   billingLedgerRows: [],
@@ -1916,7 +1930,7 @@ const TASK_TYPE_LABELS = {
   persona_post_image: "推文生成配图",
   persona_post_generation: "AI 推文草稿生成",
 };
-const ADMIN_PAGES = new Set(["overview", "users", "tasks", "security", "proxyMarket", "pricing", "telegram", "runtime", "sentimentCookies", "account"]);
+const ADMIN_PAGES = new Set(["overview", "users", "tasks", "security", "proxyMarket", "pricing", "redemptionCodes", "telegram", "runtime", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",
   secUsers: "users",
@@ -1924,6 +1938,7 @@ const ADMIN_PAGE_ALIASES = {
   secSecurity: "security",
   secProxyMarket: "proxyMarket",
   secPricing: "pricing",
+  secRedemptionCodes: "redemptionCodes",
   secTelegram: "telegram",
   secRuntime: "runtime",
   secSentimentCookies: "sentimentCookies",
@@ -5189,9 +5204,414 @@ function syncBillingAdjustmentType() {
   }
 }
 
+const REDEMPTION_STATUS_LABELS = {
+  active: "可兑换",
+  redeemed: "已兑换",
+  revoked: "已作废",
+};
+
+function redemptionCodeCell(...children) {
+  const cell = document.createElement("td");
+  children.filter(Boolean).forEach((child) => cell.appendChild(child));
+  return cell;
+}
+
+function redemptionCodeText(tag, text, className = "") {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  node.textContent = String(text ?? "");
+  return node;
+}
+
+function renderRedemptionCodes(items = []) {
+  const body = el("redemptionCodeBody");
+  if (!body) return;
+  adminState.redemptionCodeRows = Array.isArray(items) ? items : [];
+  body.replaceChildren();
+  if (!adminState.redemptionCodeRows.length) {
+    const row = document.createElement("tr");
+    const cell = redemptionCodeCell(redemptionCodeText("span", "暂无兑换码"));
+    cell.colSpan = 6;
+    cell.className = "admin-billing-empty";
+    row.appendChild(cell);
+    body.appendChild(row);
+    return;
+  }
+  adminState.redemptionCodeRows.forEach((item) => {
+    const row = document.createElement("tr");
+    const code = redemptionCodeText("strong", item.code_masked || "-", "admin-billing-strong");
+    const note = redemptionCodeText("span", item.note || "无备注");
+    const status = String(item.status || "active");
+    const statusBadge = redemptionCodeText("span", REDEMPTION_STATUS_LABELS[status] || status, `admin-billing-status is-${status}`);
+    const creator = redemptionCodeText("strong", item.created_by_username || `ID ${item.created_by || "-"}`);
+    const createdAt = redemptionCodeText("span", formatBillingTime(item.created_at));
+    const redeemed = redemptionCodeText("strong", item.redeemed_by_username || (status === "redeemed" ? `ID ${item.redeemed_by || "-"}` : "-"));
+    const redeemedAt = redemptionCodeText("span", item.redeemed_at ? formatBillingTime(item.redeemed_at) : "尚未兑换");
+    const actions = document.createElement("div");
+    actions.className = "admin-billing-actions";
+    if (status === "active") {
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.className = "danger admin-compact-button";
+      revoke.dataset.redemptionAction = "revoke";
+      revoke.dataset.id = String(item.id || "");
+      revoke.textContent = "作废";
+      actions.appendChild(revoke);
+    } else {
+      actions.appendChild(redemptionCodeText("span", "—"));
+    }
+    row.append(
+      redemptionCodeCell(code, note),
+      redemptionCodeCell(redemptionCodeText("strong", `${formatBillingPoints(item.points)} 点`)),
+      redemptionCodeCell(statusBadge),
+      redemptionCodeCell(creator, createdAt),
+      redemptionCodeCell(redeemed, redeemedAt),
+      redemptionCodeCell(actions),
+    );
+    body.appendChild(row);
+  });
+}
+
+async function loadRedemptionCodes() {
+  const status = String(el("redemptionCodeStatus")?.value || "");
+  const query = new URLSearchParams({ limit: "500" });
+  if (status) query.set("status", status);
+  const payload = await api(`/api/admin/billing/redemption-codes?${query}`);
+  renderRedemptionCodes(payload.items || []);
+  return payload;
+}
+
+async function checkRedemptionCodes() {
+  const health = await api("/api/admin/billing/redemption-codes/health");
+  const counts = health.counts || {};
+  const summary = `可兑换 ${Number(counts.active || 0)} · 已兑换 ${Number(counts.redeemed || 0)} · 已作废 ${Number(counts.revoked || 0)}`;
+  const node = el("redemptionCodeHealth");
+  if (node) {
+    node.textContent = health.ok ? `${summary} · 检测正常` : `${summary} · 发现 ${Number(health.inconsistent || 0)} 条异常`;
+    node.classList.toggle("is-error", !health.ok);
+  }
+  return health;
+}
+
+async function createRedemptionCodes(event) {
+  event.preventDefault();
+  if (adminState.redemptionCodeCreateInFlight) return;
+  const points = Number(el("redemptionCodePoints")?.value || 0);
+  const quantity = Number(el("redemptionCodeQuantity")?.value || 0);
+  if (!Number.isFinite(points) || points <= 0) throw new Error("请填写大于 0 的积分");
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) throw new Error("生成数量必须为 1 至 100");
+  adminState.redemptionCodeCreateInFlight = true;
+  const submit = el("btnCreateRedemptionCodes");
+  if (submit) submit.disabled = true;
+  try {
+    const result = await api("/api/admin/billing/redemption-codes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        points,
+        quantity,
+        note: String(el("redemptionCodeNote")?.value || "").trim(),
+      }),
+    });
+    adminState.redemptionCodePlaintext = (result.items || []).map((item) => String(item.code || "")).filter(Boolean);
+    const output = el("redemptionCodeCreatedList");
+    if (output) output.textContent = adminState.redemptionCodePlaintext.join("\n");
+    if (el("redemptionCodeCreated")) el("redemptionCodeCreated").hidden = !adminState.redemptionCodePlaintext.length;
+    await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
+    setMsg("redemptionCodeMsg", `已生成 ${adminState.redemptionCodePlaintext.length} 个兑换码，请立即复制保存`, true);
+  } finally {
+    adminState.redemptionCodeCreateInFlight = false;
+    if (submit) submit.disabled = false;
+  }
+}
+
+async function copyCreatedRedemptionCodes() {
+  const text = adminState.redemptionCodePlaintext.join("\n");
+  if (!text) throw new Error("当前没有可复制的完整兑换码");
+  await navigator.clipboard.writeText(text);
+  setMsg("redemptionCodeMsg", "完整兑换码已复制", true);
+}
+
+async function revokeRedemptionCode(codeId) {
+  const decision = await requestAdminPublicAction({
+    title: "作废兑换码",
+    message: "作废后该兑换码将不能再兑换。",
+    confirmLabel: "确认作废",
+    tone: "danger",
+    inputLabel: "作废原因（可选）",
+    inputPlaceholder: "填写作废原因",
+  });
+  if (!decision.confirmed) return;
+  await api(`/api/admin/billing/redemption-codes/${encodeURIComponent(codeId)}/revoke`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: decision.value.trim() || "管理员作废" }),
+  });
+  await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
+  setMsg("redemptionCodeMsg", "兑换码已作废", true);
+}
+
+const REDEMPTION_CODE_ICONS = {
+  view: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
+  copy: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/></svg>',
+  edit: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m4 20 4.2-1 10.7-10.7a2.1 2.1 0 0 0-3-3L5.2 16 4 20Z"/><path d="m13.8 7.3 3 3"/></svg>',
+};
+
+function redemptionCodeCell(...children) {
+  const cell = document.createElement("td");
+  children.filter(Boolean).forEach((child) => cell.appendChild(child));
+  return cell;
+}
+
+function redemptionCodeText(tag, text, className = "") {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  node.textContent = String(text ?? "");
+  return node;
+}
+
+function redemptionCodeIconButton(action, id, label) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ghost admin-redemption-icon-button";
+  button.dataset.redemptionAction = action;
+  button.dataset.id = String(id || "");
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.innerHTML = REDEMPTION_CODE_ICONS[action] || REDEMPTION_CODE_ICONS.edit;
+  return button;
+}
+
+function renderRedemptionCodePagination() {
+  const total = Math.max(0, Number(adminState.redemptionCodeTotal || 0));
+  const limit = Math.max(1, Number(adminState.redemptionCodeLimit || 20));
+  const offset = Math.max(0, Number(adminState.redemptionCodeOffset || 0));
+  const page = Math.floor(offset / limit) + 1;
+  const pageCount = Math.max(1, Math.ceil(total / limit));
+  setText("redemptionCodePaginationSummary", total ? `共 ${total} 条` : "暂无兑换码");
+  setText("redemptionCodePaginationPage", `第 ${page} / ${pageCount} 页`);
+  const previous = el("btnRedemptionCodePrevious");
+  const next = el("btnRedemptionCodeNext");
+  if (previous) previous.disabled = offset <= 0;
+  if (next) next.disabled = offset + limit >= total;
+}
+
+function renderRedemptionCodes(items = [], total = adminState.redemptionCodeTotal) {
+  const body = el("redemptionCodeBody");
+  if (!body) return;
+  adminState.redemptionCodeRows = Array.isArray(items) ? items : [];
+  adminState.redemptionCodeTotal = Math.max(0, Number(total || 0));
+  body.replaceChildren();
+  if (!adminState.redemptionCodeRows.length) {
+    const row = document.createElement("tr");
+    const cell = redemptionCodeCell(redemptionCodeText("span", "暂无兑换码"));
+    cell.colSpan = 7;
+    cell.className = "admin-billing-empty";
+    row.appendChild(cell);
+    body.appendChild(row);
+    renderRedemptionCodePagination();
+    return;
+  }
+  adminState.redemptionCodeRows.forEach((item) => {
+    const row = document.createElement("tr");
+    const code = redemptionCodeText("strong", item.code_masked || "-", "admin-billing-strong");
+    const note = redemptionCodeText("span", item.note || "无备注", "admin-redemption-detail");
+    const status = String(item.status || "active");
+    const statusBadge = redemptionCodeText("span", REDEMPTION_STATUS_LABELS[status] || status, `admin-billing-status is-${status}`);
+    const creator = redemptionCodeText("strong", item.created_by_username || `ID ${item.created_by || "-"}`);
+    const createdAt = redemptionCodeText("span", formatBillingTime(item.created_at));
+    const redeemed = redemptionCodeText("strong", item.redeemed_by_username || (status === "redeemed" ? `ID ${item.redeemed_by || "-"}` : "-"), "admin-redemption-detail");
+    const redeemedAt = redemptionCodeText("span", item.redeemed_at ? formatBillingTime(item.redeemed_at) : "尚未兑换", "admin-redemption-detail");
+    const actions = document.createElement("div");
+    actions.className = "admin-billing-actions";
+    actions.append(
+      redemptionCodeIconButton("view", item.id, "查看完整兑换码"),
+      redemptionCodeIconButton("copy", item.id, "复制完整兑换码"),
+      redemptionCodeIconButton("edit", item.id, "编辑兑换码操作"),
+    );
+    row.append(
+      redemptionCodeCell(code),
+      redemptionCodeCell(note),
+      redemptionCodeCell(redemptionCodeText("strong", `${formatBillingPoints(item.points)} 点`)),
+      redemptionCodeCell(statusBadge),
+      redemptionCodeCell(creator, createdAt),
+      redemptionCodeCell(redeemed, redeemedAt),
+      redemptionCodeCell(actions),
+    );
+    body.appendChild(row);
+  });
+  renderRedemptionCodePagination();
+}
+
+async function loadRedemptionCodes() {
+  const status = String(el("redemptionCodeStatus")?.value || "");
+  const selectedLimit = Number(el("redemptionCodePageSize")?.value || adminState.redemptionCodeLimit || 20);
+  adminState.redemptionCodeLimit = [10, 20, 50, 100].includes(selectedLimit) ? selectedLimit : 20;
+  const query = new URLSearchParams({
+    limit: String(adminState.redemptionCodeLimit),
+    offset: String(adminState.redemptionCodeOffset),
+  });
+  if (status) query.set("status", status);
+  const payload = await api(`/api/admin/billing/redemption-codes?${query}`);
+  adminState.redemptionCodeOffset = Math.max(0, Number(payload.offset || 0));
+  renderRedemptionCodes(payload.items || [], payload.total || 0);
+  return payload;
+}
+
+async function checkRedemptionCodes() {
+  const health = await api("/api/admin/billing/redemption-codes/health");
+  const counts = health.counts || {};
+  const summary = `可兑换 ${Number(counts.active || 0)} · 已兑换 ${Number(counts.redeemed || 0)} · 已作废 ${Number(counts.revoked || 0)}`;
+  const node = el("redemptionCodeHealth");
+  if (node) {
+    node.textContent = health.ok ? `${summary} · 检测正常` : `${summary} · 发现 ${Number(health.inconsistent || 0)} 条异常`;
+    node.classList.toggle("is-error", !health.ok);
+  }
+  return health;
+}
+
+async function createRedemptionCodes(event, preset = null) {
+  event?.preventDefault();
+  if (adminState.redemptionCodeCreateInFlight) return;
+  const points = Number(preset?.points ?? (el("redemptionCodePoints")?.value || 0));
+  const quantity = Number(preset?.quantity ?? (el("redemptionCodeQuantity")?.value || 0));
+  if (!Number.isFinite(points) || points <= 0) throw new Error("请填写大于 0 的积分");
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) throw new Error("生成数量必须为 1 至 100");
+  adminState.redemptionCodeCreateInFlight = true;
+  const submit = preset?.button || el("btnCreateRedemptionCodes");
+  if (submit) submit.disabled = true;
+  try {
+    const result = await api("/api/admin/billing/redemption-codes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        points,
+        quantity,
+        note: String(preset?.note ?? (el("redemptionCodeNote")?.value || "")).trim(),
+      }),
+    });
+    const note = String(preset?.note ?? (el("redemptionCodeNote")?.value || "")).trim();
+    showRedemptionCodePlaintext(result.items || [], note, "本次生成（完整代码仅显示一次，请立即复制）");
+    adminState.redemptionCodeOffset = 0;
+    await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
+    setMsg("redemptionCodeMsg", `已生成 ${adminState.redemptionCodePlaintext.length} 个兑换码，请立即复制保存`, true);
+  } finally {
+    adminState.redemptionCodeCreateInFlight = false;
+    if (submit) submit.disabled = false;
+  }
+}
+
+function showRedemptionCodePlaintext(items, fallbackNote = "", title = "重新查看兑换码") {
+  const rows = Array.isArray(items) ? items : [];
+  adminState.redemptionCodePlaintext = rows.map((item) => String(item.code || "")).filter(Boolean);
+  const output = el("redemptionCodeCreatedList");
+  if (output) output.textContent = rows.map((item) => {
+    const note = String(item.note || fallbackNote || "").trim();
+    return [String(item.code || ""), note ? `说明：${note}` : ""].filter(Boolean).join("\n");
+  }).join("\n\n");
+  setText("redemptionCodeCreatedTitle", title);
+  if (el("redemptionCodeCreated")) el("redemptionCodeCreated").hidden = !adminState.redemptionCodePlaintext.length;
+}
+
+async function copyCreatedRedemptionCodes() {
+  const text = adminState.redemptionCodePlaintext.join("\n");
+  if (!text) throw new Error("当前没有可复制的完整兑换码");
+  await navigator.clipboard.writeText(text);
+  setMsg("redemptionCodeMsg", "完整兑换码已复制", true);
+}
+
+async function revokeRedemptionCode(codeId) {
+  const decision = await requestAdminPublicAction({
+    title: "作废兑换码",
+    message: "作废后该兑换码将不能再兑换。",
+    confirmLabel: "确认作废",
+    tone: "danger",
+    inputLabel: "作废原因（可选）",
+    inputPlaceholder: "填写作废原因",
+  });
+  if (!decision.confirmed) return;
+  await api(`/api/admin/billing/redemption-codes/${encodeURIComponent(codeId)}/revoke`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: decision.value.trim() || "管理员作废" }),
+  });
+  await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
+  setMsg("redemptionCodeMsg", "兑换码已作废", true);
+}
+
+async function revealRedemptionCode(codeId, { copy = false } = {}) {
+  const result = await api(`/api/admin/billing/redemption-codes/${encodeURIComponent(codeId)}/reveal`, { method: "POST" });
+  const item = result.item || {};
+  if (copy) {
+    await navigator.clipboard.writeText(String(item.code || ""));
+    setMsg("redemptionCodeMsg", "完整兑换码已复制", true);
+    return;
+  }
+  showRedemptionCodePlaintext([item], String(item.note || ""), "重新查看（已加密保存的兑换码）");
+  setMsg("redemptionCodeMsg", "已安全显示兑换码，请复制保存", true);
+}
+
+async function deleteRedemptionCodeRecord(codeId) {
+  const decision = await requestAdminPublicAction({
+    title: "删除兑换码记录",
+    message: "删除后不再出现在列表，兑换码会立即失效；已兑换的积分流水会保留以避免重复兑换。",
+    confirmLabel: "确认删除",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
+  await api(`/api/admin/billing/redemption-codes/${encodeURIComponent(codeId)}/delete`, { method: "POST" });
+  const pageStart = adminState.redemptionCodeOffset;
+  await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
+  if (!adminState.redemptionCodeRows.length && pageStart > 0) {
+    adminState.redemptionCodeOffset = Math.max(0, pageStart - adminState.redemptionCodeLimit);
+    await loadRedemptionCodes();
+  }
+  setMsg("redemptionCodeMsg", "兑换码记录已删除", true);
+}
+
+function closeRedemptionCodeEditSheet() {
+  const modal = el("redemptionCodeEditModal");
+  if (!modal) return;
+  modal.style.display = "none";
+  modal.setAttribute("aria-hidden", "true");
+  const restore = adminState.redemptionCodeEditRestoreFocus;
+  adminState.redemptionCodeEditRestoreFocus = null;
+  adminState.redemptionCodeEditTarget = null;
+  if (restore instanceof HTMLElement && restore.isConnected) restore.focus();
+}
+
+function openRedemptionCodeEditSheet(codeId, trigger) {
+  const item = adminState.redemptionCodeRows.find((row) => String(row.id) === String(codeId));
+  const modal = el("redemptionCodeEditModal");
+  if (!item || !modal) return;
+  adminState.redemptionCodeEditTarget = item;
+  adminState.redemptionCodeEditRestoreFocus = trigger instanceof HTMLElement ? trigger : document.activeElement;
+  setText("redemptionCodeEditCode", item.code_masked || "-");
+  setText("redemptionCodeEditDetail", `${item.note || "无备注"} · ${formatBillingPoints(item.points)} 点`);
+  const revoke = el("btnRedemptionCodeEditRevoke");
+  if (revoke) revoke.hidden = String(item.status || "active") !== "active";
+  modal.style.display = "grid";
+  modal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => (revoke?.hidden ? el("btnRedemptionCodeEditDelete") : revoke)?.focus(), 0);
+}
+
+async function handleRedemptionCodeEditOperation(action) {
+  const codeId = adminState.redemptionCodeEditTarget?.id;
+  if (!codeId) return;
+  closeRedemptionCodeEditSheet();
+  if (action === "revoke") await revokeRedemptionCode(codeId);
+  if (action === "delete") await deleteRedemptionCodeRecord(codeId);
+}
+
+
 async function loadBillingWorkspace() {
   setMsg("billingWorkspaceMsg", "");
-  const results = await Promise.allSettled([loadBillingCatalog(), loadBillingOrders()]);
+  const results = await Promise.allSettled([
+    loadBillingCatalog(),
+    loadBillingOrders(),
+    loadRedemptionCodes(),
+    checkRedemptionCodes(),
+  ]);
   const failures = results.filter((result) => result.status === "rejected");
   adminState.billingLoaded = failures.length === 0;
   if (failures.length) {
@@ -10646,6 +11066,79 @@ function bindBillingActions() {
     } catch (err) {
       setMsg("billingOrderMsg", getErrorMessage(err), false);
     }
+  });
+  el("redemptionCodeForm")?.addEventListener("submit", async (event) => {
+    setMsg("redemptionCodeMsg", "");
+    try {
+      await createRedemptionCodes(event);
+    } catch (err) {
+      event.preventDefault();
+      setMsg("redemptionCodeMsg", getErrorMessage(err), false);
+    }
+  });
+  el("btnReloadRedemptionCodes")?.addEventListener("click", async () => {
+    try { await loadRedemptionCodes(); }
+    catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  el("btnCheckRedemptionCodes")?.addEventListener("click", async () => {
+    try { await checkRedemptionCodes(); }
+    catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  el("redemptionCodeStatus")?.addEventListener("change", async () => {
+    adminState.redemptionCodeOffset = 0;
+    try { await loadRedemptionCodes(); }
+    catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  el("redemptionCodePageSize")?.addEventListener("change", async () => {
+    adminState.redemptionCodeOffset = 0;
+    try { await loadRedemptionCodes(); }
+    catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  document.querySelectorAll("[data-redemption-preset]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await createRedemptionCodes(null, {
+          points: Number(button.dataset.points || 0),
+          quantity: 1,
+          note: String(button.dataset.note || ""),
+          button,
+        });
+      } catch (err) {
+        setMsg("redemptionCodeMsg", getErrorMessage(err), false);
+      }
+    });
+  });
+  el("btnCopyRedemptionCodes")?.addEventListener("click", async () => {
+    try { await copyCreatedRedemptionCodes(); }
+    catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  el("redemptionCodeBody")?.addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-redemption-action]");
+    if (!button) return;
+    try {
+      const action = button.dataset.redemptionAction;
+      if (action === "revoke") await revokeRedemptionCode(button.dataset.id);
+      if (action === "view") await revealRedemptionCode(button.dataset.id);
+      if (action === "copy") await revealRedemptionCode(button.dataset.id, { copy: true });
+      if (action === "edit") openRedemptionCodeEditSheet(button.dataset.id, button);
+    }
+    catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  el("btnRedemptionCodePrevious")?.addEventListener("click", async () => {
+    adminState.redemptionCodeOffset = Math.max(0, adminState.redemptionCodeOffset - adminState.redemptionCodeLimit);
+    try { await loadRedemptionCodes(); } catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  el("btnRedemptionCodeNext")?.addEventListener("click", async () => {
+    adminState.redemptionCodeOffset += adminState.redemptionCodeLimit;
+    try { await loadRedemptionCodes(); } catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  el("btnRedemptionCodeEditClose")?.addEventListener("click", closeRedemptionCodeEditSheet);
+  el("btnRedemptionCodeEditCancel")?.addEventListener("click", closeRedemptionCodeEditSheet);
+  el("btnRedemptionCodeEditRevoke")?.addEventListener("click", async () => {
+    try { await handleRedemptionCodeEditOperation("revoke"); } catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  el("btnRedemptionCodeEditDelete")?.addEventListener("click", async () => {
+    try { await handleRedemptionCodeEditOperation("delete"); } catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
   });
   el("billingSubscriptionBody")?.addEventListener("click", async (event) => {
     const button = event.target.closest('button[data-billing-action="subscription-terminate"]');

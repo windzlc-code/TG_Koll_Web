@@ -319,6 +319,20 @@ class BillingManualSubscriptionPayload(BaseModel):
     renewal_subscription_ids: list[str] = Field(default_factory=list)
     note: str = Field(default="管理员人工开通", max_length=1000)
 
+
+class RedemptionCodeCreatePayload(BaseModel):
+    points: float = Field(gt=0, le=1_000_000)
+    quantity: int = Field(default=1, ge=1, le=100)
+    note: str = Field(default="", max_length=200)
+
+
+class RedemptionCodeRedeemPayload(BaseModel):
+    code: str = Field(min_length=16, max_length=128)
+
+
+class RedemptionCodeRevokePayload(BaseModel):
+    reason: str = Field(default="管理员作废", max_length=200)
+
 VIDEO_SOURCE_IMAGE_MODELS = (
     "gpt image 2",
     "openai/gpt-image-2-official",
@@ -30111,6 +30125,131 @@ def create_app() -> FastAPI:
             items = commercial_billing.list_ledger(conn, user_id=_workspace_user_id(user), limit=limit, before=before)
         return {"items": items, "next_before": int(items[-1]["created_at"]) if items else 0}
 
+    @app.post("/api/billing/redemption-codes/redeem")
+    def api_billing_redemption_code_redeem(
+        payload: RedemptionCodeRedeemPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        user_id = _identity_user_id(user)
+        if _is_admin(user):
+            raise HTTPException(status_code=409, detail="管理员账号不参与积分兑换")
+        _enforce_auth_rate_limit(
+            "redemption_code",
+            f"{user_id}:{_request_client_ip(request)}",
+            limit=12,
+            window_seconds=300,
+        )
+        with db() as conn:
+            result = commercial_billing.redeem_redemption_code(
+                conn,
+                user_id=user_id,
+                raw_code=payload.code,
+            )
+        _invalidate_admin_dashboard_cache()
+        return JSONResponse(
+            content={"ok": True, **result},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/admin/billing/redemption-codes")
+    def api_admin_billing_redemption_codes(
+        status: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        with db() as conn:
+            items = commercial_billing.list_redemption_codes(
+                conn,
+                status=status,
+                limit=limit,
+                offset=offset,
+            )
+            total = commercial_billing.count_redemption_codes(conn, status=status)
+        return JSONResponse(
+            content={
+                "items": items,
+                "total": total,
+                "limit": min(max(int(limit), 1), 500),
+                "offset": max(int(offset), 0),
+                "next_offset": max(int(offset), 0) + len(items) if max(int(offset), 0) + len(items) < total else 0,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/admin/billing/redemption-codes")
+    def api_admin_billing_redemption_code_create(
+        payload: RedemptionCodeCreatePayload,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        units = commercial_billing.units_from_points(payload.points)
+        if units <= 0:
+            raise HTTPException(status_code=422, detail="兑换积分必须大于 0")
+        with db() as conn:
+            items = commercial_billing.create_redemption_codes(
+                conn,
+                credit_units=units,
+                quantity=payload.quantity,
+                actor_user_id=_identity_user_id(user),
+                note=payload.note,
+            )
+        return JSONResponse(
+            content={"ok": True, "items": items},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/admin/billing/redemption-codes/{code_id}/revoke")
+    def api_admin_billing_redemption_code_revoke(
+        code_id: str,
+        payload: RedemptionCodeRevokePayload,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        with db() as conn:
+            item = commercial_billing.revoke_redemption_code(
+                conn,
+                code_id=code_id,
+                actor_user_id=_identity_user_id(user),
+                reason=payload.reason,
+            )
+        return {"ok": True, "item": item}
+
+    @app.post("/api/admin/billing/redemption-codes/{code_id}/reveal")
+    def api_admin_billing_redemption_code_reveal(
+        code_id: str,
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        with db() as conn:
+            item = commercial_billing.reveal_redemption_code(conn, code_id=code_id)
+        return JSONResponse(
+            content={"ok": True, "item": item},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/admin/billing/redemption-codes/{code_id}/delete")
+    def api_admin_billing_redemption_code_delete(
+        code_id: str,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        with db() as conn:
+            item = commercial_billing.delete_redemption_code_record(
+                conn,
+                code_id=code_id,
+                actor_user_id=_identity_user_id(user),
+            )
+        return {"ok": True, "item": item}
+
+    @app.get("/api/admin/billing/redemption-codes/health")
+    def api_admin_billing_redemption_code_health(
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        with db() as conn:
+            result = commercial_billing.redemption_code_health(conn)
+        return JSONResponse(
+            content=result,
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.get("/api/admin/billing/catalog/versions")
     def api_admin_billing_catalog_versions(_user: dict[str, Any] = Depends(require_admin)):
         with db() as conn:
@@ -33905,6 +34044,21 @@ def create_app() -> FastAPI:
                     )
                     conn.execute("DELETE FROM persona_owners WHERE user_id = ?", (target_id,))
                     conn.execute("DELETE FROM persona_group_owners WHERE user_id = ?", (target_id,))
+                    # Keep a non-identifying redemption receipt so the code
+                    # remains permanently spent and health checks stay true
+                    # after the user's account and personal billing records
+                    # are purged.
+                    conn.execute(
+                        "UPDATE billing_redemption_codes SET redeemed_by = 0 "
+                        "WHERE status = 'redeemed' AND redeemed_by = ?",
+                        (target_id,),
+                    )
+                    conn.execute(
+                        "UPDATE billing_ledger SET user_id = 0 "
+                        "WHERE user_id = ? AND ref_type = 'redemption_code' "
+                        "AND event_type = 'redemption_code_redeemed'",
+                        (target_id,),
+                    )
                     for billing_table in (
                         "billing_ledger",
                         "billing_reservations",
