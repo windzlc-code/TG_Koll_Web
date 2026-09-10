@@ -16174,8 +16174,7 @@ def _persona_hot_user_warnings(
         if empty_reason == "no_source" or "没有搜索到帖" in warning_text:
             return [specific_message or f"{platform_label} 这次没有搜索到帖，还没有进入热度筛选。"]
         if empty_reason == "below_threshold" or "搜到了帖，但没有符合条件" in warning_text:
-            heat_floor = 100 if platform_label == "Instagram" else 200
-            return [specific_message or f"{platform_label} 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量加互动热度合计满 1000 或互动热度满 {heat_floor}。"]
+            return [specific_message or f"{platform_label} 搜到了帖，但没有符合条件的结果：需相关、近 30 天，且浏览量或互动热度至少达到 500。"]
         return [specific_message or "暂未找到符合条件的热点，请稍后刷新候选。"]
     messages = [f"已找到 {count} 条符合条件的热点，暂不足 {target} 条。" if count < target else f"已获取 {count} 条热点候选。"]
     if specific_message:
@@ -16199,7 +16198,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
     return keywords
 
 
-PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 63
+PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 62
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 10
 PERSONA_HOT_KEYWORD_BATCH_MAX_USES = 2
 PERSONA_HOT_KEYWORD_PLAN_MAX_CYCLES = 1
@@ -16373,7 +16372,12 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
         state = _read_persona_hot_keyword_batch_state()
         key = _persona_hot_keyword_batch_key(clean_id, payload)
         existing = state.get(key)
-        remaining_batch = _persona_hot_keyword_batch_from_row(existing)
+        existing_version = _to_int((existing or {}).get("strategy_version"), 0) if isinstance(existing, dict) else 0
+        remaining_batch = (
+            _persona_hot_keyword_batch_from_row(existing)
+            if existing_version == PERSONA_HOT_KEYWORD_STRATEGY_VERSION
+            else []
+        )
         if remaining_batch:
             return _persona_hot_keyword_prepare_payload(existing if isinstance(existing, dict) else {}, search_mode)
 
