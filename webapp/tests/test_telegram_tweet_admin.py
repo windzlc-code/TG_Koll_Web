@@ -36,9 +36,17 @@ class _Markup:
         self.inline_keyboard = inline_keyboard
 
 
+class _ReplyMarkup:
+    def __init__(self, *, keyboard, **kwargs):
+        self.keyboard = keyboard
+        self.__dict__.update(kwargs)
+
+
 class _Types:
     InlineKeyboardButton = _Button
     InlineKeyboardMarkup = _Markup
+    KeyboardButton = _Button
+    ReplyKeyboardMarkup = _ReplyMarkup
 
 
 class _Message:
@@ -201,6 +209,82 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(load_state(101)["selected_persona_id"], "persona-new")
         self.assertEqual(calls[-1][1], "personas.create")
         self.assertEqual(calls[-1][2]["content"], "关注 AI 产品")
+
+    def test_main_menu_uses_compact_persistent_control_keyboard(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(
+                dispatch=lambda _uid, _action, _payload: [],
+                dispatch_async=_unused_async_dispatch,
+            ),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {
+                "chat_id": chat_id,
+                "web_user_id": self.alice_id,
+                "web_username": "tweet_alice",
+            },
+        )
+        message = _Message()
+        asyncio.run(controller.send_main_menu(message, _Types))
+        markup = message.answers[-1][1]["reply_markup"]
+        self.assertIsInstance(markup, _ReplyMarkup)
+        self.assertEqual([len(row) for row in markup.keyboard], [2, 2, 3])
+        self.assertEqual(
+            [[button.text for button in row] for row in markup.keyboard],
+            [
+                ["👤 人设管理", "✍️ 推文创作"],
+                ["🗂 内容管理", "🚀 发布管理"],
+                ["📋 任务中心", "📊 工作台状态", "ℹ️ 使用提示"],
+            ],
+        )
+        self.assertTrue(markup.resize_keyboard)
+        self.assertTrue(markup.is_persistent)
+        self.assertNotIn("请选择功能。", message.answers[-1][0])
+
+    def test_control_buttons_open_only_grouped_actions_and_leave_input_mode(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(
+                dispatch=lambda _uid, _action, _payload: [],
+                dispatch_async=_unused_async_dispatch,
+            ),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {
+                "chat_id": chat_id,
+                "web_user_id": self.alice_id,
+                "web_username": "tweet_alice",
+            },
+        )
+        expected = {
+            "👤 人设管理": {"tt:personas:0", "tt:profile"},
+            "✍️ 推文创作": {"tt:generate", "tt:hot"},
+            "🗂 内容管理": {"tt:drafts:0", "tt:favorites:0"},
+            "🚀 发布管理": {"tt:matrix", "tt:accounts"},
+        }
+        for label, callbacks in expected.items():
+            save_state(101, selected_persona_id="persona-a", mode="draft_edit", payload={"post_id": "p1"})
+            message = _Message(text=label)
+            asyncio.run(controller.handle_text(message, _Types))
+            self.assertEqual(load_state(101)["mode"], "")
+            markup = message.answers[-1][1]["reply_markup"]
+            actual = {button.callback_data for row in markup.inline_keyboard for button in row}
+            self.assertEqual(actual, callbacks)
+
+    def test_return_callback_restores_reply_control_keyboard(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(
+                dispatch=lambda _uid, _action, _payload: [],
+                dispatch_async=_unused_async_dispatch,
+            ),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {
+                "chat_id": chat_id,
+                "web_user_id": self.alice_id,
+                "web_username": "tweet_alice",
+            },
+        )
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:menu", message), _Types))
+        self.assertEqual(message.edits[-1][0], "已返回推文工作台总控菜单。")
+        self.assertIsInstance(message.answers[-1][1]["reply_markup"], _ReplyMarkup)
 
     def test_native_publish_selects_bound_account_and_requires_confirmation(self):
         calls = []

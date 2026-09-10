@@ -20,6 +20,30 @@ logger = logging.getLogger(__name__)
 
 PAGE_SIZE = 6
 MAX_TELEGRAM_MEDIA_BYTES = 20 * 1024 * 1024
+PERSONA_CONTROL_BUTTON = "👤 人设管理"
+CREATION_CONTROL_BUTTON = "✍️ 推文创作"
+CONTENT_CONTROL_BUTTON = "🗂 内容管理"
+PUBLISH_CONTROL_BUTTON = "🚀 发布管理"
+TASK_CONTROL_BUTTON = "📋 任务中心"
+STATUS_CONTROL_BUTTON = "📊 工作台状态"
+HELP_CONTROL_BUTTON = "ℹ️ 使用提示"
+CONTROL_BUTTONS = frozenset({
+    PERSONA_CONTROL_BUTTON,
+    CREATION_CONTROL_BUTTON,
+    CONTENT_CONTROL_BUTTON,
+    PUBLISH_CONTROL_BUTTON,
+    TASK_CONTROL_BUTTON,
+    STATUS_CONTROL_BUTTON,
+    HELP_CONTROL_BUTTON,
+})
+HELP_TEXT = (
+    "使用提示\n\n"
+    "• 管理员在后台加入当前 Chat ID 后，即可使用全部推文 Bot 功能。\n"
+    "• 人设、生成、草稿、收藏、媒体、热点和任务均可直接在 Telegram 内操作。\n"
+    "• 首次发布前需已有可用的 Threads 账号；若尚未授权，请从“发布管理”进入账号与浏览器完成一次 OAuth。\n"
+    "• 在输入流程中点击任一总控按钮，会退出当前未提交的输入并切换模块。\n"
+    "• Bot 不接收账号密码、验证码或浏览器凭证。"
+)
 SUPPORTED_MEDIA_MIME_SUFFIXES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -325,14 +349,42 @@ class NativeTweetBotController:
 
     @staticmethod
     def _main_keyboard(types: Any) -> Any:
+        button = types.KeyboardButton
+        return types.ReplyKeyboardMarkup(
+            keyboard=[
+                [button(text=PERSONA_CONTROL_BUTTON), button(text=CREATION_CONTROL_BUTTON)],
+                [button(text=CONTENT_CONTROL_BUTTON), button(text=PUBLISH_CONTROL_BUTTON)],
+                [button(text=TASK_CONTROL_BUTTON), button(text=STATUS_CONTROL_BUTTON), button(text=HELP_CONTROL_BUTTON)],
+            ],
+            resize_keyboard=True,
+            is_persistent=True,
+            input_field_placeholder="请选择推文工作台功能",
+        )
+
+    @staticmethod
+    def _return_keyboard(types: Any) -> Any:
+        return types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
+        ]])
+
+    @staticmethod
+    def _section_keyboard(types: Any, section: str) -> Any:
         button = types.InlineKeyboardButton
-        return types.InlineKeyboardMarkup(inline_keyboard=[
-            [button(text="👤 我的人设", callback_data="tt:personas:0"), button(text="✍️ 推文生成", callback_data="tt:generate")],
-            [button(text="📝 草稿", callback_data="tt:drafts:0"), button(text="⭐ 收藏", callback_data="tt:favorites:0")],
-            [button(text="🔥 热点", callback_data="tt:hot"), button(text="🚀 矩阵发布", callback_data="tt:matrix")],
-            [button(text="📋 任务中心", callback_data="tt:tasks:0"), button(text="⚙️ 内容设置", callback_data="tt:profile")],
-            [button(text="🔐 账号与浏览器", callback_data="tt:accounts"), button(text="ℹ️ 使用提示", callback_data="tt:help")],
-        ])
+        rows = {
+            "persona": [
+                [button(text="👤 我的人设", callback_data="tt:personas:0"), button(text="⚙️ 内容设置", callback_data="tt:profile")],
+            ],
+            "creation": [
+                [button(text="✍️ 推文生成", callback_data="tt:generate"), button(text="🔥 热点创作", callback_data="tt:hot")],
+            ],
+            "content": [
+                [button(text="📝 草稿", callback_data="tt:drafts:0"), button(text="⭐ 收藏", callback_data="tt:favorites:0")],
+            ],
+            "publish": [
+                [button(text="🚀 矩阵发布", callback_data="tt:matrix"), button(text="🔐 账号与浏览器", callback_data="tt:accounts")],
+            ],
+        }.get(section, [])
+        return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def send_main_menu(self, message: Any, types: Any) -> None:
         member = await self._authorized(message.chat, message.from_user, message.answer)
@@ -351,9 +403,99 @@ class NativeTweetBotController:
         clear_pending_state(int(message.chat.id))
         await message.answer(
             f"当前 Chat ID 已授权。{selected}\n"
-            "可直接在 Telegram 内完成人设、生成、草稿、媒体、发布和任务操作。",
+            "请使用输入框下方的总控按钮；进入模块后再选择具体操作。",
             reply_markup=self._main_keyboard(types),
         )
+
+    async def _send_control_section(self, message: Any, types: Any, section: str, title: str) -> None:
+        await message.answer(
+            f"{title}\n请选择具体操作。",
+            reply_markup=self._section_keyboard(types, section),
+        )
+
+    async def _send_task_center(self, message: Any, types: Any, member: dict[str, Any], page: int = 0) -> None:
+        tasks = await self._call(int(member["web_user_id"]), "tasks.list", {"limit": 30})
+        page = max(0, int(page))
+        start = page * PAGE_SIZE
+        rows = []
+        for item in tasks[start:start + PAGE_SIZE]:
+            task_id = str(item.get("id") or "")
+            task_kind = str(item.get("_tg_task_kind") or "social")
+            label = f"{_task_status(item)} · {str(item.get('type') or item.get('task_type') or 'task')[:18]}"
+            rows.append([types.InlineKeyboardButton(
+                text=label,
+                callback_data=callback_token(
+                    int(message.chat.id), "t", {"task_id": task_id, "task_kind": task_kind},
+                ),
+            )])
+        nav = []
+        if page > 0:
+            nav.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"tt:tasks:{page - 1}"))
+        if start + PAGE_SIZE < len(tasks):
+            nav.append(types.InlineKeyboardButton(text="➡️", callback_data=f"tt:tasks:{page + 1}"))
+        if nav:
+            rows.append(nav)
+        rows.append([types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")])
+        await message.answer(
+            f"任务中心（最近 {len(tasks)} 条）" if tasks else "暂无任务。",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _send_workbench_status(self, message: Any, types: Any, member: dict[str, Any]) -> None:
+        personas = await self._call(int(member["web_user_id"]), "personas.list")
+        tasks = await self._call(int(member["web_user_id"]), "tasks.list", {"limit": 30})
+        state = load_state(int(message.chat.id))
+        current = next(
+            (item for item in personas if str(item.get("id") or "") == state["selected_persona_id"]),
+            None,
+        )
+        draft_count = sum(int((item.get("counts") or {}).get("posts") or 0) for item in personas)
+        favorite_count = sum(int((item.get("counts") or {}).get("favorites") or 0) for item in personas)
+        active_count = sum(1 for item in tasks if _task_status(item) in {"queued", "pending", "running", "retrying", "scheduled"})
+        await message.answer(
+            "推文工作台状态\n\n"
+            f"当前人设：{str((current or {}).get('name') or '未选择')}\n"
+            f"人设：{len(personas)} · 草稿：{draft_count} · 收藏：{favorite_count}\n"
+            f"进行中任务：{active_count} · 最近任务：{len(tasks)}",
+            reply_markup=self._main_keyboard(types),
+        )
+
+    async def _handle_control_button(
+        self,
+        message: Any,
+        types: Any,
+        member: dict[str, Any],
+        text: str,
+    ) -> bool:
+        if text not in CONTROL_BUTTONS:
+            return False
+        chat_id = int(message.chat.id)
+        user_id = int(member["web_user_id"])
+        clear_pending_state(chat_id)
+        try:
+            if text == PERSONA_CONTROL_BUTTON:
+                await self._send_control_section(message, types, "persona", "人设管理")
+            elif text == CREATION_CONTROL_BUTTON:
+                await self._send_control_section(message, types, "creation", "推文创作")
+            elif text == CONTENT_CONTROL_BUTTON:
+                await self._send_control_section(message, types, "content", "内容管理")
+            elif text == PUBLISH_CONTROL_BUTTON:
+                await self._send_control_section(message, types, "publish", "发布管理")
+            elif text == TASK_CONTROL_BUTTON:
+                await self._send_task_center(message, types, member)
+            elif text == STATUS_CONTROL_BUTTON:
+                await self._send_workbench_status(message, types, member)
+            else:
+                await message.answer(HELP_TEXT, reply_markup=self._main_keyboard(types))
+            audit_action(chat_id, user_id, "control.open", status="success", detail=text)
+        except Exception as exc:
+            logger.exception("Telegram tweet control action failed: %s", text)
+            audit_action(chat_id, user_id, "control.open", status="failed", detail=f"{text}: {_error_text(exc)}")
+            await message.answer(
+                f"打开失败：{_error_text(exc)}",
+                reply_markup=self._main_keyboard(types),
+            )
+        return True
 
     async def _persona_list(self, query: Any, types: Any, member: dict[str, Any], page: int) -> None:
         personas = await self._call(int(member["web_user_id"]), "personas.list")
@@ -377,7 +519,7 @@ class NativeTweetBotController:
             rows.append(nav)
         rows.extend([
             [types.InlineKeyboardButton(text="➕ 新建人设", callback_data="tt:persona_new")],
-            [types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")],
+            [types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")],
         ])
         await query.message.edit_text(
             f"我的人设（{len(personas)}）\n选择后，生成、草稿和发布都会限定在该人设。" if personas else "尚无人设，可先新建一个。",
@@ -412,7 +554,7 @@ class NativeTweetBotController:
             rows.append(nav)
         if source == "posts":
             rows.append([types.InlineKeyboardButton(text="➕ 手工新建草稿", callback_data="tt:draft_new")])
-        rows.append([types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")])
+        rows.append([types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")])
         await query.message.edit_text(
             f"{'收藏' if source == 'favorites' else '草稿'}（{len(posts)}）" if posts else f"当前人设暂无{'收藏' if source == 'favorites' else '草稿'}。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -513,7 +655,7 @@ class NativeTweetBotController:
             nav.append(types.InlineKeyboardButton(text="➡️", callback_data=f"tt:tasks:{page + 1}"))
         if nav:
             rows.append(nav)
-        rows.append([types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")])
+        rows.append([types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")])
         await query.message.edit_text(
             f"任务中心（最近 {len(tasks)} 条）" if tasks else "暂无任务。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -534,15 +676,12 @@ class NativeTweetBotController:
         try:
             if action == "menu":
                 clear_pending_state(chat_id)
-                await query.message.edit_text("请选择功能。", reply_markup=self._main_keyboard(types))
+                await query.message.edit_text("已返回推文工作台总控菜单。")
+                await query.message.answer("请选择总控功能。", reply_markup=self._main_keyboard(types))
             elif action == "help":
                 await query.message.edit_text(
-                    "使用提示\n\n"
-                    "• 管理员在后台加入当前 Chat ID 后，即可使用全部推文 Bot 功能。\n"
-                    "• 人设、生成、草稿、收藏、媒体、热点和任务均可直接在 Telegram 内操作。\n"
-                    "• 首次发布前需已有可用的 Threads 账号；若尚未授权，请从“账号与浏览器”进入网页完成一次 OAuth。\n"
-                    "• Bot 不接收账号密码、验证码或浏览器凭证。",
-                    reply_markup=self._main_keyboard(types),
+                    HELP_TEXT,
+                    reply_markup=self._return_keyboard(types),
                 )
             elif action == "personas":
                 await self._persona_list(query, types, member, int(parts[2]) if len(parts) > 2 else 0)
@@ -604,7 +743,7 @@ class NativeTweetBotController:
                         "index": int(reference.get("index") or 0),
                     })
                     audit_action(chat_id, user_id, "media.delete", status="success", resource_type=source, resource_id=post_id)
-                    await query.message.edit_text("媒体已移除。", reply_markup=self._main_keyboard(types))
+                    await query.message.edit_text("媒体已移除。", reply_markup=self._return_keyboard(types))
                 elif action == "pub":
                     await self._publish_account_picker(
                         query, types, member, source=source, post_id=post_id, scheduled=False,
@@ -659,7 +798,7 @@ class NativeTweetBotController:
                 if action == "delok":
                     await self._call(user_id, "posts.delete", {"persona_id": state["selected_persona_id"], "source": source, "post_id": post_id})
                     audit_action(chat_id, user_id, "post.delete", status="success", resource_type=source, resource_id=post_id)
-                    await query.message.edit_text("已删除。", reply_markup=self._main_keyboard(types))
+                    await query.message.edit_text("已删除。", reply_markup=self._return_keyboard(types))
                 else:
                     result = await self._call(user_id, "publish.start", {
                         "persona_id": state["selected_persona_id"],
@@ -671,7 +810,7 @@ class NativeTweetBotController:
                     task = result.get("task") if isinstance(result, dict) else {}
                     task_id = str((task or {}).get("id") or "")
                     audit_action(chat_id, user_id, "publish.enqueue", status="success", resource_type=source, resource_id=post_id, detail=task_id)
-                    await query.message.edit_text(f"已进入发布队列。\n任务：{task_id or '已创建'}", reply_markup=self._main_keyboard(types))
+                    await query.message.edit_text(f"已进入发布队列。\n任务：{task_id or '已创建'}", reply_markup=self._return_keyboard(types))
                     if task_id:
                         asyncio.create_task(self._watch_publish(query.message.bot, chat_id, user_id, task_id, types))
             elif action == "hot":
@@ -718,7 +857,7 @@ class NativeTweetBotController:
                     )
                     await query.message.edit_text(
                         "热点任务已取消。" if result.get("cancelled") else "热点任务已结束或无需取消。",
-                        reply_markup=self._main_keyboard(types),
+                        reply_markup=self._return_keyboard(types),
                     )
                 else:
                     task = await self._call(user_id, "hot.status", {
@@ -737,7 +876,7 @@ class NativeTweetBotController:
                             text=str(item.get("title") or item.get("content") or f"候选 {index + 1}")[:28],
                             callback_data=callback_token(chat_id, "hotpick", {"index": index}),
                         )] for index, item in enumerate(candidates)]
-                        rows.append([types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")])
+                        rows.append([types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")])
                         await query.message.edit_text(
                             "热点候选已完成，选择一条保存为草稿。" if candidates else "热点任务已完成，但没有可导入候选。",
                             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -764,7 +903,7 @@ class NativeTweetBotController:
                     else:
                         await query.message.edit_text(
                             f"热点任务 {status}：{str(task.get('error') or '')[:1200]}",
-                            reply_markup=self._main_keyboard(types),
+                            reply_markup=self._return_keyboard(types),
                         )
             elif action == "hotpick" and len(parts) > 2:
                 state = load_state(chat_id)
@@ -775,7 +914,7 @@ class NativeTweetBotController:
                 await self._call(user_id, "hot.import", {"persona_id": state["selected_persona_id"], "candidates": [candidates[index]]})
                 clear_pending_state(chat_id)
                 audit_action(chat_id, user_id, "hot.import", status="success", resource_type="persona", resource_id=state["selected_persona_id"])
-                await query.message.edit_text("热点内容已保存为草稿。", reply_markup=self._main_keyboard(types))
+                await query.message.edit_text("热点内容已保存为草稿。", reply_markup=self._return_keyboard(types))
             elif action == "matrix":
                 personas = await self._call(user_id, "personas.list")
                 eligible = [item for item in personas if int((item.get("counts") or {}).get("posts") or 0) > 0]
@@ -805,14 +944,14 @@ class NativeTweetBotController:
                     audit_action(chat_id, user_id, "publish.matrix", status="failed", detail=detail)
                     await query.message.edit_text(
                         f"矩阵发布未入队。{detail or '没有符合条件的草稿或账号。'}"[:3500],
-                        reply_markup=self._main_keyboard(types),
+                        reply_markup=self._return_keyboard(types),
                     )
                 else:
                     created = result.get("created") if isinstance(result.get("created"), list) else []
                     audit_action(chat_id, user_id, "publish.matrix", status="success", detail=str(result.get("batch_id") or ""))
                     await query.message.edit_text(
                         f"矩阵发布已入队：{result.get('batch_id') or '已创建'}\n已创建 {len(created)} 个任务。",
-                        reply_markup=self._main_keyboard(types),
+                        reply_markup=self._return_keyboard(types),
                     )
             elif action == "tasks":
                 await self._tasks(query, types, member, int(parts[2]) if len(parts) > 2 else 0)
@@ -843,7 +982,7 @@ class NativeTweetBotController:
                     raise HTTPException(status_code=409, detail="生成任务请从推文生成重新提交")
                 result = await self._call(user_id, task_action, {"task_id": task_id})
                 audit_action(chat_id, user_id, task_action, status="success", resource_type="task", resource_id=task_id)
-                await query.message.edit_text(str(result.get("message") or "操作已提交"), reply_markup=self._main_keyboard(types))
+                await query.message.edit_text(str(result.get("message") or "操作已提交"), reply_markup=self._return_keyboard(types))
             elif action == "profile":
                 state = load_state(chat_id)
                 if not state["selected_persona_id"]:
@@ -852,7 +991,7 @@ class NativeTweetBotController:
                 rows = [[
                     types.InlineKeyboardButton(text="编辑简介", callback_data="tt:bio"),
                     types.InlineKeyboardButton(text="编辑推文风格", callback_data="tt:style"),
-                ], [types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")]]
+                ], [types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")]]
                 await query.message.edit_text(
                     f"内容设置\n\n简介：{str(profile.get('content') or '')[:1200]}\n\n推文风格：{str(profile.get('tweet_style_sample') or '')[:1200]}",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -867,13 +1006,13 @@ class NativeTweetBotController:
                 rows = []
                 if base.startswith("https://"):
                     rows.append([types.InlineKeyboardButton(text="网页登录/授权", url=f"{base}/console.html?view=accounts")])
-                rows.append([types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")])
+                rows.append([types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")])
                 await query.message.edit_text(
                     "账号状态\n" + ("\n".join(lines) if lines else "暂无已绑定账号。") + "\n\n登录、OAuth、代理和浏览器人工接管必须在网页端完成，Bot 不接收密码或验证码。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
             else:
-                await query.answer("操作已过期，请返回主菜单", show_alert=True)
+                await query.answer("操作已过期，请返回总控菜单", show_alert=True)
                 return
             await query.answer()
         except Exception as exc:
@@ -891,6 +1030,8 @@ class NativeTweetBotController:
         if text in {"/cancel", "/done"}:
             clear_pending_state(chat_id)
             await message.answer("已结束当前操作。", reply_markup=self._main_keyboard(types))
+            return
+        if await self._handle_control_button(message, types, member, text):
             return
         state = load_state(chat_id)
         mode = state["mode"]
@@ -977,7 +1118,7 @@ class NativeTweetBotController:
                             "task_id": task_id, "persona_id": persona_id,
                         }),
                     ),
-                ], [types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")]]
+                ], [types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")]]
                 await message.answer(
                     f"热点任务已提交：{task_id}\n完成后 Bot 会返回候选。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -1134,7 +1275,7 @@ class NativeTweetBotController:
                     text=str(item.get("title") or item.get("content") or f"候选 {index + 1}")[:28],
                     callback_data=callback_token(chat_id, "hotpick", {"index": index}),
                 )] for index, item in enumerate(candidates)]
-                rows.append([types.InlineKeyboardButton(text="返回主菜单", callback_data="tt:menu")])
+                rows.append([types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")])
                 await bot.send_message(chat_id, "热点候选已完成，选择一条保存为草稿。", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows))
             else:
                 if not self._member_still_bound(chat_id, user_id):
