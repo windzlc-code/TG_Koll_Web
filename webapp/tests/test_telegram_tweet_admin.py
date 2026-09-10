@@ -227,13 +227,13 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.send_main_menu(message, _Types))
         markup = message.answers[-1][1]["reply_markup"]
         self.assertIsInstance(markup, _ReplyMarkup)
-        self.assertEqual([len(row) for row in markup.keyboard], [2, 2, 3])
+        self.assertEqual([len(row) for row in markup.keyboard], [2, 2, 1])
         self.assertEqual(
             [[button.text for button in row] for row in markup.keyboard],
             [
                 ["👤 人设管理", "✍️ 推文创作"],
                 ["🗂 内容管理", "🚀 发布管理"],
-                ["📋 任务中心", "📊 工作台状态", "ℹ️ 使用提示"],
+                ["📋 任务中心"],
             ],
         )
         self.assertTrue(markup.resize_keyboard)
@@ -254,10 +254,11 @@ class TelegramTweetAdminTests(unittest.TestCase):
             },
         )
         expected = {
-            "👤 人设管理": {"tt:personas:0", "tt:profile"},
-            "✍️ 推文创作": {"tt:generate", "tt:hot"},
+            "👤 人设管理": {"tt:personas:0", "tt:persona_new"},
+            "✍️ 推文创作": {"tt:generate", "tt:hot", "tt:draft_new"},
             "🗂 内容管理": {"tt:drafts:0", "tt:favorites:0"},
-            "🚀 发布管理": {"tt:matrix", "tt:accounts"},
+            "🚀 发布管理": {"tt:publish_one", "tt:matrix", "tt:accounts"},
+            "📋 任务中心": {"tt:tasks:0:active", "tt:tasks:0:failed", "tt:tasks:0:all"},
         }
         for label, callbacks in expected.items():
             save_state(101, selected_persona_id="persona-a", mode="draft_edit", payload={"post_id": "p1"})
@@ -267,6 +268,45 @@ class TelegramTweetAdminTests(unittest.TestCase):
             markup = message.answers[-1][1]["reply_markup"]
             actual = {button.callback_data for row in markup.inline_keyboard for button in row}
             self.assertEqual(actual, callbacks)
+
+    def test_generation_resumes_after_persona_and_confirms_before_enqueue(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "personas.list":
+                return [{"id": "persona-a", "name": "科技观察员", "counts": {"posts": 0, "favorites": 0}}]
+            if action == "generation.start":
+                return {"task_id": "gen-task-1"}
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:generate", message), _Types))
+        self.assertEqual(load_state(101)["payload"]["resume_action"], "generate")
+        persona_callback = message.edits[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
+        asyncio.run(controller.handle_callback(_Query(persona_callback, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_count")
+        self.assertIn("第 1/3 步", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:gcount:3", message), _Types))
+        asyncio.run(controller.handle_callback(_Query("tt:gwords:120", message), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_prompt")
+        prompt = _Message(text="AI 产品趋势")
+        asyncio.run(controller.handle_text(prompt, _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_confirm")
+        self.assertEqual([action for action, _payload in calls].count("generation.start"), 0)
+        confirm = prompt.answers[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
+        with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
+            asyncio.run(controller.handle_callback(_Query(confirm, prompt), _Types))
+        generated = [payload for action, payload in calls if action == "generation.start"]
+        self.assertEqual(len(generated), 1)
+        self.assertEqual(generated[0]["count"], 3)
+        self.assertEqual(generated[0]["target_words"], 120)
+        self.assertEqual(generated[0]["prompt"], "AI 产品趋势")
 
     def test_return_callback_restores_reply_control_keyboard(self):
         controller = NativeTweetBotController(
@@ -417,11 +457,14 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         save_state(101, selected_persona_id="persona-a", mode="hot_prompt", payload={})
         message = _Message(text="AI 热点")
+        asyncio.run(controller.handle_text(message, _Types))
+        self.assertEqual(load_state(101)["mode"], "hot_confirm")
+        confirm = message.answers[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
         with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
-            asyncio.run(controller.handle_text(message, _Types))
+            asyncio.run(controller.handle_callback(_Query(confirm, message), _Types))
         state = load_state(101)
         self.assertEqual(state["payload"]["last_hot_task_id"], "phc_test")
-        buttons = message.answers[-1][1]["reply_markup"].inline_keyboard[0]
+        buttons = message.edits[-1][1]["reply_markup"].inline_keyboard[0]
         self.assertTrue(buttons[0].callback_data.startswith("tt:hotstatus:"))
         self.assertTrue(buttons[1].callback_data.startswith("tt:hotcancel:"))
 
@@ -461,6 +504,63 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query(token, message), _Types))
         self.assertIn("未入队", message.edits[-1][0])
         self.assertIn("未绑定账号", message.edits[-1][0])
+
+    def test_matrix_publish_selects_personas_before_confirmation(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "personas.list":
+                return [
+                    {"id": "persona-a", "name": "A", "counts": {"posts": 2}},
+                    {"id": "persona-b", "name": "B", "counts": {"posts": 1}},
+                ]
+            if action == "publish.matrix":
+                return {"ok": True, "batch_id": "batch-1", "created": [{}]}
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:matrix", message), _Types))
+        self.assertEqual(load_state(101)["mode"], "matrix_select")
+        self.assertFalse(any(action == "publish.matrix" for action, _payload in calls))
+        first_persona = message.edits[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
+        asyncio.run(controller.handle_callback(_Query(first_persona, message), _Types))
+        self.assertEqual(load_state(101)["payload"]["matrix_persona_ids"], ["persona-a"])
+        asyncio.run(controller.handle_callback(_Query("tt:matrixnext", message), _Types))
+        self.assertEqual(load_state(101)["mode"], "matrix_confirm")
+        confirm = message.edits[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
+        asyncio.run(controller.handle_callback(_Query(confirm, message), _Types))
+        published = [payload for action, payload in calls if action == "publish.matrix"]
+        self.assertEqual(published, [{"persona_ids": ["persona-a"]}])
+
+    def test_task_submenu_filters_before_opening_task_detail(self):
+        def dispatch(_user_id, action, _payload):
+            if action == "tasks.list":
+                return [
+                    {"id": "running-1", "type": "publish", "status": "running", "_tg_task_kind": "social"},
+                    {"id": "failed-1", "type": "publish", "status": "failed", "_tg_task_kind": "social"},
+                    {"id": "done-1", "type": "publish", "status": "success", "_tg_task_kind": "social"},
+                ]
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:tasks:0:failed", message), _Types))
+        self.assertIn("失败任务（1 条）", message.edits[-1][0])
+        task_buttons = [
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(getattr(button, "callback_data", "")).startswith("tt:t:")
+        ]
+        self.assertEqual(len(task_buttons), 1)
 
     def test_generation_failure_offers_regenerate_not_unsupported_retry(self):
         def dispatch(_user_id, action, _payload):
