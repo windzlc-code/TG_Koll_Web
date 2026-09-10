@@ -233,6 +233,34 @@ class RemoteFetchStoreTests(unittest.TestCase):
         with self.store._connection() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0], 0)
 
+    def test_due_pool_refill_discards_a_stale_keyword_protocol_target(self) -> None:
+        now = int(time.time())
+        archive_id = "archive_stale_strategy"
+        self.store.submit(
+            idempotency_key="capture:stale-strategy:1234",
+            request_digest="f" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=self.pool_payload(archive_id, user_initiated=True),
+        )
+        with self.store._connection() as connection:
+            payload = json.loads(connection.execute(
+                "SELECT payload_json FROM fetch_pool_targets WHERE archive_id=?",
+                (archive_id,),
+            ).fetchone()[0])
+            payload["keywordStrategyVersion"] = PERSONA_HOT_KEYWORD_STRATEGY_VERSION + 1
+            connection.execute(
+                "UPDATE fetch_pool_targets SET payload_json=?, next_run_at=? WHERE archive_id=?",
+                (json.dumps(payload), now, archive_id),
+            )
+
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
+        with self.store._connection() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM fetch_pool_targets WHERE archive_id=?",
+                (archive_id,),
+            ).fetchone()[0], 0)
+
     def test_dataset_overview_lists_global_pool_first_and_named_persona_counts(self) -> None:
         now = int(time.time())
         archive_id = "12345678-1234-4234-8234-123456789abc"

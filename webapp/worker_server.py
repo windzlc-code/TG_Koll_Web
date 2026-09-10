@@ -898,6 +898,13 @@ class JobStore:
             if not str(payload.get("archiveId") or "").strip():
                 connection.execute("DELETE FROM fetch_pool_targets WHERE archive_id=?", (archive_id,))
                 return False
+            # Deployments may restore an earlier keyword protocol while a
+            # scheduled refill still carries the later version. Do not keep
+            # enqueueing a payload that the worker will deterministically
+            # reject; the next user-initiated fetch registers a current target.
+            if not _has_current_hot_keyword_strategy(payload):
+                connection.execute("DELETE FROM fetch_pool_targets WHERE archive_id=?", (archive_id,))
+                return False
             active_rows = connection.execute(
                 "SELECT payload_json FROM fetch_jobs WHERE capability='persona.hot_candidates.v1' AND status IN ('queued','running')"
             ).fetchall()
