@@ -100,17 +100,16 @@ class BillingFrontendContractTests(unittest.TestCase):
         self.assertNotIn(".billing-price-pill", self.console_styles)
 
     def test_public_pricing_currency_follows_the_site_language(self):
-        self.assertIn('const CNY_PER_TWD = 0.23', self.pricing_script)
         self.assertIn('const CNY_CREDITS_PER_YUAN = 2.5', self.pricing_script)
         self.assertIn('window.VectoSiteNavigation?.currentLanguage?.() === "zh-Hans"', self.pricing_script)
         self.assertIn('return `NT$${amount.toLocaleString("zh-TW", { maximumFractionDigits: 2 })}`;', self.pricing_script)
-        self.assertIn('return `¥${(amount * CNY_PER_TWD).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;', self.pricing_script)
-        self.assertIn('const paidPoints = Number(item?.paid_points ?? item?.total_points ?? 0);', self.pricing_script)
-        self.assertIn('return `¥${(paidPoints / CNY_CREDITS_PER_YUAN).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;', self.pricing_script)
+        self.assertIn('const currencyCode = () => usesSimplifiedChinese() ? "CNY" : "TWD";', self.pricing_script)
+        self.assertIn('const localizedPoints = (item, field = "total_points")', self.pricing_script)
+        self.assertIn('const discountLabel = (item) => {', self.pricing_script)
         self.assertIn('`¥1 = ${CNY_CREDITS_PER_YUAN} 点`', self.pricing_script)
-        self.assertIn('const displayPrice = item.kind === "subscription" ? money(item.price_ntd) : packageMoney(item);', self.pricing_script)
-        self.assertIn('簡體中文依 ¥1 = 2.5 點計算', self.pricing_markup)
-        self.assertIn('簡體中文以人民幣展示', self.pricing_markup)
+        self.assertIn('const displayPrice = item.kind === "subscription" ? catalogPrice(item) : packageMoney(item);', self.pricing_script)
+        self.assertIn('台幣依 NT$2 = 1 點、人民幣依 ¥1 = 2.5 點計算', self.pricing_markup)
+        self.assertIn('四款連續包月方案依語言顯示人民幣或台幣價格', self.pricing_markup)
         self.assertIn('window.addEventListener("vecto:language-change", () => {', self.pricing_script)
         self.assertIn('if (state.catalog) renderPage(state.catalog);', self.pricing_script)
 

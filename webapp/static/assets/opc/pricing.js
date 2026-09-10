@@ -39,28 +39,35 @@
   };
   const list = (value) => Array.isArray(value) ? value : [];
   const object = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  const CNY_PER_TWD = 0.23;
   const CNY_CREDITS_PER_YUAN = 2.5;
   const currentLanguage = () => window.VectoSiteNavigation?.currentLanguage?.() === "zh-Hans" ? "zh-Hans" : "zh-Hant";
   const usesSimplifiedChinese = () => currentLanguage() === "zh-Hans";
   const escapeHtml = (value) => String(value == null ? "" : value).replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[character]));
-  const money = (value) => {
+  const currencyCode = () => usesSimplifiedChinese() ? "CNY" : "TWD";
+  const pointLabel = () => usesSimplifiedChinese() ? "点" : "點";
+  const money = (value, currency = currencyCode()) => {
     const amount = Number(value || 0);
-    if (!usesSimplifiedChinese()) {
+    if (currency === "TWD") {
       return `NT$${amount.toLocaleString("zh-TW", { maximumFractionDigits: 2 })}`;
     }
-    return `¥${(amount * CNY_PER_TWD).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
+    return `¥${amount.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
   };
-  const packageMoney = (item) => {
-    if (!usesSimplifiedChinese()) return money(item?.price_ntd);
-    const paidPoints = Number(item?.paid_points ?? item?.total_points ?? 0);
-    return `¥${(paidPoints / CNY_CREDITS_PER_YUAN).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}`;
+  const catalogPrice = (item, field = "price") => {
+    const suffix = currencyCode() === "CNY" ? "cny" : "ntd";
+    const key = field === "monthly" ? `monthly_price_${suffix}` : `${field}_${suffix}`;
+    return money(item?.[key], currencyCode());
   };
+  const packageMoney = (item) => catalogPrice(item);
+  const localizedPoints = (item, field = "total_points") => Number(item?.[`${field}_${currencyCode().toLowerCase()}`] ?? item?.[field] ?? 0);
   const pointPriceFact = (catalog) => usesSimplifiedChinese()
     ? `¥1 = ${CNY_CREDITS_PER_YUAN} 点`
-    : `1 點 = ${money(catalog.point_unit_ntd || 10)}`;
+    : `${money(catalog.point_unit_ntd || 2, "TWD")} = 1 點`;
+  const discountLabel = (item) => {
+    const percent = Math.max(0, Math.min(99, Number(item?.discount_percent || 0)));
+    return percent ? `${100 - percent} 折` : "原價";
+  };
   const skuOf = (item) => String(item?.sku || "").trim();
   const subscriptionPlanFamily = (sku) => {
     const clean = String(sku || "").trim();
@@ -77,6 +84,7 @@
     const renewalId = String(form.elements.renewal_subscription_id?.value || "");
     return {
       sku: skuOf(state.selected),
+      currency: currencyCode(),
       quantity: Number(form.elements.quantity.value || 1),
       renewal_subscription_ids: renewalId ? [renewalId] : [],
       note: String(form.elements.note.value || "").trim(),
@@ -183,9 +191,10 @@
         `${Number(subscription.threads_accounts || 1)} 個 Threads 帳號容量`,
         `每月 ${Number(subscription.monthly_free_images || 10)} 張免費 AI 圖片`,
       ];
+      const creditPoints = localizedPoints(subscription, "credit_points");
       const priceDetail = purchasable
-        ? `<div class="pricing-subscription-price">${money(subscription.price_ntd)} <small>/ ${escapeHtml(periodLabel)}</small></div>
-        <p class="pricing-subscription-monthly">${money(subscription.monthly_price_ntd)} / 月標準</p>`
+        ? `<div class="pricing-subscription-price">${catalogPrice(subscription)} <small>/ ${escapeHtml(periodLabel)}</small></div>
+        <p class="pricing-subscription-monthly">每月獲得 ${creditPoints.toLocaleString("zh-TW")} ${pointLabel()} · ${discountLabel(subscription)}</p>`
         : `<div class="pricing-subscription-price">${money(0)} <small>/ 免費開通</small></div>
         <p class="pricing-subscription-monthly">新註冊贈送 20 點基礎算力</p>`;
       const callToAction = purchasable
@@ -241,7 +250,8 @@
 
   function renderPage(catalog) {
     const subscriptions = list(catalog.subscriptions).length ? list(catalog.subscriptions) : [object(catalog.subscription)];
-    const monthlyPrices = subscriptions.map((item) => Number(item.monthly_price_ntd || 0)).filter((value) => value > 0);
+    const monthlyField = currencyCode() === "CNY" ? "monthly_price_cny" : "monthly_price_ntd";
+    const monthlyPrices = subscriptions.map((item) => Number(item[monthlyField] || 0)).filter((value) => value > 0);
     const startingMonthlyPrice = monthlyPrices.length ? Math.min(...monthlyPrices) : 0;
     document.querySelector("#pricingFactSubscription").textContent = `${money(startingMonthlyPrice)} 起 / 月`;
     document.querySelector("#pricingFactAccounts").textContent = "1–3 帳號";
@@ -259,13 +269,12 @@
     }).join("");
 
     document.querySelector("#pricingPackages").innerHTML = list(catalog.packages).map((item, index) => {
-      const bonuses = [item.bonus_points ? `加贈 ${Number(item.bonus_points).toLocaleString("zh-TW")} 點` : "", item.bonus_images ? `加贈 ${Number(item.bonus_images)} 張永久圖片` : ""].filter(Boolean);
-      const packageCopy = usesSimplifiedChinese()
-        ? [`按 ¥1 = ${CNY_CREDITS_PER_YUAN} 点计算`, ...bonuses].join("，")
-        : bonuses.join("，") || "無加贈，算力點永久有效";
+      const bonusPoints = localizedPoints(item, "bonus_points");
+      const bonuses = [bonusPoints ? `加贈 ${bonusPoints.toLocaleString("zh-TW")} ${pointLabel()}` : "", item.bonus_images ? `加贈 ${Number(item.bonus_images)} 張永久圖片` : ""].filter(Boolean);
+      const packageCopy = [discountLabel(item), ...bonuses].join("，") || "原價";
       return `<article class="pricing-package-card">
         <span class="pricing-label">${escapeHtml(item.name)}</span><h3>${escapeHtml(item.name)}</h3>
-        <div class="pricing-package-points">${Number(item.total_points || 0).toLocaleString("zh-TW")} 點</div>
+        <div class="pricing-package-points">${localizedPoints(item).toLocaleString("zh-TW")} ${pointLabel()}</div>
         <p class="pricing-package-price">${packageMoney(item)}</p><p class="pricing-package-copy">${escapeHtml(packageCopy)}</p>
         <button class="button button-primary" type="button" data-purchase-sku="${escapeHtml(skuOf(item))}">申請購買</button>
       </article>`;
@@ -304,7 +313,7 @@
 
   function renderOrderDescription(item = state.selected) {
     if (!item) return;
-    const displayPrice = item.kind === "subscription" ? money(item.price_ntd) : packageMoney(item);
+    const displayPrice = item.kind === "subscription" ? catalogPrice(item) : packageMoney(item);
     document.querySelector("#pricingOrderDescription").textContent = `在線申請「${item.name}」，目前單價 ${displayPrice}。管理員將按送出時的價格快照審核。`;
   }
 

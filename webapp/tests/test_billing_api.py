@@ -349,7 +349,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
     def test_online_application_stays_pending_until_admin_approval(self):
         catalog = self.customer.get("/api/billing/catalog")
         self.assertEqual(catalog.status_code, 200, catalog.text)
-        self.assertEqual(catalog.json()["subscription"]["price_ntd"], 17940)
+        self.assertEqual(catalog.json()["subscription"]["price_ntd"], 1200)
         self.assertEqual(catalog.json()["timezone"], "Asia/Shanghai")
         self.assertEqual(
             [item["key"] for item in catalog.json()["automation_modules"]],
@@ -366,7 +366,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         self.assertEqual(blocked_write.json()["code"], "INSUFFICIENT_POINTS")
 
         body = {
-            "sku": "credits_200",
+            "sku": "credits_50",
             "quantity": 1,
             "note": "线上方案申请",
             "idempotency_key": "billing-api-order-0001",
@@ -424,7 +424,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         summary = self.customer.get("/api/billing/summary")
         ledger = self.customer.get("/api/billing/ledger")
         self.assertEqual(summary.status_code, 200, summary.text)
-        self.assertEqual(summary.json()["points"], 200)
+        self.assertEqual(summary.json()["points"], 50)
         self.assertTrue(summary.json()["subscription_active"])
         self.assertEqual(summary.json()["threads_account_limit"], 3)
         self.assertEqual(summary.json()["free_images"]["monthly_remaining"], 10)
@@ -435,7 +435,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
             json={"amount_cents": 5, "note": "billing api regression"},
         )
         self.assertEqual(recharged.status_code, 200, recharged.text)
-        self.assertEqual(recharged.json()["points"], 205)
+        self.assertEqual(recharged.json()["points"], 55)
         self.assertNotIn("balance_cents", recharged.json())
 
         archived = self.admin.delete(f"/api/admin/users/{self.user_id}")
@@ -491,7 +491,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
                 created = self.customer.post(
                     "/api/billing/orders",
                     json={
-                        "sku": "credits_200",
+                        "sku": "credits_50",
                         "quantity": 1,
                         "note": f"first user {index}",
                         "idempotency_key": f"first-user-order-{index}",
@@ -503,7 +503,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
                 created = second_customer.post(
                     "/api/billing/orders",
                     json={
-                        "sku": "credits_200",
+                        "sku": "credits_50",
                         "quantity": 1,
                         "note": f"second user {index}",
                         "idempotency_key": f"second-user-order-{index}",
@@ -576,7 +576,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         created = self.customer.post(
             "/api/billing/orders",
             json={
-                "sku": "credits_200",
+                "sku": "credits_50",
                 "quantity": 1,
                 "note": "reject this application",
                 "idempotency_key": "reject-order-permission-test",
@@ -645,7 +645,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
         created = self.customer.post(
             "/api/billing/orders",
             json={
-                "sku": "credits_200",
+                "sku": "credits_50",
                 "quantity": 1,
                 "note": "refund boundary",
                 "idempotency_key": "refund-boundary-order",
@@ -658,7 +658,7 @@ class BillingApiClosedLoopTests(unittest.TestCase):
             json={"note": "approved for refund test"},
         )
         self.assertEqual(approved.status_code, 200, approved.text)
-        self.assertEqual(self.customer.get("/api/billing/summary").json()["points"], 200)
+        self.assertEqual(self.customer.get("/api/billing/summary").json()["points"], 50)
 
         customer_refund = self.customer.post(
             f"/api/admin/billing/orders/{order_id}/refund",

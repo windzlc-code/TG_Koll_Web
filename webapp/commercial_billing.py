@@ -60,12 +60,18 @@ DEFAULT_AUTOMATION_MODULES: list[dict[str, Any]] = [
 LATEST_PDF_SUBSCRIPTION_PLANS: list[dict[str, Any]] = [
     {
         "sku": "vanguard_beta_free",
-        "name": "免費試用版（Beta 創始會員）",
-        "price_ntd": 0,
-        "monthly_price_ntd": 0,
+        "name": "基礎版",
+        "price_ntd": 60,
+        "price_cny": 60,
+        "monthly_price_ntd": 60,
+        "monthly_price_cny": 60,
+        "credit_points": 31,
+        "credit_points_twd": 31,
+        "credit_points_cny": 157,
+        "discount_percent": 5,
         "period_months": 1,
-        "period_label": "免費開通",
-        "purchasable": False,
+        "period_label": "連續包月",
+        "purchasable": True,
         "plan_family": "vanguard_beta",
         "threads_accounts": 1,
         "monthly_free_images": 10,
@@ -83,11 +89,17 @@ LATEST_PDF_SUBSCRIPTION_PLANS: list[dict[str, Any]] = [
     },
     {
         "sku": "vanguard_experience_monthly",
-        "name": "正式－體驗版",
-        "price_ntd": 2980,
-        "monthly_price_ntd": 2980,
+        "name": "進階版",
+        "price_ntd": 200,
+        "price_cny": 200,
+        "monthly_price_ntd": 200,
+        "monthly_price_cny": 200,
+        "credit_points": 108,
+        "credit_points_twd": 108,
+        "credit_points_cny": 540,
+        "discount_percent": 8,
         "period_months": 1,
-        "period_label": "月繳",
+        "period_label": "連續包月",
         "purchasable": True,
         "plan_family": "vanguard_experience",
         "threads_accounts": 1,
@@ -106,11 +118,17 @@ LATEST_PDF_SUBSCRIPTION_PLANS: list[dict[str, Any]] = [
     },
     {
         "sku": "vanguard_basic_monthly",
-        "name": "正式－基礎版（月繳）",
-        "price_ntd": 5980,
-        "monthly_price_ntd": 5980,
+        "name": "高級版",
+        "price_ntd": 650,
+        "price_cny": 650,
+        "monthly_price_ntd": 650,
+        "monthly_price_cny": 650,
+        "credit_points": 357,
+        "credit_points_twd": 357,
+        "credit_points_cny": 1787,
+        "discount_percent": 10,
         "period_months": 1,
-        "period_label": "月繳",
+        "period_label": "連續包月",
         "purchasable": True,
         "plan_family": "vanguard_basic",
         "threads_accounts": 3,
@@ -129,11 +147,17 @@ LATEST_PDF_SUBSCRIPTION_PLANS: list[dict[str, Any]] = [
     },
     {
         "sku": "vanguard_basic_revenue_quarterly",
-        "name": "正式－基礎版／分潤啟動版",
-        "price_ntd": 17940,
-        "monthly_price_ntd": 5980,
-        "period_months": 3,
-        "period_label": "一次繳 3 個月",
+        "name": "豪華版",
+        "price_ntd": 1200,
+        "price_cny": 1200,
+        "monthly_price_ntd": 1200,
+        "monthly_price_cny": 1200,
+        "credit_points": 672,
+        "credit_points_twd": 672,
+        "credit_points_cny": 3360,
+        "discount_percent": 12,
+        "period_months": 1,
+        "period_label": "連續包月",
         "purchasable": True,
         "plan_family": "vanguard_basic",
         "threads_accounts": 3,
@@ -164,7 +188,7 @@ OFFICIAL_BILLING_RULES = [
 DEFAULT_CATALOG: dict[str, Any] = {
     "currency": "TWD",
     "timezone": "Asia/Shanghai",
-    "point_unit_ntd": 10,
+    "point_unit_ntd": 2,
     "subscription": {
         **LATEST_PDF_SUBSCRIPTION_PLANS[-1],
         "features": list(LATEST_PDF_SUBSCRIPTION_PLANS[-1]["features"]),
@@ -205,9 +229,10 @@ DEFAULT_CATALOG: dict[str, Any] = {
         {"sku": "subject_generate_image", "name": "数字人 / 产品主体图", "points": 2, "unit": "张", "implemented": True},
     ],
     "packages": [
-        {"sku": "credits_200", "name": "标准储值包", "price_ntd": 2000, "paid_points": 200, "bonus_points": 0, "total_points": 200, "bonus_images": 0},
-        {"sku": "credits_530", "name": "畅销储值包", "price_ntd": 5000, "paid_points": 500, "bonus_points": 30, "total_points": 530, "bonus_images": 0},
-        {"sku": "credits_1620", "name": "企业长期储值包", "price_ntd": 15000, "paid_points": 1500, "bonus_points": 120, "total_points": 1620, "bonus_images": 20},
+        {"sku": "credits_50", "name": "基礎儲值包", "price_ntd": 100, "price_cny": 100, "paid_points": 50, "bonus_points": 0, "total_points": 50, "paid_points_twd": 50, "bonus_points_twd": 0, "total_points_twd": 50, "paid_points_cny": 250, "bonus_points_cny": 0, "total_points_cny": 250, "bonus_images": 0, "discount_percent": 0},
+        {"sku": "credits_151", "name": "進階儲值包", "price_ntd": 300, "price_cny": 300, "paid_points": 150, "bonus_points": 1, "total_points": 151, "paid_points_twd": 150, "bonus_points_twd": 1, "total_points_twd": 151, "paid_points_cny": 750, "bonus_points_cny": 7, "total_points_cny": 757, "bonus_images": 0, "discount_percent": 1},
+        {"sku": "credits_255", "name": "高級儲值包", "price_ntd": 500, "price_cny": 500, "paid_points": 250, "bonus_points": 5, "total_points": 255, "paid_points_twd": 250, "bonus_points_twd": 5, "total_points_twd": 255, "paid_points_cny": 1250, "bonus_points_cny": 25, "total_points_cny": 1275, "bonus_images": 0, "discount_percent": 2},
+        {"sku": "credits_515", "name": "豪華儲值包", "price_ntd": 1000, "price_cny": 1000, "paid_points": 500, "bonus_points": 15, "total_points": 515, "paid_points_twd": 500, "bonus_points_twd": 15, "total_points_twd": 515, "paid_points_cny": 2500, "bonus_points_cny": 75, "total_points_cny": 2575, "bonus_images": 0, "discount_percent": 3},
     ],
     "automation_modules": DEFAULT_AUTOMATION_MODULES,
 }
@@ -359,6 +384,25 @@ def _with_latest_pdf_subscription_plans(catalog: dict[str, Any]) -> dict[str, An
     plans = _loads(_dumps(LATEST_PDF_SUBSCRIPTION_PLANS), [])
     result["subscriptions"] = plans
     result["subscription"] = dict(plans[-1])
+    return result
+
+
+def _with_current_pricing_rules(catalog: dict[str, Any]) -> dict[str, Any]:
+    """Apply only the current subscription and credit-pack price sheet."""
+    result = _with_latest_pdf_subscription_plans(catalog)
+    result["point_unit_ntd"] = int(DEFAULT_CATALOG["point_unit_ntd"])
+    result["packages"] = _loads(_dumps(DEFAULT_CATALOG["packages"]), [])
+    return result
+
+
+def _localized_credit_pack_item(item: dict[str, Any], currency: str) -> dict[str, Any]:
+    """Freeze the correct language-currency point amount into an order snapshot."""
+    result = _loads(_dumps(item), {})
+    suffix = "cny" if str(currency).upper() == "CNY" else "twd"
+    for field in ("paid_points", "bonus_points", "total_points"):
+        localized = result.get(f"{field}_{suffix}")
+        if localized is not None:
+            result[field] = int(localized)
     return result
 
 
@@ -959,6 +1003,51 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
             (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
         )
 
+    current_pricing_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v13_current_pricing_rules'"
+    ).fetchone()
+    if current_pricing_migration is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        upgraded_catalog = _with_current_pricing_rules(active_catalog) if active_row else active_catalog
+        changed = bool(active_row) and upgraded_catalog != active_catalog
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            validate_catalog(upgraded_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(upgraded_catalog), current, current, current),
+            )
+        updated_drafts = 0
+        draft_rows = conn.execute(
+            "SELECT id, catalog_json FROM billing_catalog_versions WHERE status = 'draft'"
+        ).fetchall()
+        for draft_row in draft_rows:
+            draft_catalog = _loads(draft_row["catalog_json"], {})
+            upgraded_draft = _with_current_pricing_rules(draft_catalog)
+            if upgraded_draft == draft_catalog:
+                continue
+            validate_catalog(upgraded_draft)
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (_dumps(upgraded_draft), str(draft_row["id"])),
+            )
+            updated_drafts += 1
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v13_current_pricing_rules', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
+        )
+
     enforcement_migration = conn.execute(
         "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_enforcement_v2'"
     ).fetchone()
@@ -1134,7 +1223,7 @@ def get_active_catalog(conn: sqlite3.Connection) -> dict[str, Any]:
     if row is None:
         raise BillingError("CATALOG_UNAVAILABLE", "当前没有已发布的计费目录", 503)
     catalog = _loads(row["catalog_json"], {})
-    catalog = _with_latest_pdf_subscription_plans(catalog if isinstance(catalog, dict) else {})
+    catalog = _with_current_pricing_rules(catalog if isinstance(catalog, dict) else {})
     return {
         "id": str(row["id"]),
         "version": int(row["version_number"]),
@@ -1212,12 +1301,15 @@ def _valid_subscription_catalog_item(item: Any) -> bool:
     try:
         price = int(item.get("price_ntd") or 0)
         monthly_price = int(item.get("monthly_price_ntd") or 0)
+        price_cny = int(item.get("price_cny") or 0)
+        monthly_price_cny = int(item.get("monthly_price_cny") or 0)
         period_months = int(item.get("period_months") or 0)
         purchasable = item.get("purchasable") is not False
         valid_price = (
             price > 0 and monthly_price > 0 and monthly_price * period_months == price
+            and price_cny > 0 and monthly_price_cny > 0 and monthly_price_cny * period_months == price_cny
             if purchasable
-            else price == 0 and monthly_price == 0
+            else price == 0 and monthly_price == 0 and price_cny == 0 and monthly_price_cny == 0
         )
         return (
             valid_price
@@ -1279,8 +1371,11 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
             not isinstance(item, dict)
             or not str(item.get("sku") or "")
             or int(item.get("price_ntd") or 0) <= 0
+            or int(item.get("price_cny") or 0) <= 0
             or int(item.get("total_points") or 0) <= 0
             or int(item.get("paid_points") or 0) + int(item.get("bonus_points") or 0) != int(item.get("total_points") or 0)
+            or int(item.get("paid_points_twd") or 0) + int(item.get("bonus_points_twd") or 0) != int(item.get("total_points_twd") or 0)
+            or int(item.get("paid_points_cny") or 0) + int(item.get("bonus_points_cny") or 0) != int(item.get("total_points_cny") or 0)
             for item in packages
         )
     ):
@@ -2296,6 +2391,7 @@ def create_order(
     sku: str,
     quantity: int,
     idempotency_key: str,
+    currency: str = "TWD",
     renewal_subscription_ids: list[str] | None = None,
     payer_name: str = "",
     payment_reference: str = "",
@@ -2311,6 +2407,9 @@ def create_order(
     if not idem or len(idem) > 128:
         raise BillingError("INVALID_IDEMPOTENCY_KEY", "缺少有效的幂等键", 400)
     requested_sku = str(sku)
+    requested_currency = str(currency or "TWD").strip().upper()
+    if requested_currency not in {"TWD", "CNY"}:
+        raise BillingError("INVALID_CURRENCY", "仅支持台币或人民币计价", 400)
     renewals = [str(item_id).strip() for item_id in (renewal_subscription_ids or []) if str(item_id).strip()]
     requested_payer_name = str(payer_name)[:120]
     requested_payment_reference = str(payment_reference)[:160]
@@ -2322,6 +2421,7 @@ def create_order(
         existing_request = (
             str(existing["sku"]),
             int(existing["quantity"]),
+            str((_loads(existing["price_snapshot_json"], {}) or {}).get("currency") or "TWD"),
             _loads(existing["renewal_subscription_ids_json"], []),
             str(existing["payer_name"]),
             str(existing["payment_reference"]),
@@ -2332,6 +2432,7 @@ def create_order(
         requested_order = (
             requested_sku,
             qty,
+            requested_currency,
             renewals,
             requested_payer_name,
             requested_payment_reference,
@@ -2365,9 +2466,21 @@ def create_order(
         requested_family = _subscription_plan_family(requested_sku)
         if any(_subscription_plan_family(str(existing["plan_sku"] or "")) != requested_family for existing in owned_rows):
             raise BillingError("SUBSCRIPTION_PLAN_MISMATCH", "续费方案必须属于原订阅计划系列；跨系列变更请新开订阅", 409)
-    amount = int(item.get("price_ntd") or 0) * 100 * qty
+    price_field = "price_cny" if requested_currency == "CNY" else "price_ntd"
+    unit_price = int(item.get(price_field) or 0)
+    if unit_price <= 0 and not (kind == "subscription" and item.get("purchasable") is False):
+        raise BillingError("INVALID_PRICE", "所选方案价格尚未配置", 409)
+    amount = unit_price * 100 * qty
     order_id = _id("bill_order")
-    snapshot = {"kind": kind, "item": item, "catalog_version": int(catalog["version"]), "catalog_id": str(catalog["id"])}
+    item_snapshot = _localized_credit_pack_item(item, requested_currency) if kind == "credit_pack" else item
+    snapshot = {
+        "kind": kind,
+        "item": item_snapshot,
+        "currency": requested_currency,
+        "unit_price": unit_price,
+        "catalog_version": int(catalog["version"]),
+        "catalog_id": str(catalog["id"]),
+    }
     conn.execute(
         """
         INSERT INTO billing_orders(
@@ -2386,6 +2499,7 @@ def create_order(
 
 def order_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
+    snapshot = _loads(item.get("price_snapshot_json"), {})
     return {
         "id": str(item.get("id") or ""),
         "user_id": int(item.get("user_id") or 0),
@@ -2395,7 +2509,8 @@ def order_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         "renewal_subscription_ids": _loads(item.get("renewal_subscription_ids_json"), []),
         "amount_ntd_cents": int(item.get("amount_ntd_cents") or 0),
         "amount_ntd": round(int(item.get("amount_ntd_cents") or 0) / 100, 2),
-        "price_snapshot": _loads(item.get("price_snapshot_json"), {}),
+        "currency": str(snapshot.get("currency") or "TWD"),
+        "price_snapshot": snapshot,
         "payer_name": str(item.get("payer_name") or ""),
         "payment_reference": str(item.get("payment_reference") or ""),
         "paid_at": int(item.get("paid_at") or 0),

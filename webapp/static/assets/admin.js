@@ -3902,9 +3902,12 @@ function formatBillingPoints(value) {
     : "0";
 }
 
-function formatBillingNtd(cents) {
+function formatBillingMoney(cents, currency = "TWD") {
   const value = Number(cents || 0) / 100;
-  return `NT$ ${value.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const code = String(currency || "TWD").toUpperCase();
+  const symbol = code === "CNY" ? "¥" : "NT$";
+  const locale = code === "CNY" ? "zh-CN" : "zh-TW";
+  return `${symbol} ${value.toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function formatBillingCatalogNtd(value) {
@@ -4662,7 +4665,7 @@ function renderBillingOrders(payload, { append = false, requestOffset = 0 } = {}
     identity.append(orderId, user);
     row.appendChild(identity);
     row.appendChild(createBillingCell(`${billingCatalogProductName(order.sku, order)} × ${order.quantity || 1}`));
-    row.appendChild(createBillingCell(formatBillingNtd(order.amount_ntd_cents), "admin-billing-money"));
+    row.appendChild(createBillingCell(formatBillingMoney(order.amount_ntd_cents, order.currency), "admin-billing-money"));
     const application = document.createElement("td");
     const summary = document.createElement("strong");
     summary.textContent = String(order.note || "线上方案申请");

@@ -278,6 +278,7 @@ DEFAULT_PRICING: dict[str, Any] = {
 
 class BillingOrderCreatePayload(BaseModel):
     sku: str
+    currency: str = Field(default="TWD", min_length=3, max_length=3)
     quantity: int = Field(default=1, ge=1, le=50)
     renewal_subscription_ids: list[str] = Field(default_factory=list)
     payer_name: str = Field(default="", max_length=120)
@@ -29717,6 +29718,7 @@ def create_app() -> FastAPI:
                 conn,
                 user_id=_workspace_user_id(user),
                 sku=payload.sku,
+                currency=payload.currency,
                 quantity=payload.quantity,
                 idempotency_key=payload.idempotency_key,
                 renewal_subscription_ids=payload.renewal_subscription_ids,
