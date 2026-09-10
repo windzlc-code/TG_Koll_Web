@@ -477,6 +477,7 @@ describe("sentiment hot importer", () => {
       .not.toBe(buildSentimentHotSearchStrategyCacheKey({ ...base, searchMode: "normal" }));
     expect(sentimentHotKeywordModelInstructionForMode("strict")).toContain("严格垂直");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("泛垂直");
+    expect(sentimentHotKeywordModelInstructionForMode("strict")).toContain("不得截断");
   });
 
   it("ignores free-form user supplements in hot-keyword strategy cache identity", () => {
@@ -3417,7 +3418,8 @@ Title: Instagram
     expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个");
     expect(source).toContain("domainExpansion");
     expect(source).toContain("合计必须给出 20 个互不重复的可搜索词");
-    expect(source).toContain("2-4 个汉字的具体物件、服务、场所、工具、产品或作品名为主");
+    expect(source).toContain("2-8 个汉字的完整自然词语为主");
+    expect(source).toContain("禁止为了凑长度而截断词尾或自造简称");
     expect(source).toContain("禁止输出带这些后缀或整词的合成搜索词");
     expect(source).toContain("存股、融資、配息、當沖、槓桿、信用交易");
     expect(source).toContain("禁止单独输出空词");
@@ -3432,7 +3434,7 @@ Title: Instagram
     expect(source).not.toContain("expandNormalLifestyleSearchTerms");
     expect(source).not.toContain('["通勤", "停车", "洗车", "年检"]');
     expect(source).not.toContain('["约会妆", "换季", "赶时间"]');
-    expect(source).toContain("const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 50");
+    expect(source).toContain("const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 51");
   });
 
   it("indexes and reads the global hotspot pool by platform", () => {
