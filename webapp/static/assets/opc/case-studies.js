@@ -11,7 +11,7 @@
       sourceUrl: "https://www.threads.com/@gy.zzzzz",
       reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtvgxqg4_543acf",
       reportApiUrls: [
-        "/crm-api/api/threads/account-analysis/reports/tar_mtvgxqg4_543acf",
+        "/api/public/case-studies/reports/tar_mtvgxqg4_543acf",
         "http://47.243.99.2:8094/crm-api/api/threads/account-analysis/reports/tar_mtvgxqg4_543acf",
       ],
       sampledAt: "2026/5/13—2026/7/26",
