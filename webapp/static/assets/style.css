@@ -6889,8 +6889,7 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 .page-admin #secPricing .admin-billing-status.is-active,
 .page-admin #secPricing .admin-billing-status.is-approved,
 .page-admin #secPricing .admin-billing-status.is-enforced,
-.page-admin #secPricing .admin-billing-status.is-redeemed,
-.page-admin #secRedemptionCodes .admin-billing-status.is-active {
+.page-admin #secPricing .admin-billing-status.is-redeemed {
   color: #176b4d;
   background: #e8f7ef;
   border-color: #b8e1ca;
@@ -6920,6 +6919,12 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   color: #1d4ed8;
   background: #eff6ff;
   border-color: #bfdbfe;
+}
+
+.page-admin #secRedemptionCodes .admin-billing-status.is-active {
+  color: #8a5a08;
+  background: #fff6dc;
+  border-color: #efd493;
 }
 
 .page-admin #secPricing .admin-billing-status.is-retired,
@@ -7238,28 +7243,81 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 }
 
 .page-admin #secRedemptionCodes .admin-redemption-table {
-  min-width: 1320px;
-  table-layout: auto;
+  min-width: 1120px;
+  table-layout: fixed;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-table th,
+.page-admin #secRedemptionCodes .admin-redemption-table td {
+  padding: 5px 7px;
+  vertical-align: middle;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-table th:nth-child(1),
+.page-admin #secRedemptionCodes .admin-redemption-table td:nth-child(1) {
+  width: 30px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-table th:nth-child(2),
+.page-admin #secRedemptionCodes .admin-redemption-table td:nth-child(2) {
+  width: 180px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-table th:nth-child(3),
+.page-admin #secRedemptionCodes .admin-redemption-table td:nth-child(3) {
+  width: 290px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-table th:nth-child(4),
+.page-admin #secRedemptionCodes .admin-redemption-table td:nth-child(4) {
+  width: 90px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-table th:nth-child(5),
+.page-admin #secRedemptionCodes .admin-redemption-table td:nth-child(5) {
+  width: 90px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-table th:nth-child(6),
+.page-admin #secRedemptionCodes .admin-redemption-table td:nth-child(6),
+.page-admin #secRedemptionCodes .admin-redemption-table th:nth-child(7),
+.page-admin #secRedemptionCodes .admin-redemption-table td:nth-child(7) {
+  width: 150px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-table th:nth-child(8),
+.page-admin #secRedemptionCodes .admin-redemption-table td:nth-child(8) {
+  width: 118px;
 }
 
 .page-admin #secRedemptionCodes .admin-redemption-detail {
   display: block;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-table .admin-billing-actions {
+  min-width: 0;
+  flex-wrap: nowrap;
+  gap: 4px;
 }
 
 .page-admin #secRedemptionCodes .admin-redemption-icon-button {
   display: inline-grid;
-  width: 34px;
-  min-width: 34px;
-  min-height: 34px;
-  padding: 7px;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 5px;
   place-items: center;
 }
 
 .page-admin #secRedemptionCodes .admin-redemption-icon-button svg {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
@@ -7296,9 +7354,9 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 .page-admin #secRedemptionCodes .admin-redemption-bulk-toolbar {
   flex-wrap: wrap;
   justify-content: flex-end;
-  min-height: 36px;
-  margin: 0 0 8px;
-  padding: 6px 8px;
+  min-height: 28px;
+  margin: 0 0 6px;
+  padding: 3px 6px;
   border: 1px solid var(--admin-line);
   border-radius: 7px;
   background: #f8fbfd;
@@ -7310,13 +7368,23 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   font-size: 12px;
 }
 
+.page-admin #secRedemptionCodes .admin-redemption-bulk-toolbar .admin-compact-button {
+  min-height: 26px;
+  padding: 2px 7px;
+  line-height: 18px;
+}
+
 .page-admin #secRedemptionCodes .admin-redemption-select-cell {
-  width: 38px;
+  width: 30px;
+  padding-right: 3px;
+  padding-left: 3px;
   text-align: center;
 }
 
 .page-admin #secRedemptionCodes .admin-redemption-row-select {
   display: block;
+  width: 14px;
+  height: 14px;
   margin: 0 auto;
 }
 

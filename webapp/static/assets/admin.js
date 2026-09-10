@@ -5213,7 +5213,7 @@ const REDEMPTION_CODE_ICONS = {
 };
 
 const REDEMPTION_STATUS_LABELS = {
-  active: "可兑换",
+  active: "未兑换",
   redeemed: "已兑换",
   revoked: "已作废",
 };
@@ -5229,6 +5229,35 @@ function redemptionCodeText(tag, text, className = "") {
   if (className) node.className = className;
   node.textContent = String(text ?? "");
   return node;
+}
+
+function formatRedemptionCodeNote(item) {
+  const rawNote = String(item?.note || "").trim();
+  if (!rawNote) return "—";
+  const amountMatch = rawNote.match(/(\d+(?:\.\d+)?)\s*元/);
+  const pointsMatch = rawNote.match(/(?:兑换|对应|获得|→|->)\s*([\d,]+(?:\.\d+)?)\s*点/);
+  if (!amountMatch || !pointsMatch) {
+    return rawNote
+      .replace(/仅兑换算力点[，,]?不开通或续订订阅。?/g, "")
+      .replace(/仅兑换算力点。?/g, "")
+      .trim() || "—";
+  }
+  const plan = rawNote.match(/(基础版|进阶版|高级版|豪华版)/)?.[1] || "";
+  const isSubscription = /连续包月|订阅规则/.test(rawNote);
+  const label = isSubscription ? (plan ? `${plan}连续包月` : "连续包月") : "充值";
+  const amount = formatBillingPoints(Number(amountMatch[1]));
+  const points = formatBillingPoints(Number(pointsMatch[1].replace(/,/g, "")));
+  const foldMatch = rawNote.match(/(\d+(?:\.\d+)?)\s*折/);
+  const discountMatch = rawNote.match(/优惠\s*(\d+(?:\.\d+)?)\s*%/);
+  let foldValue = foldMatch ? Number(foldMatch[1]) : null;
+  if (!Number.isFinite(foldValue) && discountMatch) {
+    const discountPercent = Number(discountMatch[1]);
+    if (Number.isFinite(discountPercent)) foldValue = (100 - discountPercent) / 10;
+  }
+  const foldText = Number.isFinite(foldValue) && foldValue !== 10
+    ? ` · ${Number.isInteger(foldValue) ? foldValue : foldValue.toFixed(1)}折`
+    : "";
+  return `${label}：${amount} 元 → ${points} 点${foldText}`;
 }
 
 function redemptionCodeIconButton(action, id, label) {
@@ -5322,7 +5351,7 @@ function renderRedemptionCodes(items = [], total = adminState.redemptionCodeTota
       syncRedemptionCodeSelection();
     });
     const code = redemptionCodeText("strong", item.code_masked || "-", "admin-billing-strong");
-    const note = redemptionCodeText("span", item.note || "无备注", "admin-redemption-detail");
+    const note = redemptionCodeText("span", formatRedemptionCodeNote(item), "admin-redemption-detail");
     const status = String(item.status || "active");
     const statusBadge = redemptionCodeText("span", REDEMPTION_STATUS_LABELS[status] || status, `admin-billing-status is-${status}`);
     const creator = redemptionCodeText("strong", item.created_by_username || `ID ${item.created_by || "-"}`);
@@ -5370,7 +5399,7 @@ async function loadRedemptionCodes() {
 async function checkRedemptionCodes() {
   const health = await api("/api/admin/billing/redemption-codes/health");
   const counts = health.counts || {};
-  const summary = `可兑换 ${Number(counts.active || 0)} · 已兑换 ${Number(counts.redeemed || 0)} · 已作废 ${Number(counts.revoked || 0)}`;
+  const summary = `未兑换 ${Number(counts.active || 0)} · 已兑换 ${Number(counts.redeemed || 0)} · 已作废 ${Number(counts.revoked || 0)}`;
   const node = el("redemptionCodeHealth");
   if (node) {
     node.textContent = health.ok ? `${summary} · 检测正常` : `${summary} · 发现 ${Number(health.inconsistent || 0)} 条异常`;

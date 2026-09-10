@@ -1801,7 +1801,7 @@
               </div>
               <div class="admin-billing-toolbar">
                 <select id="redemptionCodeStatus" aria-label="兑换码状态">
-                  <option value="">全部状态</option><option value="active">可兑换</option><option value="redeemed">已兑换</option><option value="revoked">已作废</option>
+                  <option value="">全部状态</option><option value="active">未兑换</option><option value="redeemed">已兑换</option><option value="revoked">已作废</option>
                 </select>
                 <label class="admin-redemption-page-size"><span>每页</span><select id="redemptionCodePageSize" aria-label="每页显示数量"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option><option value="100">100</option></select><span>条</span></label>
                 <label class="admin-redemption-code-check"><span class="sr-only">输入兑换码检测可用状态</span><input id="redemptionCodeCheckInput" type="text" maxlength="128" autocomplete="off" spellcheck="false" placeholder="输入完整兑换码检测可用状态"></label>
@@ -1816,19 +1816,19 @@
                 <div class="admin-redemption-preset-group">
                   <span class="admin-redemption-preset-label">连续包月规则</span>
                   <div class="admin-redemption-preset-grid">
-                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="31" data-note="订阅规则兑换 · 基础版连续包月：金额 60 元，兑换 31 点，9.5折。仅兑换算力点，不开通或续订订阅。"><span>基础版</span><strong>31 点</strong><small>60 元 · 9.5折</small></button>
-                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="108" data-note="订阅规则兑换 · 进阶版连续包月：金额 200 元，兑换 108 点，9.2折。仅兑换算力点，不开通或续订订阅。"><span>进阶版</span><strong>108 点</strong><small>200 元 · 9.2折</small></button>
-                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="357" data-note="订阅规则兑换 · 高级版连续包月：金额 650 元，兑换 357 点，9折。仅兑换算力点，不开通或续订订阅。"><span>高级版</span><strong>357 点</strong><small>650 元 · 9折</small></button>
-                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="672" data-note="订阅规则兑换 · 豪华版连续包月：金额 1200 元，兑换 672 点，8.8折。仅兑换算力点，不开通或续订订阅。"><span>豪华版</span><strong>672 点</strong><small>1200 元 · 8.8折</small></button>
+                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="31" data-note="基础版连续包月：60 元 → 31 点 · 9.5折"><span>基础版</span><strong>31 点</strong><small>60 元 · 9.5折</small></button>
+                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="108" data-note="进阶版连续包月：200 元 → 108 点 · 9.2折"><span>进阶版</span><strong>108 点</strong><small>200 元 · 9.2折</small></button>
+                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="357" data-note="高级版连续包月：650 元 → 357 点 · 9折"><span>高级版</span><strong>357 点</strong><small>650 元 · 9折</small></button>
+                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="672" data-note="豪华版连续包月：1200 元 → 672 点 · 8.8折"><span>豪华版</span><strong>672 点</strong><small>1200 元 · 8.8折</small></button>
                   </div>
                 </div>
                 <div class="admin-redemption-preset-group">
                   <span class="admin-redemption-preset-label">充值规则</span>
                   <div class="admin-redemption-preset-grid">
-                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="50" data-note="充值规则兑换 · 100 元充值：兑换 50 点，10折。仅兑换算力点。"><span>100 元充值</span><strong>50 点</strong><small>100 元 · 10折</small></button>
-                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="151" data-note="充值规则兑换 · 300 元充值：兑换 151 点，9.9折。仅兑换算力点。"><span>300 元充值</span><strong>151 点</strong><small>300 元 · 9.9折</small></button>
-                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="255" data-note="充值规则兑换 · 500 元充值：兑换 255 点，9.8折。仅兑换算力点。"><span>500 元充值</span><strong>255 点</strong><small>500 元 · 9.8折</small></button>
-                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="515" data-note="充值规则兑换 · 1000 元充值：兑换 515 点，9.7折。仅兑换算力点。"><span>1000 元充值</span><strong>515 点</strong><small>1000 元 · 9.7折</small></button>
+                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="50" data-note="充值：100 元 → 50 点"><span>100 元充值</span><strong>50 点</strong><small>100 元</small></button>
+                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="151" data-note="充值：300 元 → 151 点 · 9.9折"><span>300 元充值</span><strong>151 点</strong><small>300 元 · 9.9折</small></button>
+                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="255" data-note="充值：500 元 → 255 点 · 9.8折"><span>500 元充值</span><strong>255 点</strong><small>500 元 · 9.8折</small></button>
+                    <button type="button" class="admin-redemption-preset" data-redemption-preset data-points="515" data-note="充值：1000 元 → 515 点 · 9.7折"><span>1000 元充值</span><strong>515 点</strong><small>1000 元 · 9.7折</small></button>
                   </div>
                 </div>
               </div>

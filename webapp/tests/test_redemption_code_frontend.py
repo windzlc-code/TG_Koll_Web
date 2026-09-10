@@ -64,6 +64,10 @@ def test_admin_redemption_statuses_keep_the_shared_billing_badge_palette():
     assert ".page-admin #secRedemptionCodes .admin-billing-status.is-active" in STYLE_CSS
     assert ".page-admin #secRedemptionCodes .admin-billing-status.is-redeemed" in STYLE_CSS
     assert ".page-admin #secRedemptionCodes .admin-billing-status.is-revoked" in STYLE_CSS
+    assert 'active: "未兑换"' in ADMIN_JS
+    assert 'option value="active">未兑换</option>' in ADMIN_HTML
+    assert ".page-admin #secRedemptionCodes .admin-billing-status.is-active {\n  color: #8a5a08;" in STYLE_CSS
+    assert "background: #fff6dc;" in STYLE_CSS
     assert "color: #1d4ed8" in STYLE_CSS
     assert "background: #eff6ff" in STYLE_CSS
 
@@ -91,6 +95,11 @@ def test_admin_redemption_list_has_compact_presets_pagination_and_record_actions
     assert ".admin-redemption-pagination" in STYLE_CSS
     assert 'data-redemption-select-id' in ADMIN_JS
     assert 'id="redemptionCodeSelectAll"' in ADMIN_HTML
+    assert "min-width: 1120px" in STYLE_CSS
+    assert ".admin-redemption-table th" in STYLE_CSS
+    assert "padding: 5px 7px" in STYLE_CSS
+    assert ".admin-redemption-bulk-toolbar .admin-compact-button" in STYLE_CSS
+    assert "width: 28px" in STYLE_CSS
 
 
 def test_admin_redemption_presets_match_the_current_ntd_rules_and_use_fold_labels():
@@ -99,7 +108,7 @@ def test_admin_redemption_presets_match_the_current_ntd_rules_and_use_fold_label
         ("108", "200 元 · 9.2折"),
         ("357", "650 元 · 9折"),
         ("672", "1200 元 · 8.8折"),
-        ("50", "100 元 · 10折"),
+        ("50", "100 元"),
         ("151", "300 元 · 9.9折"),
         ("255", "500 元 · 9.8折"),
         ("515", "1000 元 · 9.7折"),
@@ -109,6 +118,12 @@ def test_admin_redemption_presets_match_the_current_ntd_rules_and_use_fold_label
         assert f'<small>{label}</small>' in ADMIN_HTML
     assert "2 台币 = 1 积分" in ADMIN_HTML
     assert "优惠 5%" not in ADMIN_HTML
+    assert 'data-note="充值：100 元 → 50 点"' in ADMIN_HTML
+    assert 'data-note="充值：100 元 → 50 点 · 10折"' not in ADMIN_HTML
+    assert "function formatRedemptionCodeNote(item)" in ADMIN_JS
+    assert "const isSubscription = /连续包月|订阅规则/.test(rawNote);" in ADMIN_JS
+    assert "foldValue !== 10" in ADMIN_JS
+    assert "foldValue.toFixed(1)}折" in ADMIN_JS
 
 
 def test_public_pricing_uses_decimal_fold_not_percentage_points():
