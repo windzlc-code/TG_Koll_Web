@@ -99,6 +99,7 @@ boundary=(
   webapp/remote_fetch_protocol.py
   webapp/collector_accounts.py
   webapp/collector_db.py
+  webapp/collector_proxy_admin.py
   webapp/collector_vault.py
   tool_r18/src
   tool_r18/scripts/skills/persona-hot-workflow.ts
@@ -286,7 +287,10 @@ if sys.argv[1] == "release":
     expected = [
         "crm.threads_live_search.v1",
         "persona.hot_candidates.v1",
+        "persona.hot_keywords.v1",
         "persona.hot_post_metrics.v1",
+        "persona.hot_recycle.v1",
+        "persona.profile_metrics.v1",
     ]
     if payload.get("capabilities") != expected:
         raise SystemExit("unexpected worker capability boundary")
