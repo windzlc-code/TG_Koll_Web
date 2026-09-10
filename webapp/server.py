@@ -25453,26 +25453,6 @@ def create_app() -> FastAPI:
             "hot_capture_execution": "collector" if boundary.collector else "remote_collector",
         }
 
-    @app.get("/api/public/case-studies/reports/{report_id}", include_in_schema=False)
-    def api_public_case_study_report(report_id: str) -> JSONResponse:
-        clean_report_id = str(report_id or "").strip()
-        if clean_report_id not in {"tar_mtvgxqg4_543acf"}:
-            raise HTTPException(status_code=404, detail="案例报告不存在")
-        collector_origin = str(os.getenv("TG_CASE_STUDIES_REPORT_ORIGIN", "http://47.243.99.2:8094") or "").strip().rstrip("/")
-        try:
-            upstream = requests.get(
-                f"{collector_origin}/crm-api/api/threads/account-analysis/reports/{clean_report_id}",
-                headers={"Accept": "application/json"},
-                timeout=(3, 12),
-            )
-            upstream.raise_for_status()
-            payload = upstream.json()
-        except (ValueError, requests.RequestException) as exc:
-            raise HTTPException(status_code=502, detail="案例报告暂不可用") from exc
-        if not isinstance(payload, dict) or not isinstance(payload.get("result"), dict):
-            raise HTTPException(status_code=502, detail="案例报告格式无效")
-        return JSONResponse(content=payload, headers={"Cache-Control": "no-store"})
-
     @app.get("/tool_r18_uploads/{file_path:path}", include_in_schema=False)
     def tool_r18_upload(file_path: str, _user: dict[str, Any] = Depends(require_admin)) -> FileResponse:
         root = TOOL_R18_UPLOAD_ROOT.resolve()

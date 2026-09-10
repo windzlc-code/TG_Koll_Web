@@ -10,10 +10,7 @@
       username: "gy.zzzzz",
       sourceUrl: "https://www.threads.com/@gy.zzzzz",
       reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtvgxqg4_543acf",
-      reportApiUrls: [
-        "/api/public/case-studies/reports/tar_mtvgxqg4_543acf",
-        "http://47.243.99.2:8094/crm-api/api/threads/account-analysis/reports/tar_mtvgxqg4_543acf",
-      ],
+      reportApiUrls: ["/assets/opc/case-studies/tar_mtvgxqg4_543acf.json"],
       sampledAt: "2026/5/13—2026/7/26",
       followers: 767,
       recentViews: 47742,
@@ -140,6 +137,9 @@
       samplePost: (index, hasImage) => `第 ${String(index + 1).padStart(2, "0")} 篇${hasImage ? " · 含媒体" : " · 文字帖"}`,
       mediaLoading: "正在同步本次抓取到的公开帖子…",
       mediaEmpty: "本次报告未返回公开帖子。",
+      previousPage: "上一页",
+      nextPage: "下一页",
+      pageStatus: (current, total) => `第 ${current} / ${total} 页`,
       bestKicker: "BEST SAMPLE",
       bestTitle: "代表帖文信号",
       views: "浏览",
@@ -224,6 +224,9 @@
       samplePost: (index, hasImage) => `第 ${String(index + 1).padStart(2, "0")} 篇${hasImage ? " · 含媒體" : " · 文字貼文"}`,
       mediaLoading: "正在同步本次擷取到的公開貼文…",
       mediaEmpty: "本次報告未回傳公開貼文。",
+      previousPage: "上一頁",
+      nextPage: "下一頁",
+      pageStatus: (current, total) => `第 ${current} / ${total} 頁`,
       bestKicker: "BEST SAMPLE",
       bestTitle: "代表貼文訊號",
       views: "瀏覽",
@@ -244,6 +247,8 @@
   };
 
   let selectedCaseId = sourceCases[0]?.id || "";
+  const mediaPostsPerPage = 5;
+  const mediaPostPages = new Map();
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
   const format = (value) => new Intl.NumberFormat("zh-TW", { maximumFractionDigits: 1 }).format(Number(value || 0));
   const language = () => window.VectoSiteNavigation?.currentLanguage?.() === "zh-Hant" ? "zh-Hant" : "zh-Hans";
@@ -355,9 +360,7 @@
         sourceCases[index] = normalizeReport(caseItem, await response.json());
         if (selectedCaseId === caseItem.id) render();
         return;
-      } catch (_) {
-        // Try the next route. The deployed console uses the same-origin CRM proxy; local review falls back to the public report endpoint.
-      }
+      } catch (_) { /* Try the next persisted case-report snapshot. */ }
     }
     sourceCases[index] = { ...caseItem, reportLoading: false };
     if (selectedCaseId === caseItem.id) render();
@@ -382,6 +385,10 @@
     const mostUsedStyle = [...item.styleMix].sort((left, right) => right.posts - left.posts)[0];
     const weakestStyle = [...item.styleMix].sort((left, right) => left.average - right.average)[0];
     const currentIndex = Math.max(0, sourceCases.findIndex((entry) => entry.id === item.id));
+    const totalMediaPages = Math.max(1, Math.ceil(item.mediaPosts.length / mediaPostsPerPage));
+    const currentMediaPage = Math.min(totalMediaPages, Math.max(1, Number(mediaPostPages.get(item.id) || 1)));
+    const mediaPageOffset = (currentMediaPage - 1) * mediaPostsPerPage;
+    const visibleMediaPosts = item.mediaPosts.slice(mediaPageOffset, mediaPageOffset + mediaPostsPerPage);
     root.innerHTML = `
       <div class="case-studies-page">
         <section class="case-studies-hero" aria-labelledby="case-studies-title">
@@ -482,11 +489,13 @@
             <p class="case-panel-intro">${item.reportLoading ? t.mediaLoading : t.mediaIntro(item.mediaPosts.length)}</p>
             <div class="case-media-table" role="table" aria-label="${t.mediaTitle}">
               <div class="case-media-table-head" role="row"><span></span><span>${t.mediaContent}</span><span>${t.mediaMetrics}</span><span>${t.mediaSource}</span></div>
-              ${item.mediaPosts.map((post, index) => {
+              ${visibleMediaPosts.map((post, index) => {
                 const hasImage = Boolean(post.image);
-                return `<article class="case-media-row" role="row"><div class="case-media-preview">${hasImage ? `<img src="${esc(post.image)}" alt="${esc(t.samplePost(index, true))}" loading="lazy" onerror="this.closest('.case-media-row').classList.add('case-media-unavailable'); this.remove();">` : `<span class="case-media-text-plate">TEXT</span>`}</div><div class="case-media-copy"><strong>${esc(t.samplePost(index, hasImage))}</strong><small>${esc(post.caption)}</small><em>${esc(post.date)}</em></div><div class="case-media-metrics"><span>${t.views} <b>${format(post.views)}</b></span><span>${t.interactions} <b>${format(post.interactions)}</b></span></div><a class="case-media-link" href="${esc(post.url)}" target="_blank" rel="noreferrer">${t.openPost} ↗</a></article>`;
+                const postIndex = mediaPageOffset + index;
+                return `<article class="case-media-row" role="row"><div class="case-media-preview">${hasImage ? `<img src="${esc(post.image)}" alt="${esc(t.samplePost(postIndex, true))}" loading="lazy" onerror="this.closest('.case-media-row').classList.add('case-media-unavailable'); this.remove();">` : `<span class="case-media-text-plate">TEXT</span>`}</div><div class="case-media-copy"><strong>${esc(t.samplePost(postIndex, hasImage))}</strong><small>${esc(post.caption)}</small><em>${esc(post.date)}</em></div><div class="case-media-metrics"><span>${t.views} <b>${format(post.views)}</b></span><span>${t.interactions} <b>${format(post.interactions)}</b></span></div><a class="case-media-link" href="${esc(post.url)}" target="_blank" rel="noreferrer">${t.openPost} ↗</a></article>`;
               }).join("") || `<div class="case-media-empty">${item.reportLoading ? t.mediaLoading : t.mediaEmpty}</div>`}
             </div>
+            ${item.mediaPosts.length > mediaPostsPerPage ? `<nav class="case-media-pagination" aria-label="${t.mediaTitle}"><button type="button" data-case-media-page="${currentMediaPage - 1}" ${currentMediaPage === 1 ? "disabled" : ""}>${t.previousPage}</button><span>${t.pageStatus(currentMediaPage, totalMediaPages)}</span><button type="button" data-case-media-page="${currentMediaPage + 1}" ${currentMediaPage === totalMediaPages ? "disabled" : ""}>${t.nextPage}</button></nav>` : ""}
           </section>
           <section class="case-panel case-style-panel">
             <p class="case-section-kicker">${t.bestKicker}</p>
@@ -511,6 +520,13 @@
   }
 
   window.addEventListener("vecto:language-change", render);
+  root.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-case-media-page]");
+    if (!button || button.disabled) return;
+    mediaPostPages.set(selectedCaseId, Math.max(1, Number(button.dataset.caseMediaPage || 1)));
+    render();
+    document.querySelector(".case-media-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   render();
   loadCaseReports();
 })();

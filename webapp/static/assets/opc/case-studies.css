@@ -201,6 +201,11 @@
 .case-media-link:focus-visible { border-color: #2c8799; color: #075c70; background: #effbfd; }
 .case-media-row.case-media-unavailable .case-media-preview::after { position: absolute; inset: 0; display: grid; place-items: center; padding: 8px; color: #68808f; background: #eef4f6; content: "公開圖片暫時無法載入"; font-size: 11px; font-weight: 750; text-align: center; }
 .case-media-empty { padding: 20px 12px; color: #66808f; background: #ffffff; font-size: 12px; text-align: center; }
+.case-media-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 12px; color: #587180; font-size: 12px; font-weight: 800; }
+.case-media-pagination button { min-width: 76px; min-height: 32px; padding: 0 12px; border: 1px solid #abc4d0; border-radius: 4px; color: #126b81; background: #ffffff; font: inherit; cursor: pointer; }
+.case-media-pagination button:hover:not(:disabled),
+.case-media-pagination button:focus-visible:not(:disabled) { border-color: #2c8799; color: #075c70; background: #effbfd; }
+.case-media-pagination button:disabled { color: #9badb6; border-color: #d3e0e5; background: #f5f8f9; cursor: not-allowed; }
 
 .case-top-post { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 15px; margin-top: 17px; padding: 15px; border: 1px solid #bcd2dd; background: #f5f9fb; }
 .case-top-post-index { display: grid; min-height: 80px; place-items: center; color: #ffffff; background: var(--case-blue); font: 850 34px/1 "Bahnschrift", "DIN Alternate", sans-serif; }
@@ -260,6 +265,7 @@
   .case-media-preview img { height: 80px; }
   .case-media-metrics { display: flex; gap: 9px; justify-items: unset; justify-content: flex-start; }
   .case-media-link { justify-self: start; min-height: 29px; padding: 0 9px; }
+  .case-media-pagination { justify-content: center; margin-top: 10px; }
   .case-history-list article { grid-template-columns: 28px minmax(0, 1fr) auto; gap: 7px 10px; }
   .case-history-list small { grid-column: 2; }
   .case-history-list b { grid-column: 3; grid-row: 1 / span 2; text-align: right; }
