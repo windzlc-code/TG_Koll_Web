@@ -4982,10 +4982,9 @@ export function parseThreadsGraphqlSearchPayload(args: {
           value?.play_count,
           value?.playCount,
         ].find((item) => item !== null && item !== undefined && item !== "");
-        const parsedViewCount = rawViewCount === undefined ? undefined : Number(rawViewCount);
-        const viewCount = typeof parsedViewCount === "number" && Number.isFinite(parsedViewCount) && parsedViewCount > 0
-          ? Math.round(parsedViewCount)
-          : undefined;
+        const viewCount = rawViewCount === undefined
+          ? undefined
+          : Math.max(0, Number(rawViewCount) || 0);
         const sourceUrl = `https://www.threads.com/@${encodeURIComponent(username)}/post/${encodeURIComponent(code)}`;
         const id = buildSentimentCandidateId({ platform: "threads", sourceUrl, content });
         if (!byId.has(id)) {
@@ -7862,12 +7861,11 @@ async function extractThreadsVisibleProfilePosts(args: {
 }
 
 export function parseThreadsPostViewCountFromText(text: string): number | undefined {
-  const parsed = parseMetricNumberLoose(
+  return parseMetricNumberLoose(
     String(text || "").match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*(?:次瀏覽|次浏览|瀏覽|浏览|views?)/i)?.[1]
       || String(text || "").match(/Thread\s+(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s+views/i)?.[1]
       || String(text || "").match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*views/i)?.[1],
   );
-  return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
 }
 
 export function parseInstagramPostEngagementFromHtml(html: string): NonNullable<SentimentHotCandidate["engagement"]> {
@@ -7890,19 +7888,11 @@ export function parseInstagramPostEngagementFromHtml(html: string): NonNullable<
 }
 
 export function parseThreadsPostViewCountFromHtml(html: string): number | undefined {
-  let source = String(html || "").replace(/&quot;|&#34;/gi, '"');
-  // Threads sometimes nests hydration JSON inside a quoted JSON string.
-  // Unwrap only escaped quotes so the exact-key parser handles both forms.
-  for (let pass = 0; pass < 2; pass += 1) source = source.replace(/\\"/g, '"');
-  const matches = [
-    source.match(/"view_counts"\s*:\s*(\d+(?:\.\d+)?)/i)?.[1],
-    source.match(/"text_post_app_info"\s*:\s*\{[\s\S]{0,1600}?"view_count"\s*:\s*(\d+(?:\.\d+)?)/i)?.[1],
-    source.match(/"text_post_app_info"\s*:\s*\{[\s\S]{0,1600}?"viewCount"\s*:\s*(\d+(?:\.\d+)?)/i)?.[1],
-  ];
-  for (const match of matches) {
-    const parsed = parseMetricNumberLoose(match);
-    if (typeof parsed === "number" && parsed > 0) return parsed;
-  }
+  const source = String(html || "");
+  const loggedOut = source.match(/"view_counts"\s*:\s*(\d+(?:\.\d+)?)/i);
+  if (loggedOut?.[1]) return parseMetricNumberLoose(loggedOut[1]);
+  const graphql = source.match(/"text_post_app_info"\s*:\s*\{[\s\S]{0,1200}?"view_count"\s*:\s*(\d+)/i);
+  if (graphql?.[1]) return parseMetricNumberLoose(graphql[1]);
   return undefined;
 }
 
@@ -9602,13 +9592,10 @@ function realSentimentHotScore(engagement: NonNullable<SentimentHotCandidate["en
   } as SentimentHotCandidate);
 }
 
-export function viewCountOfCandidate(candidate: Pick<SentimentHotCandidate, "engagement" | "metrics" | "view_count" | "viewCount" | "views">): number {
+export function viewCountOfCandidate(candidate: Pick<SentimentHotCandidate, "engagement" | "metrics">): number {
   const metrics = candidate.metrics && typeof candidate.metrics === "object" ? candidate.metrics as Record<string, unknown> : {};
   const raw = [
     candidate.engagement?.viewCount,
-    candidate.view_count,
-    candidate.viewCount,
-    candidate.views,
     metrics.view_count,
     metrics.viewCount,
     metrics.views,
@@ -9648,32 +9635,16 @@ export function combinedReachScore(candidate: Pick<SentimentHotCandidate, "engag
 export function stampCombinedReachScore(candidate: SentimentHotCandidate): SentimentHotCandidate {
   const viewCount = viewCountOfCandidate(candidate);
   const combined = combinedReachScore(candidate);
-  const engagement = { ...(candidate.engagement || {}) };
-  const metrics = { ...(candidate.metrics || {}) } as Record<string, unknown>;
-  if (viewCount > 0) {
-    engagement.viewCount = viewCount;
-    metrics.view_count = viewCount;
-  } else {
-    delete engagement.viewCount;
-    for (const key of ["view_count", "viewCount", "views"] as const) delete metrics[key];
-  }
-  const stamped: SentimentHotCandidate = {
+  return {
     ...candidate,
     hotScore: Math.max(Number(candidate.hotScore || 0), combined),
-    ...(viewCount > 0 ? { view_count: viewCount, viewCount } : {}),
-    engagement,
     metrics: {
-      ...metrics,
+      ...(candidate.metrics || {}),
+      ...(viewCount > 0 ? { view_count: viewCount } : {}),
       interaction_heat: interactionHeatScore(candidate),
       combined_reach: combined,
     },
   };
-  if (viewCount <= 0) {
-    delete stamped.view_count;
-    delete stamped.viewCount;
-    delete stamped.views;
-  }
-  return stamped;
 }
 
 function extractInstagramEngagementMetricsFromText(value: string): NonNullable<SentimentHotCandidate["engagement"]> {
@@ -9700,11 +9671,7 @@ function mergeEngagementMetrics(
   const merged: NonNullable<SentimentHotCandidate["engagement"]> = { ...base };
   if (typeof merged.likeCount !== "number" && typeof extra.likeCount === "number") merged.likeCount = extra.likeCount;
   if (typeof merged.commentCount !== "number" && typeof extra.commentCount === "number") merged.commentCount = extra.commentCount;
-  if (
-    !(typeof merged.viewCount === "number" && merged.viewCount > 0)
-    && typeof extra.viewCount === "number"
-    && extra.viewCount > 0
-  ) merged.viewCount = extra.viewCount;
+  if (typeof merged.viewCount !== "number" && typeof extra.viewCount === "number") merged.viewCount = extra.viewCount;
   if (typeof merged.shareCount !== "number" && typeof extra.shareCount === "number") merged.shareCount = extra.shareCount;
   const rawSignals = [...(base.rawSignals || []), ...(extra.rawSignals || [])]
     .filter((item): item is number => typeof item === "number" && Number.isFinite(item) && item > 0);
@@ -9754,8 +9721,9 @@ function hasNamedEngagementMetrics(engagement?: SentimentHotCandidate["engagemen
 export function parseThreadsDetailEngagementMarkdown(text: string): NonNullable<SentimentHotCandidate["engagement"]> {
   const value = String(text || "");
   const engagement = extractEngagementMetricsFromText(value);
-  const viewCount = parseThreadsPostViewCountFromText(value);
-  if (typeof viewCount === "number" && viewCount > 0) engagement.viewCount = viewCount;
+  const viewMatch = value.match(/Thread\s+(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s+views/i);
+  const viewCount = parseMetricNumberLoose(viewMatch?.[1]);
+  if (typeof viewCount === "number") engagement.viewCount = viewCount;
   const rawSignals = Array.from(value.matchAll(/(?:^|\n)\s*(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*(?=\n|$)/g))
     .map((match) => parseMetricNumberLoose(match[1]))
     .filter((item): item is number => typeof item === "number" && item > 0)
@@ -10016,7 +9984,11 @@ export function parseThreadsBrowserPostDetailMetrics(args: {
 }): Pick<ThreadsBrowserProfilePublishedPostSnapshot, "hotScore" | "engagement" | "metrics"> | null {
   const sequence = findThreadsActionMetricSequence(args.actionTexts || []);
   const text = String(args.text || "");
-  const viewCount = parseThreadsPostViewCountFromText(text);
+  const viewCount = parseMetricNumberLoose(
+    text.match(/Thread\s+(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s+views/i)?.[1]
+    || text.match(/串文\s*(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*次瀏覽/i)?.[1]
+    || text.match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*次瀏覽/i)?.[1],
+  );
   if (!sequence && typeof viewCount !== "number") return null;
   if (!sequence) {
     return {
@@ -10565,7 +10537,10 @@ export async function enrichThreadsCandidateDetails(
       && (
         options.force === true
         || (
-          viewCountOfCandidate(candidate) <= 0
+          typeof candidate.engagement?.viewCount !== "number"
+          && typeof (candidate.metrics as any)?.view_count !== "number"
+          && typeof (candidate.metrics as any)?.viewCount !== "number"
+          && typeof (candidate.metrics as any)?.views !== "number"
         )
       )
     ))
@@ -10625,7 +10600,7 @@ function compactEngagementMetrics(engagement: NonNullable<SentimentHotCandidate[
   const out: Record<string, number | number[]> = {};
   if (typeof engagement.likeCount === "number") out.like_count = engagement.likeCount;
   if (typeof engagement.commentCount === "number") out.comment_count = engagement.commentCount;
-  if (typeof engagement.viewCount === "number" && engagement.viewCount > 0) out.view_count = engagement.viewCount;
+  if (typeof engagement.viewCount === "number") out.view_count = engagement.viewCount;
   if (typeof engagement.shareCount === "number") out.share_count = engagement.shareCount;
   if (engagement.rawSignals?.length) out.raw_engagement_signals = engagement.rawSignals;
   return out;

@@ -3361,37 +3361,8 @@ Title: Instagram
     });
 
     expect(stamped.hotScore).toBe(210);
-    expect(stamped.engagement).not.toHaveProperty("viewCount");
     expect(stamped.metrics).not.toHaveProperty("view_count");
     expect(stamped.metrics).toMatchObject({ interaction_heat: 210, combined_reach: 210 });
-    expect(finalizeSentimentHotCandidatesForDisplay([stamped], 1, {
-      keywords: ["热点"],
-      searchMode: "normal",
-    })).toHaveLength(1);
-  });
-
-  it("normalizes a positive top-level view count into returned candidate metrics", () => {
-    const stamped = stampCombinedReachScore({
-      id: "top-level-view",
-      platform: "threads",
-      sourceUrl: "https://www.threads.net/@demo/post/top-level-view",
-      author: "demo",
-      content: "热点内容完整展示并包含足够长度的中文说明，确保浏览量能够正确返回。",
-      media: [],
-      hotScore: 0,
-      view_count: 3210,
-      metrics: { source: "threads-reader-search", view_count: 0 },
-      engagement: { likeCount: 80, commentCount: 10 },
-      capturedAt: new Date().toISOString(),
-    } as any);
-
-    expect(viewCountOfCandidate(stamped as any)).toBe(3210);
-    expect(stamped.engagement?.viewCount).toBe(3210);
-    expect(stamped.metrics).toMatchObject({
-      view_count: 3210,
-      interaction_heat: 90,
-      combined_reach: 3300,
-    });
   });
 
   it("keeps shown history isolated between strict and normal modes", () => {
@@ -4635,9 +4606,6 @@ stevie875443
 Thread
 6.1萬 views
     `)).toBe(61000);
-
-    expect(parseThreadsPostViewCountFromText("这则串文已有 1.8万次浏览")).toBe(18000);
-    expect(parseThreadsPostViewCountFromText("Thread 0 views")).toBeUndefined();
   });
 
   it("parses the exact permalink view count from Threads page data", () => {
@@ -4647,15 +4615,6 @@ Thread
     expect(parseThreadsPostViewCountFromHtml(`
       {"text_post_app_info":{"direct_reply_count":4,"view_count":186000}}
     `)).toBe(186000);
-    expect(parseThreadsPostViewCountFromHtml(`
-      {\"payload\":\"{\\\"text_post_app_info\\\":{\\\"view_count\\\":98200}}\"}
-    `)).toBe(98200);
-    expect(parseThreadsPostViewCountFromHtml(`
-      {&quot;text_post_app_info&quot;:{&quot;view_count&quot;:76400}}
-    `)).toBe(76400);
-    expect(parseThreadsPostViewCountFromHtml(`
-      {"text_post_app_info":{"view_count":0}}
-    `)).toBeUndefined();
     expect(parseThreadsPostViewCountFromHtml("<html>no target view count</html>")).toBeUndefined();
   });
 
