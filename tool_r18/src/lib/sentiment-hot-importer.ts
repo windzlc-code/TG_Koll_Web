@@ -136,7 +136,7 @@ const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
 const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 53;
-const SENTIMENT_HOT_NORMAL_KEYWORD_PROMPT_VERSION = 3;
+const SENTIMENT_HOT_NORMAL_KEYWORD_PROMPT_VERSION = 4;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 20;
@@ -2388,9 +2388,9 @@ export function sentimentHotKeywordModelInstructionForMode(value: unknown): stri
       "当前模式：泛垂直。必须独立生成本模式自己的 20 个搜索词，不得复用严格垂直模式的关键词计划。",
       "这 20 个词必须由模型直接生成，程序不会用固定词表或兜底代码补齐；不得把人设核心行业词换序后冒充泛垂直词。",
       "primaryQueries 的 10 个词生成自然生活场景、日常动作、家庭选择或消费处境；每个词都必须带一个从当前人设提炼的轻量桥接信息，例如目标地区、目标人群、居住环境或日常使用对象。候选正文中自然提到一嘴即可，不要求整篇都讲专业主题。",
-      "domainExpansion 的 10 个词再扩展到更通用的真实生活事件，但仍要保留上述轻量桥接；不得单独输出通勤、搬家、装修、孩子教育、家庭聚餐、人际关系、休闲娱乐等裸生活大类。",
+      "normalQueries 的 10 个词再扩展到更通用的真实生活事件，但仍要保留上述轻量桥接；不得单独输出通勤、搬家、装修、孩子教育、家庭聚餐、人际关系、休闲娱乐等裸生活大类。",
       "每个词都要能用一句话解释为何该人设或其受众可能自然谈到。可以远离核心产品与服务，但不能拿掉所有人设线索，不能完全无关，也不能只是日常、生活、分享等没有搜索对象的空词。",
-      "与严格垂直常见的行业、产品、服务词尽量不重叠，20 个词中最多 2 个可以直接使用核心专业词，其余必须是自然生活化搜索词。",
+      "与严格垂直常见的行业、产品、服务词尽量不重叠；20 个词中至少 16 个必须是带轻量桥接的自然生活词，最多 2 个可以直接使用核心专业词，normalQueries 禁止输出专业交易、投资、融资、产品、服务、资产配置或业务流程词。",
       "每个词必须是平台用户会自然输入的完整常用词，2-5 个汉字，不得为了缩短长度而截断词尾。",
     ].join("\n");
   }
@@ -2406,6 +2406,23 @@ export function sentimentHotSearchStrategyCacheVersionForMode(value: unknown): n
   return normalizeSentimentHotSearchMode(value) === "normal"
     ? `${SENTIMENT_HOT_SEARCH_STRATEGY_VERSION}-normal-lifestyle-v${SENTIMENT_HOT_NORMAL_KEYWORD_PROMPT_VERSION}`
     : SENTIMENT_HOT_SEARCH_STRATEGY_VERSION;
+}
+
+export function sentimentHotKeywordModelJsonContractForMode(value: unknown): string[] {
+  if (normalizeSentimentHotSearchMode(value) === "normal") {
+    return [
+      "JSON 结构：",
+      "{\"primaryQueries\":[\"...\"],\"normalQueries\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
+      "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，normalQueries 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
+      "合计必须给出 20 个互不重复的泛垂直生活搜索词，供下游按 10 个一批轮换搜索。不要多也不要少。",
+    ];
+  }
+  return [
+    "JSON 结构：",
+    "{\"primaryQueries\":[\"...\"],\"domainExpansion\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
+    "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
+    "合计必须给出 20 个互不重复的可搜索词，供下游按 10 个一批轮换搜索。不要多也不要少。",
+  ];
 }
 
 async function buildSentimentHotSearchStrategyWithModel(args: {
@@ -2479,17 +2496,14 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "人设名称只是对外称呼。必须按内容领域和职业理解；禁止把俚语化名称理解成色情、擦边或开车含义，也不得因此拒写或返回空候选。",
             "只输出 JSON 对象，不要解释，不要 Markdown。",
             sentimentHotKeywordModelInstructionForMode(searchMode),
-            "JSON 结构：",
-            "{\"primaryQueries\":[\"...\"],\"domainExpansion\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
-            "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
-            "合计必须给出 20 个互不重复的可搜索词，供下游按 10 个一批轮换搜索。不要多也不要少。",
+            ...sentimentHotKeywordModelJsonContractForMode(searchMode),
             "",
             ...(searchMode === "normal" ? [
               "先看人设名称、内容主题和目标受众，再从这些人的真实一天里生成 20 个搜索词；不要沿着核心行业名继续扩同义词。",
               "搜索词要落在可发生具体事件的自然生活内容：出门、通勤、居住、家庭安排、消费选择、人际互动、休闲计划或生活小麻烦；允许与核心业务仅有间接联系，但每个词必须保留从人设中提炼的地区、人群、居住环境或使用对象之一作为轻量桥接。",
               "候选帖子只要主要内容是自然生活话题，并在正文任意位置自然提及一个当前搜索词，就符合泛垂直相关性；不要要求标题、开头或全文围绕专业主题。",
               "仍须保留弱关联边界：每个词必须是当前人设或其受众确实可能遇到的话题。禁止只给孩子教育、家庭聚餐、人际关系、休闲娱乐等裸生活大类，也禁止跨到毫无关系的明星八卦、游戏、医疗、政治等随机领域。",
-              "primaryQueries 和 domainExpansion 都必须是 2-5 个汉字的完整常用搜索词，互不重复；禁止截断、造简称，也禁止用严格垂直词简单改写凑数。",
+              "primaryQueries 和 normalQueries 都必须是 2-5 个汉字的完整常用搜索词，互不重复；禁止截断、造简称，也禁止用严格垂直词简单改写凑数。",
               "禁止单独输出没有具体事件或对象的空词：日常、搞笑、生活、分享、心得、好物、气氛、爱好者、大叔、便宜、烟火气。",
               "禁止外貌、性格、语气、穿著、面料、体型、姿势、道具、图片视觉描述。",
             ] : [

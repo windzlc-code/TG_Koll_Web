@@ -97,6 +97,7 @@ import {
   resolveSentimentHotStrategyTimeoutMs,
   resolveSentimentHotDisplayHeatThreshold,
   sentimentHotKeywordModelInstructionForMode,
+  sentimentHotKeywordModelJsonContractForMode,
   sentimentHotSearchStrategyCacheVersionForMode,
   stampCombinedReachScore,
   resolveSentimentHotReaderConcurrency,
@@ -480,12 +481,16 @@ describe("sentiment hot importer", () => {
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("泛垂直");
     expect(sentimentHotKeywordModelInstructionForMode("strict")).toContain("不得截断");
     expect(sentimentHotSearchStrategyCacheVersionForMode("strict")).toBe(53);
-    expect(sentimentHotSearchStrategyCacheVersionForMode("normal")).toBe("53-normal-lifestyle-v3");
+    expect(sentimentHotSearchStrategyCacheVersionForMode("normal")).toBe("53-normal-lifestyle-v4");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("自然生活场景");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("正文中自然提到一嘴");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("必须由模型直接生成");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("轻量桥接");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("不得单独输出通勤、搬家、装修、孩子教育、家庭聚餐、人际关系、休闲娱乐等裸生活大类");
+    expect(sentimentHotKeywordModelJsonContractForMode("normal").join("\n")).toContain("normalQueries 正好 10 个");
+    expect(sentimentHotKeywordModelJsonContractForMode("normal").join("\n")).not.toContain("domainExpansion");
+    expect(sentimentHotKeywordModelJsonContractForMode("strict").join("\n")).toContain("domainExpansion 正好 10 个");
+    expect(sentimentHotKeywordModelJsonContractForMode("strict").join("\n")).not.toContain("normalQueries");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).not.toContain("核心领域；domainExpansion");
     expect(sentimentHotKeywordModelInstructionForMode("strict")).toBe([
       "当前模式：严格垂直。必须独立生成本模式自己的 20 个搜索词，不得复用泛垂直模式的关键词计划。",
