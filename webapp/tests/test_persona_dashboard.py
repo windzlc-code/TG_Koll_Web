@@ -5422,6 +5422,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("每个词都必须带一个从当前人设提炼的轻量桥接信息", importer)
         self.assertIn("不得单独输出通勤、搬家、装修、孩子教育、家庭聚餐、人际关系、休闲娱乐等裸生活大类", importer)
         self.assertIn("normalQueries 正好 10 个", importer)
+        self.assertIn("personaBridgeTerms 4-8 个", importer)
+        self.assertIn("每一个搜索词都必须原样包含至少一个 personaBridgeTerms", importer)
         self.assertIn("normalQueries 禁止输出专业交易、投资、融资", importer)
         self.assertIn("禁止输出带这些后缀或整词的合成搜索词", importer)
         self.assertIn("存股、融資、配息、當沖、槓桿、信用交易", importer)
