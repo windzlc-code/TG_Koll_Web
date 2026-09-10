@@ -1863,6 +1863,8 @@ const adminState = {
   redemptionCodeRows: [],
   redemptionCodePlaintext: [],
   redemptionCodeCreateInFlight: false,
+  redemptionCodeCheckInFlight: false,
+  redemptionCodeSelectedIds: new Set(),
   redemptionCodeOffset: 0,
   redemptionCodeLimit: 20,
   redemptionCodeTotal: 0,
@@ -5204,157 +5206,16 @@ function syncBillingAdjustmentType() {
   }
 }
 
-const REDEMPTION_STATUS_LABELS = {
-  active: "可兑换",
-  redeemed: "已兑换",
-  revoked: "已作废",
-};
-
-function redemptionCodeCell(...children) {
-  const cell = document.createElement("td");
-  children.filter(Boolean).forEach((child) => cell.appendChild(child));
-  return cell;
-}
-
-function redemptionCodeText(tag, text, className = "") {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  node.textContent = String(text ?? "");
-  return node;
-}
-
-function renderRedemptionCodes(items = []) {
-  const body = el("redemptionCodeBody");
-  if (!body) return;
-  adminState.redemptionCodeRows = Array.isArray(items) ? items : [];
-  body.replaceChildren();
-  if (!adminState.redemptionCodeRows.length) {
-    const row = document.createElement("tr");
-    const cell = redemptionCodeCell(redemptionCodeText("span", "暂无兑换码"));
-    cell.colSpan = 6;
-    cell.className = "admin-billing-empty";
-    row.appendChild(cell);
-    body.appendChild(row);
-    return;
-  }
-  adminState.redemptionCodeRows.forEach((item) => {
-    const row = document.createElement("tr");
-    const code = redemptionCodeText("strong", item.code_masked || "-", "admin-billing-strong");
-    const note = redemptionCodeText("span", item.note || "无备注");
-    const status = String(item.status || "active");
-    const statusBadge = redemptionCodeText("span", REDEMPTION_STATUS_LABELS[status] || status, `admin-billing-status is-${status}`);
-    const creator = redemptionCodeText("strong", item.created_by_username || `ID ${item.created_by || "-"}`);
-    const createdAt = redemptionCodeText("span", formatBillingTime(item.created_at));
-    const redeemed = redemptionCodeText("strong", item.redeemed_by_username || (status === "redeemed" ? `ID ${item.redeemed_by || "-"}` : "-"));
-    const redeemedAt = redemptionCodeText("span", item.redeemed_at ? formatBillingTime(item.redeemed_at) : "尚未兑换");
-    const actions = document.createElement("div");
-    actions.className = "admin-billing-actions";
-    if (status === "active") {
-      const revoke = document.createElement("button");
-      revoke.type = "button";
-      revoke.className = "danger admin-compact-button";
-      revoke.dataset.redemptionAction = "revoke";
-      revoke.dataset.id = String(item.id || "");
-      revoke.textContent = "作废";
-      actions.appendChild(revoke);
-    } else {
-      actions.appendChild(redemptionCodeText("span", "—"));
-    }
-    row.append(
-      redemptionCodeCell(code, note),
-      redemptionCodeCell(redemptionCodeText("strong", `${formatBillingPoints(item.points)} 点`)),
-      redemptionCodeCell(statusBadge),
-      redemptionCodeCell(creator, createdAt),
-      redemptionCodeCell(redeemed, redeemedAt),
-      redemptionCodeCell(actions),
-    );
-    body.appendChild(row);
-  });
-}
-
-async function loadRedemptionCodes() {
-  const status = String(el("redemptionCodeStatus")?.value || "");
-  const query = new URLSearchParams({ limit: "500" });
-  if (status) query.set("status", status);
-  const payload = await api(`/api/admin/billing/redemption-codes?${query}`);
-  renderRedemptionCodes(payload.items || []);
-  return payload;
-}
-
-async function checkRedemptionCodes() {
-  const health = await api("/api/admin/billing/redemption-codes/health");
-  const counts = health.counts || {};
-  const summary = `可兑换 ${Number(counts.active || 0)} · 已兑换 ${Number(counts.redeemed || 0)} · 已作废 ${Number(counts.revoked || 0)}`;
-  const node = el("redemptionCodeHealth");
-  if (node) {
-    node.textContent = health.ok ? `${summary} · 检测正常` : `${summary} · 发现 ${Number(health.inconsistent || 0)} 条异常`;
-    node.classList.toggle("is-error", !health.ok);
-  }
-  return health;
-}
-
-async function createRedemptionCodes(event) {
-  event.preventDefault();
-  if (adminState.redemptionCodeCreateInFlight) return;
-  const points = Number(el("redemptionCodePoints")?.value || 0);
-  const quantity = Number(el("redemptionCodeQuantity")?.value || 0);
-  if (!Number.isFinite(points) || points <= 0) throw new Error("请填写大于 0 的积分");
-  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 100) throw new Error("生成数量必须为 1 至 100");
-  adminState.redemptionCodeCreateInFlight = true;
-  const submit = el("btnCreateRedemptionCodes");
-  if (submit) submit.disabled = true;
-  try {
-    const result = await api("/api/admin/billing/redemption-codes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        points,
-        quantity,
-        note: String(el("redemptionCodeNote")?.value || "").trim(),
-      }),
-    });
-    adminState.redemptionCodePlaintext = (result.items || []).map((item) => String(item.code || "")).filter(Boolean);
-    const output = el("redemptionCodeCreatedList");
-    if (output) output.textContent = adminState.redemptionCodePlaintext.join("\n");
-    if (el("redemptionCodeCreated")) el("redemptionCodeCreated").hidden = !adminState.redemptionCodePlaintext.length;
-    await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
-    setMsg("redemptionCodeMsg", `已生成 ${adminState.redemptionCodePlaintext.length} 个兑换码，请立即复制保存`, true);
-  } finally {
-    adminState.redemptionCodeCreateInFlight = false;
-    if (submit) submit.disabled = false;
-  }
-}
-
-async function copyCreatedRedemptionCodes() {
-  const text = adminState.redemptionCodePlaintext.join("\n");
-  if (!text) throw new Error("当前没有可复制的完整兑换码");
-  await navigator.clipboard.writeText(text);
-  setMsg("redemptionCodeMsg", "完整兑换码已复制", true);
-}
-
-async function revokeRedemptionCode(codeId) {
-  const decision = await requestAdminPublicAction({
-    title: "作废兑换码",
-    message: "作废后该兑换码将不能再兑换。",
-    confirmLabel: "确认作废",
-    tone: "danger",
-    inputLabel: "作废原因（可选）",
-    inputPlaceholder: "填写作废原因",
-  });
-  if (!decision.confirmed) return;
-  await api(`/api/admin/billing/redemption-codes/${encodeURIComponent(codeId)}/revoke`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reason: decision.value.trim() || "管理员作废" }),
-  });
-  await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
-  setMsg("redemptionCodeMsg", "兑换码已作废", true);
-}
-
 const REDEMPTION_CODE_ICONS = {
   view: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>',
   copy: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/></svg>',
   edit: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m4 20 4.2-1 10.7-10.7a2.1 2.1 0 0 0-3-3L5.2 16 4 20Z"/><path d="m13.8 7.3 3 3"/></svg>',
+};
+
+const REDEMPTION_STATUS_LABELS = {
+  active: "可兑换",
+  redeemed: "已兑换",
+  revoked: "已作废",
 };
 
 function redemptionCodeCell(...children) {
@@ -5382,6 +5243,35 @@ function redemptionCodeIconButton(action, id, label) {
   return button;
 }
 
+function syncRedemptionCodeSelection() {
+  const rows = adminState.redemptionCodeRows || [];
+  const selectedIds = adminState.redemptionCodeSelectedIds;
+  const currentIds = rows.map((item) => String(item.id || "")).filter(Boolean);
+  const selectedCount = currentIds.filter((id) => selectedIds.has(id)).length;
+  setText("redemptionCodeSelectionSummary", `已选 ${selectedCount} 条`);
+  const toolbar = el("redemptionCodeBulkToolbar");
+  if (toolbar) toolbar.hidden = selectedCount === 0;
+  const selectAll = el("redemptionCodeSelectAll");
+  if (selectAll) {
+    selectAll.checked = currentIds.length > 0 && selectedCount === currentIds.length;
+    selectAll.indeterminate = selectedCount > 0 && selectedCount < currentIds.length;
+  }
+  document.querySelectorAll("#redemptionCodeBody input[data-redemption-select-id]").forEach((input) => {
+    input.checked = selectedIds.has(String(input.dataset.redemptionSelectId || ""));
+  });
+}
+
+function setCurrentRedemptionCodeSelection(selected) {
+  const selectedIds = adminState.redemptionCodeSelectedIds;
+  (adminState.redemptionCodeRows || []).forEach((item) => {
+    const id = String(item.id || "");
+    if (!id) return;
+    if (selected) selectedIds.add(id);
+    else selectedIds.delete(id);
+  });
+  syncRedemptionCodeSelection();
+}
+
 function renderRedemptionCodePagination() {
   const total = Math.max(0, Number(adminState.redemptionCodeTotal || 0));
   const limit = Math.max(1, Number(adminState.redemptionCodeLimit || 20));
@@ -5401,19 +5291,36 @@ function renderRedemptionCodes(items = [], total = adminState.redemptionCodeTota
   if (!body) return;
   adminState.redemptionCodeRows = Array.isArray(items) ? items : [];
   adminState.redemptionCodeTotal = Math.max(0, Number(total || 0));
+  const currentIds = new Set(adminState.redemptionCodeRows.map((item) => String(item.id || "")).filter(Boolean));
+  adminState.redemptionCodeSelectedIds.forEach((id) => {
+    if (!currentIds.has(id)) adminState.redemptionCodeSelectedIds.delete(id);
+  });
   body.replaceChildren();
   if (!adminState.redemptionCodeRows.length) {
     const row = document.createElement("tr");
     const cell = redemptionCodeCell(redemptionCodeText("span", "暂无兑换码"));
-    cell.colSpan = 7;
+    cell.colSpan = 8;
     cell.className = "admin-billing-empty";
     row.appendChild(cell);
     body.appendChild(row);
     renderRedemptionCodePagination();
+    syncRedemptionCodeSelection();
     return;
   }
   adminState.redemptionCodeRows.forEach((item) => {
     const row = document.createElement("tr");
+    const id = String(item.id || "");
+    const selection = document.createElement("input");
+    selection.type = "checkbox";
+    selection.className = "admin-redemption-row-select";
+    selection.dataset.redemptionSelectId = id;
+    selection.setAttribute("aria-label", `选择兑换码 ${item.code_masked || id}`);
+    selection.checked = adminState.redemptionCodeSelectedIds.has(id);
+    selection.addEventListener("change", () => {
+      if (selection.checked) adminState.redemptionCodeSelectedIds.add(id);
+      else adminState.redemptionCodeSelectedIds.delete(id);
+      syncRedemptionCodeSelection();
+    });
     const code = redemptionCodeText("strong", item.code_masked || "-", "admin-billing-strong");
     const note = redemptionCodeText("span", item.note || "无备注", "admin-redemption-detail");
     const status = String(item.status || "active");
@@ -5430,6 +5337,7 @@ function renderRedemptionCodes(items = [], total = adminState.redemptionCodeTota
       redemptionCodeIconButton("edit", item.id, "编辑兑换码操作"),
     );
     row.append(
+      redemptionCodeCell(selection),
       redemptionCodeCell(code),
       redemptionCodeCell(note),
       redemptionCodeCell(redemptionCodeText("strong", `${formatBillingPoints(item.points)} 点`)),
@@ -5441,6 +5349,7 @@ function renderRedemptionCodes(items = [], total = adminState.redemptionCodeTota
     body.appendChild(row);
   });
   renderRedemptionCodePagination();
+  syncRedemptionCodeSelection();
 }
 
 async function loadRedemptionCodes() {
@@ -5468,6 +5377,56 @@ async function checkRedemptionCodes() {
     node.classList.toggle("is-error", !health.ok);
   }
   return health;
+}
+
+function renderRedemptionCodeCheckResult(result, isError = false) {
+  const node = el("redemptionCodeCheckResult");
+  if (!node) return;
+  const status = String(result?.status || "");
+  const statusLabel = REDEMPTION_STATUS_LABELS[status] || "";
+  const details = result?.valid && Number.isFinite(Number(result.points))
+    ? ` · ${formatBillingPoints(result.points)} 点`
+    : "";
+  const note = result?.note ? ` · ${String(result.note)}` : "";
+  node.textContent = isError
+    ? `检测失败：${String(result?.message || "请稍后重试")}`
+    : `${String(result?.message || "检测完成")}${statusLabel ? `（${statusLabel}）` : ""}${details}${note}`;
+  node.className = `admin-redemption-check-result ${isError ? "is-error" : result?.available ? "is-available" : "is-unavailable"}`;
+  node.hidden = false;
+}
+
+async function checkRedemptionCode() {
+  const input = el("redemptionCodeCheckInput");
+  const button = el("btnCheckRedemptionCode");
+  const code = String(input?.value || "").trim();
+  if (!code) {
+    renderRedemptionCodeCheckResult({ message: "请输入完整兑换码" }, true);
+    return null;
+  }
+  if (adminState.redemptionCodeCheckInFlight) return null;
+  adminState.redemptionCodeCheckInFlight = true;
+  if (button) {
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+  }
+  try {
+    const result = await api("/api/admin/billing/redemption-codes/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    renderRedemptionCodeCheckResult(result);
+    return result;
+  } catch (error) {
+    renderRedemptionCodeCheckResult({ message: getErrorMessage(error) }, true);
+    throw error;
+  } finally {
+    adminState.redemptionCodeCheckInFlight = false;
+    if (button) {
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
+  }
 }
 
 async function createRedemptionCodes(event, preset = null) {
@@ -5560,6 +5519,7 @@ async function deleteRedemptionCodeRecord(codeId) {
   });
   if (!decision.confirmed) return;
   await api(`/api/admin/billing/redemption-codes/${encodeURIComponent(codeId)}/delete`, { method: "POST" });
+  adminState.redemptionCodeSelectedIds.delete(String(codeId));
   const pageStart = adminState.redemptionCodeOffset;
   await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
   if (!adminState.redemptionCodeRows.length && pageStart > 0) {
@@ -5567,6 +5527,35 @@ async function deleteRedemptionCodeRecord(codeId) {
     await loadRedemptionCodes();
   }
   setMsg("redemptionCodeMsg", "兑换码记录已删除", true);
+}
+
+async function deleteSelectedRedemptionCodes() {
+  const codeIds = [...adminState.redemptionCodeSelectedIds];
+  if (!codeIds.length) return;
+  const decision = await requestAdminPublicAction({
+    title: "删除选中的兑换码记录",
+    message: `共 ${codeIds.length} 条记录将从列表隐藏，并立即使兑换码失效。已兑换的积分流水会保留。`,
+    confirmLabel: "确认删除",
+    tone: "danger",
+  });
+  if (!decision.confirmed) return;
+  const button = el("btnRedemptionCodeBulkDelete");
+  if (button) button.disabled = true;
+  const pageStart = adminState.redemptionCodeOffset;
+  try {
+    for (const codeId of codeIds) {
+      await api(`/api/admin/billing/redemption-codes/${encodeURIComponent(codeId)}/delete`, { method: "POST" });
+      adminState.redemptionCodeSelectedIds.delete(codeId);
+    }
+    await Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]);
+    if (!adminState.redemptionCodeRows.length && pageStart > 0) {
+      adminState.redemptionCodeOffset = Math.max(0, pageStart - adminState.redemptionCodeLimit);
+      await loadRedemptionCodes();
+    }
+    setMsg("redemptionCodeMsg", `已删除 ${codeIds.length} 条兑换码记录`, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function closeRedemptionCodeEditSheet() {
@@ -11076,6 +11065,16 @@ function bindBillingActions() {
       setMsg("redemptionCodeMsg", getErrorMessage(err), false);
     }
   });
+  el("btnCheckRedemptionCode")?.addEventListener("click", async () => {
+    setMsg("redemptionCodeMsg", "");
+    try { await checkRedemptionCode(); }
+    catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  el("redemptionCodeCheckInput")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    el("btnCheckRedemptionCode")?.click();
+  });
   el("btnReloadRedemptionCodes")?.addEventListener("click", async () => {
     try { await loadRedemptionCodes(); }
     catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
@@ -11110,6 +11109,20 @@ function bindBillingActions() {
   });
   el("btnCopyRedemptionCodes")?.addEventListener("click", async () => {
     try { await copyCreatedRedemptionCodes(); }
+      catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
+  });
+  el("redemptionCodeSelectAll")?.addEventListener("change", (event) => {
+    setCurrentRedemptionCodeSelection(event.currentTarget.checked);
+  });
+  el("btnRedemptionCodeSelectAll")?.addEventListener("click", () => {
+    setCurrentRedemptionCodeSelection(true);
+  });
+  el("btnRedemptionCodeClearSelection")?.addEventListener("click", () => {
+    setCurrentRedemptionCodeSelection(false);
+  });
+  el("btnRedemptionCodeBulkDelete")?.addEventListener("click", async () => {
+    setMsg("redemptionCodeMsg", "");
+    try { await deleteSelectedRedemptionCodes(); }
     catch (err) { setMsg("redemptionCodeMsg", getErrorMessage(err), false); }
   });
   el("redemptionCodeBody")?.addEventListener("click", async (event) => {

@@ -326,6 +326,10 @@ class RedemptionCodeCreatePayload(BaseModel):
     note: str = Field(default="", max_length=200)
 
 
+class RedemptionCodeCheckPayload(BaseModel):
+    code: str = Field(min_length=1, max_length=128)
+
+
 class RedemptionCodeRedeemPayload(BaseModel):
     code: str = Field(min_length=16, max_length=128)
 
@@ -30198,6 +30202,15 @@ def create_app() -> FastAPI:
             content={"ok": True, "items": items},
             headers={"Cache-Control": "no-store"},
         )
+
+    @app.post("/api/admin/billing/redemption-codes/check")
+    def api_admin_billing_redemption_code_check(
+        payload: RedemptionCodeCheckPayload,
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        with db() as conn:
+            result = commercial_billing.check_redemption_code(conn, raw_code=payload.code)
+        return JSONResponse(content={"ok": True, **result}, headers={"Cache-Control": "no-store"})
 
     @app.post("/api/admin/billing/redemption-codes/{code_id}/revoke")
     def api_admin_billing_redemption_code_revoke(

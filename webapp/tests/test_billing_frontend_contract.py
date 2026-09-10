@@ -106,6 +106,7 @@ class BillingFrontendContractTests(unittest.TestCase):
         self.assertIn('const currencyCode = () => usesSimplifiedChinese() ? "CNY" : "TWD";', self.pricing_script)
         self.assertIn('const localizedPoints = (item, field = "total_points")', self.pricing_script)
         self.assertIn('const discountLabel = (item) => {', self.pricing_script)
+        self.assertIn('return `${Number.isInteger(fold) ? fold : fold.toFixed(1)}折`;', self.pricing_script)
         self.assertIn('`¥1 = ${CNY_CREDITS_PER_YUAN} 点`', self.pricing_script)
         self.assertIn('const displayPrice = item.kind === "subscription" ? catalogPrice(item) : packageMoney(item);', self.pricing_script)
         self.assertIn('台幣依 NT$2 = 1 點、人民幣依 ¥1 = 2.5 點計算', self.pricing_markup)

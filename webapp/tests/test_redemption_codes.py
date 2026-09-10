@@ -121,6 +121,36 @@ class RedemptionCodeClosedLoopTests(unittest.TestCase):
         self.assertIn("••••", item["code_masked"])
         self.assertEqual(listed.headers.get("cache-control"), "no-store")
 
+    def test_admin_can_check_code_availability_without_redeeming_it(self):
+        code = self._create_code(31)
+        available = self.admin.post(
+            "/api/admin/billing/redemption-codes/check",
+            json={"code": f"  {code.lower()}  "},
+        )
+        self.assertEqual(available.status_code, 200, available.text)
+        self.assertTrue(available.json()["valid"])
+        self.assertTrue(available.json()["available"])
+        self.assertEqual(available.json()["status"], "active")
+        self.assertEqual(available.json()["points"], 31)
+        self.assertEqual(available.headers.get("cache-control"), "no-store")
+
+        invalid = self.admin.post(
+            "/api/admin/billing/redemption-codes/check",
+            json={"code": "not-a-redemption-code"},
+        )
+        self.assertEqual(invalid.status_code, 200, invalid.text)
+        self.assertFalse(invalid.json()["valid"])
+        self.assertFalse(invalid.json()["available"])
+        self.assertEqual(invalid.json()["status"], "invalid")
+
+        with db_module.db() as conn:
+            row = conn.execute(
+                "SELECT status, redeemed_by FROM billing_redemption_codes WHERE code_digest = ?",
+                (commercial_billing._redemption_code_digest(code),),
+            ).fetchone()
+        self.assertEqual(row["status"], "active")
+        self.assertEqual(row["redeemed_by"], 0)
+
     def test_redeem_is_atomic_one_time_and_not_cash_backed(self):
         code = self._create_code(25.5)
         first = self.customer.post(

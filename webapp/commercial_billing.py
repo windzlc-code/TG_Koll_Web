@@ -3421,6 +3421,43 @@ def count_redemption_codes(conn: sqlite3.Connection, *, status: str = "") -> int
     return int(row[0] or 0) if row else 0
 
 
+def check_redemption_code(
+    conn: sqlite3.Connection,
+    *,
+    raw_code: Any,
+) -> dict[str, Any]:
+    normalized = _normalize_redemption_code(raw_code)
+    if not normalized:
+        return {
+            "valid": False,
+            "available": False,
+            "status": "invalid",
+            "message": "兑换码格式不正确",
+        }
+    digest = _redemption_code_digest(normalized)
+    row = conn.execute(
+        "SELECT * FROM billing_redemption_codes WHERE code_digest = ? AND deleted_at = 0",
+        (digest,),
+    ).fetchone()
+    if row is None:
+        return {
+            "valid": False,
+            "available": False,
+            "status": "not_found",
+            "message": "兑换码不存在或已失效",
+        }
+    item = _redemption_code_public(row)
+    status = str(item["status"] or "")
+    return {
+        "valid": True,
+        "available": status == "active",
+        "status": status,
+        "points": item["points"],
+        "note": item["note"],
+        "message": "兑换码可用" if status == "active" else "兑换码已不可兑换",
+    }
+
+
 def reveal_redemption_code(
     conn: sqlite3.Connection,
     *,

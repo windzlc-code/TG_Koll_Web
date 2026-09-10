@@ -10,13 +10,16 @@ CONSOLE_HTML = (ROOT / "webapp" / "static" / "console.html").read_text(encoding=
 SITE_NAVIGATION_JS = (ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
 SITE_NAVIGATION_CSS = (ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.css").read_text(encoding="utf-8")
 STYLE_CSS = (ROOT / "webapp" / "static" / "assets" / "style.css").read_text(encoding="utf-8")
+PRICING_JS = (ROOT / "webapp" / "static" / "assets" / "opc" / "pricing.js").read_text(encoding="utf-8")
 
 
 def test_admin_redemption_workspace_has_its_own_navigation_page():
     assert 'data-page="redemptionCodes">兑换码</button>' in ADMIN_HTML
     assert 'id="secRedemptionCodes" data-page-view="redemptionCodes"' in ADMIN_HTML
     assert 'id="redemptionCodeForm"' in ADMIN_HTML
+    assert 'id="btnCheckRedemptionCode"' in ADMIN_HTML
     assert 'id="btnCheckRedemptionCodes"' in ADMIN_HTML
+    assert 'id="redemptionCodeCheckResult"' in ADMIN_HTML
     assert 'id="redemptionCodeBody"' in ADMIN_HTML
     assert 'redemptionCodes: "兑换码"' in ADMIN_JS
     assert 'secRedemptionCodes: "redemptionCodes"' in ADMIN_JS
@@ -24,6 +27,8 @@ def test_admin_redemption_workspace_has_its_own_navigation_page():
     assert "/api/admin/billing/redemption-codes" in ADMIN_JS
     assert "完整代码仅显示一次" in ADMIN_HTML
     assert "redemptionCodeCreateInFlight" in ADMIN_JS
+    assert '"/api/admin/billing/redemption-codes/check"' in ADMIN_JS
+    assert 'el("btnCheckRedemptionCode")?.addEventListener' in ADMIN_JS
     assert 'submit.disabled = true' in ADMIN_JS
 
 
@@ -48,6 +53,8 @@ def test_account_drawer_opens_the_shared_redemption_dialog_in_place():
 
 def test_admin_redemption_controls_share_one_aligned_row_with_spacing():
     assert ".page-admin #secRedemptionCodes .admin-billing-toolbar" in STYLE_CSS
+    assert "display: flex" in STYLE_CSS
+    assert "flex-wrap: nowrap" in STYLE_CSS
     assert "align-items: flex-end" in STYLE_CSS
     assert "column-gap: 14px" in STYLE_CSS
 
@@ -57,6 +64,8 @@ def test_admin_redemption_statuses_keep_the_shared_billing_badge_palette():
     assert ".page-admin #secRedemptionCodes .admin-billing-status.is-active" in STYLE_CSS
     assert ".page-admin #secRedemptionCodes .admin-billing-status.is-redeemed" in STYLE_CSS
     assert ".page-admin #secRedemptionCodes .admin-billing-status.is-revoked" in STYLE_CSS
+    assert "color: #1d4ed8" in STYLE_CSS
+    assert "background: #eff6ff" in STYLE_CSS
 
 
 def test_admin_redemption_list_has_compact_presets_pagination_and_record_actions():
@@ -80,3 +89,28 @@ def test_admin_redemption_list_has_compact_presets_pagination_and_record_actions
     assert "justify-content: center" in STYLE_CSS
     assert "min-height: 62px" in STYLE_CSS
     assert ".admin-redemption-pagination" in STYLE_CSS
+    assert 'data-redemption-select-id' in ADMIN_JS
+    assert 'id="redemptionCodeSelectAll"' in ADMIN_HTML
+
+
+def test_admin_redemption_presets_match_the_current_ntd_rules_and_use_fold_labels():
+    expected = (
+        ("31", "60 元 · 9.5折"),
+        ("108", "200 元 · 9.2折"),
+        ("357", "650 元 · 9折"),
+        ("672", "1200 元 · 8.8折"),
+        ("50", "100 元 · 10折"),
+        ("151", "300 元 · 9.9折"),
+        ("255", "500 元 · 9.8折"),
+        ("515", "1000 元 · 9.7折"),
+    )
+    for points, label in expected:
+        assert f'data-points="{points}"' in ADMIN_HTML
+        assert f'<small>{label}</small>' in ADMIN_HTML
+    assert "2 台币 = 1 积分" in ADMIN_HTML
+    assert "优惠 5%" not in ADMIN_HTML
+
+
+def test_public_pricing_uses_decimal_fold_not_percentage_points():
+    assert 'return `${Number.isInteger(fold) ? fold : fold.toFixed(1)}折`;' in PRICING_JS
+    assert 'return percent ? `${100 - percent} 折` : "原價";' not in PRICING_JS
