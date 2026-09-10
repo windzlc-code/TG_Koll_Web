@@ -506,7 +506,7 @@ describe("sentiment hot importer", () => {
 
   it("keeps model primary query order and excludes generic anchor filler from strict dispatch", () => {
     const strategy = {
-      primaryQueries: ["\u6c7d\u8f66\u4fee\u7406\u7ffb\u8f66", "\u4fee\u8f66\u907f\u5751", "\u53d1\u52a8\u673a\u7ef4\u4fee\u4ef7\u683c", "\u4fee\u8f66\u524d\u540e\u5bf9\u6bd4", "\u6c7d\u8f66\u4fee\u7406\u7ecf\u9a8c"],
+      primaryQueries: ["汽车修理", "修车避坑", "发动机维修", "刹车系统", "变速箱维修"],
       ecosystemQueries: ["\u6c7d\u8f66\u7ef4\u4fee\u884c\u4e1a"],
       broadQueries: ["\u6c7d\u8f66\u7ef4\u4fee\u4e89\u8bae"],
       requiredAnchorTerms: ["\u6c7d\u8f66\u4fee\u7406", "\u4fee\u8f66", "\u53d1\u52a8\u673a\u7ef4\u4fee"],
@@ -519,7 +519,7 @@ describe("sentiment hot importer", () => {
     } as any;
 
     const keywords = resolveSentimentHotModelStrategyKeywords(strategy, "strict");
-    expect(keywords[0]).toBe("\u6c7d\u8f66\u4fee\u7406\u7ffb\u8f66");
+    expect(keywords[0]).toBe("汽车修理");
     expect(keywords).toEqual(expect.arrayContaining(strategy.primaryQueries));
     expect(keywords).not.toContain("\u95ee\u9898");
     expect(keywords).not.toContain("\u7cfb\u7edf");
@@ -1765,20 +1765,20 @@ describe("sentiment hot importer", () => {
   it("caps both independently generated mode plans at exactly twenty keywords", () => {
     const strategy = {
       primaryQueries: Array.from({ length: 10 }, (_, index) => `核心词${index}`),
-      broadQueries: ["非居住者貸款", "日本豪宅", "東京豪宅", "大阪豪宅", "麻布豪宅", "一戶建", "灣景塔廈", "台籍融資", "日本房貸", "日幣資產", "海外置產", "港區物件", "房產稅務", "租金收益"],
+      broadQueries: ["高資產配", "日本豪宅", "東京豪宅", "大阪豪宅", "麻布豪宅", "一戶建", "灣景塔廈", "台籍融資", "日本房貸", "日幣資產", "海外置產", "港區物件", "房產稅務", "租金收益"],
       ecosystemQueries: [],
       lifestyleQueries: [],
       requiredAnchorTerms: ["核心词0", "核心词1", "核心词2"],
       normalAnchorTerms: ["日本豪宅", "東京豪宅", "大阪豪宅"],
       strictAcceptTerms: Array.from({ length: 10 }, (_, index) => `核心词${index}`),
-      normalAcceptTerms: ["非居住者貸款", "日本豪宅", "東京豪宅", "大阪豪宅", "麻布豪宅", "一戶建", "灣景塔廈", "台籍融資", "日本房貸", "日幣資產", "海外置產", "港區物件", "房產稅務", "租金收益"],
+      normalAcceptTerms: ["高資產配", "日本豪宅", "東京豪宅", "大阪豪宅", "麻布豪宅", "一戶建", "灣景塔廈", "台籍融資", "日本房貸", "日幣資產", "海外置產", "港區物件", "房產稅務", "租金收益"],
       rejectTerms: [],
       domainSummary: "独立二十词计划",
     } as any;
 
     expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).toHaveLength(20);
     expect(resolveSentimentHotModelStrategyKeywords(strategy, "normal")).toHaveLength(20);
-    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).toContain("非居住者貸款");
+    expect(resolveSentimentHotModelStrategyKeywords(strategy, "strict")).not.toContain("高資產配");
   });
 
   it("does not accept a single broad strategy term as normal persona relevance", () => {
@@ -3419,7 +3419,7 @@ Title: Instagram
     expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个");
     expect(source).toContain("domainExpansion");
     expect(source).toContain("合计必须给出 20 个互不重复的可搜索词");
-    expect(source).toContain("2-8 个汉字的完整自然词语为主");
+    expect(source).toContain("2-5 个汉字的完整自然词语");
     expect(source).toContain("禁止为了凑长度而截断词尾或自造简称");
     expect(source).toContain("禁止输出带这些后缀或整词的合成搜索词");
     expect(source).toContain("存股、融資、配息、當沖、槓桿、信用交易");
@@ -3435,7 +3435,7 @@ Title: Instagram
     expect(source).not.toContain("expandNormalLifestyleSearchTerms");
     expect(source).not.toContain('["通勤", "停车", "洗车", "年检"]');
     expect(source).not.toContain('["约会妆", "换季", "赶时间"]');
-    expect(source).toContain("const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 52");
+    expect(source).toContain("const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 53");
   });
 
   it("indexes and reads the global hotspot pool by platform", () => {
