@@ -136,7 +136,7 @@ const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
 const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 53;
-const SENTIMENT_HOT_NORMAL_KEYWORD_PROMPT_VERSION = 5;
+const SENTIMENT_HOT_NORMAL_KEYWORD_PROMPT_VERSION = 6;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 20;
@@ -637,7 +637,6 @@ export interface SentimentHotSearchStrategy {
   rejectTerms: string[];
   domainSummary?: string;
   personaGuardTerms?: string[];
-  normalBridgeTerms?: string[];
 }
 
 export interface ThreadsBrowserProfilePublishedPostSnapshot {
@@ -1824,10 +1823,6 @@ function parseSentimentHotSearchStrategy(text: string, args: { archiveName?: str
     normalAcceptTerms: normalizeStrategyTermList((parsed as any).normalAcceptTerms || (parsed as any).broadAcceptTerms || [...normalAnchorTerms, ...primaryQueries, ...broadQueries, ...lifestyleQueries], { ...args, limit: SENTIMENT_HOT_NORMAL_KEYWORD_TARGET }),
     rejectTerms: normalizeStrategyTermList((parsed as any).rejectTerms || (parsed as any).excludeTerms || (parsed as any).negativeTerms, { ...args, limit: 16 }),
     domainSummary: cleanText((parsed as any).domainSummary || (parsed as any).summary),
-    normalBridgeTerms: normalizeStrategyTermList(
-      (parsed as any).personaBridgeTerms,
-      { ...args, limit: 8 },
-    ).filter((term) => term.length >= 2 && term.length <= 4),
   };
   if (strategy.requiredAnchorTerms.length < 3) {
     strategy.requiredAnchorTerms = primaryQueries.slice(0, 4);
@@ -2392,12 +2387,11 @@ export function sentimentHotKeywordModelInstructionForMode(value: unknown): stri
     return [
       "当前模式：泛垂直。必须独立生成本模式自己的 20 个搜索词，不得复用严格垂直模式的关键词计划。",
       "这 20 个词必须由模型直接生成，程序不会用固定词表或兜底代码补齐；不得把人设核心行业词换序后冒充泛垂直词。",
-      "primaryQueries 的 10 个词生成自然生活场景、日常动作、家庭选择或消费处境；每个词都必须带一个从当前人设提炼的轻量桥接信息，例如目标地区、目标人群、居住环境或日常使用对象。候选正文中自然提到一嘴即可，不要求整篇都讲专业主题。",
-      "normalQueries 的 10 个词再扩展到更通用的真实生活事件，但仍要保留上述轻量桥接；不得单独输出通勤、搬家、装修、孩子教育、家庭聚餐、人际关系、休闲娱乐等裸生活大类。",
-      "先从当前人设资料中逐字提取 4-8 个 personaBridgeTerms，每个是 2-4 个汉字的地区、人群、居住环境或日常使用对象；禁止把家庭、生活、朋友、消费、计划、选择、日常等通用词当作桥接词。",
-      "primaryQueries 与 normalQueries 的每一个搜索词都必须原样包含至少一个 personaBridgeTerms；不满足就必须在输出前自行重写，不能交给程序兜底。",
-      "每个词都要能用一句话解释为何该人设或其受众可能自然谈到。可以远离核心产品与服务，但不能拿掉所有人设线索，不能完全无关，也不能只是日常、生活、分享等没有搜索对象的空词。",
-      "与严格垂直常见的行业、产品、服务词尽量不重叠；20 个词中至少 16 个必须是带轻量桥接的自然生活词，最多 2 个可以直接使用核心专业词，normalQueries 禁止输出专业交易、投资、融资、产品、服务、资产配置或业务流程词。",
+      "模型先自主理解人设的核心内容、内容类型、目标受众和他们通常关注的生活场景，再生成同一内容类型或受众生态中的泛化搜索词；不要求关键词逐字包含人设原文。",
+      "primaryQueries 的 10 个词偏向与人设核心相邻的自然生活场景、日常动作、家庭选择或消费处境；保持语义上的轻量桥接即可，候选正文中自然提到一嘴就符合，不要求整篇都讲专业主题。",
+      "normalQueries 的 10 个词可以进一步扩展到同类受众会自然关注的日常生活、出行、居住、消费、家庭和休闲话题；相关性可以较弱，但仍须属于同一类型或相邻内容生态，不能随机跨到完全无关领域。",
+      "允许与严格垂直有少量自然重叠，也允许保留模型认为必要的核心词；不要为了追求零重叠而制造生硬词，也不要规定固定重叠数量。",
+      "可以使用通勤、搬家、装修、孩子教育、家庭聚餐、人际关系、休闲娱乐等自然生活主题，只要模型判断它们与当前人设类型或受众具有合理弱关联；不能只输出日常、生活、分享等没有搜索对象的空词。",
       "每个词必须是平台用户会自然输入的完整常用词，2-5 个汉字，不得为了缩短长度而截断词尾。",
     ].join("\n");
   }
@@ -2419,8 +2413,8 @@ export function sentimentHotKeywordModelJsonContractForMode(value: unknown): str
   if (normalizeSentimentHotSearchMode(value) === "normal") {
     return [
       "JSON 结构：",
-      "{\"personaBridgeTerms\":[\"...\"],\"primaryQueries\":[\"...\"],\"normalQueries\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
-      "所有列表字段必须是 JSON 数组。字段数量：personaBridgeTerms 4-8 个，primaryQueries 正好 10 个，normalQueries 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
+      "{\"primaryQueries\":[\"...\"],\"normalQueries\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
+      "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，normalQueries 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
       "合计必须给出 20 个互不重复的泛垂直生活搜索词，供下游按 10 个一批轮换搜索。不要多也不要少。",
     ];
   }
@@ -2430,27 +2424,6 @@ export function sentimentHotKeywordModelJsonContractForMode(value: unknown): str
     "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
     "合计必须给出 20 个互不重复的可搜索词，供下游按 10 个一批轮换搜索。不要多也不要少。",
   ];
-}
-
-export function normalSentimentHotStrategyKeepsPersonaBridge(
-  strategy: SentimentHotSearchStrategy,
-  sourceText: string,
-): boolean {
-  const source = cleanText(sourceText).toLowerCase();
-  const bridgeTerms = [...new Set((strategy.normalBridgeTerms || [])
-    .map(cleanText)
-    .filter((term) => (
-      term.length >= 2
-      && term.length <= 4
-      && source.includes(term.toLowerCase())
-      && !isGenericPersonaContentTopic(term)
-      && !isHollowSearchKeyword(term)
-      && !/^(?:家庭|生活|朋友|消費|消费|計劃|计划|選擇|选择|日常)$/u.test(term)
-    )))];
-  if (bridgeTerms.length < 4) return false;
-  const keywords = resolveSentimentHotModelStrategyKeywords(strategy, "normal");
-  return keywords.length === SENTIMENT_HOT_NORMAL_KEYWORD_TARGET
-    && keywords.every((query) => bridgeTerms.some((bridge) => cleanText(query).toLowerCase().includes(bridge.toLowerCase())));
 }
 
 async function buildSentimentHotSearchStrategyWithModel(args: {
@@ -2570,11 +2543,8 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
           const expansion = [...new Set((candidate.broadQueries || []).map(cleanText).filter(Boolean))];
           const uniqueCount = resolveSentimentHotModelStrategyKeywords(candidate, searchMode).length;
           const hasChinese = ([...queries, ...expansion].join("").match(/[\u3400-\u9fff]/gu) || []).length >= 16;
-          const normalBridgeValid = searchMode !== "normal" || normalSentimentHotStrategyKeepsPersonaBridge(candidate, personaText);
-          if (queries.length !== 10 || uniqueCount !== sentimentHotKeywordTargetForMode(searchMode) || !hasChinese || !normalBridgeValid) {
-            const reason = queries.length !== 10 || uniqueCount !== sentimentHotKeywordTargetForMode(searchMode)
-              ? "missing_terms"
-              : (!hasChinese ? "not_chinese" : "missing_persona_bridge");
+          if (queries.length !== 10 || uniqueCount !== sentimentHotKeywordTargetForMode(searchMode) || !hasChinese) {
+            const reason = queries.length !== 10 || uniqueCount !== sentimentHotKeywordTargetForMode(searchMode) ? "missing_terms" : "not_chinese";
             console.info(`[sentiment_hot_model_unusable] reason=${reason} mode=${searchMode} primary=${queries.length} unique=${uniqueCount} sample=${JSON.stringify(queries.slice(0, 8))}`);
             return false;
           }
@@ -2591,10 +2561,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
       archiveName: cleanText(archive.name),
       sourceText: personaText,
     });
-    if (
-      resolveSentimentHotModelStrategyKeywords(strategy, searchMode).length === sentimentHotKeywordTargetForMode(searchMode)
-      && (searchMode !== "normal" || normalSentimentHotStrategyKeepsPersonaBridge(strategy, personaText))
-    ) {
+    if (resolveSentimentHotModelStrategyKeywords(strategy, searchMode).length === sentimentHotKeywordTargetForMode(searchMode)) {
       console.info(`[sentiment_hot_model_strategy] model=${JSON.stringify(result.model)} domain=${JSON.stringify(strategy.domainSummary)}`);
       writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
       return strategy;

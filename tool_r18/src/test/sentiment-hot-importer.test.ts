@@ -99,7 +99,6 @@ import {
   sentimentHotKeywordModelInstructionForMode,
   sentimentHotKeywordModelJsonContractForMode,
   sentimentHotSearchStrategyCacheVersionForMode,
-  normalSentimentHotStrategyKeepsPersonaBridge,
   stampCombinedReachScore,
   resolveSentimentHotReaderConcurrency,
   resolveSentimentHotReaderTotalTimeoutMs,
@@ -482,14 +481,18 @@ describe("sentiment hot importer", () => {
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("泛垂直");
     expect(sentimentHotKeywordModelInstructionForMode("strict")).toContain("不得截断");
     expect(sentimentHotSearchStrategyCacheVersionForMode("strict")).toBe(53);
-    expect(sentimentHotSearchStrategyCacheVersionForMode("normal")).toBe("53-normal-lifestyle-v5");
+    expect(sentimentHotSearchStrategyCacheVersionForMode("normal")).toBe("53-normal-lifestyle-v6");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("自然生活场景");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("正文中自然提到一嘴");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("必须由模型直接生成");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("轻量桥接");
-    expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("不得单独输出通勤、搬家、装修、孩子教育、家庭聚餐、人际关系、休闲娱乐等裸生活大类");
+    expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("同一内容类型或受众生态");
+    expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("允许与严格垂直有少量自然重叠");
+    expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("不要求关键词逐字包含人设原文");
+    expect(sentimentHotKeywordModelInstructionForMode("normal")).not.toContain("逐字提取");
+    expect(sentimentHotKeywordModelInstructionForMode("normal")).not.toContain("最多 2 个");
     expect(sentimentHotKeywordModelJsonContractForMode("normal").join("\n")).toContain("normalQueries 正好 10 个");
-    expect(sentimentHotKeywordModelJsonContractForMode("normal").join("\n")).toContain("personaBridgeTerms 4-8 个");
+    expect(sentimentHotKeywordModelJsonContractForMode("normal").join("\n")).not.toContain("personaBridgeTerms");
     expect(sentimentHotKeywordModelJsonContractForMode("normal").join("\n")).not.toContain("domainExpansion");
     expect(sentimentHotKeywordModelJsonContractForMode("strict").join("\n")).toContain("domainExpansion 正好 10 个");
     expect(sentimentHotKeywordModelJsonContractForMode("strict").join("\n")).not.toContain("normalQueries");
@@ -500,29 +503,6 @@ describe("sentiment hot importer", () => {
       "禁止单独输出资产配置、理财、家族传承、生活、职场等上位宽词；若确属核心业务，必须和具体行业对象组合成可搜索词。",
       "每个词必须是平台用户会自然输入的完整高流量词，优先 2-4 个汉字，最多 5 个汉字；不得截断、造简称或输出東京宅、豪宅貸、傳承策这类残缺词。",
     ].join("\n"));
-  });
-
-  it("rejects model-generated normal terms that drop every persona bridge", () => {
-    const sourceText = "服务台湾高资产人士安排日本东京生活";
-    const strategy = {
-      primaryQueries: ["日本早餐", "日本咖啡", "日本通勤", "日本散步", "日本超市", "日本假期", "日本旅行", "日本租屋", "日本天气", "日本购物"],
-      broadQueries: ["东京早餐", "东京咖啡", "东京通勤", "东京散步", "东京超市", "东京假期", "东京旅行", "东京租屋", "东京天气", "东京购物"],
-      lifestyleQueries: [],
-      ecosystemQueries: [],
-      requiredAnchorTerms: ["日本", "东京", "台湾", "高资产"],
-      normalAnchorTerms: ["日本", "东京", "台湾", "高资产"],
-      strictAcceptTerms: ["日本", "东京", "台湾", "高资产", "日本生活"],
-      normalAcceptTerms: ["日本", "东京", "台湾", "高资产", "日本生活"],
-      rejectTerms: [],
-      domainSummary: "台湾高资产人士的日本生活",
-      normalBridgeTerms: ["日本", "东京", "台湾", "高资产"],
-    };
-
-    expect(normalSentimentHotStrategyKeepsPersonaBridge(strategy, sourceText)).toBe(true);
-    expect(normalSentimentHotStrategyKeepsPersonaBridge({
-      ...strategy,
-      broadQueries: [...strategy.broadQueries.slice(0, 9), "朋友聚会"],
-    }, sourceText)).toBe(false);
   });
 
   it("ignores free-form user supplements in hot-keyword strategy cache identity", () => {
