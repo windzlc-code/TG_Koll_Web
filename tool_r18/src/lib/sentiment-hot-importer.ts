@@ -1720,8 +1720,10 @@ function filterModelQueriesByDomainAnchors(queries: string[], anchors: string[])
   // primaryQueries empty even though the model already stayed in-domain.
   const objectNouns = cleanQueries.filter((query) => (
     isPublicSearchableKeywordLength(query)
-    && query.length <= 4
+    && query.length <= 8
     && !isGenericPersonaContentTopic(query)
+    && !isPersonaVisualArtifactKeyword(query, "")
+    && isConcreteSearchKeyword(query)
   ));
   return [...new Set([...matched, ...objectNouns])];
 }
