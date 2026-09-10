@@ -23,6 +23,11 @@ export interface SentimentHotCandidate {
   content: string;
   media: SentimentHotMedia[];
   hotScore: number;
+  /** Canonical API-facing view count. Omitted when the source does not expose it. */
+  view_count?: number;
+  /** Accepted from camelCase collector payloads and normalized before display. */
+  viewCount?: number;
+  views?: number;
   metrics: Record<string, unknown>;
   engagement?: {
     likeCount?: number;
