@@ -136,6 +136,7 @@ const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
 const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 53;
+const SENTIMENT_HOT_NORMAL_KEYWORD_PROMPT_VERSION = 2;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 20;
@@ -2296,8 +2297,9 @@ export function buildSentimentHotSearchStrategyCacheKey(args: {
 }): string {
   const archive = args.archive || {};
   const setup = archive.setup || {};
+  const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
   const payload = {
-    version: SENTIMENT_HOT_SEARCH_STRATEGY_VERSION,
+    version: sentimentHotSearchStrategyCacheVersionForMode(searchMode),
     id: cleanText((archive as any).id),
     name: cleanText(archive.name),
     setup: {
@@ -2309,7 +2311,7 @@ export function buildSentimentHotSearchStrategyCacheKey(args: {
     // Free-form user supplements are deliberately excluded from both model
     // input and cache identity. The persona's stable topic fields are enough.
     writingLocale: cleanText(args.writingLocale),
-    searchMode: normalizeSentimentHotSearchMode(args.searchMode),
+    searchMode,
   };
   return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex");
 }
@@ -2384,9 +2386,12 @@ export function sentimentHotKeywordModelInstructionForMode(value: unknown): stri
   if (mode === "normal") {
     return [
       "当前模式：泛垂直。必须独立生成本模式自己的 20 个搜索词，不得复用严格垂直模式的关键词计划。",
-      "primaryQueries 的 10 个词覆盖人设核心领域；domainExpansion 的 10 个词覆盖该领域相邻的使用场景、消费决策、行业生态和真实痛点。",
-      "相邻扩展仍必须能解释为这个人设会持续讨论的内容，禁止跨到无关行业，也禁止只输出日常、生活、分享等空泛词。",
-      "每个词必须是平台用户会自然输入的完整高流量词，优先 2-4 个汉字，最多 5 个汉字，不得为了缩短长度而截断词尾。",
+      "这 20 个词必须由模型直接生成，程序不会用固定词表或兜底代码补齐；不得把人设核心行业词换序后冒充泛垂直词。",
+      "primaryQueries 的 10 个词生成与人设受众有关的自然生活场景、日常动作、家庭选择、消费处境或情绪事件；和人设核心只需弱关联，候选正文中自然提到一嘴即可，不要求整篇都讲专业主题。",
+      "domainExpansion 的 10 个词再向更通用的真实生活话题扩展，例如通勤、搬家、装修、家庭预算、周末安排、邻里相处这类可发生具体事件的方向；示例只说明粒度，必须结合当前人设重新生成，禁止照抄示例。",
+      "每个词都要能用一句话解释为何该人设或其受众可能自然谈到，不能完全无关，也不能只是日常、生活、分享等没有搜索对象的空词。",
+      "与严格垂直常见的行业、产品、服务词尽量不重叠，20 个词中最多 2 个可以直接使用核心专业词，其余必须是自然生活化搜索词。",
+      "每个词必须是平台用户会自然输入的完整常用词，2-5 个汉字，不得为了缩短长度而截断词尾。",
     ].join("\n");
   }
   return [
@@ -2395,6 +2400,12 @@ export function sentimentHotKeywordModelInstructionForMode(value: unknown): stri
     "禁止单独输出资产配置、理财、家族传承、生活、职场等上位宽词；若确属核心业务，必须和具体行业对象组合成可搜索词。",
     "每个词必须是平台用户会自然输入的完整高流量词，优先 2-4 个汉字，最多 5 个汉字；不得截断、造简称或输出東京宅、豪宅貸、傳承策这类残缺词。",
   ].join("\n");
+}
+
+export function sentimentHotSearchStrategyCacheVersionForMode(value: unknown): number | string {
+  return normalizeSentimentHotSearchMode(value) === "normal"
+    ? `${SENTIMENT_HOT_SEARCH_STRATEGY_VERSION}-normal-lifestyle-v${SENTIMENT_HOT_NORMAL_KEYWORD_PROMPT_VERSION}`
+    : SENTIMENT_HOT_SEARCH_STRATEGY_VERSION;
 }
 
 async function buildSentimentHotSearchStrategyWithModel(args: {
@@ -2473,18 +2484,28 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
             "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
             "合计必须给出 20 个互不重复的可搜索词，供下游按 10 个一批轮换搜索。不要多也不要少。",
             "",
-            "先看人设名称和主题。若简介清楚写了职业、产品、场所或作品，就按这些扩词。",
-            "若简介很难过关——只有性格、外貌、日常、搞笑、吐槽、段子，没有现成物件名词——你必须先自己扩展：这个人会持续对公众讲什么，把该主题扩成可搜索的具体对象（物、场景、作品、槽点对象、职场物件），再输出搜索词。",
-            "扩展必须仍属于这个人设会讲的内容，不能换成无关行业。禁止因为简介空泛、擦边或不好写就拒写或返回空候选。",
-            "primaryQueries 必须是 2-5 个汉字的完整自然词语，优先 2-4 个汉字的高流量词，描述具体物件、服务、场所、工具、产品或作品，互不重复，公众会直接拿去搜；禁止为了凑长度而截断词尾或自造简称。",
-            "完整词超过 5 字时，改写为完整且常用的上位短词，例如非居住者貸款改为日本房貸、高資產配置保留資產配置；绝不能直接砍掉最后一个字。",
-            "domainExpansion 再补 10 个同一领域、与 primaryQueries 不重复的可搜物件。两个主题并存时必须分别扩词。主题名本身最多保留 1 次，其余必须更具体。",
-            "风格意图只用于理解这类帖子常见，不要写进搜索词。禁止输出带这些后缀或整词的合成搜索词：攻略、教程、教學、教学、分享、心得、评测、測評、推荐、推薦、經驗、经验。",
-            "若该领域常见攻略或教程帖，请改写成更具体的可搜物件，例如存股、融資、配息、當沖、槓桿、信用交易，而不是融資攻略、理財心得、台股分享。",
-            "不要用短词再拼更长的标签。有融資可以同时保留更具体的融資券，但不要写融資攻略、融資分享、融資額這種重复加长。",
-            "禁止单独输出空词：日常、搞笑、生活、攻略、经验、好物、气氛、爱好者、大叔、便宜、烟火气、教程、分享、心得。",
-            "禁止外貌、性格、语气、穿著、面料、体型、姿势、道具、图片视觉描述。",
-            "生活状态词（慢生活、退休生活、健康生活、家务、居家清洁）除非人设主业本身就是家政、养老或对应行业，否则禁止作为搜索词。",
+            ...(searchMode === "normal" ? [
+              "先看人设名称、内容主题和目标受众，再从这些人的真实一天里生成 20 个搜索词；不要沿着核心行业名继续扩同义词。",
+              "搜索词要落在可发生具体事件的自然生活内容：出门、通勤、居住、家庭安排、消费选择、人际互动、休闲计划或生活小麻烦；允许与核心业务仅有间接联系。",
+              "候选帖子只要主要内容是自然生活话题，并在正文任意位置自然提及一个当前搜索词，就符合泛垂直相关性；不要要求标题、开头或全文围绕专业主题。",
+              "仍须保留弱关联边界：每个词必须是当前人设或其受众确实可能遇到的话题，禁止跨到毫无关系的明星八卦、游戏、医疗、政治等随机领域。",
+              "primaryQueries 和 domainExpansion 都必须是 2-5 个汉字的完整常用搜索词，互不重复；禁止截断、造简称，也禁止用严格垂直词简单改写凑数。",
+              "禁止单独输出没有具体事件或对象的空词：日常、搞笑、生活、分享、心得、好物、气氛、爱好者、大叔、便宜、烟火气。",
+              "禁止外貌、性格、语气、穿著、面料、体型、姿势、道具、图片视觉描述。",
+            ] : [
+              "先看人设名称和主题。若简介清楚写了职业、产品、场所或作品，就按这些扩词。",
+              "若简介很难过关——只有性格、外貌、日常、搞笑、吐槽、段子，没有现成物件名词——你必须先自己扩展：这个人会持续对公众讲什么，把该主题扩成可搜索的具体对象（物、场景、作品、槽点对象、职场物件），再输出搜索词。",
+              "扩展必须仍属于这个人设会讲的内容，不能换成无关行业。禁止因为简介空泛、擦边或不好写就拒写或返回空候选。",
+              "primaryQueries 必须是 2-5 个汉字的完整自然词语，优先 2-4 个汉字的高流量词，描述具体物件、服务、场所、工具、产品或作品，互不重复，公众会直接拿去搜；禁止为了凑长度而截断词尾或自造简称。",
+              "完整词超过 5 字时，改写为完整且常用的上位短词，例如非居住者貸款改为日本房貸、高資產配置保留資產配置；绝不能直接砍掉最后一个字。",
+              "domainExpansion 再补 10 个同一领域、与 primaryQueries 不重复的可搜物件。两个主题并存时必须分别扩词。主题名本身最多保留 1 次，其余必须更具体。",
+              "风格意图只用于理解这类帖子常见，不要写进搜索词。禁止输出带这些后缀或整词的合成搜索词：攻略、教程、教學、教学、分享、心得、评测、測評、推荐、推薦、經驗、经验。",
+              "若该领域常见攻略或教程帖，请改写成更具体的可搜物件，例如存股、融資、配息、當沖、槓桿、信用交易，而不是融資攻略、理財心得、台股分享。",
+              "不要用短词再拼更长的标签。有融資可以同时保留更具体的融資券，但不要写融資攻略、融資分享、融資額這種重复加长。",
+              "禁止单独输出空词：日常、搞笑、生活、攻略、经验、好物、气氛、爱好者、大叔、便宜、烟火气、教程、分享、心得。",
+              "禁止外貌、性格、语气、穿著、面料、体型、姿势、道具、图片视觉描述。",
+              "生活状态词（慢生活、退休生活、健康生活、家务、居家清洁）除非人设主业本身就是家政、养老或对应行业，否则禁止作为搜索词。",
+            ]),
             "禁止把两个主题名拼成一个词。",
             "rejectTerms 写最容易误召回的其他行业，不能排除主领域。",
             chineseSearchInstruction,
@@ -4979,12 +5000,14 @@ export function parseThreadsGraphqlSearchPayload(args: {
           value?.text_post_app_info?.viewCount,
           value?.view_count,
           value?.viewCount,
+          value?.views,
           value?.play_count,
           value?.playCount,
         ].find((item) => item !== null && item !== undefined && item !== "");
-        const viewCount = rawViewCount === undefined
-          ? undefined
-          : Math.max(0, Number(rawViewCount) || 0);
+        const parsedViewCount = rawViewCount === undefined ? undefined : parseMetricNumberLoose(String(rawViewCount));
+        const viewCount = typeof parsedViewCount === "number" && Number.isFinite(parsedViewCount) && parsedViewCount > 0
+          ? Math.round(parsedViewCount)
+          : undefined;
         const sourceUrl = `https://www.threads.com/@${encodeURIComponent(username)}/post/${encodeURIComponent(code)}`;
         const id = buildSentimentCandidateId({ platform: "threads", sourceUrl, content });
         if (!byId.has(id)) {
@@ -7861,11 +7884,12 @@ async function extractThreadsVisibleProfilePosts(args: {
 }
 
 export function parseThreadsPostViewCountFromText(text: string): number | undefined {
-  return parseMetricNumberLoose(
-    String(text || "").match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*(?:次瀏覽|次浏览|瀏覽|浏览|views?)/i)?.[1]
+  const parsed = parseMetricNumberLoose(
+    String(text || "").match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*(?:次瀏覽|次浏览|瀏覽|浏览|次觀看|次观看|觀看|观看|views?)/i)?.[1]
       || String(text || "").match(/Thread\s+(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s+views/i)?.[1]
       || String(text || "").match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*views/i)?.[1],
   );
+  return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
 }
 
 export function parseInstagramPostEngagementFromHtml(html: string): NonNullable<SentimentHotCandidate["engagement"]> {
@@ -7888,11 +7912,19 @@ export function parseInstagramPostEngagementFromHtml(html: string): NonNullable<
 }
 
 export function parseThreadsPostViewCountFromHtml(html: string): number | undefined {
-  const source = String(html || "");
-  const loggedOut = source.match(/"view_counts"\s*:\s*(\d+(?:\.\d+)?)/i);
-  if (loggedOut?.[1]) return parseMetricNumberLoose(loggedOut[1]);
-  const graphql = source.match(/"text_post_app_info"\s*:\s*\{[\s\S]{0,1200}?"view_count"\s*:\s*(\d+)/i);
-  if (graphql?.[1]) return parseMetricNumberLoose(graphql[1]);
+  let source = String(html || "").replace(/&quot;|&#34;/gi, '"');
+  // Threads may nest hydration JSON inside another quoted JSON string.
+  // Unwrap escaped quotes only; exact keys still anchor every metric match.
+  for (let pass = 0; pass < 2; pass += 1) source = source.replace(/\\"/g, '"');
+  const matches = [
+    source.match(/"view_counts"\s*:\s*"?(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)"?/i)?.[1],
+    source.match(/"text_post_app_info"\s*:\s*\{[\s\S]{0,1600}?"view_count"\s*:\s*"?(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)"?/i)?.[1],
+    source.match(/"text_post_app_info"\s*:\s*\{[\s\S]{0,1600}?"viewCount"\s*:\s*"?(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)"?/i)?.[1],
+  ];
+  for (const match of matches) {
+    const parsed = parseMetricNumberLoose(match);
+    if (typeof parsed === "number" && parsed > 0) return parsed;
+  }
   return undefined;
 }
 
@@ -9592,10 +9624,13 @@ function realSentimentHotScore(engagement: NonNullable<SentimentHotCandidate["en
   } as SentimentHotCandidate);
 }
 
-export function viewCountOfCandidate(candidate: Pick<SentimentHotCandidate, "engagement" | "metrics">): number {
+export function viewCountOfCandidate(candidate: Pick<SentimentHotCandidate, "engagement" | "metrics" | "view_count" | "viewCount" | "views">): number {
   const metrics = candidate.metrics && typeof candidate.metrics === "object" ? candidate.metrics as Record<string, unknown> : {};
   const raw = [
     candidate.engagement?.viewCount,
+    candidate.view_count,
+    candidate.viewCount,
+    candidate.views,
     metrics.view_count,
     metrics.viewCount,
     metrics.views,
@@ -9635,16 +9670,32 @@ export function combinedReachScore(candidate: Pick<SentimentHotCandidate, "engag
 export function stampCombinedReachScore(candidate: SentimentHotCandidate): SentimentHotCandidate {
   const viewCount = viewCountOfCandidate(candidate);
   const combined = combinedReachScore(candidate);
-  return {
+  const engagement = { ...(candidate.engagement || {}) };
+  const metrics = { ...(candidate.metrics || {}) } as Record<string, unknown>;
+  if (viewCount > 0) {
+    engagement.viewCount = viewCount;
+    metrics.view_count = viewCount;
+  } else {
+    delete engagement.viewCount;
+    for (const key of ["view_count", "viewCount", "views"] as const) delete metrics[key];
+  }
+  const stamped: SentimentHotCandidate = {
     ...candidate,
     hotScore: Math.max(Number(candidate.hotScore || 0), combined),
+    ...(viewCount > 0 ? { view_count: viewCount, viewCount } : {}),
+    engagement,
     metrics: {
-      ...(candidate.metrics || {}),
-      ...(viewCount > 0 ? { view_count: viewCount } : {}),
+      ...metrics,
       interaction_heat: interactionHeatScore(candidate),
       combined_reach: combined,
     },
   };
+  if (viewCount <= 0) {
+    delete stamped.view_count;
+    delete stamped.viewCount;
+    delete stamped.views;
+  }
+  return stamped;
 }
 
 function extractInstagramEngagementMetricsFromText(value: string): NonNullable<SentimentHotCandidate["engagement"]> {
@@ -9671,7 +9722,11 @@ function mergeEngagementMetrics(
   const merged: NonNullable<SentimentHotCandidate["engagement"]> = { ...base };
   if (typeof merged.likeCount !== "number" && typeof extra.likeCount === "number") merged.likeCount = extra.likeCount;
   if (typeof merged.commentCount !== "number" && typeof extra.commentCount === "number") merged.commentCount = extra.commentCount;
-  if (typeof merged.viewCount !== "number" && typeof extra.viewCount === "number") merged.viewCount = extra.viewCount;
+  if (
+    !(typeof merged.viewCount === "number" && merged.viewCount > 0)
+    && typeof extra.viewCount === "number"
+    && extra.viewCount > 0
+  ) merged.viewCount = extra.viewCount;
   if (typeof merged.shareCount !== "number" && typeof extra.shareCount === "number") merged.shareCount = extra.shareCount;
   const rawSignals = [...(base.rawSignals || []), ...(extra.rawSignals || [])]
     .filter((item): item is number => typeof item === "number" && Number.isFinite(item) && item > 0);
@@ -9721,9 +9776,8 @@ function hasNamedEngagementMetrics(engagement?: SentimentHotCandidate["engagemen
 export function parseThreadsDetailEngagementMarkdown(text: string): NonNullable<SentimentHotCandidate["engagement"]> {
   const value = String(text || "");
   const engagement = extractEngagementMetricsFromText(value);
-  const viewMatch = value.match(/Thread\s+(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s+views/i);
-  const viewCount = parseMetricNumberLoose(viewMatch?.[1]);
-  if (typeof viewCount === "number") engagement.viewCount = viewCount;
+  const viewCount = parseThreadsPostViewCountFromText(value);
+  if (typeof viewCount === "number" && viewCount > 0) engagement.viewCount = viewCount;
   const rawSignals = Array.from(value.matchAll(/(?:^|\n)\s*(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*(?=\n|$)/g))
     .map((match) => parseMetricNumberLoose(match[1]))
     .filter((item): item is number => typeof item === "number" && item > 0)
@@ -9984,11 +10038,7 @@ export function parseThreadsBrowserPostDetailMetrics(args: {
 }): Pick<ThreadsBrowserProfilePublishedPostSnapshot, "hotScore" | "engagement" | "metrics"> | null {
   const sequence = findThreadsActionMetricSequence(args.actionTexts || []);
   const text = String(args.text || "");
-  const viewCount = parseMetricNumberLoose(
-    text.match(/Thread\s+(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s+views/i)?.[1]
-    || text.match(/串文\s*(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*次瀏覽/i)?.[1]
-    || text.match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*次瀏覽/i)?.[1],
-  );
+  const viewCount = parseThreadsPostViewCountFromText(text);
   if (!sequence && typeof viewCount !== "number") return null;
   if (!sequence) {
     return {
@@ -10537,10 +10587,7 @@ export async function enrichThreadsCandidateDetails(
       && (
         options.force === true
         || (
-          typeof candidate.engagement?.viewCount !== "number"
-          && typeof (candidate.metrics as any)?.view_count !== "number"
-          && typeof (candidate.metrics as any)?.viewCount !== "number"
-          && typeof (candidate.metrics as any)?.views !== "number"
+          viewCountOfCandidate(candidate) <= 0
         )
       )
     ))
@@ -10600,7 +10647,7 @@ function compactEngagementMetrics(engagement: NonNullable<SentimentHotCandidate[
   const out: Record<string, number | number[]> = {};
   if (typeof engagement.likeCount === "number") out.like_count = engagement.likeCount;
   if (typeof engagement.commentCount === "number") out.comment_count = engagement.commentCount;
-  if (typeof engagement.viewCount === "number") out.view_count = engagement.viewCount;
+  if (typeof engagement.viewCount === "number" && engagement.viewCount > 0) out.view_count = engagement.viewCount;
   if (typeof engagement.shareCount === "number") out.share_count = engagement.shareCount;
   if (engagement.rawSignals?.length) out.raw_engagement_signals = engagement.rawSignals;
   return out;

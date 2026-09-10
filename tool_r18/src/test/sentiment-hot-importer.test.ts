@@ -97,6 +97,7 @@ import {
   resolveSentimentHotStrategyTimeoutMs,
   resolveSentimentHotDisplayHeatThreshold,
   sentimentHotKeywordModelInstructionForMode,
+  sentimentHotSearchStrategyCacheVersionForMode,
   stampCombinedReachScore,
   resolveSentimentHotReaderConcurrency,
   resolveSentimentHotReaderTotalTimeoutMs,
@@ -478,6 +479,18 @@ describe("sentiment hot importer", () => {
     expect(sentimentHotKeywordModelInstructionForMode("strict")).toContain("严格垂直");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("泛垂直");
     expect(sentimentHotKeywordModelInstructionForMode("strict")).toContain("不得截断");
+    expect(sentimentHotSearchStrategyCacheVersionForMode("strict")).toBe(53);
+    expect(sentimentHotSearchStrategyCacheVersionForMode("normal")).toBe("53-normal-lifestyle-v2");
+    expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("自然生活场景");
+    expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("正文中自然提到一嘴");
+    expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("必须由模型直接生成");
+    expect(sentimentHotKeywordModelInstructionForMode("normal")).not.toContain("核心领域；domainExpansion");
+    expect(sentimentHotKeywordModelInstructionForMode("strict")).toBe([
+      "当前模式：严格垂直。必须独立生成本模式自己的 20 个搜索词，不得复用泛垂直模式的关键词计划。",
+      "primaryQueries 和 domainExpansion 的全部词都必须直接指向人设的核心行业、核心对象或核心服务。",
+      "禁止单独输出资产配置、理财、家族传承、生活、职场等上位宽词；若确属核心业务，必须和具体行业对象组合成可搜索词。",
+      "每个词必须是平台用户会自然输入的完整高流量词，优先 2-4 个汉字，最多 5 个汉字；不得截断、造简称或输出東京宅、豪宅貸、傳承策这类残缺词。",
+    ].join("\n"));
   });
 
   it("ignores free-form user supplements in hot-keyword strategy cache identity", () => {
@@ -3361,8 +3374,37 @@ Title: Instagram
     });
 
     expect(stamped.hotScore).toBe(210);
+    expect(stamped.engagement).not.toHaveProperty("viewCount");
     expect(stamped.metrics).not.toHaveProperty("view_count");
     expect(stamped.metrics).toMatchObject({ interaction_heat: 210, combined_reach: 210 });
+    expect(finalizeSentimentHotCandidatesForDisplay([stamped], 1, {
+      keywords: ["热点"],
+      searchMode: "normal",
+    })).toHaveLength(1);
+  });
+
+  it("normalizes a positive top-level view count into returned candidate metrics", () => {
+    const stamped = stampCombinedReachScore({
+      id: "top-level-view",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/top-level-view",
+      author: "demo",
+      content: "热点内容完整展示并包含足够长度的中文说明，确保浏览量能够正确返回。",
+      media: [],
+      hotScore: 0,
+      view_count: 3210,
+      metrics: { source: "threads-reader-search", view_count: 0 },
+      engagement: { likeCount: 80, commentCount: 10 },
+      capturedAt: new Date().toISOString(),
+    } as any);
+
+    expect(viewCountOfCandidate(stamped as any)).toBe(3210);
+    expect(stamped.engagement?.viewCount).toBe(3210);
+    expect(stamped.metrics).toMatchObject({
+      view_count: 3210,
+      interaction_heat: 90,
+      combined_reach: 3300,
+    });
   });
 
   it("keeps shown history isolated between strict and normal modes", () => {
@@ -4606,6 +4648,10 @@ stevie875443
 Thread
 6.1萬 views
     `)).toBe(61000);
+
+    expect(parseThreadsPostViewCountFromText("这则串文已有 1.8万次浏览")).toBe(18000);
+    expect(parseThreadsPostViewCountFromText("这则串文已有 2.4萬次觀看")).toBe(24000);
+    expect(parseThreadsPostViewCountFromText("Thread 0 views")).toBeUndefined();
   });
 
   it("parses the exact permalink view count from Threads page data", () => {
@@ -4615,6 +4661,18 @@ Thread
     expect(parseThreadsPostViewCountFromHtml(`
       {"text_post_app_info":{"direct_reply_count":4,"view_count":186000}}
     `)).toBe(186000);
+    expect(parseThreadsPostViewCountFromHtml(`
+      {\"payload\":\"{\\\"text_post_app_info\\\":{\\\"view_count\\\":98200}}\"}
+    `)).toBe(98200);
+    expect(parseThreadsPostViewCountFromHtml(`
+      {&quot;text_post_app_info&quot;:{&quot;view_count&quot;:76400}}
+    `)).toBe(76400);
+    expect(parseThreadsPostViewCountFromHtml(`
+      {"text_post_app_info":{"view_count":"44.1K"}}
+    `)).toBe(44100);
+    expect(parseThreadsPostViewCountFromHtml(`
+      {"text_post_app_info":{"view_count":0}}
+    `)).toBeUndefined();
     expect(parseThreadsPostViewCountFromHtml("<html>no target view count</html>")).toBeUndefined();
   });
 

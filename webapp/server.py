@@ -16186,6 +16186,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
 
 
 PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 67
+PERSONA_HOT_NORMAL_KEYWORD_PROMPT_VERSION = 2
 PERSONA_HOT_KEYWORD_PLAN_SIZE = 20
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 10
 PERSONA_HOT_KEYWORD_BATCH_MAX_USES = 2
@@ -16363,7 +16364,18 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
         state = _read_persona_hot_keyword_batch_state()
         key = _persona_hot_keyword_batch_key(clean_id, payload)
         existing = state.get(key)
-        existing_version = _to_int((existing or {}).get("strategy_version"), 0) if isinstance(existing, dict) else 0
+        normal_prompt_is_current = (
+            search_mode != "normal"
+            or (
+                isinstance(existing, dict)
+                and _to_int(existing.get("normal_prompt_version"), 0) == PERSONA_HOT_NORMAL_KEYWORD_PROMPT_VERSION
+            )
+        )
+        existing_version = (
+            _to_int((existing or {}).get("strategy_version"), 0)
+            if isinstance(existing, dict) and normal_prompt_is_current
+            else 0
+        )
         remaining_batch = (
             _persona_hot_keyword_batch_from_row(existing)
             if existing_version == PERSONA_HOT_KEYWORD_STRATEGY_VERSION
@@ -16377,6 +16389,7 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
         if (
             isinstance(existing, dict)
             and not must_regenerate
+            and normal_prompt_is_current
             and _to_int(existing.get("strategy_version"), 0) == PERSONA_HOT_KEYWORD_STRATEGY_VERSION
             and existing_keywords
         ):
@@ -16387,7 +16400,12 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
             _write_persona_hot_keyword_batch_state(state)
             return _persona_hot_keyword_prepare_payload(existing, search_mode)
 
-        force_regenerate = must_regenerate
+        force_regenerate = must_regenerate or (
+            search_mode == "normal"
+            and isinstance(existing, dict)
+            and bool(existing_keywords)
+            and not normal_prompt_is_current
+        )
         archive_snapshot = _remote_fetch_archive_snapshot(clean_id)
         prepare_payload: dict[str, Any] = {
             "action": "prepare-hot-keywords",
@@ -16427,6 +16445,8 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
+        if search_mode == "normal":
+            row["normal_prompt_version"] = PERSONA_HOT_NORMAL_KEYWORD_PROMPT_VERSION
         if all_keywords:
             state[key] = row
             _write_persona_hot_keyword_batch_state(state)
