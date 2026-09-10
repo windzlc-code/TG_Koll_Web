@@ -5419,6 +5419,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("与严格垂直常见的行业、产品、服务词尽量不重叠", importer)
         self.assertIn("候选正文中自然提到一嘴即可", importer)
         self.assertIn("程序不会用固定词表或兜底代码补齐", importer)
+        self.assertIn("每个词都必须带一个从当前人设提炼的轻量桥接信息", importer)
+        self.assertIn("不得单独输出通勤、搬家、装修、孩子教育、家庭聚餐、人际关系、休闲娱乐等裸生活大类", importer)
         self.assertIn("禁止输出带这些后缀或整词的合成搜索词", importer)
         self.assertIn("存股、融資、配息、當沖、槓桿、信用交易", importer)
         self.assertIn("domainSummary", importer)
