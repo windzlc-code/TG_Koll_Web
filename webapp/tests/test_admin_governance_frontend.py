@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SERVER_SOURCE = (ROOT / "server.py").read_text(encoding="utf-8")
 
 
 class AdminGovernanceFrontendTests(unittest.TestCase):
@@ -110,6 +111,15 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('记录读取失败：${getErrorMessage(error)}；请点击“刷新数据集”重试', self.script)
         self.assertIn('if (payload?.stale) void refreshHotDatasets({ force: true });', self.script)
         self.assertIn('候选已使用或清理', self.script)
+
+    def test_hot_dataset_initial_read_uses_worker_source_of_truth(self):
+        route = SERVER_SOURCE[
+            SERVER_SOURCE.index('@app.get("/api/admin/hot-datasets")')
+            : SERVER_SOURCE.index('@app.post("/api/admin/hot-datasets/refresh")')
+        ]
+        self.assertIn('_hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")', route)
+        self.assertIn('except HTTPException:', route)
+        self.assertIn('local snapshot as a degraded fallback', route)
 
     def test_social_automation_limits_are_managed_in_admin_runtime(self):
         for element_id in (

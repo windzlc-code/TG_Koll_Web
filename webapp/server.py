@@ -31641,6 +31641,25 @@ def create_app() -> FastAPI:
 
     @app.get("/api/admin/hot-datasets")
     def api_admin_hot_datasets(_user: dict[str, Any] = Depends(require_admin)):
+        # The worker owns the dataset state.  The collector admin container has
+        # a separate /collector-proxy mount, so reading its local snapshot
+        # here can resurrect stale/generated persona names after a refresh.
+        try:
+            worker_payload = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")
+            overview = worker_payload.get("overview") if isinstance(worker_payload, dict) else None
+            if isinstance(overview, dict):
+                generated_at = int(overview.get("generated_at") or 0)
+                return {
+                    "configured": True,
+                    "stale": False,
+                    "generated_at": generated_at,
+                    "global": overview.get("global") if isinstance(overview.get("global"), dict) else {},
+                    "personas": overview.get("personas") if isinstance(overview.get("personas"), list) else [],
+                }
+        except HTTPException:
+            # Keep the existing local snapshot as a degraded fallback when
+            # the old worker is temporarily unavailable.
+            pass
         path = Path(os.getenv("TG_HOT_DATASET_OVERVIEW_PATH", "/collector-proxy/hot-dataset-overview.json"))
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
