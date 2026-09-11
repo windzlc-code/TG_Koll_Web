@@ -162,3 +162,12 @@ class ProductWorkspaceSplitHttpTests(unittest.TestCase):
             self.assertIn("/assets/opc/vecto-logo-ui-icon.png", response.text)
             self.assertIn('id="productLoginForm"', response.text)
             self.assertIn("Vecto", response.text)
+
+    def test_only_console_login_renders_the_static_case_studies_entry(self):
+        console = self.client.get("/console-login.html")
+        video = self.client.get("/video-login.html")
+        crm = self.client.get("/crm-login.html")
+
+        self.assertIn('data-site-nav-key="caseStudies"', console.text)
+        self.assertNotIn('data-site-nav-key="caseStudies"', video.text)
+        self.assertNotIn('data-site-nav-key="caseStudies"', crm.text)

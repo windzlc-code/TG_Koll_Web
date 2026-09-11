@@ -6044,6 +6044,12 @@ def _public_admin_login_location(return_url: str = "/admin") -> str:
 
 def _product_login_html(kind: str) -> HTMLResponse:
     spec = dict(_PRODUCT_LOGIN_SPECS.get(kind) or _PRODUCT_LOGIN_SPECS["console"])
+    case_studies_nav = (
+        '<a data-site-nav-key="caseStudies" href="/case-studies.html">'
+        '<span data-site-copy="caseStudies">热门案例</span></a>'
+        if spec["kind"] == "console"
+        else ""
+    )
     return _html_response_with_versions(
         "product-login.html",
         replacements={
@@ -6065,6 +6071,7 @@ def _product_login_html(kind: str) -> HTMLResponse:
             "__PRODUCT_FACT_1_COPY__": str(spec["fact_1_copy"]),
             "__PRODUCT_FACT_2_TITLE__": str(spec["fact_2_title"]),
             "__PRODUCT_FACT_2_COPY__": str(spec["fact_2_copy"]),
+            "__PRODUCT_CASE_STUDIES_NAV__": case_studies_nav,
         },
     )
 
