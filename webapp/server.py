@@ -31661,7 +31661,21 @@ def create_app() -> FastAPI:
 
     @app.post("/api/admin/hot-datasets/refresh")
     def api_admin_refresh_hot_datasets(user: dict[str, Any] = Depends(require_admin)):
-        _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")
+        # The worker is the source of truth.  The old implementation discarded
+        # the worker response and read the console's local snapshot again,
+        # which kept stale/generated persona names visible after refresh.
+        worker_payload = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")
+        overview = worker_payload.get("overview") if isinstance(worker_payload, dict) else None
+        if isinstance(overview, dict):
+            generated_at = int(overview.get("generated_at") or 0)
+            return {
+                "ok": True,
+                "configured": True,
+                "stale": False,
+                "generated_at": generated_at,
+                "global": overview.get("global") if isinstance(overview.get("global"), dict) else {},
+                "personas": overview.get("personas") if isinstance(overview.get("personas"), list) else [],
+            }
         return {"ok": True, **api_admin_hot_datasets(user)}
 
     @app.get("/api/admin/hot-datasets/events")
@@ -31717,6 +31731,19 @@ def create_app() -> FastAPI:
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail="热点数据集 ID 无效") from exc
         result = _hot_dataset_worker_request("DELETE", f"/internal/worker/v1/hot-datasets/{clean_id}")
+        overview = result.get("overview") if isinstance(result, dict) else None
+        if isinstance(overview, dict):
+            generated_at = int(overview.get("generated_at") or 0)
+            return {
+                "ok": True,
+                "deleted_count": int(result.get("deleted_count") or 0),
+                "moved_count": int(result.get("moved_count") or 0),
+                "configured": True,
+                "stale": False,
+                "generated_at": generated_at,
+                "global": overview.get("global") if isinstance(overview.get("global"), dict) else {},
+                "personas": overview.get("personas") if isinstance(overview.get("personas"), list) else [],
+            }
         return {"ok": True, "deleted_count": int(result.get("deleted_count") or 0), **api_admin_hot_datasets(user)}
 
     @app.get("/api/admin/dashboard")

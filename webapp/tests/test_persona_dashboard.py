@@ -5390,6 +5390,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("已准备", fetch_source)
         self.assertIn("/hot_candidates/cache", source)
         self.assertIn("readPersonaHotCandidatesCache", source)
+        self.assertIn("const liveTaskPromise", fetch_source)
+        self.assertLess(fetch_source.index("const liveTaskPromise"), fetch_source.index("await readPersonaHotCandidatesCache"))
         self.assertIn("record_shown", fetch_source)
         self.assertIn("已展示缓存热点，正在实时更新", source)
 

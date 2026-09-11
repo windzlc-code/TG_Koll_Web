@@ -56,6 +56,8 @@ PERSONA_HOT_POOL_ACTIVE_SECONDS = 2 * 86400
 _SAFE_JOB_ID = re.compile(r"job_[0-9a-f]{24}")
 _PERSONA_ARCHIVE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
 _SAFE_CACHE_ARCHIVE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+_PLACEHOLDER_PERSONA_NAME = re.compile(r"^(?:人设 [0-9a-f]{8}|未命名人设)$", re.IGNORECASE)
+_ORPHAN_PERSONA_ARCHIVE_ID = re.compile(r"^persona-[0-9a-f]{8,64}$", re.IGNORECASE)
 
 
 def _truthy_environment(name: str) -> bool:
@@ -70,6 +72,21 @@ def _hot_public_probe_enabled() -> bool:
     if _truthy_environment("TG_HOT_PUBLIC_PROBE"):
         return True
     return Path("/data/hot-public-probe").is_file()
+
+
+def _persona_hot_auto_refill_enabled() -> bool:
+    # Persona caches are derived classifications of the shared global pool.
+    # Keep the legacy scheduler code available for migration/rollback, but do
+    # not create or execute timed refill targets in the normal product path.
+    return _truthy_environment("TG_HOT_POOL_AUTO_REFILL")
+
+
+def _global_pool_capacity() -> int:
+    try:
+        configured = int(os.getenv("TG_HOT_GLOBAL_POOL_CAPACITY", "100000") or 100000)
+    except (TypeError, ValueError):
+        configured = 100000
+    return max(1, min(configured, 100000))
 
 
 _PERSONA_HOT_SNAPSHOT_SETUP_FIELDS = (
@@ -385,6 +402,27 @@ def _rewrite_persona_cache_candidates(
         os.replace(temporary, cache_path)
 
 
+def _prune_global_pool_database(connection: sqlite3.Connection) -> None:
+    cutoff_ms = (int(time.time()) - 30 * 86400) * 1000
+    connection.execute(
+        "DELETE FROM sentiment_hot_global_candidates WHERE content_at_ms < ?",
+        (cutoff_ms,),
+    )
+    capacity = _global_pool_capacity()
+    connection.execute(
+        """
+        DELETE FROM sentiment_hot_global_candidates
+        WHERE id NOT IN (
+          SELECT id
+          FROM sentiment_hot_global_candidates
+          ORDER BY content_at_ms DESC, hot_score DESC, updated_at_ms DESC, id DESC
+          LIMIT ?
+        )
+        """,
+        (capacity,),
+    )
+
+
 def _append_candidates_to_global_pool(runtime_dir: Path, candidates: list[Mapping[str, Any]]) -> int:
     rows = [dict(item) for item in candidates if isinstance(item, Mapping) and _candidate_identity(item)]
     if not rows:
@@ -456,6 +494,7 @@ def _append_candidates_to_global_pool(runtime_dir: Path, candidates: list[Mappin
                     (candidate_id, payload, content_at_ms),
                 )
             moved += 1
+        _prune_global_pool_database(connection)
         connection.commit()
     finally:
         connection.close()
@@ -477,10 +516,11 @@ def _append_candidates_to_global_pool(runtime_dir: Path, candidates: list[Mappin
         merged[candidate_id] = dict(candidate)
         if not merged[candidate_id].get("id"):
             merged[candidate_id]["id"] = candidate_id
+    ordered = sorted(merged.values(), key=_candidate_published_ms, reverse=True)
     pool_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = pool_path.with_name(f".{pool_path.name}.{os.getpid()}.tmp")
     temporary.write_text(
-        json.dumps({"version": 1, "updatedAt": now_ms, "candidates": list(merged.values())}, ensure_ascii=False, separators=(",", ":")),
+        json.dumps({"version": 1, "updatedAt": now_ms, "candidates": ordered[:_global_pool_capacity()]}, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
     os.replace(temporary, pool_path)
@@ -793,6 +833,10 @@ class JobStore:
                 """,
                 (active_seconds, refill_seconds, refill_seconds),
             )
+            if not _persona_hot_auto_refill_enabled():
+                # Retire scheduling metadata from older releases. Candidate
+                # rows are kept in the shared pool and are not touched here.
+                connection.execute("DELETE FROM fetch_pool_targets")
             connection.execute(
                 """
                 UPDATE fetch_jobs
@@ -908,6 +952,10 @@ class JobStore:
             ):
                 archive_id = str(payload.get("archiveId") or "").strip()
                 if archive_id:
+                    # A fresh user request makes the classification visible
+                    # again after an operator removed a stale/placeholder row.
+                    connection.execute("DELETE FROM hidden_hot_datasets WHERE archive_id=?", (archive_id.lower(),))
+                if _persona_hot_auto_refill_enabled() and archive_id:
                     search_mode = _normalize_hot_search_mode(payload.get("searchMode"))
                     low_watermark, target_watermark = _persona_hot_pool_watermarks()
                     active_seconds = _persona_hot_pool_active_seconds()
@@ -918,7 +966,6 @@ class JobStore:
                     refill_payload["recordShown"] = False
                     refill_payload["liveOnly"] = False
                     refill_payload["refresh"] = True
-                    connection.execute("DELETE FROM hidden_hot_datasets WHERE archive_id=?", (archive_id.lower(),))
                     connection.execute(
                         """
                         INSERT INTO fetch_pool_targets(
@@ -951,6 +998,10 @@ class JobStore:
             return self.public(row), True
 
     def enqueue_due_pool_refill(self, *, now: int | None = None) -> bool:
+        if not _persona_hot_auto_refill_enabled():
+            with self._lock, self._connection() as connection:
+                connection.execute("DELETE FROM fetch_pool_targets")
+            return False
         timestamp = int(now or time.time())
         interval = _persona_hot_pool_refill_seconds()
         with self._lock, self._connection() as connection:
@@ -1367,6 +1418,7 @@ class JobStore:
                 "name": names.get(archive_id) or "未命名人设",
                 "count": count,
                 "capacity": capacity,
+                "derived": True,
                 "active": bool(target is not None and int(target["active_until"] or 0) > timestamp),
                 "refilling": bool(last_run_at >= last_user_fetch_at > 0 and count < refill_target),
             })
@@ -1376,7 +1428,7 @@ class JobStore:
             "global": {
                 "name": "全局数据集",
                 "count": _global_available_candidate_count(self.runtime_dir, now=timestamp),
-                "capacity": max(1, int(os.getenv("TG_HOT_GLOBAL_POOL_CAPACITY", "100000") or 100000)),
+                "capacity": _global_pool_capacity(),
             },
             "personas": personas,
         }
@@ -1579,6 +1631,62 @@ class JobStore:
                 moved += _spill_persona_overflow_to_global(self.runtime_dir, archive_id, capacity=capacity)
         return moved
 
+    def _retire_placeholder_persona_datasets(self, overview: Mapping[str, Any]) -> int:
+        retired = 0
+        personas = overview.get("personas") if isinstance(overview, Mapping) else None
+        placeholder_ids = sorted({
+            str(item.get("archive_id") or "").strip().lower()
+            for item in personas
+            if isinstance(personas, list)
+            and isinstance(item, Mapping)
+            and _PERSONA_ARCHIVE_ID.fullmatch(str(item.get("archive_id") or "").strip())
+            and _PLACEHOLDER_PERSONA_NAME.fullmatch(str(item.get("name") or "").strip())
+        })
+        orphan_ids: set[str] = set()
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        with contextlib.suppress(OSError):
+            for path in cache_dir.iterdir():
+                match = re.match(r"^(persona-[0-9a-f]{8,64})-", path.name, re.IGNORECASE)
+                if path.is_file() and match:
+                    orphan_ids.add(match.group(1).lower())
+        now = int(time.time())
+        with self._lock:
+            with self._connection() as connection:
+                for row in connection.execute("SELECT archive_id FROM fetch_pool_targets"):
+                    archive_id = str(row["archive_id"] or "").strip().lower()
+                    if _ORPHAN_PERSONA_ARCHIVE_ID.fullmatch(archive_id):
+                        orphan_ids.add(archive_id)
+                for row in connection.execute(
+                    "SELECT payload_json FROM fetch_jobs WHERE capability='persona.hot_candidates.v1'"
+                ):
+                    with contextlib.suppress(json.JSONDecodeError):
+                        payload = json.loads(str(row["payload_json"] or "{}"))
+                        archive_id = str(payload.get("archiveId") or "").strip().lower()
+                        if _ORPHAN_PERSONA_ARCHIVE_ID.fullmatch(archive_id):
+                            orphan_ids.add(archive_id)
+                cleanup_ids = sorted(set(placeholder_ids) | orphan_ids)
+                for archive_id in cleanup_ids:
+                    # A generated display name is not a user-owned persona.
+                    # Preserve any cached candidates by moving them to the
+                    # shared pool before hiding the derived classification.
+                    retired += _move_persona_candidates_to_global(self.runtime_dir, archive_id)
+                    connection.execute(
+                        "INSERT OR REPLACE INTO hidden_hot_datasets(archive_id, hidden_at) VALUES(?,?)",
+                        (archive_id, now),
+                    )
+                    connection.execute("DELETE FROM fetch_pool_targets WHERE archive_id=?", (archive_id,))
+                    connection.execute(
+                        """
+                        UPDATE fetch_jobs
+                        SET status='cancelled', finished_at=?, updated_at=?
+                        WHERE capability='persona.hot_candidates.v1'
+                          AND status IN ('queued','running')
+                          AND json_extract(payload_json, '$.archiveId') = ?
+                        """,
+                        (now, now, archive_id),
+                    )
+        return retired
+
     def delete_hot_dataset_event(self, event_id: str) -> bool:
         clean_id = str(event_id or "").strip().lower()
         if not re.fullmatch(r"[0-9a-f]{32}", clean_id):
@@ -1602,6 +1710,10 @@ class JobStore:
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         try:
             self.spill_persona_overflow_to_global()
+            overview = self.dataset_overview()
+            # Even an empty placeholder cache must not keep reappearing from
+            # an old job snapshot on the next overview refresh.
+            self._retire_placeholder_persona_datasets(overview)
             overview = self.dataset_overview()
             self._record_dataset_overview_changes(overview, reason=reason, source=source)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -1642,7 +1754,7 @@ class JobStore:
                 )
                 os.replace(temporary, pool_path)
             else:
-                _rewrite_persona_cache_candidates(self.runtime_dir, clean_id, set())
+                moved_count = _move_persona_candidates_to_global(self.runtime_dir, clean_id)
                 now = int(time.time())
                 with self._connection() as connection:
                     connection.execute(
@@ -1664,7 +1776,7 @@ class JobStore:
         return {
             "dataset_id": clean_id,
             "deleted_count": count_before,
-            "moved_count": 0,
+            "moved_count": moved_count,
             "overview": self.dataset_overview(),
         }
 

@@ -11705,6 +11705,20 @@ function upsertSentimentHotGlobalPoolRows(db: any, candidates: SentimentHotCandi
   return acceptedById.size;
 }
 
+function pruneSentimentHotGlobalPoolDatabase(db: any): void {
+  const cutoff = Date.now() - SENTIMENT_HOT_GLOBAL_POOL_RETENTION_MS;
+  db.prepare("DELETE FROM sentiment_hot_global_candidates WHERE content_at_ms < ?").run(cutoff);
+  db.prepare(`
+    DELETE FROM sentiment_hot_global_candidates
+    WHERE id NOT IN (
+      SELECT id
+      FROM sentiment_hot_global_candidates
+      ORDER BY content_at_ms DESC, hot_score DESC, updated_at_ms DESC, id DESC
+      LIMIT ?
+    )
+  `).run(SENTIMENT_HOT_GLOBAL_POOL_LIMIT);
+}
+
 function openSentimentHotGlobalPoolDatabase(): any {
   fs.mkdirSync(path.dirname(SENTIMENT_HOT_GLOBAL_POOL_DB_FILE), { recursive: true });
   const db = new Database(path.resolve(SENTIMENT_HOT_GLOBAL_POOL_DB_FILE));
@@ -11731,6 +11745,7 @@ function openSentimentHotGlobalPoolDatabase(): any {
   const migrated = db.prepare("SELECT value FROM sentiment_hot_global_meta WHERE key='legacy_json_migrated'").get();
   if (!migrated) {
     upsertSentimentHotGlobalPoolRows(db, readLegacyGlobalSentimentHotCandidatePool());
+    pruneSentimentHotGlobalPoolDatabase(db);
     db.prepare("INSERT OR REPLACE INTO sentiment_hot_global_meta(key,value) VALUES('legacy_json_migrated',?)")
       .run(new Date().toISOString());
   }
@@ -11747,6 +11762,7 @@ function readGlobalSentimentHotCandidatePool(
     db = openSentimentHotGlobalPoolDatabase();
     const cutoff = Date.now() - SENTIMENT_HOT_GLOBAL_POOL_RETENTION_MS;
     db.prepare("DELETE FROM sentiment_hot_global_candidates WHERE content_at_ms < ?").run(cutoff);
+    pruneSentimentHotGlobalPoolDatabase(db);
     const boundedLimit = Math.max(1, Math.min(Math.floor(limit || 1), SENTIMENT_HOT_GLOBAL_POOL_LIMIT));
     const terms = [...new Set(quickNeedles.map(cleanText).filter((term) => term.length >= 2))].slice(0, 12);
     const requestedPlatform = normalizeRequestedHotPlatform(platform);
@@ -11815,6 +11831,7 @@ export function writeGlobalSentimentHotCandidatePool(candidates: SentimentHotCan
     const cutoff = Date.now() - SENTIMENT_HOT_GLOBAL_POOL_RETENTION_MS;
     db.prepare("DELETE FROM sentiment_hot_global_candidates WHERE content_at_ms < ?").run(cutoff);
     const inserted = upsertSentimentHotGlobalPoolRows(db, candidates);
+    pruneSentimentHotGlobalPoolDatabase(db);
     if (inserted === 0) return;
   } catch (error) {
     console.warn(`[sentiment_hot_global_pool] write failed=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);

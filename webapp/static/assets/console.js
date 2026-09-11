@@ -23823,26 +23823,16 @@ async function fetchPersonaHotCandidates(refresh = false) {
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
-    let cacheRead = { hasCandidates: false, displayed: false, count: 0, cacheSource: "empty" };
-    try {
-      const visibleBeforeCache = previousCandidates.filter((candidate) => (
-        normalizePersonaContentPlatform(candidate?.platform || "threads") === targetPlatform
-      ));
-      cacheRead = await readPersonaHotCandidatesCache(persona, form, hotState, {
-        recordShown: visibleBeforeCache.length === 0,
-        signal: controller.signal,
-      });
-    } catch (cacheError) {
-      if (Number(cacheError?.status || 0) === 499) throw cacheError;
-      // Cache is an acceleration path. A stale/unavailable old-host cache
-      // must never suppress the required user-triggered live fetch below.
-    }
-    previousCandidates = personaHotAllCandidates(persona);
-    hotState = personaHotResultState(persona, form.hotSearchMode);
-    const allKeywords = Array.isArray(hotState.all_keywords) && hotState.all_keywords.length
+    const visibleBeforeCache = previousCandidates.filter((candidate) => (
+      normalizePersonaContentPlatform(candidate?.platform || "threads") === targetPlatform
+    ));
+    const taskAllKeywords = Array.isArray(hotState.all_keywords) && hotState.all_keywords.length
       ? hotState.all_keywords.map((item) => String(item || "").trim()).filter(Boolean)
       : keywords;
-    const task = await apiWithTimeout(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/tasks`, {
+    // Start the user-triggered live fetch before awaiting the cache read. The
+    // cache remains the instant display path, while the live task prepares the
+    // next batch in the background.
+    const liveTaskPromise = apiWithTimeout(`/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
@@ -23850,7 +23840,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
         refresh: Boolean(refresh),
         limit: 10,
         keywords,
-        all_keywords: allKeywords,
+        all_keywords: taskAllKeywords,
         search_mode: form.hotSearchMode,
         writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
           ? String(form.writingLocale)
@@ -23863,11 +23853,26 @@ async function fetchPersonaHotCandidates(refresh = false) {
         // A live result is normally a background refresh once a cached batch
         // is visible. Only a cache miss with no visible batch is a display
         // batch and may consume shown-history rotation.
-        record_shown: !cacheRead.hasCandidates && !previousCandidates.some((candidate) => (
-          normalizePersonaContentPlatform(candidate?.platform || "threads") === targetPlatform
-        )),
+        record_shown: visibleBeforeCache.length === 0,
       }),
     }, 15000);
+    try {
+      await readPersonaHotCandidatesCache(persona, form, hotState, {
+        recordShown: visibleBeforeCache.length === 0,
+        signal: controller.signal,
+      });
+    } catch (cacheError) {
+      if (Number(cacheError?.status || 0) === 499) {
+        await liveTaskPromise.catch(() => undefined);
+        throw cacheError;
+      }
+      // Cache is an acceleration path. A stale/unavailable old-host cache
+      // must never suppress the required user-triggered live fetch below.
+    }
+    previousCandidates = personaHotAllCandidates(persona);
+    hotState = personaHotResultState(persona, form.hotSearchMode);
+    const allKeywords = taskAllKeywords;
+    const task = await liveTaskPromise;
     const taskId = String(task?.id || "").trim();
     if (!taskId) throw { detail: "热点抓取任务创建失败。", status: 500 };
     const overallDeadline = Date.now() + 10 * 60 * 1000;

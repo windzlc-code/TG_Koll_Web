@@ -7764,7 +7764,7 @@ function hotDatasetEventReason(event = {}) {
   const delta = Number(event.delta || 0);
   if (reason === "manual_delete") return "手动删除数据集";
   if (reason === "manual_refresh") return delta > 0 ? "刷新时发现新增" : "刷新时发现减少";
-  return delta > 0 ? "自动补充" : "候选已使用或清理";
+  return delta > 0 ? "实时抓取/分类更新" : "候选已使用或清理";
 }
 
 function renderHotDatasetEvents(payload = {}) {
@@ -7924,7 +7924,7 @@ async function deleteHotDataset(item = {}) {
     title: `重要提示：删除${datasetName}`,
     message: item.global
       ? "确定后会清空全局热点候选池中的全部内容。此操作不可撤销；后续新抓取的合格内容仍会重新进入全局池。"
-      : `确定后会从本页移除“${datasetName}”人设池，队列清空且不再自动补充。下次对该人设启动采集后才会重新出现。`,
+      : `确定后会清空“${datasetName}”的人设派生分类缓存，并将其中候选返回全局数据集。不会删除人设正文或全局候选数据。`,
     confirmLabel: "确认删除数据集",
     cancelLabel: "取消",
     tone: "danger",
@@ -7938,7 +7938,7 @@ async function deleteHotDataset(item = {}) {
       title: "数据集已清空",
       message: item.global
         ? `已删除 ${Math.max(0, Number(payload?.deleted_count || 0)).toLocaleString("zh-CN")} 条候选数据。`
-        : `已从列表移除“${datasetName}”。下次启动采集后会重新添加。`,
+        : `已移除“${datasetName}”的派生分类缓存，并回收 ${Math.max(0, Number(payload?.moved_count || 0)).toLocaleString("zh-CN")} 条候选到全局数据集。`,
       ok: true,
     });
   } catch (error) {
@@ -7948,6 +7948,7 @@ async function deleteHotDataset(item = {}) {
 
 function renderHotDatasetRow(item, index) {
   const count = Math.max(0, Number(item.count || 0));
+  const derived = !item.global && item.derived !== false;
   const capacity = Math.max(1, Number(item.capacity || (item.global ? 100000 : 30)));
   const percent = Math.min(100, count / capacity * 100);
   const color = hotDatasetColor(index, Boolean(item.global));
@@ -7960,7 +7961,9 @@ function renderHotDatasetRow(item, index) {
   const value = document.createElement("strong");
   value.textContent = `${count.toLocaleString("zh-CN")} 条可用`;
   const ratio = document.createElement("span");
-  ratio.textContent = `${percent < 1 && count ? percent.toFixed(2) : percent.toFixed(0)}% · 上限 ${capacity.toLocaleString("zh-CN")}`;
+  ratio.textContent = derived
+    ? "全局数据集派生分类缓存"
+    : `${percent < 1 && count ? percent.toFixed(2) : percent.toFixed(0)}% · 上限 ${capacity.toLocaleString("zh-CN")}`;
   copy.append(value, ratio);
   const track = document.createElement("div");
   track.className = "hot-dataset-track";
@@ -7978,7 +7981,7 @@ function renderHotDatasetRow(item, index) {
   const name = document.createElement("strong");
   name.textContent = String(item.name || (item.global ? "全局数据集" : "未命名人设"));
   const state = document.createElement("small");
-  state.textContent = item.global ? "全局候选池" : (item.refilling ? "补充中" : (item.active ? "已激活" : "独立人设池"));
+  state.textContent = item.global ? "全局候选池" : (derived ? "派生分类缓存" : (item.refilling ? "补充中" : (item.active ? "已激活" : "独立人设池")));
   identity.append(dot, name, state);
   const remove = document.createElement("button");
   remove.type = "button";

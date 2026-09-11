@@ -102,6 +102,8 @@ class RemoteFetchProtocolTests(unittest.TestCase):
 
 class RemoteFetchStoreTests(unittest.TestCase):
     def setUp(self) -> None:
+        self._previous_auto_refill = os.environ.get("TG_HOT_POOL_AUTO_REFILL")
+        os.environ["TG_HOT_POOL_AUTO_REFILL"] = "0"
         self.temp = tempfile.TemporaryDirectory()
         self.path = Path(self.temp.name) / "jobs.db"
         self.runtime_dir = Path(self.temp.name) / "runtime"
@@ -110,6 +112,10 @@ class RemoteFetchStoreTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+        if self._previous_auto_refill is None:
+            os.environ.pop("TG_HOT_POOL_AUTO_REFILL", None)
+        else:
+            os.environ["TG_HOT_POOL_AUTO_REFILL"] = self._previous_auto_refill
 
     def submit(self, *, key: str = "capture:test:1234", digest: str = "a" * 64):
         return self.store.submit(
@@ -173,7 +179,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
             "limit": 10,
         }
 
-    def test_refill_targets_are_isolated_by_archive_and_search_mode(self) -> None:
+    def test_derived_persona_classification_does_not_register_refill_targets(self) -> None:
         archive_id = "archive_mode_isolation"
         for index, mode in enumerate(("strict", "normal"), start=1):
             payload = self.pool_payload(archive_id, user_initiated=True, search_mode=mode)
@@ -187,15 +193,10 @@ class RemoteFetchStoreTests(unittest.TestCase):
             )
 
         with self.store._connection() as connection:
-            rows = connection.execute(
-                "SELECT search_mode,payload_json FROM fetch_pool_targets WHERE archive_id=? ORDER BY search_mode",
-                (archive_id,),
-            ).fetchall()
-        self.assertEqual([row["search_mode"] for row in rows], ["normal", "strict"])
-        self.assertEqual(
-            [json.loads(row["payload_json"])["searchMode"] for row in rows],
-            ["normal", "strict"],
-        )
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0],
+                0,
+            )
 
     def test_available_candidate_count_reads_only_the_requested_mode_shard(self) -> None:
         now = int(time.time())
@@ -225,7 +226,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
             7,
         )
 
-    def test_legacy_refill_target_schema_migrates_without_losing_mode(self) -> None:
+    def test_legacy_refill_target_schema_is_migrated_and_disabled(self) -> None:
         legacy_path = Path(self.temp.name) / "legacy-jobs.db"
         connection = sqlite3.connect(legacy_path)
         try:
@@ -261,9 +262,9 @@ class RemoteFetchStoreTests(unittest.TestCase):
             ]
             row = connection.execute("SELECT archive_id,search_mode FROM fetch_pool_targets").fetchone()
         self.assertEqual(primary_key, ["archive_id", "search_mode"])
-        self.assertEqual(dict(row), {"archive_id": "archive-legacy", "search_mode": "normal"})
+        self.assertIsNone(row)
 
-    def test_only_user_initiated_persona_hot_submit_registers_refill_target(self) -> None:
+    def test_persona_hot_submit_never_registers_refill_target(self) -> None:
         self.store.submit(
             idempotency_key="capture:inactive-target:1234",
             request_digest="d" * 64,
@@ -271,9 +272,6 @@ class RemoteFetchStoreTests(unittest.TestCase):
             unit_id="archive_inactive_target",
             payload=self.pool_payload("archive_inactive_target", user_initiated=False),
         )
-        with self.store._connection() as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0], 0)
-
         self.store.submit(
             idempotency_key="capture:active-target:1234",
             request_digest="e" * 64,
@@ -282,68 +280,27 @@ class RemoteFetchStoreTests(unittest.TestCase):
             payload=self.pool_payload("archive_active_target", user_initiated=True),
         )
         with self.store._connection() as connection:
-            target = connection.execute("SELECT * FROM fetch_pool_targets").fetchone()
-        self.assertIsNotNone(target)
-        self.assertEqual(target["archive_id"], "archive_active_target")
-        self.assertGreater(target["active_until"], target["last_user_fetch_at"])
-        self.assertEqual(target["next_run_at"] - target["last_user_fetch_at"], 8 * 3600)
-        self.assertEqual(target["active_until"] - target["last_user_fetch_at"], 2 * 86400)
-        self.assertEqual(target["low_watermark"], 15)
-        self.assertEqual(target["target_watermark"], 15)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0], 0)
 
-    def test_pool_refill_waits_eight_hours_and_stops_after_two_idle_days(self) -> None:
+    def test_legacy_pool_refill_is_disabled_and_clears_targets(self) -> None:
         now = int(time.time())
         archive_id = "archive_eight_hour"
-        self.store.submit(
-            idempotency_key="capture:eight-hour:1234",
-            request_digest="a" * 64,
-            capability="persona.hot_candidates.v1",
-            unit_id=archive_id,
-            payload=self.pool_payload(archive_id, user_initiated=True),
-        )
-        original = self.store.claim_next()
-        self.assertIsNotNone(original)
-        self.store.finish(original[0]["id"], status="success", result={"ok": True})
-        with self.store._connection() as connection:
-            target = connection.execute("SELECT next_run_at, last_user_fetch_at, active_until FROM fetch_pool_targets").fetchone()
-        due = int(target["next_run_at"])
-        fetched = int(target["last_user_fetch_at"])
-        self.assertEqual(due - fetched, 8 * 3600)
-        self.assertEqual(int(target["active_until"]) - fetched, 2 * 86400)
-        self.assertFalse(self.store.enqueue_due_pool_refill(now=due - 1))
-        self.assertTrue(self.store.enqueue_due_pool_refill(now=due))
-        refill = self.store.claim_next()
-        self.assertIsNotNone(refill)
-        self.assertTrue(refill[1].get("_poolRefill"))
-        self.store.finish(refill[0]["id"], status="success", result={"ok": True})
         with self.store._connection() as connection:
             connection.execute(
-                "UPDATE fetch_pool_targets SET next_run_at=?, last_user_fetch_at=?, active_until=?",
-                (now + 2 * 86400, now, now + 2 * 86400),
+                "INSERT INTO fetch_pool_targets(archive_id,search_mode,payload_json,next_run_at,last_run_at,last_user_fetch_at,active_until,low_watermark,target_watermark,last_available_count,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (archive_id, "strict", json.dumps(self.pool_payload(archive_id, user_initiated=False)), now, 0, now, now + 86400, 15, 15, 0, now),
             )
-        self.assertFalse(self.store.enqueue_due_pool_refill(now=now + 2 * 86400))
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
         with self.store._connection() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0], 0)
 
-    def test_due_pool_refill_discards_a_stale_keyword_protocol_target(self) -> None:
+    def test_disabled_pool_refill_discards_legacy_targets_without_fetching(self) -> None:
         now = int(time.time())
         archive_id = "archive_stale_strategy"
-        self.store.submit(
-            idempotency_key="capture:stale-strategy:1234",
-            request_digest="f" * 64,
-            capability="persona.hot_candidates.v1",
-            unit_id=archive_id,
-            payload=self.pool_payload(archive_id, user_initiated=True),
-        )
         with self.store._connection() as connection:
-            payload = json.loads(connection.execute(
-                "SELECT payload_json FROM fetch_pool_targets WHERE archive_id=?",
-                (archive_id,),
-            ).fetchone()[0])
-            payload["keywordStrategyVersion"] = PERSONA_HOT_KEYWORD_STRATEGY_VERSION + 1
             connection.execute(
-                "UPDATE fetch_pool_targets SET payload_json=?, next_run_at=? WHERE archive_id=?",
-                (json.dumps(payload), now, archive_id),
+                "INSERT INTO fetch_pool_targets(archive_id,search_mode,payload_json,next_run_at,last_run_at,last_user_fetch_at,active_until,low_watermark,target_watermark,last_available_count,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (archive_id, "strict", json.dumps({"keywordStrategyVersion": PERSONA_HOT_KEYWORD_STRATEGY_VERSION + 1}), now, 0, now, now + 86400, 15, 15, 0, now),
             )
 
         self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
@@ -404,11 +361,105 @@ class RemoteFetchStoreTests(unittest.TestCase):
             unit_id=archive_id,
             payload=self.pool_payload(archive_id, user_initiated=True),
         )
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        cache_dir.mkdir()
+        (cache_dir / f"{archive_id}-keywords-strict.json").write_text("{}", encoding="utf-8")
 
         overview = self.store.dataset_overview(now=int(time.time()))
 
         self.assertEqual(overview["personas"][0]["name"], "未命名人设")
         self.assertNotIn(archive_id[:8], overview["personas"][0]["name"])
+
+    def test_placeholder_persona_dataset_is_recycled_and_hidden(self) -> None:
+        now = int(time.time())
+        archive_id = "abcdef12-1234-4234-8234-123456789abc"
+        payload = self.pool_payload(archive_id, user_initiated=True)
+        payload["archiveSnapshot"]["name"] = "人设 abcdef12"
+        self.store.submit(
+            idempotency_key="capture:placeholder-dataset:1234",
+            request_digest="b" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=payload,
+        )
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        cache_dir.mkdir()
+        candidate = {
+            "id": "placeholder-candidate-1",
+            "content": "placeholder candidate content " * 4,
+            "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        }
+        cache_path = cache_dir / f"{archive_id}-keywords-strict.json"
+        cache_path.write_text(
+            json.dumps({f"{archive_id}::strict::query": {"candidates": [candidate]}}),
+            encoding="utf-8",
+        )
+
+        before = self.store.dataset_overview(now=now)
+        self.assertEqual(before["personas"][0]["name"], "人设 abcdef12")
+        self.store.publish_dataset_overview(force=True)
+
+        after = self.store.dataset_overview(now=now)
+        self.assertEqual(after["personas"], [])
+        cleared = json.loads(cache_path.read_text(encoding="utf-8"))
+        self.assertEqual(cleared[f"{archive_id}::strict::query"]["candidates"], [])
+        with self.store._connection() as connection:
+            self.assertIsNotNone(connection.execute(
+                "SELECT archive_id FROM hidden_hot_datasets WHERE archive_id=?",
+                (archive_id,),
+            ).fetchone())
+        global_db = sqlite3.connect(self.runtime_dir / "sentiment_hot_global_pool.sqlite3")
+        try:
+            self.assertEqual(
+                {row[0] for row in global_db.execute("SELECT id FROM sentiment_hot_global_candidates")},
+                {"placeholder-candidate-1"},
+            )
+        finally:
+            global_db.close()
+
+    def test_orphan_persona_cache_is_recycled_and_hidden(self) -> None:
+        now = int(time.time())
+        archive_id = "persona-de5910322b3b"
+        payload = self.pool_payload(archive_id, user_initiated=True)
+        payload["archiveSnapshot"]["name"] = "异常人设"
+        self.store.submit(
+            idempotency_key="capture:orphan-dataset:1234",
+            request_digest="f" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=payload,
+        )
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        cache_dir.mkdir()
+        candidate = {
+            "id": "orphan-candidate-1",
+            "content": "orphan candidate content " * 4,
+            "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        }
+        cache_path = cache_dir / f"{archive_id}-30e611d4eb-normal.json"
+        cache_path.write_text(
+            json.dumps({f"{archive_id}::normal::query": {"candidates": [candidate]}}),
+            encoding="utf-8",
+        )
+
+        self.store.publish_dataset_overview(force=True)
+
+        self.assertEqual(self.store.dataset_overview(now=now)["personas"], [])
+        cleared = json.loads(cache_path.read_text(encoding="utf-8"))
+        self.assertEqual(cleared[f"{archive_id}::normal::query"]["candidates"], [])
+        with self.store._connection() as connection:
+            self.assertIsNotNone(connection.execute(
+                "SELECT archive_id FROM hidden_hot_datasets WHERE archive_id=?",
+                (archive_id,),
+            ).fetchone())
+        global_db = sqlite3.connect(self.runtime_dir / "sentiment_hot_global_pool.sqlite3")
+        try:
+            self.assertEqual(
+                {row[0] for row in global_db.execute("SELECT id FROM sentiment_hot_global_candidates")},
+                {"orphan-candidate-1"},
+            )
+        finally:
+            global_db.close()
 
     def test_hot_dataset_change_events_use_first_snapshot_as_baseline_and_can_be_deleted(self) -> None:
         archive_id = "12345678-1234-4234-8234-123456789abc"
@@ -476,7 +527,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(len(pruned["events"]), 5)
         self.assertGreaterEqual(pruned["pages"], 1)
 
-    def test_clear_hot_dataset_removes_candidates_but_preserves_persona_refill_target(self) -> None:
+    def test_clear_hot_dataset_recycles_persona_candidates_to_global(self) -> None:
         now = int(time.time())
         archive_id = "12345678-1234-4234-8234-123456789abc"
         payload = self.pool_payload(archive_id, user_initiated=True)
@@ -517,7 +568,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertTrue(any(item["archive_id"] == archive_id for item in self.store.dataset_overview()["personas"]))
         persona_result = self.store.clear_hot_dataset(archive_id)
         self.assertEqual(persona_result["deleted_count"], 1)
-        self.assertEqual(persona_result["moved_count"], 0)
+        self.assertEqual(persona_result["moved_count"], 1)
         self.assertFalse(any(item["archive_id"] == archive_id for item in self.store.dataset_overview()["personas"]))
         cleared_cache = json.loads(cache_path.read_text(encoding="utf-8"))
         self.assertEqual(cleared_cache[f"{archive_id}::strict::query"]["candidates"], [])
@@ -526,7 +577,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
             leftover_ids = {row[0] for row in global_db.execute("SELECT id FROM sentiment_hot_global_candidates")}
         finally:
             global_db.close()
-        self.assertEqual(leftover_ids, {"global-1"})
+        self.assertEqual(leftover_ids, {"global-1", "persona-candidate-1"})
         with self.store._connection() as connection:
             target = connection.execute(
                 "SELECT archive_id FROM fetch_pool_targets WHERE archive_id=?",
@@ -544,7 +595,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertTrue(any(item["archive_id"] == archive_id for item in self.store.dataset_overview()["personas"]))
 
         global_result = self.store.clear_hot_dataset("global")
-        self.assertEqual(global_result["deleted_count"], 1)
+        self.assertEqual(global_result["deleted_count"], 2)
         global_db = sqlite3.connect(global_path)
         try:
             self.assertEqual(global_db.execute("SELECT COUNT(*) FROM sentiment_hot_global_candidates").fetchone()[0], 0)
@@ -587,7 +638,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(len(overflow_ids), 30)
         self.assertIn("persona-extra-59", overflow_ids)
 
-    def test_due_persona_below_watermark_enqueues_one_internal_refill(self) -> None:
+    def test_due_persona_below_watermark_does_not_enqueue_internal_refill(self) -> None:
         now = int(time.time())
         self.store.submit(
             idempotency_key="capture:low-water:1234",
@@ -599,21 +650,15 @@ class RemoteFetchStoreTests(unittest.TestCase):
         original = self.store.claim_next()
         self.assertIsNotNone(original)
         self.store.finish(original[0]["id"], status="success", result={"ok": True})
-        with self.store._connection() as connection:
-            connection.execute("UPDATE fetch_pool_targets SET next_run_at=?", (now,))
-        self.assertTrue(self.store.enqueue_due_pool_refill(now=now))
-        with self.store._connection() as connection:
-            rows = connection.execute(
-                "SELECT payload_json FROM fetch_jobs WHERE unit_id LIKE 'pool_%'"
-            ).fetchall()
-        self.assertEqual(len(rows), 1)
-        payload = json.loads(rows[0]["payload_json"])
-        self.assertTrue(payload["_poolRefill"])
-        self.assertFalse(payload["userInitiated"])
-        self.assertEqual(payload["limit"], 15)
+        self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
         self.assertFalse(self.store.enqueue_due_pool_refill(now=now + 1))
+        with self.store._connection() as connection:
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM fetch_jobs WHERE unit_id LIKE 'pool_%'").fetchone()[0],
+                0,
+            )
 
-    def test_due_persona_waits_while_its_user_fetch_is_still_active(self) -> None:
+    def test_due_persona_does_not_wait_or_schedule_when_auto_refill_is_disabled(self) -> None:
         now = int(time.time())
         self.store.submit(
             idempotency_key="capture:active-fetch:1234",
@@ -622,15 +667,11 @@ class RemoteFetchStoreTests(unittest.TestCase):
             unit_id="archive_active_fetch",
             payload=self.pool_payload("archive_active_fetch", user_initiated=True),
         )
-        with self.store._connection() as connection:
-            connection.execute("UPDATE fetch_pool_targets SET next_run_at=?", (now,))
         self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
         with self.store._connection() as connection:
-            target = connection.execute("SELECT next_run_at FROM fetch_pool_targets").fetchone()
             refill_count = connection.execute(
                 "SELECT COUNT(*) FROM fetch_jobs WHERE unit_id LIKE 'pool_%'"
             ).fetchone()[0]
-        self.assertEqual(target["next_run_at"], now + 60)
         self.assertEqual(refill_count, 0)
 
     def test_claim_next_skips_refill_while_interactive_job_is_running(self) -> None:
@@ -656,7 +697,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         )
         self.assertIsNone(self.store.claim_next())
 
-    def test_preempt_background_refills_postpones_pool_target(self) -> None:
+    def test_preempt_background_refills_has_no_legacy_target_to_postpone(self) -> None:
         now = int(time.time())
         archive_id = "archive_preempt_delay"
         self.store.submit(
@@ -666,11 +707,6 @@ class RemoteFetchStoreTests(unittest.TestCase):
             unit_id=archive_id,
             payload=self.pool_payload(archive_id, user_initiated=True),
         )
-        with self.store._connection() as connection:
-            connection.execute(
-                "UPDATE fetch_pool_targets SET next_run_at=? WHERE archive_id=?",
-                (now + 10, archive_id),
-            )
         self.store.submit(
             idempotency_key="pool:preempt-delay:1234",
             request_digest="7" * 64,
@@ -683,11 +719,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         )
         self.store.preempt_background_refills()
         with self.store._connection() as connection:
-            next_run = connection.execute(
-                "SELECT next_run_at FROM fetch_pool_targets WHERE archive_id=?",
-                (archive_id,),
-            ).fetchone()[0]
-        self.assertGreaterEqual(int(next_run), now + 120)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0], 0)
 
     def test_claim_next_prefers_interactive_job_over_earlier_pool_refill(self) -> None:
         self.store.submit(
@@ -771,7 +803,7 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(running_view["queue"]["queue_ahead"], 0)
         self.assertIn("正在抓取公开帖", running_view["queue"]["message"])
 
-    def test_watermark_starts_below_15_and_stops_at_15(self) -> None:
+    def test_watermark_does_not_schedule_derived_persona_refill(self) -> None:
         now = int(time.time())
         archive_id = "archive_full_water"
         self.store.submit(
@@ -781,57 +813,9 @@ class RemoteFetchStoreTests(unittest.TestCase):
             unit_id=archive_id,
             payload=self.pool_payload(archive_id, user_initiated=True),
         )
-        original = self.store.claim_next()
-        self.assertIsNotNone(original)
-        self.store.finish(original[0]["id"], status="success", result={"ok": True})
-        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
-        cache_dir.mkdir()
-
-        def write_candidates(count: int) -> None:
-            rows = [
-                {
-                    "id": f"candidate-{index}",
-                    "content": "useful persona candidate content " * 4,
-                    "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
-                }
-                for index in range(count)
-            ]
-            (cache_dir / f"{archive_id}-keywords-strict.json").write_text(
-                json.dumps({f"{archive_id}::strict::query": {"candidates": rows}}),
-                encoding="utf-8",
-            )
-
-        write_candidates(15)
-        with self.store._connection() as connection:
-            connection.execute("UPDATE fetch_pool_targets SET next_run_at=?", (now,))
         self.assertFalse(self.store.enqueue_due_pool_refill(now=now))
         with self.store._connection() as connection:
-            target = connection.execute("SELECT last_available_count FROM fetch_pool_targets").fetchone()
-            refill_count = connection.execute(
-                "SELECT COUNT(*) FROM fetch_jobs WHERE unit_id LIKE 'pool_%'"
-            ).fetchone()[0]
-        self.assertEqual(target["last_available_count"], 15)
-        self.assertEqual(refill_count, 0)
-
-        write_candidates(10)
-        with self.store._connection() as connection:
-            connection.execute(
-                "UPDATE fetch_pool_targets SET last_run_at=last_user_fetch_at,next_run_at=?",
-                (now,),
-            )
-        self.assertTrue(self.store.enqueue_due_pool_refill(now=now))
-        refill = self.store.claim_next()
-        self.assertIsNotNone(refill)
-        self.store.finish(refill[0]["id"], status="success", result={"ok": True})
-
-        write_candidates(15)
-        with self.store._connection() as connection:
-            connection.execute("UPDATE fetch_pool_targets SET next_run_at=?", (now + 601,))
-        self.assertFalse(self.store.enqueue_due_pool_refill(now=now + 601))
-        with self.store._connection() as connection:
-            target = connection.execute("SELECT last_available_count,last_run_at FROM fetch_pool_targets").fetchone()
-        self.assertEqual(target["last_available_count"], 15)
-        self.assertEqual(target["last_run_at"], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM fetch_pool_targets").fetchone()[0], 0)
 
     def test_expired_persona_target_is_removed_without_refill(self) -> None:
         now = int(time.time())
