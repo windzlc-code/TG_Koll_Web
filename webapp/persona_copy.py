@@ -330,6 +330,24 @@ def _post_from_node(node: dict[str, object], username: str, platform: str) -> di
     return {"content": content, "url": url, "published_at": timestamp}
 
 
+def _published_at_sort_value(value: object) -> float | None:
+    """Return a sortable public post timestamp without guessing a missing date."""
+    text = _clean_text(value, limit=80)
+    if not text:
+        return None
+    try:
+        if re.fullmatch(r"\d+(?:\.\d+)?", text):
+            timestamp = float(text)
+            # Platforms sometimes serialize Unix milliseconds instead of seconds.
+            return timestamp / 1_000 if timestamp >= 10_000_000_000 else timestamp
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(text)
+        return parsed.replace(tzinfo=timezone.utc).timestamp() if parsed.tzinfo is None else parsed.timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _extract_page_data(html: str, url: str) -> dict[str, object]:
     parser = _PublicPageParser()
     try:
@@ -374,8 +392,16 @@ def _extract_page_data(html: str, url: str) -> dict[str, object]:
             continue
         seen_posts.add(key)
         posts.append(post)
-        if len(posts) >= MAX_POSTS:
-            break
+    # The platform's JSON traversal order is not a chronology guarantee.  Sort
+    # only after de-duplication, then apply the public sample cap so users see
+    # the newest available samples rather than an arbitrary older subset.
+    posts.sort(
+        key=lambda post: (
+            _published_at_sort_value(post.get("published_at")) is None,
+            -(_published_at_sort_value(post.get("published_at")) or 0),
+        )
+    )
+    posts = posts[:MAX_POSTS]
     if not (username or display_name or bio or posts):
         raise PublicPersonaProfileError("页面未提供可分析的公开简介或公开内容，请换用用户主页链接。")
     warnings: list[str] = []

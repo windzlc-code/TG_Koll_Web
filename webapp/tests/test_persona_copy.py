@@ -99,6 +99,24 @@ class PersonaCopyExtractionTests(unittest.TestCase):
         self.assertEqual(result["bio"], "RSC 简介")
         self.assertEqual(result["followers"], 88)
 
+    def test_orders_post_samples_newest_first_when_public_page_is_oldest_first(self):
+        html = """
+        <html><body><script>
+          {"username":"alice","posts":[
+            {"text":"最早的公开内容","shortcode":"old","taken_at_timestamp":1700000000},
+            {"text":"最新的公开内容","shortcode":"new","taken_at_timestamp":1700200000},
+            {"text":"没有时间的公开内容","shortcode":"unknown"}
+          ]}
+        </script></body></html>
+        """
+        with mock.patch("webapp.persona_copy.requests.get", return_value=_FakeResponse(html)):
+            result = fetch_public_persona_profile("https://www.threads.com/@alice")
+
+        self.assertEqual(
+            [post["content"] for post in result["posts"]],
+            ["最新的公开内容", "最早的公开内容", "没有时间的公开内容"],
+        )
+
     def test_prompt_contains_public_source_and_post_samples(self):
         prompt = build_persona_copy_prompt({
             "platform": "threads",
