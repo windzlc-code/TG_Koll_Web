@@ -91,7 +91,8 @@ def test_case_catalog_keeps_hero_copy_without_the_legacy_switcher() -> None:
 
     assert 'class="case-study-switcher-band"' not in script
     assert 'class="case-profile-field"' in script
-    assert 'data-case-open data-case-id=' in script
+    assert 'data-case-layout="${index + 1}" data-case-open data-case-id=' in script
+    assert 'class="case-profile-open"' not in script
     assert 'class="case-studies-hero-copy"' in script
     assert "t.heroIntro" in script
     assert "padding: calc(var(--site-header-height" in stylesheet
@@ -118,6 +119,7 @@ def test_case_account_card_uses_persisted_avatars_and_opens_the_common_report_mo
     stylesheet = (ROOT / "static" / "assets" / "opc" / "case-studies.css").read_text(encoding="utf-8")
 
     assert 'avatarUrl: "/assets/opc/case-studies/avatars/mina_ya2002.jpg"' in script
+    assert 'avatarUrl: "/assets/opc/case-studies/avatars/saasaimomo.jpg"' in script
     assert "profileAvatarUrlFrom" in script
     assert 'class="case-profile-card case-profile-card--catalog"' in script
     assert "data-case-open" in script
@@ -133,11 +135,15 @@ def test_case_account_card_uses_persisted_avatars_and_opens_the_common_report_mo
     assert ".case-report-dialog" in stylesheet
     assert 'class="platform-brand-icon"' in script
     assert ".case-profile-platform .platform-brand-icon" in stylesheet
+    assert 'class="case-profile-source"' in script
+    assert 'class="case-action-icon"' in script
+    assert 'data-case-modal-close' in script
+    assert 'root.addEventListener("keydown"' in script
 
 
 def test_case_avatar_assets_are_persisted_locally() -> None:
     avatar_directory = ROOT / "static" / "assets" / "opc" / "case-studies" / "avatars"
-    expected = ["mina_ya2002.jpg", "gy.zzzzz.jpg", "tjs0980.jpg", "kameoka_yingying.jpg", "mirahuang.12.jpg"]
+    expected = ["mina_ya2002.jpg", "gy.zzzzz.jpg", "tjs0980.jpg", "kameoka_yingying.jpg", "mirahuang.12.jpg", "saasaimomo.jpg"]
 
     for avatar in expected:
         asset = avatar_directory / avatar
@@ -154,3 +160,25 @@ def test_case_context_hides_internal_metric_scope_from_public_layout() -> None:
     context_markup = script[context_start:context_end]
     assert "t.metricScope" not in context_markup
     assert "repeat(3, minmax(0, 1fr))" in stylesheet
+
+
+def test_case_modal_ends_after_report_data_without_legacy_signal_cards() -> None:
+    script = (ROOT / "static" / "assets" / "opc" / "case-studies.js").read_text(encoding="utf-8")
+    stylesheet = (ROOT / "static" / "assets" / "opc" / "case-studies.css").read_text(encoding="utf-8")
+
+    assert 'class="case-top-post"' not in script
+    assert 'class="case-guidance"' not in script
+    assert 'class="case-source-note"' not in script
+    assert ".case-top-post" not in stylesheet
+    assert ".case-guidance" not in stylesheet
+
+
+def test_case_catalog_uses_smooth_actions_and_grid_backdrop() -> None:
+    stylesheet = (ROOT / "static" / "assets" / "opc" / "case-studies.css").read_text(encoding="utf-8")
+
+    assert "case-profile-actions" in stylesheet
+    assert "transition: border-color 520ms ease" in stylesheet
+    assert "scale: 1.025" in stylesheet
+    assert ".case-profile-open" not in stylesheet
+    assert "border-radius: 0;" in stylesheet
+    assert "repeating-linear-gradient(90deg, rgba(44, 112, 136, .07)" in stylesheet

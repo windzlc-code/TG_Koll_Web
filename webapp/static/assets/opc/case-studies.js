@@ -202,7 +202,7 @@
       number: "06",
       platform: "Threads",
       username: "saasaimomo",
-      avatarUrl: "",
+      avatarUrl: "/assets/opc/case-studies/avatars/saasaimomo.jpg",
       sourceUrl: "https://www.threads.com/@saasaimomo",
       reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwtcgfx_7a15a3",
       reportApiUrls: ["/assets/opc/case-studies/tar_mtwtcgfx_7a15a3.json"],
@@ -243,6 +243,7 @@
       analysisTitle: "账号分析快照",
       caseOverview: "账号概览",
       openReport: "查看完整案例",
+      openAccount: "打开账号主页",
       reportDialogTitle: "完整案例报告",
       closeReport: "关闭",
       accountMeta: (sampledAt) => `Threads · 样本期 ${sampledAt}`,
@@ -352,6 +353,7 @@
       analysisTitle: "帳號分析快照",
       caseOverview: "帳號概覽",
       openReport: "查看完整案例",
+      openAccount: "開啟帳號主頁",
       reportDialogTitle: "完整案例報告",
       closeReport: "關閉",
       accountMeta: (sampledAt) => `Threads · 樣本期 ${sampledAt}`,
@@ -483,6 +485,9 @@
   );
   // This is the same Threads brand mark used by the account-pool component.
   const threadsIcon = () => '<svg class="platform-brand-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18.263 11.097c-.03-3.486-1.92-5.586-5.111-5.586-2.13 0-3.922.963-4.863 2.499l2.062 1.438c.535-.843 1.272-1.543 2.628-1.543 1.528 0 2.318.85 2.544 2.431a15 15 0 0 0-2.236-.173c-4.125 0-6.068 1.867-6.068 4.336s1.943 3.99 4.804 3.99c3.139 0 5.013-2.115 5.781-4.735.798.361 1.348 1.204 1.348 2.47 0 3.387-3.907 5.232-7.22 5.232-4.885 0-8.077-3.207-8.077-8.424 0-6.392 4.223-10.487 9.9-10.487 3.808 0 5.69 1.671 6.97 3.914l2.108-1.475C21.44 2.078 18.331 0 13.663 0 6.227 0 1.168 5.277 1.168 12.934c0 7 4.953 11.066 10.856 11.066 4.878 0 9.809-2.846 9.809-7.716 0-2.545-1.46-4.231-3.569-5.187m-6.33 4.855c-1.077 0-2.026-.512-2.026-1.453 0-1.483 1.822-1.934 3.606-1.934.678 0 1.34.045 1.927.173-.422 1.927-1.671 3.215-3.508 3.214Z"></path></svg>';
+  // Shared icon paths match the standard navigation controls used across the site.
+  const closeIcon = () => '<svg class="case-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"></path></svg>';
+  const externalLinkIcon = () => '<svg class="case-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 4h6v6M20 4l-9 9M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5"></path></svg>';
   const caseLibraryIcon = () => '<svg class="case-library-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2.2a1.2 1.2 0 0 1 1.13.8l1.15 3.3 3.5.07a1.2 1.2 0 0 1 .7 2.14l-2.78 2.14.95 3.36a1.2 1.2 0 0 1-1.84 1.3L12 13.32l-2.8 2.01a1.2 1.2 0 0 1-1.84-1.3l.96-3.36-2.8-2.14a1.2 1.2 0 0 1 .71-2.14l3.5-.07L10.87 3A1.2 1.2 0 0 1 12 2.2Zm0 3.95-.45 1.3a1.2 1.2 0 0 1-1.1.8l-1.38.03 1.1.84a1.2 1.2 0 0 1 .42 1.3l-.37 1.34 1.1-.8a1.2 1.2 0 0 1 1.4 0l1.1.8-.37-1.34a1.2 1.2 0 0 1 .42-1.3l1.1-.84-1.38-.03a1.2 1.2 0 0 1-1.1-.8L12 6.15Z"></path><path d="M4.37 16.2a1.1 1.1 0 0 1 1.5.4l.65 1.12 1.2-.48a1.1 1.1 0 0 1 .81 2.05l-2.1.83a1.1 1.1 0 0 1-1.4-.5l-1.06-1.9a1.1 1.1 0 0 1 .4-1.52Zm15.26 0a1.1 1.1 0 0 1 .4 1.52l-1.06 1.9a1.1 1.1 0 0 1-1.4.5l-2.1-.83a1.1 1.1 0 1 1 .81-2.05l1.2.48.65-1.12a1.1 1.1 0 0 1 1.5-.4Z"></path></svg>';
   const asNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
   const asArray = (value) => Array.isArray(value) ? value : [];
@@ -676,7 +681,7 @@
     const profileAvatar = profileAvatarFor(item);
     const caseCatalog = sourceCases.map((entry, index) => {
       const entryAvatar = profileAvatarFor(entry);
-      return `<button class="case-profile-card case-profile-card--catalog" type="button" data-case-open data-case-id="${esc(entry.id)}" data-case-layout="${index + 1}" aria-haspopup="dialog" aria-label="${t.openReport} · @${esc(entry.username)}">
+      return `<article class="case-profile-card case-profile-card--catalog" data-case-layout="${index + 1}" data-case-open data-case-id="${esc(entry.id)}" tabindex="0" role="button" aria-haspopup="dialog" aria-label="${t.openReport} · @${esc(entry.username)}">
         <span class="case-profile-surface">
           <span class="case-profile-avatar ${entry.avatarUrl ? "" : "is-fallback"}">${entryAvatar}</span>
           <span class="case-profile-copy">
@@ -689,9 +694,11 @@
             <span><b>${format(entry.recentViews)}</b>${t.recentViews}</span>
             <span><b>${format(entry.engagement)}</b>${t.engagement}</span>
           </span>
-          <span class="case-profile-open">${t.openReport}<b aria-hidden="true">↗</b></span>
+          <span class="case-profile-actions">
+            <a class="case-profile-source" href="${esc(entry.sourceUrl)}" target="_blank" rel="noreferrer">${t.openAccount}${externalLinkIcon()}</a>
+          </span>
         </span>
-      </button>`;
+      </article>`;
     }).join("");
     root.innerHTML = `
       <div class="case-studies-page">
@@ -716,7 +723,7 @@
                   <span class="case-profile-avatar case-profile-avatar-small ${item.avatarUrl ? "" : "is-fallback"}">${profileAvatar}</span>
                   <div><span class="case-platform-badge">${threadsIcon()} ${esc(item.platform)}</span><h2 id="case-account-title">@${esc(item.username)}</h2></div>
                 </div>
-                <button class="case-report-dialog-close" type="button" data-case-modal-close aria-label="${t.closeReport}">×</button>
+                <button class="case-report-dialog-close" type="button" data-case-modal-close aria-label="${t.closeReport}">${closeIcon()}</button>
               </header>
               <div class="case-report-dialog-body">
           <section class="case-summary-grid" aria-label="${t.analysisTitle}">
@@ -824,13 +831,6 @@
             </div>
             ${item.mediaPosts.length > mediaPostsPerPage ? `<nav class="case-media-pagination" aria-label="${t.mediaTitle}"><button type="button" data-case-media-page="${currentMediaPage - 1}" ${currentMediaPage === 1 ? "disabled" : ""}>${t.previousPage}</button><span>${t.pageStatus(currentMediaPage, totalMediaPages)}</span><button type="button" data-case-media-page="${currentMediaPage + 1}" ${currentMediaPage === totalMediaPages ? "disabled" : ""}>${t.nextPage}</button></nav>` : ""}
           </section>
-          <section class="case-panel case-style-panel">
-            <p class="case-section-kicker">${t.bestKicker}</p>
-            <h3>${t.bestTitle}</h3>
-            <div class="case-top-post"><div class="case-top-post-index">01</div><div><p>${esc(item.bestPost.text)}</p><footer><span>${t.views} ${format(item.bestPost.views)}</span><span>${t.interactions} ${format(item.bestPost.engagement)}</span><span>${t.likes} ${format(item.bestPost.likes)}</span><span>${t.replies} ${format(item.bestPost.replies)}</span><a href="${esc(item.bestPost.url)}" target="_blank" rel="noreferrer">${t.openPost} ↗</a></footer></div></div>
-          </section>
-          <section class="case-guidance" aria-label="${t.guidanceTitle}">${item.guidance.map((guide, index) => `<article><span>0${index + 1}</span><strong>${esc(guide.title)}</strong><p>${esc(guide.text)}</p></article>`).join("")}</section>
-          <p class="case-source-note">${t.sourceNote}</p>
           </div></div></section>
         </div>
       </div>`;
@@ -838,6 +838,7 @@
 
   window.addEventListener("vecto:language-change", render);
   root.addEventListener("click", (event) => {
+    if (event.target.closest(".case-profile-source")) return;
     const caseCard = event.target.closest("[data-case-open]");
     if (caseCard) {
       selectedCaseId = caseCard.dataset.caseId || selectedCaseId;
@@ -853,6 +854,14 @@
     mediaPostPages.set(selectedCaseId, Math.max(1, Number(button.dataset.caseMediaPage || 1)));
     render();
     document.querySelector(".case-media-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  root.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const caseCard = event.target.closest("[data-case-open]");
+    if (!caseCard || event.target.closest("a, button, input, select, textarea")) return;
+    event.preventDefault();
+    selectedCaseId = caseCard.dataset.caseId || selectedCaseId;
+    setCaseDetailOpen(true);
   });
   root.addEventListener("change", (event) => {
     const control = event.target.closest("[data-case-traffic-month]");
