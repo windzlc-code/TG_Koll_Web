@@ -566,6 +566,10 @@
     return ["", "home", "aboutVecto", "pricing", "caseStudies", "console", "console-login"].includes(String(page || ""));
   }
 
+  function pageKeepsCaseStudies(page) {
+    return publicPageKeepsTweetWorkbench(page);
+  }
+
   function isolatedWorkspacePage(page) {
     return ["video", "crm", "video-login", "crm-login"].includes(String(page || ""));
   }
@@ -579,7 +583,7 @@
       links.push(navLink({ key: "console", href: "/console.html", current }));
     }
     links.push(navLink({ key: "aboutVecto", href: "/about-vecto.html", current }));
-    if (["home", "caseStudies"].includes(String(page || ""))) {
+    if (pageKeepsCaseStudies(page)) {
       links.push(navLink({ key: "caseStudies", href: "/case-studies.html", current }));
     }
     return links.join("");
@@ -613,7 +617,7 @@
 
   function installCaseStudiesDesktopEntry(header, current) {
     if (!header || isolatedWorkspacePage(header.dataset.sitePage || "")) return null;
-    if (!["home", "caseStudies"].includes(String(header.dataset.sitePage || ""))) {
+    if (!pageKeepsCaseStudies(header.dataset.sitePage || "")) {
       header.querySelectorAll(':scope > .site-nav [data-site-nav-key="caseStudies"], .site-mobile-menu-panel a[data-site-nav-key="caseStudies"], .site-console-case-entry').forEach((node) => node.remove());
       return null;
     }
@@ -703,6 +707,7 @@
       solution: '<path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="m18.5 16 .7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"></path>',
       pricing: '<rect x="4" y="5" width="16" height="14" rx="2"></rect><path d="M4 9h16M8 14h3"></path><path d="m16 12 .7 1.4 1.6.2-1.2 1.1.3 1.6-1.4-.8-1.4.8.3-1.6-1.2-1.1 1.6-.2z"></path>',
       console: '<rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><path d="M15 17h5M17.5 14.5v5"></path>',
+      caseStudies: '<path d="m12 3 2.3 4.7L19.5 8.5l-3.8 3.7.9 5.3-4.6-2.4-4.6 2.4.9-5.3L4.5 8.5l5.2-.8z"></path>',
       video: '<path d="M4 5h11a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path><path d="m17 10 5-3v10l-5-3z"></path>',
       crm: '<path d="M5 4h14v16H5z"></path><path d="M8 8h8M8 12h5M8 16h3"></path><circle cx="17" cy="16" r="2.5"></circle>',
       aboutVecto: '<circle cx="12" cy="12" r="8"></circle><path d="M12 10v5M12 7h.01"></path>',
@@ -818,6 +823,9 @@
     ];
     if (publicPageKeepsTweetWorkbench(page)) {
       items.push({ group: "mobileWorkspace", key: "console", href: "/console.html" });
+    }
+    if (pageKeepsCaseStudies(page)) {
+      items.push({ group: "mobileWorkspace", key: "caseStudies", href: "/case-studies.html" });
     }
     return items.map(({ group, key, href }, index, items) => {
       const active = current === key ? ' aria-current="page"' : "";

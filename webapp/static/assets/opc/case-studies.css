@@ -140,22 +140,27 @@
 .case-trend-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-top: 17px; }
 .case-trend-kpis > span { min-width: 0; padding: 12px; border: 1px solid #d7e3e9; color: #6a818f; background: #f7fbfc; font-size: 11px; font-weight: 800; }
 .case-trend-kpis b { display: block; overflow: hidden; margin-top: 5px; color: #1b4e64; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.case-daily-wave { display: grid; gap: 8px; margin-top: 17px; }
+.case-daily-wave-row { display: grid; grid-template-columns: 54px minmax(0, 1fr) 48px; gap: 12px; align-items: center; min-height: 31px; padding: 5px 8px; color: #587180; background: #fbfcfd; font-size: 11px; font-weight: 850; }
+.case-daily-wave-row > span { white-space: nowrap; }
+.case-daily-wave-row small { display: block; margin-top: 2px; color: #8aa0ac; font-size: 9px; font-weight: 750; }
+.case-daily-wave-row > i { display: block; height: 10px; overflow: hidden; border-radius: 999px; background: #e1ebef; }
+.case-daily-wave-row > i > b { display: block; height: 100%; min-width: 3px; border-radius: inherit; background: linear-gradient(90deg, #163e56, #1a95ac 72%, #60c4d0); }
+.case-daily-wave-row > strong { color: #174e63; font: 850 13px/1 "Bahnschrift", "DIN Alternate", sans-serif; text-align: right; }
+.case-daily-wave-row.is-peak { color: #195a70; background: #f0fafb; }
+.case-daily-wave-row.is-peak > i > b { background: linear-gradient(90deg, #16465f, #138da5 54%, #52c5d2); }
+.case-traffic-panel-head { display: flex; align-items: end; justify-content: space-between; gap: 14px; }
+.case-traffic-month { display: grid; gap: 5px; min-width: 130px; color: #6a818f; font-size: 10px; font-weight: 850; }
+.case-traffic-month select { width: 100%; min-height: 33px; padding: 0 29px 0 9px; border: 1px solid #aac3cf; border-radius: 4px; color: #1c465a; background: #ffffff; font: 800 12px/1 inherit; }
 .case-chart-wrap { width: 100%; overflow-x: auto; margin-top: 12px; border: 1px solid #d4e1e7; background: linear-gradient(180deg, #fbfdfe, #f3f8fa); }
 .case-trend-chart { display: block; width: 100%; min-width: 860px; height: auto; }
 .case-trend-chart text { fill: #6d8492; font: 11px/1 "Bahnschrift", "DIN Alternate", sans-serif; }
 .case-chart-axis { stroke: #9db6c2; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .case-chart-gridline { stroke: #dce8ed; stroke-width: 1; vector-effect: non-scaling-stroke; }
-.case-chart-bar { fill: rgba(26, 165, 188, .18); }
 .case-chart-line { fill: none; stroke: #147c94; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .case-chart-point { fill: #edf9fb; stroke: #177f97; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .case-chart-point.is-peak { fill: #2ab3c5; stroke: #17394e; }
-.case-trend-table { display: grid; margin-top: 12px; border: 1px solid #d6e1e7; }
-.case-trend-table > div { display: grid; grid-template-columns: 1.25fr repeat(4, 1fr); gap: 8px; padding: 9px 12px; border-bottom: 1px solid #e0e9ed; color: #557080; background: #ffffff; font-size: 11px; text-align: right; }
-.case-trend-table > div:last-child { border-bottom: 0; }
-.case-trend-table > div > span:first-child { text-align: left; }
-.case-trend-table-head { position: sticky; z-index: 1; top: 0; color: #476373 !important; background: #f0f7f9 !important; font-size: 10px !important; font-weight: 850; }
-.case-trend-table b { color: #1a586e; }
-.case-trend-table .is-peak { color: #0b7583; font-weight: 850; }
+.case-chart-empty { margin: 14px 0 0; padding: 18px; border: 1px dashed #c7d8df; color: #6c8391; background: #fbfdfe; font-size: 12px; text-align: center; }
 
 .case-table-wrap { overflow-x: auto; margin-top: 16px; border: 1px solid #d6e1e7; }
 .case-data-table { width: 100%; min-width: 590px; border-collapse: collapse; font-size: 12px; }
@@ -242,6 +247,10 @@
   .case-summary-grid article { padding: 13px; }
   .case-traffic-kpis { grid-template-columns: 1fr; }
   .case-trend-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .case-daily-wave-row { grid-template-columns: 43px minmax(0, 1fr) 40px; gap: 8px; padding: 5px 6px; font-size: 10px; }
+  .case-daily-wave-row > strong { font-size: 12px; }
+  .case-traffic-panel-head { align-items: start; }
+  .case-traffic-month { min-width: 112px; }
   .case-trend-chart { min-width: 760px; }
   .case-trend-chart .case-chart-x-label { font-size: 9px; }
   .case-hour-heading { display: none; }
@@ -251,8 +260,6 @@
   .case-expand-mark { grid-column: 4; grid-row: 1; }
   .case-expand-body { display: block; padding-left: 42px; }
   .case-expand-body a { display: inline-block; margin-top: 8px; }
-  .case-trend-table { overflow-x: auto; }
-  .case-trend-table > div { grid-template-columns: 1.1fr repeat(4, .9fr); min-width: 460px; padding: 8px; font-size: 10px; }
   .case-media-table-head { display: none; }
   .case-media-row { grid-template-columns: 88px minmax(0, 1fr); gap: 8px 11px; min-height: 0; padding: 10px; }
   .case-media-preview { min-height: 80px; grid-row: 1 / span 2; }

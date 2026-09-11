@@ -42,6 +42,21 @@ class AboutVectoFrontendContractTests(unittest.TestCase):
                 self.assertIn('data-site-nav-key="console"', markup)
                 self.assertIn('data-site-nav-key="aboutVecto"', markup)
 
+    def test_hot_cases_entry_stays_in_the_public_tweet_workbench_navigation(self):
+        self.assertIn(
+            'function pageKeepsCaseStudies(page) {\n'
+            '    return publicPageKeepsTweetWorkbench(page);\n'
+            '  }',
+            self.navigation_script,
+        )
+        self.assertIn(
+            'return ["", "home", "aboutVecto", "pricing", "caseStudies", "console", "console-login"].includes(String(page || ""));',
+            self.navigation_script,
+        )
+        self.assertIn('if (pageKeepsCaseStudies(page)) {', self.navigation_script)
+        self.assertIn('key: "caseStudies", href: "/case-studies.html"', self.navigation_script)
+        self.assertIn('if (!header || isolatedWorkspacePage(header.dataset.sitePage || "")) return null;', self.navigation_script)
+
     def test_about_page_covers_product_story_and_marks_roadmap_features(self):
         self.assertIn('data-site-page="aboutVecto"', self.about_markup)
         self.assertIn('data-login-redirect="/about-vecto.html"', self.about_markup)
@@ -52,7 +67,7 @@ class AboutVectoFrontendContractTests(unittest.TestCase):
             "data-open-login",
         ):
             self.assertIn(control, self.about_markup)
-        self.assertIn('["pricing", "console", "video", "crm", "aboutVecto"].includes(page)', self.navigation_script)
+        self.assertIn('["pricing", "console", "video", "crm", "aboutVecto", "caseStudies"].includes(page)', self.navigation_script)
         for heading in (
             "六個階段，把內容投入沉澱成營運資產",
             "七個產品模組，支撐內容與帳號日常營運",

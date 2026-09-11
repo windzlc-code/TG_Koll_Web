@@ -99,6 +99,37 @@
         { title: "放大胜出时段", text: "优先在 15–20 点测试同类题材，再根据真实互动继续扩展，而不是复制原帖。" },
       ],
     },
+    {
+      id: "tjs0980",
+      number: "03",
+      platform: "Threads",
+      username: "tjs0980",
+      sourceUrl: "https://www.threads.com/@tjs0980",
+      reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwejs0k_bbc154",
+      reportApiUrls: ["/assets/opc/case-studies/tar_mtwejs0k_bbc154.json"],
+      sampledAt: "2026/3/16—2026/3/30",
+      followers: 808,
+      recentViews: 21936,
+      samplePosts: 15,
+      engagement: 1442,
+      averageEngagement: 96,
+      viewsPerFollower: 27.15,
+      engagementPerThousandViews: 65.74,
+      persona: "生活观点型公开账号",
+      styles: ["观点叙事型", "文字简洁", "自然语句导向", "弱销售感"],
+      flow: ["以具体观察建立话题", "用简洁表达承接观点", "从真实互动延展后续内容"],
+      peakHours: [],
+      daily: [],
+      monthly: [],
+      bestPost: { text: "正在同步已保存的公开报告。", views: 0, engagement: 0, likes: 0, replies: 0, url: "" },
+      mediaPosts: [],
+      reportLoading: true,
+      guidance: [
+        { title: "保留具体观察", text: "从可感知的日常片段出发，让观点有真实场景支撑。" },
+        { title: "用短句承接讨论", text: "以自然、清晰的表达保留读者回应空间。" },
+        { title: "复测有效时段", text: "先依据公开样本的高互动时段测试同类主题，再按真实反馈调整。" },
+      ],
+    },
   ];
 
   const copy = {
@@ -128,18 +159,21 @@
       posts: (count) => `${count} 篇样本`,
       dailyKicker: "DAILY WAVE",
       dailyTitle: "每日互动波段",
-      dailyIntro: "以公开样本的每日互动指数呈现趋势；柱线叠加用于识别异常峰值和可复测时段。",
+      dailyIntro: "按公开样本的每日互动指数逐日排列，完整保留每个有样本日期与峰值。",
       activeDays: "有样本天数",
       dailyAverage: "样本日均指数",
       peakDay: "最高互动日",
       trendTotal: "样本总互动指数",
-      trendDate: "日期",
-      trendPostCount: "篇数",
-      trendValue: "互动指数",
-      trendShare: "占样本比例",
-      trendSignal: "数据标记",
-      peakSignal: "峰值",
-      normalSignal: "常规",
+      dailyWavePosts: "篇",
+      trafficTrendKicker: "MONTH → DAY TRAFFIC",
+      trafficTrendTitle: "每月到每天的流量趋势",
+      trafficTrendIntro: "以公开样本中每篇帖文的真实浏览量按发布日期汇总，不对缺失浏览量补值。",
+      trafficMonth: "查看月份",
+      trafficTotal: "月浏览量",
+      trafficActiveDays: "有浏览天数",
+      trafficDailyAverage: "日均浏览",
+      trafficPeakDay: "最高浏览日",
+      trafficNoData: "当前筛选范围没有可用的公开浏览数据。",
       monthlyKicker: "MONTHLY TABLE",
       monthlyTitle: "月度数据对照",
       monthlyIntro: "按月保留样本数量、互动构成和代表帖文，方便快速核对增长波段。",
@@ -230,18 +264,21 @@
       posts: (count) => `${count} 篇樣本`,
       dailyKicker: "DAILY WAVE",
       dailyTitle: "每日互動波段",
-      dailyIntro: "以公開樣本的每日互動指數呈現趨勢；柱線疊加用於辨識異常峰值和可複測時段。",
+      dailyIntro: "按公開樣本的每日互動指數逐日排列，完整保留每個有樣本日期與峰值。",
       activeDays: "有樣本天數",
       dailyAverage: "樣本日均指數",
       peakDay: "最高互動日",
       trendTotal: "樣本總互動指數",
-      trendDate: "日期",
-      trendPostCount: "篇數",
-      trendValue: "互動指數",
-      trendShare: "占樣本比例",
-      trendSignal: "數據標記",
-      peakSignal: "峰值",
-      normalSignal: "常規",
+      dailyWavePosts: "篇",
+      trafficTrendKicker: "MONTH → DAY TRAFFIC",
+      trafficTrendTitle: "每月到每天的流量趨勢",
+      trafficTrendIntro: "以公開樣本中每篇貼文的真實瀏覽量按發佈日期彙總，不對缺失瀏覽量補值。",
+      trafficMonth: "查看月份",
+      trafficTotal: "月瀏覽量",
+      trafficActiveDays: "有瀏覽天數",
+      trafficDailyAverage: "日均瀏覽",
+      trafficPeakDay: "最高瀏覽日",
+      trafficNoData: "目前篩選範圍沒有可用的公開瀏覽數據。",
       monthlyKicker: "MONTHLY TABLE",
       monthlyTitle: "月度數據對照",
       monthlyIntro: "按月保留樣本數量、互動構成和代表貼文，方便快速核對成長波段。",
@@ -311,6 +348,7 @@
   let selectedCaseId = sourceCases[0]?.id || "";
   const mediaPostsPerPage = 5;
   const mediaPostPages = new Map();
+  const trafficMonthsByCase = new Map();
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
   const format = (value) => new Intl.NumberFormat("zh-TW", { maximumFractionDigits: 1 }).format(Number(value || 0));
   const language = () => window.VectoSiteNavigation?.currentLanguage?.() === "zh-Hant" ? "zh-Hant" : "zh-Hans";
@@ -358,6 +396,18 @@
       byMonth.set(month, row);
     });
     return [...byMonth.values()].sort((left, right) => left.month.localeCompare(right.month)).map((row) => ({ ...row, average: Math.round(row.total / Math.max(1, row.posts)) }));
+  };
+  const trafficDaysFromPosts = (posts) => {
+    const byDate = new Map();
+    asArray(posts).forEach((post) => {
+      const fullDate = dateKey(post?.publishedAt);
+      if (!fullDate) return;
+      const row = byDate.get(fullDate) || { fullDate, date: fullDate.slice(5), month: fullDate.slice(0, 7), posts: 0, views: 0 };
+      row.posts += 1;
+      row.views += asNumber(post?.views);
+      byDate.set(fullDate, row);
+    });
+    return [...byDate.values()].sort((left, right) => left.fullDate.localeCompare(right.fullDate));
   };
   const normalizeReport = (caseItem, payload) => {
     const result = payload?.report?.result || payload?.result || {};
@@ -419,6 +469,7 @@
       persona: result?.targetPersona || report?.persona || caseItem.persona,
       styles: asArray(report?.contentStyle).length ? report.contentStyle : caseItem.styles,
       daily: daily.length ? daily : caseItem.daily,
+      trafficDaily: trafficDaysFromPosts(posts),
       peakHours: peakHours.length ? peakHours : caseItem.peakHours,
       monthly: monthRowsFromPosts(posts),
       bestPost: {
@@ -463,9 +514,21 @@
     const activeDaily = item.daily.filter((day) => Number(day.value || 0) > 0);
     const averageDaily = Math.round(totalDaily / Math.max(1, activeDaily.length));
     const peakDaily = activeDaily.reduce((top, day) => Number(day.value || 0) > Number(top?.value || 0) ? day : top, activeDaily[0] || item.daily[0]);
-    const chartX = (index) => 54 + index * (820 / Math.max(1, item.daily.length - 1));
-    const chartY = (value) => 226 - Number(value || 0) / maxDaily * 174;
-    const chartPoints = item.daily.map((day, index) => `${chartX(index).toFixed(1)},${chartY(day.value).toFixed(1)}`).join(" ");
+    const trafficDaily = asArray(item.trafficDaily);
+    const trafficMonths = [...new Set(trafficDaily.map((day) => day.month).filter(Boolean))].sort();
+    const rememberedTrafficMonth = trafficMonthsByCase.get(item.id);
+    const selectedTrafficMonth = trafficMonths.includes(rememberedTrafficMonth) ? rememberedTrafficMonth : (trafficMonths.at(-1) || "");
+    const trafficDays = selectedTrafficMonth ? trafficDaily.filter((day) => day.month === selectedTrafficMonth) : trafficDaily;
+    const maxTraffic = Math.max(1, ...trafficDays.map((day) => Number(day.views || 0)));
+    const totalTraffic = trafficDays.reduce((sum, day) => sum + Number(day.views || 0), 0);
+    const activeTrafficDays = trafficDays.filter((day) => Number(day.views || 0) > 0);
+    const averageTraffic = Math.round(totalTraffic / Math.max(1, activeTrafficDays.length));
+    const peakTraffic = activeTrafficDays.reduce((top, day) => Number(day.views || 0) > Number(top?.views || 0) ? day : top, activeTrafficDays[0] || trafficDays[0]);
+    const trafficChartX = (index) => 58 + index * (816 / Math.max(1, trafficDays.length - 1));
+    const trafficChartY = (value) => 226 - Number(value || 0) / maxTraffic * 174;
+    const trafficChartPoints = trafficDays.map((day, index) => `${trafficChartX(index).toFixed(1)},${trafficChartY(day.views).toFixed(1)}`).join(" ");
+    const trafficChart = trafficDays.length ? `<div class="case-chart-wrap"><svg class="case-trend-chart" viewBox="0 0 920 310" role="img" aria-label="${t.trafficTrendTitle}"><line x1="58" y1="226" x2="874" y2="226" class="case-chart-axis"/><line x1="58" y1="42" x2="58" y2="226" class="case-chart-axis"/>${[0, .25, .5, .75, 1].map((ratio) => { const y = 226 - ratio * 174; return `<g><line x1="58" y1="${y}" x2="874" y2="${y}" class="case-chart-gridline"/><text x="48" y="${y + 4}" text-anchor="end">${format(Math.round(maxTraffic * ratio))}</text></g>`; }).join("")}${trafficDays.map((day, index) => { const x = trafficChartX(index); const y = trafficChartY(day.views); const isPeak = day.fullDate === peakTraffic?.fullDate; return `<g><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isPeak ? 4.5 : 3}" class="case-chart-point ${isPeak ? "is-peak" : ""}"><title>${esc(day.fullDate)} · ${format(day.views)}</title></circle><text class="case-chart-x-label" x="${x.toFixed(1)}" y="247" text-anchor="end" transform="rotate(-38 ${x.toFixed(1)} 247)">${esc(day.date)}</text></g>`; }).join("")}<polyline points="${trafficChartPoints}" class="case-chart-line"/></svg></div>` : `<p class="case-chart-empty">${t.trafficNoData}</p>`;
+    const dailyWave = item.daily.length ? item.daily.map((day) => { const isPeak = day.date === peakDaily?.date && day.value === peakDaily?.value; return `<div class="case-daily-wave-row ${isPeak ? "is-peak" : ""}"><span>${esc(day.date)}<small>${format(day.posts)}${t.dailyWavePosts}</small></span><i><b style="width:${Math.max(3, Math.round(Number(day.value || 0) / maxDaily * 100))}%"></b></i><strong>${format(day.value)}</strong></div>`; }).join("") : `<p class="case-chart-empty">${t.trafficNoData}</p>`;
     const reportedStyles = asArray(item.styles);
     const currentIndex = Math.max(0, sourceCases.findIndex((entry) => entry.id === item.id));
     const totalMediaPages = Math.max(1, Math.ceil(item.mediaPosts.length / mediaPostsPerPage));
@@ -575,9 +638,18 @@
               <h3>${t.dailyTitle}</h3>
               <p class="case-panel-intro">${t.dailyIntro}</p>
               <div class="case-trend-kpis"><span>${t.trendTotal}<b>${format(totalDaily)}</b></span><span>${t.activeDays}<b>${format(activeDaily.length)}</b></span><span>${t.dailyAverage}<b>${format(averageDaily)}</b></span><span>${t.peakDay}<b>${esc(peakDaily?.date || "—")} · ${format(peakDaily?.value || 0)}</b></span></div>
-              <div class="case-chart-wrap"><svg class="case-trend-chart" viewBox="0 0 920 310" role="img" aria-label="${t.dailyTitle}"><line x1="54" y1="226" x2="874" y2="226" class="case-chart-axis"/><line x1="54" y1="42" x2="54" y2="226" class="case-chart-axis"/>${[0, .25, .5, .75, 1].map((ratio) => { const y = 226 - ratio * 174; return `<g><line x1="54" y1="${y}" x2="874" y2="${y}" class="case-chart-gridline"/><text x="44" y="${y + 4}" text-anchor="end">${format(Math.round(maxDaily * ratio))}</text></g>`; }).join("")}${item.daily.map((day, index) => { const x = chartX(index); const y = chartY(day.value); return `<g><rect x="${(x - 6).toFixed(1)}" y="${y.toFixed(1)}" width="12" height="${Math.max(1, 226 - y).toFixed(1)}" class="case-chart-bar"><title>${esc(day.date)} · ${format(day.value)}</title></rect><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${day.value === peakDaily?.value ? 4.5 : 3}" class="case-chart-point ${day.value === peakDaily?.value ? "is-peak" : ""}"><title>${esc(day.date)} · ${format(day.value)}</title></circle><text class="case-chart-x-label" x="${x.toFixed(1)}" y="247" text-anchor="end" transform="rotate(-38 ${x.toFixed(1)} 247)">${esc(day.date)}</text></g>`; }).join("")}<polyline points="${chartPoints}" class="case-chart-line"/></svg></div>
-              <div class="case-trend-table"><div class="case-trend-table-head"><span>${t.trendDate}</span><span>${t.trendPostCount}</span><span>${t.trendValue}</span><span>${t.trendShare}</span><span>${t.trendSignal}</span></div>${item.daily.map((day) => `<div><span>${esc(day.date)}</span><span>${format(day.posts)}</span><b>${format(day.value)}</b><span>${Math.round(Number(day.value || 0) / Math.max(1, totalDaily) * 100)}%</span><span class="${day.value === peakDaily?.value ? "is-peak" : ""}">${day.value === peakDaily?.value ? t.peakSignal : t.normalSignal}</span></div>`).join("")}</div>
+              <div class="case-daily-wave" role="img" aria-label="${t.dailyTitle}">${dailyWave}</div>
             </article>
+          </section>
+          <section class="case-report-grid case-style-panel">
+            <article class="case-panel case-traffic-panel">
+              <div class="case-traffic-panel-head"><div><p class="case-section-kicker">${t.trafficTrendKicker}</p><h3>${t.trafficTrendTitle}</h3></div>${trafficMonths.length > 1 ? `<label class="case-traffic-month"><span>${t.trafficMonth}</span><select data-case-traffic-month>${trafficMonths.map((month) => `<option value="${esc(month)}" ${month === selectedTrafficMonth ? "selected" : ""}>${esc(month)}</option>`).join("")}</select></label>` : ""}</div>
+              <p class="case-panel-intro">${t.trafficTrendIntro}</p>
+              <div class="case-trend-kpis"><span>${t.trafficTotal}<b>${format(totalTraffic)}</b></span><span>${t.trafficActiveDays}<b>${format(activeTrafficDays.length)}</b></span><span>${t.trafficDailyAverage}<b>${format(averageTraffic)}</b></span><span>${t.trafficPeakDay}<b>${esc(peakTraffic?.date || "—")} · ${format(peakTraffic?.views || 0)}</b></span></div>
+              ${trafficChart}
+            </article>
+          </section>
+          <section class="case-report-grid case-style-panel">
             <article class="case-panel case-month-panel">
               <p class="case-section-kicker">${t.monthlyKicker}</p>
               <h3>${t.monthlyTitle}</h3>
@@ -623,6 +695,12 @@
     mediaPostPages.set(selectedCaseId, Math.max(1, Number(button.dataset.caseMediaPage || 1)));
     render();
     document.querySelector(".case-media-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  root.addEventListener("change", (event) => {
+    const control = event.target.closest("[data-case-traffic-month]");
+    if (!control) return;
+    trafficMonthsByCase.set(selectedCaseId, control.value);
+    render();
   });
   render();
   loadCaseReports();
