@@ -99,9 +99,11 @@ export function buildSentimentCandidateId(input: { platform: string; sourceUrl?:
   return crypto.createHash("sha1").update(stable).digest("hex").slice(0, 20);
 }
 
-export function getSentimentHotExcludedIds(archiveId: string): Set<string> {
-  const state = readState();
-  return new Set(state.imported[archiveId] || []);
+export function getSentimentHotExcludedIds(_archiveId: string): Set<string> {
+  // Import history is an audit trail, not a permanent queue blacklist. The
+  // shown-history scope is responsible for short-term rotation/cooldown;
+  // otherwise an imported post could never return to the candidate pool.
+  return new Set<string>();
 }
 
 function shownEntryId(entry: string | ShownEntry): string {
@@ -160,7 +162,6 @@ export function getSentimentHotRefreshExcludedIds(archiveId: string, searchMode?
   const historyScope = sentimentHotHistoryScope(archiveId, searchMode);
   return new Set([
     ...(state.shown[historyScope] || []).map(shownEntryId).filter(Boolean),
-    ...(state.imported[archiveId] || []),
   ]);
 }
 

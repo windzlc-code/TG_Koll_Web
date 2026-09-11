@@ -1905,14 +1905,19 @@ def run_tool_r18_job(
     # accounts remain reserved for CRM/full-data refresh capabilities.
     if capability == "persona.hot_candidates.v1":
         background_refill = bool(payload.get("_poolRefill"))
+        record_shown = bool(
+            payload.get("recordShown") is True
+            and payload.get("userInitiated") is True
+            and not background_refill
+        )
         result = _run_tool_r18_job_once(
             {
                 **payload,
                 "sourcePolicy": "reader_only",
                 "refresh": True,
-                # The new host controls when a candidate was actually shown.
-                # A remote fetch itself must not consume the mode-scoped pool.
-                "recordShown": False,
+                # User-facing display batches participate in the old-host
+                # rotation history; scheduled pool refills never do.
+                "recordShown": record_shown,
             },
             cancel_event,
             timeout_seconds=timeout_seconds,
@@ -2077,7 +2082,13 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
         raise ProtocolError("worker action does not match capability")
     normalized["action"] = action
     if action == "fetch-hot-candidates":
-        if normalized.get("recordShown") is not False:
+        display_batch_record = (
+            capability == "persona.hot_candidates.v1"
+            and normalized.get("recordShown") is True
+            and normalized.get("userInitiated") is True
+            and not normalized.get("_poolRefill")
+        )
+        if normalized.get("recordShown") is not False and not display_batch_record:
             raise ProtocolError("remote fetch must set recordShown=false")
         if capability == "persona.hot_candidates.v1" and normalized.get("liveOnly") is not False:
             if not (normalized.get("liveOnly") is True and _hot_public_probe_enabled()):

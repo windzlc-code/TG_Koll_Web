@@ -3492,7 +3492,16 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     // Re-open the same-persona cache/database for the shortage path. Refresh
     // searches exclude shown IDs while collecting live results; if the fresh
     // pool is still short, compliant same-persona rows may rotate back in
-    // under the cooldown policy instead of collapsing the result count.
+    // under the cooldown policy instead of collapsing the result count. The
+    // shared persona pool is part of this final rotation too; otherwise a
+    // large pre-filter batch can hide its candidates before this branch runs.
+    const globalPoolHistory = readGlobalThreadsCandidateBackfill(
+      archiveId,
+      keywords,
+      Math.max(limit * 20, 200),
+      searchMode,
+      requestedPlatform,
+    );
     const archiveHistory = [
       ...readThreadsSearchCandidateCache(archiveId, keywords, poolLimit, false, searchMode, requestedPlatform),
       ...(await readCandidatesFromDatabase({
@@ -3502,6 +3511,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
         excludeShown: false,
         searchMode,
       }).catch(() => [])),
+      ...globalPoolHistory,
     ].filter((candidate) => !useModelStrategyForAcceptance || !strategyResult || candidateMatchesStrategyOrVerifiedFreshFallback(candidate, strategyResult, searchMode));
     const orderedSupplements = orderSentimentHotCandidatesForLegacyFallback(
       finalizeSentimentHotCandidatesForDisplay([...displayCandidatePool, ...archiveHistory], poolLimit, {
@@ -3527,9 +3537,11 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     if (supplements.length > 0) {
       candidates = [...candidates, ...supplements];
       const rotated = supplements.filter((candidate) => getSentimentHotCandidateHistoryKeys(candidate).some((key) => shownHistoryKeys.has(key))).length;
+      const globalBackfilled = supplements.filter((candidate) => (candidate.metrics as any)?.globalPersonaBackfill).length;
       warnings.push(rotated > 0
         ? `候選池不足，已補充 ${rotated} 篇符合條件的候選。`
         : `候選池不足，已補充 ${supplements.length} 篇符合條件的同人設候選。`);
+      if (globalBackfilled > 0) warnings.push(`最终缺口已从人设补池回补 ${globalBackfilled} 篇候选。`);
     }
   }
   if (!liveOnlyRefresh && candidates.length < limit && modelParentCandidatePool.length > 0) {
@@ -3738,6 +3750,27 @@ async function fillSentimentHotCandidatesToLimit(args: {
     }
     if (out.length > beforeArchiveBackfillCount) {
       args.warnings.push(`即時新候選不足，已用同一人設歷史關鍵詞候選回補到 ${out.length}/${args.limit} 篇。`);
+    }
+  }
+
+  if (out.length < args.limit) {
+    // The shared persona pool is also a final fill source. It used to run
+    // only before live search, so rows rejected by the later quality/platform
+    // gates could leave the result short without ever consulting the pool.
+    const beforeGlobalBackfillCount = out.length;
+    const globalBackfillCandidates = readGlobalThreadsCandidateBackfill(
+      args.archiveId,
+      args.keywords,
+      Math.max(args.limit * 20, 200),
+      searchMode,
+      args.platform,
+    );
+    for (const candidate of globalBackfillCandidates) {
+      add(candidate);
+      if (out.length >= args.limit) break;
+    }
+    if (out.length > beforeGlobalBackfillCount) {
+      args.warnings.push(`同人设候选不足，已从补池回补 ${out.length - beforeGlobalBackfillCount} 篇到 ${out.length}/${args.limit}。`);
     }
   }
 
@@ -10612,11 +10645,18 @@ export async function enrichThreadsCandidateDetails(
     .slice(0, 16);
   if (!targets.length) return candidates;
   const enriched = [...candidates];
-  const browserMetricsPromise = fetchThreadsBrowserDetailMetricsBatch(
-    targets.map(({ candidate }) => candidate.sourceUrl),
-    boundedBrowserPageConcurrency(options.browserConcurrency || 2),
-    options.browserContext,
-  );
+  // Public Spider/Reader is the fast path used by the hotspot import. Starting
+  // a second browser-detail batch here makes the whole enrichment wait for up
+  // to 16 authenticated pages, so the outer hotspot budget can expire and
+  // discard Reader metrics that were already parsed. Browser detail rescue is
+  // still used by the explicit browser-only callers (`includeReader: false`).
+  const browserMetricsPromise = options.includeReader === false
+    ? fetchThreadsBrowserDetailMetricsBatch(
+      targets.map(({ candidate }) => candidate.sourceUrl),
+      boundedBrowserPageConcurrency(options.browserConcurrency || 2),
+      options.browserContext,
+    )
+    : null;
   if (options.includeReader !== false) await Promise.all(targets.map(async ({ candidate, index }) => {
     const detail = await fetchThreadsDetailData(candidate.sourceUrl);
     if (!hasNamedEngagementMetrics(detail.engagement) && !detail.media.length) return;
@@ -10637,7 +10677,7 @@ export async function enrichThreadsCandidateDetails(
       },
     };
   }));
-  const browserMetrics = await browserMetricsPromise;
+  const browserMetrics = browserMetricsPromise ? await browserMetricsPromise : null;
   for (const { candidate, index } of targets) {
     const detail = browserMetrics?.get(normalizeThreadsPostUrl(candidate.sourceUrl));
     if (!detail) continue;

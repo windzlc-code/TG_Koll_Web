@@ -35,3 +35,12 @@ def test_reader_parser_and_spider_markdown_carry_real_view_counts():
     markdown_end = importer.index("export function", markdown_start + 1)
     markdown = importer[markdown_start:markdown_end]
     assert "浏览" in markdown
+
+
+def test_reader_view_enrichment_is_not_blocked_by_browser_rescue_and_heat_uses_views():
+    importer = (ROOT / "tool_r18" / "src" / "lib" / "sentiment-hot-importer.ts").read_text(encoding="utf-8")
+    console = (ROOT / "webapp" / "static" / "assets" / "console.js").read_text(encoding="utf-8")
+
+    assert "const browserMetricsPromise = options.includeReader === false" in importer
+    assert '["热度", personaHotViewMetric(candidate)]' in console
+    assert '["热度", personaHotViewMetric(meta)]' in console

@@ -878,6 +878,18 @@ describe("sentiment hot importer", () => {
     expect(fill).not.toContain("some((key) => shownHistoryKeys.has(key))) return;");
   });
 
+  it("uses the shared persona pool in the final candidate fill path", () => {
+    const source = fs.readFileSync(path.resolve("src/lib/sentiment-hot-importer.ts"), "utf8");
+    const start = source.indexOf("async function fillSentimentHotCandidatesToLimit");
+    const end = source.indexOf("export function isObviouslyLowQualitySentimentHotCandidate", start);
+    const fill = source.slice(start, end);
+
+    expect(fill).toContain("readGlobalThreadsCandidateBackfill");
+    expect(fill).toContain("同人设候选不足，已从补池回补");
+    expect(source).toContain("const globalPoolHistory = readGlobalThreadsCandidateBackfill(");
+    expect(source).toContain("最终缺口已从人设补池回补");
+  });
+
   it("gives a live refresh enough time to obtain a model search strategy", () => {
     expect(resolveSentimentHotStrategyTimeoutMs(true, 50_000)).toBe(8_000);
     expect(resolveSentimentHotStrategyTimeoutMs(false, 50_000)).toBe(8_000);
@@ -1536,13 +1548,14 @@ describe("sentiment hot importer", () => {
     expect(getSentimentHotRefreshExcludedIds(archiveId).has("shown-hot")).toBe(true);
   });
 
-  it("only excludes a candidate after its draft import succeeds", () => {
+  it("keeps import history for audit without permanently excluding the candidate", () => {
     const archiveId = `test-import-consumption-${Date.now()}`;
     rememberSentimentHotSelected(archiveId, "candidate-a");
     expect(getSentimentHotExcludedIds(archiveId).has("candidate-a")).toBe(false);
 
     rememberSentimentHotImported(archiveId, "candidate-a");
-    expect(getSentimentHotExcludedIds(archiveId).has("candidate-a")).toBe(true);
+    expect(getSentimentHotExcludedIds(archiveId).has("candidate-a")).toBe(false);
+    expect(getSentimentHotRefreshExcludedIds(archiveId).has("candidate-a")).toBe(false);
   });
 
   it("prioritizes heat before publish time for gap filling", () => {

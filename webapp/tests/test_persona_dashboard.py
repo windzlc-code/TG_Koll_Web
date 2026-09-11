@@ -5377,6 +5377,9 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("第一次会现场生成，大约 10–20 秒", source)
         self.assertIn("不想等可随时取消", source)
         self.assertIn("排队中 前面还有", source)
+        self.assertIn("pending_batch", fetch_source)
+        self.assertIn("displayImmediately", fetch_source)
+        self.assertIn("已准备", fetch_source)
 
     def test_console_hot_cancel_updates_ui_before_waiting_for_backend(self):
         source = (Path(server.__file__).parent / "static" / "assets" / "console.js").read_text(encoding="utf-8")
@@ -5494,7 +5497,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(payload["platform"], "threads")
         self.assertNotIn("memorySummaries", payload)
         self.assertIs(payload["userInitiated"], True)
-        self.assertIs(payload["recordShown"], False)
+        self.assertIs(payload["recordShown"], True)
         self.assertNotIn("forceLive", payload)
         self.assertNotIn("deferBackgroundRefresh", payload)
 

@@ -873,6 +873,23 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(payload["archiveSnapshot"]["id"], "archive_empty_keywords")
         self.assertEqual(payload["archiveSnapshot"]["posts"], [])
 
+    def test_persona_hot_user_display_batch_can_record_rotation_history(self) -> None:
+        _, _, payload = _validate_envelope(
+            {
+                "capability": "persona.hot_candidates.v1",
+                "unit_id": "archive_display_batch",
+                "payload": {
+                    "action": "fetch-hot-candidates",
+                    "archiveId": "archive_display_batch",
+                    **current_keyword_strategy(["女性成长", "心理疗愈"]),
+                    "liveOnly": False,
+                    "recordShown": True,
+                    "userInitiated": True,
+                },
+            }
+        )
+        self.assertTrue(payload["recordShown"])
+
     def test_persona_hot_envelope_rejects_empty_keywords_from_new_host(self) -> None:
         with self.assertRaisesRegex(ProtocolError, "keywords"):
             _validate_envelope(
@@ -1550,6 +1567,8 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                     "platform": "threads",
                     **current_keyword_strategy(["理发师", "理发店趣事"]),
                     "limit": 10,
+                    "userInitiated": True,
+                    "recordShown": True,
                 },
                 threading.Event(),
             )
@@ -1560,7 +1579,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(len(responses), 0)
         sent = json.loads(popen.call_args.args[0][-1])
         self.assertEqual(sent["sourcePolicy"], "reader_only")
-        self.assertFalse(sent["recordShown"])
+        self.assertTrue(sent["recordShown"])
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_CONCURRENCY"], "24")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"], "0")
         self.assertEqual(popen.call_args.kwargs["env"]["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"], "45000")

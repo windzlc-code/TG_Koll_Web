@@ -16869,7 +16869,10 @@ def _fetch_persona_hot_candidates(
             # Only this billable, user-facing route may activate scheduled
             # low-watermark refill on the old collector host.
             "userInitiated": True,
-            "recordShown": False,
+            # This is the user-facing display batch. Recording it enables the
+            # old worker's short rotation cooldown; background pool refills
+            # still explicitly send false and never consume display history.
+            "recordShown": True,
             # The new application owns keyword generation. The old collector
             # searches public pages with those keywords and may merge its pool.
             # /data/hot-public-probe forces a public-page-only request for live

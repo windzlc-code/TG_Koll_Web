@@ -4898,7 +4898,7 @@ function personaHotViewMetric(candidate) {
 function personaHotMetricSummary(candidate) {
   const fields = [
     ["浏览", personaHotViewMetric(candidate)],
-    ["热度", personaHotMetricNumber(candidate?.hot_score, candidate?.hotScore, candidate?.score)],
+    ["热度", personaHotViewMetric(candidate)],
     ["点赞", personaHotMetricNumber(candidate?.like_count, candidate?.engagement?.likeCount, candidate?.metrics?.like_count, candidate?.metrics?.likeCount, candidate?.metrics?.likes)],
     ["评论", personaHotMetricNumber(candidate?.comment_count, candidate?.engagement?.commentCount, candidate?.metrics?.comment_count, candidate?.metrics?.commentCount, candidate?.metrics?.comments)],
     ["转发", personaHotMetricNumber(candidate?.repost_count, candidate?.engagement?.repostCount, candidate?.metrics?.repost_count, candidate?.metrics?.repostCount, candidate?.metrics?.reposts)],
@@ -4956,6 +4956,13 @@ function personaHotResultState(persona = selectedPersona(), searchMode) {
 
 function setPersonaHotResultState(personaId, searchMode, value) {
   state.personaHotCandidateResults[personaHotResultStateKey(personaId, searchMode)] = value;
+}
+
+function personaHotPendingBatch(hotState = {}) {
+  const batch = hotState?.pending_batch;
+  if (!batch || typeof batch !== "object") return null;
+  const candidates = Array.isArray(batch.candidates) ? batch.candidates.filter((item) => item && typeof item === "object") : [];
+  return candidates.length ? { ...batch, candidates } : null;
 }
 
 function parsePersonaHotKeywordText(value) {
@@ -6005,7 +6012,7 @@ function renderPersonaHotMetricStrip(meta, postId = "") {
   if (!meta) return "";
   const metrics = [
     ["浏览", personaHotViewMetric(meta)],
-    ["热度", personaHotMetricNumber(meta?.hot_score, meta?.hotScore, meta?.score)],
+    ["热度", personaHotViewMetric(meta)],
     ["点赞", meta.like_count],
     ["评论", meta.comment_count],
     ["转发", meta.repost_count],
@@ -23593,9 +23600,40 @@ async function fetchPersonaHotCandidates(refresh = false) {
   const personaKey = String(persona.id || "").trim();
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
-  const previousCandidates = personaHotAllCandidates(persona);
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
   let hotState = personaHotResultState(persona, form.hotSearchMode);
+  const targetPlatform = normalizePersonaContentPlatform(personaContentPlatform(persona));
+  const pendingBatch = personaHotPendingBatch(hotState);
+  if (
+    pendingBatch
+    && (!pendingBatch.platform || normalizePersonaContentPlatform(pendingBatch.platform) === targetPlatform)
+  ) {
+    const pendingKeywords = Array.isArray(pendingBatch.keywords)
+      ? pendingBatch.keywords.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    const pendingAllKeywords = Array.isArray(pendingBatch.all_keywords)
+      ? pendingBatch.all_keywords.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    const pendingUnreadCounts = { ...(hotState.unread_counts || {}) };
+    accountPoolPlatforms.forEach(([platform]) => {
+      if (!(platform in pendingUnreadCounts)) pendingUnreadCounts[platform] = 0;
+    });
+    pendingUnreadCounts[targetPlatform] = 0;
+    hotState = {
+      ...hotState,
+      candidates: pendingBatch.candidates,
+      keywords: pendingKeywords.length ? pendingKeywords : hotState.keywords,
+      all_keywords: pendingAllKeywords.length ? pendingAllKeywords : hotState.all_keywords,
+      warnings: Array.isArray(pendingBatch.warnings) ? pendingBatch.warnings : hotState.warnings,
+      empty_reason: String(pendingBatch.empty_reason || hotState.empty_reason || ""),
+      fetched_at: String(pendingBatch.fetched_at || hotState.fetched_at || ""),
+      pending_batch: null,
+      unread_counts: pendingUnreadCounts,
+    };
+    setPersonaHotResultState(persona.id, form.hotSearchMode, hotState);
+    if (isPersonaWorkspaceModule()) renderPersonaDetail();
+  }
+  const previousCandidates = personaHotAllCandidates(persona);
   let keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
   const cooldown = await apiWithTimeout(
     `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/cooldown`,
@@ -23716,17 +23754,20 @@ async function fetchPersonaHotCandidates(refresh = false) {
       normalizePersonaContentPlatform(candidate?.platform || "threads") === currentPlatform
     ));
     const mergedCandidates = [...previousOther, ...platformCandidates];
+    const visiblePlatformCandidates = previousCandidates.filter((candidate) => (
+      normalizePersonaContentPlatform(candidate?.platform || "threads") === currentPlatform
+    ));
+    const displayImmediately = visiblePlatformCandidates.length === 0;
     const unreadCounts = {
       ...(personaHotResultState(persona, form.hotSearchMode)?.unread_counts || {}),
     };
     accountPoolPlatforms.forEach(([platform]) => {
       if (!(platform in unreadCounts)) unreadCounts[platform] = 0;
     });
-    unreadCounts[currentPlatform] = platformCandidates.length;
+    unreadCounts[currentPlatform] = displayImmediately ? 0 : platformCandidates.length;
     const previousHot = personaHotResultState(persona, form.hotSearchMode);
-    setPersonaHotResultState(persona.id, form.hotSearchMode, {
+    const nextHotState = {
       ...previousHot,
-      candidates: mergedCandidates,
       keywords,
       all_keywords: Array.isArray(previousHot.all_keywords) && previousHot.all_keywords.length
         ? previousHot.all_keywords
@@ -23738,47 +23779,72 @@ async function fetchPersonaHotCandidates(refresh = false) {
       cooldown: result.cooldown && typeof result.cooldown === "object" ? result.cooldown : {},
       unread_counts: unreadCounts,
       fetched_at: new Date().toISOString(),
-    });
+    };
+    if (displayImmediately) {
+      nextHotState.candidates = mergedCandidates;
+      nextHotState.pending_batch = null;
+    } else if (platformCandidates.length) {
+      // Keep the visible batch stable while the next batch is prepared. It is
+      // promoted at the beginning of the next fetch click, so the user never
+      // waits for the new search before seeing the already prepared result.
+      nextHotState.pending_batch = {
+        platform: currentPlatform,
+        candidates: mergedCandidates,
+        keywords,
+        all_keywords: Array.isArray(previousHot.all_keywords) && previousHot.all_keywords.length
+          ? previousHot.all_keywords
+          : (allKeywords.length ? allKeywords : keywords),
+        warnings: Array.isArray(result.warnings) ? result.warnings : [],
+        empty_reason: String(result.empty_reason || ""),
+        fetched_at: new Date().toISOString(),
+      };
+    }
+    setPersonaHotResultState(persona.id, form.hotSearchMode, nextHotState);
     form.hotKeywordText = formatPersonaHotKeywordText(keywords);
     form.hotKeywordMode = form.hotSearchMode;
     const nextCandidates = personaHotAllCandidates(persona);
-    reconcilePersonaHotMediaStateAfterRefresh(persona.id, previousCandidates, nextCandidates);
+    if (displayImmediately) {
+      reconcilePersonaHotMediaStateAfterRefresh(persona.id, previousCandidates, nextCandidates);
+    }
     state.transientWorkspaceLeaveAcknowledgement = "";
     const currentIds = platformCandidates.map((item) => String(item.candidate_id || item.id || "").trim()).filter(Boolean);
     const candidateIds = nextCandidates.map((item) => String(item.candidate_id || "").trim()).filter(Boolean);
     const candidateIdSet = new Set(candidateIds);
-    form.hotSelectedIds = (form.hotSelectedIds || []).filter((item) => currentIds.includes(String(item || "").trim()));
-    form.hotPreviewId = currentIds.includes(String(form.hotPreviewId || "").trim()) ? String(form.hotPreviewId || "").trim() : (currentIds[0] || "");
-    if (!candidateIdSet.has(String(form.hotEditingCandidateId || "").trim())) form.hotEditingCandidateId = "";
-    Object.keys(form.hotReplacementFilesByCandidate || {}).forEach((candidateId) => {
-      if (!candidateIdSet.has(candidateId)) clearPersonaHotReplacementFiles(persona.id, candidateId);
-    });
-    Object.keys(form.hotReplacementPoolByCandidate || {}).forEach((candidateId) => {
-      if (!candidateIdSet.has(candidateId)) clearPersonaHotReplacementPool(persona.id, candidateId);
-    });
-    Object.keys(form.hotMediaDraftsByCandidate || {}).forEach((candidateId) => {
-      if (!candidateIdSet.has(candidateId)) clearPersonaHotMediaDraft(persona.id, candidateId);
-    });
-    ["hotDeletedMediaByCandidate", "hotEditedContentByCandidate", "hotRewrittenByCandidate", "hotRewriteInstructionByCandidate", "hotSelectedMediaIndexByCandidate", "hotSelectedReplacementPoolIdByCandidate"].forEach((field) => {
-      const current = form[field] && typeof form[field] === "object" ? form[field] : {};
-      form[field] = Object.fromEntries(Object.entries(current).filter(([candidateId]) => candidateIdSet.has(candidateId)));
-    });
+    if (displayImmediately) {
+      form.hotSelectedIds = (form.hotSelectedIds || []).filter((item) => currentIds.includes(String(item || "").trim()));
+      form.hotPreviewId = currentIds.includes(String(form.hotPreviewId || "").trim()) ? String(form.hotPreviewId || "").trim() : (currentIds[0] || "");
+      if (!candidateIdSet.has(String(form.hotEditingCandidateId || "").trim())) form.hotEditingCandidateId = "";
+      Object.keys(form.hotReplacementFilesByCandidate || {}).forEach((candidateId) => {
+        if (!candidateIdSet.has(candidateId)) clearPersonaHotReplacementFiles(persona.id, candidateId);
+      });
+      Object.keys(form.hotReplacementPoolByCandidate || {}).forEach((candidateId) => {
+        if (!candidateIdSet.has(candidateId)) clearPersonaHotReplacementPool(persona.id, candidateId);
+      });
+      Object.keys(form.hotMediaDraftsByCandidate || {}).forEach((candidateId) => {
+        if (!candidateIdSet.has(candidateId)) clearPersonaHotMediaDraft(persona.id, candidateId);
+      });
+      ["hotDeletedMediaByCandidate", "hotEditedContentByCandidate", "hotRewrittenByCandidate", "hotRewriteInstructionByCandidate", "hotSelectedMediaIndexByCandidate", "hotSelectedReplacementPoolIdByCandidate"].forEach((field) => {
+        const current = form[field] && typeof form[field] === "object" ? form[field] : {};
+        form[field] = Object.fromEntries(Object.entries(current).filter(([candidateId]) => candidateIdSet.has(candidateId)));
+      });
+    }
     const platformLabel = currentPlatform === "instagram" ? "Instagram" : "Threads";
     const emptyMessage = personaHotEmptyFetchMessage(platformLabel, result);
+    const readyMessage = currentIds.length
+      ? (displayImmediately
+        ? `已获取 ${platformLabel} 热点 ${currentIds.length} 条`
+        : `已准备 ${platformLabel} 下一批热点 ${currentIds.length} 条`)
+      : emptyMessage;
     setPersonaGenerateRunState(persona.id, {
       kind: "hot",
       status: "success",
-      message: currentIds.length
-        ? `已获取 ${platformLabel} 热点 ${currentIds.length} 条`
-        : emptyMessage,
+      message: readyMessage,
       generatedCount: currentIds.length,
       error: "",
     });
     showMsg(
       "commandMsg",
-      currentIds.length
-        ? `已获取 ${platformLabel} 热点 ${currentIds.length} 条`
-        : emptyMessage,
+      readyMessage,
       currentIds.length > 0,
     );
   } catch (error) {
@@ -26553,6 +26619,10 @@ function renderPersonaHotCandidatePicker(persona, form) {
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
   const hotState = personaHotResultState(persona, form.hotSearchMode);
   const candidates = personaHotCandidates(persona);
+  const pendingBatch = personaHotPendingBatch(hotState);
+  const pendingCount = pendingBatch
+    ? pendingBatch.candidates.filter((candidate) => normalizePersonaContentPlatform(candidate?.platform || "threads") === personaContentPlatform(persona)).length
+    : 0;
   const selectedIds = new Set((form.hotSelectedIds || []).map((item) => String(item || "").trim()).filter(Boolean));
   const allCandidatesSelected = Boolean(candidates.length)
     && candidates.every((candidate) => selectedIds.has(personaHotCandidateKey(candidate)));
@@ -26623,6 +26693,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
       <section class="persona-hot-list">
         <div class="persona-hot-toolbar">
           <strong>候选 ${candidates.length} 条</strong>
+          ${pendingCount ? `<small>下一批已准备 ${pendingCount} 条</small>` : ""}
           <div class="row-actions">
             <button type="button" class="bulk-selection-icon-button" data-persona-hot-bulk="${allCandidatesSelected ? "clear" : "all"}" title="${allCandidatesSelected ? "取消全选" : "全选"}" aria-label="${allCandidatesSelected ? "取消全选" : "全选"}">${allCandidatesSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
           </div>
