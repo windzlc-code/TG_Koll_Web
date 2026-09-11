@@ -633,14 +633,31 @@
     const trafficChart = trafficDays.length ? `<div class="case-chart-wrap"><svg class="case-trend-chart" viewBox="0 0 920 310" role="img" aria-label="${t.trafficTrendTitle}"><line x1="58" y1="226" x2="874" y2="226" class="case-chart-axis"/><line x1="58" y1="42" x2="58" y2="226" class="case-chart-axis"/>${[0, .25, .5, .75, 1].map((ratio) => { const y = 226 - ratio * 174; return `<g><line x1="58" y1="${y}" x2="874" y2="${y}" class="case-chart-gridline"/><text x="48" y="${y + 4}" text-anchor="end">${format(Math.round(maxTraffic * ratio))}</text></g>`; }).join("")}${trafficDays.map((day, index) => { const x = trafficChartX(index); const y = trafficChartY(day.views); const isPeak = day.fullDate === peakTraffic?.fullDate; return `<g><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isPeak ? 4.5 : 3}" class="case-chart-point ${isPeak ? "is-peak" : ""}"><title>${esc(day.fullDate)} · ${format(day.views)}</title></circle><text class="case-chart-x-label" x="${x.toFixed(1)}" y="247" text-anchor="end" transform="rotate(-38 ${x.toFixed(1)} 247)">${esc(day.date)}</text></g>`; }).join("")}<polyline points="${trafficChartPoints}" class="case-chart-line"/></svg></div>` : `<p class="case-chart-empty">${t.trafficNoData}</p>`;
     const dailyWave = item.daily.length ? item.daily.map((day) => { const isPeak = day.date === peakDaily?.date && day.value === peakDaily?.value; return `<div class="case-daily-wave-row ${isPeak ? "is-peak" : ""}"><span>${esc(day.date)}<small>${format(day.posts)}${t.dailyWavePosts}</small></span><i><b style="width:${Math.max(3, Math.round(Number(day.value || 0) / maxDaily * 100))}%"></b></i><strong>${format(day.value)}</strong></div>`; }).join("") : `<p class="case-chart-empty">${t.trafficNoData}</p>`;
     const reportedStyles = asArray(item.styles);
-    const currentIndex = Math.max(0, sourceCases.findIndex((entry) => entry.id === item.id));
     const totalMediaPages = Math.max(1, Math.ceil(item.mediaPosts.length / mediaPostsPerPage));
     const currentMediaPage = Math.min(totalMediaPages, Math.max(1, Number(mediaPostPages.get(item.id) || 1)));
     const mediaPageOffset = (currentMediaPage - 1) * mediaPostsPerPage;
     const visibleMediaPosts = item.mediaPosts.slice(mediaPageOffset, mediaPageOffset + mediaPostsPerPage);
-    const profileAvatar = `${threadsIcon()}${item.avatarUrl
-      ? `<img src="${esc(item.avatarUrl)}" alt="@${esc(item.username)}" loading="eager" onerror="this.remove(); this.parentElement.classList.add('is-fallback');">`
+    const profileAvatarFor = (entry) => `${threadsIcon()}${entry.avatarUrl
+      ? `<img src="${esc(entry.avatarUrl)}" alt="@${esc(entry.username)}" loading="eager" onerror="this.remove(); this.parentElement.classList.add('is-fallback');">`
       : ""}`;
+    const profileAvatar = profileAvatarFor(item);
+    const caseCatalog = sourceCases.map((entry, index) => {
+      const entryAvatar = profileAvatarFor(entry);
+      return `<button class="case-profile-card case-profile-card--catalog" type="button" data-case-open data-case-id="${esc(entry.id)}" data-case-layout="${index + 1}" aria-haspopup="dialog" aria-label="${t.openReport} · @${esc(entry.username)}">
+        <span class="case-profile-avatar ${entry.avatarUrl ? "" : "is-fallback"}">${entryAvatar}</span>
+        <span class="case-profile-copy">
+          <span class="case-profile-platform">${threadsIcon()} ${esc(entry.platform)}</span>
+          <strong>@${esc(entry.username)}</strong>
+          <small>${t.accountMeta(entry.sampledAt)}</small>
+        </span>
+        <span class="case-profile-metrics" aria-label="${t.caseOverview}">
+          <span><b>${format(entry.followers)}</b>${t.followers}</span>
+          <span><b>${format(entry.recentViews)}</b>${t.recentViews}</span>
+          <span><b>${format(entry.engagement)}</b>${t.engagement}</span>
+        </span>
+        <span class="case-profile-open">${t.openReport}<b aria-hidden="true">↗</b></span>
+      </button>`;
+    }).join("");
     root.innerHTML = `
       <div class="case-studies-page">
         <section class="case-studies-hero" aria-labelledby="case-studies-title">
@@ -652,30 +669,8 @@
             </div>
           </div>
         </section>
-        <div class="case-study-switcher-band">
-          <div class="case-studies-shell case-study-switcher" aria-label="${t.switcherLabel}">
-            <span class="case-study-switcher-label">${t.switcherLabel}</span>
-            <div class="case-study-pills" role="group" aria-label="${t.switcherLabel}">
-              ${sourceCases.map((entry, index) => `<button class="case-study-pill" type="button" data-case-id="${esc(entry.id)}" aria-pressed="${entry.id === item.id}">${t.switcherPrefix} ${String(index + 1).padStart(2, "0")} · @${esc(entry.username)}</button>`).join("")}
-            </div>
-            <span class="case-study-counter">${t.counter(currentIndex + 1, sourceCases.length)}</span>
-          </div>
-        </div>
         <div class="case-studies-shell case-study-content">
-          <button class="case-profile-card" type="button" data-case-open aria-haspopup="dialog" aria-label="${t.openReport} · @${esc(item.username)}">
-            <span class="case-profile-avatar ${item.avatarUrl ? "" : "is-fallback"}">${profileAvatar}</span>
-            <span class="case-profile-copy">
-              <span class="case-profile-platform">${threadsIcon()} ${esc(item.platform)}</span>
-              <strong>@${esc(item.username)}</strong>
-              <small>${t.accountMeta(item.sampledAt)}</small>
-            </span>
-            <span class="case-profile-metrics" aria-label="${t.caseOverview}">
-              <span><b>${format(item.followers)}</b>${t.followers}</span>
-              <span><b>${format(item.recentViews)}</b>${t.recentViews}</span>
-              <span><b>${format(item.engagement)}</b>${t.engagement}</span>
-            </span>
-            <span class="case-profile-open">${t.openReport}<b aria-hidden="true">↗</b></span>
-          </button>
+          <section class="case-profile-field" aria-label="${t.caseOverview}">${caseCatalog}</section>
           <section class="case-report-modal" data-case-modal aria-label="${t.reportDialogTitle}" ${isCaseDetailOpen ? "" : "hidden"}>
             <div class="case-report-dialog" role="dialog" aria-modal="true" aria-labelledby="case-account-title" tabindex="-1">
               <header class="case-report-dialog-head">
@@ -801,17 +796,13 @@
           </div></div></section>
         </div>
       </div>`;
-    root.querySelectorAll("[data-case-id]").forEach((button) => button.addEventListener("click", () => {
-      selectedCaseId = button.dataset.caseId || selectedCaseId;
-      isCaseDetailOpen = false;
-      document.body.classList.remove("case-report-modal-open");
-      render();
-    }));
   }
 
   window.addEventListener("vecto:language-change", render);
   root.addEventListener("click", (event) => {
-    if (event.target.closest("[data-case-open]")) {
+    const caseCard = event.target.closest("[data-case-open]");
+    if (caseCard) {
+      selectedCaseId = caseCard.dataset.caseId || selectedCaseId;
       setCaseDetailOpen(true);
       return;
     }

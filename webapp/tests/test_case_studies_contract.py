@@ -66,14 +66,13 @@ def test_fifth_hot_case_snapshot_has_complete_report_data() -> None:
     assert sum(len(post.get("mediaItems", [])) for post in report["posts"]) == 1
 
 
-def test_case_switching_keeps_the_current_scroll_position_and_hero_copy() -> None:
+def test_case_catalog_keeps_hero_copy_without_the_legacy_switcher() -> None:
     script = (ROOT / "static" / "assets" / "opc" / "case-studies.js").read_text(encoding="utf-8")
     stylesheet = (ROOT / "static" / "assets" / "opc" / "case-studies.css").read_text(encoding="utf-8")
 
-    switch_start = script.index('root.querySelectorAll("[data-case-id]")')
-    switch_end = script.index('window.addEventListener("vecto:language-change", render);')
-    switch_handler = script[switch_start:switch_end]
-    assert "scrollIntoView" not in switch_handler
+    assert 'class="case-study-switcher-band"' not in script
+    assert 'class="case-profile-field"' in script
+    assert 'data-case-open data-case-id=' in script
     assert 'class="case-studies-hero-copy"' in script
     assert "t.heroIntro" in script
     assert "padding: calc(var(--site-header-height" in stylesheet
@@ -85,11 +84,16 @@ def test_case_account_card_uses_persisted_avatars_and_opens_the_common_report_mo
 
     assert 'avatarUrl: "/assets/opc/case-studies/avatars/mina_ya2002.jpg"' in script
     assert "profileAvatarUrlFrom" in script
-    assert 'class="case-profile-card"' in script
+    assert 'class="case-profile-card case-profile-card--catalog"' in script
     assert "data-case-open" in script
     assert 'class="case-report-modal"' in script
     assert "data-case-modal-close" in script
     assert "setCaseDetailOpen" in script
+    assert "case-profile-field" in stylesheet
+    assert 'data-case-layout="1"' in stylesheet
+    assert "case-profile-avatar img { position: absolute" in stylesheet
+    assert ".case-profile-card::before { content: none; }" in stylesheet
+    assert ".case-profile-copy > strong { overflow-wrap: anywhere;" in stylesheet
     assert ".case-profile-card" in stylesheet
     assert ".case-report-dialog" in stylesheet
     assert 'class="platform-brand-icon"' in script
