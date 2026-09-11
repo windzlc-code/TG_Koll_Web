@@ -26,6 +26,12 @@ def test_added_hot_cases_use_persisted_report_endpoints() -> None:
     assert 'reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwloux8_ae32f0"' in script
     assert 'reportApiUrls: ["/assets/opc/case-studies/tar_mtwloux8_ae32f0.json"]' in script
     assert script.index('id: "kameoka-yingying"') < script.index('id: "mirahuang-12"')
+    assert 'id: "saasaimomo"' in script
+    assert 'number: "06"' in script
+    assert 'username: "saasaimomo"' in script
+    assert 'reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwtcgfx_7a15a3"' in script
+    assert 'reportApiUrls: ["/assets/opc/case-studies/tar_mtwtcgfx_7a15a3.json"]' in script
+    assert script.index('id: "mirahuang-12"') < script.index('id: "saasaimomo"')
 
 
 def test_third_hot_case_snapshot_has_complete_report_data() -> None:
@@ -66,6 +72,19 @@ def test_fifth_hot_case_snapshot_has_complete_report_data() -> None:
     assert sum(len(post.get("mediaItems", [])) for post in report["posts"]) == 1
 
 
+def test_sixth_hot_case_snapshot_has_complete_report_data() -> None:
+    snapshot_path = ROOT / "static" / "assets" / "opc" / "case-studies" / "tar_mtwtcgfx_7a15a3.json"
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    result = snapshot["report"]["result"]
+    report = result["report"]
+
+    assert result["username"] == "saasaimomo"
+    assert result["recentViewCount"] == 7889
+    assert len(report["posts"]) == 15
+    assert len(report["daily"]) == 5
+    assert sum(len(post.get("mediaItems", [])) for post in report["posts"]) == 4
+
+
 def test_case_catalog_keeps_hero_copy_without_the_legacy_switcher() -> None:
     script = (ROOT / "static" / "assets" / "opc" / "case-studies.js").read_text(encoding="utf-8")
     stylesheet = (ROOT / "static" / "assets" / "opc" / "case-studies.css").read_text(encoding="utf-8")
@@ -76,6 +95,22 @@ def test_case_catalog_keeps_hero_copy_without_the_legacy_switcher() -> None:
     assert 'class="case-studies-hero-copy"' in script
     assert "t.heroIntro" in script
     assert "padding: calc(var(--site-header-height" in stylesheet
+
+
+def test_case_catalog_uses_desktop_orbit_motion_without_breaking_mobile_layout() -> None:
+    script = (ROOT / "static" / "assets" / "opc" / "case-studies.js").read_text(encoding="utf-8")
+    stylesheet = (ROOT / "static" / "assets" / "opc" / "case-studies.css").read_text(encoding="utf-8")
+
+    assert 'class="case-profile-orbit-center"' in script
+    assert 'class="case-profile-surface"' in script
+    assert "caseLibraryIcon" in script
+    assert "@media (min-width: 1240px)" in stylesheet
+    assert "case-profile-orbit-float" in stylesheet
+    assert ".case-profile-card:hover .case-profile-surface" in stylesheet
+    assert "@media (max-width: 720px)" in stylesheet
+    assert 'data-case-layout="6"' in stylesheet
+    assert "@media (prefers-reduced-motion: reduce)" in stylesheet
+    assert ".case-studies-canvas { background-attachment: fixed; }" in stylesheet
 
 
 def test_case_account_card_uses_persisted_avatars_and_opens_the_common_report_modal() -> None:
