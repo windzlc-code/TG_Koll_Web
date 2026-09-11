@@ -423,6 +423,88 @@ def _prune_global_pool_database(connection: sqlite3.Connection) -> None:
     )
 
 
+def _candidate_content_at_ms(value: Mapping[str, Any]) -> int | None:
+    raw = str(
+        value.get("publishedAt")
+        or value.get("published_at")
+        or value.get("capturedAt")
+        or value.get("captured_at")
+        or ""
+    ).strip()
+    if not raw:
+        return None
+    try:
+        published = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        return int(published.timestamp() * 1000)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _prune_candidate_json_file(path: Path, *, cutoff_ms: int) -> None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    changed = False
+
+    def prune(node: Any) -> None:
+        nonlocal changed
+        if not isinstance(node, dict):
+            return
+        for key, value in list(node.items()):
+            if key == "candidates" and isinstance(value, list):
+                kept = [
+                    candidate
+                    for candidate in value
+                    if not isinstance(candidate, Mapping)
+                    or _candidate_content_at_ms(candidate) is None
+                    or _candidate_content_at_ms(candidate) >= cutoff_ms
+                ]
+                if len(kept) != len(value):
+                    node[key] = kept
+                    changed = True
+                continue
+            prune(value)
+
+    prune(payload)
+    if not changed:
+        return
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        os.replace(temporary, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            temporary.unlink()
+
+
+def _prune_stale_hot_candidate_artifacts(runtime_dir: Path) -> None:
+    """Keep all materialized candidate views on the same 30-day boundary."""
+
+    cutoff_ms = (int(time.time()) - 30 * 86400) * 1000
+    database_path = runtime_dir / "sentiment_hot_global_pool.sqlite3"
+    if database_path.exists():
+        connection = sqlite3.connect(str(database_path), timeout=15)
+        try:
+            with contextlib.suppress(sqlite3.OperationalError):
+                _prune_global_pool_database(connection)
+                connection.commit()
+        finally:
+            connection.close()
+
+    paths = [
+        runtime_dir / "sentiment_hot_global_pool.json",
+        runtime_dir / "sentiment_hot_candidates.json",
+    ]
+    cache_dir = runtime_dir / "sentiment_threads_search_cache"
+    with contextlib.suppress(OSError):
+        paths.extend(path for path in cache_dir.glob("*.json") if path.is_file())
+    for path in paths:
+        _prune_candidate_json_file(path, cutoff_ms=cutoff_ms)
+
+
 def _append_candidates_to_global_pool(runtime_dir: Path, candidates: list[Mapping[str, Any]]) -> int:
     rows = [dict(item) for item in candidates if isinstance(item, Mapping) and _candidate_identity(item)]
     if not rows:
@@ -1709,6 +1791,7 @@ class JobStore:
         path = Path(os.getenv("TG_HOT_DATASET_OVERVIEW_PATH", "/collector-proxy/hot-dataset-overview.json"))
         temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         try:
+            _prune_stale_hot_candidate_artifacts(self.runtime_dir)
             self.spill_persona_overflow_to_global()
             overview = self.dataset_overview()
             # Even an empty placeholder cache must not keep reappearing from

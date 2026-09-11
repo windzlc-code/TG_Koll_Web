@@ -352,6 +352,86 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(overview["personas"][0]["count"], 1)
         self.assertEqual(overview["personas"][0]["capacity"], 30)
 
+    def test_dataset_overview_prunes_only_candidate_rows_older_than_30_days(self) -> None:
+        now = int(time.time())
+        stale_at = now - 30 * 86400 - 1
+        stale_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stale_at))
+        fresh_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+        stale = {
+            "id": "stale-candidate",
+            "content": "stale candidate content " * 8,
+            "publishedAt": stale_iso,
+        }
+        fresh = {
+            "id": "fresh-candidate",
+            "content": "fresh candidate content " * 8,
+            "publishedAt": fresh_iso,
+        }
+        unknown = {
+            "id": "unknown-date-candidate",
+            "content": "candidate without a trustworthy timestamp " * 5,
+        }
+        global_path = self.runtime_dir / "sentiment_hot_global_pool.sqlite3"
+        global_db = sqlite3.connect(global_path)
+        global_db.execute(
+            """
+            CREATE TABLE sentiment_hot_global_candidates(
+              id TEXT PRIMARY KEY,
+              candidate_json TEXT NOT NULL,
+              search_text TEXT NOT NULL DEFAULT '',
+              hot_score REAL NOT NULL DEFAULT 0,
+              content_at_ms INTEGER NOT NULL DEFAULT 0,
+              captured_at_ms INTEGER NOT NULL DEFAULT 0,
+              updated_at_ms INTEGER NOT NULL DEFAULT 0,
+              platform TEXT NOT NULL DEFAULT 'threads'
+            )
+            """
+        )
+        for candidate, published_at in ((stale, stale_at), (fresh, now)):
+            global_db.execute(
+                "INSERT INTO sentiment_hot_global_candidates(id,candidate_json,content_at_ms) VALUES(?,?,?)",
+                (candidate["id"], json.dumps(candidate), published_at * 1000),
+            )
+        global_db.commit()
+        global_db.close()
+
+        (self.runtime_dir / "sentiment_hot_global_pool.json").write_text(
+            json.dumps({"version": 1, "candidates": [stale, fresh, unknown]}),
+            encoding="utf-8",
+        )
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        cache_dir.mkdir()
+        cache_path = cache_dir / "archive-cleanup-keywords-strict.json"
+        cache_path.write_text(
+            json.dumps({"archive-cleanup::strict::query": {"candidates": [stale, fresh, unknown]}}),
+            encoding="utf-8",
+        )
+
+        with patch.dict(
+            os.environ,
+            {"TG_HOT_DATASET_OVERVIEW_PATH": str(self.runtime_dir / "hot-dataset-overview.json")},
+        ):
+            self.store.publish_dataset_overview(force=True)
+
+        global_db = sqlite3.connect(global_path)
+        try:
+            self.assertEqual(
+                {row[0] for row in global_db.execute("SELECT id FROM sentiment_hot_global_candidates")},
+                {"fresh-candidate"},
+            )
+        finally:
+            global_db.close()
+        global_json = json.loads((self.runtime_dir / "sentiment_hot_global_pool.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            {row["id"] for row in global_json["candidates"]},
+            {"fresh-candidate", "unknown-date-candidate"},
+        )
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            {row["id"] for row in cache["archive-cleanup::strict::query"]["candidates"]},
+            {"fresh-candidate", "unknown-date-candidate"},
+        )
+
     def test_dataset_overview_does_not_expose_archive_id_as_persona_name(self) -> None:
         archive_id = "12345678-1234-4234-8234-123456789abc"
         self.store.submit(
