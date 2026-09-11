@@ -21,6 +21,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from .remote_fetch_protocol import (
     IDEMPOTENCY_HEADER,
@@ -54,6 +55,7 @@ PERSONA_HOT_POOL_REFILL_SECONDS = 8 * 3600
 PERSONA_HOT_POOL_ACTIVE_SECONDS = 2 * 86400
 _SAFE_JOB_ID = re.compile(r"job_[0-9a-f]{24}")
 _PERSONA_ARCHIVE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+_SAFE_CACHE_ARCHIVE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
 def _truthy_environment(name: str) -> bool:
@@ -1362,7 +1364,7 @@ class JobStore:
             last_user_fetch_at = int(target["last_user_fetch_at"] or 0) if target is not None else 0
             personas.append({
                 "archive_id": archive_id,
-                "name": names.get(archive_id) or f"人设 {archive_id[:8]}",
+                "name": names.get(archive_id) or "未命名人设",
                 "count": count,
                 "capacity": capacity,
                 "active": bool(target is not None and int(target["active_until"] or 0) > timestamp),
@@ -1393,7 +1395,7 @@ class JobStore:
                 dataset_id = str(persona.get("archive_id") or "").strip().lower()
                 if not _PERSONA_ARCHIVE_ID.fullmatch(dataset_id):
                     continue
-                rows.append((dataset_id, str(persona.get("name") or f"人设 {dataset_id[:8]}"), max(0, int(persona.get("count") or 0))))
+                rows.append((dataset_id, str(persona.get("name") or "未命名人设"), max(0, int(persona.get("count") or 0))))
         return rows
 
     def _record_dataset_overview_changes(
@@ -2259,6 +2261,62 @@ def create_worker_app(
         except Exception as exc:
             raise HTTPException(status_code=503, detail=str(exc)[:240]) from exc
         return {"ok": True, "proxy": proxy}
+
+    @app.post("/internal/worker/v1/hot-candidates/cache")
+    async def read_hot_candidates_cache(request: Request) -> dict[str, Any]:
+        """Return materialized hot candidates without entering the live queue."""
+        body = await request.body()
+        await authenticate(request, body)
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail="invalid json") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="invalid json")
+        if str(payload.get("action") or "").strip() != "read-hot-candidates-cache":
+            raise HTTPException(status_code=400, detail="unsupported cache action")
+        archive_id = str(payload.get("archiveId") or "").strip()
+        if not _SAFE_CACHE_ARCHIVE_ID.fullmatch(archive_id):
+            raise HTTPException(status_code=400, detail="persona archive id is invalid")
+        try:
+            limit = max(1, min(int(payload.get("limit") or 10), 20))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="cache limit is invalid") from exc
+        keywords = _clean_hot_keywords(payload.get("keywords"))
+        all_keywords = _clean_hot_keywords(payload.get("allKeywords") or payload.get("all_keywords"))
+        if not keywords:
+            keywords = list(all_keywords)
+        try:
+            freshness_days = max(0, min(int(payload.get("freshnessDays") or 30), 30))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="cache freshness is invalid") from exc
+        normalized = {
+            "action": "read-hot-candidates-cache",
+            "archiveId": archive_id,
+            "keywords": keywords,
+            "allKeywords": all_keywords or list(keywords),
+            "limit": limit,
+            "searchMode": _normalize_hot_search_mode(payload.get("searchMode")),
+            "freshnessDays": freshness_days,
+            "freshnessPolicy": "strict" if str(payload.get("freshnessPolicy") or "").strip().lower() == "strict" else "legacy",
+            "recordShown": payload.get("recordShown") is True,
+            "platform": str(payload.get("platform") or "threads").strip().lower() or "threads",
+            "_workerCapability": "persona.hot_cache.v1",
+        }
+        try:
+            result = await run_in_threadpool(
+                lambda: _run_tool_r18_job_once(
+                    normalized,
+                    threading.Event(),
+                    timeout_seconds=10,
+                    use_collector_profile=False,
+                ),
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="hot candidate cache is temporarily unavailable") from exc
+        if not isinstance(result, dict):
+            raise HTTPException(status_code=502, detail="invalid hot candidate cache response")
+        return result
 
     @app.post("/internal/worker/v1/hot-datasets/refresh")
     async def refresh_hot_datasets(request: Request) -> dict[str, Any]:

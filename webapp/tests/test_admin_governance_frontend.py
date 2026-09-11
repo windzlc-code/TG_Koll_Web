@@ -106,6 +106,9 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('item.global ? 100000 : 30', self.script)
         self.assertIn('function renderHotDatasetOverview(', self.script)
         self.assertIn('function renderHotDatasetEvents(', self.script)
+        self.assertIn('function renderHotDatasetEventsError(', self.script)
+        self.assertIn('记录读取失败：${getErrorMessage(error)}；请点击“刷新数据集”重试', self.script)
+        self.assertIn('if (payload?.stale) void refreshHotDatasets({ force: true });', self.script)
         self.assertIn('候选已使用或清理', self.script)
 
     def test_social_automation_limits_are_managed_in_admin_runtime(self):

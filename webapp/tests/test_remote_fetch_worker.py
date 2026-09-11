@@ -395,6 +395,21 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(overview["personas"][0]["count"], 1)
         self.assertEqual(overview["personas"][0]["capacity"], 30)
 
+    def test_dataset_overview_does_not_expose_archive_id_as_persona_name(self) -> None:
+        archive_id = "12345678-1234-4234-8234-123456789abc"
+        self.store.submit(
+            idempotency_key="capture:dataset-overview-unnamed:1234",
+            request_digest="a" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=self.pool_payload(archive_id, user_initiated=True),
+        )
+
+        overview = self.store.dataset_overview(now=int(time.time()))
+
+        self.assertEqual(overview["personas"][0]["name"], "未命名人设")
+        self.assertNotIn(archive_id[:8], overview["personas"][0]["name"])
+
     def test_hot_dataset_change_events_use_first_snapshot_as_baseline_and_can_be_deleted(self) -> None:
         archive_id = "12345678-1234-4234-8234-123456789abc"
         baseline = {
@@ -1098,6 +1113,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
             paths = {route.path for route in app.routes}
             self.assertIn("/health", paths)
             self.assertIn("/internal/worker/v1/jobs", paths)
+            self.assertIn("/internal/worker/v1/hot-candidates/cache", paths)
             self.assertIn("/internal/worker/v1/hot-datasets/refresh", paths)
             self.assertIn("/internal/worker/v1/hot-datasets/events", paths)
             self.assertIn("/internal/worker/v1/hot-datasets/settings", paths)

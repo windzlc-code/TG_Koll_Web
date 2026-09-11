@@ -13668,6 +13668,9 @@ class PersonaDashboardPublishHistoryDeletePayload(BaseModel):
 class PersonaDashboardHotCandidatesFetchPayload(BaseModel):
     prompt: str = ""
     refresh: bool = False
+    # Preserve the legacy synchronous endpoint's display-batch behavior. The
+    # new frontend sends this explicitly as false for background live refreshes.
+    record_shown: bool = True
     limit: int = 10
     search_mode: str = "strict"
     writing_locale: str = "zh-TW"
@@ -16879,7 +16882,7 @@ def _fetch_persona_hot_candidates(
             # This is the user-facing display batch. Recording it enables the
             # old worker's short rotation cooldown; background pool refills
             # still explicitly send false and never consume display history.
-            "recordShown": True,
+            "recordShown": bool(payload.record_shown),
             # The new application owns keyword generation. The old collector
             # searches public pages with those keywords and may merge its pool.
             # /data/hot-public-probe forces a public-page-only request for live
@@ -29408,6 +29411,75 @@ def create_app() -> FastAPI:
             bypassed=bool(cooldown["bypassed"]),
         )
         return result
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/cache")
+    def api_persona_dashboard_read_hot_candidates_cache(
+        archive_id: str,
+        payload: PersonaDashboardHotCandidatesFetchPayload,
+        _user: dict[str, Any] = Depends(require_persona_owner),
+    ):
+        clean_id = str(archive_id or "").strip()
+        if not clean_id:
+            raise HTTPException(status_code=400, detail="缺少人设 ID。")
+        limit = min(max(_to_int(payload.limit, 10), 1), 20)
+        search_mode = "normal" if str(payload.search_mode or "").strip().lower() == "normal" else "strict"
+        freshness_days = min(max(_to_int(payload.freshness_days, 30), 0), 30)
+        target_platform = _normalize_persona_content_platform(payload.platform)
+        keywords = _persona_hot_payload_keywords(payload.keywords)
+        all_keywords = _persona_hot_payload_keywords(payload.all_keywords)
+        if not keywords:
+            keywords = list(all_keywords)
+        if not keywords:
+            return {
+                "ok": True,
+                "archive_id": clean_id,
+                "keywords": [],
+                "search_mode": search_mode,
+                "freshness_days": freshness_days,
+                "freshness_policy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
+                "cache_source": "empty",
+                "refreshing": True,
+                "candidates": [],
+            }
+        body = json.dumps({
+            "action": "read-hot-candidates-cache",
+            "archiveId": clean_id,
+            "keywords": keywords,
+            "allKeywords": all_keywords or list(keywords),
+            "limit": limit,
+            "searchMode": search_mode,
+            "freshnessDays": freshness_days,
+            "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
+            "recordShown": bool(payload.record_shown),
+            "platform": target_platform,
+        }, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        result = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-candidates/cache", body=body)
+        candidates: list[dict[str, Any]] = []
+        for item in result.get("candidates") if isinstance(result.get("candidates"), list) else []:
+            normalized = _normalize_persona_hot_candidate(item)
+            if not normalized:
+                continue
+            item_platform = _normalize_persona_content_platform(normalized.get("platform"))
+            if not item_platform:
+                normalized["platform"] = target_platform
+                item_platform = target_platform
+            if item_platform != target_platform:
+                continue
+            candidates.append(normalized)
+            if len(candidates) >= limit:
+                break
+        return {
+            "ok": True,
+            "archive_id": clean_id,
+            "keywords": _persona_hot_payload_keywords(result.get("keywords")) or keywords,
+            "search_mode": "normal" if str(result.get("searchMode") or search_mode).strip().lower() == "normal" else "strict",
+            "freshness_days": min(max(_to_int(result.get("freshnessDays"), freshness_days), 0), 30),
+            "cache_source": str(result.get("cacheSource") or "empty").strip() or "empty",
+            "persona_cache_count": max(0, _to_int(result.get("personaCacheCount"), 0)),
+            "global_pool_count": max(0, _to_int(result.get("globalPoolCount"), 0)),
+            "refreshing": True,
+            "candidates": candidates,
+        }
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/hot_keywords")
     def api_persona_dashboard_prepare_hot_keywords(archive_id: str, payload: PersonaDashboardHotCandidatesFetchPayload, _user: dict[str, Any] = Depends(require_persona_owner)):

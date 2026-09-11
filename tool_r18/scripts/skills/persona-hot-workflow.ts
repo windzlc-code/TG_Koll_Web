@@ -14,6 +14,7 @@ import {
   listSentimentHotCandidatePoolStats,
   sentimentHotCandidatePoolLimits,
   prepareSentimentHotKeywords,
+  readSentimentHotCandidateCache,
   recycleUnusedSentimentHotCandidates,
   refreshSentimentSourceMetrics,
   warmSentimentHotSearchStrategy,
@@ -47,6 +48,19 @@ type FetchHotCandidatesInput = {
   platform?: "threads" | "instagram" | string;
   /** Authoritative control-plane snapshot. When present, never read the worker's archive copy. */
   archiveSnapshot?: PersonaArchive;
+};
+
+type ReadHotCandidatesCacheInput = {
+  action: "read-hot-candidates-cache";
+  archiveId: string;
+  keywords?: string[];
+  allKeywords?: string[];
+  limit?: number;
+  searchMode?: "normal" | "strict";
+  freshnessDays?: number;
+  freshnessPolicy?: "legacy" | "strict";
+  recordShown?: boolean;
+  platform?: "threads" | "instagram" | string;
 };
 
 type PrepareHotKeywordsInput = {
@@ -117,7 +131,7 @@ type PoolStatsInput = {
   archiveIds?: string[];
 };
 
-type PersonaHotWorkflowInput = FetchHotCandidatesInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RecycleHotCandidatesInput | FinalizeHotImportInput | RefreshHotPostInput | RefreshProfileMetricsInput | WarmHotStrategyInput | PoolStatsInput;
+type PersonaHotWorkflowInput = FetchHotCandidatesInput | ReadHotCandidatesCacheInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RecycleHotCandidatesInput | FinalizeHotImportInput | RefreshHotPostInput | RefreshProfileMetricsInput | WarmHotStrategyInput | PoolStatsInput;
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -259,6 +273,36 @@ export async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     cookieStatuses: result.cookieStatuses,
     warnings: result.warnings,
     emptyReason: result.emptyReason,
+    candidates: result.candidates,
+  };
+}
+
+export async function readHotCandidatesCache(input: ReadHotCandidatesCacheInput) {
+  const archiveId = String(input.archiveId || "").trim();
+  if (!archiveId) throw new Error("persona archive id is required");
+  const result = readSentimentHotCandidateCache({
+    archiveId,
+    keywords: Array.isArray(input.keywords)
+      ? input.keywords.map((item) => String(item || "").trim()).filter(Boolean)
+      : [],
+    allKeywords: Array.isArray(input.allKeywords)
+      ? input.allKeywords.map((item) => String(item || "").trim()).filter(Boolean)
+      : [],
+    limit: Math.max(1, Math.min(Number(input.limit || 10), 20)),
+    searchMode: input.searchMode === "normal" ? "normal" : "strict",
+    freshnessDays: input.freshnessDays,
+    platform: String(input.platform || "").trim() || undefined,
+    recordShown: input.recordShown === true,
+  });
+  return {
+    ok: true,
+    archiveId,
+    keywords: result.keywords,
+    searchMode: result.searchMode,
+    freshnessDays: result.freshnessDays,
+    cacheSource: result.cacheSource,
+    personaCacheCount: result.personaCacheCount,
+    globalPoolCount: result.globalPoolCount,
     candidates: result.candidates,
   };
 }
@@ -572,6 +616,9 @@ async function main() {
   const input = JSON.parse(raw) as PersonaHotWorkflowInput;
   if (input.action === "fetch-hot-candidates") {
     await printJsonAndExit(await fetchHotCandidates(input));
+  }
+  if (input.action === "read-hot-candidates-cache") {
+    await printJsonAndExit(await readHotCandidatesCache(input));
   }
   if (input.action === "prepare-hot-keywords") {
     await printJsonAndExit(await prepareHotKeywords(input));

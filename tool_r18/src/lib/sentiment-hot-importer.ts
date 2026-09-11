@@ -11502,6 +11502,118 @@ function readGlobalThreadsCandidateBackfill(
   return sortSentimentHotCandidatePool([...byId.values()], keywords, limit, searchMode);
 }
 
+export type SentimentHotCandidateCacheReadResult = {
+  candidates: SentimentHotCandidate[];
+  keywords: string[];
+  searchMode: SentimentHotSearchMode;
+  freshnessDays: number;
+  cacheSource: "persona" | "global" | "persona+global" | "empty";
+  personaCacheCount: number;
+  globalPoolCount: number;
+};
+
+function cacheCandidateIdentity(candidate: SentimentHotCandidate): string[] {
+  return getSentimentHotCandidateHistoryKeys(candidate);
+}
+
+/**
+ * Read only the materialized hot-candidate views. This path deliberately does
+ * not start Reader/browser work; the user-triggered live task remains a
+ * separate path and can run immediately after this fast read completes.
+ */
+export function readSentimentHotCandidateCache(args: {
+  archiveId: string;
+  keywords?: string[];
+  allKeywords?: string[];
+  limit?: number;
+  searchMode?: SentimentHotSearchMode;
+  freshnessDays?: number;
+  platform?: SentimentHotPlatform | string;
+  recordShown?: boolean;
+}): SentimentHotCandidateCacheReadResult {
+  const archiveId = cleanText(args.archiveId);
+  const keywords = [...new Set([
+    ...(Array.isArray(args.keywords) ? args.keywords : []),
+    ...(Array.isArray(args.allKeywords) ? args.allKeywords : []),
+  ].map(cleanText).filter(Boolean))].slice(0, 32);
+  const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
+  const freshnessDays = normalizeSentimentHotFreshnessDays(args.freshnessDays ?? DEFAULT_REFRESH_FRESHNESS_DAYS);
+  const limit = Math.max(1, Math.min(Math.floor(Number(args.limit || 10)), 20));
+  const platform = normalizeRequestedHotPlatform(args.platform);
+  const empty = (cacheSource: SentimentHotCandidateCacheReadResult["cacheSource"] = "empty"): SentimentHotCandidateCacheReadResult => ({
+    candidates: [],
+    keywords,
+    searchMode,
+    freshnessDays,
+    cacheSource,
+    personaCacheCount: 0,
+    globalPoolCount: 0,
+  });
+  if (!archiveId || !keywords.length) return empty();
+
+  const poolLimit = Math.max(limit * 6, 60);
+  const readBatch = (excludeShown: boolean) => {
+    const personaPool = readThreadsSearchCandidateCache(
+      archiveId,
+      keywords,
+      poolLimit,
+      excludeShown,
+      searchMode,
+      platform,
+    );
+    const globalPool = readGlobalThreadsCandidateBackfill(
+      archiveId,
+      keywords,
+      poolLimit,
+      searchMode,
+      platform,
+    );
+    const personaCandidates = finalizeSentimentHotCandidatesForDisplay(
+      personaPool,
+      limit,
+      { archiveId, keywords, excludeShown, searchMode, freshnessDays },
+    );
+    const personaKeys = new Set(personaCandidates.flatMap(cacheCandidateIdentity));
+    const globalCandidates = finalizeSentimentHotCandidatesForDisplay(
+      globalPool.filter((candidate) => (
+        cacheCandidateIdentity(candidate).every((key) => !personaKeys.has(key))
+      )),
+      Math.max(0, limit - personaCandidates.length),
+      { archiveId, keywords, excludeShown, searchMode, freshnessDays },
+    );
+    return {
+      candidates: [...personaCandidates, ...globalCandidates],
+      personaCount: personaCandidates.length,
+      globalCount: globalCandidates.length,
+    };
+  };
+
+  // Prefer unseen material. If the cache is sparse, allow the existing
+  // rotation policy to reuse an older row rather than leaving the fast path
+  // blank; imported history is intentionally not a permanent blacklist.
+  let selected = readBatch(true);
+  if (selected.candidates.length === 0) selected = readBatch(false);
+  if (args.recordShown === true && selected.candidates.length > 0) {
+    rememberSentimentHotShown(archiveId, selected.candidates, searchMode);
+  }
+  const cacheSource = selected.personaCount > 0 && selected.globalCount > 0
+    ? "persona+global"
+    : selected.personaCount > 0
+      ? "persona"
+      : selected.globalCount > 0
+        ? "global"
+        : "empty";
+  return {
+    candidates: selected.candidates,
+    keywords,
+    searchMode,
+    freshnessDays,
+    cacheSource,
+    personaCacheCount: selected.personaCount,
+    globalPoolCount: selected.globalCount,
+  };
+}
+
 function normalizeSentimentHotGlobalPoolCandidate(candidate: SentimentHotCandidate): SentimentHotCandidate | null {
   if (!candidate?.id) return null;
   const metrics = { ...(candidate.metrics || {}) } as Record<string, unknown>;

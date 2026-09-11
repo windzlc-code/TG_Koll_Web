@@ -21,9 +21,11 @@ Required for deployment:
 Optional:
   CAPTURE_WORKER_SSH_PORT         SSH port (default: 22)
   CAPTURE_WORKER_SSH_CONFIG       OpenSSH config file
+  CAPTURE_WORKER_SSH_KEY          SSH identity file
   CAPTURE_WORKER_SOURCE_ROOT      Source checkout (default: repository root)
   CAPTURE_WORKER_RELEASE_ROOT     Old-host code root
   CAPTURE_WORKER_RUNTIME_ROOT     Old-host versioned runtime root
+  CAPTURE_WORKER_ENDPOINT_FILE    Old-host worker endpoint file
   CAPTURE_WORKER_CONTAINER        Existing/new container name
   CAPTURE_WORKER_CANDIDATE_PORT   Temporary host canary port
 
@@ -182,11 +184,17 @@ if [[ -n "${CAPTURE_WORKER_SSH_CONFIG:-}" ]]; then
   ssh_args+=(-F "$CAPTURE_WORKER_SSH_CONFIG")
   scp_args+=(-F "$CAPTURE_WORKER_SSH_CONFIG")
 fi
+if [[ -n "${CAPTURE_WORKER_SSH_KEY:-}" ]]; then
+  [[ -f "$CAPTURE_WORKER_SSH_KEY" ]] || die "SSH identity file not found"
+  ssh_args+=(-i "$CAPTURE_WORKER_SSH_KEY")
+  scp_args+=(-i "$CAPTURE_WORKER_SSH_KEY")
+fi
 
 release_root="${CAPTURE_WORKER_RELEASE_ROOT:-/opt/tg-koll-capture-worker-code}"
 runtime_root="${CAPTURE_WORKER_RUNTIME_ROOT:-/opt/tg-koll-capture-worker-runtime}"
 container="${CAPTURE_WORKER_CONTAINER:-tg-koll-capture-worker}"
 candidate_port="${CAPTURE_WORKER_CANDIDATE_PORT:-18093}"
+endpoint_file="${CAPTURE_WORKER_ENDPOINT_FILE:-/opt/tg-koll-capture-worker-proxy/worker-endpoint.json}"
 [[ "$candidate_port" =~ ^[0-9]{2,5}$ ]] || die "invalid candidate port"
 
 remote_archive="$release_root/incoming/${release_id}.tar.gz"
@@ -207,7 +215,7 @@ scp "${scp_args[@]}" "$archive" "$ssh_target:$remote_archive"
 
 ssh "${ssh_args[@]}" "$ssh_target" bash -s -- \
   "$release_root" "$runtime_root" "$release_id" "$archive_sha256" \
-  "$container" "$candidate_port" <<'REMOTE_DEPLOY'
+  "$container" "$candidate_port" "$endpoint_file" <<'REMOTE_DEPLOY'
 set -euo pipefail
 umask 077
 
@@ -217,6 +225,7 @@ release_id="$3"
 expected_archive_sha="$4"
 container="$5"
 candidate_port="$6"
+endpoint_file="$7"
 archive="$release_root/incoming/${release_id}.tar.gz"
 release_dir="$release_root/releases/$release_id"
 lock_file="$release_root/deploy.lock"
@@ -296,6 +305,24 @@ if sys.argv[1] == "release":
         raise SystemExit("unexpected worker capability boundary")
 print("signed-capabilities-ok")
 PY
+}
+
+sync_worker_endpoint() {
+  local target_container="$1"
+  local worker_ip
+  local endpoint_dir
+  local temporary_file
+  worker_ip="$(podman inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$target_container" 2>/dev/null || true)"
+  if [[ ! "$worker_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    printf 'ERROR: unable to resolve worker container IP for endpoint sync: %s\n' "$target_container" >&2
+    return 1
+  fi
+  endpoint_dir="$(dirname -- "$endpoint_file")"
+  temporary_file="${endpoint_file}.$$"
+  install -d -m 700 "$endpoint_dir"
+  printf '{"base_url":"http://%s:8092","key_id":"capture-v1"}\n' "$worker_ip" >"$temporary_file"
+  chmod 600 "$temporary_file"
+  mv -f -- "$temporary_file" "$endpoint_file"
 }
 
 prepare_execution_runtime() {
@@ -401,6 +428,7 @@ rollback_container() {
   podman start "$container" >/dev/null
   wait_health 8092 || die "rollback container did not recover health"
   hmac_canary "$container" >/dev/null || die "rollback HMAC canary failed"
+  sync_worker_endpoint "$container" || die "rollback worker endpoint sync failed"
 }
 
 command -v flock >/dev/null 2>&1 || die "flock is required"
@@ -521,6 +549,12 @@ if ! wait_health 8092 || \
   podman logs --tail 100 "$container" >&2 || true
   rollback_container
   die "new worker failed health/HMAC canary; previous container restored"
+fi
+
+if ! sync_worker_endpoint "$container"; then
+  podman logs --tail 100 "$container" >&2 || true
+  rollback_container
+  die "new worker endpoint sync failed; previous container restored"
 fi
 
 next_link="$release_root/.current-${release_id}"

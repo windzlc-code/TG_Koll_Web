@@ -7822,6 +7822,26 @@ function renderHotDatasetEvents(payload = {}) {
   setText("hotDatasetEventsTime", `更新于 ${formatTime(Math.floor(Date.now() / 1000))}`);
 }
 
+function renderHotDatasetEventsError(error) {
+  const body = el("hotDatasetEventsBody");
+  if (body) {
+    body.replaceChildren();
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 6;
+    cell.className = "hot-dataset-event-empty is-error";
+    cell.textContent = `记录读取失败：${getErrorMessage(error)}；请点击“刷新数据集”重试`;
+    row.appendChild(cell);
+    body.appendChild(row);
+  }
+  setText("hotDatasetEventPageLabel", "读取失败");
+  const prev = el("btnHotDatasetEventPrev");
+  const next = el("btnHotDatasetEventNext");
+  if (prev) prev.disabled = true;
+  if (next) next.disabled = true;
+  setText("hotDatasetEventsTime", `记录读取失败：${getErrorMessage(error)}`);
+}
+
 async function refreshHotDatasetEvents() {
   const settings = adminState.hotDatasetSettings || defaultHotDatasetSettings();
   const page = Math.max(1, Number(adminState.hotDatasetEventPage || 1));
@@ -7833,7 +7853,7 @@ async function refreshHotDatasetEvents() {
     renderHotDatasetEvents(payload || {});
     return payload;
   } catch (error) {
-    setText("hotDatasetEventsTime", `记录读取失败：${getErrorMessage(error)}`);
+    renderHotDatasetEventsError(error);
     return null;
   }
 }
@@ -8350,7 +8370,9 @@ async function loadGovernanceDashboard({ force = false } = {}) {
   const requestId = ++adminState.governanceRequestId;
   void api("/api/admin/hot-datasets")
     .then((payload) => {
-      if (requestId === adminState.governanceRequestId) renderHotDatasetOverview(payload || {});
+      if (requestId !== adminState.governanceRequestId) return;
+      renderHotDatasetOverview(payload || {});
+      if (payload?.stale) void refreshHotDatasets({ force: true });
     })
     .catch(() => {
       if (requestId !== adminState.governanceRequestId) return;

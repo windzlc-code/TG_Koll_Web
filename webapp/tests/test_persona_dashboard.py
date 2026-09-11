@@ -5388,6 +5388,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("pending_batch", fetch_source)
         self.assertIn("displayImmediately", fetch_source)
         self.assertIn("已准备", fetch_source)
+        self.assertIn("/hot_candidates/cache", source)
+        self.assertIn("readPersonaHotCandidatesCache", source)
+        self.assertIn("record_shown", fetch_source)
+        self.assertIn("已展示缓存热点，正在实时更新", source)
 
     def test_console_hot_cancel_updates_ui_before_waiting_for_backend(self):
         source = (Path(server.__file__).parent / "static" / "assets" / "console.js").read_text(encoding="utf-8")

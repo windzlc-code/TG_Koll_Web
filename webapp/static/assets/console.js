@@ -23608,6 +23608,130 @@ async function preparePersonaHotKeywords(refresh = false) {
   }
 }
 
+function personaHotCacheCandidateIdentity(candidate, index = 0) {
+  const sourceUrl = String(candidate?.source_url || candidate?.sourceUrl || "").trim().toLowerCase();
+  if (sourceUrl) return `url:${sourceUrl.replace(/[?#].*$/, "").replace(/\/+$/, "")}`;
+  const candidateId = String(candidate?.candidate_id || candidate?.id || "").trim();
+  if (candidateId) return `id:${candidateId}`;
+  return `content:${String(candidate?.full_content || candidate?.content || candidate?.summary || `hot-${index}`).trim().slice(0, 500)}`;
+}
+
+function mergePersonaHotCacheCandidates(...groups) {
+  const byIdentity = new Map();
+  groups.flatMap((group) => (Array.isArray(group) ? group : [])).forEach((candidate, index) => {
+    if (!candidate || typeof candidate !== "object") return;
+    const identity = personaHotCacheCandidateIdentity(candidate, index);
+    if (!identity || byIdentity.has(identity)) return;
+    byIdentity.set(identity, candidate);
+  });
+  return [...byIdentity.values()];
+}
+
+async function readPersonaHotCandidatesCache(persona, form, hotState = {}, { recordShown = false, signal = null } = {}) {
+  const personaId = String(persona?.id || "").trim();
+  const targetPlatform = normalizePersonaContentPlatform(personaContentPlatform(persona));
+  const keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
+  const allKeywords = Array.isArray(hotState?.all_keywords) && hotState.all_keywords.length
+    ? hotState.all_keywords.map((item) => String(item || "").trim()).filter(Boolean)
+    : keywords;
+  if (!personaId || !keywords.length) return { hasCandidates: false, displayed: false, count: 0, cacheSource: "empty" };
+  const response = await apiWithTimeout(
+    `/api/persona_dashboard/personas/${encodeURIComponent(personaId)}/hot_candidates/cache`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: signal || undefined,
+      body: JSON.stringify({
+        limit: 10,
+        keywords,
+        all_keywords: allKeywords,
+        search_mode: normalizePersonaHotSearchMode(form.hotSearchMode),
+        writing_locale: PERSONA_WRITING_LOCALES.some(([value]) => value === String(form.writingLocale || ""))
+          ? String(form.writingLocale)
+          : PERSONA_DEFAULT_WRITING_LOCALE,
+        freshness_days: 30,
+        freshness_policy: "strict",
+        platform: personaContentPlatform(persona),
+        record_shown: Boolean(recordShown),
+      }),
+    },
+    5000,
+  );
+  const rawCandidates = Array.isArray(response?.candidates) ? response.candidates : [];
+  const cacheCandidates = rawCandidates.filter((candidate) => (
+    normalizePersonaContentPlatform(candidate?.platform || targetPlatform) === targetPlatform
+  ));
+  if (!cacheCandidates.length) {
+    return {
+      hasCandidates: false,
+      displayed: false,
+      count: 0,
+      cacheSource: String(response?.cache_source || "empty").trim() || "empty",
+    };
+  }
+
+  const currentState = personaHotResultState(persona, form.hotSearchMode);
+  const currentCandidates = personaHotAllCandidates(persona);
+  const visiblePlatformCandidates = currentCandidates.filter((candidate) => (
+    normalizePersonaContentPlatform(candidate?.platform || "threads") === targetPlatform
+  ));
+  const otherPlatformCandidates = currentCandidates.filter((candidate) => (
+    normalizePersonaContentPlatform(candidate?.platform || "threads") !== targetPlatform
+  ));
+  const displayImmediately = visiblePlatformCandidates.length === 0;
+  const unreadCounts = { ...(currentState.unread_counts || {}) };
+  accountPoolPlatforms.forEach(([platform]) => {
+    if (!(platform in unreadCounts)) unreadCounts[platform] = 0;
+  });
+  const nextState = {
+    ...currentState,
+    keywords: Array.isArray(response?.keywords) && response.keywords.length ? response.keywords : keywords,
+    all_keywords: allKeywords,
+    search_mode: normalizePersonaHotSearchMode(response?.search_mode || form.hotSearchMode),
+    freshness_days: Number(response?.freshness_days || 30),
+    fetched_at: new Date().toISOString(),
+    unread_counts: unreadCounts,
+  };
+  if (displayImmediately) {
+    nextState.candidates = mergePersonaHotCacheCandidates(otherPlatformCandidates, cacheCandidates);
+    nextState.pending_batch = null;
+    unreadCounts[targetPlatform] = 0;
+  } else {
+    const pending = personaHotPendingBatch(currentState);
+    const pendingOther = pending?.candidates || [];
+    nextState.pending_batch = {
+      ...(pending || {}),
+      platform: targetPlatform,
+      candidates: mergePersonaHotCacheCandidates(pendingOther, otherPlatformCandidates, cacheCandidates),
+      keywords: nextState.keywords,
+      all_keywords: allKeywords,
+      fetched_at: nextState.fetched_at,
+    };
+    unreadCounts[targetPlatform] = cacheCandidates.length;
+  }
+  setPersonaHotResultState(persona.id, form.hotSearchMode, nextState);
+  if (displayImmediately) {
+    const candidateIds = cacheCandidates.map((candidate) => String(candidate?.candidate_id || candidate?.id || "").trim()).filter(Boolean);
+    form.hotSelectedIds = (form.hotSelectedIds || []).filter((item) => candidateIds.includes(String(item || "").trim()));
+    form.hotPreviewId = candidateIds.includes(String(form.hotPreviewId || "").trim())
+      ? String(form.hotPreviewId || "").trim()
+      : (candidateIds[0] || "");
+    setPersonaGenerateRunState(persona.id, {
+      kind: "hot",
+      status: "running",
+      message: "已展示缓存热点，正在实时更新",
+      error: "",
+    });
+  }
+  if (isPersonaWorkspaceModule()) renderPersonaDetail();
+  return {
+    hasCandidates: true,
+    displayed: displayImmediately,
+    count: cacheCandidates.length,
+    cacheSource: String(response?.cache_source || "empty").trim() || "empty",
+  };
+}
+
 async function fetchPersonaHotCandidates(refresh = false) {
   const persona = selectedPersona();
   if (!persona) {
@@ -23655,7 +23779,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
     setPersonaHotResultState(persona.id, form.hotSearchMode, hotState);
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
   }
-  const previousCandidates = personaHotAllCandidates(persona);
+  let previousCandidates = personaHotAllCandidates(persona);
   let keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
   const cooldown = await apiWithTimeout(
     `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/cooldown`,
@@ -23699,6 +23823,21 @@ async function fetchPersonaHotCandidates(refresh = false) {
   setActionLocked(lockParts, true);
   renderPersonaDetail();
   try {
+    let cacheRead = { hasCandidates: false, displayed: false, count: 0, cacheSource: "empty" };
+    try {
+      const visibleBeforeCache = previousCandidates.filter((candidate) => (
+        normalizePersonaContentPlatform(candidate?.platform || "threads") === targetPlatform
+      ));
+      cacheRead = await readPersonaHotCandidatesCache(persona, form, hotState, {
+        recordShown: visibleBeforeCache.length === 0,
+        signal: controller.signal,
+      });
+    } catch (cacheError) {
+      if (Number(cacheError?.status || 0) === 499) throw cacheError;
+      // Cache is an acceleration path. A stale/unavailable old-host cache
+      // must never suppress the required user-triggered live fetch below.
+    }
+    previousCandidates = personaHotAllCandidates(persona);
     hotState = personaHotResultState(persona, form.hotSearchMode);
     const allKeywords = Array.isArray(hotState.all_keywords) && hotState.all_keywords.length
       ? hotState.all_keywords.map((item) => String(item || "").trim()).filter(Boolean)
@@ -23721,6 +23860,12 @@ async function fetchPersonaHotCandidates(refresh = false) {
         freshness_days: 30,
         freshness_policy: "strict",
         platform: personaContentPlatform(persona),
+        // A live result is normally a background refresh once a cached batch
+        // is visible. Only a cache miss with no visible batch is a display
+        // batch and may consume shown-history rotation.
+        record_shown: !cacheRead.hasCandidates && !previousCandidates.some((candidate) => (
+          normalizePersonaContentPlatform(candidate?.platform || "threads") === targetPlatform
+        )),
       }),
     }, 15000);
     const taskId = String(task?.id || "").trim();
