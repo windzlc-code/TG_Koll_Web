@@ -609,6 +609,17 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         self.assertIn("const goToImageGeneration = await openConsoleModal", create)
         self.assertIn("if (goToImageGeneration) await openPersonaImageGeneration(createdPersonaId);", create)
 
+    def test_persona_copy_public_samples_are_collapsed_by_default(self):
+        summary = self.console_script[
+            self.console_script.index("function renderPersonaCopySourceSummary")
+            : self.console_script.index("function renderPersonaCopyCreateWorkbench")
+        ]
+        self.assertIn('<details class="persona-create-copy-posts">', summary)
+        self.assertIn("<summary>", summary)
+        self.assertIn("\\u70b9\\u51fb\\u5c55\\u5f00", summary)
+        self.assertNotIn('<details class="persona-create-copy-posts" open>', summary)
+        self.assertIn(".persona-create-copy-posts > summary", self.console_styles)
+
     def test_mobile_toasts_enter_from_top_and_busy_spinner_has_distinct_track(self):
         mobile_start = self.console_styles.index(
             "@media (max-width: 760px)",

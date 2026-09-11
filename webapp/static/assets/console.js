@@ -22159,11 +22159,17 @@ function renderPersonaCopySourceSummary(source = {}) {
       </div>
       <p class="persona-create-copy-bio">${esc(source.bio || "页面未公开可识别的简介。")}</p>
       ${posts.length ? `
-        <div class="persona-create-copy-posts">
+        <details class="persona-create-copy-posts">
+          <summary>
+            <strong>\u516c\u5f00\u6587\u5b57\u6837\u672c\uff08${sampleCount} / ${sampleLimit} \u6761\uff09</strong>
+            <span>\u70b9\u51fb\u5c55\u5f00</span>
+          </summary>
+          <div class="persona-create-copy-posts-body">
           <strong>公开文字样本（${sampleCount} / ${sampleLimit} 条）</strong>
           ${sampleCount < sampleLimit ? `<p class="persona-create-copy-muted">当前公开页只暴露 ${sampleCount} 条；分析已基于全部可见样本完成，不代表账号完整发文历史。</p>` : ""}
           ${posts.slice(0, 5).map((post) => `<p>${esc(post?.content || "")}</p>`).join("")}
         </div>
+        </details>
       ` : `<p class="persona-create-copy-muted">页面未公开可识别的近期文字内容，AI 将基于现有公开资料给出有限分析。</p>`}
     </div>
   `;

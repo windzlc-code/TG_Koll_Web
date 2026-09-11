@@ -6646,13 +6646,58 @@ body.persona-touch-dragging .persona-list-card:active {
 }
 
 .persona-create-copy-posts {
-  display: grid;
-  gap: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--line);
 }
 
-.persona-create-copy-posts p {
+.persona-create-copy-posts > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  color: var(--ink);
+  list-style: none;
+}
+
+.persona-create-copy-posts > summary::-webkit-details-marker {
+  display: none;
+}
+
+.persona-create-copy-posts > summary span {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.persona-create-copy-posts > summary::after {
+  content: "+";
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.persona-create-copy-posts[open] > summary::after {
+  content: "−";
+}
+
+.persona-create-copy-posts-body {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.persona-create-copy-posts-body > strong {
+  display: none;
+}
+
+.persona-create-copy-posts-body p {
   margin: 0;
   padding: 8px 10px;
   border-radius: 8px;
