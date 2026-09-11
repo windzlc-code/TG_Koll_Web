@@ -67,9 +67,9 @@ def test_fifth_hot_case_snapshot_has_complete_report_data() -> None:
 
     assert result["username"] == "mirahuang.12"
     assert result["recentViewCount"] == 1473
-    assert len(report["posts"]) == 2
-    assert len(report["daily"]) == 2
-    assert sum(len(post.get("mediaItems", [])) for post in report["posts"]) == 1
+    assert len(report["posts"]) == 15
+    assert len(report["daily"]) == 10
+    assert sum(len(post.get("mediaItems", [])) for post in report["posts"]) == 15
 
 
 def test_sixth_hot_case_snapshot_has_complete_report_data() -> None:
