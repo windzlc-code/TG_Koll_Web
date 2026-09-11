@@ -41,6 +41,7 @@ class AboutVectoFrontendContractTests(unittest.TestCase):
                     self.assertNotIn(f'data-site-nav-key="{removed_key}"', markup)
                 self.assertIn('data-site-nav-key="console"', markup)
                 self.assertIn('data-site-nav-key="aboutVecto"', markup)
+                self.assertIn('data-site-nav-key="caseStudies"', markup)
 
     def test_hot_cases_entry_stays_in_the_public_tweet_workbench_navigation(self):
         self.assertIn(

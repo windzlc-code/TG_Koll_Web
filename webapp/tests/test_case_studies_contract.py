@@ -88,6 +88,17 @@ def test_case_account_header_uses_compact_username_without_external_actions() ->
     account_markup = script[account_start:account_end]
     assert 'class="case-platform-badge"' in account_markup
     assert 'class="case-account-actions"' not in account_markup
-    assert "max(24px, 2.5vw, 32px)" not in stylesheet
     assert "font-size: clamp(24px, 2.5vw, 32px)" in stylesheet
-    assert "width: 19px; height: 19px" in stylesheet
+    assert 'class="platform-brand-icon"' in script
+    assert ".case-platform-badge .platform-brand-icon" in stylesheet
+
+
+def test_case_context_hides_internal_metric_scope_from_public_layout() -> None:
+    script = (ROOT / "static" / "assets" / "opc" / "case-studies.js").read_text(encoding="utf-8")
+    stylesheet = (ROOT / "static" / "assets" / "opc" / "case-studies.css").read_text(encoding="utf-8")
+
+    context_start = script.index('<section class="case-panel case-report-context"')
+    context_end = script.index('<section class="case-panel case-style-panel case-engagement-panel"')
+    context_markup = script[context_start:context_end]
+    assert "t.metricScope" not in context_markup
+    assert "repeat(3, minmax(0, 1fr))" in stylesheet

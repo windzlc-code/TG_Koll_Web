@@ -53,7 +53,7 @@
 .case-tag,
 .case-state-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; font-size: 12px; font-weight: 850; }
 .case-platform-badge { gap: 8px; padding: 8px 13px; color: #ffffff; background: #111d28; font-size: 14px; }
-.case-platform-badge svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; }
+.case-platform-badge .platform-brand-icon { width: 19px; height: 19px; flex: 0 0 19px; fill: currentColor; }
 .case-account-title h2 { margin: 0; font-size: clamp(24px, 2.5vw, 32px); letter-spacing: -.025em; }
 .case-account-meta { margin: 7px 0 0; color: var(--case-muted); font-size: 13px; }
 .case-state-badge { padding: 7px 11px; color: #08736b; background: #dbf6ec; }
@@ -70,7 +70,7 @@
 
 .case-report-context,
 .case-engagement-panel { margin-top: 16px; }
-.case-fact-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 17px 0 0; border: 1px solid #d6e1e7; background: #d6e1e7; }
+.case-fact-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 17px 0 0; border: 1px solid #d6e1e7; background: #d6e1e7; }
 .case-fact-grid div { min-width: 0; padding: 12px; background: #f9fcfd; }
 .case-fact-grid dt { color: #6a818f; font-size: 10px; font-weight: 850; }
 .case-fact-grid dd { overflow-wrap: anywhere; margin: 5px 0 0; color: #20485c; font-size: 13px; font-weight: 850; line-height: 1.45; }
