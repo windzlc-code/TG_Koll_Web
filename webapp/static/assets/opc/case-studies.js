@@ -161,6 +161,37 @@
         { title: "依据公开信号复测", text: "优先在报告呈现的有效时段测试相关主题，再按真实反馈继续调整。" },
       ],
     },
+    {
+      id: "mirahuang-12",
+      number: "05",
+      platform: "Threads",
+      username: "mirahuang.12",
+      sourceUrl: "https://www.threads.com/@mirahuang.12",
+      reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwloux8_ae32f0",
+      reportApiUrls: ["/assets/opc/case-studies/tar_mtwloux8_ae32f0.json"],
+      sampledAt: "—",
+      followers: 2501,
+      recentViews: 1473,
+      samplePosts: 2,
+      engagement: 64,
+      averageEngagement: 32,
+      viewsPerFollower: 0.59,
+      engagementPerThousandViews: 43.45,
+      persona: "生活观察内容账号",
+      styles: ["生活记录", "图文表达", "自然互动"],
+      flow: ["从具体经历切入", "用简洁表达承接互动", "根据公开反馈迭代方向"],
+      peakHours: [],
+      daily: [],
+      monthly: [],
+      bestPost: { text: "正在同步已保存的公开报告。", views: 0, engagement: 0, likes: 0, replies: 0, url: "" },
+      mediaPosts: [],
+      reportLoading: true,
+      guidance: [
+        { title: "保留具体情境", text: "让内容从真实可观察的日常片段开始，形成自然的阅读入口。" },
+        { title: "控制表达密度", text: "用清晰、短而完整的表达承接主题，让互动更容易发生。" },
+        { title: "按反馈持续复测", text: "依据公开样本中的互动信号，逐步优化内容方向与发布时间。" },
+      ],
+    },
   ];
 
   const copy = {
@@ -268,8 +299,6 @@
       guidanceKicker: "REUSABLE SIGNALS",
       guidanceTitle: "可复用的方法，不复制原内容",
       sourceNote: "数据来源：公开账号样本与已保存分析报告。平台可见范围、样本时间和互动口径会随报告变化；本页不代表完整账号数据。",
-      openProfile: "打开账号主页",
-      openOriginal: "查看原始报告",
     },
     "zh-Hant": {
       heroKicker: "VECTO CASE LIBRARY",
@@ -375,8 +404,6 @@
       guidanceKicker: "REUSABLE SIGNALS",
       guidanceTitle: "可複用的方法，不複製原內容",
       sourceNote: "資料來源：公開帳號樣本與已保存分析報告。平台可見範圍、樣本時間和互動口徑會隨報告變化；本頁不代表完整帳號資料。",
-      openProfile: "開啟帳號主頁",
-      openOriginal: "查看原始報告",
     },
   };
 
@@ -598,10 +625,6 @@
                 <h2 id="case-account-title">@${esc(item.username)}</h2>
               </div>
               <p class="case-account-meta">${t.accountMeta(item.sampledAt)}</p>
-              <div class="case-account-actions">
-                <a href="${esc(item.sourceUrl)}" target="_blank" rel="noreferrer">${t.openProfile} ↗</a>
-                <a href="${esc(item.reportUrl)}" target="_blank" rel="noreferrer">${t.openOriginal} ↗</a>
-              </div>
             </div>
             <span class="case-state-badge">${t.reportState}</span>
           </section>

@@ -47,19 +47,15 @@
 .case-study-pill[aria-pressed="true"] { border-color: var(--case-blue); color: #ffffff; background: var(--case-blue); }
 
 .case-study-content { padding-top: clamp(32px, 5vw, 56px); }
-.case-account-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: end; margin-bottom: 16px; }
+.case-account-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; margin-bottom: 16px; }
 .case-account-title { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 12px; }
 .case-platform-badge,
 .case-tag,
 .case-state-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; font-size: 12px; font-weight: 850; }
-.case-platform-badge { padding: 6px 10px; color: #ffffff; background: #111d28; }
-.case-platform-badge svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; }
-.case-account-title h2 { margin: 0; font-size: clamp(27px, 3.4vw, 42px); letter-spacing: -.03em; }
+.case-platform-badge { gap: 8px; padding: 8px 13px; color: #ffffff; background: #111d28; font-size: 14px; }
+.case-platform-badge svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; }
+.case-account-title h2 { margin: 0; font-size: clamp(24px, 2.5vw, 32px); letter-spacing: -.025em; }
 .case-account-meta { margin: 7px 0 0; color: var(--case-muted); font-size: 13px; }
-.case-account-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
-.case-account-actions a { display: inline-flex; min-height: 32px; align-items: center; padding: 0 11px; border: 1px solid #b8cad4; border-radius: 4px; color: #20445a; background: #ffffff; font-size: 12px; font-weight: 850; text-decoration: none; }
-.case-account-actions a:hover,
-.case-account-actions a:focus-visible { border-color: var(--case-cyan); color: #075c70; background: #effbfd; }
 .case-state-badge { padding: 7px 11px; color: #08736b; background: #dbf6ec; }
 
 .case-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 18px; border: 1px solid var(--case-line); background: var(--case-panel); box-shadow: 0 15px 34px rgba(26, 55, 73, .07); }
@@ -245,7 +241,6 @@
   .case-study-switcher { min-height: 55px; gap: 8px; }
   .case-study-switcher-label { display: none; }
   .case-account-head { grid-template-columns: 1fr; gap: 12px; }
-  .case-account-actions a { flex: 1 1 auto; justify-content: center; }
   .case-summary-grid article { padding: 13px; }
   .case-traffic-kpis { grid-template-columns: 1fr; }
   .case-trend-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
