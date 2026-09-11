@@ -600,6 +600,15 @@ function billingLedgerEntries() {{ return ledgerRows; }}
         self.assertIn("personaStepErrorKeepsOperationKey", create)
         self.assertIn('clearPersonaStepOperationKey("copy-create", operationKey)', create)
 
+    def test_persona_copy_create_guides_to_persona_image_generation(self):
+        create = self.console_script[
+            self.console_script.index("async function createPersonaArchiveFromCopy")
+            : self.console_script.index("function generatePersonaPayloadFromState")
+        ]
+        self.assertIn('modalKey: "persona-copy-next-image"', create)
+        self.assertIn("const goToImageGeneration = await openConsoleModal", create)
+        self.assertIn("if (goToImageGeneration) await openPersonaImageGeneration(createdPersonaId);", create)
+
     def test_mobile_toasts_enter_from_top_and_busy_spinner_has_distinct_track(self):
         mobile_start = self.console_styles.index(
             "@media (max-width: 760px)",

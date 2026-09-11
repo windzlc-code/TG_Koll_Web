@@ -22348,12 +22348,21 @@ async function createPersonaArchiveFromCopy() {
     });
     clearPersonaStepOperationKey("copy-create", operationKey);
     createState.copyCreateOperationKey = "";
+    const createdPersonaId = String(result.id || state.selectedPersonaId || "").trim();
     state.personaCreate = defaultPersonaCreateState();
     showMsg("commandMsg", `复制人设已创建：${result.name || result.id || name}`, true);
     state.personaCreateMode = false;
     if (isPersonaCreateModalOpen()) closeConsoleModal(true);
-    await activateCreatedPersona(result.id || state.selectedPersonaId, { group: "settings", step: "profile" });
+    await activateCreatedPersona(createdPersonaId, { group: "settings", step: "profile" });
     renderWorkspace();
+    const goToImageGeneration = await openConsoleModal({
+      title: "复制人设已创建",
+      message: `“${result.name || name}”已创建。下一步建议生成人设图，或在下一页上传自定义人设图后再开始生成内容。`,
+      confirmText: "下一步：生成人设图",
+      cancelText: "稍后设置",
+      modalKey: "persona-copy-next-image",
+    });
+    if (goToImageGeneration) await openPersonaImageGeneration(createdPersonaId);
   } catch (error) {
     if (!personaStepErrorKeepsOperationKey(error)) {
       clearPersonaStepOperationKey("copy-create", operationKey);
