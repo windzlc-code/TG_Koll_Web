@@ -20,7 +20,7 @@
 .case-studies-hero {
   position: relative;
   overflow: hidden;
-  padding: 22px 0;
+  padding: 20px 0 22px;
   color: #ffffff;
   background:
     linear-gradient(90deg, rgba(140, 208, 218, .08) 1px, transparent 1px) 0 0 / 76px 76px,
@@ -28,9 +28,11 @@
     linear-gradient(125deg, #11202d, #17374b 62%, #1f4e60);
 }
 
-.case-studies-hero-bar { display: flex; min-height: 44px; align-items: center; }
+.case-studies-hero-bar { display: block; min-height: 0; }
 .case-section-kicker { margin: 0; color: #7ddce8; font: 850 11px/1 "Bahnschrift", "DIN Alternate", sans-serif; letter-spacing: .13em; text-transform: uppercase; }
-.case-studies-hero h1 { margin: 0; font-size: clamp(27px, 3vw, 38px); line-height: 1; letter-spacing: -.035em; }
+.case-studies-hero-copy { max-width: 680px; }
+.case-studies-hero h1 { margin: 8px 0 0; font-size: clamp(27px, 3vw, 38px); line-height: 1; letter-spacing: -.035em; }
+.case-studies-hero-copy > p:last-child { margin: 9px 0 0; color: #c7dce5; font-size: 13px; font-weight: 650; line-height: 1.55; }
 
 .case-study-switcher-band { position: sticky; z-index: 14; top: var(--site-header-height, 68px); border-bottom: 1px solid #c9d7df; background: rgba(242, 246, 248, .95); backdrop-filter: blur(14px); }
 .case-study-switcher { display: flex; align-items: center; min-height: 60px; gap: 10px; }
@@ -237,9 +239,9 @@
 
 @media (max-width: 560px) {
   .case-studies-shell { width: min(100% - 22px, 960px); }
-  .case-studies-hero { padding: 16px 0; }
-  .case-studies-hero-bar { min-height: 36px; }
+  .case-studies-hero { padding: 16px 0 18px; }
   .case-studies-hero h1 { font-size: 27px; }
+  .case-studies-hero-copy > p:last-child { font-size: 12px; }
   .case-study-switcher { min-height: 55px; gap: 8px; }
   .case-study-switcher-label { display: none; }
   .case-account-head { grid-template-columns: 1fr; gap: 12px; }

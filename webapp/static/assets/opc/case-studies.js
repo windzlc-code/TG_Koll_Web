@@ -130,11 +130,44 @@
         { title: "复测有效时段", text: "先依据公开样本的高互动时段测试同类主题，再按真实反馈调整。" },
       ],
     },
+    {
+      id: "kameoka-yingying",
+      number: "04",
+      platform: "Threads",
+      username: "kameoka_yingying",
+      sourceUrl: "https://www.threads.com/@kameoka_yingying",
+      reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwiw9jh_d4c2c7",
+      reportApiUrls: ["/assets/opc/case-studies/tar_mtwiw9jh_d4c2c7.json"],
+      sampledAt: "—",
+      followers: 431,
+      recentViews: 36147,
+      samplePosts: 15,
+      engagement: 1903,
+      averageEngagement: 127,
+      viewsPerFollower: 83.87,
+      engagementPerThousandViews: 52.65,
+      persona: "生活化个人内容账号",
+      styles: ["日常观察", "自然叙述", "轻量互动", "图文记录"],
+      flow: ["以具体生活片段建立共鸣", "用自然表达承接互动", "按公开反馈复测内容方向"],
+      peakHours: [],
+      daily: [],
+      monthly: [],
+      bestPost: { text: "正在同步已保存的公开报告。", views: 0, engagement: 0, likes: 0, replies: 0, url: "" },
+      mediaPosts: [],
+      reportLoading: true,
+      guidance: [
+        { title: "保留真实细节", text: "从可观察的生活情境出发，让内容拥有自然、具体的阅读入口。" },
+        { title: "用短句留出互动空间", text: "用简洁清晰的表达呈现观点，并给读者留下自然回应的余地。" },
+        { title: "依据公开信号复测", text: "优先在报告呈现的有效时段测试相关主题，再按真实反馈继续调整。" },
+      ],
+    },
   ];
 
   const copy = {
     "zh-Hans": {
+      heroKicker: "VECTO CASE LIBRARY",
       heroTitle: "热门案例",
+      heroIntro: "基于已保存的公开报告，查看账号定位、内容结构与增长信号。",
       switcherLabel: "热门案例",
       switcherPrefix: "案例",
       counter: (current, total) => `${current} / ${total}`,
@@ -239,7 +272,9 @@
       openOriginal: "查看原始报告",
     },
     "zh-Hant": {
+      heroKicker: "VECTO CASE LIBRARY",
       heroTitle: "熱門案例",
+      heroIntro: "以已保存的公開報告，查看帳號定位、內容結構與成長訊號。",
       switcherLabel: "熱門案例",
       switcherPrefix: "案例",
       counter: (current, total) => `${current} / ${total}`,
@@ -539,7 +574,11 @@
       <div class="case-studies-page">
         <section class="case-studies-hero" aria-labelledby="case-studies-title">
           <div class="case-studies-shell case-studies-hero-bar">
-            <h1 id="case-studies-title">${t.heroTitle}</h1>
+            <div class="case-studies-hero-copy">
+              <p class="case-section-kicker">${t.heroKicker}</p>
+              <h1 id="case-studies-title">${t.heroTitle}</h1>
+              <p>${t.heroIntro}</p>
+            </div>
           </div>
         </section>
         <div class="case-study-switcher-band">
@@ -684,7 +723,6 @@
     root.querySelectorAll("[data-case-id]").forEach((button) => button.addEventListener("click", () => {
       selectedCaseId = button.dataset.caseId || selectedCaseId;
       render();
-      document.querySelector(".case-study-switcher-band")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }));
   }
 
