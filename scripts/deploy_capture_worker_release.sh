@@ -462,6 +462,22 @@ runtime_snapshot_container="/worker-runtime/current/tool_r18_runtime"
 # snapshot; candidate shards, Reader cache and scheduler state remain here.
 stable_hot_runtime="$data_root/collector-hot-runtime"
 install -d -m 700 "$stable_hot_runtime/sentiment-opinx"
+# Never silently start a new empty candidate pool when a legacy pool is still
+# present.  The one-time migration must be explicit and recoverable; otherwise
+# a release can make the admin overview look like valid candidates vanished.
+if [[ ! -e "$stable_hot_runtime/sentiment_hot_global_pool.sqlite3" ]]; then
+  legacy_pool_candidate="$(
+    find "$data_root/execution-runtime-releases" \
+      -type f -path '*/tool_r18_runtime/sentiment_hot_global_pool.sqlite3' \
+      -printf '%T@ %p\n' 2>/dev/null |
+      sort -nr |
+      head -n 1 |
+      cut -d ' ' -f 2-
+  )"
+  if [[ -n "$legacy_pool_candidate" ]]; then
+    die "stable candidate pool is missing while legacy pool exists: $legacy_pool_candidate; run an explicit additive migration first"
+  fi
+fi
 for relative in persona_archives.json persona_archives_cache.json persona_groups.json persona_memory.json; do
   ln -sfn "$runtime_snapshot_container/$relative" "$stable_hot_runtime/$relative"
 done
