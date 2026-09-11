@@ -4,8 +4,52 @@
 
   const sourceCases = [
     {
-      id: "gy-zzzzz",
+      id: "mina-ya2002",
       number: "01",
+      platform: "Threads",
+      username: "mina_ya2002",
+      sourceUrl: "https://www.threads.com/@mina_ya2002",
+      reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwb84p6_000c47",
+      reportApiUrls: ["/assets/opc/case-studies/tar_mtwb84p6_000c47.json"],
+      sampledAt: "2026/8/28—2026/9/8",
+      followers: 1703,
+      recentViews: 23487,
+      samplePosts: 15,
+      engagement: 2281,
+      averageEngagement: 152,
+      viewsPerFollower: 13.79,
+      engagementPerThousandViews: 97.12,
+      persona: "生活化个人风格账号",
+      styles: ["日常生活", "自拍记录", "多图内容", "自然互动"],
+      flow: ["以具体生活片段切入", "用图片与短文建立情境", "从高互动样本延展内容主题"],
+      peakHours: [
+        { label: "08:00–09:00", value: 204, total: 1427, posts: 7, detail: "7 篇公开样本累计 1,427 互动指数。", postUrl: "https://www.threads.com/@mina_ya2002/post/Dcw5wHKIAz4" },
+        { label: "20:00–21:00", value: 107, total: 854, posts: 8, detail: "8 篇公开样本累计 854 互动指数。", postUrl: "https://www.threads.com/@mina_ya2002/post/DdBo4umkcZ0" },
+      ],
+      daily: [
+        { date: "08-28", value: 96 }, { date: "08-30", value: 137 }, { date: "08-31", value: 380 }, { date: "09-02", value: 604 },
+        { date: "09-04", value: 157 }, { date: "09-05", value: 222 }, { date: "09-06", value: 258 }, { date: "09-07", value: 263 }, { date: "09-08", value: 164 },
+      ],
+      monthly: [],
+      bestPost: {
+        text: "以多图生活记录承接评论与互动，形成高互动峰值。",
+        views: 5602,
+        engagement: 604,
+        likes: 373,
+        replies: 114,
+        url: "https://www.threads.com/@mina_ya2002/post/Dcw5wHKIAz4",
+      },
+      mediaPosts: [],
+      reportLoading: true,
+      guidance: [
+        { title: "保留生活现场感", text: "以具体日期、地点和当下情绪建立可感知的日常片段。" },
+        { title: "多图承接一个主题", text: "让图片序列与短文围绕同一个生活主题展开，避免信息分散。" },
+        { title: "优先复测早间时段", text: "先在 08:00 附近测试同类内容，再根据真实互动继续调整。" },
+      ],
+    },
+    {
+      id: "gy-zzzzz",
+      number: "02",
       platform: "Threads",
       username: "gy.zzzzz",
       sourceUrl: "https://www.threads.com/@gy.zzzzz",
@@ -39,12 +83,6 @@
         { month: "2026-06", posts: 2, likes: 17, replies: 4, reposts: 1, total: 28, average: 14, championUrl: "https://www.threads.com/@gy.zzzzz/post/DZISlozEzpE" },
         { month: "2026-07", posts: 4, likes: 97, replies: 7, reposts: 0, total: 111, average: 28, championUrl: "https://www.threads.com/@gy.zzzzz/post/DbNUbmIkwnT" },
       ],
-      styleMix: [
-        { name: "互动提问型", percent: 40, posts: 6, average: 112, total: 672, detail: "以問句、二選一、站隊或留言關鍵字降低回覆門檻；是本樣本最需要優先放大的內容結構。", postUrl: "https://www.threads.com/@gy.zzzzz/post/DYT8bXmk9uu" },
-        { name: "视觉展示型", percent: 20, posts: 3, average: 39, total: 116, detail: "圖片、輪播或短影片先承接情緒與場景，文字負責補充脈絡和一個明確問題。", postUrl: "https://www.threads.com/@gy.zzzzz/post/DbPcvpCE9lj" },
-        { name: "观点立场型", percent: 27, posts: 4, average: 16, total: 62, detail: "以明確判斷和生活觀察建立辨識度；需持續測試更具體的切角，避免泛泛而談。", postUrl: "https://www.threads.com/@gy.zzzzz/post/DYhCAfzE6ZY" },
-        { name: "故事叙事型", percent: 27, posts: 4, average: 16, total: 64, detail: "從真實經歷、轉折與情境開始；若篇均偏低，先替換鉤子與衝突點，而非只更換圖片。", postUrl: "https://www.threads.com/@gy.zzzzz/post/DYSHe3Jk-Gi" },
-      ],
       bestPost: {
         text: "同期朋友陆续转行，自己仍在飞行工作中；以职业日常与自我提问形成真实共鸣。",
         views: 25110,
@@ -55,12 +93,6 @@
       },
       mediaPosts: [],
       reportLoading: true,
-      historical: [
-        { title: "互動選擇", posts: 2, total: 547, average: 274, url: "https://www.threads.com/@gy.zzzzz/post/DYT8bXmk9uu" },
-        { title: "生活情境", posts: 2, total: 235, average: 118, url: "https://www.threads.com/@gy.zzzzz/post/DYRtXzGk-p9" },
-        { title: "穿搭／形象", posts: 3, total: 52, average: 17, url: "https://www.threads.com/@gy.zzzzz/post/DY2EAFkk6fD" },
-        { title: "其他日常", posts: 8, total: 123, average: 15, url: "https://www.threads.com/@gy.zzzzz/post/DbPcvpCE9lj" },
-      ],
       guidance: [
         { title: "保留真实日常", text: "从职业、通勤、下班和生活碎片切入，先让内容具备可感知的具体场景。" },
         { title: "问题只留一个", text: "在结尾保留一个自然的选择题或提问，让读者有明确而低门槛的回应入口。" },
@@ -71,11 +103,7 @@
 
   const copy = {
     "zh-Hans": {
-      heroKicker: "VECTO CASE LIBRARY",
-      heroTitle: "热门案例，拆解可复用的增长线索",
-      heroCopy: "以真实公开样本复盘账号定位、内容结构、互动表现和下一步方向。案例只呈现经核对的数据，不用模板化数字填充。",
-      heroNoteTitle: "案例持续收录",
-      heroNoteCopy: "当前案例来自已保存的公开分析报告；新增案例会保持同一套信息结构与可比较口径。",
+      heroTitle: "热门案例",
       switcherLabel: "热门案例",
       switcherPrefix: "案例",
       counter: (current, total) => `${current} / ${total}`,
@@ -106,6 +134,7 @@
       peakDay: "最高互动日",
       trendTotal: "样本总互动指数",
       trendDate: "日期",
+      trendPostCount: "篇数",
       trendValue: "互动指数",
       trendShare: "占样本比例",
       trendSignal: "数据标记",
@@ -134,6 +163,27 @@
       mediaContent: "图文内容",
       mediaMetrics: "公开数据",
       mediaSource: "原帖链接",
+      mediaAssets: "媒体文件",
+      textPosts: "文字帖子",
+      mediaPosts: "含媒体帖子",
+      sourceKicker: "REPORT CONTEXT",
+      sourceTitle: "采集范围与数据口径",
+      sourceIntro: "以下字段均来自已保存的本次公开报告，用于说明样本范围与指标边界。",
+      reportCaptured: "报告生成",
+      sampledRange: "采样范围",
+      recentViewPosts: "浏览统计帖子",
+      metricScope: "浏览统计口径",
+      metricNotice: "指标说明",
+      engagementKicker: "ENGAGEMENT BREAKDOWN",
+      engagementTitle: "互动构成与样本分布",
+      engagementIntro: "互动指数由各项公开互动累计，不对缺失字段做推测或补值。",
+      likesTotal: "点赞累计",
+      repliesTotal: "回复累计",
+      repostsTotal: "转发累计",
+      quotesTotal: "引用累计",
+      mediaUnavailable: "图片暂时无法加载",
+      assetCount: (count) => `${count} 个媒体文件`,
+      postBreakdown: (likes, replies, reposts, quotes) => `赞 ${likes} · 回复 ${replies} · 转发 ${reposts}${quotes ? ` · 引用 ${quotes}` : ""}`,
       samplePost: (index, hasImage) => `第 ${String(index + 1).padStart(2, "0")} 篇${hasImage ? " · 含媒体" : " · 文字帖"}`,
       mediaLoading: "正在同步本次抓取到的公开帖子…",
       mediaEmpty: "本次报告未返回公开帖子。",
@@ -147,9 +197,6 @@
       likes: "点赞",
       replies: "回复",
       openPost: "打开原帖",
-      historicalKicker: "HISTORICAL REVIEW",
-      historicalTitle: "历史内容对照",
-      historicalIntro: "按题材比较样本总互动和篇均表现，方便识别应放大与应修正的内容方向。",
       averageEngagementLabel: "篇均互动",
       guidanceKicker: "REUSABLE SIGNALS",
       guidanceTitle: "可复用的方法，不复制原内容",
@@ -158,11 +205,7 @@
       openOriginal: "查看原始报告",
     },
     "zh-Hant": {
-      heroKicker: "VECTO CASE LIBRARY",
-      heroTitle: "熱門案例，拆解可複用的成長線索",
-      heroCopy: "以真實公開樣本復盤帳號定位、內容結構、互動表現和下一步方向。案例只呈現經核對的數據，不用模板化數字填充。",
-      heroNoteTitle: "案例持續收錄",
-      heroNoteCopy: "目前案例來自已保存的公開分析報告；新增案例會保持同一套資訊結構與可比較口徑。",
+      heroTitle: "熱門案例",
       switcherLabel: "熱門案例",
       switcherPrefix: "案例",
       counter: (current, total) => `${current} / ${total}`,
@@ -193,6 +236,7 @@
       peakDay: "最高互動日",
       trendTotal: "樣本總互動指數",
       trendDate: "日期",
+      trendPostCount: "篇數",
       trendValue: "互動指數",
       trendShare: "占樣本比例",
       trendSignal: "數據標記",
@@ -221,6 +265,27 @@
       mediaContent: "圖文內容",
       mediaMetrics: "公開數據",
       mediaSource: "原帖連結",
+      mediaAssets: "媒體檔案",
+      textPosts: "文字貼文",
+      mediaPosts: "含媒體貼文",
+      sourceKicker: "REPORT CONTEXT",
+      sourceTitle: "擷取範圍與數據口徑",
+      sourceIntro: "以下欄位均來自已保存的本次公開報告，用於說明樣本範圍與指標邊界。",
+      reportCaptured: "報告產生",
+      sampledRange: "樣本範圍",
+      recentViewPosts: "瀏覽統計貼文",
+      metricScope: "瀏覽統計口徑",
+      metricNotice: "指標說明",
+      engagementKicker: "ENGAGEMENT BREAKDOWN",
+      engagementTitle: "互動構成與樣本分布",
+      engagementIntro: "互動指數由各項公開互動累計，不對缺失欄位做推測或補值。",
+      likesTotal: "按讚累計",
+      repliesTotal: "回覆累計",
+      repostsTotal: "轉發累計",
+      quotesTotal: "引用累計",
+      mediaUnavailable: "圖片暫時無法載入",
+      assetCount: (count) => `${count} 個媒體檔案`,
+      postBreakdown: (likes, replies, reposts, quotes) => `讚 ${likes} · 回覆 ${replies} · 轉發 ${reposts}${quotes ? ` · 引用 ${quotes}` : ""}`,
       samplePost: (index, hasImage) => `第 ${String(index + 1).padStart(2, "0")} 篇${hasImage ? " · 含媒體" : " · 文字貼文"}`,
       mediaLoading: "正在同步本次擷取到的公開貼文…",
       mediaEmpty: "本次報告未回傳公開貼文。",
@@ -234,9 +299,6 @@
       likes: "按讚",
       replies: "回覆",
       openPost: "開啟原帖",
-      historicalKicker: "HISTORICAL REVIEW",
-      historicalTitle: "歷史內容對照",
-      historicalIntro: "按題材比較樣本總互動和篇均表現，方便辨識應放大與應修正的內容方向。",
       averageEngagementLabel: "篇均互動",
       guidanceKicker: "REUSABLE SIGNALS",
       guidanceTitle: "可複用的方法，不複製原內容",
@@ -270,11 +332,12 @@
     const to = dateKey(range?.to);
     return from && to ? `${from.replace(/-/g, "/")}—${to.replace(/-/g, "/")}` : "—";
   };
-  const firstMediaUrl = (post) => {
-    const mediaItem = asArray(post?.mediaItems).find((item) => typeof item === "string" || item?.url);
-    if (typeof mediaItem === "string") return mediaItem;
-    if (mediaItem?.url) return mediaItem.url;
-    return asArray(post?.media).find((item) => typeof item === "string") || "";
+  const mediaItemsFrom = (post) => {
+    const source = asArray(post?.mediaItems).length ? post.mediaItems : post?.media;
+    return asArray(source).map((item) => ({
+      type: typeof item === "string" ? "image" : String(item?.type || "image"),
+      url: typeof item === "string" ? item : String(item?.url || ""),
+    })).filter((item) => item.url);
   };
   const monthRowsFromPosts = (posts) => {
     const byMonth = new Map();
@@ -300,7 +363,11 @@
     const result = payload?.report?.result || payload?.result || {};
     const report = result?.report || {};
     const posts = asArray(report.posts);
-    const daily = asArray(report.daily).map((day) => ({ date: dateKey(day?.date).slice(5) || String(day?.date || "—"), value: asNumber(day?.engagement) }));
+    const daily = asArray(report.daily).map((day) => ({
+      date: dateKey(day?.date).slice(5) || String(day?.date || "—"),
+      posts: asNumber(day?.posts),
+      value: asNumber(day?.engagement),
+    }));
     const peakHours = asArray(report.peakHours).map((hour) => {
       const matchingPost = posts.find((post) => asDate(post?.publishedAt)?.getUTCHours() === asNumber(hour?.hour));
       return {
@@ -315,12 +382,18 @@
     const bestPost = report.bestPost || {};
     const mediaPosts = posts.map((post) => ({
       url: post?.url || "",
-      image: firstMediaUrl(post),
+      mediaItems: mediaItemsFrom(post),
       caption: String(post?.text || ""),
       date: dateKey(post?.publishedAt) || String(post?.publishedAt || "—"),
       views: asNumber(post?.views),
       interactions: asNumber(post?.engagement),
+      likes: asNumber(post?.likes),
+      replies: asNumber(post?.replies),
+      reposts: asNumber(post?.reposts),
+      quotes: asNumber(post?.quotes),
     }));
+    const totalMediaAssets = mediaPosts.reduce((total, post) => total + post.mediaItems.length, 0);
+    const mediaPostCount = mediaPosts.filter((post) => post.mediaItems.length).length;
     return {
       ...caseItem,
       platform: String(result?.platform || caseItem.platform || "Threads").replace(/^./, (value) => value.toUpperCase()),
@@ -329,9 +402,18 @@
       sampledAt: sampleRange(report?.range),
       followers: asNumber(result?.followerCount),
       recentViews: asNumber(result?.recentViewCount),
+      recentViewPostCount: asNumber(result?.recentViewPostCount),
+      analyzedAt: dateKey(result?.analyzedAt) || String(result?.analyzedAt || "—"),
+      inspectedUrl: String(result?.inspectedUrl || ""),
+      metricNotice: String(result?.metricNotice || ""),
+      metricScope: String(result?.recentViewMetricScope || report?.traffic?.scope || ""),
       samplePosts: asNumber(report?.sampleSize || report?.totals?.posts || posts.length),
       engagement: asNumber(report?.totals?.engagement),
       averageEngagement: asNumber(report?.totals?.averageEngagement),
+      totalLikes: asNumber(report?.totals?.likes),
+      totalReplies: asNumber(report?.totals?.replies),
+      totalReposts: asNumber(report?.totals?.reposts),
+      totalQuotes: posts.reduce((total, post) => total + asNumber(post?.quotes), 0),
       viewsPerFollower: asNumber(report?.traffic?.viewsPerFollower),
       engagementPerThousandViews: asNumber(report?.traffic?.publicEngagementPerThousandViews),
       persona: result?.targetPersona || report?.persona || caseItem.persona,
@@ -348,6 +430,9 @@
         url: bestPost?.url || caseItem.bestPost.url,
       },
       mediaPosts,
+      mediaPostCount,
+      textPostCount: Math.max(0, mediaPosts.length - mediaPostCount),
+      totalMediaAssets,
       reportLoading: false,
     };
   };
@@ -381,9 +466,7 @@
     const chartX = (index) => 54 + index * (820 / Math.max(1, item.daily.length - 1));
     const chartY = (value) => 226 - Number(value || 0) / maxDaily * 174;
     const chartPoints = item.daily.map((day, index) => `${chartX(index).toFixed(1)},${chartY(day.value).toFixed(1)}`).join(" ");
-    const strongestStyle = [...item.styleMix].sort((left, right) => right.average - left.average)[0];
-    const mostUsedStyle = [...item.styleMix].sort((left, right) => right.posts - left.posts)[0];
-    const weakestStyle = [...item.styleMix].sort((left, right) => left.average - right.average)[0];
+    const reportedStyles = asArray(item.styles);
     const currentIndex = Math.max(0, sourceCases.findIndex((entry) => entry.id === item.id));
     const totalMediaPages = Math.max(1, Math.ceil(item.mediaPosts.length / mediaPostsPerPage));
     const currentMediaPage = Math.min(totalMediaPages, Math.max(1, Number(mediaPostPages.get(item.id) || 1)));
@@ -392,16 +475,8 @@
     root.innerHTML = `
       <div class="case-studies-page">
         <section class="case-studies-hero" aria-labelledby="case-studies-title">
-          <div class="case-studies-shell case-studies-hero-grid">
-            <div>
-              <p class="case-studies-eyebrow">${t.heroKicker}</p>
-              <h1 id="case-studies-title">${t.heroTitle}</h1>
-              <p>${t.heroCopy}</p>
-            </div>
-            <aside class="case-studies-hero-note">
-              <strong>${t.heroNoteTitle}</strong>
-              <span>${t.heroNoteCopy}</span>
-            </aside>
+          <div class="case-studies-shell case-studies-hero-bar">
+            <h1 id="case-studies-title">${t.heroTitle}</h1>
           </div>
         </section>
         <div class="case-study-switcher-band">
@@ -434,6 +509,32 @@
             <article><span>${t.samplePosts}</span><strong>${format(item.samplePosts)}</strong><small>${t.viewsScope}</small></article>
             <article><span>${t.engagement}</span><strong>${format(item.engagement)}</strong><small>${t.average(item.averageEngagement)}</small></article>
           </section>
+          <section class="case-panel case-report-context">
+            <p class="case-section-kicker">${t.sourceKicker}</p>
+            <h3>${t.sourceTitle}</h3>
+            <p class="case-panel-intro">${t.sourceIntro}</p>
+            <dl class="case-fact-grid">
+              <div><dt>${t.reportCaptured}</dt><dd>${esc(item.analyzedAt || "—")}</dd></div>
+              <div><dt>${t.sampledRange}</dt><dd>${esc(item.sampledAt || "—")}</dd></div>
+              <div><dt>${t.recentViewPosts}</dt><dd>${format(item.recentViewPostCount)}</dd></div>
+              <div><dt>${t.metricScope}</dt><dd>${esc(item.metricScope || "public_sample")}</dd></div>
+            </dl>
+            ${item.metricNotice ? `<p class="case-metric-notice"><b>${t.metricNotice}</b>${esc(item.metricNotice)}</p>` : ""}
+          </section>
+          <section class="case-panel case-style-panel case-engagement-panel">
+            <p class="case-section-kicker">${t.engagementKicker}</p>
+            <h3>${t.engagementTitle}</h3>
+            <p class="case-panel-intro">${t.engagementIntro}</p>
+            <div class="case-engagement-grid">
+              <div><span>${t.likesTotal}</span><strong>${format(item.totalLikes)}</strong></div>
+              <div><span>${t.repliesTotal}</span><strong>${format(item.totalReplies)}</strong></div>
+              <div><span>${t.repostsTotal}</span><strong>${format(item.totalReposts)}</strong></div>
+              <div><span>${t.quotesTotal}</span><strong>${format(item.totalQuotes)}</strong></div>
+              <div><span>${t.mediaPosts}</span><strong>${format(item.mediaPostCount)}</strong></div>
+              <div><span>${t.textPosts}</span><strong>${format(item.textPostCount)}</strong></div>
+              <div><span>${t.mediaAssets}</span><strong>${format(item.totalMediaAssets)}</strong></div>
+            </div>
+          </section>
           <section class="case-report-grid">
             <article class="case-panel">
               <p class="case-section-kicker">${t.personaKicker}</p>
@@ -463,8 +564,9 @@
             <article class="case-panel">
               <p class="case-section-kicker">${t.styleKicker}</p>
               <h3>${t.styleTitle}</h3>
-              <div class="case-style-summary"><span>${t.interactions}<b>${esc(strongestStyle?.name || "—")}</b><small>${t.average(strongestStyle?.average || 0)}</small></span><span>${t.samplePosts}<b>${esc(mostUsedStyle?.name || "—")}</b><small>${t.postCount(mostUsedStyle?.posts || 0)}</small></span><span>${t.guidanceTitle}<b>${esc(weakestStyle?.name || "—")}</b><small>${t.average(weakestStyle?.average || 0)}</small></span></div>
-              <div class="case-style-grid">${item.styleMix.map((style) => `<details class="case-style-card"><summary><strong>${esc(style.name)}</strong><span>${format(style.percent)}%</span><small>${t.postCount(style.posts)} · ${t.average(style.average)} · ${format(style.total)} ${t.total}</small></summary><div class="case-expand-body"><p>${esc(style.detail)}</p><a href="${esc(style.postUrl)}" target="_blank" rel="noreferrer">${t.openPost} ↗</a></div></details>`).join("")}</div>
+              <p class="case-panel-intro">${reportedStyles.length ? t.styleDetails : t.mediaEmpty}</p>
+              <div class="case-report-style-tags">${reportedStyles.map((style) => `<span class="case-tag">${esc(style)}</span>`).join("") || `<span class="case-tag">—</span>`}</div>
+              <div class="case-sample-breakdown"><span>${t.samplePosts}<b>${format(item.samplePosts)}</b></span><span>${t.mediaPosts}<b>${format(item.mediaPostCount)}</b></span><span>${t.textPosts}<b>${format(item.textPostCount)}</b></span><span>${t.mediaAssets}<b>${format(item.totalMediaAssets)}</b></span></div>
             </article>
           </section>
           <section class="case-report-grid case-style-panel">
@@ -474,7 +576,7 @@
               <p class="case-panel-intro">${t.dailyIntro}</p>
               <div class="case-trend-kpis"><span>${t.trendTotal}<b>${format(totalDaily)}</b></span><span>${t.activeDays}<b>${format(activeDaily.length)}</b></span><span>${t.dailyAverage}<b>${format(averageDaily)}</b></span><span>${t.peakDay}<b>${esc(peakDaily?.date || "—")} · ${format(peakDaily?.value || 0)}</b></span></div>
               <div class="case-chart-wrap"><svg class="case-trend-chart" viewBox="0 0 920 310" role="img" aria-label="${t.dailyTitle}"><line x1="54" y1="226" x2="874" y2="226" class="case-chart-axis"/><line x1="54" y1="42" x2="54" y2="226" class="case-chart-axis"/>${[0, .25, .5, .75, 1].map((ratio) => { const y = 226 - ratio * 174; return `<g><line x1="54" y1="${y}" x2="874" y2="${y}" class="case-chart-gridline"/><text x="44" y="${y + 4}" text-anchor="end">${format(Math.round(maxDaily * ratio))}</text></g>`; }).join("")}${item.daily.map((day, index) => { const x = chartX(index); const y = chartY(day.value); return `<g><rect x="${(x - 6).toFixed(1)}" y="${y.toFixed(1)}" width="12" height="${Math.max(1, 226 - y).toFixed(1)}" class="case-chart-bar"><title>${esc(day.date)} · ${format(day.value)}</title></rect><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${day.value === peakDaily?.value ? 4.5 : 3}" class="case-chart-point ${day.value === peakDaily?.value ? "is-peak" : ""}"><title>${esc(day.date)} · ${format(day.value)}</title></circle><text class="case-chart-x-label" x="${x.toFixed(1)}" y="247" text-anchor="end" transform="rotate(-38 ${x.toFixed(1)} 247)">${esc(day.date)}</text></g>`; }).join("")}<polyline points="${chartPoints}" class="case-chart-line"/></svg></div>
-              <div class="case-trend-table"><div class="case-trend-table-head"><span>${t.trendDate}</span><span>${t.trendValue}</span><span>${t.trendShare}</span><span>${t.trendSignal}</span></div>${item.daily.map((day) => `<div><span>${esc(day.date)}</span><b>${format(day.value)}</b><span>${Math.round(Number(day.value || 0) / Math.max(1, totalDaily) * 100)}%</span><span class="${day.value === peakDaily?.value ? "is-peak" : ""}">${day.value === peakDaily?.value ? t.peakSignal : t.normalSignal}</span></div>`).join("")}</div>
+              <div class="case-trend-table"><div class="case-trend-table-head"><span>${t.trendDate}</span><span>${t.trendPostCount}</span><span>${t.trendValue}</span><span>${t.trendShare}</span><span>${t.trendSignal}</span></div>${item.daily.map((day) => `<div><span>${esc(day.date)}</span><span>${format(day.posts)}</span><b>${format(day.value)}</b><span>${Math.round(Number(day.value || 0) / Math.max(1, totalDaily) * 100)}%</span><span class="${day.value === peakDaily?.value ? "is-peak" : ""}">${day.value === peakDaily?.value ? t.peakSignal : t.normalSignal}</span></div>`).join("")}</div>
             </article>
             <article class="case-panel case-month-panel">
               <p class="case-section-kicker">${t.monthlyKicker}</p>
@@ -490,9 +592,10 @@
             <div class="case-media-table" role="table" aria-label="${t.mediaTitle}">
               <div class="case-media-table-head" role="row"><span></span><span>${t.mediaContent}</span><span>${t.mediaMetrics}</span><span>${t.mediaSource}</span></div>
               ${visibleMediaPosts.map((post, index) => {
-                const hasImage = Boolean(post.image);
+                const hasMedia = post.mediaItems.length > 0;
                 const postIndex = mediaPageOffset + index;
-                return `<article class="case-media-row" role="row"><div class="case-media-preview">${hasImage ? `<img src="${esc(post.image)}" alt="${esc(t.samplePost(postIndex, true))}" loading="lazy" onerror="this.closest('.case-media-row').classList.add('case-media-unavailable'); this.remove();">` : `<span class="case-media-text-plate">TEXT</span>`}</div><div class="case-media-copy"><strong>${esc(t.samplePost(postIndex, hasImage))}</strong><small>${esc(post.caption)}</small><em>${esc(post.date)}</em></div><div class="case-media-metrics"><span>${t.views} <b>${format(post.views)}</b></span><span>${t.interactions} <b>${format(post.interactions)}</b></span></div><a class="case-media-link" href="${esc(post.url)}" target="_blank" rel="noreferrer">${t.openPost} ↗</a></article>`;
+                const gallery = hasMedia ? `<div class="case-media-gallery" style="--case-media-count:${Math.min(post.mediaItems.length, 4)}">${post.mediaItems.map((media, mediaIndex) => `<a class="case-media-asset" href="${esc(media.url)}" target="_blank" rel="noreferrer" aria-label="${esc(t.samplePost(postIndex, true))} · ${esc(t.assetCount(mediaIndex + 1))}"><img src="${esc(media.url)}" alt="${esc(t.samplePost(postIndex, true))}" loading="lazy" onerror="this.parentElement.classList.add('is-unavailable'); this.remove();"><span>${t.mediaUnavailable}</span></a>`).join("")}</div>` : `<span class="case-media-text-plate">TEXT</span>`;
+                return `<article class="case-media-row" role="row"><div class="case-media-preview">${gallery}</div><div class="case-media-copy"><strong>${esc(t.samplePost(postIndex, hasMedia))}</strong>${hasMedia ? `<i class="case-media-count">${esc(t.assetCount(post.mediaItems.length))}</i>` : ""}<small>${esc(post.caption)}</small><em>${esc(post.date)}</em></div><div class="case-media-metrics"><span>${t.views} <b>${format(post.views)}</b></span><span>${t.interactions} <b>${format(post.interactions)}</b></span><small>${esc(t.postBreakdown(format(post.likes), format(post.replies), format(post.reposts), format(post.quotes)))}</small></div><a class="case-media-link" href="${esc(post.url)}" target="_blank" rel="noreferrer">${t.openPost} ↗</a></article>`;
               }).join("") || `<div class="case-media-empty">${item.reportLoading ? t.mediaLoading : t.mediaEmpty}</div>`}
             </div>
             ${item.mediaPosts.length > mediaPostsPerPage ? `<nav class="case-media-pagination" aria-label="${t.mediaTitle}"><button type="button" data-case-media-page="${currentMediaPage - 1}" ${currentMediaPage === 1 ? "disabled" : ""}>${t.previousPage}</button><span>${t.pageStatus(currentMediaPage, totalMediaPages)}</span><button type="button" data-case-media-page="${currentMediaPage + 1}" ${currentMediaPage === totalMediaPages ? "disabled" : ""}>${t.nextPage}</button></nav>` : ""}
@@ -501,12 +604,6 @@
             <p class="case-section-kicker">${t.bestKicker}</p>
             <h3>${t.bestTitle}</h3>
             <div class="case-top-post"><div class="case-top-post-index">01</div><div><p>${esc(item.bestPost.text)}</p><footer><span>${t.views} ${format(item.bestPost.views)}</span><span>${t.interactions} ${format(item.bestPost.engagement)}</span><span>${t.likes} ${format(item.bestPost.likes)}</span><span>${t.replies} ${format(item.bestPost.replies)}</span><a href="${esc(item.bestPost.url)}" target="_blank" rel="noreferrer">${t.openPost} ↗</a></footer></div></div>
-          </section>
-          <section class="case-panel case-style-panel">
-            <p class="case-section-kicker">${t.historicalKicker}</p>
-            <h3>${t.historicalTitle}</h3>
-            <p class="case-panel-intro">${t.historicalIntro}</p>
-            <div class="case-history-list">${item.historical.map((row, index) => `<article><span>${String(index + 1).padStart(2, "0")}</span><strong>${esc(row.title)}</strong><small>${t.postCount(row.posts)} · ${t.total} ${format(row.total)}</small><b>${format(row.average)}<em>${t.averageEngagementLabel}</em></b><a href="${esc(row.url)}" target="_blank" rel="noreferrer">${t.openPost} ↗</a></article>`).join("")}</div>
           </section>
           <section class="case-guidance" aria-label="${t.guidanceTitle}">${item.guidance.map((guide, index) => `<article><span>0${index + 1}</span><strong>${esc(guide.title)}</strong><p>${esc(guide.text)}</p></article>`).join("")}</section>
           <p class="case-source-note">${t.sourceNote}</p>
