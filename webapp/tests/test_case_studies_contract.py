@@ -79,18 +79,31 @@ def test_case_switching_keeps_the_current_scroll_position_and_hero_copy() -> Non
     assert "padding: calc(var(--site-header-height" in stylesheet
 
 
-def test_case_account_header_uses_compact_username_without_external_actions() -> None:
+def test_case_account_card_uses_persisted_avatars_and_opens_the_common_report_modal() -> None:
     script = (ROOT / "static" / "assets" / "opc" / "case-studies.js").read_text(encoding="utf-8")
     stylesheet = (ROOT / "static" / "assets" / "opc" / "case-studies.css").read_text(encoding="utf-8")
 
-    account_start = script.index('<section class="case-account-head"')
-    account_end = script.index('<section class="case-summary-grid"')
-    account_markup = script[account_start:account_end]
-    assert 'class="case-platform-badge"' in account_markup
-    assert 'class="case-account-actions"' not in account_markup
-    assert "font-size: clamp(24px, 2.5vw, 32px)" in stylesheet
+    assert 'avatarUrl: "/assets/opc/case-studies/avatars/mina_ya2002.jpg"' in script
+    assert "profileAvatarUrlFrom" in script
+    assert 'class="case-profile-card"' in script
+    assert "data-case-open" in script
+    assert 'class="case-report-modal"' in script
+    assert "data-case-modal-close" in script
+    assert "setCaseDetailOpen" in script
+    assert ".case-profile-card" in stylesheet
+    assert ".case-report-dialog" in stylesheet
     assert 'class="platform-brand-icon"' in script
-    assert ".case-platform-badge .platform-brand-icon" in stylesheet
+    assert ".case-profile-platform .platform-brand-icon" in stylesheet
+
+
+def test_case_avatar_assets_are_persisted_locally() -> None:
+    avatar_directory = ROOT / "static" / "assets" / "opc" / "case-studies" / "avatars"
+    expected = ["mina_ya2002.jpg", "gy.zzzzz.jpg", "tjs0980.jpg", "kameoka_yingying.jpg", "mirahuang.12.jpg"]
+
+    for avatar in expected:
+        asset = avatar_directory / avatar
+        assert asset.is_file()
+        assert asset.stat().st_size > 5_000
 
 
 def test_case_context_hides_internal_metric_scope_from_public_layout() -> None:

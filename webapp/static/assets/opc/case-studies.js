@@ -8,6 +8,7 @@
       number: "01",
       platform: "Threads",
       username: "mina_ya2002",
+      avatarUrl: "/assets/opc/case-studies/avatars/mina_ya2002.jpg",
       sourceUrl: "https://www.threads.com/@mina_ya2002",
       reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwb84p6_000c47",
       reportApiUrls: ["/assets/opc/case-studies/tar_mtwb84p6_000c47.json"],
@@ -52,6 +53,7 @@
       number: "02",
       platform: "Threads",
       username: "gy.zzzzz",
+      avatarUrl: "/assets/opc/case-studies/avatars/gy.zzzzz.jpg",
       sourceUrl: "https://www.threads.com/@gy.zzzzz",
       reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtvgxqg4_543acf",
       reportApiUrls: ["/assets/opc/case-studies/tar_mtvgxqg4_543acf.json"],
@@ -104,6 +106,7 @@
       number: "03",
       platform: "Threads",
       username: "tjs0980",
+      avatarUrl: "/assets/opc/case-studies/avatars/tjs0980.jpg",
       sourceUrl: "https://www.threads.com/@tjs0980",
       reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwejs0k_bbc154",
       reportApiUrls: ["/assets/opc/case-studies/tar_mtwejs0k_bbc154.json"],
@@ -135,6 +138,7 @@
       number: "04",
       platform: "Threads",
       username: "kameoka_yingying",
+      avatarUrl: "/assets/opc/case-studies/avatars/kameoka_yingying.jpg",
       sourceUrl: "https://www.threads.com/@kameoka_yingying",
       reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwiw9jh_d4c2c7",
       reportApiUrls: ["/assets/opc/case-studies/tar_mtwiw9jh_d4c2c7.json"],
@@ -166,6 +170,7 @@
       number: "05",
       platform: "Threads",
       username: "mirahuang.12",
+      avatarUrl: "/assets/opc/case-studies/avatars/mirahuang.12.jpg",
       sourceUrl: "https://www.threads.com/@mirahuang.12",
       reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwloux8_ae32f0",
       reportApiUrls: ["/assets/opc/case-studies/tar_mtwloux8_ae32f0.json"],
@@ -204,6 +209,10 @@
       counter: (current, total) => `${current} / ${total}`,
       reportState: "公开样本分析",
       analysisTitle: "账号分析快照",
+      caseOverview: "账号概览",
+      openReport: "查看完整案例",
+      reportDialogTitle: "完整案例报告",
+      closeReport: "关闭",
       accountMeta: (sampledAt) => `Threads · 样本期 ${sampledAt}`,
       followers: "粉丝",
       recentViews: "近期浏览",
@@ -309,6 +318,10 @@
       counter: (current, total) => `${current} / ${total}`,
       reportState: "公開樣本分析",
       analysisTitle: "帳號分析快照",
+      caseOverview: "帳號概覽",
+      openReport: "查看完整案例",
+      reportDialogTitle: "完整案例報告",
+      closeReport: "關閉",
       accountMeta: (sampledAt) => `Threads · 樣本期 ${sampledAt}`,
       followers: "粉絲",
       recentViews: "近期瀏覽",
@@ -408,6 +421,7 @@
   };
 
   let selectedCaseId = sourceCases[0]?.id || "";
+  let isCaseDetailOpen = false;
   const mediaPostsPerPage = 5;
   const mediaPostPages = new Map();
   const trafficMonthsByCase = new Map();
@@ -416,6 +430,25 @@
   const language = () => window.VectoSiteNavigation?.currentLanguage?.() === "zh-Hant" ? "zh-Hant" : "zh-Hans";
   const labels = () => copy[language()];
   const selectedCase = () => sourceCases.find((item) => item.id === selectedCaseId) || sourceCases[0];
+  const safeImageUrl = (value) => {
+    const source = String(value || "").trim();
+    if (!source) return "";
+    if (source.startsWith("/assets/")) return source;
+    try {
+      const url = new URL(source);
+      return /^https?:$/.test(url.protocol) ? url.href : "";
+    } catch (_) {
+      return "";
+    }
+  };
+  const profileAvatarUrlFrom = (result, report, caseItem) => safeImageUrl(
+    result?.profileAvatarUrl
+    || result?.avatarUrl
+    || result?.avatar_url
+    || report?.profileAvatarUrl
+    || report?.avatarUrl
+    || caseItem?.avatarUrl,
+  );
   // This is the same Threads brand mark used by the account-pool component.
   const threadsIcon = () => '<svg class="platform-brand-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18.263 11.097c-.03-3.486-1.92-5.586-5.111-5.586-2.13 0-3.922.963-4.863 2.499l2.062 1.438c.535-.843 1.272-1.543 2.628-1.543 1.528 0 2.318.85 2.544 2.431a15 15 0 0 0-2.236-.173c-4.125 0-6.068 1.867-6.068 4.336s1.943 3.99 4.804 3.99c3.139 0 5.013-2.115 5.781-4.735.798.361 1.348 1.204 1.348 2.47 0 3.387-3.907 5.232-7.22 5.232-4.885 0-8.077-3.207-8.077-8.424 0-6.392 4.223-10.487 9.9-10.487 3.808 0 5.69 1.671 6.97 3.914l2.108-1.475C21.44 2.078 18.331 0 13.663 0 6.227 0 1.168 5.277 1.168 12.934c0 7 4.953 11.066 10.856 11.066 4.878 0 9.809-2.846 9.809-7.716 0-2.545-1.46-4.231-3.569-5.187m-6.33 4.855c-1.077 0-2.026-.512-2.026-1.453 0-1.483 1.822-1.934 3.606-1.934.678 0 1.34.045 1.927.173-.422 1.927-1.671 3.215-3.508 3.214Z"></path></svg>';
   const asNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
@@ -511,6 +544,7 @@
       ...caseItem,
       platform: String(result?.platform || caseItem.platform || "Threads").replace(/^./, (value) => value.toUpperCase()),
       username: String(result?.username || caseItem.username),
+      avatarUrl: profileAvatarUrlFrom(result, report, caseItem),
       sourceUrl: result?.profileUrl || caseItem.sourceUrl,
       sampledAt: sampleRange(report?.range),
       followers: asNumber(result?.followerCount),
@@ -567,6 +601,12 @@
   function loadCaseReports() {
     sourceCases.forEach((caseItem, index) => void loadCaseReport(caseItem, index));
   }
+  function setCaseDetailOpen(nextOpen) {
+    isCaseDetailOpen = Boolean(nextOpen);
+    document.body.classList.toggle("case-report-modal-open", isCaseDetailOpen);
+    render();
+    if (isCaseDetailOpen) requestAnimationFrame(() => root.querySelector(".case-report-dialog")?.focus());
+  }
   function render() {
     const item = selectedCase();
     if (!item) return;
@@ -598,6 +638,9 @@
     const currentMediaPage = Math.min(totalMediaPages, Math.max(1, Number(mediaPostPages.get(item.id) || 1)));
     const mediaPageOffset = (currentMediaPage - 1) * mediaPostsPerPage;
     const visibleMediaPosts = item.mediaPosts.slice(mediaPageOffset, mediaPageOffset + mediaPostsPerPage);
+    const profileAvatar = `${threadsIcon()}${item.avatarUrl
+      ? `<img src="${esc(item.avatarUrl)}" alt="@${esc(item.username)}" loading="eager" onerror="this.remove(); this.parentElement.classList.add('is-fallback');">`
+      : ""}`;
     root.innerHTML = `
       <div class="case-studies-page">
         <section class="case-studies-hero" aria-labelledby="case-studies-title">
@@ -619,16 +662,30 @@
           </div>
         </div>
         <div class="case-studies-shell case-study-content">
-          <section class="case-account-head" aria-labelledby="case-account-title">
-            <div>
-              <div class="case-account-title">
-                <span class="case-platform-badge">${threadsIcon()} ${esc(item.platform)}</span>
-                <h2 id="case-account-title">@${esc(item.username)}</h2>
-              </div>
-              <p class="case-account-meta">${t.accountMeta(item.sampledAt)}</p>
-            </div>
-            <span class="case-state-badge">${t.reportState}</span>
-          </section>
+          <button class="case-profile-card" type="button" data-case-open aria-haspopup="dialog" aria-label="${t.openReport} · @${esc(item.username)}">
+            <span class="case-profile-avatar ${item.avatarUrl ? "" : "is-fallback"}">${profileAvatar}</span>
+            <span class="case-profile-copy">
+              <span class="case-profile-platform">${threadsIcon()} ${esc(item.platform)}</span>
+              <strong>@${esc(item.username)}</strong>
+              <small>${t.accountMeta(item.sampledAt)}</small>
+            </span>
+            <span class="case-profile-metrics" aria-label="${t.caseOverview}">
+              <span><b>${format(item.followers)}</b>${t.followers}</span>
+              <span><b>${format(item.recentViews)}</b>${t.recentViews}</span>
+              <span><b>${format(item.engagement)}</b>${t.engagement}</span>
+            </span>
+            <span class="case-profile-open">${t.openReport}<b aria-hidden="true">↗</b></span>
+          </button>
+          <section class="case-report-modal" data-case-modal aria-label="${t.reportDialogTitle}" ${isCaseDetailOpen ? "" : "hidden"}>
+            <div class="case-report-dialog" role="dialog" aria-modal="true" aria-labelledby="case-account-title" tabindex="-1">
+              <header class="case-report-dialog-head">
+                <div class="case-report-dialog-account">
+                  <span class="case-profile-avatar case-profile-avatar-small ${item.avatarUrl ? "" : "is-fallback"}">${profileAvatar}</span>
+                  <div><span class="case-platform-badge">${threadsIcon()} ${esc(item.platform)}</span><h2 id="case-account-title">@${esc(item.username)}</h2></div>
+                </div>
+                <button class="case-report-dialog-close" type="button" data-case-modal-close aria-label="${t.closeReport}">×</button>
+              </header>
+              <div class="case-report-dialog-body">
           <section class="case-summary-grid" aria-label="${t.analysisTitle}">
             <article><span>${t.followers}</span><strong>${format(item.followers)}</strong><small>${item.platform}</small></article>
             <article><span>${t.recentViews}</span><strong>${format(item.recentViews)}</strong><small>${t.viewsScope}</small></article>
@@ -741,16 +798,27 @@
           </section>
           <section class="case-guidance" aria-label="${t.guidanceTitle}">${item.guidance.map((guide, index) => `<article><span>0${index + 1}</span><strong>${esc(guide.title)}</strong><p>${esc(guide.text)}</p></article>`).join("")}</section>
           <p class="case-source-note">${t.sourceNote}</p>
+          </div></div></section>
         </div>
       </div>`;
     root.querySelectorAll("[data-case-id]").forEach((button) => button.addEventListener("click", () => {
       selectedCaseId = button.dataset.caseId || selectedCaseId;
+      isCaseDetailOpen = false;
+      document.body.classList.remove("case-report-modal-open");
       render();
     }));
   }
 
   window.addEventListener("vecto:language-change", render);
   root.addEventListener("click", (event) => {
+    if (event.target.closest("[data-case-open]")) {
+      setCaseDetailOpen(true);
+      return;
+    }
+    if (event.target.closest("[data-case-modal-close]") || event.target.matches("[data-case-modal]")) {
+      setCaseDetailOpen(false);
+      return;
+    }
     const button = event.target.closest("[data-case-media-page]");
     if (!button || button.disabled) return;
     mediaPostPages.set(selectedCaseId, Math.max(1, Number(button.dataset.caseMediaPage || 1)));
@@ -763,6 +831,13 @@
     trafficMonthsByCase.set(selectedCaseId, control.value);
     render();
   });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && isCaseDetailOpen) {
+      event.preventDefault();
+      setCaseDetailOpen(false);
+    }
+  });
+  window.addEventListener("pagehide", () => document.body.classList.remove("case-report-modal-open"));
   render();
   loadCaseReports();
 })();
