@@ -541,6 +541,58 @@ class RemoteFetchStoreTests(unittest.TestCase):
         finally:
             global_db.close()
 
+    def test_legacy_persona_id_owned_by_archive_is_preserved_until_explicit_clear(self) -> None:
+        now = int(time.time())
+        archive_id = "persona-a1b2c3d4"
+        (self.runtime_dir / "persona_archives.json").write_text(
+            json.dumps([{"id": archive_id, "name": "老的人设"}], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        payload = self.pool_payload(archive_id, user_initiated=True)
+        payload["archiveSnapshot"]["name"] = "老的人设"
+        self.store.submit(
+            idempotency_key="capture:owned-legacy-dataset:1234",
+            request_digest="1" * 64,
+            capability="persona.hot_candidates.v1",
+            unit_id=archive_id,
+            payload=payload,
+        )
+        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
+        cache_dir.mkdir()
+        candidate = {
+            "id": "owned-legacy-candidate-1",
+            "content": "owned legacy persona candidate content " * 4,
+            "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        }
+        cache_path = cache_dir / f"{archive_id}-30e611d4eb-normal.json"
+        cache_path.write_text(
+            json.dumps({f"{archive_id}::normal::query": {"candidates": [candidate]}}),
+            encoding="utf-8",
+        )
+
+        self.store.publish_dataset_overview(force=True)
+
+        overview = self.store.dataset_overview(now=now)
+        owned = [item for item in overview["personas"] if item["archive_id"] == archive_id]
+        self.assertEqual(len(owned), 1)
+        self.assertEqual(owned[0]["name"], "老的人设")
+        preserved = json.loads(cache_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            preserved[f"{archive_id}::normal::query"]["candidates"][0]["id"],
+            "owned-legacy-candidate-1",
+        )
+
+        cleared = self.store.clear_hot_dataset(archive_id)
+        self.assertEqual(cleared["moved_count"], 1)
+        global_db = sqlite3.connect(self.runtime_dir / "sentiment_hot_global_pool.sqlite3")
+        try:
+            self.assertEqual(
+                {row[0] for row in global_db.execute("SELECT id FROM sentiment_hot_global_candidates")},
+                {"owned-legacy-candidate-1"},
+            )
+        finally:
+            global_db.close()
+
     def test_hot_dataset_change_events_use_first_snapshot_as_baseline_and_can_be_deleted(self) -> None:
         archive_id = "12345678-1234-4234-8234-123456789abc"
         baseline = {

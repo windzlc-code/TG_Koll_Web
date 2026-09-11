@@ -11213,6 +11213,15 @@ function migrateLegacyThreadsSearchCache(): void {
     const migrated = withExclusiveJsonFileLock(THREADS_SEARCH_CACHE_FILE, () => {
       if (fs.existsSync(THREADS_SEARCH_CACHE_MIGRATION_MARKER) || !fs.existsSync(THREADS_SEARCH_CACHE_FILE)) return;
       const legacyState = readThreadsSearchCacheFile(THREADS_SEARCH_CACHE_FILE, true);
+      const legacyCandidates = Object.values(legacyState).flatMap((row) => (
+        Array.isArray(row?.candidates) ? row.candidates : []
+      ));
+      // The monolithic cache is an old persona view, not the canonical pool.
+      // Preserve its candidates in the shared pool before the old file is
+      // archived, so format migration cannot silently drop usable rows.
+      if (legacyCandidates.length > 0 && !writeGlobalSentimentHotCandidatePool(legacyCandidates)) {
+        throw new Error("legacy hot candidate cache could not be persisted to the global pool");
+      }
       const shards = new Map<string, ThreadsSearchCacheState>();
       for (const [key, row] of Object.entries(legacyState)) {
         const scope = threadsSearchCacheKeyScope(key);
@@ -11824,17 +11833,18 @@ export function recycleUnusedSentimentHotCandidates(args: {
   return { recycled: candidates.length };
 }
 
-export function writeGlobalSentimentHotCandidatePool(candidates: SentimentHotCandidate[]): void {
+export function writeGlobalSentimentHotCandidatePool(candidates: SentimentHotCandidate[]): boolean {
   let db: any = null;
   try {
     db = openSentimentHotGlobalPoolDatabase();
     const cutoff = Date.now() - SENTIMENT_HOT_GLOBAL_POOL_RETENTION_MS;
     db.prepare("DELETE FROM sentiment_hot_global_candidates WHERE content_at_ms < ?").run(cutoff);
-    const inserted = upsertSentimentHotGlobalPoolRows(db, candidates);
+    upsertSentimentHotGlobalPoolRows(db, candidates);
     pruneSentimentHotGlobalPoolDatabase(db);
-    if (inserted === 0) return;
+    return true;
   } catch (error) {
     console.warn(`[sentiment_hot_global_pool] write failed=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
+    return false;
   } finally {
     db?.close?.();
   }

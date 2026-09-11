@@ -25,7 +25,9 @@ describe("sentiment hot cache sharding", () => {
       content: "汽车维修保养经验与修车费用案例分享。".repeat(8),
       media: [],
       hotScore: 5000,
+      engagement: { viewCount: 1000, likeCount: 200, commentCount: 30, shareCount: 20 },
       metrics: {},
+      publishedAt: new Date().toISOString(),
       capturedAt: new Date().toISOString(),
     };
     fs.writeFileSync(path.join(runtimeDir, "sentiment_threads_search_cache.json"), JSON.stringify({
@@ -48,8 +50,9 @@ describe("sentiment hot cache sharding", () => {
       },
     }), "utf8");
 
-    const { listSentimentHotCandidatePoolStats } = await import("@/lib/sentiment-hot-importer");
+    const { getSentimentHotGlobalPoolStat, listSentimentHotCandidatePoolStats } = await import("@/lib/sentiment-hot-importer");
     listSentimentHotCandidatePoolStats();
+    expect(getSentimentHotGlobalPoolStat().readyCount).toBe(2);
 
     const shardFiles = fs.readdirSync(shardDir).filter((name) => name.endsWith(".json"));
     expect(shardFiles).toHaveLength(2);

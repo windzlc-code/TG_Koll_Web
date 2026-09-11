@@ -60,6 +60,30 @@ _PLACEHOLDER_PERSONA_NAME = re.compile(r"^(?:人设 [0-9a-f]{8}|未命名人设)
 _ORPHAN_PERSONA_ARCHIVE_ID = re.compile(r"^persona-[0-9a-f]{8,64}$", re.IGNORECASE)
 
 
+def _safe_persona_archive_id(value: Any) -> str:
+    archive_id = str(value or "").strip()
+    if archive_id.casefold() in {"", "default", "global"}:
+        return ""
+    if not _SAFE_CACHE_ARCHIVE_ID.fullmatch(archive_id):
+        return ""
+    return archive_id
+
+
+def _extract_persona_archive_rows(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, dict)]
+    if not isinstance(raw, dict):
+        return []
+    for key in ("persona_archives_v2", "persona_archives", "archives", "items"):
+        value = raw.get(key)
+        if isinstance(value, str):
+            with contextlib.suppress(json.JSONDecodeError):
+                value = json.loads(value)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
 def _truthy_environment(name: str) -> bool:
     return str(os.getenv(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -177,22 +201,21 @@ def _has_current_hot_keyword_strategy(payload: Mapping[str, Any]) -> bool:
 
 
 def _local_persona_archive_names(runtime_dir: Path) -> dict[str, str]:
-    path = Path(runtime_dir) / "persona_archives.json"
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    rows = raw if isinstance(raw, list) else (raw.get("archives") if isinstance(raw, dict) else None)
-    if not isinstance(rows, list):
-        return {}
     names: dict[str, str] = {}
-    for item in rows:
-        if not isinstance(item, dict):
+    # Read the primary store after the node-side compatibility cache so a
+    # current archive name always wins, while either store can protect a
+    # valid legacy persona id from orphan cleanup.
+    for filename in ("persona_archives_cache.json", "persona_archives.json"):
+        path = Path(runtime_dir) / filename
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
             continue
-        archive_id = str(item.get("id") or "").strip()
-        name = str(item.get("name") or "").strip()
-        if archive_id and name:
-            names[archive_id] = name
+        for item in _extract_persona_archive_rows(raw):
+            archive_id = _safe_persona_archive_id(item.get("id"))
+            if not archive_id or archive_id.casefold().startswith("workflow-persona-"):
+                continue
+            names[archive_id] = str(item.get("name") or "").strip() or "未命名人设"
     return names
 
 
@@ -343,6 +366,33 @@ def _persona_cache_files(runtime_dir: Path, archive_id: str) -> list[Path]:
         ]
     except OSError:
         return []
+
+
+def _persona_cache_archive_ids(runtime_dir: Path) -> set[str]:
+    archive_ids: set[str] = set()
+    cache_dir = runtime_dir / "sentiment_threads_search_cache"
+    try:
+        cache_paths = [path for path in cache_dir.iterdir() if path.is_file() and path.suffix == ".json"]
+    except OSError:
+        cache_paths = []
+    for cache_path in cache_paths:
+        match = _PERSONA_ARCHIVE_ID.match(cache_path.name)
+        if match:
+            archive_ids.add(match.group(0))
+        orphan_match = re.match(r"^(persona-[0-9a-f]{8,64})-", cache_path.name, re.IGNORECASE)
+        if orphan_match:
+            archive_ids.add(orphan_match.group(1))
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(cache, dict):
+            continue
+        for key in cache:
+            archive_id = _safe_persona_archive_id(str(key).split("::", 1)[0])
+            if archive_id:
+                archive_ids.add(archive_id)
+    return archive_ids
 
 
 def _extract_persona_cache_candidates(runtime_dir: Path, archive_id: str) -> list[dict[str, Any]]:
@@ -1443,26 +1493,29 @@ class JobStore:
         targets: dict[str, sqlite3.Row] = {}
         local_names = _local_persona_archive_names(self.runtime_dir)
         for archive_id, name in local_names.items():
-            if _PERSONA_ARCHIVE_ID.fullmatch(archive_id):
+            archive_ids.add(archive_id)
+            names[archive_id] = name
+        local_archive_ids = {archive_id.casefold() for archive_id in local_names}
+        for archive_id in _persona_cache_archive_ids(self.runtime_dir):
+            if _PERSONA_ARCHIVE_ID.fullmatch(archive_id) or archive_id.casefold() in local_archive_ids:
                 archive_ids.add(archive_id)
-                names[archive_id] = name
-        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
-        with contextlib.suppress(OSError):
-            for path in cache_dir.iterdir():
-                archive_id = path.name[:36]
-                if path.is_file() and _PERSONA_ARCHIVE_ID.fullmatch(archive_id):
-                    archive_ids.add(archive_id)
         try:
             shown_store = json.loads((self.runtime_dir / "sentiment_hot_candidates.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             shown_store = {}
         shown = shown_store.get("shown") if isinstance(shown_store, dict) else None
         if isinstance(shown, dict):
-            archive_ids.update(key for key in shown if _PERSONA_ARCHIVE_ID.fullmatch(str(key)))
+            for key in shown:
+                archive_id = _safe_persona_archive_id(str(key).split("::", 1)[0])
+                if archive_id and (
+                    _PERSONA_ARCHIVE_ID.fullmatch(archive_id)
+                    or archive_id.casefold() in local_archive_ids
+                ):
+                    archive_ids.add(archive_id)
         with self._connection() as connection:
             for row in connection.execute("SELECT * FROM fetch_pool_targets"):
-                archive_id = str(row["archive_id"] or "")
-                if not _PERSONA_ARCHIVE_ID.fullmatch(archive_id):
+                archive_id = _safe_persona_archive_id(row["archive_id"])
+                if not archive_id:
                     continue
                 archive_ids.add(archive_id)
                 targets[archive_id] = row
@@ -1527,7 +1580,7 @@ class JobStore:
                 if not isinstance(persona, Mapping):
                     continue
                 dataset_id = str(persona.get("archive_id") or "").strip().lower()
-                if not _PERSONA_ARCHIVE_ID.fullmatch(dataset_id):
+                if not _safe_persona_archive_id(dataset_id):
                     continue
                 rows.append((dataset_id, str(persona.get("name") or "未命名人设"), max(0, int(persona.get("count") or 0))))
         return rows
@@ -1693,20 +1746,12 @@ class JobStore:
 
     def spill_persona_overflow_to_global(self) -> int:
         capacity = _persona_hot_pool_capacity()
-        archive_ids: set[str] = set()
-        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
-        try:
-            for path in cache_dir.iterdir():
-                match = _PERSONA_ARCHIVE_ID.match(path.name)
-                if match:
-                    archive_ids.add(match.group(0).lower())
-        except OSError:
-            pass
+        archive_ids = _persona_cache_archive_ids(self.runtime_dir)
         with self._connection() as connection:
             for row in connection.execute("SELECT archive_id FROM fetch_pool_targets"):
-                archive_id = str(row["archive_id"] or "").strip()
-                if _PERSONA_ARCHIVE_ID.fullmatch(archive_id):
-                    archive_ids.add(archive_id.lower())
+                archive_id = _safe_persona_archive_id(row["archive_id"])
+                if archive_id:
+                    archive_ids.add(archive_id)
         moved = 0
         with self._lock:
             for archive_id in sorted(archive_ids):
@@ -1721,30 +1766,34 @@ class JobStore:
             for item in personas
             if isinstance(personas, list)
             and isinstance(item, Mapping)
-            and _PERSONA_ARCHIVE_ID.fullmatch(str(item.get("archive_id") or "").strip())
+            and _safe_persona_archive_id(item.get("archive_id"))
             and _PLACEHOLDER_PERSONA_NAME.fullmatch(str(item.get("name") or "").strip())
         })
+        active_ids = {archive_id.casefold() for archive_id in _local_persona_archive_names(self.runtime_dir)}
         orphan_ids: set[str] = set()
-        cache_dir = self.runtime_dir / "sentiment_threads_search_cache"
-        with contextlib.suppress(OSError):
-            for path in cache_dir.iterdir():
-                match = re.match(r"^(persona-[0-9a-f]{8,64})-", path.name, re.IGNORECASE)
-                if path.is_file() and match:
-                    orphan_ids.add(match.group(1).lower())
         now = int(time.time())
         with self._lock:
             with self._connection() as connection:
+                orphan_ids.update(
+                    archive_id.casefold()
+                    for archive_id in _persona_cache_archive_ids(self.runtime_dir)
+                    if _ORPHAN_PERSONA_ARCHIVE_ID.fullmatch(archive_id)
+                    and archive_id.casefold() not in active_ids
+                )
                 for row in connection.execute("SELECT archive_id FROM fetch_pool_targets"):
-                    archive_id = str(row["archive_id"] or "").strip().lower()
-                    if _ORPHAN_PERSONA_ARCHIVE_ID.fullmatch(archive_id):
+                    archive_id = _safe_persona_archive_id(row["archive_id"]).casefold()
+                    if _ORPHAN_PERSONA_ARCHIVE_ID.fullmatch(archive_id) and archive_id not in active_ids:
                         orphan_ids.add(archive_id)
                 for row in connection.execute(
                     "SELECT payload_json FROM fetch_jobs WHERE capability='persona.hot_candidates.v1'"
                 ):
                     with contextlib.suppress(json.JSONDecodeError):
                         payload = json.loads(str(row["payload_json"] or "{}"))
-                        archive_id = str(payload.get("archiveId") or "").strip().lower()
-                        if _ORPHAN_PERSONA_ARCHIVE_ID.fullmatch(archive_id):
+                        archive_id = _safe_persona_archive_id(payload.get("archiveId")).casefold()
+                        if (
+                            _ORPHAN_PERSONA_ARCHIVE_ID.fullmatch(archive_id)
+                            and archive_id not in active_ids
+                        ):
                             orphan_ids.add(archive_id)
                 cleanup_ids = sorted(set(placeholder_ids) | orphan_ids)
                 for archive_id in cleanup_ids:
@@ -1808,8 +1857,27 @@ class JobStore:
 
     def clear_hot_dataset(self, dataset_id: str) -> dict[str, Any]:
         clean_id = str(dataset_id or "").strip()
-        if clean_id != "global" and not _PERSONA_ARCHIVE_ID.fullmatch(clean_id):
+        if clean_id != "global" and not _safe_persona_archive_id(clean_id):
             raise ValueError("invalid hot dataset id")
+        if clean_id != "global" and not _PERSONA_ARCHIVE_ID.fullmatch(clean_id):
+            known_ids = {
+                archive_id.casefold()
+                for archive_id in (
+                    set(_local_persona_archive_names(self.runtime_dir))
+                    | _persona_cache_archive_ids(self.runtime_dir)
+                )
+            }
+            with self._connection() as connection:
+                known_ids.update(
+                    archive_id.casefold()
+                    for archive_id in (
+                        _safe_persona_archive_id(row["archive_id"])
+                        for row in connection.execute("SELECT archive_id FROM fetch_pool_targets")
+                    )
+                    if archive_id
+                )
+            if clean_id.casefold() not in known_ids:
+                raise ValueError("invalid hot dataset id")
         self.publish_dataset_overview(force=True)
         count_before = (
             _global_available_candidate_count(self.runtime_dir, now=int(time.time()))
