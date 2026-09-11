@@ -228,7 +228,7 @@ describe("persona image production", () => {
     expect(prompt).not.toContain(" or ");
   });
 
-  it("uses the persona introduction to fill only automatic fields", () => {
+  it("uses the persona introduction as the primary identity when no dedicated appearance exists", () => {
     const request = "中国人，自然上镜，23至27岁的成年女性，自然身材比例";
     const prompt = buildReferenceSheetPrompt(
       nonWorkflowSetup({
@@ -247,10 +247,31 @@ describe("persona image production", () => {
     expect(prompt).toContain(`appearance: ${request}`);
     expect(prompt).toContain("长直发");
     expect(prompt).toContain("金色耳环");
-    expect(prompt).toContain("自动项参考（发型、气质、服饰）");
+    expect(prompt).not.toContain("自动项参考");
     expect(prompt).toContain("金融理财顾问");
     expect(prompt).toContain("日常穿正式西装");
     expect(prompt).toContain("商务干练气质");
+  });
+
+  it("uses the persona identity as the primary appearance when only the default region is selected", () => {
+    const prompt = buildReferenceSheetPrompt(
+      nonWorkflowSetup({
+        personaAppearance: "",
+        personaDescription: "成年人女性生活博主，微卷中长发，简洁日常穿搭，亲切俏皮，常在夜市和河边记录生活。",
+        personaNationality: "",
+      }),
+      "分享夜市、河边散步和日常料理的生活内容。",
+      "中国人，自然上镜，真实生活感",
+      {
+        explicitFields: ["region"],
+        supplementPrompt: "",
+      },
+    );
+
+    expect(prompt).toContain("appearance: 中国人，自然上镜，真实生活感, 成年人女性生活博主");
+    expect(prompt).toContain("微卷中长发");
+    expect(prompt).toContain("简洁日常穿搭");
+    expect(prompt).not.toContain("自动项参考");
   });
 
   it("replaces only explicitly selected fields and keeps other persona fields automatic", () => {

@@ -2426,7 +2426,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "ok": True,
                     "name": "Alice 观察者",
                     "content": "一位分享城市观察与咖啡内容的人设。",
-                    "setup": {"personaDescription": "城市观察与咖啡内容。"},
+                    "setup": {
+                        "personaDescription": "城市观察与咖啡内容。",
+                        "personaAppearance": "25岁的成年女性，短发，简洁通勤穿搭，亲切自然。",
+                    },
                 },
             ) as cli_mock:
             resp = self.client.post(
@@ -2441,6 +2444,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(body["source"]["username"], "alice")
         self.assertEqual(body["profile"]["name"], "Alice 观察者")
         self.assertIn("城市观察", body["profile"]["content"])
+        self.assertEqual(body["profile"]["setup"]["personaAppearance"], "25岁的成年女性，短发，简洁通勤穿搭，亲切自然。")
         fetch_mock.assert_called_once_with(public_source["url"])
         prompt_mock.assert_called_once()
         self.assertEqual(cli_mock.call_args.args[0]["action"], "derive-profile")
@@ -2453,7 +2457,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
             json={
                 "name": "Copied Alice",
                 "content": "城市观察与咖啡内容。",
-                "setup": {"personaDescription": "模型生成的详细简介。"},
+                "setup": {
+                    "personaDescription": "模型生成的详细简介。",
+                    "personaAppearance": "25岁的成年女性，短发，简洁通勤穿搭，亲切自然。",
+                },
                 "copy_source": {
                     "platform": "threads",
                     "url": "https://www.threads.com/@alice",
@@ -2468,6 +2475,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         copied = next(item for item in archives if item.get("name") == "Copied Alice")
         self.assertEqual(copied["setup"]["copySource"]["username"], "alice")
         self.assertEqual(copied["setup"]["personaDescription"], "城市观察与咖啡内容。")
+        self.assertEqual(copied["setup"]["personaAppearance"], "25岁的成年女性，短发，简洁通勤穿搭，亲切自然。")
 
     def test_persona_copy_create_replays_same_request_without_duplicate_archive(self):
         self._write_archives()

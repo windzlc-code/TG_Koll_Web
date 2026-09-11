@@ -19476,6 +19476,9 @@ _PERSONA_COPY_SETUP_FIELDS = frozenset({
     "isMemePersona",
     "totalEpisodes",
     "stylePrompt",
+    # This is model-produced visual identity, used by the automatic persona
+    # image route.  It is deliberately separate from the source account bio.
+    "personaAppearance",
 })
 
 
@@ -19538,6 +19541,10 @@ def _sanitize_persona_copy_source(value: Any) -> dict[str, Any]:
         })
     if safe_posts:
         result["posts"] = safe_posts
+    # These values are generated locally from the normalized public posts,
+    # rather than accepted verbatim from the client.
+    result["sample_count"] = len(safe_posts)
+    result["sample_limit"] = 12
     warnings = source.get("warnings") if isinstance(source.get("warnings"), list) else []
     safe_warnings = [str(item or "").strip()[:200] for item in warnings[:10] if str(item or "").strip()]
     if safe_warnings:

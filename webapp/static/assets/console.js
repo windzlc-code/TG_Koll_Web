@@ -22138,6 +22138,12 @@ async function createPersonaArchiveWithAi() {
 
 function renderPersonaCopySourceSummary(source = {}) {
   const posts = Array.isArray(source.posts) ? source.posts : [];
+  const sampleCount = Number.isFinite(Number(source.sample_count))
+    ? Math.max(0, Number(source.sample_count))
+    : posts.length;
+  const sampleLimit = Number.isFinite(Number(source.sample_limit))
+    ? Math.max(sampleCount, Number(source.sample_limit))
+    : 12;
   const metrics = [
     source.followers != null ? `粉丝 ${source.followers}` : "",
     source.following != null ? `关注 ${source.following}` : "",
@@ -22154,7 +22160,8 @@ function renderPersonaCopySourceSummary(source = {}) {
       <p class="persona-create-copy-bio">${esc(source.bio || "页面未公开可识别的简介。")}</p>
       ${posts.length ? `
         <div class="persona-create-copy-posts">
-          <strong>公开文字样本（${posts.length} 条）</strong>
+          <strong>公开文字样本（${sampleCount} / ${sampleLimit} 条）</strong>
+          ${sampleCount < sampleLimit ? `<p class="persona-create-copy-muted">当前公开页只暴露 ${sampleCount} 条；分析已基于全部可见样本完成，不代表账号完整发文历史。</p>` : ""}
           ${posts.slice(0, 5).map((post) => `<p>${esc(post?.content || "")}</p>`).join("")}
         </div>
       ` : `<p class="persona-create-copy-muted">页面未公开可识别的近期文字内容，AI 将基于现有公开资料给出有限分析。</p>`}

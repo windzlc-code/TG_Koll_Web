@@ -392,6 +392,11 @@ def _extract_page_data(html: str, url: str) -> dict[str, object]:
         "followers": profile.get("followers"),
         "following": profile.get("following"),
         "posts": posts,
+        # The public page is progressively rendered by the platform.  Keep the
+        # actual count beside the extraction cap so callers never mistake a
+        # short anonymous response for a deliberate four-post analysis limit.
+        "sample_count": len(posts),
+        "sample_limit": MAX_POSTS,
         "source": "public_http",
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "warnings": warnings,
@@ -413,11 +418,16 @@ def build_persona_copy_prompt(source: dict[str, object], requested_name: str = "
     username = _clean_text(source.get("username"), limit=120)
     bio = _clean_text(source.get("bio"), limit=MAX_TEXT_LENGTH)
     posts = source.get("posts") if isinstance(source.get("posts"), list) else []
+    sample_count = sum(1 for post in posts if isinstance(post, dict) and _clean_text(post.get("content"), limit=MAX_TEXT_LENGTH))
     lines = [
         "请根据下面从公开网页匿名抓取的资料，生成一个可编辑、可执行的中文社媒人设档案。",
         "资料只代表公开页面当时可见内容，不要声称这是原用户本人，也不要补写未提供的私人事实。",
         "请综合判断身份定位、受众、核心兴趣、内容支柱、表达语气、叙事视角、常用结构、边界和可持续选题。",
         "输出应详细、具体、适合后续生成社媒内容；优先使用事实可支持的结论，并把不确定处写成待确认项。",
+        (
+            f"本次匿名公开页面实际只提供 {sample_count} 条文字样本（系统上限 {MAX_POSTS} 条），"
+            "这不是账号完整历史。样本不足时不得把推断写成已证实的个人事实。"
+        ),
         f"目标人设名称：{_clean_text(requested_name, limit=160) or display_name or username or '复制创建人设'}",
         f"来源平台：{platform}",
         f"来源用户名：@{username}" if username else "来源用户名：未识别",

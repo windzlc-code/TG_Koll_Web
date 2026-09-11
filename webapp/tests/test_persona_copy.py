@@ -52,6 +52,8 @@ class PersonaCopyExtractionTests(unittest.TestCase):
         self.assertEqual(result["bio"], "城市观察与咖啡。")
         self.assertEqual(result["followers"], 1234)
         self.assertEqual(result["posts"][0]["content"], "今天在街角发现一家很好的咖啡店。")
+        self.assertEqual(result["sample_count"], 1)
+        self.assertEqual(result["sample_limit"], 12)
         request_kwargs = get_mock.call_args.kwargs
         self.assertNotIn("cookies", request_kwargs)
         self.assertNotIn("Cookie", request_kwargs.get("headers", {}))
@@ -109,3 +111,4 @@ class PersonaCopyExtractionTests(unittest.TestCase):
         self.assertIn("公开简介：城市观察。", prompt)
         self.assertIn("一条公开内容", prompt)
         self.assertIn("不要声称这是原用户本人", prompt)
+        self.assertIn("实际只提供 1 条文字样本", prompt)

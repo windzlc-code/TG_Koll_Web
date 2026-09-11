@@ -230,13 +230,28 @@ export function buildReferenceSheetPrompt(
   const automaticFields = fieldPolicy
     ? SELECTABLE_PERSONA_FIELDS.filter((field) => !explicitFieldSet.has(field))
     : [];
-  const visualBase = String(setup.personaAppearance || "").replace(/\s+/g, " ").trim();
-  const keptVisual = applyUserVisualReplacements(visualBase, request, {
-    mode: "strip",
-    replacedFields: fieldPolicy ? explicitFields : undefined,
-  });
+  // A field policy is used by the persona-image form, including its default
+  // China selection.  For a copied/older persona that has not yet stored a
+  // separate appearance field, its generated introduction is the only visual
+  // identity available.  Keep it in the primary appearance clause instead of
+  // relegating it to a weak automatic-field note.
+  const dedicatedAppearance = String(setup.personaAppearance || "").replace(/\s+/g, " ").trim();
+  const usesFallbackIdentity = fieldPolicy && !dedicatedAppearance;
+  const visualIdentitySource = fieldPolicy
+    ? String(dedicatedAppearance || setup.personaDescription || personaContent || "")
+    : String(setup.personaAppearance || "");
+  const visualBase = visualIdentitySource.replace(/\s+/g, " ").trim().slice(0, 360);
+  const keptVisual = usesFallbackIdentity
+    // Without a dedicated visual field, the description also contains the
+    // persona's non-visual role. Preserve that identity while removing only
+    // fields the user explicitly selected in this request.
+    ? filterPersonaClauses(visualBase, explicitFieldSet, true)
+    : applyUserVisualReplacements(visualBase, request, {
+      mode: "strip",
+      replacedFields: fieldPolicy ? explicitFields : undefined,
+    });
   const contextBase = String(setup.personaDescription || personaContent || "").replace(/\s+/g, " ").trim().slice(0, 600);
-  const automaticContextCandidate = fieldPolicy && automaticFields.length && contextBase
+  const automaticContextCandidate = fieldPolicy && !usesFallbackIdentity && automaticFields.length && contextBase
     ? filterPersonaClauses(contextBase, explicitFieldSet, true).slice(0, 240)
     : "";
   const automaticContext = automaticContextCandidate === keptVisual ? "" : automaticContextCandidate;
