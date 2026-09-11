@@ -20,7 +20,7 @@
 .case-studies-hero {
   position: relative;
   overflow: hidden;
-  padding: 20px 0 22px;
+  padding: calc(var(--site-header-height, 68px) + 18px) 0 22px;
   color: #ffffff;
   background:
     linear-gradient(90deg, rgba(140, 208, 218, .08) 1px, transparent 1px) 0 0 / 76px 76px,
@@ -239,7 +239,7 @@
 
 @media (max-width: 560px) {
   .case-studies-shell { width: min(100% - 22px, 960px); }
-  .case-studies-hero { padding: 16px 0 18px; }
+  .case-studies-hero { padding: calc(var(--site-header-height, 56px) + 14px) 0 18px; }
   .case-studies-hero h1 { font-size: 27px; }
   .case-studies-hero-copy > p:last-child { font-size: 12px; }
   .case-study-switcher { min-height: 55px; gap: 8px; }

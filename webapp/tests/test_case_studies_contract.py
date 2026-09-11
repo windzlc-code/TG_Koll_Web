@@ -49,6 +49,7 @@ def test_fourth_hot_case_snapshot_has_complete_report_data() -> None:
 
 def test_case_switching_keeps_the_current_scroll_position_and_hero_copy() -> None:
     script = (ROOT / "static" / "assets" / "opc" / "case-studies.js").read_text(encoding="utf-8")
+    stylesheet = (ROOT / "static" / "assets" / "opc" / "case-studies.css").read_text(encoding="utf-8")
 
     switch_start = script.index('root.querySelectorAll("[data-case-id]")')
     switch_end = script.index('window.addEventListener("vecto:language-change", render);')
@@ -56,3 +57,4 @@ def test_case_switching_keeps_the_current_scroll_position_and_hero_copy() -> Non
     assert "scrollIntoView" not in switch_handler
     assert 'class="case-studies-hero-copy"' in script
     assert "t.heroIntro" in script
+    assert "padding: calc(var(--site-header-height" in stylesheet
