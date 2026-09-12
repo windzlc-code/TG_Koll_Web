@@ -178,7 +178,7 @@ body.case-report-modal-open { overflow: hidden; }
 .case-report-identity-row { flex-wrap: nowrap; overflow: hidden; }
 .case-report-identity-row .case-platform-badge { flex: 0 0 auto; }
 .case-report-dialog-account h2 { min-width: 0; overflow: hidden; margin: 0; padding: 2px 0; color: #16293a; font-size: clamp(20px, 2.4vw, 26px); line-height: 1.2; letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
-.case-report-dialog-close { display: grid; flex: 0 0 auto; width: 36px; height: 36px; place-items: center; border: 1px solid #abc1cb; border-radius: 50%; color: #314f60; background: #ffffff; cursor: pointer; }
+.case-report-dialog-close { display: grid; box-sizing: border-box; flex: 0 0 36px; width: 36px; height: 36px; min-width: 36px; min-height: 36px; aspect-ratio: 1; padding: 0; place-items: center; border: 1px solid #abc1cb; border-radius: 50%; color: #314f60; background: #ffffff; cursor: pointer; }
 .case-report-dialog-close .case-action-icon { width: 20px; height: 20px; stroke-width: 1.75; }
 .case-report-dialog-close:hover,
 .case-report-dialog-close:focus-visible { border-color: var(--case-cyan); color: #0e7287; background: #edfbfd; outline: none; }
@@ -393,7 +393,7 @@ body.case-report-modal-open { overflow: hidden; }
   .case-report-identity-row .case-platform-badge .platform-brand-icon { width: 17px; height: 17px; flex-basis: 17px; }
   .case-report-dialog-body { max-height: calc(94vh - 66px); padding: 13px; }
   .case-report-dialog-account h2 { font-size: 20px; }
-  .case-report-dialog-close { width: 32px; height: 32px; font-size: 24px; }
+  .case-report-dialog-close { flex-basis: 32px; width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; font-size: 24px; }
   .case-summary-grid article { padding: 13px; }
   .case-traffic-kpis { grid-template-columns: 1fr; }
   .case-trend-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
