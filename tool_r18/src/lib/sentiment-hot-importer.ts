@@ -2968,6 +2968,8 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   recordShown?: boolean;
   /** Test-only mode: exclude cache/database/history backfills and do not write shown history. */
   liveOnly?: boolean;
+  /** One-shot public probe: never write discovered candidates into a shared pool. */
+  transient?: boolean;
   sourcePolicy?: "reader_first" | "reader_only" | "authenticated_only";
   allKeywords?: string[];
   platform?: SentimentHotPlatform | string;
@@ -2998,6 +3000,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
   );
   const strictFreshness = freshnessPolicy === "strict";
   const liveOnlyRefresh = args.liveOnly === true;
+  const transientProbe = liveOnlyRefresh && args.transient === true;
   // A strict request means exactly the selected publication-time window.
   // Never widen it to fill a sparse result set: that would turn a "7 days"
   // request into older content without the user asking for it.
@@ -3276,6 +3279,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
           deadlineAt: Date.now() + threadsTimeoutMs - (authenticatedOnly ? 500 : 1_000),
           warnings,
           sourcePolicy: args.sourcePolicy,
+          transient: transientProbe,
           deferRelevanceGate: deferLiveSearchRelevanceGate,
         }),
         threadsTimeoutMs,
@@ -3673,6 +3677,7 @@ export async function fetchSentimentHotCandidates(args: {
   freshnessPolicy?: SentimentHotFreshnessPolicy;
   recordShown?: boolean;
   liveOnly?: boolean;
+  transient?: boolean;
   sourcePolicy?: "reader_first" | "reader_only" | "authenticated_only";
   keywords?: string[];
   allKeywords?: string[];
@@ -4671,6 +4676,8 @@ async function fetchThreadsSearchPageCandidates(args: {
   allowCacheFallback?: boolean;
   /** Test-only: do not read shown-id/history state or write candidate cache. */
   ignoreHistory?: boolean;
+  /** One-shot public probe: do not persist raw discoveries in the global pool. */
+  transient?: boolean;
   writeCache?: boolean;
   searchMode?: SentimentHotSearchMode;
   deadlineAt?: number;
@@ -4763,6 +4770,7 @@ async function fetchThreadsSearchPageCandidates(args: {
       searchMode: args.searchMode,
       deadlineAt: args.deadlineAt,
       deferRelevanceGate: args.deferRelevanceGate,
+      transient: args.transient,
   }).catch(() => []), readerInitialTimeoutMs, []) : [];
   addAll(readerCandidates);
 
@@ -4833,6 +4841,7 @@ async function fetchThreadsSearchPageCandidates(args: {
         searchMode: args.searchMode,
         deadlineAt: args.deadlineAt,
         deferRelevanceGate: args.deferRelevanceGate,
+        transient: args.transient,
       }).catch(() => []), extraTimeoutMs, []);
       addAll(extraCandidates);
     }
@@ -6599,6 +6608,8 @@ async function fetchThreadsReaderSearchCandidates(args: {
   deadlineAt?: number;
   recentSearch?: boolean;
   deferRelevanceGate?: boolean;
+  /** One-shot public probe: return results without mutating the shared candidate pool. */
+  transient?: boolean;
 }): Promise<SentimentHotCandidate[]> {
   const excluded = args.excludeIds || (args.refresh ? getSentimentHotRefreshExcludedIds(args.archiveId, normalizeSentimentHotSearchMode(args.searchMode)) : getSentimentHotExcludedIds(args.archiveId));
   const all: SentimentHotCandidate[] = [];
@@ -6730,7 +6741,7 @@ async function fetchThreadsReaderSearchCandidates(args: {
       if (all.length >= collectCap) break;
     }
   }
-  writeGlobalSentimentHotCandidatePool([...globalPoolCandidates.values()]);
+  if (!args.transient) writeGlobalSentimentHotCandidatePool([...globalPoolCandidates.values()]);
   console.info(`[sentiment_hot_reader_search] archiveId=${args.archiveId} status=done accepted=${all.length} mode=spider-http`);
   return args.deferRelevanceGate
     ? sortUsefulHotCandidates(all, collectCap)

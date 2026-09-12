@@ -41,6 +41,8 @@ type FetchHotCandidatesInput = {
   recordShown?: boolean;
   /** Test-only mode: count only candidates returned by this live search run. */
   liveOnly?: boolean;
+  /** One-shot persona-create probe: do not mutate candidate caches or shared pools. */
+  transient?: boolean;
   sourcePolicy?: "reader_first" | "reader_only" | "authenticated_only";
   memorySummaries?: string[];
   keywords?: string[];
@@ -258,6 +260,7 @@ export async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     freshnessPolicy: input.freshnessPolicy === "strict" ? "strict" : "legacy",
     recordShown: input.recordShown !== false,
     liveOnly: input.liveOnly === true,
+    transient: input.transient === true,
     sourcePolicy: input.sourcePolicy,
     platform: String(input.platform || "").trim() || undefined,
   } as Parameters<typeof fetchSentimentHotCandidates>[0]);
@@ -270,6 +273,7 @@ export async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     freshnessDays: result.freshnessDays,
     freshnessPolicy: result.freshnessPolicy,
     liveOnly: input.liveOnly === true,
+    transient: input.transient === true,
     cookieStatuses: result.cookieStatuses,
     warnings: result.warnings,
     emptyReason: result.emptyReason,

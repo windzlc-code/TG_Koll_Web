@@ -1004,6 +1004,43 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(payload["archiveSnapshot"]["id"], "archive_empty_keywords")
         self.assertEqual(payload["archiveSnapshot"]["posts"], [])
 
+    def test_persona_trend_probe_is_live_only_stateless_and_uses_snapshot(self) -> None:
+        capability, _unit_id, payload = _validate_envelope(
+            {
+                "capability": "persona.trend_probe.v1",
+                "unit_id": "persona-12345678",
+                "payload": {
+                    "action": "fetch-hot-candidates",
+                    "archiveId": "persona-12345678",
+                    "archiveSnapshot": {"id": "persona-12345678", "posts": []},
+                    "keywords": ["城市咖啡", "咖啡日常", "手冲咖啡", "咖啡馆"],
+                    "allKeywords": ["城市咖啡", "咖啡日常", "手冲咖啡", "咖啡馆"],
+                    "liveOnly": True,
+                    "transient": True,
+                    "recordShown": False,
+                },
+            }
+        )
+        self.assertEqual(capability, "persona.trend_probe.v1")
+        self.assertTrue(payload["liveOnly"])
+        self.assertTrue(payload["transient"])
+        self.assertFalse(payload["recordShown"])
+
+    def test_persona_trend_probe_rejects_persistent_or_shown_requests(self) -> None:
+        base = {
+            "capability": "persona.trend_probe.v1",
+            "unit_id": "persona-12345678",
+            "payload": {
+                "action": "fetch-hot-candidates",
+                "archiveId": "persona-12345678",
+                "archiveSnapshot": {"id": "persona-12345678", "posts": []},
+                "keywords": ["城市咖啡"],
+                "recordShown": False,
+            },
+        }
+        with self.assertRaisesRegex(ProtocolError, "live-only and transient"):
+            _validate_envelope(base)
+
     def test_persona_hot_user_display_batch_can_record_rotation_history(self) -> None:
         _, _, payload = _validate_envelope(
             {

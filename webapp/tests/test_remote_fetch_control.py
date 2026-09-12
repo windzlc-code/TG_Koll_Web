@@ -226,6 +226,19 @@ class RemoteFetchControlTests(unittest.TestCase):
             ),
             (
                 {
+                    "action": "fetch-hot-candidates",
+                    "operation": "persona_trend_probe",
+                    "archiveId": "persona-12345678",
+                    "archiveSnapshot": {"id": "persona-12345678", "posts": []},
+                    "keywords": ["城市咖啡"],
+                    "liveOnly": True,
+                    "transient": True,
+                    "recordShown": False,
+                },
+                "persona.trend_probe.v1",
+            ),
+            (
+                {
                     "action": "refresh-profile-metrics",
                     "archiveId": "persona-a",
                     "username": "sherryjim68",

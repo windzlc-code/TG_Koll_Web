@@ -41,6 +41,9 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 ALLOWED_CAPABILITIES = {
     "crm.threads_live_search.v1": "fetch-hot-candidates",
     "persona.hot_candidates.v1": "fetch-hot-candidates",
+    # A one-shot, public-only probe for persona creation.  It is deliberately
+    # separate from the persistent persona hotspot pool.
+    "persona.trend_probe.v1": "fetch-hot-candidates",
     "persona.hot_keywords.v1": "prepare-hot-keywords",
     "persona.hot_recycle.v1": "recycle-hot-candidates",
     "persona.hot_post_metrics.v1": "refresh-hot-post",
@@ -1999,7 +2002,7 @@ def _run_tool_r18_job_once(
     capability = str(runtime_payload.pop("_workerCapability", "") or "").strip()
     background_refill = bool(runtime_payload.pop("_poolRefill", False))
     runtime_payload.pop("userInitiated", None)
-    if capability in {"persona.hot_candidates.v1", "persona.hot_keywords.v1"}:
+    if capability in {"persona.hot_candidates.v1", "persona.trend_probe.v1", "persona.hot_keywords.v1"}:
         runtime_payload["keywords"] = _clean_hot_keywords(runtime_payload.get("keywords"))
         runtime_payload["allKeywords"] = _clean_hot_keywords(
             runtime_payload.get("allKeywords") or runtime_payload.get("all_keywords"),
@@ -2019,7 +2022,7 @@ def _run_tool_r18_job_once(
     holder = f"runtime_{uuid.uuid4().hex}"
     lease: dict[str, Any] | None = None
     runtime_environment = os.environ.copy()
-    if capability == "persona.hot_candidates.v1":
+    if capability in {"persona.hot_candidates.v1", "persona.trend_probe.v1"}:
         _apply_hot_reader_execution_profile(
             runtime_environment,
             background_refill=background_refill,
@@ -2163,14 +2166,14 @@ def run_tool_r18_job(
             timeout_seconds=timeout_seconds,
             use_collector_profile=False,
         )
-    if capability not in {"persona.hot_candidates.v1", "crm.threads_live_search.v1"}:
+    if capability not in {"persona.hot_candidates.v1", "persona.trend_probe.v1", "crm.threads_live_search.v1"}:
         return _run_tool_r18_job_once(payload, cancel_event, timeout_seconds=timeout_seconds)
 
     # Persona hotspot discovery always uses the public Reader. Authenticated
     # accounts remain reserved for CRM/full-data refresh capabilities.
-    if capability == "persona.hot_candidates.v1":
+    if capability in {"persona.hot_candidates.v1", "persona.trend_probe.v1"}:
         background_refill = bool(payload.get("_poolRefill"))
-        record_shown = bool(
+        record_shown = capability == "persona.hot_candidates.v1" and bool(
             payload.get("recordShown") is True
             and payload.get("userInitiated") is True
             and not background_refill
@@ -2183,6 +2186,10 @@ def run_tool_r18_job(
                 # User-facing display batches participate in the old-host
                 # rotation history; scheduled pool refills never do.
                 "recordShown": record_shown,
+                # Trend probes must stay stateless: no persona cache, global
+                # candidate pool, shown history, or account lease.
+                "liveOnly": True if capability == "persona.trend_probe.v1" else payload.get("liveOnly"),
+                "transient": capability == "persona.trend_probe.v1",
             },
             cancel_event,
             timeout_seconds=timeout_seconds,
@@ -2191,9 +2198,12 @@ def run_tool_r18_job(
         warnings = result.setdefault("warnings", [])
         if isinstance(warnings, list):
             warnings.append(
-                "Background HTTP-only Spider refill completed without leasing an authenticated account."
+                "Persona-create trend probe used the public HTTP-only Spider reader without leasing an authenticated account."
+                if capability == "persona.trend_probe.v1"
+                else ("Background HTTP-only Spider refill completed without leasing an authenticated account."
                 if background_refill
                 else "Interactive hot fetch used the public HTTP-only Spider reader without leasing an authenticated account."
+                )
             )
         return result
 
@@ -2358,6 +2368,11 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
         if capability == "persona.hot_candidates.v1" and normalized.get("liveOnly") is not False:
             if not (normalized.get("liveOnly") is True and _hot_public_probe_enabled()):
                 raise ProtocolError("persona hot fetch must use the old-host candidate pool")
+        if capability == "persona.trend_probe.v1":
+            if normalized.get("liveOnly") is not True or normalized.get("transient") is not True:
+                raise ProtocolError("persona trend probe must be live-only and transient")
+            if normalized.get("recordShown") is not False:
+                raise ProtocolError("persona trend probe must not record shown history")
         if capability == "persona.hot_candidates.v1":
             if normalized.get("_poolRefill"):
                 raise ProtocolError("background pool refill cannot be submitted externally")
@@ -2370,13 +2385,14 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
         if capability == "crm.threads_live_search.v1" and normalized.get("liveOnly") is not True:
             raise ProtocolError("CRM live search must remain live-only")
         normalized.pop("sourcePolicy", None)
-    if capability == "crm.threads_live_search.v1":
+    if capability in {"crm.threads_live_search.v1", "persona.trend_probe.v1"}:
         archive_snapshot = normalized.get("archiveSnapshot")
         archive_id = str(normalized.get("archiveId") or "").strip()
         if not isinstance(archive_snapshot, dict) or str(archive_snapshot.get("id") or "").strip() != archive_id:
             raise ProtocolError("current persona archive snapshot is required")
     if capability in {
         "persona.hot_candidates.v1",
+        "persona.trend_probe.v1",
         "persona.hot_keywords.v1",
         "persona.hot_recycle.v1",
     }:

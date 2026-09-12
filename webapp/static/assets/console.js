@@ -1069,6 +1069,7 @@ function defaultPersonaCreateState() {
     aiPrompt: "",
     aiKeywords: [],
     aiHotKeywords: [],
+    aiHotKeywordSource: null,
     aiSelectedKeywords: [],
     aiResult: null,
     aiKeywordOperationKey: "",
@@ -22034,7 +22035,7 @@ async function suggestPersonaCreateKeywords() {
   state.personaCreateKeywordController = controller;
   renderPersonaCreateSurface();
   try {
-    showMsg("commandMsg", "正在提炼人设方向关键词...", true);
+    showMsg("commandMsg", "正在核验公开帖热度并提炼人设方向关键词...", true);
     const result = await apiWithTimeout("/api/persona_dashboard/personas/ai_keywords", {
       method: "POST",
       headers: {
@@ -22043,10 +22044,13 @@ async function suggestPersonaCreateKeywords() {
       },
       body: JSON.stringify(requestPayload),
       signal: controller.signal,
-    }, 90000);
+    }, 180000);
     createState.aiStep = "keywords";
     createState.aiKeywords = Array.isArray(result.keywords) ? result.keywords : [];
     createState.aiHotKeywords = Array.isArray(result.hot_keywords) ? result.hot_keywords : [];
+    createState.aiHotKeywordSource = result.hot_keyword_source && typeof result.hot_keyword_source === "object"
+      ? result.hot_keyword_source
+      : null;
     createState.aiSelectedKeywords = [];
     createState.aiResult = null;
     clearPersonaStepOperationKey("keywords", operationKey);
@@ -27841,6 +27845,9 @@ function renderPersonaCreateWorkbench() {
   const createBusy = state.personaCreateBusy || {};
   const aiKeywords = Array.isArray(createState.aiKeywords) ? createState.aiKeywords : [];
   const aiHotKeywords = Array.isArray(createState.aiHotKeywords) ? createState.aiHotKeywords : [];
+  const aiHotKeywordSource = createState.aiHotKeywordSource && typeof createState.aiHotKeywordSource === "object"
+    ? createState.aiHotKeywordSource
+    : null;
   const aiSelectedKeywords = Array.isArray(createState.aiSelectedKeywords) ? createState.aiSelectedKeywords : [];
   const aiResult = createState.aiResult && typeof createState.aiResult === "object" ? createState.aiResult : null;
   const aiReadyToCreate = Boolean(String(createState.aiName || "").trim() && String(createState.aiPrompt || "").trim());
@@ -27872,7 +27879,7 @@ function renderPersonaCreateWorkbench() {
         </section>
         ${aiHotKeywords.length ? `<section class="persona-keyword-column persona-hot-keyword-column">
           <strong>热门关键词</strong>
-          <span title="公开社媒讨论线索会先按人设主题筛选，再由模型归纳为关键词。">公开社媒讨论线索经人设筛选后由模型生成</span>
+          <span title="模型先从人设生成公开检索词；系统仅使用本轮公开 Threads 实际解析到的浏览量和互动数据排序，再由模型归纳。">${aiHotKeywordSource?.available ? `基于 ${Number(aiHotKeywordSource.candidate_count || 0)} 条公开帖真实热度，由模型生成` : "本轮未取得带指标的公开热点"}</span>
           <div class="persona-keyword-grid">${renderKeywordButtons(aiHotKeywords)}</div>
         </section>` : ""}
       </div>
@@ -28146,6 +28153,7 @@ function openPersonaCreateModal() {
       createState.aiStep = "input";
       createState.aiKeywords = [];
       createState.aiHotKeywords = [];
+      createState.aiHotKeywordSource = null;
       createState.aiSelectedKeywords = [];
       createState.aiResult = null;
       createState.aiKeywordOperationKey = "";
@@ -37244,6 +37252,7 @@ function bindEvents() {
       createState.aiStep = "input";
       createState.aiKeywords = [];
       createState.aiHotKeywords = [];
+      createState.aiHotKeywordSource = null;
       createState.aiSelectedKeywords = [];
       createState.aiResult = null;
       renderPersonaDetail();

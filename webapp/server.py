@@ -15579,6 +15579,8 @@ def _normalize_persona_hot_workflow_error_detail(value: Any, *, action: str = ""
 def _remote_fetch_capability(payload: dict[str, Any]) -> str:
     action = str(payload.get("action") or "").strip()
     operation = str(payload.get("operation") or "").strip()
+    if action == "fetch-hot-candidates" and operation == "persona_trend_probe":
+        return "persona.trend_probe.v1"
     if action == "fetch-hot-candidates" and operation == "crm_threads_live_search":
         return "crm.threads_live_search.v1"
     if action == "fetch-hot-candidates":
@@ -15633,6 +15635,7 @@ _REMOTE_CRM_FETCH_FIELDS = frozenset({
     "refresh",
     "recordShown",
     "liveOnly",
+    "transient",
     "writingLocale",
     "accountScope",
 })
@@ -15651,6 +15654,7 @@ _REMOTE_PERSONA_HOT_REQUEST_FIELDS = frozenset({
     "userInitiated",
     "recordShown",
     "liveOnly",
+    "transient",
     "keywordStrategyVersion",
     "keywordDigest",
     "platform",
@@ -15868,7 +15872,7 @@ def _run_remote_persona_hot_workflow(
     archive_id = str(payload.get("archiveId") or "").strip()
     if capability == "crm.threads_live_search.v1":
         remote_payload = _remote_fetch_crm_payload(payload)
-    elif capability in {"persona.hot_candidates.v1", "persona.hot_keywords.v1"}:
+    elif capability in {"persona.hot_candidates.v1", "persona.trend_probe.v1", "persona.hot_keywords.v1"}:
         remote_payload = _remote_fetch_persona_hot_request(payload)
     else:
         remote_payload = dict(payload)
@@ -15900,7 +15904,7 @@ def _run_remote_persona_hot_workflow(
     if capability == "persona.profile_metrics.v1":
         unit_descriptor["username"] = str(remote_payload.get("username") or "")
         unit_descriptor["platform"] = str(remote_payload.get("platform") or "")
-    elif capability == "persona.hot_candidates.v1":
+    elif capability in {"persona.hot_candidates.v1", "persona.trend_probe.v1"}:
         unit_descriptor["searchMode"] = "normal" if str(payload.get("searchMode") or "").strip().lower() == "normal" else "strict"
         unit_descriptor["platform"] = str(payload.get("platform") or "threads").strip().lower() or "threads"
     elif capability != "crm.threads_live_search.v1":
@@ -19183,6 +19187,86 @@ def _duplicate_persona_archive(archive_id: str) -> dict[str, Any]:
     return {"ok": True, "profile": _build_persona_dashboard_profile(duplicate)}
 
 
+PERSONA_CREATE_TREND_FRESHNESS_DAYS = 14
+PERSONA_CREATE_TREND_CANDIDATE_LIMIT = 12
+
+
+def _persona_create_trend_probe_snapshot(name: str, prompt: str) -> dict[str, Any]:
+    digest = hashlib.sha256(f"{name}\x00{prompt}".encode("utf-8")).hexdigest()[:32]
+    return {
+        "id": f"persona-{digest}",
+        "name": name[:200],
+        "content": prompt[:4000],
+        "setup": {
+            "personaName": name[:200],
+            "personaDescription": prompt[:4000],
+            "contentTheme": prompt[:4000],
+            "customTopic": prompt[:4000],
+            "targetMarket": "cn",
+            "locale": "zh-CN",
+        },
+        "posts": [],
+    }
+
+
+def _persona_create_trend_metric(row: dict[str, Any], *names: str) -> int:
+    metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+    engagement = row.get("engagement") if isinstance(row.get("engagement"), dict) else {}
+    for name in names:
+        value = row.get(name)
+        if value is None:
+            value = metrics.get(name)
+        if value is None:
+            value = engagement.get(name)
+        number = _number(value, 0)
+        if number > 0:
+            return number
+    return 0
+
+
+def _persona_create_trend_evidence(result: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    for raw in result.get("candidates") if isinstance(result.get("candidates"), list) else []:
+        candidate = _normalize_persona_hot_candidate(raw)
+        if not candidate or candidate.get("platform") != "threads":
+            continue
+        views = _persona_create_trend_metric(candidate, "view_count", "viewCount", "views")
+        interaction = _persona_create_trend_metric(candidate, "interaction_heat", "interactionHeat")
+        if interaction <= 0:
+            interaction = sum(
+                _persona_create_trend_metric(candidate, field)
+                for field in ("likeCount", "likes", "commentCount", "comments", "shareCount", "shares", "repostCount", "reposts")
+            )
+        combined = _persona_create_trend_metric(candidate, "combined_reach", "combinedReach") or views + interaction
+        if views <= 0 and interaction <= 0:
+            continue
+        ranked.append({
+            "content": str(candidate.get("full_content") or candidate.get("content") or "").strip(),
+            "views": views,
+            "interaction": interaction,
+            "combined": combined,
+        })
+    ranked.sort(key=lambda item: (item["combined"], item["views"], item["interaction"]), reverse=True)
+    ranked = ranked[:6]
+    if not ranked:
+        return "", {"available": False, "candidate_count": 0}
+    evidence = [
+        "以下均为本轮公开 Threads 搜索实际解析到的指标，已按综合热度（浏览量+互动）降序排列：",
+    ]
+    for index, item in enumerate(ranked, start=1):
+        content = re.sub(r"\s+", " ", item["content"]).strip()[:180]
+        evidence.append(
+            f"- #{index} 综合热度 {item['combined']}（浏览 {item['views']}，互动 {item['interaction']}）：{content}"
+        )
+    return "\n".join(evidence), {
+        "available": True,
+        "candidate_count": len(ranked),
+        "max_combined_reach": ranked[0]["combined"],
+        "platform": "threads",
+        "freshness_days": PERSONA_CREATE_TREND_FRESHNESS_DAYS,
+    }
+
+
 def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywordsPayload) -> dict[str, Any]:
     name = str(payload.name or "").strip()
     prompt = str(payload.prompt or "").strip()
@@ -19190,12 +19274,61 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
         raise HTTPException(status_code=400, detail="persona name cannot be empty")
     if not prompt:
         raise HTTPException(status_code=400, detail="persona prompt cannot be empty")
-    result = _run_persona_create_cli({
-        "action": "suggest-keywords",
-        "personaName": name,
-        "userPrompt": prompt,
-        "includeHotKeywords": bool(payload.include_hot_keywords),
-    }, timeout_seconds=90)
+    hot_trend_meta: dict[str, Any] = {"available": False, "candidate_count": 0}
+    if payload.include_hot_keywords:
+        seed_result = _run_persona_create_cli({
+            "action": "suggest-trend-search-seeds",
+            "personaName": name,
+            "userPrompt": prompt,
+        }, timeout_seconds=60)
+        search_seeds = _persona_hot_payload_keywords(seed_result.get("searchSeeds"))[:4]
+        if len(search_seeds) != 4:
+            raise HTTPException(status_code=502, detail="热门关键词提炼失败：模型未返回 4 个有效公开趋势检索词，请稍后重试。")
+        snapshot = _persona_create_trend_probe_snapshot(name, prompt)
+        probe_result = _run_persona_hot_workflow_cli({
+            "action": "fetch-hot-candidates",
+            "operation": "persona_trend_probe",
+            "archiveId": snapshot["id"],
+            "archiveSnapshot": snapshot,
+            "prompt": prompt,
+            "keywords": search_seeds,
+            "allKeywords": search_seeds,
+            "limit": PERSONA_CREATE_TREND_CANDIDATE_LIMIT,
+            "refresh": True,
+            "liveOnly": True,
+            "transient": True,
+            "recordShown": False,
+            "searchMode": "strict",
+            "writingLocale": "zh-CN",
+            "freshnessDays": PERSONA_CREATE_TREND_FRESHNESS_DAYS,
+            "freshnessPolicy": "strict",
+            "platform": "threads",
+        }, timeout_seconds=75)
+        hot_trend_evidence, hot_trend_meta = _persona_create_trend_evidence(probe_result)
+        if hot_trend_evidence:
+            result = _run_persona_create_cli({
+                "action": "suggest-keywords",
+                "personaName": name,
+                "userPrompt": prompt,
+                "includeHotKeywords": True,
+                "hotTrendEvidence": hot_trend_evidence,
+            }, timeout_seconds=90)
+        else:
+            # Do not invent a "hot" label when public posts did not expose
+            # measurable heat.  The ordinary creation path remains usable.
+            result = _run_persona_create_cli({
+                "action": "suggest-keywords",
+                "personaName": name,
+                "userPrompt": prompt,
+                "includeHotKeywords": False,
+            }, timeout_seconds=90)
+    else:
+        result = _run_persona_create_cli({
+            "action": "suggest-keywords",
+            "personaName": name,
+            "userPrompt": prompt,
+            "includeHotKeywords": False,
+        }, timeout_seconds=90)
     keywords = [
         str(item or "").strip()
         for item in (result.get("keywords") if isinstance(result.get("keywords"), list) else [])
@@ -19206,13 +19339,14 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
         for item in (result.get("hotKeywords") if isinstance(result.get("hotKeywords"), list) else [])
         if str(item or "").strip()
     ][:12]
-    if len(keywords) != 5 or (payload.include_hot_keywords and len(hot_keywords) != 5):
+    if len(keywords) != 5 or (hot_trend_meta.get("available") is True and len(hot_keywords) != 5):
         raise HTTPException(status_code=502, detail="关键词提炼失败：模型未返回 5 个有效关键词，请稍后重试。")
     return {
         "ok": True,
         "name": name,
         "keywords": keywords,
         "hot_keywords": hot_keywords,
+        "hot_keyword_source": hot_trend_meta,
     }
 
 

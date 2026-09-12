@@ -17,6 +17,7 @@ installNodePersonaArchiveBridge();
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const CODEX_BOT_TIMEOUT_MS = Number(process.env.CODEX_BOT_TIMEOUT_MS || 300_000);
 const CREATE_PERSONA_KEYWORD_COUNT = 5;
+const CREATE_PERSONA_TREND_SEARCH_SEED_COUNT = 4;
 const CREATE_PERSONA_MAX_SELECTED_KEYWORDS = 2;
 const CREATE_PERSONA_MIN_SELECTED_KEYWORDS = 2;
 const CREATE_PERSONA_GROUP_MAX_SELECTED_KEYWORDS = 2;
@@ -29,7 +30,8 @@ type PostImageStyleKind = (typeof POST_IMAGE_STYLE_KINDS)[number];
 type PostImageStyle = { label: string; kind: PostImageStyleKind };
 
 type Input =
-  | { action: "suggest-keywords"; personaName: string; userPrompt: string; includeHotKeywords?: boolean }
+  | { action: "suggest-keywords"; personaName: string; userPrompt: string; includeHotKeywords?: boolean; hotTrendEvidence?: string }
+  | { action: "suggest-trend-search-seeds"; personaName: string; userPrompt: string }
   | { action: "suggest-post-directions"; personaName: string; personaCore: string; userContent?: string; previousKeywords?: string[]; interfaceLanguage?: string }
   | { action: "suggest-image-styles"; personaName: string; personaCore: string; userContent?: string; previousImageStyles?: string[]; interfaceLanguage?: string }
   | { action: "derive-profile"; personaName: string; userPrompt: string; selectedKeywords?: string[] }
@@ -361,6 +363,27 @@ function normalizePersonaDirectionKeywords(raw: unknown): string[] {
   return result.slice(0, CREATE_PERSONA_KEYWORD_COUNT);
 }
 
+function normalizePersonaTrendSearchSeeds(raw: unknown): string[] {
+  const source = Array.isArray((raw as any)?.searchSeeds)
+    ? (raw as any).searchSeeds
+    : Array.isArray((raw as any)?.keywords)
+      ? (raw as any).keywords
+      : [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of source) {
+    const value = typeof item === "string" ? item : (item as any)?.label || (item as any)?.keyword || (item as any)?.name;
+    const keyword = normalizePersonaDirectionKeyword(value);
+    if (keyword.length < 2 || isWeakPersonaDirectionKeyword(keyword)) continue;
+    const key = keyword.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(keyword);
+    if (result.length >= CREATE_PERSONA_TREND_SEARCH_SEED_COUNT) break;
+  }
+  return result;
+}
+
 function normalizePostDirectionKeyword(value: unknown): string {
   return normalizeSingleLine(String(value || ""))
     .replace(/^[\s\d.、\-_*#]+/g, "")
@@ -507,11 +530,37 @@ async function derivePersonaDirectionKeywordsWithCodex(personaName: string, user
   }
 }
 
+async function derivePersonaTrendSearchSeedsWithCodex(personaName: string, userPrompt: string): Promise<string[]> {
+  const instruction = [
+    "你是社交媒体趋势检索规划助手。",
+    "任务：根据用户的人设提示词，生成恰好 4 个用于公开社媒搜索的短关键词。",
+    "这些词只用于寻找与人设自然相关、可能有真实浏览量和互动数据的帖子；不是最终展示给用户的人设关键词。",
+    "必须优先覆盖人设的身份、内容领域、日常场景或受众话题。可以生活化、可讨论，但不得编造具体新闻、品牌、人物、突发事件或平台热搜。",
+    "每个词 2 到 10 个中文字；四个词要覆盖不同但关联的检索角度，避免同义重复和抽象词。",
+    "只输出 JSON，不要 Markdown。",
+    JSON.stringify({ searchSeeds: ["检索词1", "检索词2", "检索词3", "检索词4"] }),
+    `人设名称：${personaName}`,
+    `用户提示词：${compactLongAiInput(userPrompt, 3000)}`,
+  ].join("\n");
+  try {
+    const keywords = normalizePersonaTrendSearchSeeds(await runCodexJsonInstruction(instruction));
+    if (keywords.length !== CREATE_PERSONA_TREND_SEARCH_SEED_COUNT) {
+      throw new Error(`模型仅返回 ${keywords.length} 个有效公开检索词`);
+    }
+    return keywords;
+  } catch (error: any) {
+    console.warn("[persona-create][trend_seed_error]", error?.message || error);
+    throw new Error("热门关键词提炼失败：模型未返回有效的公开趋势检索词，请稍后重试。");
+  }
+}
+
 async function derivePersonaKeywordGroupsWithCodex(
   personaName: string,
   userPrompt: string,
+  hotTrendEvidence = "",
 ): Promise<{ keywords: string[]; hotKeywords: string[] }> {
-  const trendIntel = await fetchPersonaTrendIntelForNode({
+  const suppliedEvidence = String(hotTrendEvidence || "").trim();
+  const trendIntel = suppliedEvidence ? "" : await fetchPersonaTrendIntelForNode({
     genres: [],
     personaPersonality: "",
     personaGender: "",
@@ -525,19 +574,19 @@ async function derivePersonaKeywordGroupsWithCodex(
     timeoutMs: 5_500,
     topicContext: { userInput: userPrompt },
   });
-  if (!trendIntel.trim()) {
+  if (!suppliedEvidence && !trendIntel.trim()) {
     throw new Error("热门关键词提炼失败：未取得可用的公开趋势参考，请稍后重试。");
   }
-  const socialTrendEvidence = extractPersonaCreateSocialTrendEvidence(trendIntel);
+  const socialTrendEvidence = suppliedEvidence || extractPersonaCreateSocialTrendEvidence(trendIntel);
   const instruction = [
     "你是自动化推文人设策划助手。",
-    "任务：根据用户的人设提示词和下方社媒讨论参考，生成两组各 5 个可选的人设关键词。",
+    "任务：根据用户的人设提示词和下方带真实公开指标的社媒帖子参考，生成两组各 5 个可选的人设关键词。",
     "普通关键词代表长期身份、形象、日常、语气或圈子；热门关键词代表能自然融入该人设的当下社媒表达切口。",
     "两组关键词都会直接影响后续完整人设生成。热门关键词不是单篇标题，不能脱离人设，也不能与普通关键词重复或近义重复。",
-    "优先级必须是：人设提示词的身份、内容方向和气质 > 社媒讨论参考。社媒参考只用于发现表达角度，绝不能覆盖或改变人设核心。",
+    "优先级必须是：人设提示词的身份、内容方向和气质 > 公开帖子参考。公开帖子参考只用于发现表达角度，绝不能覆盖或改变人设核心。",
     "热门关键词必须能从人设提示词自然推导；不得引入提示词没有涉及的品牌、产品、突发事件、灾害、科技领域、职业或新闻话题。",
-    "如果社媒讨论参考为空或与人设无自然关联，仍由你根据人设生成生活化、可讨论的表达切口，但不要假称具体新闻或事件为热门。",
-    "不要照抄社媒标题；每个热门关键词应是人设会自然聊到的场景、情绪、关系、日常选择或讨论角度，而不是热点新闻标题。",
+    "热门关键词必须能从至少一条参考帖的主题和真实热度数据中得到支持，但不要把具体事件、数字或原帖标题写成关键词。",
+    "每个热门关键词应是人设会自然聊到的场景、情绪、关系、日常选择或讨论角度，而不是热点新闻标题。",
     "每个词 3 到 10 个中文字，直白、有画面感，不要使用抽象空话、活动标题、工具名称或无关职业。",
     "只输出 JSON，不要 Markdown。",
     "",
@@ -550,8 +599,8 @@ async function derivePersonaKeywordGroupsWithCodex(
     `人设名称：${personaName}`,
     `用户提示词：${compactLongAiInput(userPrompt, 3000)}`,
     "",
-    "社媒讨论参考（仅作表达角度参考，不要照抄标题；没有自然关联时忽略）：",
-    socialTrendEvidence || "- 未取得与该人设相关的可靠社媒讨论；请只依据人设提示词生成自然生活化的表达切口。",
+    "公开高热帖子参考（仅作表达角度参考，不要照抄内容或把数字写进关键词）：",
+    socialTrendEvidence,
   ].join("\n");
   try {
     const raw = await runCodexJsonInstruction(instruction);
@@ -882,7 +931,7 @@ async function main() {
     if (!userPrompt) throw new Error("persona prompt cannot be empty");
     try {
       if (input.includeHotKeywords !== false) {
-        const result = await derivePersonaKeywordGroupsWithCodex(personaName, userPrompt);
+        const result = await derivePersonaKeywordGroupsWithCodex(personaName, userPrompt, String(input.hotTrendEvidence || ""));
         printJson({ ok: true, action: input.action, personaName, ...result });
       } else {
         const keywords = await derivePersonaDirectionKeywordsWithCodex(personaName, userPrompt);
@@ -890,6 +939,20 @@ async function main() {
       }
     } catch (error: any) {
       printJson({ ok: false, action: input.action, personaName, error: String(error?.message || "关键词提炼失败，请稍后重试。") });
+      process.exitCode = 1;
+    }
+    return;
+  }
+  if (input.action === "suggest-trend-search-seeds") {
+    const personaName = normalizeSingleLine(String(input.personaName || "")).slice(0, 40);
+    const userPrompt = String(input.userPrompt || "").trim();
+    if (!personaName) throw new Error("persona name cannot be empty");
+    if (!userPrompt) throw new Error("persona prompt cannot be empty");
+    try {
+      const searchSeeds = await derivePersonaTrendSearchSeedsWithCodex(personaName, userPrompt);
+      printJson({ ok: true, action: input.action, personaName, searchSeeds });
+    } catch (error: any) {
+      printJson({ ok: false, action: input.action, personaName, error: String(error?.message || "公开趋势检索词提炼失败，请稍后重试。") });
       process.exitCode = 1;
     }
     return;
