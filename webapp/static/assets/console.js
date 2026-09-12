@@ -1069,7 +1069,6 @@ function defaultPersonaCreateState() {
     aiPrompt: "",
     aiKeywords: [],
     aiHotKeywords: [],
-    aiIncludeHotKeywords: false,
     aiSelectedKeywords: [],
     aiResult: null,
     aiKeywordOperationKey: "",
@@ -1161,8 +1160,8 @@ function personaCreateIsBusy() {
   return Boolean(personaCreateBusyKind());
 }
 
-function personaCreateKeywordLimit(createState = ensurePersonaCreateState()) {
-  return createState.aiIncludeHotKeywords ? 4 : 2;
+function personaCreateKeywordLimit() {
+  return 4;
 }
 
 function personaCreateSelectedKeywordGroups(createState = ensurePersonaCreateState()) {
@@ -22008,7 +22007,7 @@ async function suggestPersonaCreateKeywords() {
     showMsg("commandMsg", "请先填写人设提示词。", false);
     return;
   }
-  const requestPayload = { name, prompt, include_hot_keywords: Boolean(createState.aiIncludeHotKeywords) };
+  const requestPayload = { name, prompt, include_hot_keywords: true };
   const operationKey = personaStepOperationKey(
     "keywords",
     requestPayload,
@@ -27837,10 +27836,12 @@ function renderPersonaCreateWorkbench() {
   const anyCreateBusy = personaCreateIsBusy();
   const busyLabel = personaCreateBusyKind();
   const keywordLimit = personaCreateKeywordLimit(createState);
+  const keywordMinimum = 2;
   const keywordLimitReached = aiSelectedKeywords.length >= keywordLimit;
+  const keywordMinimumMet = aiSelectedKeywords.length >= keywordMinimum;
   const selectedKeywordHint = aiSelectedKeywords.length
     ? `已选 ${aiSelectedKeywords.length} / ${keywordLimit} 个，可取消后重新选择`
-    : `最多选择 ${keywordLimit} 个，用于确定人设生成的重点方向`;
+    : `至少选择 ${keywordMinimum} 个，最多选择 ${keywordLimit} 个，用于确定人设生成的重点方向`;
   const renderKeywordButtons = (keywords) => keywords.map((keyword) => {
     const active = aiSelectedKeywords.includes(keyword);
     const disabled = aiCreateBusy || (!active && keywordLimitReached);
@@ -27902,11 +27903,6 @@ function renderPersonaCreateWorkbench() {
         <textarea id="personaCreateAiPrompt" rows="7" placeholder="描述身份、性格、内容方向、语气、受众和图片风格。" ${aiInputsLocked ? "readonly aria-readonly=\"true\"" : ""}>${esc(createState.aiPrompt || "")}</textarea>
       </label>
       ${createState.aiStep === "input" ? `
-        <div class="persona-create-keyword-mode" role="group" aria-label="关键词模式">
-          <button type="button" class="${createState.aiIncludeHotKeywords ? "" : "is-active"}" data-persona-create-keyword-mode="normal" ${anyCreateBusy ? "disabled" : ""}>普通创建 · 5 选 2</button>
-          <button type="button" class="${createState.aiIncludeHotKeywords ? "is-active" : ""}" data-persona-create-keyword-mode="hot" ${anyCreateBusy ? "disabled" : ""}>热门人设 · 10 选 4</button>
-        </div>
-        <p class="persona-create-keyword-mode-note">${createState.aiIncludeHotKeywords ? "普通词和热门词均会影响人设生成；可任意搭配，也可以只选 2 个。" : "沿用原有 5 选 2 闭环，不生成热门关键词。"}</p>
         <div class="row-actions">
           <button type="button" class="primary" data-persona-create-ai-keywords aria-busy="${aiKeywordsBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiKeywordsBusy ? renderBusyButtonContent("正在提炼关键词", true, createBusy.keywordsStartedAt) : (anyCreateBusy ? `${busyLabel}中` : "提炼关键词")}</button>
           ${aiKeywordsBusy ? "" : `<button type="button" data-persona-create aria-busy="${Boolean(createBusy.manual) ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${createBusy.manual ? renderBusyButtonContent("正在创建人设", true, createBusy.manualStartedAt) : (anyCreateBusy ? `${busyLabel}中` : "直接创建人设")}</button>`}
@@ -27917,7 +27913,7 @@ function renderPersonaCreateWorkbench() {
           <div class="persona-create-keyword-section">
             <div class="persona-workbench-head">
               <div class="persona-head-copy">
-                <strong>方向关键词</strong>
+                <strong>人设关键词</strong>
                 <span>${selectedKeywordHint}</span>
               </div>
               <span class="module-chip">${esc(createState.aiStep === "created" ? "已完成" : "步骤 3/3")}</span>
@@ -27927,7 +27923,7 @@ function renderPersonaCreateWorkbench() {
           <div class="persona-create-actions">
             <button type="button" data-persona-create-ai-back ${aiCreateBusy ? "disabled" : ""}>返回修改提示词</button>
             <button type="button" class="unified-action-icon-button" data-persona-create-ai-clear title="清空选择" aria-label="清空选择" ${aiSelectedKeywords.length && !aiCreateBusy ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
-            <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy ? "disabled" : ""}>${aiCreateBusy ? renderBusyButtonContent("正在生成人设", true, createBusy.aiCreateStartedAt) : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设")}</button>
+            <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy || !keywordMinimumMet ? "disabled" : ""}>${aiCreateBusy ? renderBusyButtonContent("正在生成人设", true, createBusy.aiCreateStartedAt) : (!keywordMinimumMet ? `至少选择 ${keywordMinimum} 个关键词` : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设"))}</button>
           </div>
         </div>
         ${resultMarkup}
@@ -28118,13 +28114,6 @@ function openPersonaCreateModal() {
       renderPersonaCreateSurface();
       return;
     }
-    const keywordModeButton = event.target.closest("[data-persona-create-keyword-mode]");
-    if (keywordModeButton) {
-      const createState = snapshotPersonaCreateInputs();
-      createState.aiIncludeHotKeywords = keywordModeButton.dataset.personaCreateKeywordMode === "hot";
-      renderPersonaCreateSurface();
-      return;
-    }
     if (event.target.closest("[data-persona-create-ai-clear]")) {
       ensurePersonaCreateState().aiSelectedKeywords = [];
       renderPersonaCreateSurface();
@@ -28143,6 +28132,10 @@ function openPersonaCreateModal() {
       return;
     }
     if (event.target.closest("[data-persona-create-ai-submit]")) {
+      if (ensurePersonaCreateState().aiSelectedKeywords.length < 2) {
+        showMsg("commandMsg", "请至少选择 2 个人设关键词。", false);
+        return;
+      }
       run(createPersonaArchiveWithAi, "AI 新建人设失败");
       return;
     }
@@ -37218,13 +37211,6 @@ function bindEvents() {
       renderPersonaDetail();
       return;
     }
-    const keywordModeButton = event.target.closest("[data-persona-create-keyword-mode]");
-    if (keywordModeButton) {
-      const createState = snapshotPersonaCreateInputs();
-      createState.aiIncludeHotKeywords = keywordModeButton.dataset.personaCreateKeywordMode === "hot";
-      renderPersonaDetail();
-      return;
-    }
     if (event.target.closest("[data-persona-create-ai-clear]")) {
       const createState = ensurePersonaCreateState();
       createState.aiSelectedKeywords = [];
@@ -37242,6 +37228,10 @@ function bindEvents() {
       return;
     }
     if (event.target.closest("[data-persona-create-ai-submit]")) {
+      if (ensurePersonaCreateState().aiSelectedKeywords.length < 2) {
+        showMsg("commandMsg", "请至少选择 2 个人设关键词。", false);
+        return;
+      }
       createPersonaArchiveWithAi().catch((error) => showMsg("commandMsg", error.detail || error.message || "AI 新建人设失败", false));
       return;
     }

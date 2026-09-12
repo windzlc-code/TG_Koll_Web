@@ -2318,7 +2318,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         ) as cli_mock:
             resp = self.client.post(
                 "/api/persona_dashboard/personas/ai_keywords",
-                json={"name": "Night Driver", "prompt": "夜班出租车司机，分享夜间载客见闻和城市通勤观察。"},
+                json={"name": "Night Driver", "prompt": "夜班出租车司机，分享夜间载客见闻和城市通勤观察。", "include_hot_keywords": False},
             )
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
@@ -2373,7 +2373,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 json={
                     "name": "Night Driver",
                     "prompt": "夜班出租车司机，分享夜间载客见闻和城市通勤观察。",
-                    "include_hot_keywords": True,
                 },
             )
         self.assertEqual(resp.status_code, 200)
@@ -2453,6 +2452,15 @@ class PersonaDashboardApiTests(unittest.TestCase):
         cli_payload = cli_mock.call_args.args[0]
         self.assertEqual(cli_payload["selectedRegularKeywords"], ["夜班司机", "城市见闻"])
         self.assertEqual(cli_payload["selectedHotKeywords"], ["下班日常", "通勤吐槽"])
+
+    def test_persona_ai_create_rejects_less_than_two_new_keyword_selections(self):
+        payload = server.PersonaDashboardPersonaAiCreatePayload(
+            name="Night Driver",
+            prompt="夜班出租车司机，分享夜间载客见闻和城市通勤观察。",
+            selected_regular_keywords=["夜班司机"],
+        )
+        with self.assertRaisesRegex(server.HTTPException, "至少选择 2"):
+            server._persona_dashboard_create_persona_with_ai(payload)
 
     def test_persona_copy_analyze_fetches_public_source_and_derives_profile(self):
         public_source = {

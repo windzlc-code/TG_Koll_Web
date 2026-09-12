@@ -18,6 +18,7 @@ const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const CODEX_BOT_TIMEOUT_MS = Number(process.env.CODEX_BOT_TIMEOUT_MS || 300_000);
 const CREATE_PERSONA_KEYWORD_COUNT = 5;
 const CREATE_PERSONA_MAX_SELECTED_KEYWORDS = 2;
+const CREATE_PERSONA_MIN_SELECTED_KEYWORDS = 2;
 const CREATE_PERSONA_HOT_MAX_SELECTED_KEYWORDS = 4;
 const POST_DIRECTION_KEYWORD_COUNT = 10;
 const POST_IMAGE_STYLE_COUNT = 6;
@@ -864,7 +865,7 @@ async function main() {
     if (!personaName) throw new Error("persona name cannot be empty");
     if (!userPrompt) throw new Error("persona prompt cannot be empty");
     try {
-      if (input.includeHotKeywords) {
+      if (input.includeHotKeywords !== false) {
         const result = await derivePersonaKeywordGroupsWithCodex(personaName, userPrompt);
         printJson({ ok: true, action: input.action, personaName, ...result });
       } else {
@@ -935,6 +936,9 @@ async function main() {
       .slice(0, structuredSelection ? CREATE_PERSONA_HOT_MAX_SELECTED_KEYWORDS : CREATE_PERSONA_MAX_SELECTED_KEYWORDS);
     if (!personaName) throw new Error("persona name cannot be empty");
     if (!userPrompt) throw new Error("persona prompt cannot be empty");
+    if (structuredSelection && selectedKeywords.length < CREATE_PERSONA_MIN_SELECTED_KEYWORDS) {
+      throw new Error(`at least ${CREATE_PERSONA_MIN_SELECTED_KEYWORDS} keywords must be selected`);
+    }
     printJson(await createPersonaFromPromptSelection(
       personaName,
       userPrompt,

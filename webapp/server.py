@@ -13478,7 +13478,7 @@ class PersonaDashboardSelectionBatchDeletePayload(BaseModel):
 class PersonaDashboardPersonaAiKeywordsPayload(BaseModel):
     name: str = ""
     prompt: str = ""
-    include_hot_keywords: bool = False
+    include_hot_keywords: bool = True
 
 
 class PersonaDashboardPostDirectionsPayload(BaseModel):
@@ -19414,6 +19414,8 @@ def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAi
         raise HTTPException(status_code=400, detail="persona name cannot be empty")
     if not prompt:
         raise HTTPException(status_code=400, detail="persona prompt cannot be empty")
+    if structured_selection and len(selected_keywords) < 2:
+        raise HTTPException(status_code=400, detail="请至少选择 2 个人设关键词。")
     result = _run_persona_create_cli({
         "action": "create-from-prompt",
         "personaName": name,

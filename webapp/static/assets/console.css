@@ -6815,8 +6815,7 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--ink);
 }
 
-.persona-keyword-column > span,
-.persona-create-keyword-mode-note {
+.persona-keyword-column > span {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
@@ -6829,28 +6828,6 @@ body.persona-touch-dragging .persona-list-card:active {
 .persona-hot-keyword-column {
   padding-left: 12px;
   border-left: 1px dashed var(--line);
-}
-
-.persona-create-keyword-mode {
-  display: flex;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.persona-create-keyword-mode button {
-  border: 1px solid var(--line);
-  background: var(--panel-solid);
-  color: var(--muted);
-}
-
-.persona-create-keyword-mode button.is-active {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-ink);
-}
-
-.persona-create-keyword-mode-note {
-  margin: 8px 0 0;
 }
 
 @media (max-width: 640px) {
