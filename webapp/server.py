@@ -19555,13 +19555,33 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
         ptt_candidates = _fetch_persona_create_ptt_trend_candidates()
         hot_trend_evidence, hot_trend_meta = _persona_create_trend_evidence({"candidates": ptt_candidates})
         if hot_trend_evidence:
-            result = _run_persona_create_cli({
-                "action": "suggest-keywords",
-                "personaName": name,
-                "userPrompt": prompt,
-                "includeHotKeywords": True,
-                "hotTrendEvidence": hot_trend_evidence,
-            }, timeout_seconds=90)
+            try:
+                result = _run_persona_create_cli({
+                    "action": "suggest-keywords",
+                    "personaName": name,
+                    "userPrompt": prompt,
+                    "includeHotKeywords": True,
+                    "hotTrendEvidence": hot_trend_evidence,
+                }, timeout_seconds=90)
+            except HTTPException as exc:
+                # A public page can be real and hot while still being too
+                # heterogeneous for the model to form five safe directions.
+                # Keep the 5 + 5 UI contract by asking the model again for
+                # persona-only directions; never synthesize code fallback
+                # keywords or falsely label them as public-trend derived.
+                if exc.status_code not in {500, 502}:
+                    raise
+                hot_trend_meta.update({
+                    "fallback": "persona_model",
+                    "reason": "public_evidence_model_incomplete",
+                })
+                result = _run_persona_create_cli({
+                    "action": "suggest-keywords",
+                    "personaName": name,
+                    "userPrompt": prompt,
+                    "includeHotKeywords": True,
+                    "hotTrendMode": "persona_fallback",
+                }, timeout_seconds=90)
         else:
             # Preserve the established 5 + 5 selection flow even when this
             # public probe did not yield verifiable metrics.  The fallback is

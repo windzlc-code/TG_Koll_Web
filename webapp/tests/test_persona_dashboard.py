@@ -2441,6 +2441,41 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("PTT 热门看板活跃人数 3584", cli_mock.call_args.args[0]["hotTrendEvidence"])
         self.assertEqual(cli_mock.call_count, 1)
 
+    def test_persona_ai_keywords_uses_model_fallback_when_public_evidence_model_is_incomplete(self):
+        regular_keywords = ["夜班司机", "城市见闻", "出租车故事", "深夜通勤", "城市观察"]
+        hot_keywords = ["下班日常", "深夜食堂", "通勤吐槽", "城市夜生活", "深夜聊天"]
+        with mock.patch.object(
+            server,
+            "_run_persona_create_cli",
+            side_effect=[
+                server.HTTPException(status_code=500, detail="模型未返回两组各 5 个有效且不重复的关键词"),
+                {"ok": True, "keywords": regular_keywords, "hotKeywords": hot_keywords},
+            ],
+        ) as cli_mock, mock.patch.object(
+            server,
+            "_fetch_persona_create_ptt_trend_candidates",
+            return_value=[{
+                "id": "ptt:Gossiping:123",
+                "platform": "ptt",
+                "content": "热门看板 Gossiping：台北夜市美食讨论",
+                "metrics": {"activeUsers": 3584},
+            }],
+        ):
+            result = server._persona_dashboard_suggest_keywords(
+                server.PersonaDashboardPersonaAiKeywordsPayload(
+                    name="Night Driver",
+                    prompt="夜班出租车司机，分享夜间载客见闻和城市通勤观察。",
+                    include_hot_keywords=True,
+                )
+            )
+
+        self.assertEqual(result["hot_keywords"], hot_keywords)
+        self.assertEqual(result["hot_keyword_source"]["fallback"], "persona_model")
+        self.assertEqual(result["hot_keyword_source"]["reason"], "public_evidence_model_incomplete")
+        self.assertEqual(cli_mock.call_count, 2)
+        self.assertIn("hotTrendEvidence", cli_mock.call_args_list[0].args[0])
+        self.assertEqual(cli_mock.call_args_list[1].args[0]["hotTrendMode"], "persona_fallback")
+
     def test_persona_public_trend_evidence_keeps_twelve_source_rows_but_bounds_model_context(self):
         long_suffix = "很长的公开热门内容" * 20
         candidates = [
