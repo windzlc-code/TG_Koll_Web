@@ -2441,6 +2441,25 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("PTT 热门看板活跃人数 3584", cli_mock.call_args.args[0]["hotTrendEvidence"])
         self.assertEqual(cli_mock.call_count, 1)
 
+    def test_persona_public_trend_evidence_keeps_twelve_source_rows_but_bounds_model_context(self):
+        long_suffix = "很长的公开热门内容" * 20
+        candidates = [
+            {
+                "platform": "ptt",
+                "content": f"热门看板 {index}：{long_suffix}",
+                "metrics": {"activeUsers": 10_000 - index},
+            }
+            for index in range(12)
+        ]
+
+        evidence, metadata = server._persona_create_trend_evidence({"candidates": candidates})
+
+        self.assertTrue(metadata["available"])
+        self.assertEqual(metadata["candidate_count"], 8)
+        self.assertEqual(evidence.count("PTT 热门看板活跃人数"), 8)
+        for line in evidence.splitlines()[1:]:
+            self.assertLessEqual(len(line.split("：", 1)[1]), 72)
+
     def test_youtube_public_trend_probe_parses_fresh_true_view_counts(self):
         initial_data = {
             "contents": {

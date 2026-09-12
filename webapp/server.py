@@ -19190,6 +19190,10 @@ def _duplicate_persona_archive(archive_id: str) -> dict[str, Any]:
 
 PERSONA_CREATE_TREND_FRESHNESS_DAYS = 14
 PERSONA_CREATE_TREND_CANDIDATE_LIMIT = 12
+# Keep the public source broad, while keeping the model prompt bounded enough
+# for the configured text model to respond within the interactive timeout.
+PERSONA_CREATE_TREND_EVIDENCE_LIMIT = 8
+PERSONA_CREATE_TREND_EVIDENCE_CONTENT_CHARS = 72
 PERSONA_CREATE_YOUTUBE_TREND_LIMIT = PERSONA_CREATE_TREND_CANDIDATE_LIMIT
 PERSONA_CREATE_YOUTUBE_REQUEST_TIMEOUT_SECONDS = 8
 PERSONA_CREATE_PTT_TREND_LIMIT = PERSONA_CREATE_TREND_CANDIDATE_LIMIT
@@ -19510,14 +19514,14 @@ def _persona_create_trend_evidence(*results: dict[str, Any]) -> tuple[str, dict[
     # direction.  Do not arbitrarily reduce a healthy public source to two
     # rows: the user selects the resulting directions, while the model needs
     # sufficient variety to avoid treating one board title as the trend.
-    ranked = ranked[:PERSONA_CREATE_TREND_CANDIDATE_LIMIT]
+    ranked = ranked[:PERSONA_CREATE_TREND_EVIDENCE_LIMIT]
     if not ranked:
         return "", {"available": False, "candidate_count": 0}
     evidence = [
         "以下均为本轮公开社媒页面实际解析到的热度或活跃指标，已按热度/活跃度降序排列：",
     ]
     for index, item in enumerate(ranked, start=1):
-        content = re.sub(r"\s+", " ", item["content"]).strip()[:180]
+        content = re.sub(r"\s+", " ", item["content"]).strip()[:PERSONA_CREATE_TREND_EVIDENCE_CONTENT_CHARS]
         platform_label = "YouTube" if item["platform"] == "youtube" else item["platform"].title()
         if item["platform"] == "ptt":
             evidence.append(f"- #{index} PTT 热门看板活跃人数 {item['active_users']}：{content}")
