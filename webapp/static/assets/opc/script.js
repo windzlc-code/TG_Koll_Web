@@ -888,7 +888,10 @@ document.querySelectorAll("[data-console-entry]").forEach((link) => link.addEven
     return;
   }
   await window.VectoSiteNavigation.openConsoleEntry(link, {
-    onUnauthorized: () => openLogin({ currentTarget: link }),
+    onUnauthorized: () => {
+      document.body.dataset.loginRedirect = safeLoginReturnUrl(link.getAttribute("href"), "/console.html");
+      openLogin({ currentTarget: link });
+    },
   });
 }));
 document.querySelectorAll("[data-close-login]").forEach((button) => button.addEventListener("click", closeLogin));
@@ -1285,9 +1288,10 @@ async function submitUserLogin(forceTakeover = false, securityVerification = {})
     currentUrl.searchParams.delete("login");
     currentUrl.searchParams.delete("return_url");
     const safeRedirect = safeLoginReturnUrl(
-      `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
+      document.body.dataset.loginRedirect || `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
       "/",
     );
+    delete document.body.dataset.loginRedirect;
     const passwordTarget = isAdmin
       ? `/change-password.html?admin_console=1&return_url=${encodeURIComponent(safeRedirect)}`
       : `/change-password.html?return_url=${encodeURIComponent(safeRedirect)}`;
@@ -1313,7 +1317,10 @@ async function submitUserLogin(forceTakeover = false, securityVerification = {})
       actionText: "开始使用",
     };
     await window.VectoSiteNavigation?.showAuthFeedback?.(loginFeedback);
-    window.history.replaceState({}, "", safeRedirect);
+    // The shared public login dialog may have been opened from another public
+    // page (for example Hot Cases).  Complete that return path instead of only
+    // rewriting the address bar while leaving the homepage rendered.
+    window.location.assign(safeRedirect);
   } catch (error) {
     const detail = apiErrorDetail(error);
     loginStatus.textContent = detail.message || "登入失敗，請檢查帳號與密碼。";

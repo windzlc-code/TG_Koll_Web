@@ -359,6 +359,14 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('openLogin(event)', self.script)
         self.assertEqual(page.count('id="loginModal"'), 1)
 
+    def test_public_console_entry_reuses_home_login_dialog_and_preserves_return_target(self):
+        self.assertIn('if (document.querySelector("#loginModal")) return;', self.site_nav_script)
+        self.assertIn('loginUrl.searchParams.set("login", "1")', self.site_nav_script)
+        self.assertIn('loginUrl.searchParams.set("return_url", link.getAttribute("href") || "/console.html")', self.site_nav_script)
+        self.assertIn('document.body.dataset.loginRedirect || `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`', self.script)
+        self.assertIn('document.body.dataset.loginRedirect = safeLoginReturnUrl(link.getAttribute("href"), "/console.html")', self.script)
+        self.assertIn("window.location.assign(safeRedirect);", self.script)
+
     def test_home_workflow_cards_use_authenticated_console_entry(self):
         page = (self.static_dir / "index.html").read_text(encoding="utf-8")
         cards = re.findall(r'<a class="home-hero-card-shell"[^>]*>', page)
@@ -442,7 +450,7 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn('[data-site-home-label]', self.site_nav_script)
         self.assertIn('[data-site-nav-key="aboutVecto"]', self.site_nav_script)
         self.assertIn('"/about-vecto.html",', self.site_nav_script)
-        self.assertIn('["home", "aboutVecto", "pricing", "crm", "video"].includes(page)', self.site_nav_script)
+        self.assertIn('["home", "aboutVecto", "pricing", "caseStudies", "crm", "video"].includes(page)', self.site_nav_script)
         self.assertIn('url.searchParams.delete("admin_workspace_user_id")', self.site_nav_script)
         self.assertIn("function adminWorkspacePageUrl(value)", self.console_js)
         self.assertNotIn('data-proxy-market-open', self.console_js)

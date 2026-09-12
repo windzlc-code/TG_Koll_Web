@@ -410,11 +410,26 @@
       link.setAttribute("href", target);
       if (link.dataset.siteConsoleBoundaryReady === "true") return;
       link.dataset.siteConsoleBoundaryReady = "true";
-      link.addEventListener("click", () => {
+      link.addEventListener("click", (event) => {
         const isAdminEntry = document.querySelector('meta[name="admin-console-session"]')?.content === "1"
           || currentSessionMode === "admin"
           || hasAdminConsoleContext();
-        if (!isAdminEntry) return;
+        if (!isAdminEntry) {
+          // 首页已经加载同一个公共登录弹窗，由首页脚本在原位置打开它。
+          // 其余公开页统一回到首页并通过既有 ?login=1 入口打开该弹窗，避免
+          // 直接落到工作台的独立登录页面。
+          if (document.querySelector("#loginModal")) return;
+          event.preventDefault();
+          void openConsoleEntry(link, {
+            onUnauthorized: () => {
+              const loginUrl = new URL("/", window.location.origin);
+              loginUrl.searchParams.set("login", "1");
+              loginUrl.searchParams.set("return_url", link.getAttribute("href") || "/console.html");
+              window.location.assign(`${loginUrl.pathname}${loginUrl.search}`);
+            },
+          });
+          return;
+        }
         if (!publicPagePreservesAdminWorkspace()) removeSessionValue(ADMIN_WORKSPACE_STORAGE_KEY);
         markAdminConsoleContext();
         link.setAttribute("href", adminConsoleTarget("", workspaceUserId));
