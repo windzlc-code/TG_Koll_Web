@@ -72,6 +72,13 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertIn('.persona-create-actions .persona-create-clear-button', self.styles)
 
+    def test_persona_create_actions_fit_as_one_mobile_row_and_label_hot_sources_accurately(self):
+        self.assertIn('公开社媒讨论线索经人设筛选后由模型生成', self.console_script)
+        self.assertIn('grid-template-columns: max-content minmax(0, 1fr);', self.styles)
+        self.assertIn('grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.3fr) minmax(0, 0.88fr);', self.styles)
+        self.assertIn('.persona-create-submit-actions {\n    display: contents;', self.styles)
+        self.assertIn('font-size: clamp(10px, 3vw, 13px);', self.styles)
+
     def test_empty_persona_workspace_has_a_mobile_first_run_guide_without_replacing_selection_copy(self):
         self.assertIn("personaOverviewLoaded: false", self.console_script)
         self.assertIn("state.personaOverviewLoaded = true", self.console_script)

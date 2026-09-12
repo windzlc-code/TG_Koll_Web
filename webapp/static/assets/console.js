@@ -27872,7 +27872,7 @@ function renderPersonaCreateWorkbench() {
         </section>
         ${aiHotKeywords.length ? `<section class="persona-keyword-column persona-hot-keyword-column">
           <strong>热门关键词</strong>
-          <span>公开趋势参考后由模型生成</span>
+          <span title="公开社媒讨论线索会先按人设主题筛选，再由模型归纳为关键词。">公开社媒讨论线索经人设筛选后由模型生成</span>
           <div class="persona-keyword-grid">${renderKeywordButtons(aiHotKeywords)}</div>
         </section>` : ""}
       </div>
