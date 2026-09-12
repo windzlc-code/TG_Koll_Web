@@ -415,16 +415,15 @@
           || currentSessionMode === "admin"
           || hasAdminConsoleContext();
         if (!isAdminEntry) {
-          // 首页已经加载同一个公共登录弹窗，由首页脚本在原位置打开它。
-          // 其余公开页统一回到首页并通过既有 ?login=1 入口打开该弹窗，避免
-          // 直接落到工作台的独立登录页面。
-          if (document.querySelector("#loginModal")) return;
           event.preventDefault();
+          event.stopImmediatePropagation();
           void openConsoleEntry(link, {
             onUnauthorized: () => {
+              const returnUrl = link.getAttribute("href") || "/console.html";
+              if (window.VectoPublicAuth?.openLogin?.({ trigger: link, returnUrl })) return;
               const loginUrl = new URL("/", window.location.origin);
               loginUrl.searchParams.set("login", "1");
-              loginUrl.searchParams.set("return_url", link.getAttribute("href") || "/console.html");
+              loginUrl.searchParams.set("return_url", returnUrl);
               window.location.assign(`${loginUrl.pathname}${loginUrl.search}`);
             },
           });

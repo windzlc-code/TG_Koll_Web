@@ -171,11 +171,11 @@ body.case-report-modal-open { overflow: hidden; }
 .case-report-modal { position: fixed; z-index: 1200; inset: 0; display: grid; place-items: center; padding: clamp(12px, 3vw, 34px); background: rgba(12, 27, 38, .58); backdrop-filter: blur(6px); }
 .case-report-dialog { width: min(1120px, 100%); max-height: min(92vh, 980px); overflow: hidden; border: 1px solid #7aaab9; border-radius: 16px; outline: none; background: #edf3f6; box-shadow: 0 28px 80px rgba(6, 20, 30, .42); }
 .case-report-dialog-head { display: flex; min-height: 78px; align-items: center; justify-content: space-between; gap: 18px; padding: 14px clamp(16px, 2.5vw, 28px); border-bottom: 1px solid #b9ced7; background: linear-gradient(115deg, #ffffff, #eaf7f9); }
-.case-report-dialog-account { display: flex; min-width: 0; align-items: center; gap: 12px; }
-.case-report-dialog-account > div { display: flex; min-width: 0; align-items: center; gap: 10px; }
-.case-report-identity-row { flex-wrap: nowrap; }
+.case-report-dialog-account { display: flex; min-width: 0; align-items: center; gap: 12px; overflow: visible; }
+.case-report-dialog-account > div { display: flex; min-width: 0; align-items: center; gap: 10px; overflow: visible; }
+.case-report-identity-row { flex-wrap: nowrap; overflow: visible; }
 .case-report-identity-row .case-platform-badge { flex: 0 0 auto; }
-.case-report-dialog-account h2 { min-width: 0; overflow: hidden; margin: 0; color: #16293a; font-size: clamp(20px, 2.7vw, 28px); letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
+.case-report-dialog-account h2 { min-width: 0; margin: 0; padding: 2px 0; color: #16293a; font-size: clamp(20px, 2.7vw, 28px); line-height: 1.2; letter-spacing: -.025em; white-space: nowrap; }
 .case-report-dialog-close { display: grid; flex: 0 0 auto; width: 36px; height: 36px; place-items: center; border: 1px solid #abc1cb; border-radius: 50%; color: #314f60; background: #ffffff; cursor: pointer; }
 .case-report-dialog-close .case-action-icon { width: 20px; height: 20px; stroke-width: 1.75; }
 .case-report-dialog-close:hover,

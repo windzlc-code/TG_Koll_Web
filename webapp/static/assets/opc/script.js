@@ -937,6 +937,15 @@ function safeLoginReturnUrl(value, fallback = "/console.html") {
   }
 }
 
+window.VectoPublicAuth = Object.assign(window.VectoPublicAuth || {}, {
+  openLogin({ trigger = null, returnUrl = "/console.html" } = {}) {
+    if (!loginModal) return false;
+    document.body.dataset.loginRedirect = safeLoginReturnUrl(returnUrl, "/console.html");
+    openLogin({ currentTarget: trigger instanceof HTMLElement ? trigger : null });
+    return true;
+  },
+});
+
 function registrationEmailIsValid() {
   const input = applicationForm?.elements?.email;
   return Boolean(input?.value.trim()) && input.validity.valid;

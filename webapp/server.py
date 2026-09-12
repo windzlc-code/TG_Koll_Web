@@ -25682,6 +25682,7 @@ def create_app() -> FastAPI:
                 "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
                 "__CASE_STUDIES_CSS_VERSION__": _asset_version("assets", "opc", "case-studies.css"),
                 "__CASE_STUDIES_JS_VERSION__": _asset_version("assets", "opc", "case-studies.js"),
+                "__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js"),
             },
         )
 

@@ -360,9 +360,21 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertEqual(page.count('id="loginModal"'), 1)
 
     def test_public_console_entry_reuses_home_login_dialog_and_preserves_return_target(self):
-        self.assertIn('if (document.querySelector("#loginModal")) return;', self.site_nav_script)
+        case_studies_html = (self.static_dir / "case-studies.html").read_text(encoding="utf-8")
+        self.assertIn('id="loginModal"', case_studies_html)
+        self.assertIn('id="homeLoginForm"', case_studies_html)
+        self.assertIn('/assets/opc/script.js?v=__OPC_SCRIPT_VERSION__', case_studies_html)
+        server_source = Path(server.__file__).read_text(encoding="utf-8")
+        case_route = server_source.split('@app.get("/case-studies.html"', 1)[1].split(
+            '@app.get("/bundle-auth-complete.html"', 1
+        )[0]
+        self.assertIn('"__OPC_SCRIPT_VERSION__": _asset_version("assets", "opc", "script.js")', case_route)
+        self.assertIn("window.VectoPublicAuth = Object.assign", self.script)
+        self.assertIn("openLogin({ trigger = null, returnUrl = \"/console.html\" } = {})", self.script)
+        self.assertIn("window.VectoPublicAuth?.openLogin?.({ trigger: link, returnUrl })", self.site_nav_script)
+        self.assertIn("event.stopImmediatePropagation();", self.site_nav_script)
         self.assertIn('loginUrl.searchParams.set("login", "1")', self.site_nav_script)
-        self.assertIn('loginUrl.searchParams.set("return_url", link.getAttribute("href") || "/console.html")', self.site_nav_script)
+        self.assertIn('loginUrl.searchParams.set("return_url", returnUrl)', self.site_nav_script)
         self.assertIn('document.body.dataset.loginRedirect || `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`', self.script)
         self.assertIn('document.body.dataset.loginRedirect = safeLoginReturnUrl(link.getAttribute("href"), "/console.html")', self.script)
         self.assertIn("window.location.assign(safeRedirect);", self.script)
