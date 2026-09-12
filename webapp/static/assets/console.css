@@ -6776,6 +6776,51 @@ body.persona-touch-dragging .persona-list-card:active {
   color: var(--accent-ink);
 }
 
+.persona-create-submit-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.persona-create-actions .persona-create-clear-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 42px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.persona-create-clear-button > .ui-action-icon,
+.persona-create-clear-button > .ui-trash-icon,
+.persona-create-clear-button > .ui-form-list-icon,
+.persona-create-clear-button > .ui-lightbox-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.25;
+}
+
+.persona-create-clear-button:hover,
+.persona-create-clear-button:focus-visible {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
+  background: color-mix(in srgb, var(--danger) 7%, var(--panel-solid));
+}
+
+@media (max-width: 520px) {
+  .persona-create-submit-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+}
+
 .persona-create-workbench button:disabled {
   opacity: 0.55;
   cursor: not-allowed;

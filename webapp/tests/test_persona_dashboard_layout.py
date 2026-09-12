@@ -59,6 +59,19 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn("content.scrollTop = previousScrollTop;", self.console_script)
         self.assertIn("renderPersonaCreateSurface({ preserveScroll: true });", self.console_script)
 
+    def test_persona_create_clear_selection_sits_after_the_generate_action_with_text(self):
+        actions_start = self.console_script.index('<div class="persona-create-actions">')
+        actions_end = self.console_script.index('\n        ${resultMarkup}', actions_start)
+        actions = self.console_script[actions_start:actions_end]
+        self.assertIn('class="persona-create-submit-actions"', actions)
+        self.assertIn('data-persona-create-ai-clear', actions)
+        self.assertIn('<span>清空选择</span>', actions)
+        self.assertLess(
+            actions.index('data-persona-create-ai-submit'),
+            actions.index('data-persona-create-ai-clear'),
+        )
+        self.assertIn('.persona-create-actions .persona-create-clear-button', self.styles)
+
     def test_empty_persona_workspace_has_a_mobile_first_run_guide_without_replacing_selection_copy(self):
         self.assertIn("personaOverviewLoaded: false", self.console_script)
         self.assertIn("state.personaOverviewLoaded = true", self.console_script)
@@ -1640,9 +1653,10 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         modal_end = self.console_script.index("\nfunction personaGroupStepOptions", modal_start)
         create_modal = self.console_script[modal_start:modal_end]
 
-        self.assertIn("最多选择 2 个，用于确定人设生成的重点方向", create_workbench)
-        self.assertIn("const keywordLimitReached = aiSelectedKeywords.length >= 2;", create_workbench)
-        self.assertIn("const disabled = aiCreateBusy || (!active && keywordLimitReached);", create_workbench)
+        self.assertIn("const keywordLimit = personaCreateKeywordLimit(createState);", create_workbench)
+        self.assertIn("const keywordGroupLimit = personaCreateKeywordGroupLimit(createState);", create_workbench)
+        self.assertIn("每列最多选择 ${keywordGroupLimit} 个", create_workbench)
+        self.assertIn("const disabled = aiCreateBusy || (!active && !personaCreateCanSelectKeyword(keyword, createState));", create_workbench)
         self.assertIn("function personaCreateHasPendingChanges()", self.console_script)
         self.assertIn('modal.__requestClose = () => {', create_modal)
         self.assertIn("const hasPendingChanges = personaCreateHasPendingChanges();", create_modal)

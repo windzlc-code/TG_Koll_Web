@@ -27937,8 +27937,10 @@ function renderPersonaCreateWorkbench() {
           </div>
           <div class="persona-create-actions">
             <button type="button" data-persona-create-ai-back ${aiCreateBusy ? "disabled" : ""}>返回修改提示词</button>
-            <button type="button" class="unified-action-icon-button" data-persona-create-ai-clear title="清空选择" aria-label="清空选择" ${aiSelectedKeywords.length && !aiCreateBusy ? "" : "disabled"}>${renderClearSelectionIcon()}</button>
-            <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy || !keywordMinimumMet ? "disabled" : ""}>${aiCreateBusy ? renderBusyButtonContent("正在生成人设", true, createBusy.aiCreateStartedAt) : (!keywordMinimumMet ? `至少选择 ${keywordMinimum} 个关键词` : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设"))}</button>
+            <div class="persona-create-submit-actions">
+              <button type="button" class="primary" data-persona-create-ai-submit aria-busy="${aiCreateBusy ? "true" : "false"}" ${anyCreateBusy || !keywordMinimumMet ? "disabled" : ""}>${aiCreateBusy ? renderBusyButtonContent("正在生成人设", true, createBusy.aiCreateStartedAt) : (!keywordMinimumMet ? `至少选择 ${keywordMinimum} 个关键词` : (anyCreateBusy ? `${busyLabel}中` : "确认并生成人设"))}</button>
+              <button type="button" class="persona-create-clear-button" data-persona-create-ai-clear title="清空已选关键词" aria-label="清空已选关键词" ${aiSelectedKeywords.length && !aiCreateBusy ? "" : "disabled"}>${renderClearSelectionIcon()}<span>清空选择</span></button>
+            </div>
           </div>
         </div>
         ${resultMarkup}
