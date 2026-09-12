@@ -182,3 +182,15 @@ def test_case_catalog_uses_smooth_actions_and_grid_backdrop() -> None:
     assert ".case-profile-open" not in stylesheet
     assert "border-radius: 0;" in stylesheet
     assert "repeating-linear-gradient(90deg, rgba(44, 112, 136, .07)" in stylesheet
+
+
+def test_case_detail_keeps_identity_horizontal_and_fills_daily_traffic_calendar() -> None:
+    script = (ROOT / "static" / "assets" / "opc" / "case-studies.js").read_text(encoding="utf-8")
+    stylesheet = (ROOT / "static" / "assets" / "opc" / "case-studies.css").read_text(encoding="utf-8")
+
+    assert "trafficDaysForMonth" in script
+    assert "length: totalDays" in script
+    assert 'class="case-traffic-day-list"' in script
+    assert 'class="case-report-identity-row"' in script
+    assert ".case-report-identity-row" in stylesheet
+    assert ".case-traffic-day-list" in stylesheet

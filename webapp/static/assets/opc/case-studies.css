@@ -172,8 +172,10 @@ body.case-report-modal-open { overflow: hidden; }
 .case-report-dialog { width: min(1120px, 100%); max-height: min(92vh, 980px); overflow: hidden; border: 1px solid #7aaab9; border-radius: 16px; outline: none; background: #edf3f6; box-shadow: 0 28px 80px rgba(6, 20, 30, .42); }
 .case-report-dialog-head { display: flex; min-height: 78px; align-items: center; justify-content: space-between; gap: 18px; padding: 14px clamp(16px, 2.5vw, 28px); border-bottom: 1px solid #b9ced7; background: linear-gradient(115deg, #ffffff, #eaf7f9); }
 .case-report-dialog-account { display: flex; min-width: 0; align-items: center; gap: 12px; }
-.case-report-dialog-account > div { min-width: 0; }
-.case-report-dialog-account h2 { overflow: hidden; margin: 5px 0 0; color: #16293a; font-size: clamp(20px, 2.7vw, 28px); letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
+.case-report-dialog-account > div { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.case-report-identity-row { flex-wrap: nowrap; }
+.case-report-identity-row .case-platform-badge { flex: 0 0 auto; }
+.case-report-dialog-account h2 { min-width: 0; overflow: hidden; margin: 0; color: #16293a; font-size: clamp(20px, 2.7vw, 28px); letter-spacing: -.025em; text-overflow: ellipsis; white-space: nowrap; }
 .case-report-dialog-close { display: grid; flex: 0 0 auto; width: 36px; height: 36px; place-items: center; border: 1px solid #abc1cb; border-radius: 50%; color: #314f60; background: #ffffff; cursor: pointer; }
 .case-report-dialog-close .case-action-icon { width: 20px; height: 20px; stroke-width: 1.75; }
 .case-report-dialog-close:hover,
@@ -279,6 +281,11 @@ body.case-report-modal-open { overflow: hidden; }
 .case-chart-line { fill: none; stroke: #147c94; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .case-chart-point { fill: #edf9fb; stroke: #177f97; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .case-chart-point.is-peak { fill: #2ab3c5; stroke: #17394e; }
+.case-trend-chart .case-chart-value { fill: #155b70; font-size: 9px; font-weight: 850; }
+.case-traffic-day-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); gap: 6px; margin-top: 12px; }
+.case-traffic-day-list span { display: flex; align-items: baseline; justify-content: space-between; gap: 7px; padding: 6px 8px; border: 1px solid #d8e6eb; color: #63808e; background: #fbfdfe; font-size: 10px; }
+.case-traffic-day-list b { color: #395e6f; font-weight: 850; }
+.case-traffic-day-list em { color: #12667b; font-size: 11px; font-style: normal; font-weight: 850; }
 .case-chart-empty { margin: 14px 0 0; padding: 18px; border: 1px dashed #c7d8df; color: #6c8391; background: #fbfdfe; font-size: 12px; text-align: center; }
 
 .case-table-wrap { overflow-x: auto; margin-top: 16px; border: 1px solid #d6e1e7; }

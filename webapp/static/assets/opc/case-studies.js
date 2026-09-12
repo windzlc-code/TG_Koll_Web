@@ -543,6 +543,18 @@
     });
     return [...byDate.values()].sort((left, right) => left.fullDate.localeCompare(right.fullDate));
   };
+  const trafficDaysForMonth = (trafficDays, month) => {
+    const match = /^(\d{4})-(\d{2})$/.exec(String(month || ""));
+    if (!match) return [];
+    const totalDays = new Date(Date.UTC(Number(match[1]), Number(match[2]), 0)).getUTCDate();
+    const byDate = new Map(asArray(trafficDays)
+      .filter((day) => day?.month === month)
+      .map((day) => [day.fullDate, day]));
+    return Array.from({ length: totalDays }, (_, index) => {
+      const fullDate = `${month}-${String(index + 1).padStart(2, "0")}`;
+      return byDate.get(fullDate) || { fullDate, date: fullDate.slice(5), month, posts: 0, views: 0 };
+    });
+  };
   const normalizeReport = (caseItem, payload) => {
     const result = payload?.report?.result || payload?.result || {};
     const report = result?.report || {};
@@ -659,7 +671,7 @@
     const trafficMonths = [...new Set(trafficDaily.map((day) => day.month).filter(Boolean))].sort();
     const rememberedTrafficMonth = trafficMonthsByCase.get(item.id);
     const selectedTrafficMonth = trafficMonths.includes(rememberedTrafficMonth) ? rememberedTrafficMonth : (trafficMonths.at(-1) || "");
-    const trafficDays = selectedTrafficMonth ? trafficDaily.filter((day) => day.month === selectedTrafficMonth) : trafficDaily;
+    const trafficDays = selectedTrafficMonth ? trafficDaysForMonth(trafficDaily, selectedTrafficMonth) : trafficDaily;
     const maxTraffic = Math.max(1, ...trafficDays.map((day) => Number(day.views || 0)));
     const totalTraffic = trafficDays.reduce((sum, day) => sum + Number(day.views || 0), 0);
     const activeTrafficDays = trafficDays.filter((day) => Number(day.views || 0) > 0);
@@ -668,7 +680,7 @@
     const trafficChartX = (index) => 58 + index * (816 / Math.max(1, trafficDays.length - 1));
     const trafficChartY = (value) => 226 - Number(value || 0) / maxTraffic * 174;
     const trafficChartPoints = trafficDays.map((day, index) => `${trafficChartX(index).toFixed(1)},${trafficChartY(day.views).toFixed(1)}`).join(" ");
-    const trafficChart = trafficDays.length ? `<div class="case-chart-wrap"><svg class="case-trend-chart" viewBox="0 0 920 310" role="img" aria-label="${t.trafficTrendTitle}"><line x1="58" y1="226" x2="874" y2="226" class="case-chart-axis"/><line x1="58" y1="42" x2="58" y2="226" class="case-chart-axis"/>${[0, .25, .5, .75, 1].map((ratio) => { const y = 226 - ratio * 174; return `<g><line x1="58" y1="${y}" x2="874" y2="${y}" class="case-chart-gridline"/><text x="48" y="${y + 4}" text-anchor="end">${format(Math.round(maxTraffic * ratio))}</text></g>`; }).join("")}${trafficDays.map((day, index) => { const x = trafficChartX(index); const y = trafficChartY(day.views); const isPeak = day.fullDate === peakTraffic?.fullDate; return `<g><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isPeak ? 4.5 : 3}" class="case-chart-point ${isPeak ? "is-peak" : ""}"><title>${esc(day.fullDate)} · ${format(day.views)}</title></circle><text class="case-chart-x-label" x="${x.toFixed(1)}" y="247" text-anchor="end" transform="rotate(-38 ${x.toFixed(1)} 247)">${esc(day.date)}</text></g>`; }).join("")}<polyline points="${trafficChartPoints}" class="case-chart-line"/></svg></div>` : `<p class="case-chart-empty">${t.trafficNoData}</p>`;
+    const trafficChart = trafficDays.length ? `<div class="case-chart-wrap"><svg class="case-trend-chart" viewBox="0 0 920 310" role="img" aria-label="${t.trafficTrendTitle}"><line x1="58" y1="226" x2="874" y2="226" class="case-chart-axis"/><line x1="58" y1="42" x2="58" y2="226" class="case-chart-axis"/>${[0, .25, .5, .75, 1].map((ratio) => { const y = 226 - ratio * 174; return `<g><line x1="58" y1="${y}" x2="874" y2="${y}" class="case-chart-gridline"/><text x="48" y="${y + 4}" text-anchor="end">${format(Math.round(maxTraffic * ratio))}</text></g>`; }).join("")}${trafficDays.map((day, index) => { const x = trafficChartX(index); const y = trafficChartY(day.views); const isPeak = day.fullDate === peakTraffic?.fullDate; return `<g><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isPeak ? 4.5 : 2.5}" class="case-chart-point ${isPeak ? "is-peak" : ""}"><title>${esc(day.fullDate)} · ${format(day.views)}</title></circle><text class="case-chart-x-label" x="${x.toFixed(1)}" y="247" text-anchor="end" transform="rotate(-52 ${x.toFixed(1)} 247)">${esc(day.date)}</text>${Number(day.views || 0) > 0 ? `<text class="case-chart-value" x="${x.toFixed(1)}" y="${Math.max(34, y - 9).toFixed(1)}" text-anchor="middle">${format(day.views)}</text>` : ""}</g>`; }).join("")}<polyline points="${trafficChartPoints}" class="case-chart-line"/></svg></div><div class="case-traffic-day-list" aria-label="${t.trafficTrendTitle}">${trafficDays.map((day) => `<span><b>${esc(day.date)}</b><em>${format(day.views)}</em></span>`).join("")}</div>` : `<p class="case-chart-empty">${t.trafficNoData}</p>`;
     const dailyWave = item.daily.length ? item.daily.map((day) => { const isPeak = day.date === peakDaily?.date && day.value === peakDaily?.value; return `<div class="case-daily-wave-row ${isPeak ? "is-peak" : ""}"><span>${esc(day.date)}<small>${format(day.posts)}${t.dailyWavePosts}</small></span><i><b style="width:${Math.max(3, Math.round(Number(day.value || 0) / maxDaily * 100))}%"></b></i><strong>${format(day.value)}</strong></div>`; }).join("") : `<p class="case-chart-empty">${t.trafficNoData}</p>`;
     const reportedStyles = asArray(item.styles);
     const totalMediaPages = Math.max(1, Math.ceil(item.mediaPosts.length / mediaPostsPerPage));
@@ -721,7 +733,7 @@
               <header class="case-report-dialog-head">
                 <div class="case-report-dialog-account">
                   <span class="case-profile-avatar case-profile-avatar-small ${item.avatarUrl ? "" : "is-fallback"}">${profileAvatar}</span>
-                  <div><span class="case-platform-badge">${threadsIcon()} ${esc(item.platform)}</span><h2 id="case-account-title">@${esc(item.username)}</h2></div>
+                  <div class="case-report-identity-row"><span class="case-platform-badge">${threadsIcon()} ${esc(item.platform)}</span><h2 id="case-account-title">@${esc(item.username)}</h2></div>
                 </div>
                 <button class="case-report-dialog-close" type="button" data-case-modal-close aria-label="${t.closeReport}">${closeIcon()}</button>
               </header>
