@@ -2367,7 +2367,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 "keywords": ["夜班司机", "城市见闻", "出租车故事", "深夜通勤", "城市观察"],
                 "hotKeywords": ["下班日常", "深夜食堂", "通勤吐槽", "城市夜生活", "深夜聊天"],
             },
-        ) as cli_mock:
+        ) as cli_mock, mock.patch.object(
+            server,
+            "_fetch_persona_create_ptt_trend_candidates",
+            return_value=[{"platform": "ptt", "content": "热门看板 Gossiping：深夜城市生活讨论", "metrics": {"activeUsers": 3000}}],
+        ):
             resp = self.client.post(
                 "/api/persona_dashboard/personas/ai_keywords",
                 json={
@@ -2378,6 +2382,118 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["hot_keywords"], ["下班日常", "深夜食堂", "通勤吐槽", "城市夜生活", "深夜聊天"])
         self.assertTrue(cli_mock.call_args.args[0]["includeHotKeywords"])
+        self.assertIn("PTT 热门看板", cli_mock.call_args.args[0]["hotTrendEvidence"])
+
+    def test_persona_ai_keywords_keeps_five_model_hot_keywords_when_live_trend_probe_is_empty(self):
+        regular_keywords = ["夜班司机", "城市见闻", "出租车故事", "深夜通勤", "城市观察"]
+        hot_keywords = ["下班日常", "深夜食堂", "通勤吐槽", "城市夜生活", "深夜聊天"]
+        with mock.patch.object(
+            server,
+            "_run_persona_create_cli",
+            return_value={"ok": True, "keywords": regular_keywords, "hotKeywords": hot_keywords},
+        ) as cli_mock, mock.patch.object(
+            server,
+            "_fetch_persona_create_ptt_trend_candidates",
+            return_value=[],
+        ):
+            result = server._persona_dashboard_suggest_keywords(
+                server.PersonaDashboardPersonaAiKeywordsPayload(
+                    name="Night Driver",
+                    prompt="夜班出租车司机，分享夜间载客见闻和城市通勤观察。",
+                    include_hot_keywords=True,
+                )
+            )
+
+        self.assertEqual(result["keywords"], regular_keywords)
+        self.assertEqual(result["hot_keywords"], hot_keywords)
+        self.assertEqual(result["hot_keyword_source"]["fallback"], "persona_model")
+        fallback_payload = cli_mock.call_args.args[0]
+        self.assertTrue(fallback_payload["includeHotKeywords"])
+        self.assertEqual(fallback_payload["hotTrendMode"], "persona_fallback")
+
+    def test_persona_ai_keywords_passes_public_ptt_hotboards_to_model(self):
+        regular_keywords = ["夜班司机", "城市见闻", "出租车故事", "深夜通勤", "城市观察"]
+        hot_keywords = ["下班日常", "深夜食堂", "通勤吐槽", "城市夜生活", "深夜聊天"]
+        with mock.patch.object(
+            server,
+            "_run_persona_create_cli",
+            return_value={"ok": True, "keywords": regular_keywords, "hotKeywords": hot_keywords},
+        ) as cli_mock, mock.patch.object(
+            server,
+            "_fetch_persona_create_ptt_trend_candidates",
+            return_value=[{
+                "id": "ptt:Gossiping:123",
+                "platform": "ptt",
+                "content": "热门看板 Gossiping：台北夜市美食讨论",
+                "metrics": {"activeUsers": 3584},
+            }],
+        ):
+            result = server._persona_dashboard_suggest_keywords(
+                server.PersonaDashboardPersonaAiKeywordsPayload(
+                    name="Night Driver",
+                    prompt="夜班出租车司机，分享夜间载客见闻和城市通勤观察。",
+                    include_hot_keywords=True,
+                )
+            )
+
+        self.assertTrue(result["hot_keyword_source"]["available"])
+        self.assertEqual(result["hot_keyword_source"]["platforms"], ["ptt"])
+        self.assertIn("PTT 热门看板活跃人数 3584", cli_mock.call_args.args[0]["hotTrendEvidence"])
+        self.assertEqual(cli_mock.call_count, 1)
+
+    def test_youtube_public_trend_probe_parses_fresh_true_view_counts(self):
+        initial_data = {
+            "contents": {
+                "twoColumnSearchResultsRenderer": {
+                    "primaryContents": {
+                        "sectionListRenderer": {
+                            "contents": [{
+                                "itemSectionRenderer": {
+                                    "contents": [{
+                                        "videoRenderer": {
+                                            "videoId": "fresh-video-1",
+                                            "title": {"runs": [{"text": "下班后十分钟家常菜"}]},
+                                            "ownerText": {"runs": [{"text": "生活实验室"}]},
+                                            "viewCountText": {"simpleText": "5.8万次观看"},
+                                            "publishedTimeText": {"simpleText": "2天前"},
+                                            "detailedMetadataSnippets": [{"snippetText": {"runs": [{"text": "快速晚餐做法"}]}}],
+                                        },
+                                    }],
+                                },
+                            }],
+                        },
+                    },
+                },
+            },
+        }
+        response = mock.Mock(text=f"var ytInitialData = {json.dumps(initial_data, ensure_ascii=False)};")
+        response.raise_for_status = mock.Mock()
+        with mock.patch.object(server.requests, "get", return_value=response) as get_mock:
+            rows = server._fetch_persona_create_youtube_trend_candidates(["家常菜"])
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["platform"], "youtube")
+        self.assertEqual(rows[0]["metrics"]["viewCount"], 58_000)
+        self.assertIn("快速晚餐做法", rows[0]["content"])
+        self.assertIn("sp=EgIIAw%3D%3D", get_mock.call_args.args[0])
+
+    def test_ptt_public_trend_probe_parses_hot_board_activity_without_login(self):
+        response = mock.Mock(text="""
+          <a class="board" href="/bbs/Gossiping/index.html">
+            <div class="board-name">Gossiping</div>
+            <div class="board-nuser"><span class="hl f1">3,584</span></div>
+            <div class="board-title">&#9678;[討論] 台北夜市美食</div>
+          </a>
+        """)
+        response.raise_for_status = mock.Mock()
+        with mock.patch.object(server.requests, "get", return_value=response) as get_mock:
+            rows = server._fetch_persona_create_ptt_trend_candidates()
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["platform"], "ptt")
+        self.assertEqual(rows[0]["metrics"]["activeUsers"], 3584)
+        self.assertIn("夜市美食", rows[0]["content"])
+        self.assertEqual(get_mock.call_args.args[0], "https://www.ptt.cc/bbs/hotboards.html")
 
     def test_persona_ai_create_calls_cli_and_returns_profile(self):
         archives = [

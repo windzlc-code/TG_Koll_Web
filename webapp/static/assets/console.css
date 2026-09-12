@@ -6714,7 +6714,10 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-create-modal .console-modal-content {
   gap: 0;
-  padding-right: 0;
+  /* Keep scrollbars outside the form's usable width on desktop too. */
+  box-sizing: border-box;
+  padding-right: 12px;
+  scrollbar-gutter: stable;
 }
 
 .persona-create-modal .persona-create-workbench {

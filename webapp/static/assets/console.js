@@ -3378,6 +3378,8 @@ function queuePlatformLabel(platform) {
   const key = String(platform || "").trim().toLowerCase();
   if (key === "threads") return "Threads";
   if (key === "instagram") return "Instagram";
+  if (key === "youtube") return "YouTube";
+  if (key === "ptt") return "PTT";
   return key || "-";
 }
 
@@ -27857,6 +27859,10 @@ function renderPersonaCreateWorkbench() {
   const anyCreateBusy = personaCreateIsBusy();
   const busyLabel = personaCreateBusyKind();
   const keywordLimit = personaCreateKeywordLimit(createState);
+  const aiHotKeywordPlatforms = Array.isArray(aiHotKeywordSource?.platforms)
+    ? aiHotKeywordSource.platforms.map((item) => queuePlatformLabel(item)).filter(Boolean)
+    : [];
+  const aiHotKeywordPlatformLabel = aiHotKeywordPlatforms.length ? aiHotKeywordPlatforms.join(" / ") : "公开社媒";
   const keywordGroupLimit = personaCreateKeywordGroupLimit(createState);
   const keywordMinimum = 2;
   const selectedKeywordGroups = personaCreateSelectedKeywordGroups(createState);
@@ -27879,7 +27885,7 @@ function renderPersonaCreateWorkbench() {
         </section>
         ${aiHotKeywords.length ? `<section class="persona-keyword-column persona-hot-keyword-column">
           <strong>热门关键词</strong>
-          <span title="模型先从人设生成公开检索词；系统仅使用本轮公开 Threads 实际解析到的浏览量和互动数据排序，再由模型归纳。">${aiHotKeywordSource?.available ? `基于 ${Number(aiHotKeywordSource.candidate_count || 0)} 条公开帖真实热度，由模型生成` : "本轮未取得带指标的公开热点"}</span>
+          <span title="系统先读取公开趋势页，再由模型归纳可选热门方向；用户选中的热门关键词会反过来影响完整人设。">${aiHotKeywordSource?.available ? `基于 ${Number(aiHotKeywordSource.candidate_count || 0)} 条 ${esc(aiHotKeywordPlatformLabel)} 公开趋势内容，由模型生成` : (aiHotKeywordSource?.fallback === "persona_model" ? "未取得可核验实时热度，本轮由模型按人设生成" : "本轮未取得带指标的公开热点")}</span>
           <div class="persona-keyword-grid">${renderKeywordButtons(aiHotKeywords)}</div>
         </section>` : ""}
       </div>

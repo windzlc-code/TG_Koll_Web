@@ -30,7 +30,14 @@ type PostImageStyleKind = (typeof POST_IMAGE_STYLE_KINDS)[number];
 type PostImageStyle = { label: string; kind: PostImageStyleKind };
 
 type Input =
-  | { action: "suggest-keywords"; personaName: string; userPrompt: string; includeHotKeywords?: boolean; hotTrendEvidence?: string }
+  | {
+    action: "suggest-keywords";
+    personaName: string;
+    userPrompt: string;
+    includeHotKeywords?: boolean;
+    hotTrendEvidence?: string;
+    hotTrendMode?: "metric" | "persona_fallback";
+  }
   | { action: "suggest-trend-search-seeds"; personaName: string; userPrompt: string }
   | { action: "suggest-post-directions"; personaName: string; personaCore: string; userContent?: string; previousKeywords?: string[]; interfaceLanguage?: string }
   | { action: "suggest-image-styles"; personaName: string; personaCore: string; userContent?: string; previousImageStyles?: string[]; interfaceLanguage?: string }
@@ -558,9 +565,11 @@ async function derivePersonaKeywordGroupsWithCodex(
   personaName: string,
   userPrompt: string,
   hotTrendEvidence = "",
+  hotTrendMode: "metric" | "persona_fallback" = "metric",
 ): Promise<{ keywords: string[]; hotKeywords: string[] }> {
   const suppliedEvidence = String(hotTrendEvidence || "").trim();
-  const trendIntel = suppliedEvidence ? "" : await fetchPersonaTrendIntelForNode({
+  const usePersonaOnlyFallback = hotTrendMode === "persona_fallback";
+  const trendIntel = suppliedEvidence || usePersonaOnlyFallback ? "" : await fetchPersonaTrendIntelForNode({
     genres: [],
     personaPersonality: "",
     personaGender: "",
@@ -574,18 +583,24 @@ async function derivePersonaKeywordGroupsWithCodex(
     timeoutMs: 5_500,
     topicContext: { userInput: userPrompt },
   });
-  if (!suppliedEvidence && !trendIntel.trim()) {
+  if (!suppliedEvidence && !usePersonaOnlyFallback && !trendIntel.trim()) {
     throw new Error("热门关键词提炼失败：未取得可用的公开趋势参考，请稍后重试。");
   }
   const socialTrendEvidence = suppliedEvidence || extractPersonaCreateSocialTrendEvidence(trendIntel);
+  const hotKeywordEvidenceRule = usePersonaOnlyFallback
+    ? "本轮未取得可核验的公开热度，热门关键词必须只依据人设提示词由模型自主生成；它们仍应是可自然融入该人设的当下表达切口，不能假称来自真实热帖。"
+    : "热门关键词必须能从至少一条参考帖的主题和真实热度数据中得到支持，但不要把具体事件、数字或原帖标题写成关键词。";
+  const trendReference = usePersonaOnlyFallback
+    ? "本轮未取得可核验的公开热度；请只依据人设提示词生成热门关键词。"
+    : socialTrendEvidence;
   const instruction = [
     "你是自动化推文人设策划助手。",
     "任务：根据用户的人设提示词和下方带真实公开指标的社媒帖子参考，生成两组各 5 个可选的人设关键词。",
     "普通关键词代表长期身份、形象、日常、语气或圈子；热门关键词代表能自然融入该人设的当下社媒表达切口。",
-    "两组关键词都会直接影响后续完整人设生成。热门关键词不是单篇标题，不能脱离人设，也不能与普通关键词重复或近义重复。",
-    "优先级必须是：人设提示词的身份、内容方向和气质 > 公开帖子参考。公开帖子参考只用于发现表达角度，绝不能覆盖或改变人设核心。",
-    "热门关键词必须能从人设提示词自然推导；不得引入提示词没有涉及的品牌、产品、突发事件、灾害、科技领域、职业或新闻话题。",
-    "热门关键词必须能从至少一条参考帖的主题和真实热度数据中得到支持，但不要把具体事件、数字或原帖标题写成关键词。",
+    "两组关键词都会直接影响后续完整人设生成。普通关键词描述现有人设；热门关键词是用户可选的新方向，用户选中后必须反过来影响人设的内容场景、表达和视觉设定。",
+    "热门关键词优先级必须是：本轮公开趋势内容 > 人设提示词。人设提示词只用于排除明显不安全、完全无法融合或与人设核心相冲突的方向，不能把热门方向收窄成原有人设的同义词。",
+    "热门关键词可以引入提示词未直接写出的热门场景、讨论角度或生活化话题；但不得使用具体品牌、事故、灾害、政治煽动或单篇帖子标题，且不能与普通关键词重复或近义重复。",
+    hotKeywordEvidenceRule,
     "每个热门关键词应是人设会自然聊到的场景、情绪、关系、日常选择或讨论角度，而不是热点新闻标题。",
     "每个词 3 到 10 个中文字，直白、有画面感，不要使用抽象空话、活动标题、工具名称或无关职业。",
     "只输出 JSON，不要 Markdown。",
@@ -599,8 +614,8 @@ async function derivePersonaKeywordGroupsWithCodex(
     `人设名称：${personaName}`,
     `用户提示词：${compactLongAiInput(userPrompt, 3000)}`,
     "",
-    "公开高热帖子参考（仅作表达角度参考，不要照抄内容或把数字写进关键词）：",
-    socialTrendEvidence,
+    "公开趋势参考（仅作表达角度参考，不要照抄内容或把数字写进关键词）：",
+    trendReference,
   ].join("\n");
   try {
     const raw = await runCodexJsonInstruction(instruction);
@@ -931,7 +946,12 @@ async function main() {
     if (!userPrompt) throw new Error("persona prompt cannot be empty");
     try {
       if (input.includeHotKeywords !== false) {
-        const result = await derivePersonaKeywordGroupsWithCodex(personaName, userPrompt, String(input.hotTrendEvidence || ""));
+        const result = await derivePersonaKeywordGroupsWithCodex(
+          personaName,
+          userPrompt,
+          String(input.hotTrendEvidence || ""),
+          input.hotTrendMode === "persona_fallback" ? "persona_fallback" : "metric",
+        );
         printJson({ ok: true, action: input.action, personaName, ...result });
       } else {
         const keywords = await derivePersonaDirectionKeywordsWithCodex(personaName, userPrompt);

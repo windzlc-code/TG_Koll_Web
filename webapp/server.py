@@ -6,6 +6,7 @@ import contextlib
 import copy
 import hashlib
 import hmac
+import html
 import json
 import logging
 import math
@@ -19189,6 +19190,10 @@ def _duplicate_persona_archive(archive_id: str) -> dict[str, Any]:
 
 PERSONA_CREATE_TREND_FRESHNESS_DAYS = 14
 PERSONA_CREATE_TREND_CANDIDATE_LIMIT = 12
+PERSONA_CREATE_YOUTUBE_TREND_LIMIT = PERSONA_CREATE_TREND_CANDIDATE_LIMIT
+PERSONA_CREATE_YOUTUBE_REQUEST_TIMEOUT_SECONDS = 8
+PERSONA_CREATE_PTT_TREND_LIMIT = PERSONA_CREATE_TREND_CANDIDATE_LIMIT
+PERSONA_CREATE_PTT_REQUEST_TIMEOUT_SECONDS = 8
 
 
 def _persona_create_trend_probe_snapshot(name: str, prompt: str) -> dict[str, Any]:
@@ -19209,6 +19214,254 @@ def _persona_create_trend_probe_snapshot(name: str, prompt: str) -> dict[str, An
     }
 
 
+def _persona_create_youtube_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    simple = str(value.get("simpleText") or "").strip()
+    if simple:
+        return simple
+    runs = value.get("runs")
+    if not isinstance(runs, list):
+        return ""
+    return "".join(str(item.get("text") or "") for item in runs if isinstance(item, dict)).strip()
+
+
+def _persona_create_youtube_snippet_text(value: Any) -> str:
+    if not isinstance(value, dict):
+        return ""
+    return _persona_create_youtube_text(value.get("snippetText") if isinstance(value.get("snippetText"), dict) else value)
+
+
+def _persona_create_extract_balanced_json(text: str, start_at: int) -> dict[str, Any] | None:
+    start = text.find("{", max(0, start_at))
+    if start < 0:
+        return None
+    depth = 0
+    escaped = False
+    quote_char = ""
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote_char:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote_char:
+                quote_char = ""
+            continue
+        if char in {"\"", "'"}:
+            quote_char = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    parsed = json.loads(text[start:index + 1])
+                except (TypeError, ValueError):
+                    return None
+                return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _persona_create_youtube_initial_data(html: str) -> dict[str, Any] | None:
+    for match in re.finditer(r"(?:var\s+)?ytInitialData\s*=\s*", str(html or "")):
+        parsed = _persona_create_extract_balanced_json(html, match.end())
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _persona_create_walk_youtube_video_renderers(value: Any) -> Iterable[dict[str, Any]]:
+    if isinstance(value, dict):
+        renderer = value.get("videoRenderer")
+        if isinstance(renderer, dict):
+            yield renderer
+        for child in value.values():
+            yield from _persona_create_walk_youtube_video_renderers(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _persona_create_walk_youtube_video_renderers(child)
+
+
+def _persona_create_metric_text_number(value: Any) -> int:
+    text = str(value or "").replace(",", "").replace("，", "").strip()
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([kKmMbB萬万億亿]?)", text)
+    if not match:
+        return 0
+    try:
+        number = float(match.group(1))
+    except (TypeError, ValueError):
+        return 0
+    multiplier = {
+        "k": 1_000,
+        "m": 1_000_000,
+        "b": 1_000_000_000,
+        "万": 10_000,
+        "萬": 10_000,
+        "亿": 100_000_000,
+        "億": 100_000_000,
+    }.get(match.group(2).lower(), 1)
+    return max(0, int(round(number * multiplier)))
+
+
+def _persona_create_youtube_published_at(label: str) -> str:
+    text = str(label or "").strip().lower()
+    match = re.search(
+        r"(\d+)\s*(minutes?|hours?|days?|weeks?|months?|years?|分钟|分鐘|小时|小時|天|日|周|週|星期|个月|個月|月|年)\s*(?:ago|前)?",
+        text,
+    )
+    if not match:
+        return ""
+    amount = max(0, _number(match.group(1), 0))
+    unit = match.group(2)
+    days_per_unit = 1 / 1440 if unit.startswith(("minute", "分钟", "分鐘")) else 1 / 24 if unit.startswith(("hour", "小时", "小時")) else 1
+    if unit.startswith(("week", "周", "週", "星期")):
+        days_per_unit = 7
+    elif unit.startswith(("month", "个月", "個月", "月")):
+        days_per_unit = 30
+    elif unit.startswith(("year", "年")):
+        days_per_unit = 365
+    if amount * days_per_unit > PERSONA_CREATE_TREND_FRESHNESS_DAYS:
+        return ""
+    return (datetime.now(timezone.utc) - timedelta(days=amount * days_per_unit)).isoformat()
+
+
+def _fetch_persona_create_youtube_trend_candidates(search_seeds: list[str]) -> list[dict[str, Any]]:
+    queries = list(dict.fromkeys(
+        str(item or "").strip()
+        for item in search_seeds
+        if str(item or "").strip()
+    ))[:4]
+    if not queries:
+        return []
+
+    def fetch_query(query: str) -> list[dict[str, Any]]:
+        url = "https://www.youtube.com/results?" + urlencode({
+            "search_query": query,
+            # Public YouTube upload-date filter: this week.
+            "sp": "EgIIAw==",
+            "hl": "zh-CN",
+            "gl": "TW",
+        })
+        try:
+            response = requests.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
+                },
+                timeout=PERSONA_CREATE_YOUTUBE_REQUEST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            return []
+        initial_data = _persona_create_youtube_initial_data(response.text)
+        if initial_data is None:
+            return []
+        rows: list[dict[str, Any]] = []
+        for renderer in _persona_create_walk_youtube_video_renderers(initial_data):
+            video_id = str(renderer.get("videoId") or "").strip()
+            title = _persona_create_youtube_text(renderer.get("title"))
+            published_at = _persona_create_youtube_published_at(_persona_create_youtube_text(renderer.get("publishedTimeText")))
+            views = _persona_create_metric_text_number(
+                _persona_create_youtube_text(renderer.get("viewCountText"))
+                or _persona_create_youtube_text(renderer.get("shortViewCountText")),
+            )
+            if not video_id or not title or not published_at or views <= 0:
+                continue
+            snippets = renderer.get("detailedMetadataSnippets")
+            description = _persona_create_youtube_snippet_text(snippets[0]) if isinstance(snippets, list) and snippets else ""
+            author = _persona_create_youtube_text(renderer.get("ownerText"))
+            rows.append({
+                "id": f"youtube:{video_id}",
+                "platform": "youtube",
+                "sourceUrl": f"https://www.youtube.com/watch?v={quote(video_id, safe='')}",
+                "author": author,
+                "content": " ".join(part for part in (title, description) if part).strip(),
+                "metrics": {
+                    "viewCount": views,
+                    "view_count": views,
+                    "source": "youtube-public-search",
+                    "crawler": "youtube-http",
+                    "publicSearch": True,
+                    "query": query,
+                },
+                "publishedAt": published_at,
+            })
+        return rows
+
+    candidates: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=min(3, len(queries))) as executor:
+        futures = [executor.submit(fetch_query, query) for query in queries]
+        for future in as_completed(futures):
+            with contextlib.suppress(Exception):
+                candidates.extend(future.result())
+    deduped = {str(row.get("id") or ""): row for row in candidates if str(row.get("id") or "")}
+    return sorted(
+        deduped.values(),
+        key=lambda row: _persona_create_trend_metric(row, "view_count", "viewCount", "views"),
+        reverse=True,
+    )[:PERSONA_CREATE_YOUTUBE_TREND_LIMIT]
+
+
+def _persona_create_public_html_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", str(value or "")))).strip()
+
+
+def _fetch_persona_create_ptt_trend_candidates() -> list[dict[str, Any]]:
+    """Read PTT's public hot-board page without an account or browser session."""
+    try:
+        response = requests.get(
+            "https://www.ptt.cc/bbs/hotboards.html",
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+                "Accept-Language": "zh-TW,zh;q=0.9",
+            },
+            timeout=PERSONA_CREATE_PTT_REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return []
+    rows: list[dict[str, Any]] = []
+    for match in re.finditer(
+        r'<a\s+class="board"\s+href="/bbs/([^"/]+)/index\.html">(?P<body>.*?)</a>',
+        response.text,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        body = match.group("body")
+        name_match = re.search(r'class="board-name"[^>]*>(.*?)</div>', body, flags=re.IGNORECASE | re.DOTALL)
+        users_match = re.search(r'class="board-nuser"[^>]*>(.*?)</div>', body, flags=re.IGNORECASE | re.DOTALL)
+        title_match = re.search(r'class="board-title"[^>]*>(.*?)</div>', body, flags=re.IGNORECASE | re.DOTALL)
+        board = _persona_create_public_html_text(name_match.group(1) if name_match else match.group(1))
+        title = _persona_create_public_html_text(title_match.group(1) if title_match else "")
+        active_text = _persona_create_public_html_text(users_match.group(1) if users_match else "")
+        active_number = re.search(r"\d[\d,]*", active_text)
+        active_users = _number((active_number.group(0) if active_number else "").replace(",", ""), 0)
+        if not board or active_users <= 0:
+            continue
+        content = f"热门看板 {board}" + (f"：{title}" if title else "")
+        rows.append({
+            "id": f"ptt:{board}:{hashlib.sha1(content.encode('utf-8')).hexdigest()[:12]}",
+            "platform": "ptt",
+            "sourceUrl": f"https://www.ptt.cc/bbs/{quote(match.group(1), safe='')}/index.html",
+            "content": content,
+            "metrics": {
+                "activeUsers": active_users,
+                "active_users": active_users,
+                "source": "ptt-hotboards-public",
+                "crawler": "ptt-public-http",
+                "publicSearch": True,
+            },
+            "publishedAt": datetime.now(timezone.utc).isoformat(),
+        })
+    return sorted(
+        rows,
+        key=lambda row: _persona_create_trend_metric(row, "active_users", "activeUsers"),
+        reverse=True,
+    )[:PERSONA_CREATE_PTT_TREND_LIMIT]
+
+
 def _persona_create_trend_metric(row: dict[str, Any], *names: str) -> int:
     metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
     engagement = row.get("engagement") if isinstance(row.get("engagement"), dict) else {}
@@ -19224,45 +19477,60 @@ def _persona_create_trend_metric(row: dict[str, Any], *names: str) -> int:
     return 0
 
 
-def _persona_create_trend_evidence(result: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _persona_create_trend_evidence(*results: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     ranked: list[dict[str, Any]] = []
-    for raw in result.get("candidates") if isinstance(result.get("candidates"), list) else []:
-        candidate = _normalize_persona_hot_candidate(raw)
-        if not candidate or candidate.get("platform") != "threads":
-            continue
-        views = _persona_create_trend_metric(candidate, "view_count", "viewCount", "views")
-        interaction = _persona_create_trend_metric(candidate, "interaction_heat", "interactionHeat")
-        if interaction <= 0:
-            interaction = sum(
-                _persona_create_trend_metric(candidate, field)
-                for field in ("likeCount", "likes", "commentCount", "comments", "shareCount", "shares", "repostCount", "reposts")
-            )
-        combined = _persona_create_trend_metric(candidate, "combined_reach", "combinedReach") or views + interaction
-        if views <= 0 and interaction <= 0:
-            continue
-        ranked.append({
-            "content": str(candidate.get("full_content") or candidate.get("content") or "").strip(),
-            "views": views,
-            "interaction": interaction,
-            "combined": combined,
-        })
+    for result in results:
+        for candidate in result.get("candidates") if isinstance(result.get("candidates"), list) else []:
+            if not isinstance(candidate, dict):
+                continue
+            platform = str(candidate.get("platform") or "").strip().lower()
+            if platform not in {"threads", "youtube", "ptt"}:
+                continue
+            views = _persona_create_trend_metric(candidate, "view_count", "viewCount", "views")
+            interaction = _persona_create_trend_metric(candidate, "interaction_heat", "interactionHeat")
+            if interaction <= 0:
+                interaction = sum(
+                    _persona_create_trend_metric(candidate, field)
+                    for field in ("likeCount", "likes", "commentCount", "comments", "shareCount", "shares", "repostCount", "reposts")
+                )
+            active_users = _persona_create_trend_metric(candidate, "active_users", "activeUsers")
+            combined = _persona_create_trend_metric(candidate, "combined_reach", "combinedReach") or views + interaction or active_users
+            if views <= 0 and interaction <= 0 and active_users <= 0:
+                continue
+            ranked.append({
+                "platform": platform,
+                "content": str(candidate.get("full_content") or candidate.get("content") or "").strip(),
+                "views": views,
+                "interaction": interaction,
+                "active_users": active_users,
+                "combined": combined,
+            })
     ranked.sort(key=lambda item: (item["combined"], item["views"], item["interaction"]), reverse=True)
-    ranked = ranked[:6]
+    # Keep a broad enough public trend sample for the model to identify a
+    # direction.  Do not arbitrarily reduce a healthy public source to two
+    # rows: the user selects the resulting directions, while the model needs
+    # sufficient variety to avoid treating one board title as the trend.
+    ranked = ranked[:PERSONA_CREATE_TREND_CANDIDATE_LIMIT]
     if not ranked:
         return "", {"available": False, "candidate_count": 0}
     evidence = [
-        "以下均为本轮公开 Threads 搜索实际解析到的指标，已按综合热度（浏览量+互动）降序排列：",
+        "以下均为本轮公开社媒页面实际解析到的热度或活跃指标，已按热度/活跃度降序排列：",
     ]
     for index, item in enumerate(ranked, start=1):
         content = re.sub(r"\s+", " ", item["content"]).strip()[:180]
-        evidence.append(
-            f"- #{index} 综合热度 {item['combined']}（浏览 {item['views']}，互动 {item['interaction']}）：{content}"
-        )
+        platform_label = "YouTube" if item["platform"] == "youtube" else item["platform"].title()
+        if item["platform"] == "ptt":
+            evidence.append(f"- #{index} PTT 热门看板活跃人数 {item['active_users']}：{content}")
+        else:
+            evidence.append(
+                f"- #{index} {platform_label} 综合热度 {item['combined']}（浏览 {item['views']}，互动 {item['interaction']}）：{content}"
+            )
+    platforms = list(dict.fromkeys(item["platform"] for item in ranked))
     return "\n".join(evidence), {
         "available": True,
         "candidate_count": len(ranked),
         "max_combined_reach": ranked[0]["combined"],
-        "platform": "threads",
+        "platforms": platforms,
         "freshness_days": PERSONA_CREATE_TREND_FRESHNESS_DAYS,
     }
 
@@ -19276,35 +19544,12 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
         raise HTTPException(status_code=400, detail="persona prompt cannot be empty")
     hot_trend_meta: dict[str, Any] = {"available": False, "candidate_count": 0}
     if payload.include_hot_keywords:
-        seed_result = _run_persona_create_cli({
-            "action": "suggest-trend-search-seeds",
-            "personaName": name,
-            "userPrompt": prompt,
-        }, timeout_seconds=60)
-        search_seeds = _persona_hot_payload_keywords(seed_result.get("searchSeeds"))[:4]
-        if len(search_seeds) != 4:
-            raise HTTPException(status_code=502, detail="热门关键词提炼失败：模型未返回 4 个有效公开趋势检索词，请稍后重试。")
-        snapshot = _persona_create_trend_probe_snapshot(name, prompt)
-        probe_result = _run_persona_hot_workflow_cli({
-            "action": "fetch-hot-candidates",
-            "operation": "persona_trend_probe",
-            "archiveId": snapshot["id"],
-            "archiveSnapshot": snapshot,
-            "prompt": prompt,
-            "keywords": search_seeds,
-            "allKeywords": search_seeds,
-            "limit": PERSONA_CREATE_TREND_CANDIDATE_LIMIT,
-            "refresh": True,
-            "liveOnly": True,
-            "transient": True,
-            "recordShown": False,
-            "searchMode": "strict",
-            "writingLocale": "zh-CN",
-            "freshnessDays": PERSONA_CREATE_TREND_FRESHNESS_DAYS,
-            "freshnessPolicy": "strict",
-            "platform": "threads",
-        }, timeout_seconds=75)
-        hot_trend_evidence, hot_trend_meta = _persona_create_trend_evidence(probe_result)
+        # The public trend source is deliberately read first.  It must guide
+        # the optional hot directions; the persona prompt only constrains
+        # safety and plausibility, and selected hot directions later guide
+        # the full persona generation.
+        ptt_candidates = _fetch_persona_create_ptt_trend_candidates()
+        hot_trend_evidence, hot_trend_meta = _persona_create_trend_evidence({"candidates": ptt_candidates})
         if hot_trend_evidence:
             result = _run_persona_create_cli({
                 "action": "suggest-keywords",
@@ -19314,13 +19559,20 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
                 "hotTrendEvidence": hot_trend_evidence,
             }, timeout_seconds=90)
         else:
-            # Do not invent a "hot" label when public posts did not expose
-            # measurable heat.  The ordinary creation path remains usable.
+            # Preserve the established 5 + 5 selection flow even when this
+            # public probe did not yield verifiable metrics.  The fallback is
+            # still model-authored from the user's persona prompt, but it is
+            # explicitly marked as such instead of pretending to be live heat.
+            hot_trend_meta.update({
+                "fallback": "persona_model",
+                "reason": "no_public_metric",
+            })
             result = _run_persona_create_cli({
                 "action": "suggest-keywords",
                 "personaName": name,
                 "userPrompt": prompt,
-                "includeHotKeywords": False,
+                "includeHotKeywords": True,
+                "hotTrendMode": "persona_fallback",
             }, timeout_seconds=90)
     else:
         result = _run_persona_create_cli({
@@ -19339,7 +19591,7 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
         for item in (result.get("hotKeywords") if isinstance(result.get("hotKeywords"), list) else [])
         if str(item or "").strip()
     ][:12]
-    if len(keywords) != 5 or (hot_trend_meta.get("available") is True and len(hot_keywords) != 5):
+    if len(keywords) != 5 or (payload.include_hot_keywords and len(hot_keywords) != 5):
         raise HTTPException(status_code=502, detail="关键词提炼失败：模型未返回 5 个有效关键词，请稍后重试。")
     return {
         "ok": True,
