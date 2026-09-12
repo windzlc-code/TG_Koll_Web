@@ -338,6 +338,77 @@ class CommercialBillingTests(unittest.TestCase):
                 versions_after,
             )
 
+    def test_v14_subscription_persona_content_updates_active_and_existing_draft_once(self):
+        with db_module.db() as conn:
+            active_row = conn.execute(
+                "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+            ).fetchone()
+            self.assertIsNotNone(active_row)
+            catalog = json.loads(str(active_row["catalog_json"]))
+            catalog["subscriptions"][1]["ai_personas"] = 1
+            catalog["subscriptions"][1]["features"].append("不参与分润")
+            catalog["subscriptions"][3]["ai_personas"] = 3
+            catalog["subscriptions"][3]["features"].append("享有分潤權益")
+            stale_json = json.dumps(catalog, ensure_ascii=False, separators=(",", ":"))
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (stale_json, str(active_row["id"])),
+            )
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES ('catalog_v14_draft', ?, 'draft', ?, 0, 0, 100, 0)
+                """,
+                (next_version, stale_json),
+            )
+            conn.execute(
+                "DELETE FROM admin_config WHERE key = 'commercial_billing_catalog_v14_subscription_persona_content'"
+            )
+            versions_before = int(
+                conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]
+            )
+
+        db_module.init_db()
+        with db_module.db() as conn:
+            active = commercial_billing.get_active_catalog(conn)
+            draft_row = conn.execute(
+                "SELECT catalog_json FROM billing_catalog_versions WHERE id = 'catalog_v14_draft'"
+            ).fetchone()
+            draft = json.loads(str(draft_row["catalog_json"]))
+            marker = json.loads(str(conn.execute(
+                "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v14_subscription_persona_content'"
+            ).fetchone()["value_json"]))
+            versions_after = int(
+                conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]
+            )
+
+        for catalog_value in (active, draft):
+            self.assertEqual(
+                [item["ai_personas"] for item in catalog_value["subscriptions"]],
+                [1, 2, 3, 5],
+            )
+            self.assertTrue(
+                all(
+                    "分润" not in feature and "分潤" not in feature
+                    for plan in catalog_value["subscriptions"]
+                    for feature in plan["features"]
+                )
+            )
+        self.assertEqual(marker["updated_drafts"], 1)
+        self.assertEqual(versions_after, versions_before + 1)
+
+        db_module.init_db()
+        with db_module.db() as conn:
+            self.assertEqual(
+                int(conn.execute("SELECT COUNT(*) AS count FROM billing_catalog_versions").fetchone()["count"]),
+                versions_after,
+            )
+
     def test_active_catalog_never_exposes_legacy_subscription_plans(self):
         with db_module.db() as conn:
             active_row = conn.execute(
@@ -387,11 +458,13 @@ class CommercialBillingTests(unittest.TestCase):
             "vanguard_basic_revenue_quarterly",
         })
         self.assertTrue(plans["vanguard_beta_free"]["purchasable"])
-        self.assertEqual(plans["vanguard_experience_monthly"]["ai_personas"], 1)
+        self.assertEqual(plans["vanguard_experience_monthly"]["ai_personas"], 2)
         self.assertEqual(plans["vanguard_basic_monthly"]["ai_personas"], 3)
+        self.assertEqual(plans["vanguard_basic_revenue_quarterly"]["ai_personas"], 5)
         self.assertTrue(any("每日 5 次" in item for item in plans["vanguard_experience_monthly"]["features"]))
         self.assertTrue(any("每週二" in item for item in plans["vanguard_basic_monthly"]["features"]))
         self.assertTrue(any("20 人團隊" in item for item in plans["vanguard_basic_revenue_quarterly"]["features"]))
+        self.assertTrue(all("分潤" not in item for plan in plans.values() for item in plan["features"]))
         self.assertTrue(all(len(item["features"]) >= 5 for item in plans.values()))
         self.assertEqual(
             [item["key"] for item in commercial_billing.DEFAULT_CATALOG["billing_rules"]],

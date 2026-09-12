@@ -258,6 +258,9 @@
       trafficIntro: "浏览量以公开可见样本累加，不将总浏览量平均分配到单篇内容。",
       viewsPerFollower: "浏览 / 粉丝",
       engagementPerThousand: "每千浏览公开互动",
+      viewUnit: "次",
+      viewsPerFollowerUnit: "次 / 粉丝",
+      engagementPerThousandUnit: "次 / 千浏览",
       peakKicker: "PEAK WINDOWS",
       peakTitle: "高效发布时间",
       peakIntro: "按样本贴文的互动指数排序，优先用于测试同类型选题。",
@@ -368,6 +371,9 @@
       trafficIntro: "瀏覽量以公開可見樣本累加，不把總瀏覽量平均分配到單篇內容。",
       viewsPerFollower: "瀏覽 / 粉絲",
       engagementPerThousand: "每千瀏覽公開互動",
+      viewUnit: "次",
+      viewsPerFollowerUnit: "次 / 粉絲",
+      engagementPerThousandUnit: "次 / 千瀏覽",
       peakKicker: "PEAK WINDOWS",
       peakTitle: "高效發佈時間",
       peakIntro: "按樣本貼文的互動指數排序，優先用於測試同類型選題。",
@@ -782,9 +788,9 @@
               <h3>${t.trafficTitle}</h3>
               <p class="case-panel-intro">${t.trafficIntro}</p>
               <div class="case-traffic-kpis">
-                <div><span>${t.recentViews}</span><strong>${format(item.recentViews)}</strong></div>
-                <div><span>${t.viewsPerFollower}</span><strong>${format(item.viewsPerFollower)}×</strong></div>
-                <div><span>${t.engagementPerThousand}</span><strong>${format(item.engagementPerThousandViews)}</strong></div>
+                <div><span>${t.recentViews}</span><strong>${format(item.recentViews)}<small>${t.viewUnit}</small></strong></div>
+                <div><span>${t.viewsPerFollower}</span><strong>${format(item.viewsPerFollower)}<small>${t.viewsPerFollowerUnit}</small></strong></div>
+                <div><span>${t.engagementPerThousand}</span><strong>${format(item.engagementPerThousandViews)}<small>${t.engagementPerThousandUnit}</small></strong></div>
               </div>
             </article>
           </section>

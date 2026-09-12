@@ -91,7 +91,6 @@ LATEST_PDF_SUBSCRIPTION_PLANS: list[dict[str, Any]] = [
             "新註冊贈送 20 點基礎算力，單日最多發布 5 篇",
             "參與 Beta 早期測試",
             "加入 LINE 群組輔導與交流",
-            "不參與分潤",
             "可補差額升級，原有資料完整保留",
         ],
     },
@@ -112,16 +111,15 @@ LATEST_PDF_SUBSCRIPTION_PLANS: list[dict[str, Any]] = [
         "plan_family": "vanguard_experience",
         "threads_accounts": 1,
         "monthly_free_images": 10,
-        "ai_personas": 1,
-        "audience": "需要完整基礎創作與單組 AI 人設的使用者",
-        "account_positioning": "單組 AI 人設搭配基礎創作與矩陣教練算力系統",
+        "ai_personas": 2,
+        "audience": "需要完整基礎創作與兩組 AI 人設的使用者",
+        "account_positioning": "兩組 AI 人設搭配基礎創作與矩陣教練算力系統",
         "features": [
-            "AI 人設 1 組",
+            "AI 人設 2 組",
             "完整基礎 AI 創作算力",
             "獨立矩陣算力點數系統",
             "加入 LINE 社群輔導與交流",
             "每日 5 次免費矩陣教練使用額度",
-            "不參與分潤",
         ],
     },
     {
@@ -150,7 +148,6 @@ LATEST_PDF_SUBSCRIPTION_PLANS: list[dict[str, Any]] = [
             "完整矩陣教練獨立算力權益",
             "每週二固定 1 小時官方輔導",
             "加入 LINE 社群輔導與交流",
-            "月繳方案不啟動分潤",
         ],
     },
     {
@@ -170,16 +167,15 @@ LATEST_PDF_SUBSCRIPTION_PLANS: list[dict[str, Any]] = [
         "plan_family": "vanguard_basic",
         "threads_accounts": 3,
         "monthly_free_images": 10,
-        "ai_personas": 3,
-        "audience": "需要啟動團隊經營與分潤權益的經營者",
-        "account_positioning": "三組 AI 人設、完整矩陣權益與團隊分潤同步啟動",
+        "ai_personas": 5,
+        "audience": "需要啟動團隊經營與完整矩陣權益的經營者",
+        "account_positioning": "五組 AI 人設、完整矩陣權益與團隊協作能力同步開通",
         "features": [
-            "AI 人設 3 組",
+            "AI 人設 5 組",
             "完整基礎版與矩陣教練權益",
             "每週一、三各 1 堂官方輔導",
             "可建立 20 人團隊",
-            "解鎖教練與團隊獎金",
-            "分潤權益：一次性、月度與團隊帳號獎勵",
+            "解鎖教練與團隊協作工具",
         ],
     },
 ]
@@ -1053,6 +1049,51 @@ def bootstrap_billing(conn: sqlite3.Connection, *, now: int | None = None) -> No
             updated_drafts += 1
         conn.execute(
             "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v13_current_pricing_rules', ?, ?)",
+            (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
+        )
+
+    subscription_persona_content_migration = conn.execute(
+        "SELECT value_json FROM admin_config WHERE key = 'commercial_billing_catalog_v14_subscription_persona_content'"
+    ).fetchone()
+    if subscription_persona_content_migration is None:
+        active_row = conn.execute(
+            "SELECT * FROM billing_catalog_versions WHERE status = 'active' ORDER BY version_number DESC LIMIT 1"
+        ).fetchone()
+        active_catalog = _loads(active_row["catalog_json"], {}) if active_row else {}
+        upgraded_catalog = _with_latest_pdf_subscription_plans(active_catalog) if active_row else active_catalog
+        changed = bool(active_row) and upgraded_catalog != active_catalog
+        if changed and active_row is not None:
+            next_version = int(
+                conn.execute("SELECT COALESCE(MAX(version_number), 0) + 1 AS n FROM billing_catalog_versions").fetchone()["n"]
+            )
+            validate_catalog(upgraded_catalog)
+            conn.execute("UPDATE billing_catalog_versions SET status = 'retired' WHERE status = 'active'")
+            conn.execute(
+                """
+                INSERT INTO billing_catalog_versions(
+                  id, version_number, status, catalog_json, effective_at,
+                  created_by, created_at, published_at
+                ) VALUES (?, ?, 'active', ?, ?, 0, ?, ?)
+                """,
+                (_id("catalog"), next_version, _dumps(upgraded_catalog), current, current, current),
+            )
+        updated_drafts = 0
+        draft_rows = conn.execute(
+            "SELECT id, catalog_json FROM billing_catalog_versions WHERE status = 'draft'"
+        ).fetchall()
+        for draft_row in draft_rows:
+            draft_catalog = _loads(draft_row["catalog_json"], {})
+            upgraded_draft = _with_latest_pdf_subscription_plans(draft_catalog)
+            if upgraded_draft == draft_catalog:
+                continue
+            validate_catalog(upgraded_draft)
+            conn.execute(
+                "UPDATE billing_catalog_versions SET catalog_json = ? WHERE id = ?",
+                (_dumps(upgraded_draft), str(draft_row["id"])),
+            )
+            updated_drafts += 1
+        conn.execute(
+            "INSERT INTO admin_config(key, value_json, updated_at) VALUES ('commercial_billing_catalog_v14_subscription_persona_content', ?, ?)",
             (_dumps({"completed_at": current, "changed": changed, "updated_drafts": updated_drafts}), current),
         )
 
