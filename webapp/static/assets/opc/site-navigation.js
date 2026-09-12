@@ -632,7 +632,7 @@
   function installCaseStudiesDesktopEntry(header, current) {
     if (!header || isolatedWorkspacePage(header.dataset.sitePage || "")) return null;
     if (!pageKeepsCaseStudies(header.dataset.sitePage || "")) {
-      header.querySelectorAll(':scope > .site-nav [data-site-nav-key="caseStudies"], .site-mobile-menu-panel a[data-site-nav-key="caseStudies"], .site-console-case-entry').forEach((node) => node.remove());
+      header.querySelectorAll(':scope > .site-nav [data-site-nav-key="caseStudies"], .site-mobile-menu-panel a[data-site-nav-key="caseStudies"]').forEach((node) => node.remove());
       return null;
     }
     const nav = header.querySelector(":scope > .site-nav");
@@ -642,16 +642,6 @@
       template.innerHTML = navLink({ key: "caseStudies", href: "/case-studies.html", current }).trim();
       entry = template.content.firstElementChild;
       if (entry) nav.appendChild(entry);
-    }
-    if (!header.querySelector('.site-console-case-entry')) {
-      const compact = document.createElement("a");
-      compact.className = "site-console-case-entry";
-      compact.href = "/case-studies.html";
-      compact.dataset.siteNavKey = "caseStudies";
-      compact.setAttribute("data-site-copy", "caseStudies");
-      compact.setAttribute("aria-label", copy[currentLanguage()].caseStudies);
-      compact.textContent = copy[currentLanguage()].caseStudies;
-      header.querySelector(".header-actions")?.before(compact);
     }
     return entry;
   }

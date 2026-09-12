@@ -240,30 +240,6 @@ html {
   cursor: wait;
 }
 
-.site-console-case-entry {
-  display: none;
-  align-items: center;
-  justify-content: center;
-  min-height: 34px;
-  padding: 0 10px;
-  border: 1px solid rgba(169, 207, 222, 0.45);
-  border-radius: 8px;
-  color: #eef8fc;
-  background: rgba(30, 78, 100, 0.52);
-  font-size: 13px;
-  font-weight: 750;
-  line-height: 1;
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.site-console-case-entry:hover,
-.site-console-case-entry:focus-visible {
-  border-color: #79c8dc;
-  color: #ffffff;
-  background: rgba(42, 117, 143, 0.72);
-}
-
 .site-header .header-actions,
 .site-global-controls {
   display: flex;
@@ -2261,10 +2237,6 @@ body.site-account-panel-active {
     display: none;
   }
 
-  .site-header[data-site-page="home"] .site-console-case-entry {
-    display: inline-flex;
-  }
-
   .site-header .header-actions {
     justify-self: end;
   }
@@ -2283,12 +2255,6 @@ body.site-account-panel-active {
 
   .site-header .brand {
     min-width: 0;
-  }
-
-  .site-header[data-site-page="home"] .site-console-case-entry {
-    min-height: 30px;
-    padding-inline: 8px;
-    font-size: 12px;
   }
 
   .site-header .brand-name,
