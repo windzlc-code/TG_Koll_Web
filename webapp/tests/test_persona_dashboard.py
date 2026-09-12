@@ -2462,6 +2462,16 @@ class PersonaDashboardApiTests(unittest.TestCase):
         with self.assertRaisesRegex(server.HTTPException, "至少选择 2"):
             server._persona_dashboard_create_persona_with_ai(payload)
 
+    def test_persona_ai_create_rejects_more_than_two_keywords_in_one_group(self):
+        payload = server.PersonaDashboardPersonaAiCreatePayload(
+            name="Night Driver",
+            prompt="夜班出租车司机，分享夜间载客见闻和城市通勤观察。",
+            selected_regular_keywords=["夜班司机", "城市见闻", "深夜通勤"],
+            selected_hot_keywords=["下班日常"],
+        )
+        with self.assertRaisesRegex(server.HTTPException, "每列最多选择 2"):
+            server._persona_dashboard_create_persona_with_ai(payload)
+
     def test_persona_copy_analyze_fetches_public_source_and_derives_profile(self):
         public_source = {
             "platform": "threads",

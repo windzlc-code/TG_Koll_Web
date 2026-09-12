@@ -1164,6 +1164,10 @@ function personaCreateKeywordLimit() {
   return 4;
 }
 
+function personaCreateKeywordGroupLimit() {
+  return 2;
+}
+
 function personaCreateSelectedKeywordGroups(createState = ensurePersonaCreateState()) {
   const selected = Array.isArray(createState.aiSelectedKeywords) ? createState.aiSelectedKeywords : [];
   const hot = new Set(Array.isArray(createState.aiHotKeywords) ? createState.aiHotKeywords : []);
@@ -1171,6 +1175,16 @@ function personaCreateSelectedKeywordGroups(createState = ensurePersonaCreateSta
     regular: selected.filter((keyword) => !hot.has(keyword)),
     hot: selected.filter((keyword) => hot.has(keyword)),
   };
+}
+
+function personaCreateCanSelectKeyword(keyword, createState = ensurePersonaCreateState()) {
+  const selected = Array.isArray(createState.aiSelectedKeywords) ? createState.aiSelectedKeywords : [];
+  if (selected.includes(keyword)) return true;
+  if (selected.length >= personaCreateKeywordLimit()) return false;
+  const groups = personaCreateSelectedKeywordGroups(createState);
+  const hotKeywords = new Set(Array.isArray(createState.aiHotKeywords) ? createState.aiHotKeywords : []);
+  const group = hotKeywords.has(keyword) ? groups.hot : groups.regular;
+  return group.length < personaCreateKeywordGroupLimit();
 }
 
 function snapshotPersonaCreateInputs() {
@@ -27836,15 +27850,16 @@ function renderPersonaCreateWorkbench() {
   const anyCreateBusy = personaCreateIsBusy();
   const busyLabel = personaCreateBusyKind();
   const keywordLimit = personaCreateKeywordLimit(createState);
+  const keywordGroupLimit = personaCreateKeywordGroupLimit(createState);
   const keywordMinimum = 2;
-  const keywordLimitReached = aiSelectedKeywords.length >= keywordLimit;
+  const selectedKeywordGroups = personaCreateSelectedKeywordGroups(createState);
   const keywordMinimumMet = aiSelectedKeywords.length >= keywordMinimum;
   const selectedKeywordHint = aiSelectedKeywords.length
-    ? `已选 ${aiSelectedKeywords.length} / ${keywordLimit} 个，可取消后重新选择`
-    : `至少选择 ${keywordMinimum} 个，最多选择 ${keywordLimit} 个，用于确定人设生成的重点方向`;
+    ? `普通 ${selectedKeywordGroups.regular.length} / ${keywordGroupLimit}，热门 ${selectedKeywordGroups.hot.length} / ${keywordGroupLimit}；共 ${aiSelectedKeywords.length} / ${keywordLimit}`
+    : `每列最多选择 ${keywordGroupLimit} 个，至少选择 ${keywordMinimum} 个、总共最多 ${keywordLimit} 个`;
   const renderKeywordButtons = (keywords) => keywords.map((keyword) => {
     const active = aiSelectedKeywords.includes(keyword);
-    const disabled = aiCreateBusy || (!active && keywordLimitReached);
+    const disabled = aiCreateBusy || (!active && !personaCreateCanSelectKeyword(keyword, createState));
     return `<button type="button" class="${active ? "is-active" : ""}" data-persona-create-ai-keyword="${esc(keyword)}" ${disabled ? "disabled" : ""}>${esc(keyword)}</button>`;
   }).join("");
   const keywordsMarkup = aiKeywords.length
@@ -27936,21 +27951,26 @@ function isPersonaCreateModalOpen() {
   return Boolean($("consoleModal")?.dataset.modalKey === "persona-create");
 }
 
-function renderPersonaCreateModal() {
+function renderPersonaCreateModal({ preserveScroll = false } = {}) {
   const modal = $("consoleModal");
   const content = modal?.querySelector(".console-modal-content");
   if (!modal || modal.dataset.modalKey !== "persona-create" || !content) return false;
+  const previousScrollTop = preserveScroll ? content.scrollTop : 0;
   content.innerHTML = state.personaCreateBranch === "copy"
     ? renderPersonaCopyCreateWorkbench()
     : renderPersonaCreateWorkbench();
   content.querySelectorAll("strong, p, label, button, [title], [aria-label], [placeholder]").forEach(markConsoleUiElement);
   translateConsoleLanguage(content, currentLanguage());
-  content.querySelector("#personaCreateAiName, #personaCopyUrl, #personaCopyResultName, [data-persona-create-ai-keyword], [data-persona-create-ai-open-profile]")?.focus();
+  if (preserveScroll) {
+    content.scrollTop = previousScrollTop;
+  } else {
+    content.querySelector("#personaCreateAiName, #personaCopyUrl, #personaCopyResultName")?.focus({ preventScroll: true });
+  }
   return true;
 }
 
-function renderPersonaCreateSurface() {
-  if (!renderPersonaCreateModal()) renderPersonaDetail();
+function renderPersonaCreateSurface(options = {}) {
+  if (!renderPersonaCreateModal(options)) renderPersonaDetail();
 }
 
 function closePersonaCreateModal(result = null) {
@@ -28109,9 +28129,9 @@ function openPersonaCreateModal() {
       if (!keyword) return;
       const selected = new Set(Array.isArray(createState.aiSelectedKeywords) ? createState.aiSelectedKeywords : []);
       if (selected.has(keyword)) selected.delete(keyword);
-      else if (selected.size < personaCreateKeywordLimit(createState)) selected.add(keyword);
+      else if (personaCreateCanSelectKeyword(keyword, createState)) selected.add(keyword);
       createState.aiSelectedKeywords = Array.from(selected);
-      renderPersonaCreateSurface();
+      renderPersonaCreateSurface({ preserveScroll: true });
       return;
     }
     if (event.target.closest("[data-persona-create-ai-clear]")) {

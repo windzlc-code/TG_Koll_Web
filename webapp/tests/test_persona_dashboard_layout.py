@@ -50,6 +50,15 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn('data-account-proxy-market-open', self.console_script)
         self.assertNotIn('class="proxy-market-link"', self.console_script)
 
+    def test_persona_create_keyword_groups_have_separate_caps_and_keep_modal_scroll(self):
+        self.assertIn("function personaCreateKeywordGroupLimit()", self.console_script)
+        self.assertIn("function personaCreateCanSelectKeyword", self.console_script)
+        self.assertIn("普通 ${selectedKeywordGroups.regular.length} / ${keywordGroupLimit}", self.console_script)
+        self.assertIn("热门 ${selectedKeywordGroups.hot.length} / ${keywordGroupLimit}", self.console_script)
+        self.assertIn("function renderPersonaCreateModal({ preserveScroll = false } = {})", self.console_script)
+        self.assertIn("content.scrollTop = previousScrollTop;", self.console_script)
+        self.assertIn("renderPersonaCreateSurface({ preserveScroll: true });", self.console_script)
+
     def test_empty_persona_workspace_has_a_mobile_first_run_guide_without_replacing_selection_copy(self):
         self.assertIn("personaOverviewLoaded: false", self.console_script)
         self.assertIn("state.personaOverviewLoaded = true", self.console_script)

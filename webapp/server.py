@@ -19391,17 +19391,21 @@ def _persona_dashboard_suggest_image_styles(
 def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAiCreatePayload) -> dict[str, Any]:
     name = str(payload.name or "").strip()
     prompt = str(payload.prompt or "").strip()
-    selected_regular_keywords = [
+    selected_regular_keywords = list(dict.fromkeys([
         str(item or "").strip()
         for item in (payload.selected_regular_keywords or [])
         if str(item or "").strip()
-    ][:4]
-    selected_hot_keywords = [
+    ]))
+    selected_hot_keywords = list(dict.fromkeys([
         str(item or "").strip()
         for item in (payload.selected_hot_keywords or [])
         if str(item or "").strip()
-    ][:4]
+    ]))
     structured_selection = bool(selected_regular_keywords or selected_hot_keywords)
+    if structured_selection and (
+        len(selected_regular_keywords) > 2 or len(selected_hot_keywords) > 2
+    ):
+        raise HTTPException(status_code=400, detail="普通关键词和热门关键词每列最多选择 2 个。")
     selected_keywords = [
         str(item or "").strip()
         for item in ((selected_regular_keywords + selected_hot_keywords) if structured_selection else (payload.selected_keywords or []))
