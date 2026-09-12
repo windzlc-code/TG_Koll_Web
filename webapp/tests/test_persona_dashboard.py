@@ -2358,6 +2358,28 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 502)
         self.assertEqual(resp.json()["detail"], "关键词提炼失败：模型未返回 5 个有效关键词，请稍后重试。")
 
+    def test_persona_ai_keywords_hot_mode_returns_two_model_generated_groups(self):
+        with mock.patch.object(
+            server,
+            "_run_persona_create_cli",
+            return_value={
+                "ok": True,
+                "keywords": ["夜班司机", "城市见闻", "出租车故事", "深夜通勤", "城市观察"],
+                "hotKeywords": ["下班日常", "深夜食堂", "通勤吐槽", "城市夜生活", "深夜聊天"],
+            },
+        ) as cli_mock:
+            resp = self.client.post(
+                "/api/persona_dashboard/personas/ai_keywords",
+                json={
+                    "name": "Night Driver",
+                    "prompt": "夜班出租车司机，分享夜间载客见闻和城市通勤观察。",
+                    "include_hot_keywords": True,
+                },
+            )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["hot_keywords"], ["下班日常", "深夜食堂", "通勤吐槽", "城市夜生活", "深夜聊天"])
+        self.assertTrue(cli_mock.call_args.args[0]["includeHotKeywords"])
+
     def test_persona_ai_create_calls_cli_and_returns_profile(self):
         archives = [
             {
@@ -2405,6 +2427,32 @@ class PersonaDashboardApiTests(unittest.TestCase):
         payload = cli_mock.call_args.args[0]
         self.assertEqual(payload["action"], "create-from-prompt")
         self.assertEqual(payload["selectedKeywords"], ["夜班司机", "城市见闻"])
+
+    def test_persona_ai_create_keeps_hot_and_regular_keywords_separate(self):
+        payload = server.PersonaDashboardPersonaAiCreatePayload(
+            name="Night Driver",
+            prompt="夜班出租车司机，分享夜间载客见闻和城市通勤观察。",
+            selected_regular_keywords=["夜班司机", "城市见闻"],
+            selected_hot_keywords=["下班日常", "通勤吐槽"],
+        )
+        with mock.patch.object(
+            server,
+            "_run_persona_create_cli",
+            return_value={
+                "ok": True,
+                "archiveId": "",
+                "name": "Night Driver",
+                "content": "夜班司机人设。",
+                "setup": {},
+            },
+        ) as cli_mock:
+            result = server._persona_dashboard_create_persona_with_ai(payload)
+        self.assertEqual(result["selected_keywords"], ["夜班司机", "城市见闻", "下班日常", "通勤吐槽"])
+        self.assertEqual(result["selected_regular_keywords"], ["夜班司机", "城市见闻"])
+        self.assertEqual(result["selected_hot_keywords"], ["下班日常", "通勤吐槽"])
+        cli_payload = cli_mock.call_args.args[0]
+        self.assertEqual(cli_payload["selectedRegularKeywords"], ["夜班司机", "城市见闻"])
+        self.assertEqual(cli_payload["selectedHotKeywords"], ["下班日常", "通勤吐槽"])
 
     def test_persona_copy_analyze_fetches_public_source_and_derives_profile(self):
         public_source = {

@@ -8,6 +8,7 @@ import { installNodePersonaArchiveBridge } from "@/runtime/node/persona-archive-
 import { readRuntimeApiConfig } from "@/runtime/node/config";
 import { runPersonaWorkflow } from "@/core/persona/persona-workflow-service";
 import { buildWarmupInterestKeywords } from "@/lib/mobile-publisher";
+import { fetchPersonaTrendIntelForNode } from "@/lib/persona-trend-intel-node";
 import { callTextUnderstandingModelWithFallback, extractText, isTextModelFallbackError } from "@/lib/gemini-client";
 import type { DramaSetup } from "@/types/drama";
 
@@ -17,6 +18,7 @@ const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 const CODEX_BOT_TIMEOUT_MS = Number(process.env.CODEX_BOT_TIMEOUT_MS || 300_000);
 const CREATE_PERSONA_KEYWORD_COUNT = 5;
 const CREATE_PERSONA_MAX_SELECTED_KEYWORDS = 2;
+const CREATE_PERSONA_HOT_MAX_SELECTED_KEYWORDS = 4;
 const POST_DIRECTION_KEYWORD_COUNT = 10;
 const POST_IMAGE_STYLE_COUNT = 6;
 const POST_IMAGE_STYLE_KINDS = ["person", "third_person", "pov", "scene", "object"] as const;
@@ -25,11 +27,18 @@ type PostImageStyleKind = (typeof POST_IMAGE_STYLE_KINDS)[number];
 type PostImageStyle = { label: string; kind: PostImageStyleKind };
 
 type Input =
-  | { action: "suggest-keywords"; personaName: string; userPrompt: string }
+  | { action: "suggest-keywords"; personaName: string; userPrompt: string; includeHotKeywords?: boolean }
   | { action: "suggest-post-directions"; personaName: string; personaCore: string; userContent?: string; previousKeywords?: string[]; interfaceLanguage?: string }
   | { action: "suggest-image-styles"; personaName: string; personaCore: string; userContent?: string; previousImageStyles?: string[]; interfaceLanguage?: string }
   | { action: "derive-profile"; personaName: string; userPrompt: string; selectedKeywords?: string[] }
-  | { action: "create-from-prompt"; personaName: string; userPrompt: string; selectedKeywords?: string[] };
+  | {
+    action: "create-from-prompt";
+    personaName: string;
+    userPrompt: string;
+    selectedKeywords?: string[];
+    selectedRegularKeywords?: string[];
+    selectedHotKeywords?: string[];
+  };
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -496,6 +505,65 @@ async function derivePersonaDirectionKeywordsWithCodex(personaName: string, user
   }
 }
 
+async function derivePersonaKeywordGroupsWithCodex(
+  personaName: string,
+  userPrompt: string,
+): Promise<{ keywords: string[]; hotKeywords: string[] }> {
+  const trendIntel = await fetchPersonaTrendIntelForNode({
+    genres: [],
+    personaPersonality: "",
+    personaGender: "",
+    personaStyle: "",
+    totalEpisodes: 0,
+    targetMarket: "cn",
+    personaName,
+    customTopic: userPrompt,
+    contentTheme: userPrompt,
+  } as DramaSetup, `persona-create-${personaName.slice(0, 24)}`, personaName, {
+    timeoutMs: 5_500,
+    topicContext: { userInput: userPrompt },
+  });
+  if (!trendIntel.trim()) {
+    throw new Error("热门关键词提炼失败：未取得可用的公开趋势参考，请稍后重试。");
+  }
+  const instruction = [
+    "你是自动化推文人设策划助手。",
+    "任务：根据用户的人设提示词和下方公开趋势参考，生成两组各 5 个可选的人设关键词。",
+    "普通关键词代表长期身份、形象、日常、语气或圈子；热门关键词代表能自然融入该人设、且来自本次公开趋势参考的当前社媒表达切口。",
+    "两组关键词都会直接影响后续完整人设生成。热门关键词不是单篇标题，不能脱离人设，也不能与普通关键词重复或近义重复。",
+    "热门关键词必须从公开趋势参考中提炼或改写，不能凭空编造为热门；没有自然关联时宁可选择较宽泛但仍与人设相关的生活化切口。",
+    "每个词 3 到 10 个中文字，直白、有画面感，不要使用抽象空话、活动标题、工具名称或无关职业。",
+    "只输出 JSON，不要 Markdown。",
+    "",
+    "JSON schema:",
+    JSON.stringify({
+      keywords: ["普通关键词1", "普通关键词2", "普通关键词3", "普通关键词4", "普通关键词5"],
+      hotKeywords: ["热门关键词1", "热门关键词2", "热门关键词3", "热门关键词4", "热门关键词5"],
+    }, null, 2),
+    "",
+    `人设名称：${personaName}`,
+    `用户提示词：${compactLongAiInput(userPrompt, 3000)}`,
+    "",
+    "公开趋势参考（仅用作热门关键词的事实来源，不要照抄标题）：",
+    trendIntel.slice(0, 6_000),
+  ].join("\n");
+  try {
+    const raw = await runCodexJsonInstruction(instruction);
+    const keywords = normalizePersonaDirectionKeywords((raw as any)?.keywords);
+    const regularKeys = new Set(keywords.map((keyword) => keyword.toLowerCase()));
+    const hotKeywords = normalizePersonaDirectionKeywords((raw as any)?.hotKeywords)
+      .filter((keyword) => !regularKeys.has(keyword.toLowerCase()));
+    if (keywords.length !== CREATE_PERSONA_KEYWORD_COUNT || hotKeywords.length !== CREATE_PERSONA_KEYWORD_COUNT) {
+      throw new Error("模型未返回两组各 5 个有效且不重复的关键词");
+    }
+    return { keywords, hotKeywords };
+  } catch (error: any) {
+    const userError = personaKeywordSuggestionError(error);
+    console.warn("[persona-create][hot_keyword_error]", error?.message || error);
+    throw userError;
+  }
+}
+
 async function derivePostDirectionKeywordsWithCodex(
   personaName: string,
   personaCore: string,
@@ -681,20 +749,36 @@ async function derivePersonaSpecWithCodex(text: string): Promise<{ name: string;
   return normalizeCodexPersonaSpec(await runCodexJsonInstruction(instruction), originalText);
 }
 
-function buildPersonaPromptWithKeywords(personaName: string, userPrompt: string, selectedKeywords: string[]): string {
+function buildPersonaPromptWithKeywords(
+  personaName: string,
+  userPrompt: string,
+  selectedKeywords: string[],
+  selectedRegularKeywords: string[] = selectedKeywords,
+  selectedHotKeywords: string[] = [],
+): string {
   return [
     `角色名称：${personaName}`,
     "",
     userPrompt,
     "",
     selectedKeywords.length
-      ? `用户已选择的人设走向核心关键词：${selectedKeywords.join("、")}。请把这些方向作为最高优先级，生成完整人设。`
+      ? [
+        `用户已选择的人设走向核心关键词：${selectedKeywords.join("、")}。请把这些方向作为最高优先级，生成完整人设。`,
+        selectedRegularKeywords.length ? `普通关键词：${selectedRegularKeywords.join("、")}。` : "",
+        selectedHotKeywords.length ? `热门关键词：${selectedHotKeywords.join("、")}。这些也是用户确认的人设定义，必须自然影响身份、场景、表达和视觉风格，不能被忽略或覆盖。` : "",
+      ].filter(Boolean).join("\n")
       : "用户未额外选择核心关键词，请根据原始提示词自主判断最合理的人设走向。",
   ].join("\n");
 }
 
-async function createPersonaFromPromptSelection(personaName: string, userPrompt: string, selectedKeywords: string[]) {
-  const personaPrompt = buildPersonaPromptWithKeywords(personaName, userPrompt, selectedKeywords);
+async function createPersonaFromPromptSelection(
+  personaName: string,
+  userPrompt: string,
+  selectedKeywords: string[],
+  selectedRegularKeywords: string[] = selectedKeywords,
+  selectedHotKeywords: string[] = [],
+) {
+  const personaPrompt = buildPersonaPromptWithKeywords(personaName, userPrompt, selectedKeywords, selectedRegularKeywords, selectedHotKeywords);
   const spec = await derivePersonaSpecWithCodex(personaPrompt);
   spec.name = personaName;
   spec.setup = {
@@ -704,7 +788,10 @@ async function createPersonaFromPromptSelection(personaName: string, userPrompt:
     contentTheme: [
       spec.setup.contentTheme,
       selectedKeywords.length ? `核心走向：${selectedKeywords.join("、")}` : "",
+      selectedHotKeywords.length ? `热门人设方向：${selectedHotKeywords.join("、")}` : "",
     ].filter(Boolean).join("\n"),
+    personaDirectionKeywords: selectedRegularKeywords,
+    personaHotKeywords: selectedHotKeywords,
   } as DramaSetup;
   spec.setup.interests = derivePersonaInterestTags(
     {
@@ -729,7 +816,7 @@ async function createPersonaFromPromptSelection(personaName: string, userPrompt:
     name: created.name,
     content: spec.content,
     setup: spec.setup,
-    selectedKeywords: selectedKeywords.slice(0, CREATE_PERSONA_MAX_SELECTED_KEYWORDS),
+    selectedKeywords,
   };
 }
 
@@ -777,8 +864,13 @@ async function main() {
     if (!personaName) throw new Error("persona name cannot be empty");
     if (!userPrompt) throw new Error("persona prompt cannot be empty");
     try {
-      const keywords = await derivePersonaDirectionKeywordsWithCodex(personaName, userPrompt);
-      printJson({ ok: true, action: input.action, personaName, keywords });
+      if (input.includeHotKeywords) {
+        const result = await derivePersonaKeywordGroupsWithCodex(personaName, userPrompt);
+        printJson({ ok: true, action: input.action, personaName, ...result });
+      } else {
+        const keywords = await derivePersonaDirectionKeywordsWithCodex(personaName, userPrompt);
+        printJson({ ok: true, action: input.action, personaName, keywords, hotKeywords: [] });
+      }
     } catch (error: any) {
       printJson({ ok: false, action: input.action, personaName, error: String(error?.message || "关键词提炼失败，请稍后重试。") });
       process.exitCode = 1;
@@ -829,15 +921,27 @@ async function main() {
   if (input.action === "create-from-prompt") {
     const personaName = normalizeSingleLine(String(input.personaName || "")).slice(0, 40);
     const userPrompt = String(input.userPrompt || "").trim();
-    const selectedKeywords = Array.isArray(input.selectedKeywords)
-      ? input.selectedKeywords
-        .map((item) => normalizePersonaDirectionKeyword(item))
-        .filter(Boolean)
-        .slice(0, CREATE_PERSONA_MAX_SELECTED_KEYWORDS)
+    const selectedRegularKeywords = Array.isArray(input.selectedRegularKeywords)
+      ? input.selectedRegularKeywords.map((item) => normalizePersonaDirectionKeyword(item)).filter(Boolean)
       : [];
+    const selectedHotKeywords = Array.isArray(input.selectedHotKeywords)
+      ? input.selectedHotKeywords.map((item) => normalizePersonaDirectionKeyword(item)).filter(Boolean)
+      : [];
+    const structuredSelection = selectedRegularKeywords.length || selectedHotKeywords.length;
+    const selectedKeywords = (structuredSelection
+      ? [...selectedRegularKeywords, ...selectedHotKeywords]
+      : (Array.isArray(input.selectedKeywords) ? input.selectedKeywords : []).map((item) => normalizePersonaDirectionKeyword(item))
+    ).filter((keyword, index, values) => keyword && values.indexOf(keyword) === index)
+      .slice(0, structuredSelection ? CREATE_PERSONA_HOT_MAX_SELECTED_KEYWORDS : CREATE_PERSONA_MAX_SELECTED_KEYWORDS);
     if (!personaName) throw new Error("persona name cannot be empty");
     if (!userPrompt) throw new Error("persona prompt cannot be empty");
-    printJson(await createPersonaFromPromptSelection(personaName, userPrompt, selectedKeywords));
+    printJson(await createPersonaFromPromptSelection(
+      personaName,
+      userPrompt,
+      selectedKeywords,
+      selectedRegularKeywords.filter((keyword) => selectedKeywords.includes(keyword)),
+      selectedHotKeywords.filter((keyword) => selectedKeywords.includes(keyword)),
+    ));
     return;
   }
   if (input.action === "derive-profile") {

@@ -13478,6 +13478,7 @@ class PersonaDashboardSelectionBatchDeletePayload(BaseModel):
 class PersonaDashboardPersonaAiKeywordsPayload(BaseModel):
     name: str = ""
     prompt: str = ""
+    include_hot_keywords: bool = False
 
 
 class PersonaDashboardPostDirectionsPayload(BaseModel):
@@ -13503,6 +13504,8 @@ class PersonaDashboardPersonaAiCreatePayload(BaseModel):
     name: str = ""
     prompt: str = ""
     selected_keywords: list[str] = Field(default_factory=list)
+    selected_regular_keywords: list[str] = Field(default_factory=list)
+    selected_hot_keywords: list[str] = Field(default_factory=list)
 
 
 class PersonaDashboardPersonaAiProfilePayload(BaseModel):
@@ -19191,18 +19194,25 @@ def _persona_dashboard_suggest_keywords(payload: PersonaDashboardPersonaAiKeywor
         "action": "suggest-keywords",
         "personaName": name,
         "userPrompt": prompt,
+        "includeHotKeywords": bool(payload.include_hot_keywords),
     }, timeout_seconds=90)
     keywords = [
         str(item or "").strip()
         for item in (result.get("keywords") if isinstance(result.get("keywords"), list) else [])
         if str(item or "").strip()
     ][:12]
-    if len(keywords) != 5:
+    hot_keywords = [
+        str(item or "").strip()
+        for item in (result.get("hotKeywords") if isinstance(result.get("hotKeywords"), list) else [])
+        if str(item or "").strip()
+    ][:12]
+    if len(keywords) != 5 or (payload.include_hot_keywords and len(hot_keywords) != 5):
         raise HTTPException(status_code=502, detail="关键词提炼失败：模型未返回 5 个有效关键词，请稍后重试。")
     return {
         "ok": True,
         "name": name,
         "keywords": keywords,
+        "hot_keywords": hot_keywords,
     }
 
 
@@ -19381,11 +19391,25 @@ def _persona_dashboard_suggest_image_styles(
 def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAiCreatePayload) -> dict[str, Any]:
     name = str(payload.name or "").strip()
     prompt = str(payload.prompt or "").strip()
+    selected_regular_keywords = [
+        str(item or "").strip()
+        for item in (payload.selected_regular_keywords or [])
+        if str(item or "").strip()
+    ][:4]
+    selected_hot_keywords = [
+        str(item or "").strip()
+        for item in (payload.selected_hot_keywords or [])
+        if str(item or "").strip()
+    ][:4]
+    structured_selection = bool(selected_regular_keywords or selected_hot_keywords)
     selected_keywords = [
         str(item or "").strip()
-        for item in (payload.selected_keywords or [])
+        for item in ((selected_regular_keywords + selected_hot_keywords) if structured_selection else (payload.selected_keywords or []))
         if str(item or "").strip()
-    ][:2]
+    ]
+    selected_keywords = list(dict.fromkeys(selected_keywords))[:4 if structured_selection else 2]
+    selected_regular_keywords = [item for item in selected_regular_keywords if item in selected_keywords]
+    selected_hot_keywords = [item for item in selected_hot_keywords if item in selected_keywords]
     if not name:
         raise HTTPException(status_code=400, detail="persona name cannot be empty")
     if not prompt:
@@ -19395,6 +19419,8 @@ def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAi
         "personaName": name,
         "userPrompt": prompt,
         "selectedKeywords": selected_keywords,
+        "selectedRegularKeywords": selected_regular_keywords,
+        "selectedHotKeywords": selected_hot_keywords,
     })
     archive_id = str(result.get("archiveId") or "").strip()
     if archive_id:
@@ -19405,6 +19431,8 @@ def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAi
                 "ok": True,
                 "profile": _build_persona_dashboard_profile(archive),
                 "selected_keywords": selected_keywords,
+                "selected_regular_keywords": selected_regular_keywords,
+                "selected_hot_keywords": selected_hot_keywords,
             }
     profile = {
         "id": archive_id,
@@ -19416,6 +19444,8 @@ def _persona_dashboard_create_persona_with_ai(payload: PersonaDashboardPersonaAi
         "ok": True,
         "profile": profile,
         "selected_keywords": selected_keywords,
+        "selected_regular_keywords": selected_regular_keywords,
+        "selected_hot_keywords": selected_hot_keywords,
     }
 
 

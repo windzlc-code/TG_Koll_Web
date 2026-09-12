@@ -6796,6 +6796,76 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 10px;
 }
 
+.persona-keyword-columns {
+  display: grid;
+  gap: 12px;
+}
+
+.persona-keyword-columns.has-hot-keywords {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.persona-keyword-column {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.persona-keyword-column > strong {
+  color: var(--ink);
+}
+
+.persona-keyword-column > span,
+.persona-create-keyword-mode-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.persona-keyword-column .persona-keyword-grid {
+  grid-template-columns: 1fr;
+}
+
+.persona-hot-keyword-column {
+  padding-left: 12px;
+  border-left: 1px dashed var(--line);
+}
+
+.persona-create-keyword-mode {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.persona-create-keyword-mode button {
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+  color: var(--muted);
+}
+
+.persona-create-keyword-mode button.is-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.persona-create-keyword-mode-note {
+  margin: 8px 0 0;
+}
+
+@media (max-width: 640px) {
+  .persona-keyword-columns.has-hot-keywords {
+    grid-template-columns: 1fr;
+  }
+
+  .persona-hot-keyword-column {
+    padding-left: 0;
+    padding-top: 12px;
+    border-left: 0;
+    border-top: 1px dashed var(--line);
+  }
+}
+
 .persona-keyword-grid button {
   min-height: 42px;
   padding: 10px 14px;
