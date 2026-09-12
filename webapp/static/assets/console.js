@@ -11611,6 +11611,22 @@ function personaFilteredHistoryRows(persona = selectedPersona()) {
   });
 }
 
+function personaAutomationPublishSummary(persona = selectedPersona()) {
+  const detail = personaDashboardDetail(persona);
+  const automation = detail?.counts?.automation_publish || {};
+  const platform = personaContentPlatform(persona);
+  const account = selectedPersonaAutomationAccount(persona, platform);
+  const accountId = String(account?.id || "").trim();
+  const selected = (accountId && automation?.by_account?.[accountId])
+    || automation?.by_platform?.[platform]
+    || automation;
+  return {
+    success: Math.max(0, Number(selected?.success || 0)),
+    failed: Math.max(0, Number(selected?.failed || 0)),
+    total: Math.max(0, Number(selected?.total || 0)),
+  };
+}
+
 function personaPlatformMetricSummary(persona = selectedPersona()) {
   const platform = personaContentPlatform(persona);
   const account = selectedPersonaAutomationAccount(persona, platform);
@@ -11643,6 +11659,7 @@ function personaPlatformMetricSummary(persona = selectedPersona()) {
     if (accountUsername && recordUsername) return recordUsername === accountUsername;
     return !account;
   });
+  const automationPublish = personaAutomationPublishSummary(persona);
   return {
     platform,
     followers,
@@ -11653,6 +11670,7 @@ function personaPlatformMetricSummary(persona = selectedPersona()) {
     // history rendered below it, otherwise a crawler refresh can overwrite
     // the user's real in-product publish count.
     published: publishedRows.length,
+    automation_publish: automationPublish,
   };
 }
 
@@ -11662,7 +11680,7 @@ function renderPersonaPlatformMetricStrip(persona = selectedPersona()) {
     ["粉丝", summary.followers],
     ["热点/浏览", summary.hot_views],
     ["互动", summary.interactions],
-    ["发布", summary.published],
+    ["公开发布", summary.published],
   ];
   return `<div class="persona-profile-platform-metrics-wrap">
     <span class="persona-profile-platform-metrics" data-persona-platform-metrics="${esc(summary.platform)}" aria-label="${esc(`${platformLabel(summary.platform)} 当前账号数据`)}">
@@ -11805,6 +11823,10 @@ function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
   const refreshing = Boolean(personaId && state.publishHistoryRefreshPersonaId === personaId && state.publishHistoryRefreshTaskId);
   const refreshStatus = refreshing ? state.publishHistoryRefreshStatus : null;
   const selectedCount = (state.personaPublishHistorySelectedIds || []).length;
+  const publicationAudit = personaAutomationPublishSummary(persona);
+  const publicationAuditText = publicationAudit.total
+    ? ` · 系统发布：成功 ${numberText(publicationAudit.success)} / 失败 ${numberText(publicationAudit.failed)}`
+    : "";
   const contentOptions = [
     ["all", "全部内容"],
     ["text", "有文字"],
@@ -11850,7 +11872,7 @@ function renderPersonaHistoryFilters(rows = [], persona = selectedPersona()) {
       <button type="button" class="persona-history-refresh" data-publish-history-refresh aria-busy="${refreshing ? "true" : "false"}" ${refreshing ? "disabled" : ""}>${renderPublishHistoryRefreshContent(refreshing, refreshStatus)}</button>
       ${renderPublishHistoryRefreshCancel(refreshing)}
     </div>
-    <span class="persona-history-count">共 ${esc(numberText(rows.length))} 条</span>
+    <span class="persona-history-count">共 ${esc(numberText(rows.length))} 条公开已发布${esc(publicationAuditText)}</span>
   </div>`;
 }
 

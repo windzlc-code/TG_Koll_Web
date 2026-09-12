@@ -79,7 +79,20 @@ _REAUTH_MARKERS = (
 
 
 class BundleSocialError(RuntimeError):
-    pass
+    """A user-facing provider error with safe, persisted diagnostics."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider_http_status: int = 0,
+        provider_error_code: str = "",
+        provider_error_detail: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.provider_http_status = max(0, int(provider_http_status or 0))
+        self.provider_error_code = str(provider_error_code or "").strip()[:120]
+        self.provider_error_detail = str(provider_error_detail or "").strip()[:500]
 
 
 class BundleReauthRequiredError(BundleSocialError):
@@ -192,12 +205,46 @@ def _localize_media_limit_error(folded: str) -> str:
     return "图片或视频不符合平台限制，已阻止提交以免浪费额度。"
 
 
-def _raise_bundle_error(detail: str, *, status_code: int = 0) -> None:
-    raw = str(detail or "").strip()
+def _sanitize_bundle_provider_detail(detail: Any, *, api_key: str = "") -> str:
+    text = str(detail or "").strip()
+    if api_key:
+        text = text.replace(str(api_key), "***")
+    text = re.sub(
+        r"(?i)\b(authorization|bearer|token|api[_-]?key)\s*[:=]\s*[^\s,;]+",
+        lambda match: f"{match.group(1)}=***",
+        text,
+    )
+    return re.sub(r"\s+", " ", text).strip()[:500]
+
+
+def _provider_error_code(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    nested_error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    for source in (payload, nested_error):
+        for key in ("code", "errorCode", "error_code", "type"):
+            value = str(source.get(key) or "").strip()
+            if value:
+                return value[:120]
+    return ""
+
+
+def _raise_bundle_error(
+    detail: str,
+    *,
+    status_code: int = 0,
+    provider_error_code: str = "",
+) -> None:
+    raw = _sanitize_bundle_provider_detail(detail)
     message = _localize_bundle_error(raw, status_code=status_code)
+    diagnostic = {
+        "provider_http_status": status_code,
+        "provider_error_code": provider_error_code,
+        "provider_error_detail": raw,
+    }
     if is_bundle_reauth_required(raw, status_code=status_code):
-        raise BundleReauthRequiredError(message)
-    raise BundleSocialError(message)
+        raise BundleReauthRequiredError(message, **diagnostic)
+    raise BundleSocialError(message, **diagnostic)
 
 
 def _is_image_path(path: str | Path) -> bool:
@@ -564,9 +611,12 @@ class BundleSocialClient:
             detail = ""
             if isinstance(payload, dict):
                 detail = str(payload.get("message") or payload.get("detail") or payload.get("error") or "").strip()
-            if self.api_key and detail:
-                detail = detail.replace(self.api_key, "***")
-            _raise_bundle_error(detail, status_code=int(response.status_code or 0))
+            detail = _sanitize_bundle_provider_detail(detail, api_key=self.api_key)
+            _raise_bundle_error(
+                detail,
+                status_code=int(response.status_code or 0),
+                provider_error_code=_provider_error_code(payload),
+            )
         return payload
 
     def get_social_account_analytics(self, *, team_id: str, platform: str) -> dict[str, Any]:
@@ -1073,11 +1123,12 @@ def run_bundle_social_task(
             raise BundleSocialError(
                 f"{platform_label(platform)} 正文不能超过 {text_limit} 字，当前 {len(text)} 字。请缩短后再发。"
             )
+        upload_ids: list[str] = []
         try:
+            resource_id = ""
             if media_paths:
                 _set_bundle_assistance(context_control, "正在处理图片", "正在把图片处理成平台要求的尺寸，避免超限提交。")
                 media_paths = prepare_publish_media_paths(platform, media_paths, logger=logger)
-            upload_ids: list[str] = []
             for path in media_paths:
                 if cancel_event is not None and callable(getattr(cancel_event, "is_set", None)) and cancel_event.is_set():
                     raise BundleSocialError("任务已取消")
@@ -1117,6 +1168,18 @@ def run_bundle_social_task(
             if not url:
                 raise BundleSocialError("平台已发布，但未返回可查询的帖子链接")
         except BundleSocialError as exc:
+            logger.log(
+                "error",
+                "bundle_publish_error",
+                "平台授权接口未接受发布请求。",
+                {
+                    "phase": "confirmation" if resource_id else "submit",
+                    "upload_count": len(upload_ids),
+                    "provider_http_status": int(getattr(exc, "provider_http_status", 0) or 0),
+                    "provider_error_code": str(getattr(exc, "provider_error_code", "") or ""),
+                    "provider_error_detail": str(getattr(exc, "provider_error_detail", "") or ""),
+                },
+            )
             _set_bundle_assistance(
                 context_control,
                 "发布未完成",

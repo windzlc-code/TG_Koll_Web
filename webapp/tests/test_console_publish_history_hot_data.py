@@ -74,6 +74,7 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
 
     def test_persona_workspace_moves_platform_metrics_into_identity_and_shows_published_posts(self):
         metrics = function_source("personaPlatformMetricSummary", "renderPersonaPlatformMetricStrip")
+        metric_strip = function_source("renderPersonaPlatformMetricStrip", "renderPersonaPublishHistoryEmptyState")
         panel = function_source("renderPersonaDataPanel", "renderPersonaProfileIdentity")
         identity = function_source("renderPersonaProfileIdentity", "renderPersonaContentOverview")
 
@@ -86,6 +87,8 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("const metricRows = account ? accountRows : platformRows;", metrics)
         self.assertNotIn("const metricPublished = metricRows.reduce", metrics)
         self.assertIn("published: publishedRows.length", metrics)
+        self.assertIn("automation_publish", metrics)
+        self.assertIn("公开发布", metric_strip)
         self.assertIn("return !account;", metrics)
         self.assertIn("人设发布推文", panel)
         self.assertIn("personaHistoryAccountRestrictionNote(persona)", CONSOLE_JS)
@@ -99,6 +102,12 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertNotIn("人设历史推文", CONSOLE_JS)
         self.assertIn(".persona-profile-platform-metrics {", CONSOLE_CSS)
         self.assertIn(".persona-history-empty-state {", CONSOLE_CSS)
+
+    def test_publish_history_distinguishes_public_posts_from_system_publish_tasks(self):
+        filters = function_source("renderPersonaHistoryFilters", "personaHistoryAccountRestrictionNote")
+
+        self.assertIn("共 ${esc(numberText(rows.length))} 条公开已发布", filters)
+        self.assertIn("系统发布：成功", filters)
 
     def test_persona_history_merges_only_verified_current_account_posts(self):
         dashboard_record = function_source("personaHistoryDashboardMetricRecord", "personaHistoryIdentityKeys")

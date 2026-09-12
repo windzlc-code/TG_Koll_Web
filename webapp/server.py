@@ -25375,6 +25375,59 @@ def _persona_bound_publish_platforms(owner_user_id: int | None) -> dict[str, lis
     return bound
 
 
+def _persona_automation_publish_counts(
+    archive_ids: set[str],
+    *,
+    owner_user_id: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Read task-ledger publication outcomes without changing public history."""
+    clean_ids = sorted({str(value or "").strip() for value in archive_ids if str(value or "").strip()})
+    if not clean_ids:
+        return {}
+    placeholders = ",".join("?" for _ in clean_ids)
+    params: list[Any] = [*clean_ids]
+    owner_clause = ""
+    if owner_user_id is not None:
+        owner_clause = " AND user_id = ?"
+        params.append(int(owner_user_id))
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT persona_id, account_id, platform, status, COUNT(*) AS count
+                FROM social_automation_tasks
+                WHERE task_type = 'publish_post'
+                  AND status IN ('success', 'failed')
+                  AND persona_id IN ({placeholders})
+                  {owner_clause}
+                GROUP BY persona_id, account_id, platform, status
+                """,
+                tuple(params),
+            ).fetchall()
+    except Exception:
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        persona_id = str(row["persona_id"] or "").strip()
+        account_id = str(row["account_id"] or "").strip()
+        platform = _normalize_persona_content_platform(row["platform"])
+        status = str(row["status"] or "").strip().lower()
+        if not persona_id or status not in {"success", "failed"}:
+            continue
+        bucket = result.setdefault(persona_id, {"success": 0, "failed": 0, "total": 0, "by_platform": {}, "by_account": {}})
+        count = max(0, int(row["count"] or 0))
+        bucket[status] += count
+        bucket["total"] += count
+        platform_bucket = bucket["by_platform"].setdefault(platform, {"success": 0, "failed": 0, "total": 0})
+        platform_bucket[status] += count
+        platform_bucket["total"] += count
+        if account_id:
+            account_bucket = bucket["by_account"].setdefault(account_id, {"platform": platform, "success": 0, "failed": 0, "total": 0})
+            account_bucket[status] += count
+            account_bucket["total"] += count
+    return result
+
+
 def _build_persona_dashboard_console_overview(
     *,
     visible_archive_ids: set[str] | None = None,
@@ -25390,6 +25443,10 @@ def _build_persona_dashboard_console_overview(
     personas: list[dict[str, Any]] = []
     totals = {"posts": 0, "published": 0, "images": 0}
     bound_by_persona = _persona_bound_publish_platforms(owner_user_id)
+    automation_publish_counts = _persona_automation_publish_counts(
+        {str(item.get("id") or "").strip() for item in archives if isinstance(item, dict)},
+        owner_user_id=owner_user_id,
+    )
 
     for archive in archives:
         if not isinstance(archive, dict):
@@ -25483,6 +25540,7 @@ def _build_persona_dashboard_console_overview(
         platform_posts = archive.get("platformPosts") if isinstance(archive.get("platformPosts"), dict) else {}
         post_count = len(visible_posts)
         published_count = len(visible_publish_history)
+        automation_publish = copy.deepcopy(automation_publish_counts.get(archive_id) or {"success": 0, "failed": 0, "total": 0, "by_platform": {}, "by_account": {}})
         image_count = len(image_library)
         totals["posts"] += post_count
         totals["published"] += published_count

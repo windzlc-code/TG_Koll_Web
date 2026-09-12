@@ -14088,11 +14088,11 @@ def _sync_successful_task_to_persona_archive(task_id: str, result: dict[str, Any
 
 
 def _fail_task_safely(task_id: str, exc: Exception) -> None:
+    from .bundle_social import BundleReauthRequiredError, BundleSocialError
+
     try:
         if _is_task_cancelled(task_id):
             return
-        from .bundle_social import BundleReauthRequiredError
-
         if isinstance(exc, BundleReauthRequiredError) and _requeue_for_bundle_reauth(task_id, exc):
             return
         row = get_social_task(task_id)
@@ -14159,7 +14159,15 @@ def _fail_task_safely(task_id: str, exc: Exception) -> None:
                 return
     except Exception:
         pass
-    _finish_task(task_id, "failed", {}, str(exc))
+    failure_result: dict[str, Any] = {}
+    if isinstance(exc, BundleSocialError):
+        failure_result = {
+            "provider": "bundle",
+            "provider_http_status": int(getattr(exc, "provider_http_status", 0) or 0),
+            "provider_error_code": str(getattr(exc, "provider_error_code", "") or "")[:120],
+            "provider_error_detail": str(getattr(exc, "provider_error_detail", "") or "")[:500],
+        }
+    _finish_task(task_id, "failed", failure_result, str(exc))
 
 
 class _DbTaskLogger:

@@ -161,6 +161,25 @@ def test_provider_social_set_limit_error_is_localized():
     assert str(exc_info.value) == "平台授权账号集合已达上限（最多 3 个），请完成已有授权后再试"
 
 
+def test_provider_error_keeps_redacted_diagnostic_without_changing_user_message():
+    session = _Session([
+        _Response(
+            {"message": "POST_DENIED token=test-key", "code": "POST_DENIED"},
+            status_code=400,
+        )
+    ])
+    client = BundleSocialClient(api_key="test-key", api_base="https://api.example/api/v1", session=session)
+
+    with pytest.raises(BundleSocialError) as exc_info:
+        client.create_team("vecto-threads")
+
+    error = exc_info.value
+    assert str(error) == "平台未接受本次请求，请稍后重试"
+    assert error.provider_http_status == 400
+    assert error.provider_error_code == "POST_DENIED"
+    assert error.provider_error_detail == "POST_DENIED token=***"
+
+
 def test_already_connected_team_is_disconnected_then_reconnected():
     session = _Session([
         _Response(
@@ -330,6 +349,38 @@ def test_bundle_publish_success_proof_is_posted_status_and_permalink(monkeypatch
     assert result["screenshot_url"] == "https://cdn.example/threads-post.jpg"
     assert result["published"]["thumbnail"] == result["screenshot_url"]
     assert social_automation_api._confirmed_published_url(result, "threads") == "https://www.threads.net/@hiro504522/post/abc"
+
+
+def test_bundle_publish_submit_error_is_logged_with_safe_provider_diagnostic(monkeypatch):
+    from webapp.bundle_social import run_bundle_social_task
+
+    class _Client:
+        def create_post(self, **_kwargs):
+            raise BundleSocialError(
+                "平台未接受本次请求，请稍后重试",
+                provider_http_status=400,
+                provider_error_code="POST_DENIED",
+                provider_error_detail="POST_DENIED token=***",
+            )
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: _Client())
+    logger = _Logger()
+
+    with pytest.raises(BundleSocialError):
+        run_bundle_social_task(
+            task={"id": "task-error", "task_type": "publish_post", "platform": "threads", "payload": {"content": "hello"}},
+            account={"external_team_id": "team-1", "external_account_id": "social-1", "platform": "threads"},
+            logger=logger,
+        )
+
+    event = next(item for item in logger.events if item[1] == "bundle_publish_error")
+    assert event[3] == {
+        "phase": "submit",
+        "upload_count": 0,
+        "provider_http_status": 400,
+        "provider_error_code": "POST_DENIED",
+        "provider_error_detail": "POST_DENIED token=***",
+    }
 
 
 def test_create_post_uses_selected_platform_and_reference_key():

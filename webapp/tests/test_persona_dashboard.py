@@ -660,6 +660,34 @@ class PersonaDashboardApiTests(unittest.TestCase):
         conn.commit()
         conn.close()
 
+    def test_console_overview_keeps_public_post_count_separate_from_publish_task_outcomes(self):
+        self._write_archives()
+        self._insert_social_account(account_id="acct-counts", platform="threads", username="history")
+        self._insert_social_task(
+            task_id="task-count-success",
+            account_id="acct-counts",
+            platform="threads",
+            task_type="publish_post",
+            status="success",
+        )
+        for index in range(2):
+            self._insert_social_task(
+                task_id=f"task-count-failed-{index}",
+                account_id="acct-counts",
+                platform="threads",
+                task_type="publish_post",
+                status="failed",
+            )
+
+        response = self.client.get("/api/persona_dashboard/console_overview")
+
+        self.assertEqual(response.status_code, 200)
+        counts = response.json()["personas"][0]["counts"]
+        self.assertEqual(counts["published"], 1)
+        self.assertEqual(counts["automation_publish"]["success"], 1)
+        self.assertEqual(counts["automation_publish"]["failed"], 2)
+        self.assertEqual(counts["automation_publish"]["by_account"]["acct-counts"]["total"], 3)
+
     def test_overview_returns_empty_when_archive_files_are_missing(self):
         resp = self.client.get("/api/persona_dashboard/overview")
         self.assertEqual(resp.status_code, 200)
