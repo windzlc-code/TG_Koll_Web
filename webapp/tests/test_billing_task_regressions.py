@@ -150,13 +150,101 @@ class BillingTaskRegressionTests(unittest.TestCase):
                 },
             )
 
+        self.assertNotIn("中国人", runner.call_args.kwargs["prompt"])
         self.assertEqual(
             runner.call_args.kwargs["persona_field_policy"],
             {
-                "explicitFields": ["region", "gender", "age"],
+                "explicitFields": ["gender", "age"],
                 "supplementPrompt": "",
             },
         )
+
+    def test_persona_image_non_default_region_is_the_only_region_override(self):
+        result = {
+            "generation": {"image_url": "/uploads/persona-region.png"},
+            "saved_item_id": "saved-region-1",
+        }
+        with mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner:
+            server._run_persona_image_task(
+                "task-region-1",
+                {
+                    "related_persona_id": "persona-1",
+                    "supplement_prompt": "",
+                    "persona_image_options": {
+                        "digital_human_character_region": "japan",
+                        "character_gender": "",
+                        "character_age": "",
+                        "character_hairstyle": "",
+                        "character_temperament": "",
+                        "character_clothing": "",
+                    },
+                },
+            )
+
+        self.assertIn("日本人", runner.call_args.kwargs["prompt"])
+        self.assertEqual(
+            runner.call_args.kwargs["persona_field_policy"],
+            {
+                "explicitFields": ["region"],
+                "supplementPrompt": "",
+            },
+        )
+
+    def test_persona_image_supplement_does_not_promote_default_region_to_override(self):
+        result = {
+            "generation": {"image_url": "/uploads/persona-supplement.png"},
+            "saved_item_id": "saved-supplement-1",
+        }
+        with mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner:
+            server._run_persona_image_task(
+                "task-supplement-1",
+                {
+                    "related_persona_id": "persona-1",
+                    "supplement_prompt": "佩戴红色围巾",
+                    "persona_image_options": {
+                        "digital_human_character_region": "china",
+                        "character_gender": "",
+                        "character_age": "",
+                        "character_hairstyle": "",
+                        "character_temperament": "",
+                        "character_clothing": "",
+                    },
+                },
+            )
+
+        self.assertEqual(runner.call_args.kwargs["prompt"], "佩戴红色围巾")
+        self.assertEqual(
+            runner.call_args.kwargs["persona_field_policy"],
+            {
+                "explicitFields": [],
+                "supplementPrompt": "佩戴红色围巾",
+            },
+        )
+
+    def test_persona_image_untouched_defaults_use_original_reference_prompt_chain(self):
+        result = {
+            "generation": {"image_url": "/uploads/persona-default.png"},
+            "saved_item_id": "saved-default-1",
+        }
+        with mock.patch.object(server, "_run_persona_image_cli_for_web", return_value=result) as runner:
+            server._run_persona_image_task(
+                "task-default-1",
+                {
+                    "related_persona_id": "persona-1",
+                    "supplement_prompt": "",
+                    "persona_image_options": {
+                        "digital_human_character_region": "china",
+                        "character_gender": "",
+                        "character_age": "",
+                        "character_hairstyle": "",
+                        "character_temperament": "",
+                        "character_clothing": "",
+                    },
+                },
+            )
+
+        self.assertEqual(runner.call_args.kwargs["prompt"], "")
+        self.assertIsNone(runner.call_args.kwargs["persona_field_policy"])
 
     def test_persona_image_regeneration_keeps_standard_reference_sheet_chain(self):
         archive = {

@@ -298,6 +298,31 @@ describe("persona image production", () => {
     expect(prompt).toContain("自动项参考（发型、气质）");
   });
 
+  it("does not replace the default region when only age and gender are selected", () => {
+    const request = "23至27岁的成年女性，自然身材比例";
+    const prompt = buildReferenceSheetPrompt(
+      nonWorkflowSetup({
+        personaAppearance: "中国女性，28岁，微卷长发，佩戴金色耳环，正式西装，商务干练气质",
+        personaDescription: "中国金融理财顾问，日常穿正式西装，商务干练气质",
+        personaNationality: "中国",
+      }),
+      "专注金融理财内容的职业女性",
+      request,
+      {
+        explicitFields: ["gender", "age"],
+        supplementPrompt: "",
+      },
+    );
+
+    expect(prompt).toContain(request);
+    expect(prompt).toContain("中国");
+    expect(prompt).toContain("微卷长发");
+    expect(prompt).toContain("金色耳环");
+    expect(prompt).toContain("正式西装");
+    expect(prompt).toContain("商务干练气质");
+    expect(prompt).not.toContain("中国人，自然上镜");
+  });
+
   it("treats supplement prompt fields as explicit overrides", () => {
     const request = "中国人，23至27岁的成年女性，红色连衣裙";
     const prompt = buildReferenceSheetPrompt(
@@ -318,6 +343,30 @@ describe("persona image production", () => {
     expect(prompt).toContain("长直发");
     expect(prompt).toContain("商务干练气质");
     expect(prompt).toContain("自动项参考（发型、气质）");
+  });
+
+  it("orders supplement, selected options, and retained persona context by precedence", () => {
+    const selectedOptions = "中国人，23至27岁的成年女性，正式西装";
+    const supplement = "改为成熟男性，穿红色休闲夹克";
+    const prompt = buildReferenceSheetPrompt(
+      nonWorkflowSetup({
+        personaAppearance: "中国女性，28岁，长直发，白色衬衫，商务干练气质",
+        personaDescription: "金融理财顾问，日常穿白色衬衫，商务干练气质",
+      }),
+      "专注金融理财内容的职业女性",
+      `${selectedOptions}，${supplement}`,
+      {
+        explicitFields: ["region", "gender", "age", "clothing"],
+        supplementPrompt: supplement,
+      },
+    );
+
+    expect(prompt.indexOf(supplement)).toBeLessThan(prompt.indexOf(selectedOptions));
+    expect(prompt).toContain("priority: supplement > selected options > retained persona context");
+    expect(prompt).toContain("photorealistic adult 男性");
+    expect(prompt).not.toContain("白色衬衫");
+    expect(prompt).toContain("长直发");
+    expect(prompt).toContain("商务干练气质");
   });
 
   it("keeps non-visual introduction context when appearance and description share one source", () => {

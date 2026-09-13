@@ -12148,17 +12148,42 @@ def _persona_image_field_policy(image_options: Any, supplement_prompt: str = "")
     }
 
 
+def _persona_image_custom_options(image_options: Any) -> dict[str, Any] | None:
+    if not isinstance(image_options, dict):
+        return None
+    custom_options = dict(image_options)
+    region = str(custom_options.get("digital_human_character_region") or "").strip().lower()
+    if region in {"", "china"}:
+        custom_options.pop("digital_human_character_region", None)
+        custom_options.pop("digital_human_character_region_label", None)
+    return custom_options
+
+
+def _persona_image_uses_untouched_defaults(image_options: Any, supplement_prompt: str = "") -> bool:
+    """Keep the original R18 prompt path when the visible defaults were not changed."""
+    if str(supplement_prompt or "").strip():
+        return False
+    if not isinstance(image_options, dict):
+        return True
+    return all(
+        not str(image_options.get(option_key) or "").strip()
+        for option_key, _field in _PERSONA_IMAGE_OPTION_FIELDS
+    )
+
+
 def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
     archive_id = str(payload.get("related_persona_id") or payload.get("archive_id") or "").strip()
     if not archive_id:
         raise RuntimeError("人设图生成缺少人设 ID。")
     supplement_prompt = str(payload.get("supplement_prompt") or payload.get("prompt") or "").strip()
     image_options = payload.get("persona_image_options")
-    generation_prompt = supplement_prompt
-    if isinstance(image_options, dict) and image_options:
+    custom_image_options = _persona_image_custom_options(image_options)
+    uses_untouched_defaults = _persona_image_uses_untouched_defaults(custom_image_options, supplement_prompt)
+    generation_prompt = "" if uses_untouched_defaults else supplement_prompt
+    if not uses_untouched_defaults and isinstance(custom_image_options, dict) and custom_image_options:
         from video_core.image_mode_prompts import build_digital_human_character_selection_prompt
 
-        selection_prompt = build_digital_human_character_selection_prompt(dict(image_options))
+        selection_prompt = build_digital_human_character_selection_prompt(custom_image_options)
         generation_prompt = "，".join(
             part
             for part in (
@@ -12171,7 +12196,11 @@ def _run_persona_image_task(task_id: str, payload: dict[str, Any]) -> dict[str, 
         result = _run_persona_image_cli_for_web(
             archive_id,
             prompt=generation_prompt,
-            persona_field_policy=_persona_image_field_policy(image_options, supplement_prompt),
+            persona_field_policy=(
+                None
+                if uses_untouched_defaults
+                else _persona_image_field_policy(custom_image_options, supplement_prompt)
+            ),
             aspect_ratio=str(payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1").strip() or "1:1",
             mode=str(payload.get("mode") or "person").strip() or "person",
         )

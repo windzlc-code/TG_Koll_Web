@@ -189,13 +189,32 @@ export function applyUserVisualReplacements(
   return [kept, request].filter(Boolean).join(", ");
 }
 
-function resolveSheetGender(setup: DramaSetup, customPrompt?: string): string {
-  const request = String(customPrompt || "");
+function explicitSheetGender(prompt?: string): string | null {
+  const request = String(prompt || "");
   const mentionsMale = /男性|男人|男生|男的/.test(request);
   const mentionsFemale = /女性|女人|女生|女的/.test(request);
   if (mentionsMale && !mentionsFemale) return "男性";
   if (mentionsFemale && !mentionsMale) return "女性";
+  return null;
+}
+
+function resolveSheetGender(setup: DramaSetup, customPrompt?: string, supplementPrompt?: string): string {
+  const supplementGender = explicitSheetGender(supplementPrompt);
+  if (supplementGender) return supplementGender;
+  const requestGender = explicitSheetGender(customPrompt);
+  if (requestGender) return requestGender;
   return setup.personaGender || "女性";
+}
+
+function orderedReferenceSheetRequest(request: string, supplementPrompt?: string): string {
+  const supplement = refineSheetVisualRequest(supplementPrompt);
+  if (!supplement) return request;
+  const supplementIndex = request.lastIndexOf(supplement);
+  const selectedOptions = supplementIndex >= 0
+    ? `${request.slice(0, supplementIndex)} ${request.slice(supplementIndex + supplement.length)}`
+      .replace(/^[\s,，;；]+|[\s,，;；]+$/g, "")
+    : request;
+  return [supplement, selectedOptions].filter(Boolean).join(", ");
 }
 
 export function buildReferenceSheetPrompt(
@@ -207,7 +226,7 @@ export function buildReferenceSheetPrompt(
   const request = refineSheetVisualRequest(customPrompt);
   const nationality = setup.personaNationality || "";
   const gender = request
-    ? resolveSheetGender(setup, request)
+    ? resolveSheetGender(setup, request, fieldPolicy?.supplementPrompt)
     : (setup.personaGender || "女性");
 
   if (!request) {
@@ -230,8 +249,8 @@ export function buildReferenceSheetPrompt(
   const automaticFields = fieldPolicy
     ? SELECTABLE_PERSONA_FIELDS.filter((field) => !explicitFieldSet.has(field))
     : [];
-  // A field policy is used by the persona-image form, including its default
-  // China selection.  For a copied/older persona that has not yet stored a
+  // A field policy is used by the persona-image form for explicit non-default
+  // selections. For a copied/older persona that has not yet stored a
   // separate appearance field, its generated introduction is the only visual
   // identity available.  Keep it in the primary appearance clause instead of
   // relegating it to a weak automatic-field note.
@@ -256,10 +275,15 @@ export function buildReferenceSheetPrompt(
     : "";
   const automaticContext = automaticContextCandidate === keptVisual ? "" : automaticContextCandidate;
   const automaticFieldLabels = automaticFields.map((field) => PERSONA_FIELD_LABELS[field]).filter(Boolean).join("、");
-  const appearance = [request, keptVisual].filter(Boolean).join(", ");
+  const orderedRequest = orderedReferenceSheetRequest(request, fieldPolicy?.supplementPrompt);
+  const appearance = [orderedRequest, keptVisual].filter(Boolean).join(", ");
+  const conflictRule = fieldPolicy?.supplementPrompt
+    ? "priority: supplement > selected options > retained persona context; preserve unspecified traits"
+    : "priority: selected options > retained persona context; preserve unspecified traits";
   return [
     "three-view character sheet: front, side, back; same person",
     appearance ? `appearance: ${appearance}` : "",
+    conflictRule,
     automaticContext ? `自动项参考（${automaticFieldLabels}）：${automaticContext}；仅补全这些自动项` : "",
     `photorealistic adult ${gender}, full body, white studio`,
     "same face, body, hair and outfit; no text, no watermark",

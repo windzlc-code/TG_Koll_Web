@@ -12178,7 +12178,7 @@ function personaImageOptionPromptParts(imageForm = {}) {
   const values = personaImageOptionState(imageForm);
   const profile = personaImageCharacterProfile(values);
   return [
-    ["地区特征", personaImageOptionLabel(PERSONA_IMAGE_REGION_OPTIONS, values.digital_human_character_region)],
+    ["地区特征", values.digital_human_character_region === "china" ? "" : personaImageOptionLabel(PERSONA_IMAGE_REGION_OPTIONS, values.digital_human_character_region)],
     ["性别", personaImageOptionLabel(PERSONA_IMAGE_GENDER_OPTIONS, values.character_gender)],
     ["年龄段", personaImageOptionLabel(PERSONA_IMAGE_AGE_OPTIONS, values.character_age)],
     ["发型", personaImageOptionLabel(PERSONA_IMAGE_HAIRSTYLE_OPTIONS[values.character_gender] || PERSONA_IMAGE_HAIRSTYLE_OPTIONS.default, values.character_hairstyle)],

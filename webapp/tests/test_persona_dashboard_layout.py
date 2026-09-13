@@ -1953,6 +1953,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
             self.assertIn(label, prompt_field)
         self.assertIn('{ value: "china", label: "中国" }', source)
         self.assertIn('{ value: "europe_america", label: "欧美" }', source)
+        self.assertIn('values.digital_human_character_region === "china" ? "" :', source)
         self.assertIn('{ value: "adult_glamour", label: "妩媚性感" }', source)
         self.assertIn('{ value: "intimate_glamour_female", label: "福利诱惑套装" }', source)
         self.assertIn('function personaImageCharacterProfile(values = {})', source)
