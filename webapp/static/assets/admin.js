@@ -458,6 +458,7 @@ const SENSITIVE_RUNTIME_INPUT_IDS = [
   "rtVideoRunningHubPersonalApiKey",
   "rtVideoRunningHubEnterpriseApiKey",
   "tgBotToken",
+  "tgTweetBotToken",
 ];
 const SENSITIVE_PROVIDER_INPUT_IDS = [
   "bundleSocialApiKey",
@@ -482,6 +483,7 @@ const RUNTIME_SECRET_API_NAMES = {
   rtVideoRunningHubPersonalApiKey: "runninghub_personal_api_key",
   rtVideoRunningHubEnterpriseApiKey: "runninghub_enterprise_api_key",
   tgBotToken: "telegram_bot_token",
+  tgTweetBotToken: "telegram_tweet_bot_token",
 };
 const VIDEO_IMAGE_MODEL_OPTIONS = [
   "gpt image 2",
@@ -663,6 +665,9 @@ function setActiveAdminPage(page, updateHash = true) {
   if (nextPage === "telegram") {
     void loadTgSettings().catch((error) => {
       setMsg("tgSettingsMsg", `Telegram 配置读取失败：${getErrorMessage(error)}`, false);
+    });
+    void loadTgTweetSettings().catch((error) => {
+      setMsg("tgTweetSettingsMsg", `推文 Bot 配置读取失败：${getErrorMessage(error)}`, false);
     });
   }
   if (nextPage === "overview") {
@@ -3372,10 +3377,153 @@ async function saveTgUser() {
   setMsg("tgSettingsMsg", fetchedName ? `TG 成员已保存：${fetchedName}` : "TG 成员已保存，暂未获取到 Telegram 用户名称", true);
 }
 
+function renderTgTweetSettings(data) {
+  const rows = Array.isArray(data?.trusted_users) ? data.trusted_users : [];
+  const configured = Boolean(data?.bot_token_configured);
+  const running = Boolean(data?.bot_running);
+  const error = String(data?.bot_last_error || "").trim();
+  const status = el("tgTweetBotStatus");
+  if (status) {
+    status.className = "admin-tg-status-tags";
+    status.innerHTML = [
+      tgStatusBadge(configured ? "已配置" : "未配置", configured ? "enabled" : "disabled"),
+      tgStatusBadge(running ? "运行中" : "未运行", running ? "enabled" : (configured ? "pending" : "rejected")),
+      error ? tgStatusBadge(error, "locked") : "",
+    ].filter(Boolean).join("");
+  }
+  if (el("tgTweetBotUsername")) el("tgTweetBotUsername").textContent = data?.bot_username ? `@${data.bot_username}` : "-";
+  if (el("tgTweetBotEnabled")) el("tgTweetBotEnabled").checked = Boolean(data?.bot_enabled);
+  const tokenLength = Math.max(0, Number(data?.bot_token_length || 0));
+  const tokenInput = el("tgTweetBotToken");
+  const tokenAlreadyHydrated = Boolean(
+    tokenInput
+    && configured
+    && hasSavedRuntimeSecret("tgTweetBotToken")
+    && tokenLength
+    && tokenInput.value.length === tokenLength
+    && !tokenInput.value.includes("•")
+  );
+  if (!tokenAlreadyHydrated) {
+    setRuntimeSecretInputState("tgTweetBotToken", configured, configured ? "•".repeat(tokenLength || 12) : "");
+    if (configured) void hydrateTgTweetBotTokenField(data);
+  }
+  const list = el("tgTweetMemberList");
+  if (!list) return;
+  list.innerHTML = rows.length ? rows.map((item) => {
+    const enabled = Boolean(item.enabled);
+    return `<tr>
+      <td><strong>${escapeHtml(item.label || "TG 成员")}</strong></td>
+      <td>${tgMemberNameCell(item)}</td>
+      <td><strong class="admin-tg-chat-id">${escapeHtml(String(item.chat_id || ""))}</strong></td>
+      <td>
+        <div class="admin-tg-status-tags">
+          ${tgStatusBadge(enabled ? "启用" : "停用", enabled ? "enabled" : "disabled")}
+        </div>
+      </td>
+      <td>
+        <div class="admin-tg-time-cell">
+          <span><em>加入</em>${escapeHtml(tgFormatMemberTime(item.created_at))}</span>
+          <span><em>更新</em>${escapeHtml(tgFormatMemberTime(item.updated_at))}</span>
+        </div>
+      </td>
+      <td>
+        <button class="ghost mini-btn" type="button" data-act="tg_tweet_toggle" data-id="${escapeHtml(String(item.chat_id || ""))}" data-enabled="${enabled ? 1 : 0}">${enabled ? "停用" : "启用"}</button>
+        <button class="danger mini-btn" type="button" data-act="tg_tweet_delete" data-id="${escapeHtml(String(item.chat_id || ""))}">删除</button>
+      </td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="6" class="task-empty">暂无允许成员</td></tr>`;
+}
+
+async function hydrateTgTweetBotTokenField(data) {
+  if (!data?.bot_token_configured) return;
+  const input = el("tgTweetBotToken");
+  if (!input || input.dataset.runtimeSecretSaved !== "true") return;
+  try {
+    const response = await api("/api/admin/runtime_config/secrets/telegram_tweet_bot_token", { method: "POST" });
+    const value = String(response?.value || "");
+    if (!value || input.dataset.runtimeSecretSaved !== "true") return;
+    input.value = value;
+    input.dataset.runtimeSecretMask = value;
+    input.type = "password";
+    input.classList.add("is-saved-runtime-secret");
+    updateSensitiveToggleVisual(getSensitiveToggleButton("tgTweetBotToken"), false);
+  } catch (_) {}
+}
+
+async function loadTgTweetSettings() {
+  if (!el("tgTweetBotStatus")) return null;
+  const data = await api("/api/admin/tg_tweet/settings");
+  renderTgTweetSettings(data);
+  return data;
+}
+
+function tgTweetBotTokenInputValue() {
+  const input = el("tgTweetBotToken");
+  const raw = input?.value.trim() || "";
+  const mask = input?.dataset.runtimeSecretMask || "";
+  if (hasSavedRuntimeSecret("tgTweetBotToken") && raw === mask) return null;
+  return raw;
+}
+
+async function saveTgTweetEnv() {
+  const token = tgTweetBotTokenInputValue();
+  const payload = {
+    bot_enabled: token ? true : Boolean(el("tgTweetBotEnabled")?.checked),
+  };
+  if (token !== null) {
+    payload.bot_token = token;
+    if (!token) payload.bot_enabled = false;
+  }
+  const data = await api("/api/admin/tg_tweet/env", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  renderTgTweetSettings(data.tg_settings || data);
+  const cleared = token === "";
+  setMsg(
+    "tgTweetSettingsMsg",
+    cleared ? "推文 Bot Token 已清除，轮询已停止。" : "推文 Bot 配置已保存，Token 已检测，Bot 按开关状态运行。",
+    true,
+  );
+}
+
+async function testTgTweetEnv() {
+  const token = tgTweetBotTokenInputValue();
+  const payload = { bot_token: token || "" };
+  const data = await api("/api/admin/tg_tweet/env/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  setMsg("tgTweetSettingsMsg", data?.username ? `Token 有效：@${data.username}` : "Token 有效", true);
+}
+
+async function saveTgTweetUser() {
+  const chatId = String(el("tgTweetChatId")?.value || "").trim();
+  if (!/^\d+$/.test(chatId) || Number(chatId) <= 0) {
+    setMsg("tgTweetSettingsMsg", "请填写正数 Telegram Chat ID", false);
+    return;
+  }
+  const data = await api("/api/admin/tg_tweet/members", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: Number(chatId),
+      label: String(el("tgTweetLabel")?.value || "").trim(),
+      enabled: true,
+    }),
+  });
+  renderTgTweetSettings(data.tg_settings || data);
+  ["tgTweetChatId", "tgTweetLabel"].forEach((id) => { if (el(id)) el(id).value = ""; });
+  setMsg("tgTweetSettingsMsg", "成员已授权，可直接向推文 Bot 发送 /start 使用。", true);
+}
+
 async function loadRuntime() {
   const cfg = runtimeConfigResponseToConfig(await api("/api/admin/runtime_config"));
   fillRuntimeForm(cfg);
   try { await loadTgSettings(); } catch (_) {}
+  try { await loadTgTweetSettings(); } catch (_) {}
   return cfg;
 }
 
@@ -11892,6 +12040,34 @@ function bindActions() {
       }
     } catch (err) {
       setMsg("tgSettingsMsg", getErrorMessage(err), false);
+    }
+  });
+  el("btnSaveTgTweetEnv")?.addEventListener("click", () => saveTgTweetEnv().catch((err) => setMsg("tgTweetSettingsMsg", getErrorMessage(err), false)));
+  el("btnTestTgTweetEnv")?.addEventListener("click", () => testTgTweetEnv().catch((err) => setMsg("tgTweetSettingsMsg", getErrorMessage(err), false)));
+  el("btnRefreshTgTweet")?.addEventListener("click", () => loadTgTweetSettings().catch((err) => setMsg("tgTweetSettingsMsg", getErrorMessage(err), false)));
+  el("btnSaveTgTweetUser")?.addEventListener("click", () => saveTgTweetUser().catch((err) => setMsg("tgTweetSettingsMsg", getErrorMessage(err), false)));
+  el("tgTweetMemberList")?.addEventListener("click", async (event) => {
+    const btn = event.target?.closest?.("[data-act]");
+    if (!btn) return;
+    const id = String(btn.dataset.id || "").trim();
+    if (!id) return;
+    try {
+      let data = null;
+      if (btn.dataset.act === "tg_tweet_toggle") {
+        data = await api(`/api/admin/tg_tweet/members/${encodeURIComponent(id)}/toggle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: btn.dataset.enabled !== "1" }),
+        });
+        setMsg("tgTweetSettingsMsg", "成员状态已更新。", true);
+      }
+      if (btn.dataset.act === "tg_tweet_delete") {
+        data = await api(`/api/admin/tg_tweet/members/${encodeURIComponent(id)}`, { method: "DELETE" });
+        setMsg("tgTweetSettingsMsg", "成员已删除。", true);
+      }
+      if (data) renderTgTweetSettings(data.tg_settings || data);
+    } catch (err) {
+      setMsg("tgTweetSettingsMsg", getErrorMessage(err), false);
     }
   });
   el("btnSaveRuntime").addEventListener("click", async () => {
