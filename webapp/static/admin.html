@@ -1897,6 +1897,7 @@
           </section>
         </div>
       </section>
+
       <section class="card section admin-page-view" id="secRuntime" data-page-view="runtime">
         <div class="section-head">
           <div>
@@ -2352,9 +2353,69 @@
                 </div>
               </div>
               <div class="admin-runtime-block admin-model-tab-panel" data-tg-workbench-panel="console">
-                <div class="admin-config-card-title">Telegram Bot</div>
-                <div class="small">推文工作台将单独配置 Token 与授权成员，不与视频工作台共用。</div>
-                <div class="task-empty">推文工作台 Telegram 版本已预留，接入后在此分页配置。</div>
+                <div class="admin-tg-split">
+                  <div class="admin-tg-bot-pane">
+                    <div class="admin-config-card-title">Telegram Bot</div>
+                    <div class="small">填写 Token 并保存后自动开始轮询。授权以下方成员表为准。</div>
+                    <div class="admin-tg-status-row">
+                      <div class="admin-tg-field">
+                        <span>Bot 状态</span>
+                        <div id="tgTweetBotStatus" class="small">未读取</div>
+                      </div>
+                      <div class="admin-tg-field">
+                        <span>Bot 用户名</span>
+                        <div id="tgTweetBotUsername" class="small">-</div>
+                      </div>
+                      <div class="admin-tg-field">
+                        <span>轮询</span>
+                        <label class="proxy-provider-check admin-tg-enable"><input id="tgTweetBotEnabled" type="checkbox"> 启用轮询</label>
+                      </div>
+                    </div>
+                    <div class="admin-tg-token-row">
+                      <label class="admin-tg-field admin-tg-token-field">
+                        <span>Bot Token</span>
+                        <input id="tgTweetBotToken" type="password" autocomplete="new-password" placeholder="留空保存则清除 Token">
+                      </label>
+                      <div class="admin-tg-inline-actions">
+                        <button id="btnTestTgTweetEnv" class="ghost" type="button">检测 Token</button>
+                        <button id="btnSaveTgTweetEnv" class="primary" type="button">保存配置</button>
+                        <button id="btnRefreshTgTweet" class="ghost" type="button">刷新</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="admin-tg-member-pane">
+                    <div class="admin-config-card-title">允许成员</div>
+                    <div class="small">填写正数 Telegram Chat ID 即可授权，无需用户预先发送 /start；保存后可直接向 Bot 发送消息使用。</div>
+                    <div class="admin-tg-member-row">
+                      <label class="admin-tg-field">
+                        <span>Chat ID</span>
+                        <input id="tgTweetChatId" inputmode="numeric" placeholder="Telegram Chat ID">
+                      </label>
+                      <label class="admin-tg-field">
+                        <span>备注</span>
+                        <input id="tgTweetLabel" placeholder="例如：客户A">
+                      </label>
+                      <button id="btnSaveTgTweetUser" class="primary" type="button">保存成员</button>
+                    </div>
+                  </div>
+                </div>
+                <div id="tgTweetSettingsMsg" class="msg" role="status" aria-live="polite"></div>
+                <div class="table-wrap admin-table-shell admin-tg-member-table-shell">
+                  <table class="table admin-governance-table">
+                    <caption class="sr-only">推文工作台 Telegram 允许成员</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">备注</th>
+                        <th scope="col">用户名称</th>
+                        <th scope="col">Chat ID</th>
+                        <th scope="col">授权状态</th>
+                        <th scope="col">时间</th>
+                        <th scope="col">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tgTweetMemberList"></tbody>
+                  </table>
+                </div>
               </div>
               <div class="admin-runtime-block admin-model-tab-panel" data-tg-workbench-panel="crm">
                 <div class="admin-config-card-title">Telegram Bot</div>
@@ -2585,7 +2646,8 @@
       </div>
     </div>
   </div>
- <div id="taskInspectModal" class="modal-overlay" style="display:none" aria-hidden="true">
+
+  <div id="taskInspectModal" class="modal-overlay" style="display:none" aria-hidden="true">
     <div class="modal-card admin-task-modal" role="dialog" aria-modal="true" aria-labelledby="taskInspectTitle">
       <div class="modal-header">
         <div>
