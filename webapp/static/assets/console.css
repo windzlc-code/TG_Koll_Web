@@ -12430,6 +12430,210 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   margin-bottom: 0;
 }
 
+.persona-workflow-stage-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line-strong, var(--line));
+}
+
+.persona-workflow-stage-label > span {
+  display: inline-grid;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.persona-workflow-stage-label > strong {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.persona-post-image-filter-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.persona-post-image-filter-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.persona-post-image-filter-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.persona-post-image-filter-head strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.persona-post-image-filter-head small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.persona-post-image-filter-head > span {
+  flex: 0 0 auto;
+  max-width: 112px;
+  padding: 3px 7px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-post-image-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.persona-post-image-filter {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 48px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  color: var(--ink);
+  text-align: left;
+}
+
+.persona-post-image-filter:hover:not(:disabled) {
+  border-color: var(--line-strong, var(--line));
+  background: var(--panel-solid);
+}
+
+.persona-post-image-filter.is-selected {
+  border-color: var(--accent);
+  background: var(--panel-solid);
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel-solid));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.persona-post-image-filter-swatch {
+  position: relative;
+  display: block;
+  width: 30px;
+  height: 30px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(135deg, #e9dec8 0%, #71908b 48%, #233e4a 100%);
+}
+
+.persona-post-image-filter-swatch::after {
+  content: "";
+  position: absolute;
+  inset: 6px 5px;
+  border: 1px solid rgba(255, 255, 255, .72);
+  border-radius: 50% 50% 44% 56%;
+  box-shadow: 7px -5px 0 -5px rgba(255, 255, 255, .85);
+}
+
+[data-persona-image-filter="black_white"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #fff 0 32%, #9c9c9c 32% 66%, #181818 66%); }
+[data-persona-image-filter="film_noir"] .persona-post-image-filter-swatch { background: linear-gradient(145deg, #f4f4f4 0 18%, #292929 18% 52%, #020202 52%); }
+[data-persona-image-filter="sepia"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #f1d19e, #9a5f2e 58%, #3d2114); }
+[data-persona-image-filter="nostalgia"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #ecd9be, #c18274 52%, #5a6960); }
+[data-persona-image-filter="retro_film"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #e7b44b, #aa4b38 48%, #244b47); }
+[data-persona-image-filter="polaroid"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #fff4dc, #e9a899 52%, #6c8f8b); box-shadow: inset 0 -5px 0 rgba(255,255,255,.8); }
+[data-persona-image-filter="cinematic"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #e68b48, #1f6e74 50%, #142c3a); }
+[data-persona-image-filter="warm_sunset"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #ffe08a, #f17b52 52%, #87465e); }
+[data-persona-image-filter="cool_blue"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #d8f4f5, #64a9bf 52%, #315071); }
+[data-persona-image-filter="soft_matte"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #f1e9e2, #b8c6bd 52%, #7c8583); }
+[data-persona-image-filter="vivid"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #ffe45b, #fb5578 48%, #3e71eb); }
+
+.persona-post-image-filter-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.persona-post-image-filter-copy strong,
+.persona-post-image-filter-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-post-image-filter-copy strong {
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.persona-post-image-filter-copy small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.persona-post-image-settings-divider {
+  display: grid;
+  grid-template-columns: minmax(18px, 1fr) auto minmax(18px, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.persona-post-image-settings-divider::before,
+.persona-post-image-settings-divider::after {
+  content: "";
+  height: 1px;
+  background: var(--line-strong, var(--line));
+}
+
+.persona-image-style-waiting {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line-strong, var(--line));
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+}
+
+.persona-image-style-waiting strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.persona-image-style-waiting p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .persona-image-style-head {
   display: flex;
   align-items: center;
@@ -13560,6 +13764,11 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   align-content: start;
 }
 
+.persona-compose-workspace.has-media > .persona-compose-media-stack {
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+
 .persona-compose-media-stack > .publish-link-settings {
   padding: 9px 12px;
   border: 1px solid var(--line);
@@ -13576,6 +13785,11 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   display: grid;
   gap: 12px;
   align-content: start;
+}
+
+.persona-media-workspace > .persona-media-column + .persona-media-column {
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
 }
 
 .persona-production-section {
@@ -25511,10 +25725,49 @@ body.console-page {
   .console-page .persona-subflow-tabs button {
     font-size: 11px;
   }
+
+  .console-page .persona-post-image-filter-head small,
+  .console-page .persona-post-image-filter-copy small {
+    display: none;
+  }
+
+  .console-page .persona-post-image-filter {
+    min-height: 40px;
+  }
 }
 
 /* Final mobile density pass: keep the workspace readable without oversized controls. */
 @media (max-width: 760px) {
+  .console-page .persona-compose-workspace.has-media > .persona-compose-media-stack,
+  .console-page .persona-media-workspace > .persona-media-column + .persona-media-column {
+    padding-top: 14px;
+    padding-left: 0;
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
+  .console-page .persona-post-image-filter-panel {
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .console-page .persona-post-image-filter-grid {
+    gap: 6px;
+  }
+
+  .console-page .persona-post-image-filter {
+    grid-template-columns: 26px minmax(0, 1fr);
+    gap: 6px;
+    min-height: 44px;
+    padding: 5px 6px;
+  }
+
+  .console-page .persona-post-image-filter-swatch {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+  }
+
   .console-page .persona-generate-actions .persona-generate-ai-action .task-button-busy > span {
     display: none;
   }

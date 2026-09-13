@@ -11482,6 +11482,21 @@ _PERSONA_POST_IMAGE_ASPECT_RATIO_VALUES = {"auto", *_PERSONA_POST_IMAGE_ASPECT_R
 _PERSONA_POST_IMAGE_RATIO_TWEET_MAX_CHARS = 4000
 _PERSONA_POST_IMAGE_RATIO_PROMPT_MAX_CHARS = 2000
 _PERSONA_POST_IMAGE_MODES = ("auto", "person", "pov", "scene", "object", "third_person")
+_PERSONA_POST_IMAGE_FILTER_DEFAULT = "basic"
+_PERSONA_POST_IMAGE_FILTERS: dict[str, tuple[str, str]] = {
+    "basic": ("基础（默认）", ""),
+    "black_white": ("黑白", "Apply a clean black-and-white photographic treatment with clear gray tonal separation and natural detail."),
+    "film_noir": ("黑色电影", "Use a classic film-noir treatment with hard directional light, deep shadows, restrained highlights, and dramatic monochrome contrast."),
+    "sepia": ("棕褐旧照", "Apply an aged sepia-photo treatment with warm brown tones, softly faded highlights, and subtle antique print texture."),
+    "nostalgia": ("怀旧", "Use a nostalgic 1990s memory-photo treatment with gently faded warm colors, soft contrast, and a natural lived-in feeling."),
+    "retro_film": ("复古胶片", "Use a 1970s analog-film treatment with tasteful grain, slightly shifted film colors, soft highlight roll-off, and authentic vintage contrast."),
+    "polaroid": ("拍立得", "Use an instant Polaroid-style treatment with creamy highlights, gentle pastel colors, subtle paper softness, and casual snapshot character."),
+    "cinematic": ("电影感", "Apply cinematic color grading with controlled contrast, rich highlight latitude, natural skin tones, and a restrained teal-orange balance."),
+    "warm_sunset": ("暖阳", "Use warm golden-hour grading with amber highlights, soft sunlit skin tones, and a gentle sunset atmosphere."),
+    "cool_blue": ("冷调", "Use a clear cool blue-cyan treatment with clean whites, restrained saturation, and crisp modern tonal separation."),
+    "soft_matte": ("柔雾哑光", "Use a soft matte treatment with lifted shadows, low harshness, delicate skin tones, and a subtle diffused finish."),
+    "vivid": ("鲜活", "Use vivid but believable color grading with bright clean colors, lively contrast, and preserved natural texture without oversaturation."),
+}
 _PERSONA_IMAGE_STYLE_COUNT = 6
 _PERSONA_IMAGE_STYLE_KIND_ORDER = ("person", "third_person", "pov", "scene", "object")
 _PERSONA_IMAGE_STYLE_KIND_LABELS = {
@@ -11540,6 +11555,19 @@ def _normalize_persona_post_image_mode(value: Any) -> str:
     }
     mode = aliases.get(mode, mode)
     return mode if mode in _PERSONA_POST_IMAGE_MODES else "auto"
+
+
+def _normalize_persona_post_image_filter(value: Any) -> str:
+    selected = re.sub(r"[\s-]+", "_", str(value or _PERSONA_POST_IMAGE_FILTER_DEFAULT).strip().lower())
+    if selected not in _PERSONA_POST_IMAGE_FILTERS:
+        raise ValueError(f"不支持的配图滤镜：{selected}")
+    return selected
+
+
+def _persona_post_image_filter_detail(value: Any) -> tuple[str, str, str]:
+    selected = _normalize_persona_post_image_filter(value)
+    label, prompt = _PERSONA_POST_IMAGE_FILTERS[selected]
+    return selected, label, prompt
 
 
 def _persona_image_style_kind_labels(interface_language: str) -> dict[str, str]:
@@ -11939,6 +11967,13 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         raise RuntimeError(str(exc)) from exc
     _persist_persona_post_image_aspect_ratio(task_id, aspect_ratio)
     aspect_ratio_ms = round((time.perf_counter() - aspect_started_at) * 1000, 1)
+    try:
+        image_filter, image_filter_label, image_filter_prompt = _persona_post_image_filter_detail(
+            payload.get("image_filter") or payload.get("imageFilter")
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    effective_custom_prompt = "\n".join(part for part in (prompt, image_filter_prompt) if part)
     style_hint = str(payload.get("image_style_label") or payload.get("style_hint") or payload.get("styleHint") or "").strip()[:24]
     image_mode = _normalize_persona_post_image_mode(payload.get("image_mode") or payload.get("mode") or ("auto" if style_hint else "person"))
     cli_setup = dict(archive.get("setup") if isinstance(archive.get("setup"), dict) else {})
@@ -11948,7 +11983,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     cli_payload = {
         "setup": cli_setup,
         "content": source_content or prompt,
-        "customPrompt": prompt or None,
+        "customPrompt": effective_custom_prompt or None,
         "styleHint": style_hint or None,
         "aspectRatio": aspect_ratio,
         "mode": image_mode,
@@ -12054,6 +12089,8 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "image_count": len(image_paths),
         "image_edit_mode": bool(edit_reference_path),
         "edit_source": payload.get("edit_source") if edit_reference_path else None,
+        "image_filter": image_filter,
+        "image_filter_label": image_filter_label,
         "aspect_ratio": aspect_ratio,
         "aspect_ratio_selection": aspect_ratio_selection,
         "timings": compatible_timings,
@@ -31313,6 +31350,9 @@ def create_app() -> FastAPI:
                     payload.get("image_mode") or payload.get("mode")
                 )
                 payload["image_style_label"] = str(payload.get("image_style_label") or "").strip()[:24]
+                payload["image_filter"] = _normalize_persona_post_image_filter(
+                    payload.get("image_filter") or payload.get("imageFilter")
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not payload["related_persona_id"] or not payload["related_post_id"]:

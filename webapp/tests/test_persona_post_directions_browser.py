@@ -166,3 +166,100 @@ def test_generated_selection_actions_are_one_row_and_discard_is_right_aligned_on
         assert by_value["discard"]["left"] - (by_value["save"]["left"] + by_value["save"]["width"]) >= 12
         assert abs((by_value["discard"]["left"] + by_value["discard"]["width"]) - 372) <= 8
         browser.close()
+
+
+def test_post_image_filters_are_available_before_generation_and_keep_basic_as_default():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page()
+        page.set_content("<!doctype html><html><body></body></html>")
+        page.add_script_tag(path=str(CONSOLE_JS))
+
+        result = page.evaluate(
+            """() => {
+              const mediaForm = {};
+              normalizePersonaMediaGenerationForm(mediaForm);
+              const host = document.createElement("div");
+              host.innerHTML = renderPersonaPostImageFilterPicker(mediaForm);
+              document.body.append(host);
+              const initial = {
+                count: host.querySelectorAll("[data-persona-image-filter]").length,
+                checked: host.querySelector('[data-persona-image-filter][aria-checked="true"]')?.dataset.personaImageFilter || "",
+                labels: Array.from(host.querySelectorAll("[data-persona-image-filter] strong"), (node) => node.textContent.trim()),
+              };
+              const selected = selectPersonaPostImageFilter(mediaForm, "retro_film");
+              const rejected = selectPersonaPostImageFilter(mediaForm, "../../custom-prompt");
+              host.innerHTML = renderPersonaPostImageFilterPicker(mediaForm);
+              return {
+                initial,
+                selected,
+                rejected,
+                value: mediaForm.imageFilter,
+                checked: host.querySelector('[data-persona-image-filter][aria-checked="true"]')?.dataset.personaImageFilter || "",
+              };
+            }"""
+        )
+
+        assert result["initial"]["count"] == 12
+        assert result["initial"]["checked"] == "basic"
+        assert "黑白" in result["initial"]["labels"]
+        assert "怀旧" in result["initial"]["labels"]
+        assert "复古胶片" in result["initial"]["labels"]
+        assert result["selected"] is True
+        assert result["rejected"] is False
+        assert result["value"] == "retro_film"
+        assert result["checked"] == "retro_film"
+        browser.close()
+
+
+def test_post_and_image_sections_use_responsive_dividers_without_mobile_overflow():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 1280, "height": 900})
+        page.set_content(
+            '''<!doctype html><html><body class="console-page">
+            <main class="persona-compose-workspace has-media">
+              <section class="persona-compose-copy">生成推文</section>
+              <section class="persona-compose-media-stack">
+                <div class="persona-post-image-filter-panel">
+                  <div class="persona-post-image-filter-grid">
+                    <button class="persona-post-image-filter is-selected"><span class="persona-post-image-filter-swatch"></span><span class="persona-post-image-filter-copy"><strong>基础（默认）</strong><small>保留原有自然色彩</small></span></button>
+                    <button class="persona-post-image-filter"><span class="persona-post-image-filter-swatch"></span><span class="persona-post-image-filter-copy"><strong>黑白</strong><small>经典灰阶</small></span></button>
+                  </div>
+                </div>
+                <div class="persona-post-image-settings-divider"><span>生成风格</span></div>
+              </section>
+            </main></body></html>'''
+        )
+        page.add_style_tag(path=str(CONSOLE_CSS))
+
+        desktop = page.locator(".persona-compose-media-stack").evaluate(
+            """node => ({
+              left: getComputedStyle(node).borderLeftWidth,
+              top: getComputedStyle(node).borderTopWidth,
+              panel: getComputedStyle(node.querySelector(".persona-post-image-filter-panel")).borderTopWidth,
+              divider: getComputedStyle(node.querySelector(".persona-post-image-settings-divider"), "::before").backgroundColor,
+            })"""
+        )
+        assert desktop["left"] == "1px"
+        assert desktop["top"] == "0px"
+        assert desktop["panel"] == "1px"
+        assert desktop["divider"] != "rgba(0, 0, 0, 0)"
+
+        page.set_viewport_size({"width": 390, "height": 844})
+        mobile = page.evaluate(
+            """() => {
+              const node = document.querySelector(".persona-compose-media-stack");
+              const style = getComputedStyle(node);
+              return {
+                left: style.borderLeftWidth,
+                top: style.borderTopWidth,
+                overflow: document.documentElement.scrollWidth > window.innerWidth,
+                columns: getComputedStyle(document.querySelector(".persona-post-image-filter-grid")).gridTemplateColumns.split(" ").length,
+              };
+            }"""
+        )
+        assert mobile == {"left": "0px", "top": "1px", "overflow": False, "columns": 2}
+        browser.close()

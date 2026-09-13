@@ -3137,6 +3137,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                             "content_source_mode": "manual",
                             "image_count": 3,
                             "aspect_ratio": "1:1",
+                            "image_filter": "nostalgia",
                         },
                         ensure_ascii=False,
                     ),
@@ -3151,6 +3152,44 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["content_source_mode"], "manual")
         self.assertEqual(captured["payload"]["image_count"], 3)
         self.assertEqual(captured["payload"]["aspect_ratio"], "1:1")
+        self.assertEqual(captured["payload"]["image_filter"], "nostalgia")
+
+    def test_task_submit_defaults_and_validates_persona_post_image_filter(self):
+        self._write_archives()
+        captured = {}
+
+        def fake_enqueue(task_id, user_id, task_type, payload):
+            captured["payload"] = payload
+
+        with mock.patch.object(server, "_enqueue_task", side_effect=fake_enqueue):
+            default_resp = self.client.post(
+                "/api/tasks/submit",
+                data={
+                    "task_type": "persona_post_image",
+                    "params_json": json.dumps({
+                        "related_persona_id": "persona-1",
+                        "related_post_id": "post-1",
+                        "generation_content": "默认滤镜配图",
+                    }, ensure_ascii=False),
+                },
+            )
+            invalid_resp = self.client.post(
+                "/api/tasks/submit",
+                data={
+                    "task_type": "persona_post_image",
+                    "params_json": json.dumps({
+                        "related_persona_id": "persona-1",
+                        "related_post_id": "post-1",
+                        "generation_content": "非法滤镜配图",
+                        "image_filter": "../../custom-prompt",
+                    }, ensure_ascii=False),
+                },
+            )
+
+        self.assertEqual(default_resp.status_code, 200)
+        self.assertEqual(captured["payload"]["image_filter"], "basic")
+        self.assertEqual(invalid_resp.status_code, 400)
+        self.assertIn("不支持的配图滤镜", invalid_resp.text)
 
     def test_task_submit_accepts_one_owned_persona_post_image_as_edit_source(self):
         self._write_archives()

@@ -151,11 +151,16 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert "data-persona-generate-image-styles" in script
     assert "function renderPersonaImageStylePicker" in script
     assert "/image_styles" in script
-    assert "选择配图风格" in script
+    assert "生成风格（按正文推荐，可选）" in script
     assert "image_mode" in script
     assert "image_style_label" in script
-    assert "选择配图风格（可选）" in script
-    assert "可直接按推文生成生活化人物自拍" in script
+    assert "配图滤镜" in script
+    assert "基础（默认）" in script
+    assert "black_white" in script
+    assert "retro_film" in script
+    assert "image_filter" in script
+    assert "renderPersonaPostImageFilterPicker" in script
+    assert "renderPersonaPostImageControls" in script
     assert '?.kind || "person"' in script
     assert "请先生成并选择一种配图风格" not in script
     assert 'targetState.selectedKey = ""' in script
@@ -168,6 +173,9 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert ".persona-post-direction-tag.is-selected" in styles
     assert ".persona-image-style-tag" in styles
     assert ".persona-image-style-action" in styles
+    assert ".persona-post-image-filter-grid" in styles
+    assert ".persona-post-image-settings-divider" in styles
+    assert ".persona-compose-workspace.has-media > .persona-compose-media-stack" in styles
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in styles
     assert ".persona-post-direction-tools > .bulk-selection-icon-button" in styles
 
@@ -182,9 +190,9 @@ def test_mobile_direction_picker_keeps_actions_aligned_and_reuses_selection_icon
     style_picker = script.split("function renderPersonaImageStylePicker", 1)[1].split(
         "function persistPersonaHotImports", 1
     )[0]
-    assert "选择配图风格" not in picker
+    assert "生成风格" not in picker
     assert "data-persona-generate-image-styles" in style_picker
-    assert "选择配图风格" in style_picker
+    assert "生成风格（按正文推荐，可选）" in style_picker
     assert "data-persona-image-style-index" in style_picker
     assert "persona-image-style-action" in style_picker
     assert "personaImageStyleCaption" in script
@@ -200,6 +208,8 @@ def test_mobile_direction_picker_keeps_actions_aligned_and_reuses_selection_icon
     assert ".persona-generate-ai-action .ui-refresh-icon" in styles
     assert "stroke: currentColor" in styles
     assert ".persona-generate-ai-action .task-button-busy > span" in styles
+    assert "border-top: 1px solid var(--line)" in styles
+    assert "border-left: 0" in styles
 
 
 def test_generated_post_media_action_scrolls_to_the_media_composer():
@@ -395,14 +405,20 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
         "related_post_id": "post-1",
         "image_mode": "scene",
         "image_style_label": "便利店夜景",
+        "image_filter": "retro_film",
+        "prompt": "保留雨夜路面反光",
         "image_count": 1,
     })
 
     assert result["ok"] is True
     assert captured["payload"]["mode"] == "scene"
     assert captured["payload"]["styleHint"] == "便利店夜景"
+    assert "保留雨夜路面反光" in captured["payload"]["customPrompt"]
+    assert "1970s analog-film treatment" in captured["payload"]["customPrompt"]
     assert captured["payload"]["variationKey"] == "task-1:1:1"
     assert captured["payload"]["setup"]["personaReferenceIdentity"] == "中国地区特征，18至22岁的成年女性"
+    assert result["image_filter"] == "retro_film"
+    assert result["image_filter_label"] == "复古胶片"
 
     default_result = server._run_persona_post_image_task("task-2", {
         "related_persona_id": "persona-1",
@@ -413,6 +429,8 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
     assert default_result["ok"] is True
     assert captured["payload"]["mode"] == "person"
     assert captured["payload"]["styleHint"] is None
+    assert captured["payload"]["customPrompt"] is None
+    assert default_result["image_filter"] == "basic"
 
     captured["payloads"].clear()
     multi_result = server._run_persona_post_image_task("task-3", {

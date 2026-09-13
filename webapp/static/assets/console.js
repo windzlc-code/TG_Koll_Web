@@ -39,6 +39,21 @@ const PERSONA_IMAGE_STYLE_KIND_LABELS = {
     person: "人物",
   },
 };
+const PERSONA_POST_IMAGE_FILTER_DEFAULT = "basic";
+const PERSONA_POST_IMAGE_FILTERS = [
+  { id: "basic", label: "基础（默认）", detail: "保留原有自然色彩" },
+  { id: "black_white", label: "黑白", detail: "干净灰阶层次" },
+  { id: "film_noir", label: "黑色电影", detail: "硬光与深阴影" },
+  { id: "sepia", label: "棕褐旧照", detail: "暖棕年代感" },
+  { id: "nostalgia", label: "怀旧", detail: "褪色柔暖回忆" },
+  { id: "retro_film", label: "复古胶片", detail: "颗粒与胶片偏色" },
+  { id: "polaroid", label: "拍立得", detail: "奶油高光与留白" },
+  { id: "cinematic", label: "电影感", detail: "宽容度与电影色调" },
+  { id: "warm_sunset", label: "暖阳", detail: "金色日落氛围" },
+  { id: "cool_blue", label: "冷调", detail: "清透蓝青色调" },
+  { id: "soft_matte", label: "柔雾哑光", detail: "低反差柔和肤色" },
+  { id: "vivid", label: "鲜活", detail: "明快饱满色彩" },
+];
 const PERSONA_WRITING_LOCALES = [
   ["zh-TW", "繁体中文（默认）", "繁體中文（預設）"],
   ["zh-CN", "简体中文", "簡體中文"],
@@ -234,6 +249,14 @@ function storedPersonaMediaImageCount() {
   }
 }
 
+function selectPersonaPostImageFilter(mediaForm, value) {
+  if (!mediaForm || typeof mediaForm !== "object") return false;
+  const filterId = String(value || "").trim();
+  if (!PERSONA_POST_IMAGE_FILTERS.some((item) => item.id === filterId)) return false;
+  mediaForm.imageFilter = filterId;
+  return true;
+}
+
 function normalizePersonaMediaGenerationForm(mediaForm) {
   if (!mediaForm || typeof mediaForm !== "object") return mediaForm;
   const legacyManualContent = String(mediaForm.manualContent || "").trim();
@@ -243,6 +266,9 @@ function normalizePersonaMediaGenerationForm(mediaForm) {
   mediaForm.contentMode = "draft";
   mediaForm.manualContent = "";
   mediaForm.imageCount = Math.min(Math.max(Number(mediaForm.imageCount || 1), 1), 4);
+  if (!selectPersonaPostImageFilter(mediaForm, mediaForm.imageFilter || PERSONA_POST_IMAGE_FILTER_DEFAULT)) {
+    mediaForm.imageFilter = PERSONA_POST_IMAGE_FILTER_DEFAULT;
+  }
   return mediaForm;
 }
 
@@ -4092,7 +4118,7 @@ function personaFormState(personaId) {
     return {
       generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, postDirectionsByMode: { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotRewrittenByCandidate: {}, hotRewriteInstructionByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
-      media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", resolution: "720p", duration: 2, replaceExisting: false },
+      media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", imageFilter: PERSONA_POST_IMAGE_FILTER_DEFAULT, resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1", selectedImageId: "" },
     };
   }
@@ -4142,6 +4168,7 @@ function personaFormState(personaId) {
         prompt: "",
         imageCount: storedPersonaMediaImageCount(),
         aspectRatio: "auto",
+        imageFilter: PERSONA_POST_IMAGE_FILTER_DEFAULT,
         resolution: "720p",
         duration: 2,
         replaceExisting: false,
@@ -4726,7 +4753,7 @@ function renderPersonaImageStylePicker(persona, post, disabled = false) {
     : (hasStyles ? `${renderRefreshIcon()}<span>换一批</span>` : "生成风格");
   return `<section class="persona-post-direction-panel persona-image-style-panel" aria-label="推文配图风格" data-persona-image-style-post="${esc(postId)}">
     <div class="persona-image-style-head">
-      <strong>选择配图风格（可选）</strong>
+      <strong>生成风格（按正文推荐，可选）</strong>
       <button type="button" class="primary persona-image-style-action" data-persona-generate-image-styles ${stylesLocked || disabled ? "disabled" : ""} aria-busy="${stylesLocked ? "true" : "false"}" aria-label="${esc(actionLabel)}">${actionContent}</button>
     </div>
     ${hasStyles ? `<div class="persona-image-style-tags">
@@ -4735,8 +4762,37 @@ function renderPersonaImageStylePicker(persona, post, disabled = false) {
         const active = key === selectedKey;
         return `<button type="button" class="persona-post-direction-tag persona-image-style-tag ${active ? "is-selected" : ""}" data-persona-image-style-index="${esc(index)}" data-persona-image-style-post="${esc(postId)}" data-persona-image-style-kind="${esc(style.kind)}" data-persona-image-style-label="${esc(style.label)}" aria-pressed="${active ? "true" : "false"}" ${stylesLocked ? "disabled" : ""}>${esc(personaImageStyleCaption(style))}</button>`;
       }).join("")}
-    </div>` : `<p class="persona-image-style-empty">可直接按推文生成生活化人物自拍，也可生成标签后选择其他配图方向。</p>`}
+    </div>` : `<p class="persona-image-style-empty">点击“生成风格”可按当前正文推荐人物、场景或物件构图；不选择则沿用原有人物配图逻辑。</p>`}
   </section>`;
+}
+
+function renderPersonaPostImageFilterPicker(mediaForm, disabled = false) {
+  normalizePersonaMediaGenerationForm(mediaForm);
+  const selectedId = String(mediaForm?.imageFilter || PERSONA_POST_IMAGE_FILTER_DEFAULT).trim();
+  return `<section class="persona-post-image-filter-panel" aria-label="推文配图滤镜">
+    <div class="persona-post-image-filter-head">
+      <div>
+        <strong>配图滤镜</strong>
+        <small>预设始终可用，默认保持原有基础风格</small>
+      </div>
+      <span>${esc(PERSONA_POST_IMAGE_FILTERS.find((item) => item.id === selectedId)?.label || "基础（默认）")}</span>
+    </div>
+    <div class="persona-post-image-filter-grid" role="radiogroup" aria-label="选择配图滤镜">
+      ${PERSONA_POST_IMAGE_FILTERS.map((filter) => {
+        const active = filter.id === selectedId;
+        return `<button type="button" class="persona-post-image-filter ${active ? "is-selected" : ""}" data-persona-image-filter="${esc(filter.id)}" role="radio" aria-checked="${active ? "true" : "false"}" title="${esc(`${filter.label}：${filter.detail}`)}" ${disabled ? "disabled" : ""}>
+          <span class="persona-post-image-filter-swatch" aria-hidden="true"></span>
+          <span class="persona-post-image-filter-copy"><strong>${esc(filter.label)}</strong><small>${esc(filter.detail)}</small></span>
+        </button>`;
+      }).join("")}
+    </div>
+  </section>`;
+}
+
+function renderPersonaPostImageControls(persona, post, mediaForm, disabled = false, styleDisabled = disabled) {
+  return `${renderPersonaPostImageFilterPicker(mediaForm, disabled)}
+    <div class="persona-post-image-settings-divider" role="separator"><span>生成风格</span></div>
+    ${post ? renderPersonaImageStylePicker(persona, post, styleDisabled) : `<div class="persona-image-style-panel persona-image-style-waiting"><strong>生成风格</strong><p>保存推文后，可按正文生成专属构图方向。</p></div>`}`;
 }
 
 function persistPersonaHotImports() {
@@ -25304,6 +25360,9 @@ async function submitPersonaMediaTask() {
       related_post_id: String(post.id || "").trim(),
       draft_source_text: draftSourceText,
       aspect_ratio: taskType === "persona_post_image" ? String(form.aspectRatio || "auto") : undefined,
+      image_filter: taskType === "persona_post_image"
+        ? String(form.imageFilter || PERSONA_POST_IMAGE_FILTER_DEFAULT)
+        : undefined,
       image_mode: taskType === "persona_post_image"
         ? String(selectedPersonaImageStyle(persona.id, post.id)?.kind || "person")
         : undefined,
@@ -27086,6 +27145,8 @@ function renderPersonaPendingMediaInput(persona) {
 function renderPersonaMediaComposerPlaceholder(persona, mediaForm) {
   return `
     <section class="persona-compose-media-side persona-production-section">
+      <div class="persona-workflow-stage-label"><span>02</span><strong>生成推文配图</strong></div>
+      ${renderPersonaPostImageControls(persona, null, mediaForm, false, false)}
       <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
         <div class="persona-media-operation-pane">
           ${renderPersonaPendingMediaInput(persona)}${renderModuleEmptyState({
@@ -27104,6 +27165,8 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
   if (!post && isBatchCompose && !isFavoriteMedia) {
     return `
       <section class="persona-compose-media-side persona-production-section">
+        <div class="persona-workflow-stage-label"><span>02</span><strong>生成推文配图</strong></div>
+        ${renderPersonaPostImageControls(persona, null, mediaForm, false, false)}
         <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
           <div class="persona-media-operation-pane">
             ${renderPersonaPendingMediaInput(persona)}${renderModuleEmptyState({
@@ -27137,6 +27200,7 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
   if (isFavoriteMedia) {
     return `
     <section class="persona-compose-media-side persona-production-section">
+      <div class="persona-workflow-stage-label"><span>02</span><strong>推文配图</strong></div>
       ${post ? `<div class="persona-inline-panel persona-inline-panel--nested">
         <strong>当前${esc(sourceLabel)}正文</strong>
         ${renderPersonaHotOrigin(personaHotImportMeta(persona.id, post.id), { compact: true })}
@@ -27161,12 +27225,13 @@ function renderPersonaInlineMediaComposer(persona, profile, generateForm, mediaF
   }
   return `
     <section class="persona-compose-media-side persona-production-section">
+      <div class="persona-workflow-stage-label"><span>02</span><strong>生成推文配图</strong></div>
       ${post ? `<div class="persona-inline-panel persona-inline-panel--nested">
         <strong>当前${esc(sourceLabel)}正文</strong>
         ${renderPersonaHotOrigin(personaHotImportMeta(persona.id, post.id), { compact: true })}
         <p>${esc(referenceContent || `当前${sourceLabel}没有正文。`)}</p>
       </div>` : ""}
-      ${post ? renderPersonaImageStylePicker(persona, post, mediaBusy || mediaModifyActive) : ""}
+      ${renderPersonaPostImageControls(persona, post, mediaForm, mediaBusy, mediaBusy || mediaModifyActive)}
       <div class="persona-inline-panel persona-inline-panel--nested persona-media-operation-panel">
         <div class="persona-media-operation-pane">
             <div class="form-grid persona-detail-controls persona-media-generation-controls">
@@ -29079,6 +29144,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
         })}
         <div class="persona-compose-workspace ${hasComposeAside ? "has-media" : ""}">
           <section class="persona-compose-post-side persona-production-section ${isEditingDraft ? "is-editing-draft" : ""} ${editingDirty ? "is-dirty" : ""}">
+            <div class="persona-workflow-stage-label"><span>01</span><strong>生成推文</strong></div>
             ${isEditingDraft ? `
               <div class="persona-temp-edit-actions persona-temp-edit-actions--inline">
                 <div class="persona-temp-edit-copy">
@@ -29240,6 +29306,7 @@ function renderPersonaContentPanel(persona, account, profile, step) {
                 <span class="persona-panel-intro">收藏内容支持添加、编辑和删除媒体；生成新的配图请先复制为草稿后处理。</span>
               </div>
               ` : `
+              ${renderPersonaPostImageControls(persona, post, mediaForm, mediaBusy, mediaBusy || mediaModifyActive)}
               <div class="persona-inline-panel persona-inline-panel--nested">
                 <strong>生成媒体</strong>
                 <div class="form-grid persona-detail-controls">
@@ -37354,6 +37421,16 @@ function bindEvents() {
     }
     if (event.target.closest("[data-persona-generate-image-styles]")) {
       preparePersonaImageStyles().catch((error) => showMsg("commandMsg", error.detail || error.message || "生成配图风格失败", false));
+      return;
+    }
+    const imageFilterButton = event.target.closest("[data-persona-image-filter]");
+    if (imageFilterButton) {
+      const persona = selectedPersona();
+      if (!persona || imageFilterButton.disabled) return;
+      snapshotPersonaCurrentForm();
+      const filterId = String(imageFilterButton.dataset.personaImageFilter || "").trim();
+      if (!selectPersonaPostImageFilter(personaFormState(persona.id).media, filterId)) return;
+      renderPersonaDetail();
       return;
     }
     const imageStyleButton = event.target.closest("[data-persona-image-style-index]");
