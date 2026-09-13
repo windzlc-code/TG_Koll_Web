@@ -86,6 +86,33 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         ):
             self.assertIn(contract, VIDEO_EDITOR)
 
+    def test_preview_and_timeline_use_real_multitrack_model(self):
+        for contract in (
+            "const VIDEO_TRACKS = 3",
+            "timeline_start",
+            "position_x",
+            "position_y",
+            "opacity",
+            "previewSegmentsForTime",
+            "requestAnimationFrame",
+            'data-track-index="${track}"',
+            "placeClip(clipId, track, timelineStart)",
+        ):
+            self.assertIn(contract, VIDEO_EDITOR)
+        inspector = VIDEO_EDITOR.split('function renderInspector()', 1)[1].split('function renderExportStatus()', 1)[0]
+        self.assertNotIn("data-clip-move", inspector)
+        self.assertNotIn("data-clip-duplicate", inspector)
+        self.assertNotIn("data-clip-remove", inspector)
+        self.assertIn(".video-preview-stack", VIDEO_EDITOR_CSS)
+        self.assertIn("left: var(--clip-left)", VIDEO_EDITOR_CSS)
+
+    def test_asset_thumbnail_is_the_preview_control(self):
+        card = VIDEO_EDITOR.split("function assetCard(asset)", 1)[1].split("function renderAssetLibrary()", 1)[0]
+        self.assertIn('class="video-asset-visual" type="button" data-asset-preview=', card)
+        self.assertIn('class="video-asset-play"', card)
+        actions = card.split('class="video-asset-actions"', 1)[1]
+        self.assertNotIn("data-asset-preview", actions)
+
     def test_generation_records_are_server_paginated_and_open_in_editor(self):
         for contract in (
             'page_size: String(state.pageSize)',

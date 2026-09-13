@@ -100,7 +100,7 @@ def main() -> None:
             chooser_info.value.set_files(str(sample))
             page.locator(".video-asset-card").wait_for(state="visible", timeout=30_000)
             page.get_by_text("browser-sample", exact=False).first.wait_for(state="visible")
-            assert page.locator(".video-asset-card").count() == 1
+            assert page.locator(".video-asset-card").count() == 1, page.locator(".video-asset-card").count()
             page.locator("[data-asset-delete]").click()
             page.locator(".site-auth-feedback [data-video-action-confirm]").wait_for(state="visible")
             page.locator(".site-auth-feedback [data-video-action-cancel]").click()
@@ -109,10 +109,22 @@ def main() -> None:
             page.wait_for_function(
                 "document.querySelector('.video-asset-card img')?.complete && document.querySelector('.video-asset-card img')?.naturalWidth > 0"
             )
+            assert page.locator(".video-asset-visual [data-asset-preview]").count() == 0
+            assert page.locator(".video-asset-visual[data-asset-preview] .video-asset-play svg").count() == 1
+            assert page.locator(".video-asset-actions [data-asset-preview]").count() == 0
+            page.locator(".video-asset-visual[data-asset-preview]").click()
+            page.locator(".video-preview-modal").wait_for(state="visible")
+            page.locator("[data-preview-close]").click()
 
             page.locator("[data-asset-add]").click()
             page.locator(".video-timeline-clip").wait_for(state="visible")
             assert page.locator(".video-timeline-clip").count() == 1
+            preview_before = float(page.locator("[data-preview-scrubber]").input_value())
+            page.locator("[data-preview-toggle]").click()
+            page.wait_for_timeout(800)
+            preview_after = float(page.locator("[data-preview-scrubber]").input_value())
+            assert preview_after > preview_before + 0.15, (preview_before, preview_after)
+            page.locator("[data-preview-toggle]").click()
             page.locator("[data-clip-end]").fill("0.65")
             page.locator("[data-clip-volume]").fill("0.75")
             trim_handle = page.locator(".video-timeline-clip.is-selected .video-trim-handle.is-right")
@@ -140,6 +152,21 @@ def main() -> None:
             assert int(page.locator("[data-timeline-zoom]").input_value()) > zoom_before
             assert page.locator("[data-timeline-playhead]").is_visible()
             assert page.locator("[data-trim-handle]").count() == 4
+            assert page.locator(".video-track-row").count() == 3
+            assert page.locator(".video-editor-inspector [data-clip-move], .video-editor-inspector [data-clip-duplicate], .video-editor-inspector [data-clip-remove]").count() == 0
+            assert page.locator(".video-timeline-toolbar [data-clip-duplicate]").count() == 1
+
+            page.locator("[data-asset-add]").click()
+            page.locator("[data-clip-track]").select_option("1")
+            page.locator("[data-clip-timeline-start]").fill("0.05")
+            page.locator("[data-clip-timeline-start]").press("Enter")
+            page.locator("[data-clip-scale]").fill("0.45")
+            page.locator("[data-preview-scrubber]").evaluate(
+                "node => { node.value = '0.10'; node.dispatchEvent(new Event('input', { bubbles: true })); }"
+            )
+            assert page.locator('[data-track-row="1"] .video-timeline-clip').count() == 1
+            assert page.locator('[data-track-row="0"] .video-timeline-clip').count() == 2
+            assert page.locator("[data-editor-preview]").count() == 2
             page.wait_for_function("document.querySelector('[data-editor-save-state]')?.dataset.state === 'saved'", timeout=10_000)
 
             page.locator("[data-project-export]").click()
@@ -197,7 +224,7 @@ def main() -> None:
             page.locator("[data-record-edit]").click()
             page.locator("#videoEditorRoot .video-editor-app").wait_for(state="visible")
             assert page.locator('[data-studio-tab="editor"]').get_attribute("aria-selected") == "true"
-            page.wait_for_function("document.querySelectorAll('.video-timeline-clip').length === 3", timeout=10_000)
+            page.wait_for_function("document.querySelectorAll('.video-timeline-clip').length === 4", timeout=10_000)
             page.wait_for_function("document.querySelector('[data-editor-save-state]')?.dataset.state === 'saved'", timeout=10_000)
             if screenshot_dir:
                 page.evaluate("window.scrollTo(0, 0)")

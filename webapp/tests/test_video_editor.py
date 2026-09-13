@@ -68,11 +68,11 @@ class VideoEditorTests(unittest.TestCase):
                 return route.endpoint
         raise AssertionError(f"missing route: {method} {path}")
 
-    def make_video(self, target: Path, *, audio: bool = True, container: str = "mp4") -> Path:
+    def make_video(self, target: Path, *, audio: bool = True, container: str = "mp4", color: str = "#197f80") -> Path:
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             self.skipTest("ffmpeg is not installed")
-        command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=#197f80:s=320x180:d=1"]
+        command = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=c={color}:s=320x180:d=1"]
         if audio:
             command += ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-shortest"]
         command += ["-c:v", "libx264", "-pix_fmt", "yuv420p"]
@@ -85,6 +85,18 @@ class VideoEditorTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertTrue(target.is_file())
         return target
+
+    def sample_rgb(self, source: Path, x: int, y: int) -> tuple[int, int, int]:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            self.skipTest("ffmpeg is not installed")
+        completed = subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-ss", "0.25", "-i", str(source), "-vf", f"crop=2:2:{x}:{y},format=rgb24", "-frames:v", "1", "-f", "rawvideo", "-"],
+            capture_output=True, timeout=30, check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8", "replace"))
+        self.assertGreaterEqual(len(completed.stdout), 3)
+        return tuple(completed.stdout[:3])
 
     def test_generated_asset_project_export_and_durable_playback_closed_loop(self):
         source = self.make_video(self.root / "generated.mp4", audio=True)
@@ -119,6 +131,8 @@ class VideoEditorTests(unittest.TestCase):
             ),
             {"id": 1},
         )["project"]
+        self.assertEqual(project["clips"][0]["track"], 0)
+        self.assertEqual(project["clips"][0]["timeline_start"], 0)
         start_export = self.endpoint("/api/video/editor/projects/{project_id}/export", "POST")
         export = start_export(project["id"], video_editor.VideoExportPayload(name="闭环成品"), {"id": 1})["export"]
 
@@ -151,6 +165,46 @@ class VideoEditorTests(unittest.TestCase):
         row = video_editor._asset_row(self.dependencies, 1, asset["id"])
         self.assertEqual(Path(row["preview_path"]).suffix.lower(), ".mp4")
         self.assertTrue(Path(row["preview_path"]).is_file())
+
+    def test_multitrack_overlay_is_saved_and_composited_into_export(self):
+        red = self.make_video(self.root / "base-red.mp4", audio=False, color="red")
+        blue = self.make_video(self.root / "overlay-blue.mp4", audio=False, color="blue")
+        base = video_editor._persist_video_asset(
+            self.dependencies, user_id=1, source=red, name="底层", source_type="upload", source_ref="upload:base-red",
+        )
+        overlay = video_editor._persist_video_asset(
+            self.dependencies, user_id=1, source=blue, name="叠加层", source_type="upload", source_ref="upload:overlay-blue",
+        )
+        create_project = self.endpoint("/api/video/editor/projects", "POST")
+        project = create_project(
+            video_editor.VideoProjectPayload(
+                name="多轨合成",
+                clips=[
+                    {"id": "clip_base_001", "asset_id": base["id"], "start": 0, "end": 0.8, "track": 0, "timeline_start": 0, "scale": 1},
+                    {"id": "clip_overlay_001", "asset_id": overlay["id"], "start": 0, "end": 0.8, "track": 1, "timeline_start": 0, "scale": 0.4, "position_x": 1, "position_y": 0, "opacity": 1},
+                ],
+                settings={"ratio": "16:9", "quality": "720p"},
+            ),
+            {"id": 1},
+        )["project"]
+        self.assertEqual(project["clips"][1]["track"], 1)
+        self.assertEqual(project["clips"][1]["timeline_start"], 0)
+        self.assertEqual(project["clips"][1]["scale"], 0.4)
+
+        start_export = self.endpoint("/api/video/editor/projects/{project_id}/export", "POST")
+        export = start_export(project["id"], video_editor.VideoExportPayload(name="多轨成品"), {"id": 1})["export"]
+        get_export = self.endpoint("/api/video/editor/exports/{export_id}", "GET")
+        deadline = time.time() + 45
+        current = export
+        while current["status"] in {"queued", "running"} and time.time() < deadline:
+            time.sleep(0.2)
+            current = get_export(export["id"], {"id": 1})["export"]
+        self.assertEqual(current["status"], "success", current.get("error"))
+        output = Path(video_editor._asset_row(self.dependencies, 1, current["output_asset_id"])["preview_path"])
+        base_pixel = self.sample_rgb(output, 100, 600)
+        overlay_pixel = self.sample_rgb(output, 1100, 100)
+        self.assertGreater(base_pixel[0], base_pixel[2] + 80, base_pixel)
+        self.assertGreater(overlay_pixel[2], overlay_pixel[0] + 80, overlay_pixel)
 
     def test_project_rejects_cross_workspace_asset_and_delete_protects_references(self):
         source = self.make_video(self.root / "source.mp4", audio=False)

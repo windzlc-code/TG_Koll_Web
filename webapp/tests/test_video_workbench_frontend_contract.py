@@ -373,7 +373,8 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn('select("replace_mode", "替换模式"', self.workbench_js)
         self.assertIn('{ value: "model", label: "模特替换" }', self.workbench_js)
         self.assertIn('{ value: "product", label: "商品替换" }', self.workbench_js)
-        self.assertIn('values.subject_kind = values.replace_mode === "product" ? "product" : "model"', self.workbench_js)
+        self.assertIn('{ value: "union", label: "联合替换" }', self.workbench_js)
+        self.assertIn('values.subject_kind = values.replace_mode === "union" ? "union" : (values.replace_mode === "product" ? "product" : "model")', self.workbench_js)
         self.assertIn('body.append("params_json", JSON.stringify({ ...submitValues', self.workbench_js)
 
     def test_language_replace_exposes_automatic_transcription_and_translation(self):

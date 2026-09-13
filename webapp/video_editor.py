@@ -479,6 +479,7 @@ def _normalise_project_payload(
         raise HTTPException(status_code=400, detail="时间线包含不存在或不可用的视频素材。")
     clips: list[dict[str, Any]] = []
     clip_ids: set[str] = set()
+    track_cursors = [0.0, 0.0, 0.0]
     for index, raw in enumerate(payload.clips):
         if not isinstance(raw, dict):
             raise HTTPException(status_code=400, detail="时间线片段格式错误。")
@@ -490,15 +491,28 @@ def _normalise_project_payload(
             end = float(raw.get("end") or total)
             volume = float(raw.get("volume") if raw.get("volume") is not None else 1)
             speed = float(raw.get("speed") if raw.get("speed") is not None else 1)
+            track = int(raw.get("track") if raw.get("track") is not None else 0)
+            timeline_start = float(raw.get("timeline_start")) if raw.get("timeline_start") is not None else track_cursors[max(0, min(2, track))]
+            scale = float(raw.get("scale") if raw.get("scale") is not None else (0.42 if track else 1))
+            position_x = float(raw.get("position_x") if raw.get("position_x") is not None else (0.94 if track else 0.5))
+            position_y = float(raw.get("position_y") if raw.get("position_y") is not None else (0.06 if track else 0.5))
+            opacity = float(raw.get("opacity") if raw.get("opacity") is not None else 1)
         except (TypeError, ValueError, OverflowError) as exc:
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段包含无效数值。") from exc
-        if not all(math.isfinite(value) for value in (total, start, end, volume, speed)):
+        if not all(math.isfinite(value) for value in (total, start, end, volume, speed, timeline_start, scale, position_x, position_y, opacity)):
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段包含无效数值。")
+        if track < 0 or track > 2:
+            raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段的轨道无效。")
         end = min(max(end, 0), total)
         if start >= end or end - start < 0.05:
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段的裁剪范围无效。")
         volume = min(max(volume, 0), 1)
         speed = min(max(speed, 0.5), 2)
+        timeline_start = max(timeline_start, 0)
+        scale = min(max(scale, 0.15), 1)
+        position_x = min(max(position_x, 0), 1)
+        position_y = min(max(position_y, 0), 1)
+        opacity = min(max(opacity, 0.05), 1)
         clip_id = str(raw.get("id") or _new_id("clip"))[:96]
         if not _ASSET_ID_RE.fullmatch(clip_id) or clip_id in clip_ids:
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段标识无效或重复。")
@@ -510,8 +524,15 @@ def _normalise_project_payload(
             "end": round(end, 3),
             "volume": round(volume, 2),
             "speed": round(speed, 2),
+            "track": track,
+            "timeline_start": round(timeline_start, 3),
+            "scale": round(scale, 2),
+            "position_x": round(position_x, 2),
+            "position_y": round(position_y, 2),
+            "opacity": round(opacity, 2),
         })
-    if sum((float(item["end"]) - float(item["start"])) / float(item["speed"]) for item in clips) > 6 * 60 * 60:
+        track_cursors[track] = max(track_cursors[track], timeline_start + (end - start) / speed)
+    if max(track_cursors, default=0) > 6 * 60 * 60:
         raise HTTPException(status_code=400, detail="单个项目总时长不能超过 6 小时。")
     ratio = str(payload.settings.get("ratio") or "source")
     quality = str(payload.settings.get("quality") or "720p")
@@ -563,7 +584,7 @@ def _update_export(dependencies: VideoEditorDependencies, export_id: str, **upda
 
 
 def _run_export(dependencies: VideoEditorDependencies, export_id: str) -> None:
-    work_dir: Path | None = None
+    export_dir: Path | None = None
     try:
         with dependencies.db_factory() as conn:
             export_row = conn.execute("SELECT * FROM video_exports WHERE id = ?", (export_id,)).fetchone()
@@ -585,53 +606,86 @@ def _run_export(dependencies: VideoEditorDependencies, export_id: str) -> None:
         assets = {str(row["id"]): dict(row) for row in rows}
         if len(assets) != len(asset_ids):
             raise RuntimeError("时间线中的部分素材已不可用。")
-        width, height = _export_dimensions(settings, assets[str(clips[0].get("asset_id") or "")])
+        first_clip = min(clips, key=lambda item: (float(item.get("timeline_start") or 0), int(item.get("track") or 0)))
+        width, height = _export_dimensions(settings, assets[str(first_clip.get("asset_id") or "")])
         export_dir = (_user_root(dependencies, user_id) / "exports" / export_id).resolve()
-        work_dir = export_dir / "segments"
-        work_dir.mkdir(parents=True, exist_ok=False)
+        export_dir.mkdir(parents=True, exist_ok=False)
         _update_export(dependencies, export_id, status="running", progress=2, error="")
         ffmpeg = _resolve_ffmpeg()
-        segment_paths: list[Path] = []
+        total_duration = max(
+            float(clip.get("timeline_start") or 0)
+            + (float(clip.get("end") or 0) - float(clip.get("start") or 0)) / max(float(clip.get("speed") or 1), 0.5)
+            for clip in clips
+        )
+        command = [
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-t", f"{total_duration:.3f}", "-i", f"color=c=black:s={width}x{height}:r=30",
+            "-f", "lavfi", "-t", f"{total_duration:.3f}", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        ]
         for index, clip in enumerate(clips):
             asset = assets[str(clip.get("asset_id") or "")]
             source = Path(str(asset.get("original_path") or "")).resolve()
-            if not source.is_file():
+            if not source.is_file() or not _inside(source, _user_root(dependencies, user_id)):
                 raise RuntimeError(f"第 {index + 1} 个素材文件已丢失。")
             start = float(clip.get("start") or 0)
             duration = float(clip.get("end") or 0) - start
+            command += ["-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source)]
+
+        filters = [f"[0:v]trim=duration={total_duration:.3f},setpts=PTS-STARTPTS,format=rgba[canvas0]"]
+        audio_labels: list[str] = []
+        ordered = sorted(enumerate(clips), key=lambda pair: (int(pair[1].get("track") or 0), float(pair[1].get("timeline_start") or 0), pair[0]))
+        canvas_label = "canvas0"
+        for layer_index, (source_index, clip) in enumerate(ordered):
+            input_index = source_index + 2
             speed = min(max(float(clip.get("speed") or 1), 0.5), 2)
-            segment = work_dir / f"segment_{index:04d}.mp4"
-            vf = (
-                f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black,fps=30,setpts=PTS/{speed:.3f}"
+            timeline_start = max(float(clip.get("timeline_start") or 0), 0)
+            scale = min(max(float(clip.get("scale") if clip.get("scale") is not None else (0.42 if int(clip.get("track") or 0) else 1)), 0.15), 1)
+            opacity = min(max(float(clip.get("opacity") if clip.get("opacity") is not None else 1), 0.05), 1)
+            position_x = min(max(float(clip.get("position_x") if clip.get("position_x") is not None else 0.5), 0), 1)
+            position_y = min(max(float(clip.get("position_y") if clip.get("position_y") is not None else 0.5), 0), 1)
+            box_width = max(2, int(width * scale) // 2 * 2)
+            box_height = max(2, int(height * scale) // 2 * 2)
+            filters.append(
+                f"[{input_index}:v]setpts=(PTS-STARTPTS)/{speed:.3f},fps=30,"
+                f"scale={box_width}:{box_height}:force_original_aspect_ratio=decrease,format=rgba,"
+                f"colorchannelmixer=aa={opacity:.3f},setpts=PTS+{timeline_start:.3f}/TB[v{source_index}]"
             )
-            command = [
-                ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}",
-                "-i", str(source),
-            ]
-            if not bool(asset.get("has_audio")):
-                command += ["-f", "lavfi", "-t", f"{duration:.3f}", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
-            command += ["-map", "0:v:0", "-map", "0:a:0" if bool(asset.get("has_audio")) else "1:a:0"]
-            command += [
-                "-vf", vf,
-                "-af", f"atempo={speed:.3f},volume={float(clip.get('volume') if clip.get('volume') is not None else 1):.2f}",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-shortest", str(segment),
-            ]
-            completed = subprocess.run(command, capture_output=True, text=True, timeout=60 * 60, check=False)
-            if completed.returncode != 0 or not segment.is_file():
-                raise RuntimeError(_compact_process_error(completed, f"第 {index + 1} 个片段处理失败。"))
-            segment_paths.append(segment)
-            _update_export(dependencies, export_id, progress=min(85, 5 + int((index + 1) / len(clips) * 75)))
-        concat_file = work_dir / "concat.txt"
-        concat_file.write_text("".join(f"file '{path.name}'\n" for path in segment_paths), encoding="utf-8")
+            next_canvas = f"canvas{layer_index + 1}"
+            filters.append(
+                f"[{canvas_label}][v{source_index}]overlay=x='(W-w)*{position_x:.3f}':y='(H-h)*{position_y:.3f}':"
+                f"eof_action=pass:repeatlast=0:shortest=0:format=auto[{next_canvas}]"
+            )
+            canvas_label = next_canvas
+            asset = assets[str(clip.get("asset_id") or "")]
+            if bool(asset.get("has_audio")):
+                source_duration = float(clip.get("end") or 0) - float(clip.get("start") or 0)
+                delay_ms = max(0, int(round(timeline_start * 1000)))
+                volume = min(max(float(clip.get("volume") if clip.get("volume") is not None else 1), 0), 1)
+                filters.append(
+                    f"[{input_index}:a]atrim=duration={source_duration:.3f},asetpts=PTS-STARTPTS,"
+                    f"atempo={speed:.3f},volume={volume:.2f},adelay={delay_ms}:all=1[a{source_index}]"
+                )
+                audio_labels.append(f"a{source_index}")
+        filters.append(f"[{canvas_label}]trim=duration={total_duration:.3f},format=yuv420p[vout]")
+        if not audio_labels:
+            filters.append(f"[1:a]atrim=duration={total_duration:.3f},asetpts=PTS-STARTPTS[aout]")
+        elif len(audio_labels) == 1:
+            filters.append(f"[{audio_labels[0]}]apad=whole_dur={total_duration:.3f},atrim=duration={total_duration:.3f}[aout]")
+        else:
+            joined_audio = "".join(f"[{label}]" for label in audio_labels)
+            filters.append(f"{joined_audio}amix=inputs={len(audio_labels)}:duration=longest:dropout_transition=0,apad=whole_dur={total_duration:.3f},atrim=duration={total_duration:.3f}[aout]")
         output = export_dir / "final.mp4"
-        completed = subprocess.run(
-            [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_file), "-c", "copy", "-movflags", "+faststart", str(output)],
-            cwd=str(work_dir), capture_output=True, text=True, timeout=60 * 60, check=False,
-        )
+        command += [
+            "-filter_complex", ";".join(filters), "-map", "[vout]", "-map", "[aout]",
+            "-t", f"{total_duration:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+            "-movflags", "+faststart", str(output),
+        ]
+        _update_export(dependencies, export_id, progress=15)
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=60 * 60, check=False)
         if completed.returncode != 0 or not output.is_file() or output.stat().st_size <= 0:
-            raise RuntimeError(_compact_process_error(completed, "合并视频失败。"))
+            raise RuntimeError(_compact_process_error(completed, "多轨合成视频失败。"))
+        _update_export(dependencies, export_id, progress=90)
         row = _persist_video_asset(
             dependencies,
             user_id=user_id,
@@ -643,11 +697,10 @@ def _run_export(dependencies: VideoEditorDependencies, export_id: str) -> None:
             asset_id=_new_id("video"),
             copy_source=False,
         )
-        shutil.rmtree(work_dir, ignore_errors=True)
         _update_export(dependencies, export_id, status="success", progress=100, output_asset_id=str(row["id"]), error="")
     except Exception as exc:
-        if work_dir is not None and _inside(work_dir, _editor_root(dependencies.data_dir)):
-            shutil.rmtree(work_dir, ignore_errors=True)
+        if export_dir is not None and _inside(export_dir, _editor_root(dependencies.data_dir)):
+            shutil.rmtree(export_dir, ignore_errors=True)
         _update_export(dependencies, export_id, status="failed", progress=100, error=str(exc)[:1200])
 
 

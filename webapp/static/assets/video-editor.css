@@ -870,9 +870,14 @@
 
 .video-asset-visual {
   background: #17232b;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
   min-height: 82px;
   overflow: hidden;
+  padding: 0;
   position: relative;
+  width: 100%;
 }
 
 .video-asset-visual img,
@@ -891,6 +896,30 @@
   padding: 2px 4px;
   position: absolute;
   right: 5px;
+}
+
+.video-asset-play {
+  align-items: center;
+  background: rgb(12 28 36 / 76%);
+  border: 1px solid rgb(255 255 255 / 72%);
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  height: 34px;
+  inset: 50% auto auto 50%;
+  justify-content: center;
+  opacity: .9;
+  padding-left: 2px;
+  position: absolute;
+  transform: translate(-50%, -50%);
+  transition: background .15s ease, transform .15s ease;
+  width: 34px;
+}
+
+.video-asset-visual:hover .video-asset-play,
+.video-asset-visual:focus-visible .video-asset-play {
+  background: #197f7e;
+  transform: translate(-50%, -50%) scale(1.08);
 }
 
 .video-asset-body {
@@ -1019,13 +1048,19 @@
   position: absolute;
 }
 
-.video-preview-canvas video {
+.video-preview-stack {
+  inset: 0;
+  overflow: hidden;
+  position: absolute;
+  z-index: 1;
+}
+
+.video-preview-stack video {
   height: 100%;
   max-height: 430px;
   object-fit: contain;
-  position: relative;
+  position: absolute;
   width: 100%;
-  z-index: 1;
 }
 
 .video-preview-empty {
@@ -1381,7 +1416,7 @@
 .video-track-row {
   display: grid;
   grid-template-columns: 54px minmax(0, 1fr);
-  min-height: 112px;
+  min-height: 84px;
 }
 
 .video-track-label {
@@ -1412,19 +1447,21 @@
   background-size: 32px 100%;
   border: 0;
   border-radius: 0;
-  display: flex;
-  gap: 2px;
-  min-height: 112px;
+  display: block;
+  min-height: 84px;
   overflow: visible;
   padding: 8px 0;
+  position: relative;
 }
 
 .video-track-row .video-timeline-track.is-empty {
   align-items: center;
   border: 1px dashed #51636c;
+  display: flex;
   justify-content: center;
   margin: 8px;
-  min-height: 94px;
+  min-height: 68px;
+  position: relative;
 }
 
 .video-track-row .video-timeline-empty {
@@ -1441,11 +1478,13 @@
   border-radius: 5px;
   cursor: grab;
   display: block;
-  flex: 0 0 var(--clip-width);
-  height: 86px;
+  height: 68px;
+  left: var(--clip-left);
   min-width: 48px;
   overflow: hidden;
-  position: relative;
+  position: absolute;
+  top: 8px;
+  width: var(--clip-width);
 }
 
 .video-track-row .video-timeline-clip.is-selected {
@@ -1592,6 +1631,12 @@
   color: var(--editor-accent);
   float: right;
   font-weight: 700;
+}
+
+.video-clip-layout-fields {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .video-clip-inspector input[type="range"] {
