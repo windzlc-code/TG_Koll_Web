@@ -213,6 +213,55 @@ def test_post_image_filters_are_available_before_generation_and_keep_basic_as_de
         browser.close()
 
 
+def test_post_image_filter_selection_is_locked_immediately_during_submission():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page()
+        page.set_content("<!doctype html><html><body></body></html>")
+        page.add_script_tag(path=str(CONSOLE_JS))
+        result = page.evaluate(
+            """() => {
+              const mediaForm = { imageFilter: "film_noir" };
+              document.body.innerHTML = renderPersonaPostImageFilterPicker(mediaForm);
+              setPersonaPostImageFilterInteractionLocked(true);
+              const locked = Array.from(document.querySelectorAll("[data-persona-image-filter]"), (button) => button.disabled);
+              const selectedWhileLocked = document.querySelector('[data-persona-image-filter="film_noir"]')?.getAttribute("aria-checked");
+              setPersonaPostImageFilterInteractionLocked(false);
+              const unlocked = Array.from(document.querySelectorAll("[data-persona-image-filter]"), (button) => button.disabled);
+              return { locked, unlocked, selectedWhileLocked };
+            }"""
+        )
+        assert all(result["locked"])
+        assert not any(result["unlocked"])
+        assert result["selectedWhileLocked"] == "true"
+        browser.close()
+
+
+def test_mobile_stop_task_button_matches_running_button_width_and_height():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.set_content(
+            '''<!doctype html><html><body class="console-page">
+            <div class="persona-media-task-actions">
+              <button type="button" class="primary" data-persona-run-media-task disabled>
+                <span class="task-button-busy"><svg class="task-button-spinner" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle></svg><span>配图任务执行中</span><time>00:07</time></span>
+              </button>
+              <button type="button" class="danger" data-persona-cancel-media-task="task-1">停止任务</button>
+            </div></body></html>'''
+        )
+        page.add_style_tag(path=str(CONSOLE_CSS))
+        boxes = page.locator(".persona-media-task-actions > button").evaluate_all(
+            "buttons => buttons.map(button => button.getBoundingClientRect().toJSON())"
+        )
+        assert len(boxes) == 2
+        assert abs(boxes[0]["width"] - boxes[1]["width"]) <= 1
+        assert abs(boxes[0]["height"] - boxes[1]["height"]) <= 1
+        browser.close()
+
+
 def test_post_and_image_sections_use_responsive_dividers_without_mobile_overflow():
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as playwright:

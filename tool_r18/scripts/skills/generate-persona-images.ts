@@ -19,6 +19,7 @@ export interface GeneratePersonaImagesInput {
   setup: DramaSetup;
   content: string;
   customPrompt?: string;
+  imageFilterPrompt?: string;
   personaFieldPolicy?: PersonaReferenceSheetFieldPolicy;
   styleHint?: string;
   variationKey?: string;
@@ -385,6 +386,7 @@ async function main() {
     input.customPrompt,
     input.styleHint,
     input.variationKey,
+    input.imageFilterPrompt,
   );
 
   printJson({

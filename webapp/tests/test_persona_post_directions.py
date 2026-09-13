@@ -413,8 +413,8 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
     assert result["ok"] is True
     assert captured["payload"]["mode"] == "scene"
     assert captured["payload"]["styleHint"] == "便利店夜景"
-    assert "保留雨夜路面反光" in captured["payload"]["customPrompt"]
-    assert "1970s analog-film treatment" in captured["payload"]["customPrompt"]
+    assert captured["payload"]["customPrompt"] == "保留雨夜路面反光"
+    assert "1970s analog-film treatment" in captured["payload"]["imageFilterPrompt"]
     assert captured["payload"]["variationKey"] == "task-1:1:1"
     assert captured["payload"]["setup"]["personaReferenceIdentity"] == "中国地区特征，18至22岁的成年女性"
     assert result["image_filter"] == "retro_film"

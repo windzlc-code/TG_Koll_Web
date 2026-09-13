@@ -12534,6 +12534,11 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   background: var(--panel-solid);
 }
 
+.persona-post-image-filter-panel.is-locked .persona-post-image-filter:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .persona-post-image-filter.is-selected {
   border-color: var(--accent);
   background: var(--panel-solid);
@@ -28058,6 +28063,10 @@ body.console-page {
   }
 
   .console-page .persona-media-task-actions > [data-persona-run-media-task] {
+    grid-column: 1 / -1;
+  }
+
+  .console-page .persona-media-task-actions > [data-persona-cancel-media-task] {
     grid-column: 1 / -1;
   }
 

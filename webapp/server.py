@@ -11776,6 +11776,8 @@ def _resolve_persona_post_image_aspect_ratio(
     *,
     tweet_content: str,
     custom_prompt: str,
+    image_mode: str = "",
+    style_hint: str = "",
 ) -> tuple[str, dict[str, Any]]:
     requested = _normalize_persona_post_image_aspect_ratio(
         payload.get("aspect_ratio") or payload.get("aspectRatio") or "1:1"
@@ -11783,6 +11785,9 @@ def _resolve_persona_post_image_aspect_ratio(
     if requested != "auto":
         return requested, {"mode": "manual", "requested": requested, "resolved": requested}
 
+    composition = _normalize_persona_post_image_mode(
+        image_mode or payload.get("image_mode") or payload.get("mode")
+    )
     cached_ratio = str(payload.get("aspect_ratio_resolved") or "").strip()
     if cached_ratio in _PERSONA_POST_IMAGE_ASPECT_RATIOS:
         return cached_ratio, {
@@ -11813,10 +11818,11 @@ def _resolve_persona_post_image_aspect_ratio(
     system_prompt = "\n".join(
         [
             "你是社交媒体配图的画面比例决策器，只返回 JSON，不要输出 Markdown 或解释文字。",
-            "综合推文正文、用户补充提示词、主体数量、构图方向、场景空间、阅读设备和内容用途，选择最契合画面表达的比例。",
+            "综合推文正文、用户补充提示词、已选构图类型、人物或物体数量、姿势、动作方向、景别、机位、环境空间、阅读设备和内容用途，选择最契合画面表达的比例。",
             "只能选择 1:1、3:4、4:3、9:16、16:9。",
             "1:1 适合均衡居中、单一主体或信息密度接近方形的画面；3:4 适合人物、生活方式、穿搭和纵向叙事；4:3 适合自然场景、室内环境、纪实和横向信息；9:16 适合明显的竖屏、全身、纵深或高耸主体；16:9 适合宽阔场景、多人关系、横向动作或电影感构图。",
-            "不要固定偏好某个比例，必须以当前内容的构图和场景适配为准。",
+            "构图类型只是分析条件，不能直接映射成固定比例：人物近景可用 1:1，生活方式人物可用 3:4，全身纵向动作可用 9:16；静物也要根据物体数量、排列方向和环境关系在方形、竖向或横向比例中判断。",
+            "不要固定偏好某个比例，必须说明当前主体、动作、镜头和环境为何需要该比例。",
             '返回格式：{"aspect_ratio":"1:1|3:4|4:3|9:16|16:9","reason":"不超过40个中文字符"}',
         ]
     )
@@ -11824,6 +11830,8 @@ def _resolve_persona_post_image_aspect_ratio(
         [
             f"推文正文：{str(tweet_content or '').strip()[:_PERSONA_POST_IMAGE_RATIO_TWEET_MAX_CHARS] or '未提供'}",
             f"补充提示词：{str(custom_prompt or '').strip()[:_PERSONA_POST_IMAGE_RATIO_PROMPT_MAX_CHARS] or '未提供'}",
+            f"已选构图类型：{composition or 'auto'}",
+            f"已选生成风格：{str(style_hint or '').strip()[:120] or '未选择'}",
             "请选择最合适的画面比例。",
         ]
     )
@@ -11956,26 +11964,27 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
             raise RuntimeError("媒体修改的源图片已失效，请重新选择。")
         edit_reference_path = str(source_path)
     archive_load_ms = round((time.perf_counter() - started_at) * 1000, 1)
-    aspect_started_at = time.perf_counter()
-    try:
-        aspect_ratio, aspect_ratio_selection = _resolve_persona_post_image_aspect_ratio(
-            payload,
-            tweet_content=source_content,
-            custom_prompt=prompt,
-        )
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
-    _persist_persona_post_image_aspect_ratio(task_id, aspect_ratio)
-    aspect_ratio_ms = round((time.perf_counter() - aspect_started_at) * 1000, 1)
     try:
         image_filter, image_filter_label, image_filter_prompt = _persona_post_image_filter_detail(
             payload.get("image_filter") or payload.get("imageFilter")
         )
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
-    effective_custom_prompt = "\n".join(part for part in (prompt, image_filter_prompt) if part)
     style_hint = str(payload.get("image_style_label") or payload.get("style_hint") or payload.get("styleHint") or "").strip()[:24]
     image_mode = _normalize_persona_post_image_mode(payload.get("image_mode") or payload.get("mode") or ("auto" if style_hint else "person"))
+    aspect_started_at = time.perf_counter()
+    try:
+        aspect_ratio, aspect_ratio_selection = _resolve_persona_post_image_aspect_ratio(
+            payload,
+            tweet_content=source_content,
+            custom_prompt=prompt,
+            image_mode=image_mode,
+            style_hint=style_hint,
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    _persist_persona_post_image_aspect_ratio(task_id, aspect_ratio)
+    aspect_ratio_ms = round((time.perf_counter() - aspect_started_at) * 1000, 1)
     cli_setup = dict(archive.get("setup") if isinstance(archive.get("setup"), dict) else {})
     reference_identity = _persona_reference_identity_hint(archive)
     if reference_identity:
@@ -11983,7 +11992,8 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
     cli_payload = {
         "setup": cli_setup,
         "content": source_content or prompt,
-        "customPrompt": effective_custom_prompt or None,
+        "customPrompt": prompt or None,
+        "imageFilterPrompt": image_filter_prompt or None,
         "styleHint": style_hint or None,
         "aspectRatio": aspect_ratio,
         "mode": image_mode,

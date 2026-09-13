@@ -333,9 +333,9 @@ export function buildPersonaImagePrompt(
   if (requestedMode === "third_person") {
     return {
       prompt: [
+        buildLifestyleCameraDirection(true, `${content}|${hint}|${variationKey || ""}`),
         buildPersonaSocialImagePrompt(content, setup, signals),
         hint ? `third-person scene: ${hint}` : "",
-        buildLifestyleCameraDirection(true, `${content}|${hint}|${variationKey || ""}`),
         "third-person candid documentary photo of the same person inside the real environment from the post, three-quarter or full body, not a selfie, not a mirror self-portrait, not looking into the camera, not a studio half-body cutout against a fake backdrop, environment must remain readable",
         referencePrompt,
       ].filter(Boolean).join(", "),
@@ -347,9 +347,9 @@ export function buildPersonaImagePrompt(
   if (mode === "closed-person") {
     return {
       prompt: [
+        buildLifestyleCameraDirection(false, `${content}|${hint}|${variationKey || ""}`),
         buildPersonaSocialImagePrompt(content, setup, signals),
         hint ? `portrait direction: ${hint}` : "",
-        buildLifestyleCameraDirection(false, `${content}|${hint}|${variationKey || ""}`),
         "photorealistic everyday lifestyle social photo, consistent same person, natural body language, no text, no watermark",
         referencePrompt,
       ].filter(Boolean).join(", "),
@@ -486,6 +486,41 @@ const LIFESTYLE_BACKGROUND_FALLBACKS = [
   "a compact bedroom outfit-check area with a standing mirror, bright window, rumpled bedding, open shelves and ordinary clothing nearby",
 ];
 
+const LIFESTYLE_CAMERA_LANGUAGES = [
+  "24–28mm environmental wide-angle phone lens with close foreground and readable room or street depth",
+  "35mm documentary perspective at chest height with natural spatial context and mild edge distortion",
+  "50mm normal-lens perspective from conversational distance with restrained background separation",
+  "slightly low waist-height handheld angle that gives the walking or leaning body real depth",
+  "high-angle handheld view that reveals posture, hands, nearby objects, and floor or table geometry",
+  "side-on observational angle through a doorway, shelf, window edge, railing, or passing foreground object",
+  "over-the-shoulder three-quarter angle with the environment carrying equal visual weight",
+  "loosely framed medium-long phone shot from several steps away with intentional negative space",
+];
+
+const LIFESTYLE_BODY_STAGINGS = [
+  "weight on one leg with the other foot changing direction mid-step, shoulders and hips not parallel",
+  "seated diagonally with one elbow or hand naturally supported and the torso turning toward an off-frame event",
+  "leaning into or away from a counter, wall, railing, seat, or window instead of standing unsupported",
+  "half-turned back or side position with a small head turn, preserving identity without a frontal pose",
+  "walking through the frame while carrying or using an everyday object, clothing reacting to movement",
+  "crouching, reaching, bending, stepping up, or shifting position as required by the real activity",
+  "relaxed asymmetrical posture with hands doing different useful actions rather than mirrored posing",
+  "partly occluded by a real foreground object, with face, torso, and limbs at different depth planes",
+  "reclining or sitting informally with bent limbs and an imperfect crop that still reads naturally",
+  "interacting with another person, pet, object, or part of the environment instead of presenting to camera",
+];
+
+const LIFESTYLE_CAPTURE_TIMINGS = [
+  "capture just before the main action settles, with gaze and hands still in motion",
+  "capture immediately after a small event or reaction, before posture returns to a camera-ready pose",
+  "catch a side glance, breath, laugh, pause, or distracted expression rather than a held smile",
+  "freeze an ordinary transition between sitting, standing, walking, turning, reaching, or putting something down",
+  "use slight believable motion softness in hair, hand, clothing, traffic, or nearby people",
+  "frame the person while attention remains on the place, task, companion, or object outside the lens",
+  "capture an unplanned off-beat instant with uneven spacing and a naturally imperfect crop",
+  "show the action already underway, with props visibly being used rather than displayed",
+];
+
 function selectStableCameraSetup(key: string, candidates: string[]): string {
   let hash = 0;
   for (const character of key) hash = ((hash * 31) + character.codePointAt(0)!) >>> 0;
@@ -496,10 +531,14 @@ function buildLifestyleCameraDirection(thirdPerson: boolean, selectionKey: strin
   const candidates = thirdPerson ? THIRD_PERSON_LIFESTYLE_CAMERA_SETUPS : PERSON_LIFESTYLE_CAMERA_SETUPS;
   const selectedCameraSetup = selectStableCameraSetup(selectionKey, candidates);
   const selectedBackgroundFallback = selectStableCameraSetup(`${selectionKey}|background`, LIFESTYLE_BACKGROUND_FALLBACKS);
+  const selectedCameraLanguage = selectStableCameraSetup(`${selectionKey}|camera-language`, LIFESTYLE_CAMERA_LANGUAGES);
+  const selectedBodyStaging = selectStableCameraSetup(`${selectionKey}|body-staging`, LIFESTYLE_BODY_STAGINGS);
+  const selectedCaptureTiming = selectStableCameraSetup(`${selectionKey}|capture-timing`, LIFESTYLE_CAPTURE_TIMINGS);
   return [
+    `MANDATORY CURRENT SHOT PLAN: camera language: ${selectedCameraLanguage}; body staging: ${selectedBodyStaging}; capture timing: ${selectedCaptureTiming}`,
+    `subject-specific context: use this specific camera and pose setup for this post: ${selectedCameraSetup}`,
     "output one single candid social-media photo with one instance of the person, never a character sheet, multi-view layout, pose lineup, collage, or studio cutout",
     "if the persona reference is a three-view sheet, lock the protagonist face to that identity and do not copy its straight standing pose, eye-level camera, white or neutral background, or side-by-side presentation",
-    `use this specific camera and pose setup for this post: ${selectedCameraSetup}`,
     "do not default to a centered eye-level front-facing half-body pose; vary camera height, shot distance, body orientation, gaze direction, hand placement, weight shift, crop, and foreground depth across different posts and selected style hints",
     `when the post does not name a location, use this fallback lived-in setting: ${selectedBackgroundFallback}`,
     "if the post explicitly names a location, action, weather, time or event, it overrides any conflicting camera, pose, or fallback setting; keep the named action mandatory and adapt the selected setup around it, then enrich the real context with ordinary background detail, depth, small asymmetries, mild perspective distortion, and natural available light",
@@ -561,6 +600,7 @@ export async function generatePersonaImage(
   customPrompt?: string,
   styleHint?: string,
   variationKey?: string,
+  imageFilterPrompt?: string,
 ): Promise<{ ok: boolean; url?: string; mode: PersonaImageResolvedMode; error?: string; timings?: unknown }> {
   if (!imageAPI?.generate) return { ok: false, mode: "closed-scene", error: "image API 不可用" };
 
@@ -584,9 +624,18 @@ export async function generatePersonaImage(
   const identityReferenceUrl = explicitReferenceUrl || route.referenceUrl || String(referenceSheetUrl || "").trim();
   const withAvatar = Boolean(explicitReferenceUrl) || built.withAvatar;
   const customCue = customPrompt?.trim();
+  const imageFilterCue = imageFilterPrompt?.trim();
+  const mandatoryFilterDirective = imageFilterCue
+    ? [
+      "MANDATORY SELECTED IMAGE FILTER — this is a required final rendering constraint, not an optional style suggestion:",
+      imageFilterCue,
+      "Apply this filter consistently across the entire image, including the subject, skin, clothing, background, highlights, and shadows. Do not fall back to neutral or natural default grading.",
+    ].join("\n")
+    : "";
   const finalPrompt = withAvatar
     ? explicitReferenceUrl
       ? [
+        mandatoryFilterDirective,
         "Use the attached persona reference image as the source. Preserve every area and detail that the current request does not explicitly ask to change; do not replace it with an unrelated image.",
         "Keep the recognizable face and identity unchanged unless the current request explicitly asks to change the face or identity. Clothing, pose, scene, action, camera angle, lighting, and props should follow the current visual request instead of copying the source image unchanged.",
         customCue ? `Highest priority current visual request: ${customCue}` : "",
@@ -594,6 +643,7 @@ export async function generatePersonaImage(
         prompt,
       ].filter(Boolean).join("\n")
       : [
+        mandatoryFilterDirective,
         "FACE IDENTITY LOCK: The attached image is the currently selected persona reference. The protagonist's face MUST be the same person as in that image.",
         "Keep the exact same face: facial structure, eyes, nose, mouth, eyebrows, bone structure, skin tone, apparent age, gender, ethnicity, and hairline. Do not invent a similar new face, do not swap identity, and do not beautify the person into someone else.",
         "Clothing, pose, scene, camera, lighting, and props may change freely to follow the current request. Only the face identity is locked.",
@@ -601,7 +651,7 @@ export async function generatePersonaImage(
         customCue ? `Highest priority current visual request: ${customCue}` : "",
         prompt,
       ].filter(Boolean).join("\n")
-    : [prompt, customCue || ""].filter(Boolean).join(", ");
+    : [mandatoryFilterDirective, customCue ? `Highest priority current visual request: ${customCue}` : "", prompt].filter(Boolean).join("\n");
 
   const avatarSource = withAvatar ? identityReferenceUrl : undefined;
   const avatarBase64 = avatarSource ? avatarSource.replace(/^data:[^;]+;base64,/, "") : undefined;

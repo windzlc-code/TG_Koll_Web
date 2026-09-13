@@ -631,6 +631,35 @@ describe("persona image production", () => {
     expect(calls[0].prompt).toContain("neat soft hands");
   });
 
+  it("keeps a selected filter as a mandatory top-level model constraint", async () => {
+    const calls: any[] = [];
+    const filterPrompt = "Use a classic film-noir treatment with strict monochrome tones.";
+    await generatePersonaImage(
+      { generate: async (payload: any) => {
+        calls.push(payload);
+        return { ok: true, url: "https://example.com/noir.png" };
+      } },
+      nonWorkflowSetup(),
+      "夜晚走过便利店",
+      "scene",
+      "gemini-3.1-flash-image-preview",
+      "4:3",
+      "none",
+      undefined,
+      undefined,
+      undefined,
+      "保留雨夜路面反光",
+      "便利店夜景",
+      "variation-1",
+      filterPrompt,
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].prompt).toContain("MANDATORY SELECTED IMAGE FILTER");
+    expect(calls[0].prompt).toContain(filterPrompt);
+    expect(calls[0].prompt.indexOf(filterPrompt)).toBeLessThan(calls[0].prompt.indexOf("夜晚走过便利店"));
+  });
+
   it("anchors POV hands to age and gender from the active persona reference", async () => {
     const calls: any[] = [];
     const imageAPI = {
@@ -793,6 +822,28 @@ describe("persona image production", () => {
     expect(first.prompt).not.toBe(second.prompt);
     expect(first.prompt).toContain("use this specific camera and pose setup for this post");
     expect(second.prompt).toContain("use this specific camera and pose setup for this post");
+    expect(first.prompt).toContain("MANDATORY CURRENT SHOT PLAN");
+    expect(first.prompt).toContain("camera language:");
+    expect(first.prompt).toContain("body staging:");
+    expect(first.prompt).toContain("capture timing:");
+    expect(first.prompt.indexOf("MANDATORY CURRENT SHOT PLAN")).toBeLessThan(first.prompt.indexOf("persona visual identity cue:"));
+  });
+
+  it("combines camera, body, and action language across repeated generations", () => {
+    const prompts = Array.from({ length: 24 }, (_, index) => buildPersonaImagePrompt(
+      "周末在社区附近散步，顺手记录普通生活",
+      nonWorkflowSetup(),
+      "person",
+      "none",
+      "社区生活抓拍",
+      `task-${index}:1:1`,
+    ).prompt);
+    const shotPlans = new Set(prompts.map((prompt) => (
+      prompt.match(/MANDATORY CURRENT SHOT PLAN: ([\s\S]*?), subject-specific context:/)?.[1] || ""
+    )));
+
+    expect(shotPlans.has("")).toBe(false);
+    expect(shotPlans.size).toBeGreaterThanOrEqual(16);
   });
 
   it("rotates through a broad camera and background sample pool", () => {

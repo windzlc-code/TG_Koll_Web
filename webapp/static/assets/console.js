@@ -4789,6 +4789,17 @@ function renderPersonaPostImageFilterPicker(mediaForm, disabled = false) {
   </section>`;
 }
 
+function setPersonaPostImageFilterInteractionLocked(locked) {
+  document.querySelectorAll("[data-persona-image-filter]").forEach((button) => {
+    button.disabled = Boolean(locked);
+    button.setAttribute("aria-disabled", locked ? "true" : "false");
+  });
+  document.querySelectorAll(".persona-post-image-filter-panel").forEach((panel) => {
+    panel.classList.toggle("is-locked", Boolean(locked));
+    panel.setAttribute("aria-busy", locked ? "true" : "false");
+  });
+}
+
 function renderPersonaPostImageControls(persona, post, mediaForm, disabled = false, styleDisabled = disabled) {
   return `${renderPersonaPostImageFilterPicker(mediaForm, disabled)}
     <div class="persona-post-image-settings-divider" role="separator"><span>生成风格</span></div>
@@ -25310,6 +25321,7 @@ async function submitPersonaMediaTask() {
   const submittedAt = Date.now();
   let taskAccepted = false;
   setActionLocked(lockParts, true, submittedAt);
+  setPersonaPostImageFilterInteractionLocked(true);
   clearMsg("commandMsg");
   const submitButton = document.querySelector("[data-persona-run-media-task]");
   if (submitButton) {
