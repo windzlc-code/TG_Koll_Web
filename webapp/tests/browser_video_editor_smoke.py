@@ -49,7 +49,9 @@ def main() -> None:
             context = browser.new_context(viewport={"width": 1680, "height": 1050})
             page = context.new_page()
             page_errors: list[str] = []
+            native_dialogs: list[str] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
+            page.on("dialog", lambda dialog: (native_dialogs.append(dialog.type), dialog.dismiss()))
 
             login = context.request.post(
                 f"{base_url}/api/auth/portal-login",
@@ -71,10 +73,39 @@ def main() -> None:
             assert page.locator('[data-video-module="video_editor"]').get_attribute("aria-current") == "page"
             assert page.locator('[data-studio-tab="editor"]').get_attribute("aria-selected") == "true"
 
-            page.locator("[data-editor-upload]").set_input_files(str(sample))
+            toolbar_box = page.locator("#videoStudioToolbar").bounding_box()
+            tabs_box = page.locator("#videoStudioTabs").bounding_box()
+            heading_box = page.locator("#videoStudioHeadingHost .video-editor-heading").bounding_box()
+            assert toolbar_box and tabs_box and heading_box
+            assert heading_box["x"] >= tabs_box["x"] + tabs_box["width"]
+            assert abs((tabs_box["y"] + tabs_box["height"] / 2) - (heading_box["y"] + heading_box["height"] / 2)) < 10
+
+            page.locator("[data-project-new]").click()
+            page.locator(".site-auth-feedback [data-video-action-form]").wait_for(state="visible")
+            assert page.locator(".site-auth-feedback [data-video-dialog-input]").input_value().startswith("剪辑项目")
+            page.locator(".site-auth-feedback [data-video-action-cancel]").click()
+            page.locator(".site-auth-feedback").wait_for(state="detached")
+            page.locator("[data-project-rename]").click()
+            page.locator(".site-auth-feedback [data-video-dialog-input]").wait_for(state="visible")
+            page.locator(".site-auth-feedback [data-video-action-cancel]").click()
+            page.locator("[data-project-delete]").click()
+            page.locator(".site-auth-feedback [data-video-action-confirm]").wait_for(state="visible")
+            assert page.locator(".site-auth-feedback [data-video-dialog-input]").count() == 0
+            page.locator(".site-auth-feedback [data-video-action-cancel]").click()
+            assert not native_dialogs
+
+            assert page.locator("[data-editor-drop-zone] [data-editor-upload]").count() == 1
+            with page.expect_file_chooser() as chooser_info:
+                page.locator("[data-editor-drop-zone]").click()
+            chooser_info.value.set_files(str(sample))
             page.locator(".video-asset-card").wait_for(state="visible", timeout=30_000)
             page.get_by_text("browser-sample", exact=False).first.wait_for(state="visible")
             assert page.locator(".video-asset-card").count() == 1
+            page.locator("[data-asset-delete]").click()
+            page.locator(".site-auth-feedback [data-video-action-confirm]").wait_for(state="visible")
+            page.locator(".site-auth-feedback [data-video-action-cancel]").click()
+            assert page.locator(".video-asset-card").count() == 1
+            assert not native_dialogs
             page.wait_for_function(
                 "document.querySelector('.video-asset-card img')?.complete && document.querySelector('.video-asset-card img')?.naturalWidth > 0"
             )
@@ -183,6 +214,18 @@ def main() -> None:
             assert page.locator(".video-editor-stage").is_visible()
             assert page.locator(".video-editor-timeline").is_visible()
             assert page.locator(".video-editor-inspector").is_visible()
+            mobile_toolbar = page.locator("#videoStudioToolbar").bounding_box()
+            mobile_tabs = page.locator("#videoStudioTabs").bounding_box()
+            mobile_heading = page.locator("#videoStudioHeadingHost .video-editor-heading").bounding_box()
+            assert mobile_toolbar and mobile_toolbar["x"] >= 0 and mobile_toolbar["x"] + mobile_toolbar["width"] <= 390
+            assert mobile_tabs and mobile_heading and mobile_heading["x"] >= mobile_tabs["x"] + mobile_tabs["width"]
+            assert abs(mobile_tabs["y"] - mobile_heading["y"]) < 10
+            assert page.locator("[data-editor-drop-zone]").bounding_box()["width"] <= page.locator(".video-editor-library").bounding_box()["width"]
+            page.locator("[data-project-rename]").click()
+            page.locator(".site-auth-feedback [data-video-dialog-input]").wait_for(state="visible")
+            action_box = page.locator(".site-auth-feedback-dialog").bounding_box()
+            assert action_box and action_box["x"] >= 0 and action_box["x"] + action_box["width"] <= 390
+            page.locator(".site-auth-feedback [data-video-action-cancel]").click()
             if screenshot_dir:
                 page.screenshot(path=str(screenshot_dir / "video-editor-mobile.png"), full_page=True)
 

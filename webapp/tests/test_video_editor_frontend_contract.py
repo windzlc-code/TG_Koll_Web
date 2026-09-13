@@ -33,6 +33,8 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertNotIn('nav-parent-toggle', VIDEO_HTML)
         self.assertNotIn('id="videoWorkspaceFlow"', VIDEO_HTML)
         self.assertIn('id="videoStudioPanel"', VIDEO_HTML)
+        self.assertIn('id="videoStudioToolbar"', VIDEO_HTML)
+        self.assertIn('id="videoStudioHeadingHost"', VIDEO_HTML)
         self.assertIn('data-studio-tab="records"', VIDEO_HTML)
         self.assertIn('data-studio-tab="editor"', VIDEO_HTML)
         self.assertIn('data-studio-page="records"', VIDEO_HTML)
@@ -44,6 +46,24 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertIn('window.VideoPage = { navigate, showStudioTab }', VIDEO_PAGE)
         self.assertIn('requested === "video_records"', VIDEO_PAGE)
         self.assertNotIn('"video_editor",\n  ];', VIDEO_EDITOR)
+
+    def test_studio_toolbar_upload_and_action_windows_are_unified(self):
+        self.assertIn('const headingRoot = () => document.getElementById("videoStudioHeadingHost")', VIDEO_EDITOR)
+        self.assertIn('const headingRoot = () => document.getElementById("videoStudioHeadingHost")', VIDEO_RECORDS)
+        self.assertIn('renderHeading();', VIDEO_EDITOR)
+        self.assertIn('window.VectoSiteNavigation?.showAuthFeedback', VIDEO_EDITOR)
+        self.assertNotIn('window.prompt', VIDEO_EDITOR)
+        self.assertNotIn('window.confirm', VIDEO_EDITOR)
+        drop_start = VIDEO_EDITOR.index('<label class="video-upload-drop')
+        drop_end = VIDEO_EDITOR.index('</label>', drop_start)
+        upload_input = VIDEO_EDITOR.index('data-editor-upload', drop_start)
+        self.assertLess(upload_input, drop_end)
+        self.assertNotIn('video-upload-button', VIDEO_EDITOR)
+        self.assertIn('点击或拖入视频', VIDEO_EDITOR)
+        self.assertIn('event.key === "Enter" || event.key === " "', VIDEO_EDITOR)
+        self.assertIn('.video-studio-toolbar', VIDEO_EDITOR_CSS)
+        self.assertIn('grid-template-columns: max-content minmax(0, 1fr)', VIDEO_EDITOR_CSS)
+        self.assertIn('.video-upload-drop.is-dragging', VIDEO_EDITOR_CSS)
 
     def test_asset_project_and_export_closure_is_wired(self):
         for contract in (

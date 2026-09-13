@@ -41,6 +41,7 @@
   };
 
   const root = () => document.getElementById("videoEditorRoot");
+  const headingRoot = () => document.getElementById("videoStudioHeadingHost");
   const escapeHtml = (value) => String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -99,6 +100,43 @@
       throw error;
     }
     return payload;
+  }
+
+  async function requestActionDialog({ title, message, inputLabel = "", inputValue = null, confirmText = "确定", danger = false } = {}) {
+    const presenter = window.VectoSiteNavigation?.showAuthFeedback;
+    if (typeof presenter !== "function") throw new Error("公共操作窗口尚未加载，请刷新页面后重试。");
+    const withInput = inputValue !== null;
+    const previousFocus = document.activeElement;
+    let result = { confirmed: false, value: withInput ? String(inputValue || "") : "" };
+    const inputMarkup = withInput ? `<label><span>${escapeHtml(inputLabel || "名称")}</span><input type="text" value="${escapeHtml(inputValue)}" maxlength="80" autocomplete="off" required data-video-dialog-input /></label>` : "";
+    await presenter({
+      kind: danger ? "error" : "success",
+      showIcon: false,
+      title,
+      message,
+      actionText: false,
+      dialogClass: "is-form is-confirmation video-editor-action-window",
+      contentHtml: `<form class="site-auth-feedback-form" data-video-action-form>${inputMarkup}<div class="site-auth-feedback-actions"><button type="button" class="site-auth-feedback-cancel" data-video-action-cancel>取消</button><button type="submit" class="site-auth-feedback-confirm ${danger ? "is-danger" : ""}" data-video-action-confirm>${escapeHtml(confirmText)}</button></div></form>`,
+      onOpen(modal, close) {
+        const form = modal.querySelector("[data-video-action-form]");
+        const input = modal.querySelector("[data-video-dialog-input]");
+        modal.querySelector("[data-video-action-cancel]")?.addEventListener("click", () => close());
+        form?.addEventListener("submit", (event) => {
+          event.preventDefault();
+          if (input && !input.value.trim()) {
+            input.setCustomValidity("请输入项目名称");
+            input.reportValidity();
+            input.addEventListener("input", () => input.setCustomValidity(""), { once: true });
+            return;
+          }
+          result = { confirmed: true, value: input ? input.value.trim() : "" };
+          close();
+        });
+        window.setTimeout(() => { input?.focus(); input?.select(); }, 0);
+      },
+    });
+    if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+    return result;
   }
 
   function assetById(assetId) {
@@ -338,12 +376,14 @@
   function renderLoading() {
     const host = root();
     if (!host) return;
+    renderHeading();
     host.innerHTML = '<div class="video-editor-state" role="status"><span class="video-workbench-loader" aria-hidden="true"></span><strong>正在整理视频素材</strong><span>同步生成记录与剪辑项目…</span></div>';
   }
 
   function renderFailure(error) {
     const host = root();
     if (!host) return;
+    renderHeading();
     host.innerHTML = `<div class="video-editor-state video-editor-state--error"><strong>视频工作区暂时无法打开</strong><span>${escapeHtml(error?.message || error)}</span><button class="secondary-btn" type="button" data-editor-retry>重新加载</button></div>`;
   }
 
@@ -371,14 +411,12 @@
     return `<aside class="video-editor-library" aria-label="视频素材库">
       <div class="video-editor-section-heading">
         <div><span class="eyebrow">MEDIA LIBRARY</span><h3>视频素材</h3></div>
-        <label class="video-upload-button ${state.uploadBusy ? "is-busy" : ""}">
-          <input type="file" accept="video/*,.mkv,.avi,.wmv,.flv,.mts,.m2ts" multiple data-editor-upload ${state.uploadBusy ? "disabled" : ""} />
-          <span>${icon("upload")}${state.uploadBusy ? "处理中…" : "上传视频"}</span>
-        </label>
       </div>
-      <div class="video-upload-drop" data-editor-drop-zone tabindex="0">
-        <strong>拖入自定义视频</strong><span>支持 MP4、MOV、MKV、AVI、WebM 等主流格式</span>
-      </div>
+      <label class="video-upload-drop ${state.uploadBusy ? "is-busy" : ""}" data-editor-drop-zone tabindex="${state.uploadBusy ? "-1" : "0"}">
+        <input type="file" accept="video/*,.mkv,.avi,.wmv,.flv,.mts,.m2ts" multiple data-editor-upload ${state.uploadBusy ? "disabled" : ""} />
+        <span class="video-upload-drop-icon" aria-hidden="true">${icon("upload")}</span>
+        <span class="video-upload-drop-copy"><strong>${state.uploadBusy ? "正在处理视频" : "点击或拖入视频"}</strong><small>MP4、MOV、MKV、AVI、WebM 等主流格式</small></span>
+      </label>
       ${state.uploadMessage ? `<div class="video-upload-note">${escapeHtml(state.uploadMessage)}</div>` : ""}
       <div class="video-library-tools">
         <input type="search" value="${escapeHtml(state.search)}" placeholder="搜索素材" aria-label="搜索视频素材" data-editor-search />
@@ -543,22 +581,28 @@
   function render() {
     const host = root();
     if (!host || !state.project) return;
+    renderHeading();
     host.innerHTML = `<div class="video-editor-app">
-      <header class="video-editor-toolbar">
-        <div class="video-editor-heading"><span class="video-editor-mark" aria-hidden="true">${icon("scissors")}</span><div><span class="eyebrow">VECTO CUT ROOM</span><h2>视频素材与简易剪辑</h2><p>生成记录、本地素材、剪辑项目和导出成品统一保存。</p></div></div>
-        <div class="video-project-controls">
-          <label><span>当前项目</span><select data-project-select>${state.projects.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === state.project.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
-          <button type="button" class="video-icon-button" data-project-new aria-label="新建项目" title="新建项目">${icon("plus")}</button>
-          <button type="button" class="video-icon-button" data-project-rename aria-label="重命名项目" title="重命名项目">${icon("edit")}</button>
-          <button type="button" class="video-icon-button danger-link" data-project-delete aria-label="删除项目" title="删除项目">${icon("trash")}</button>
-          <span class="video-save-state" data-editor-save-state data-state="${state.dirty ? "dirty" : "saved"}">${state.dirty ? "有更改待保存" : "已保存到服务器"}</span>
-        </div>
-      </header>
       <div class="video-editor-message" data-editor-message data-type="${escapeHtml(state.messageType)}" ${state.message ? "" : "hidden"}>${escapeHtml(state.message)}</div>
       <div class="video-editor-main-grid">${renderAssetLibrary()}<div class="video-editor-center">${renderPreview()}${renderTimeline()}</div>${renderInspector()}</div>
     </div>`;
     bindPreviewElement();
     if (state.project?.clips?.length) seekPreview(Math.min(state.previewTimelineTime, timelineDuration()), state.previewPlaying);
+  }
+
+  function renderHeading() {
+    const host = headingRoot();
+    if (!host) return;
+    host.innerHTML = `<header class="video-editor-toolbar">
+      <div class="video-editor-heading"><span class="video-editor-mark" aria-hidden="true">${icon("scissors")}</span><div><span class="eyebrow">VECTO CUT ROOM</span><h2>视频素材与简易剪辑</h2><p>生成记录、本地素材、剪辑项目和导出成品统一保存。</p></div></div>
+      ${state.project ? `<div class="video-project-controls">
+        <label><span>当前项目</span><select data-project-select>${state.projects.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === state.project.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
+        <button type="button" class="video-icon-button" data-project-new aria-label="新建项目" title="新建项目">${icon("plus")}</button>
+        <button type="button" class="video-icon-button" data-project-rename aria-label="重命名项目" title="重命名项目">${icon("edit")}</button>
+        <button type="button" class="video-icon-button danger-link" data-project-delete aria-label="删除项目" title="删除项目">${icon("trash")}</button>
+        <span class="video-save-state" data-editor-save-state data-state="${state.dirty ? "dirty" : "saved"}">${state.dirty ? "有更改待保存" : "已保存到服务器"}</span>
+      </div>` : ""}
+    </header>`;
   }
 
   function addAssetToTimeline(assetId) {
@@ -689,7 +733,9 @@
 
   async function deleteAsset(assetId) {
     const asset = assetById(assetId);
-    if (!asset || !window.confirm(`确定删除素材“${asset.name}”吗？原始文件和预览文件都会删除。`)) return;
+    if (!asset) return;
+    const decision = await requestActionDialog({ title: "删除视频素材", message: `确定删除“${asset.name}”吗？原始文件和预览文件都会删除。`, confirmText: "删除素材", danger: true });
+    if (!decision.confirmed) return;
     await request(`${API}/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
     state.assets = state.assets.filter((item) => item.id !== assetId);
     render();
@@ -714,16 +760,16 @@
 
   async function newProject() {
     if (state.dirty) await saveProject();
-    const name = window.prompt("新项目名称", `剪辑项目 ${state.projects.length + 1}`);
-    if (name === null) return;
-    await createProject(name);
+    const decision = await requestActionDialog({ title: "新建剪辑项目", message: "为新的时间线输入一个便于识别的名称。", inputLabel: "项目名称", inputValue: `剪辑项目 ${state.projects.length + 1}`, confirmText: "新建项目" });
+    if (!decision.confirmed) return;
+    await createProject(decision.value);
     render();
   }
 
   async function renameProject() {
-    const name = window.prompt("项目名称", state.project?.name || "");
-    if (name === null || !name.trim()) return;
-    state.project.name = name.trim();
+    const decision = await requestActionDialog({ title: "重命名剪辑项目", message: "修改只影响项目名称，不会更改时间线内容。", inputLabel: "项目名称", inputValue: state.project?.name || "", confirmText: "保存名称" });
+    if (!decision.confirmed) return;
+    state.project.name = decision.value;
     markDirty();
     render();
     await saveProject();
@@ -731,7 +777,9 @@
   }
 
   async function deleteProject() {
-    if (!state.project || !window.confirm(`确定删除项目“${state.project.name}”吗？素材不会被删除。`)) return;
+    if (!state.project) return;
+    const decision = await requestActionDialog({ title: "删除剪辑项目", message: `确定删除“${state.project.name}”吗？素材库中的视频不会被删除。`, confirmText: "删除项目", danger: true });
+    if (!decision.confirmed) return;
     await request(`${API}/projects/${encodeURIComponent(state.project.id)}`, { method: "DELETE" });
     state.projects = state.projects.filter((item) => item.id !== state.project.id);
     if (!state.projects.length) await createProject("我的剪辑");
@@ -1088,6 +1136,12 @@
   }
 
   function onKeyDown(event) {
+    const uploadZone = event.target?.closest?.("[data-editor-drop-zone]");
+    if (uploadZone && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      uploadZone.querySelector("[data-editor-upload]")?.click();
+      return;
+    }
     if (!state.active || event.target?.closest?.("input, select, textarea, [contenteditable='true']")) return;
     const command = event.ctrlKey || event.metaKey;
     if (command && event.key.toLowerCase() === "z") { event.preventDefault(); event.shiftKey ? redoTimeline() : undoTimeline(); return; }
@@ -1108,11 +1162,18 @@
     if (event.target.closest("[data-timeline-drop], [data-editor-drop-zone]")) {
       event.preventDefault();
       event.dataTransfer.dropEffect = event.dataTransfer.types.includes("Files") ? "copy" : "move";
+      event.target.closest("[data-editor-drop-zone]")?.classList.add("is-dragging");
     }
+  }
+
+  function onDragLeave(event) {
+    const uploadZone = event.target.closest?.("[data-editor-drop-zone]");
+    if (uploadZone && !uploadZone.contains(event.relatedTarget)) uploadZone.classList.remove("is-dragging");
   }
 
   function onDrop(event) {
     const uploadZone = event.target.closest("[data-editor-drop-zone]");
+    uploadZone?.classList.remove("is-dragging");
     if (uploadZone && event.dataTransfer.files?.length) {
       event.preventDefault();
       void uploadFiles(event.dataTransfer.files);
@@ -1139,6 +1200,7 @@
     host.addEventListener("change", onChange);
     host.addEventListener("dragstart", onDragStart);
     host.addEventListener("dragover", onDragOver);
+    host.addEventListener("dragleave", onDragLeave);
     host.addEventListener("drop", onDrop);
     host.addEventListener("pointerdown", onPointerDown);
     host.addEventListener("focusin", (event) => {
@@ -1152,6 +1214,12 @@
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
     window.addEventListener("keydown", onKeyDown);
+    const heading = headingRoot();
+    if (heading && heading.dataset.editorBound !== "1") {
+      heading.dataset.editorBound = "1";
+      heading.addEventListener("click", onClick);
+      heading.addEventListener("change", onChange);
+    }
   }
 
   async function consumePendingAsset() {

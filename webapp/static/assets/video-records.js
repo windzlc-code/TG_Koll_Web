@@ -25,6 +25,7 @@
   };
 
   const root = () => document.getElementById("videoRecordsRoot");
+  const headingRoot = () => document.getElementById("videoStudioHeadingHost");
   const escapeHtml = (value) => String(value ?? "")
     .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;").replaceAll("'", "&#039;");
@@ -158,10 +159,9 @@
   function render() {
     const host = root();
     if (!host) return;
+    const heading = headingRoot();
+    if (heading) heading.innerHTML = `<header class="video-records-hero"><div class="video-records-heading"><span class="video-records-mark" aria-hidden="true">${icon("archive")}</span><div><span class="eyebrow">VIDEO ARCHIVE</span><h2>视频生成记录</h2><p>自动归档已经生成的视频，分页查看、预览、下载，并可直接送入剪辑器。</p></div></div></header>`;
     host.innerHTML = `<div class="video-records-app">
-      <header class="video-records-hero">
-        <div class="video-records-heading"><span class="video-records-mark" aria-hidden="true">${icon("archive")}</span><div><span class="eyebrow">VIDEO ARCHIVE</span><h2>视频生成记录</h2><p>自动归档已经生成的视频，分页查看、预览、下载，并可直接送入剪辑器。</p></div></div>
-      </header>
       <section class="video-records-panel" aria-label="视频记录列表">
         <div class="video-records-tools">
           <div><strong>视频记录</strong><span>${state.total} 个可用视频</span></div>
