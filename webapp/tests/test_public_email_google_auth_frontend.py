@@ -33,6 +33,44 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn('api("/api/auth/register"', self.script)
         self.assertNotIn('api("/api/auth/apply"', self.script)
 
+    def test_invitation_link_prefills_and_submits_optional_invite_code(self):
+        self.assertIn('name="invite_code"', self.script)
+        self.assertIn('searchParams.get("invite_code")', self.script)
+        self.assertIn("prefillRegistrationInvitationCode", self.script)
+        self.assertIn("invite_code: applicationForm.elements.invite_code.value.trim()", self.script)
+        self.assertIn('normalized.startsWith("invitation_")', self.script)
+        self.assertIn("registrationResult?.invitation?.invitee_points", self.script)
+
+    def test_google_invitation_is_attached_to_oauth_start_and_reports_completion_reward(self):
+        google_start = self.script[
+            self.script.index('googleLoginButton?.addEventListener("click"'):
+            self.script.index('googleSetupForm?.addEventListener("submit"')
+        ]
+        self.assertIn("invitationCodeFromUrl()", google_start)
+        self.assertIn('searchParams.set("invite_code", inviteCode)', google_start)
+        self.assertIn("googleStartUrl", google_start)
+        google_complete = self.script[
+            self.script.index('googleSetupForm?.addEventListener("submit"'):
+            self.script.index("async function showLoginSecurityVerification")
+        ]
+        self.assertIn("googleRegistrationResult", google_complete)
+        self.assertIn("googleRegistrationResult?.invitation?.invitee_points", google_complete)
+        self.assertIn("邀請獎勵", google_complete)
+
+    def test_hybrid_invitation_feedback_reports_points_and_pending_permission_together(self):
+        registration_submit = self.script[
+            self.script.index('applicationForm?.addEventListener("submit"'):
+            self.script.index('googleLoginButton?.addEventListener("click"')
+        ]
+        self.assertIn("registrationPermissionPending && inviteeRewardPoints > 0", registration_submit)
+        self.assertIn("積分已結算，權限待開通", registration_submit)
+        google_complete = self.script[
+            self.script.index('googleSetupForm?.addEventListener("submit"'):
+            self.script.index("async function showLoginSecurityVerification")
+        ]
+        self.assertIn("googlePermissionPending && inviteeRewardPoints > 0", google_complete)
+        self.assertIn("邀請積分已結算，權限待開通", google_complete)
+
     def test_registration_success_immediately_explains_the_welcome_compute_credit(self):
         registration_submit = self.script[
             self.script.index("applicationForm?.addEventListener(\"submit\""):
@@ -164,7 +202,7 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn('applicationForm?.elements?.email?.addEventListener("change"', self.script)
         self.assertIn("registrationPolicyEnabled = null", self.script)
         self.assertIn('googleLoginButton.dataset.googleLogin = ""', self.script)
-        self.assertIn('window.location.assign(`/api/auth/google/start?return_url=${encodeURIComponent(returnUrl)}`)', self.script)
+        self.assertIn('const googleStartUrl = new URL("/api/auth/google/start", window.location.origin)', self.script)
 
     def test_google_entry_is_static_on_every_public_login_and_uses_official_asset(self):
         for page_name in (

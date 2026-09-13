@@ -6,6 +6,7 @@ ADMIN_HTML = (ROOT / "webapp" / "static" / "admin.html").read_text(encoding="utf
 ADMIN_JS = (ROOT / "webapp" / "static" / "assets" / "admin.js").read_text(encoding="utf-8")
 PROFILE_HTML = (ROOT / "webapp" / "static" / "profile.html").read_text(encoding="utf-8")
 PROFILE_JS = (ROOT / "webapp" / "static" / "assets" / "profile.js").read_text(encoding="utf-8")
+PROFILE_CSS = (ROOT / "webapp" / "static" / "assets" / "profile.css").read_text(encoding="utf-8")
 CONSOLE_HTML = (ROOT / "webapp" / "static" / "console.html").read_text(encoding="utf-8")
 SITE_NAVIGATION_JS = (ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
 SITE_NAVIGATION_CSS = (ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.css").read_text(encoding="utf-8")
@@ -14,14 +15,14 @@ PRICING_JS = (ROOT / "webapp" / "static" / "assets" / "opc" / "pricing.js").read
 
 
 def test_admin_redemption_workspace_has_its_own_navigation_page():
-    assert 'data-page="redemptionCodes">兑换码</button>' in ADMIN_HTML
+    assert 'data-page="redemptionCodes">兑换邀请</button>' in ADMIN_HTML
     assert 'id="secRedemptionCodes" data-page-view="redemptionCodes"' in ADMIN_HTML
     assert 'id="redemptionCodeForm"' in ADMIN_HTML
     assert 'id="btnCheckRedemptionCode"' in ADMIN_HTML
     assert 'id="btnCheckRedemptionCodes"' in ADMIN_HTML
     assert 'id="redemptionCodeCheckResult"' in ADMIN_HTML
     assert 'id="redemptionCodeBody"' in ADMIN_HTML
-    assert 'redemptionCodes: "兑换码"' in ADMIN_JS
+    assert 'redemptionCodes: "兑换邀请"' in ADMIN_JS
     assert 'secRedemptionCodes: "redemptionCodes"' in ADMIN_JS
     assert 'if (nextPage === "redemptionCodes")' in ADMIN_JS
     assert "/api/admin/billing/redemption-codes" in ADMIN_JS
@@ -30,6 +31,50 @@ def test_admin_redemption_workspace_has_its_own_navigation_page():
     assert '"/api/admin/billing/redemption-codes/check"' in ADMIN_JS
     assert 'el("btnCheckRedemptionCode")?.addEventListener' in ADMIN_JS
     assert 'submit.disabled = true' in ADMIN_JS
+
+
+def test_invitation_workspace_extends_redemption_without_replacing_it():
+    assert 'data-redemption-invite-tab="codes"' in ADMIN_HTML
+    assert 'data-redemption-invite-tab="invitations"' in ADMIN_HTML
+    assert 'id="invitationSettingsForm"' in ADMIN_HTML
+    assert 'id="invitationBody"' in ADMIN_HTML
+    assert "/api/admin/invitations/settings" in ADMIN_JS
+    assert "/api/admin/invitations?" in ADMIN_JS
+    assert 'data-profile-open-invitation' in PROFILE_HTML
+    assert "/api/invitations/me" in PROFILE_JS
+    assert "/api/invitations/code" in PROFILE_JS
+    assert 'data-site-open-invitation data-site-copy="inviteCode"' in CONSOLE_HTML
+    assert 'data-site-open-invitation data-site-copy="inviteCode"' in SITE_NAVIGATION_JS
+
+
+def test_invitation_admin_uses_real_statuses_versioned_limits_and_its_own_table_layout():
+    for value in ("pending", "rewarded", "pending_permission", "revoked"):
+        assert f'<option value="{value}">' in ADMIN_HTML
+    for field_id in ("inviterDailyLimit", "sourceDailyLimit"):
+        assert f'id="{field_id}"' in ADMIN_HTML
+    for key in ("inviter_daily_limit", "source_daily_limit", "expected_version"):
+        assert key in ADMIN_JS
+    assert 'class="table admin-billing-table admin-invitation-table"' in ADMIN_HTML
+    assert ".page-admin #secRedemptionCodes .admin-invitation-table" in STYLE_CSS
+    assert ".admin-invitation-table th:nth-child(1)" in STYLE_CSS
+
+
+def test_profile_invitation_respects_disabled_permission_pending_and_paginates_records():
+    assert 'id="profileInvitationPrevious"' in PROFILE_HTML
+    assert 'id="profileInvitationNext"' in PROFILE_HTML
+    assert "invitationOffset" in PROFILE_JS
+    assert "invitationTotal" in PROFILE_JS
+    assert "next_offset" in PROFILE_JS
+    assert '`/api/invitations/me?${query}`' in PROFILE_JS
+    assert 'state.invitation?.enabled === false' in PROFILE_JS
+    assert 'internal_status' in PROFILE_JS
+    assert 'viewer_role' in PROFILE_JS
+    assert 'pending_permission' in PROFILE_JS
+    assert 'permissionPending' in PROFILE_JS
+    assert 'invitationRecordRole' in PROFILE_JS
+    assert ".profile-invitation-pagination" in PROFILE_CSS
+    assert ".profile-invitation-share-grid" in PROFILE_CSS
+    assert "grid-template-columns: minmax(0, 1fr);" in PROFILE_CSS
 
 
 def test_profile_does_not_contain_a_second_redemption_entry_or_flow():

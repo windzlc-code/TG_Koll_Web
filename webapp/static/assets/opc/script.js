@@ -37,6 +37,7 @@ function registrationPanelMarkup() {
               <label class="field auth-placeholder-field" for="registerPassword"><span class="field-label">登入密碼</span><span class="auth-password-field"><input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="至少 8 位" aria-describedby="registerPasswordError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPassword" aria-label="顯示登入密碼" title="顯示登入密碼" aria-controls="registerPassword" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordError"></small></label>
               <label class="field auth-placeholder-field" for="registerPasswordConfirmation"><span class="field-label">再次確認密碼</span><span class="auth-password-field"><input id="registerPasswordConfirmation" name="password_confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="請再次輸入密碼" aria-describedby="registerPasswordConfirmationError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPasswordConfirmation" aria-label="顯示確認密碼" title="顯示確認密碼" aria-controls="registerPasswordConfirmation" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordConfirmationError"></small></label>
               <label class="field auth-placeholder-field" for="registerCompany"><span class="field-label">公司 / 團隊（選填）</span><input id="registerCompany" name="company" autocomplete="organization" maxlength="120" placeholder="請輸入公司或團隊名稱" aria-describedby="registerCompanyError" /><small class="field-error" id="registerCompanyError"></small></label>
+              <label class="field auth-placeholder-field" for="registerInviteCode"><span class="field-label">邀請碼（選填）</span><input id="registerInviteCode" name="invite_code" autocomplete="off" maxlength="64" autocapitalize="characters" spellcheck="false" placeholder="輸入好友分享的邀請碼" aria-describedby="registerInviteCodeError" /><small class="field-error" id="registerInviteCodeError"></small></label>
             </div>
             <button class="submit-button auth-primary auth-registration-next" type="button" data-register-next><span>下一步</span><span aria-hidden="true">→</span></button>
           </section>
@@ -108,6 +109,16 @@ let registerResendTimer = 0;
 let registerPage = "details";
 let registrationPolicyEnabled = null;
 let googleLoginButton = null;
+
+function invitationCodeFromUrl() {
+  return String(new URL(window.location.href).searchParams.get("invite_code") || "").trim().slice(0, 64);
+}
+
+function prefillRegistrationInvitationCode() {
+  const input = applicationForm?.elements?.invite_code;
+  const code = invitationCodeFromUrl();
+  if (input && code && !String(input.value || "").trim()) input.value = code;
+}
 
 function ensureLoginAuthEnhancements() {
   if (!loginForm) return;
@@ -552,6 +563,7 @@ function validateRegistrationProfile({ focusInvalid = true } = {}) {
   if (!applicationForm) return false;
   const fullName = applicationForm.elements.full_name.value.trim();
   const company = applicationForm.elements.company.value.trim();
+  const inviteCode = applicationForm.elements.invite_code.value.trim();
   const password = applicationForm.elements.password.value;
   const passwordConfirmation = applicationForm.elements.password_confirmation.value;
   const checks = [
@@ -560,6 +572,7 @@ function validateRegistrationProfile({ focusInvalid = true } = {}) {
     [applicationForm.elements.password, password.length >= 8 && password.length <= 256, "密碼需要 8-256 位。"],
     [applicationForm.elements.password_confirmation, password === passwordConfirmation && Boolean(passwordConfirmation), "兩次輸入的密碼不一致。"],
     [applicationForm.elements.company, company.length <= 120, "公司或團隊名稱不能超過 120 個字元。"],
+    [applicationForm.elements.invite_code, inviteCode.length <= 64, "邀請碼不能超過 64 個字元。"],
   ];
   let firstInvalid = null;
   checks.forEach(([input, passed, message]) => {
@@ -663,6 +676,9 @@ function registrationErrorField(code) {
   if (["password_invalid", "weak_password"].includes(normalized)) {
     return applicationForm.elements.password;
   }
+  if (normalized.startsWith("invitation_")) {
+    return applicationForm.elements.invite_code;
+  }
   return null;
 }
 
@@ -670,6 +686,9 @@ function registrationStatusMessage(error, fallback) {
   const detail = apiErrorDetail(error);
   const code = detail.code.toLowerCase();
   const status = Number(error?.httpStatus || 0);
+  if (code.startsWith("invitation_")) {
+    return detail.message || "邀請碼無效或已失效，請確認後再試。";
+  }
   if (status === 404 || /^not found$/i.test(detail.message)) {
     return "驗證碼服務暫時不可用，請重新整理頁面後再試。";
   }
@@ -750,6 +769,7 @@ function openRegister(event) {
       : document.activeElement instanceof HTMLElement ? document.activeElement : null;
   }
   setAuthView("register");
+  prefillRegistrationInvitationCode();
   setRegistrationPage("details", { focus: false });
   loginModal.classList.add("is-open");
   loginModal.setAttribute("aria-hidden", "false");
@@ -1093,7 +1113,7 @@ applicationForm?.addEventListener("submit", async (event) => {
   const submit = applicationForm.querySelector("button[type='submit']");
   submit.disabled = true;
   try {
-    await api("/api/auth/register", {
+    const registrationResult = await api("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1104,6 +1124,7 @@ applicationForm?.addEventListener("submit", async (event) => {
         username: applicationForm.elements.username.value.trim(),
         password: applicationForm.elements.password.value,
         company: applicationForm.elements.company.value.trim(),
+        invite_code: applicationForm.elements.invite_code.value.trim(),
         consent: applicationForm.elements.consent.checked,
       }),
     });
@@ -1113,10 +1134,36 @@ applicationForm?.addEventListener("submit", async (event) => {
     resetRegistrationChallenge({ keepEmail: false });
     setRegistrationPage("details", { focus: false });
     closeLogin();
+    const inviteeRewardPoints = Number(
+      registrationResult?.invitee_reward_points
+      ?? registrationResult?.invitation?.invitee_reward_points
+      ?? registrationResult?.invitation?.invitee_points
+      ?? registrationResult?.invitation_reward?.points
+      ?? 0,
+    );
+    const registrationInvitationStatus = String(registrationResult?.invitation?.status || "").toLowerCase();
+    const registrationPermissionPending = registrationInvitationStatus === "pending_permission";
+    const successTitle = registrationPermissionPending && inviteeRewardPoints > 0
+      ? `帳號建立成功，邀請積分已結算，權限待開通（${inviteeRewardPoints.toLocaleString("zh-TW")} 點）`
+      : registrationPermissionPending
+        ? "帳號建立成功，邀請權限待開通"
+      : inviteeRewardPoints > 0
+        ? `帳號建立成功，邀請獎勵 ${inviteeRewardPoints.toLocaleString("zh-TW")} 點已結算`
+        : "帳號建立成功，5 點算力已到帳";
+    const successMessage = registrationPermissionPending && inviteeRewardPoints > 0
+      ? "歡迎加入 Vecto。好友邀請積分已結算，權限獎勵正在等待開通，可在個人資料中查看。"
+      : registrationPermissionPending
+        ? "歡迎加入 Vecto。邀請關係已記錄，權限獎勵正在等待開通，可在個人資料中查看。"
+      : inviteeRewardPoints > 0
+        ? "歡迎加入 Vecto。好友邀請積分已結算，邀請關係與積分變動可以在個人資料中查看。"
+        : "歡迎加入 Vecto。贈送算力已放入你的帳戶，可用於 AI 推文與配圖等功能。接下來先建立第一個人設，我們會一步一步帶你完成設定。";
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete("invite_code");
+    window.history.replaceState({}, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
     await window.VectoSiteNavigation?.showAuthFeedback?.({
       kind: "success",
-      title: "帳號建立成功，5 點算力已到帳",
-      message: "歡迎加入 Vecto。贈送算力已放入你的帳戶，可用於 AI 推文與配圖等功能。接下來先建立第一個人設，我們會一步一步帶你完成設定。",
+      title: successTitle,
+      message: successMessage,
       actionText: "開始使用",
     });
   } catch (error) {
@@ -1136,7 +1183,11 @@ googleLoginButton?.addEventListener("click", () => {
     window.sessionStorage.setItem(GOOGLE_AUTH_FEEDBACK_STORAGE_KEY, "1");
   } catch {}
   googleLoginButton.disabled = true;
-  window.location.assign(`/api/auth/google/start?return_url=${encodeURIComponent(returnUrl)}`);
+  const googleStartUrl = new URL("/api/auth/google/start", window.location.origin);
+  googleStartUrl.searchParams.set("return_url", returnUrl);
+  const inviteCode = invitationCodeFromUrl();
+  if (inviteCode) googleStartUrl.searchParams.set("invite_code", inviteCode);
+  window.location.assign(`${googleStartUrl.pathname}${googleStartUrl.search}`);
 });
 
 googleSetupForm?.addEventListener("submit", async (event) => {
@@ -1151,7 +1202,7 @@ googleSetupForm?.addEventListener("submit", async (event) => {
   const submit = googleSetupForm.querySelector("button[type='submit']");
   submit.disabled = true;
   try {
-    await api("/api/auth/google/complete", {
+    const googleRegistrationResult = await api("/api/auth/google/complete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: usernameInput.value.trim() }),
@@ -1159,12 +1210,31 @@ googleSetupForm?.addEventListener("submit", async (event) => {
     window.VectoSiteNavigation?.announceAuthSessionChange?.("google-login");
     await window.VectoSiteNavigation?.refreshPublicSession?.();
     const returnUrl = safeLoginReturnUrl(document.body.dataset.googleReturnUrl, "/");
+    const inviteeRewardPoints = Number(
+      googleRegistrationResult?.invitation?.invitee_points
+      ?? googleRegistrationResult?.invitation?.invitee_reward_points
+      ?? 0,
+    );
+    const googleInvitationStatus = String(googleRegistrationResult?.invitation?.status || "").toLowerCase();
+    const googlePermissionPending = googleInvitationStatus === "pending_permission";
     googleSetupForm.reset();
     closeLogin();
     await window.VectoSiteNavigation?.showAuthFeedback?.({
       kind: "success",
-      title: "Google 登入成功",
-      message: "用户名已建立，歡迎回到 Vecto。",
+      title: googlePermissionPending && inviteeRewardPoints > 0
+        ? `Google 登入成功，邀請積分已結算，權限待開通（${inviteeRewardPoints.toLocaleString("zh-TW")} 點）`
+        : googlePermissionPending
+          ? "Google 登入成功，邀請權限待開通"
+        : inviteeRewardPoints > 0
+          ? `Google 登入成功，邀請獎勵 ${inviteeRewardPoints.toLocaleString("zh-TW")} 點已結算`
+          : "Google 登入成功",
+      message: googlePermissionPending && inviteeRewardPoints > 0
+        ? "用户名已建立，好友邀請積分已結算，權限獎勵正在等待開通。"
+        : googlePermissionPending
+          ? "用户名已建立，邀請關係已記錄，權限獎勵正在等待開通。"
+        : inviteeRewardPoints > 0
+          ? "用户名已建立，好友邀請積分已結算。"
+          : "用户名已建立，歡迎回到 Vecto。",
       actionText: "開始使用",
     });
     const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;

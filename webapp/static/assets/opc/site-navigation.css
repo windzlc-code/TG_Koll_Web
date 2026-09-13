@@ -2144,7 +2144,7 @@ body.site-account-panel-active {
 }
 
 .site-account-workspace-actions {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
   margin-top: 0;
   padding: 12px;

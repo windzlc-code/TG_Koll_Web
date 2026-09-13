@@ -422,9 +422,102 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
           version INTEGER NOT NULL DEFAULT 1
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_invitation_settings (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          version INTEGER NOT NULL DEFAULT 1,
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          inviter_reward_type TEXT NOT NULL DEFAULT 'points'
+            CHECK(inviter_reward_type IN ('points', 'permission', 'points_and_permission')),
+          invitee_reward_type TEXT NOT NULL DEFAULT 'points'
+            CHECK(invitee_reward_type IN ('points', 'permission', 'points_and_permission')),
+          inviter_credit_units INTEGER NOT NULL DEFAULT 2000 CHECK(inviter_credit_units >= 0),
+          invitee_credit_units INTEGER NOT NULL DEFAULT 2000 CHECK(invitee_credit_units >= 0),
+          inviter_entitlement_key TEXT NOT NULL DEFAULT '',
+          invitee_entitlement_key TEXT NOT NULL DEFAULT '',
+          inviter_daily_limit INTEGER NOT NULL DEFAULT 100 CHECK(inviter_daily_limit >= 0),
+          source_daily_limit INTEGER NOT NULL DEFAULT 20 CHECK(source_daily_limit >= 0),
+          note TEXT NOT NULL DEFAULT '',
+          updated_by INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_invitation_codes (
+          id TEXT PRIMARY KEY,
+          user_id INTEGER UNIQUE,
+          code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_invitation_claims (
+          id TEXT PRIMARY KEY,
+          code_id TEXT NOT NULL,
+          invitation_code TEXT NOT NULL,
+          inviter_user_id INTEGER,
+          invitee_user_id INTEGER UNIQUE,
+          status TEXT NOT NULL DEFAULT 'rewarded' CHECK(status IN ('rewarded', 'pending_permission')),
+          policy_version INTEGER NOT NULL DEFAULT 1,
+          policy_snapshot_json TEXT NOT NULL DEFAULT '{}',
+          source_channel TEXT NOT NULL DEFAULT 'registration',
+          source_hash TEXT NOT NULL DEFAULT '',
+          risk_json TEXT NOT NULL DEFAULT '{}',
+          inviter_credit_units INTEGER NOT NULL DEFAULT 0,
+          invitee_credit_units INTEGER NOT NULL DEFAULT 0,
+          inviter_entitlement_key TEXT NOT NULL DEFAULT '',
+          invitee_entitlement_key TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,
+          rewarded_at INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS billing_invitation_reward_grants (
+          id TEXT PRIMARY KEY,
+          claim_id TEXT NOT NULL,
+          beneficiary_user_id INTEGER,
+          party TEXT NOT NULL CHECK(party IN ('inviter', 'invitee')),
+          reward_type TEXT NOT NULL CHECK(reward_type IN ('points', 'permission')),
+          reward_key TEXT NOT NULL DEFAULT '',
+          amount_units INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL CHECK(status IN ('applied', 'pending', 'skipped')),
+          ledger_idempotency_key TEXT NOT NULL DEFAULT '',
+          meta_json TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL,
+          applied_at INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(claim_id, party, reward_type, reward_key)
+        )
+        """,
     )
     for statement in statements:
         conn.execute(statement)
+    invitation_setting_columns = {
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(billing_invitation_settings)").fetchall()
+    }
+    for column, definition in {
+        "inviter_daily_limit": "INTEGER NOT NULL DEFAULT 100 CHECK(inviter_daily_limit >= 0)",
+        "source_daily_limit": "INTEGER NOT NULL DEFAULT 20 CHECK(source_daily_limit >= 0)",
+    }.items():
+        if column not in invitation_setting_columns:
+            conn.execute(f"ALTER TABLE billing_invitation_settings ADD COLUMN {column} {definition}")
+    invitation_claim_columns = {
+        str(row["name"]) for row in conn.execute("PRAGMA table_info(billing_invitation_claims)").fetchall()
+    }
+    if "source_hash" not in invitation_claim_columns:
+        conn.execute(
+            "ALTER TABLE billing_invitation_claims ADD COLUMN source_hash TEXT NOT NULL DEFAULT ''"
+        )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO billing_invitation_settings(
+          id, version, enabled, inviter_reward_type, invitee_reward_type,
+          inviter_credit_units, invitee_credit_units, inviter_daily_limit,
+          source_daily_limit, updated_at
+        ) VALUES (1, 1, 1, 'points', 'points', 2000, 2000, 100, 20, strftime('%s','now'))
+        """
+    )
     order_schema = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'billing_orders'"
     ).fetchone()
@@ -658,6 +751,26 @@ def _ensure_commercial_billing_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_redemption_codes_visible "
         "ON billing_redemption_codes(deleted_at, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_invitation_codes_status "
+        "ON billing_invitation_codes(status, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_invitation_claims_inviter "
+        "ON billing_invitation_claims(inviter_user_id, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_invitation_claims_created "
+        "ON billing_invitation_claims(created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_invitation_claims_source_created "
+        "ON billing_invitation_claims(source_hash, created_at DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_invitation_reward_grants_claim "
+        "ON billing_invitation_reward_grants(claim_id, party)"
     )
 
     task_columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(tasks)").fetchall()}

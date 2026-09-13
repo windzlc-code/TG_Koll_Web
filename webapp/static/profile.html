@@ -21,9 +21,9 @@
   <main id="main-content" class="profile-main">
     <section class="profile-heading">
       <div>
-        <span class="profile-eyebrow" data-profile-i18n="accountProfile">账号资料</span>
-        <h1 data-profile-i18n="personalProfile">个人资料</h1>
-        <p data-profile-i18n="profileDescription">设置显示名称和头像。登录用户名及账号权限不会因此改变。</p>
+        <span id="profileHeadingEyebrow" class="profile-eyebrow" data-profile-i18n="accountProfile">账号资料</span>
+        <h1 id="profileHeadingTitle" data-profile-i18n="personalProfile">个人资料</h1>
+        <p id="profileHeadingDescription" data-profile-i18n="profileDescription">设置显示名称和头像。登录用户名及账号权限不会因此改变。</p>
       </div>
       <a id="profileBackLink" class="profile-back-link" href="/console.html">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
@@ -62,6 +62,11 @@
               <strong id="profileAccountEmail">-</strong>
             </div>
           </div>
+          <a id="profileInvitationEntry" class="profile-invitation-entry" href="/profile.html?view=invitation" data-profile-open-invitation>
+            <span class="profile-invitation-entry-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6"></path></svg></span>
+            <span><strong data-profile-i18n="myInvitation">我的邀请</strong><small data-profile-i18n="myInvitationHelp">生成邀请码和邀请链接，查看奖励记录。</small></span>
+            <svg class="profile-invitation-entry-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"></path></svg>
+          </a>
         </div>
 
         <div class="profile-fields">
@@ -113,6 +118,62 @@
           </div>
         </div>
       </form>
+
+      <section id="profileInvitationWorkspace" class="profile-invitation-workspace" aria-labelledby="profileInvitationTitle" hidden>
+        <div class="profile-invitation-hero">
+          <div>
+            <span class="profile-eyebrow" data-profile-i18n="invitationProgram">邀请计划</span>
+            <h2 id="profileInvitationTitle" data-profile-i18n="inviteFriends">邀请好友加入 Vecto</h2>
+            <p id="profileInvitationSummary" data-profile-i18n="invitationSummary">生成专属邀请码或链接。新用户完成注册绑定后，双方会按当前规则获得奖励。</p>
+          </div>
+          <button id="profileInvitationBack" class="profile-password-action" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+            <span data-profile-i18n="backToProfile">返回个人资料</span>
+          </button>
+        </div>
+
+        <div class="profile-invitation-share-grid">
+          <p id="profileInvitationAvailability" class="profile-invitation-availability" role="status" hidden data-profile-i18n="invitationDisabled">邀请活动当前已停用，暂时不能生成或复制邀请码。</p>
+          <article class="profile-invitation-card">
+            <div class="profile-invitation-card-head"><span data-profile-i18n="invitationCode">我的邀请码</span><small id="profileInvitationCodeState" data-profile-i18n="notGenerated">尚未生成</small></div>
+            <input id="profileInvitationCode" class="profile-invitation-value" type="text" readonly aria-label="我的邀请码" data-profile-i18n-aria-label="invitationCode" value="—" />
+            <div class="profile-invitation-card-actions">
+              <button id="profileGenerateInvitation" class="profile-save" type="button" data-profile-i18n="generateInvitation">生成邀请码</button>
+              <button id="profileCopyInvitationCode" class="profile-password-action" type="button" disabled data-profile-i18n="copyCode">复制邀请码</button>
+            </div>
+          </article>
+          <article class="profile-invitation-card">
+            <div class="profile-invitation-card-head"><span data-profile-i18n="invitationLink">邀请好友链接</span><small data-profile-i18n="invitationLinkHelp">打开后自动填写邀请码</small></div>
+            <input id="profileInvitationLink" class="profile-invitation-value" type="text" readonly aria-label="邀请好友链接" data-profile-i18n-aria-label="invitationLink" value="—" />
+            <div class="profile-invitation-card-actions">
+              <button id="profileCopyInvitationLink" class="profile-save" type="button" disabled data-profile-i18n="copyLink">复制邀请链接</button>
+            </div>
+          </article>
+        </div>
+
+        <div class="profile-invitation-detail-grid">
+          <section class="profile-invitation-card profile-invitation-records" aria-labelledby="profileInvitationRecordsTitle">
+            <div class="profile-invitation-card-head"><span id="profileInvitationRecordsTitle" data-profile-i18n="invitationRecords">邀请记录</span><small id="profileInvitationRecordCount">0</small></div>
+            <div id="profileInvitationRecordList" class="profile-invitation-record-list"><p class="profile-invitation-empty" data-profile-i18n="invitationRecordsEmpty">暂无邀请记录</p></div>
+            <div class="profile-invitation-pagination" aria-label="邀请记录翻页" data-profile-i18n-aria-label="invitationPagination">
+              <button id="profileInvitationPrevious" class="profile-password-action" type="button" disabled data-profile-i18n="previousPage">上一页</button>
+              <span id="profileInvitationPaginationSummary">0 / 0</span>
+              <button id="profileInvitationNext" class="profile-password-action" type="button" disabled data-profile-i18n="nextPage">下一页</button>
+            </div>
+          </section>
+          <aside class="profile-invitation-card profile-invitation-rules" aria-labelledby="profileInvitationRulesTitle">
+            <div class="profile-invitation-card-head"><span id="profileInvitationRulesTitle" data-profile-i18n="invitationRules">活动说明</span></div>
+            <ol>
+              <li id="profileInviterRewardRule" data-profile-i18n="inviterRewardPending">邀请人奖励以当前活动规则为准。</li>
+              <li id="profileInviteeRewardRule" data-profile-i18n="inviteeRewardPending">受邀人完成新账号注册后获得对应奖励。</li>
+              <li data-profile-i18n="invitationRuleOnce">每个新账号只能绑定一次邀请码，不能邀请自己。</li>
+              <li data-profile-i18n="invitationRuleAudit">奖励及权限变动均写入记录，以后台审核结果为准。</li>
+            </ol>
+            <div class="profile-invitation-permission-placeholder"><strong data-profile-i18n="permissionRewards">其他权限奖励</strong><span data-profile-i18n="permissionRewardsPending">订阅、额度与功能权限框架已预留，暂未启用。</span></div>
+          </aside>
+        </div>
+        <span id="profileInvitationStatus" class="profile-status" role="status" aria-live="polite"></span>
+      </section>
     </section>
   </main>
 </body>

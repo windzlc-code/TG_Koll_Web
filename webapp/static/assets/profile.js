@@ -64,6 +64,49 @@
       profileSaveFailed: "个人资料保存失败。",
       logoutFailed: "退出失败，请重试。",
       understood: "知道了",
+      myInvitation: "我的邀请",
+      myInvitationHelp: "生成邀请码和邀请链接，查看奖励记录。",
+      invitationProgram: "邀请计划",
+      inviteFriends: "邀请好友加入 Vecto",
+      invitationSummary: "生成专属邀请码或链接。新用户完成注册绑定后，双方会按当前规则获得奖励。",
+      backToProfile: "返回个人资料",
+      invitationCode: "我的邀请码",
+      notGenerated: "尚未生成",
+      generated: "已生成",
+      generateInvitation: "生成邀请码",
+      generatingInvitation: "生成中…",
+      copyCode: "复制邀请码",
+      invitationLink: "邀请好友链接",
+      invitationLinkHelp: "打开后自动填写邀请码",
+      copyLink: "复制邀请链接",
+      invitationRecords: "邀请记录",
+      invitationRecordsEmpty: "暂无邀请记录",
+      invitationRecordRole: "邀请人：{inviter} · 受邀人：{invitee}",
+      invitationPagination: "邀请记录翻页",
+      invitationPageSummary: "第 {page} / {pages} 页 · 共 {total} 条",
+      previousPage: "上一页",
+      nextPage: "下一页",
+      invitationDisabled: "邀请活动当前已停用，暂时不能生成或复制邀请码。",
+      rewardSettled: "积分已结算",
+      permissionPending: "权限待开通",
+      invitationPending: "待使用",
+      invitationRevoked: "已失效",
+      invitationRules: "活动说明",
+      inviterRewardPending: "邀请人奖励以当前活动规则为准。",
+      inviteeRewardPending: "受邀人完成新账号注册后获得对应奖励。",
+      inviterRewardRule: "每成功邀请 1 名新用户，邀请人获得 {points} 点。",
+      inviteeRewardRule: "受邀人完成注册绑定后获得 {points} 点。",
+      invitationRuleOnce: "每个新账号只能绑定一次邀请码，不能邀请自己。",
+      invitationRuleAudit: "奖励及权限变动均写入记录，以后台审核结果为准。",
+      permissionRewards: "其他权限奖励",
+      permissionRewardsPending: "订阅、额度与功能权限框架已预留，暂未启用。",
+      invitationProfileEyebrow: "邀请中心",
+      invitationProfileTitle: "我的邀请码",
+      invitationProfileDescription: "分享专属邀请码或链接，并查看邀请关系与奖励到账记录。",
+      invitationLoadFailed: "邀请信息读取失败。",
+      invitationCreated: "邀请码已生成。",
+      invitationCopied: "已复制。",
+      invitationCopyFailed: "复制失败，请手动复制。",
     },
     "zh-Hant": {
       pageTitle: "個人資料 - Vecto",
@@ -125,6 +168,49 @@
       profileSaveFailed: "個人資料儲存失敗。",
       logoutFailed: "登出失敗，請重試。",
       understood: "知道了",
+      myInvitation: "我的邀請",
+      myInvitationHelp: "產生邀請碼和邀請連結，查看獎勵記錄。",
+      invitationProgram: "邀請計畫",
+      inviteFriends: "邀請好友加入 Vecto",
+      invitationSummary: "產生專屬邀請碼或連結。新用戶完成註冊綁定後，雙方會按目前規則獲得獎勵。",
+      backToProfile: "返回個人資料",
+      invitationCode: "我的邀請碼",
+      notGenerated: "尚未產生",
+      generated: "已產生",
+      generateInvitation: "產生邀請碼",
+      generatingInvitation: "產生中…",
+      copyCode: "複製邀請碼",
+      invitationLink: "邀請好友連結",
+      invitationLinkHelp: "開啟後自動填寫邀請碼",
+      copyLink: "複製邀請連結",
+      invitationRecords: "邀請記錄",
+      invitationRecordsEmpty: "暫無邀請記錄",
+      invitationRecordRole: "邀請人：{inviter} · 受邀人：{invitee}",
+      invitationPagination: "邀請記錄翻頁",
+      invitationPageSummary: "第 {page} / {pages} 頁 · 共 {total} 條",
+      previousPage: "上一頁",
+      nextPage: "下一頁",
+      invitationDisabled: "邀請活動目前已停用，暫時不能產生或複製邀請碼。",
+      rewardSettled: "積分已結算",
+      permissionPending: "權限待開通",
+      invitationPending: "待使用",
+      invitationRevoked: "已失效",
+      invitationRules: "活動說明",
+      inviterRewardPending: "邀請人獎勵以目前活動規則為準。",
+      inviteeRewardPending: "受邀人完成新帳號註冊後獲得對應獎勵。",
+      inviterRewardRule: "每成功邀請 1 名新用戶，邀請人獲得 {points} 點。",
+      inviteeRewardRule: "受邀人完成註冊綁定後獲得 {points} 點。",
+      invitationRuleOnce: "每個新帳號只能綁定一次邀請碼，不能邀請自己。",
+      invitationRuleAudit: "獎勵及權限變動均寫入記錄，以後台審核結果為準。",
+      permissionRewards: "其他權限獎勵",
+      permissionRewardsPending: "訂閱、額度與功能權限框架已預留，暫未啟用。",
+      invitationProfileEyebrow: "邀請中心",
+      invitationProfileTitle: "我的邀請碼",
+      invitationProfileDescription: "分享專屬邀請碼或連結，並查看邀請關係與獎勵到帳記錄。",
+      invitationLoadFailed: "邀請資訊讀取失敗。",
+      invitationCreated: "邀請碼已產生。",
+      invitationCopied: "已複製。",
+      invitationCopyFailed: "複製失敗，請手動複製。",
     },
   };
   const PROFILE_I18N_ATTRIBUTES = {
@@ -148,6 +234,14 @@
     saving: false,
     dirty: false,
     status: null,
+    view: "profile",
+    invitation: null,
+    invitationLoading: false,
+    invitationStatus: null,
+    invitationOffset: 0,
+    invitationLimit: 10,
+    invitationTotal: 0,
+    invitationNextOffset: 0,
   };
   const $ = (id) => document.getElementById(id);
 
@@ -244,6 +338,29 @@
     renderStatus();
   }
 
+  function renderInvitationStatus(language = currentProfileLanguage()) {
+    const node = $("profileInvitationStatus");
+    if (!node) return;
+    const status = state.invitationStatus;
+    node.textContent = !status
+      ? ""
+      : status.key
+        ? profileText(status.key, status.variables, language)
+        : convertProfileUiText(status.message, language);
+    node.classList.toggle("is-success", status?.type === "success");
+    node.classList.toggle("is-error", status?.type === "error");
+  }
+
+  function setInvitationStatus(message = "", type = "") {
+    state.invitationStatus = message ? { message: String(message), type } : null;
+    renderInvitationStatus();
+  }
+
+  function setInvitationStatusKey(key = "", type = "", variables = {}) {
+    state.invitationStatus = key ? { key, type, variables } : null;
+    renderInvitationStatus();
+  }
+
   function renderAccountLanguage(language = currentProfileLanguage()) {
     const username = String(state.account?.username || "").trim();
     const fullNameInput = $("profileFullName");
@@ -279,6 +396,11 @@
       {},
       nextLanguage,
     );
+    const generating = Boolean(state.invitationLoading && !invitationCode());
+    setProfileCopy($("profileGenerateInvitation"), generating ? "generatingInvitation" : "generateInvitation", "textContent", {}, nextLanguage);
+    renderInvitationRules(nextLanguage);
+    renderInvitationStatus(nextLanguage);
+    renderProfileViewCopy(nextLanguage);
     renderStatus(nextLanguage);
     document.documentElement.lang = nextLanguage === "zh-Hant" ? "zh-Hant" : "zh-CN";
   }
@@ -309,6 +431,295 @@
       throw error;
     }
     return payload;
+  }
+
+  function normalizedInvitationPayload(payload = {}) {
+    const invitation = payload?.invitation && typeof payload.invitation === "object" ? payload.invitation : {};
+    const settings = payload?.settings && typeof payload.settings === "object"
+      ? payload.settings
+      : invitation?.settings && typeof invitation.settings === "object" ? invitation.settings : {};
+    return {
+      ...payload,
+      ...invitation,
+      settings,
+      records: Array.isArray(payload?.records)
+        ? payload.records
+        : Array.isArray(payload?.items) ? payload.items : Array.isArray(invitation?.records) ? invitation.records : [],
+    };
+  }
+
+  function invitationCode() {
+    const codePayload = state.invitation?.code;
+    return String(
+      state.invitation?.invite_code
+      || state.invitation?.invitation_code
+      || (codePayload && typeof codePayload === "object" ? codePayload.code : codePayload)
+      || "",
+    ).trim();
+  }
+
+  function invitationLink() {
+    const code = invitationCode();
+    const provided = String(state.invitation?.share_url || state.invitation?.invite_url || state.invitation?.invite_link || state.invitation?.url || "").trim();
+    if (provided) return provided;
+    if (!code) return "";
+    const target = new URL("/", window.location.origin);
+    target.searchParams.set("register", "1");
+    target.searchParams.set("invite_code", code);
+    return target.toString();
+  }
+
+  function invitationRewardPoints(side) {
+    const settings = state.invitation?.settings || {};
+    const rewards = state.invitation?.rewards || {};
+    return Number(
+      settings?.[`${side}_reward_points`]
+      ?? settings?.[`${side}_points`]
+      ?? rewards?.[`${side}_reward_points`]
+      ?? rewards?.[`${side}_points`]
+      ?? state.invitation?.[`${side}_reward_points`]
+      ?? state.invitation?.[`${side}_points`]
+      ?? 0,
+    );
+  }
+
+  function formatInvitationPoints(value) {
+    const numeric = Number(value || 0);
+    if (!Number.isFinite(numeric)) return "0";
+    return new Intl.NumberFormat(currentProfileLanguage() === "zh-Hant" ? "zh-TW" : "zh-CN", { maximumFractionDigits: 2 }).format(numeric);
+  }
+
+  function formatInvitationTime(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "—";
+    const numeric = Number(raw);
+    const date = new Date(Number.isFinite(numeric) && numeric > 0 && numeric < 1e12 ? numeric * 1000 : raw);
+    if (Number.isNaN(date.getTime())) return raw;
+    return new Intl.DateTimeFormat(currentProfileLanguage() === "zh-Hant" ? "zh-TW" : "zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(date);
+  }
+
+  function renderInvitationRules(language = currentProfileLanguage()) {
+    const inviterPoints = invitationRewardPoints("inviter");
+    const inviteePoints = invitationRewardPoints("invitee");
+    setProfileCopy(
+      $("profileInviterRewardRule"),
+      inviterPoints > 0 ? "inviterRewardRule" : "inviterRewardPending",
+      "textContent",
+      { points: formatInvitationPoints(inviterPoints) },
+      language,
+    );
+    setProfileCopy(
+      $("profileInviteeRewardRule"),
+      inviteePoints > 0 ? "inviteeRewardRule" : "inviteeRewardPending",
+      "textContent",
+      { points: formatInvitationPoints(inviteePoints) },
+      language,
+    );
+  }
+
+  function invitationRecordName(item) {
+    const invitee = item?.invitee && typeof item.invitee === "object" ? item.invitee : {};
+    return String(item?.invitee_username || item?.invitee_name || invitee.username || invitee.full_name || invitee.name || "").trim()
+      || (currentProfileLanguage() === "zh-Hant" ? "尚未註冊" : "尚未注册");
+  }
+
+  function invitationRecordPartyName(item, side) {
+    const nested = item?.[side] && typeof item[side] === "object" ? item[side] : {};
+    if (String(item?.viewer_role || "").toLowerCase() === side && state.account?.username) {
+      return String(state.account.username);
+    }
+    const value = String(item?.[`${side}_username`] || item?.[`${side}_name`] || nested.username || nested.full_name || nested.name || "").trim();
+    if (value) return value;
+    return side === "inviter"
+      ? (state.account?.username || "—")
+      : (currentProfileLanguage() === "zh-Hant" ? "尚未註冊" : "尚未注册");
+  }
+
+  function invitationRecordStatus(item) {
+    const raw = String(item?.internal_status || item?.status || "").trim().toLowerCase();
+    if (raw === "pending_permission") return "pending_permission";
+    if (["rewarded", "completed", "redeemed", "bound", "used"].includes(raw) || item?.rewarded_at) return "rewarded";
+    if (["revoked", "expired", "invalid", "disabled"].includes(raw)) return "revoked";
+    return "pending";
+  }
+
+  function renderInvitationRecords(records = []) {
+    const list = $("profileInvitationRecordList");
+    if (!list) return;
+    list.replaceChildren();
+    const rows = Array.isArray(records) ? records : [];
+    $("profileInvitationRecordCount").textContent = String(state.invitationTotal || rows.length);
+    if (!rows.length) {
+      const empty = document.createElement("p");
+      empty.className = "profile-invitation-empty";
+      empty.textContent = profileText("invitationRecordsEmpty");
+      list.appendChild(empty);
+      return;
+    }
+    rows.forEach((item) => {
+      const record = document.createElement("article");
+      record.className = "profile-invitation-record";
+      const name = document.createElement("strong");
+      name.textContent = invitationRecordName(item);
+      const status = document.createElement("span");
+      const recordStatus = invitationRecordStatus(item);
+      const statusKey = recordStatus === "pending_permission"
+        ? "permissionPending"
+        : recordStatus === "rewarded" ? "rewardSettled" : recordStatus === "revoked" ? "invitationRevoked" : "invitationPending";
+      status.textContent = profileText(statusKey);
+      const role = document.createElement("small");
+      role.className = "profile-invitation-record-role";
+      role.textContent = profileText("invitationRecordRole", {
+        inviter: invitationRecordPartyName(item, "inviter"),
+        invitee: invitationRecordPartyName(item, "invitee"),
+      });
+      const detail = document.createElement("small");
+      const viewerRole = String(item?.viewer_role || "inviter").toLowerCase() === "invitee" ? "invitee" : "inviter";
+      const points = Number(item?.[`${viewerRole}_reward_points`] ?? item?.[`${viewerRole}_points`] ?? item?.reward_points ?? 0);
+      const time = item?.bound_at || item?.used_at || item?.completed_at || item?.rewarded_at || item?.created_at;
+      detail.textContent = recordStatus === "pending_permission"
+        ? `${formatInvitationTime(time)} · ${profileText("permissionPending")}`
+        : `${formatInvitationTime(time)} · ${formatInvitationPoints(points)} ${currentProfileLanguage() === "zh-Hant" ? "點" : "点"}`;
+      record.append(name, status, role, detail);
+      list.appendChild(record);
+    });
+  }
+
+  function renderInvitationPagination() {
+    const total = Math.max(0, Number(state.invitationTotal || 0));
+    const limit = Math.max(1, Number(state.invitationLimit || 10));
+    const offset = Math.max(0, Number(state.invitationOffset || 0));
+    const page = Math.floor(offset / limit) + 1;
+    const pages = Math.max(1, Math.ceil(total / limit));
+    if ($("profileInvitationPaginationSummary")) {
+      $("profileInvitationPaginationSummary").textContent = profileText("invitationPageSummary", { page, pages, total });
+    }
+    if ($("profileInvitationPrevious")) $("profileInvitationPrevious").disabled = state.invitationLoading || offset <= 0;
+    if ($("profileInvitationNext")) {
+      $("profileInvitationNext").disabled = state.invitationLoading || !state.invitationNextOffset || offset + limit >= total;
+    }
+  }
+
+  function renderInvitationWorkspace() {
+    const code = invitationCode();
+    const link = invitationLink();
+    const enabled = state.invitation?.enabled !== false;
+    if ($("profileInvitationAvailability")) $("profileInvitationAvailability").hidden = enabled;
+    if ($("profileInvitationCode")) $("profileInvitationCode").value = code || "—";
+    if ($("profileInvitationLink")) $("profileInvitationLink").value = link || "—";
+    setProfileCopy($("profileInvitationCodeState"), code ? "generated" : "notGenerated");
+    if ($("profileGenerateInvitation")) {
+      $("profileGenerateInvitation").hidden = Boolean(code);
+      $("profileGenerateInvitation").disabled = state.invitationLoading || !enabled;
+    }
+    if ($("profileCopyInvitationCode")) $("profileCopyInvitationCode").disabled = !enabled || !code;
+    if ($("profileCopyInvitationLink")) $("profileCopyInvitationLink").disabled = !enabled || !link;
+    renderInvitationRecords(state.invitation?.records || []);
+    renderInvitationPagination();
+    renderInvitationRules();
+  }
+
+  function renderProfileViewCopy(language = currentProfileLanguage()) {
+    const invitationView = state.view === "invitation";
+    setProfileCopy($("profileHeadingEyebrow"), invitationView ? "invitationProfileEyebrow" : "accountProfile", "textContent", {}, language);
+    setProfileCopy($("profileHeadingTitle"), invitationView ? "invitationProfileTitle" : "personalProfile", "textContent", {}, language);
+    setProfileCopy($("profileHeadingDescription"), invitationView ? "invitationProfileDescription" : "profileDescription", "textContent", {}, language);
+    document.title = profileText(invitationView ? "invitationProfileTitle" : "pageTitle", {}, language);
+  }
+
+  async function setProfileView(view, { updateUrl = false } = {}) {
+    const invitationView = !isAdminSession && view === "invitation";
+    state.view = invitationView ? "invitation" : "profile";
+    if ($("profileForm")) $("profileForm").hidden = invitationView;
+    if ($("profileInvitationWorkspace")) $("profileInvitationWorkspace").hidden = !invitationView;
+    renderProfileViewCopy();
+    if (updateUrl) {
+      const target = new URL(window.location.href);
+      if (invitationView) target.searchParams.set("view", "invitation");
+      else target.searchParams.delete("view");
+      window.history.pushState({ profileView: state.view }, "", `${target.pathname}${target.search}${target.hash}`);
+    }
+    if (invitationView && !state.invitation) await loadInvitation();
+  }
+
+  async function loadInvitation({ force = false, offset = state.invitationOffset } = {}) {
+    if (state.invitationLoading || (state.invitation && !force)) return state.invitation;
+    state.invitationOffset = Math.max(0, Number(offset || 0));
+    state.invitationLoading = true;
+    setInvitationStatus();
+    renderInvitationWorkspace();
+    try {
+      const query = new URLSearchParams({
+        limit: String(state.invitationLimit),
+        offset: String(state.invitationOffset),
+      });
+      state.invitation = normalizedInvitationPayload(await api(`/api/invitations/me?${query}`));
+      state.invitationTotal = Math.max(0, Number(state.invitation?.total || 0));
+      state.invitationOffset = Math.max(0, Number(state.invitation?.offset ?? state.invitationOffset));
+      state.invitationLimit = Math.max(1, Number(state.invitation?.limit || state.invitationLimit));
+      state.invitationNextOffset = Math.max(0, Number(state.invitation?.next_offset || 0));
+      renderInvitationWorkspace();
+      return state.invitation;
+    } catch (error) {
+      if (handleSessionBoundary(error)) return null;
+      setInvitationStatus(error.message || profileText("invitationLoadFailed"), "error");
+      return null;
+    } finally {
+      state.invitationLoading = false;
+      renderInvitationWorkspace();
+    }
+  }
+
+  async function generateInvitation() {
+    if (state.invitationLoading) return;
+    if (state.invitation?.enabled === false) {
+      setInvitationStatusKey("invitationDisabled", "error");
+      renderInvitationWorkspace();
+      return;
+    }
+    state.invitationLoading = true;
+    setInvitationStatus();
+    renderInvitationWorkspace();
+    try {
+      const created = normalizedInvitationPayload(await api("/api/invitations/code", { method: "POST" }));
+      state.invitation = {
+        ...(state.invitation || {}),
+        ...created,
+        settings: Object.keys(created.settings || {}).length ? created.settings : (state.invitation?.settings || {}),
+        records: created.records?.length ? created.records : (state.invitation?.records || []),
+      };
+      setInvitationStatusKey("invitationCreated", "success");
+      renderInvitationWorkspace();
+    } catch (error) {
+      if (handleSessionBoundary(error)) return;
+      setInvitationStatus(error.message || profileText("invitationLoadFailed"), "error");
+    } finally {
+      state.invitationLoading = false;
+      renderInvitationWorkspace();
+    }
+  }
+
+  async function copyInvitationValue(value, input) {
+    if (state.invitation?.enabled === false) {
+      setInvitationStatusKey("invitationDisabled", "error");
+      return;
+    }
+    const text = String(value || "").trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setInvitationStatusKey("invitationCopied", "success");
+    } catch (_) {
+      input?.focus();
+      input?.select();
+      setInvitationStatusKey("invitationCopyFailed", "error");
+    }
   }
 
   function accountInitial() {
@@ -398,6 +809,7 @@
     $("profileUsername").textContent = String(account?.username || "-");
     $("profileAccountId").textContent = account?.id ? `#${account.id}` : "-";
     $("profileAccountEmail").textContent = String(account?.email || "-").trim() || "-";
+    if ($("profileInvitationEntry")) $("profileInvitationEntry").hidden = isAdminSession;
     $("profileBackLink").href = isAdminSession
       ? `/admin-console.html${returnManageUserId ? `?manage_user_id=${encodeURIComponent(returnManageUserId)}` : ""}`
       : "/console.html";
@@ -617,6 +1029,27 @@
     event.target.value = "";
   });
   $("profileChangePassword")?.addEventListener("click", openPasswordResetDialog);
+  $("profileInvitationEntry")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    void setProfileView("invitation", { updateUrl: true });
+  });
+  $("profileInvitationBack")?.addEventListener("click", () => {
+    void setProfileView("profile", { updateUrl: true });
+  });
+  $("profileGenerateInvitation")?.addEventListener("click", () => void generateInvitation());
+  $("profileCopyInvitationCode")?.addEventListener("click", () => {
+    void copyInvitationValue(invitationCode(), $("profileInvitationCode"));
+  });
+  $("profileCopyInvitationLink")?.addEventListener("click", () => {
+    void copyInvitationValue(invitationLink(), $("profileInvitationLink"));
+  });
+  $("profileInvitationPrevious")?.addEventListener("click", () => {
+    void loadInvitation({ force: true, offset: Math.max(0, state.invitationOffset - state.invitationLimit) });
+  });
+  $("profileInvitationNext")?.addEventListener("click", () => {
+    if (!state.invitationNextOffset) return;
+    void loadInvitation({ force: true, offset: state.invitationNextOffset });
+  });
   $("profileTagAdd")?.addEventListener("click", addTagFromInput);
   $("profileTagInput")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -662,11 +1095,19 @@
   window.addEventListener("pageshow", (event) => {
     if (event.persisted && !state.saving && !state.dirty) void loadProfile();
   });
+  window.addEventListener("popstate", () => {
+    const requestedView = new URLSearchParams(window.location.search).get("view");
+    void setProfileView(requestedView === "invitation" ? "invitation" : "profile");
+  });
   window.VectoProfileI18n = {
     applyLanguage: applyProfileLanguage,
     currentLanguage: currentProfileLanguage,
     text: profileText,
   };
   applyProfileLanguage();
-  void loadProfile();
+  void (async () => {
+    await loadProfile();
+    const requestedView = new URLSearchParams(window.location.search).get("view");
+    await setProfileView(requestedView === "invitation" ? "invitation" : "profile");
+  })();
 })();

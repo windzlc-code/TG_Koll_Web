@@ -381,7 +381,7 @@ const ADMIN_PAGE_LABELS = {
   security: "安全告警",
   proxyMarket: "代理 IP",
   pricing: "套餐与客户额度",
-  redemptionCodes: "兑换码",
+  redemptionCodes: "兑换邀请",
   telegram: "Telegram",
   runtime: "系统配置",
   sentimentCookies: "舆情 Cookie",
@@ -650,9 +650,15 @@ function setActiveAdminPage(page, updateHash = true) {
     void ensureBillingLoaded();
   }
   if (nextPage === "redemptionCodes") {
-    void Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]).catch((error) => {
-      setMsg("redemptionCodeMsg", getErrorMessage(error), false);
-    });
+    if (adminState.redemptionInviteTab === "invitations") {
+      void loadInvitationAdminWorkspace().catch((error) => {
+        setMsg("invitationMsg", getErrorMessage(error), false);
+      });
+    } else {
+      void Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]).catch((error) => {
+        setMsg("redemptionCodeMsg", getErrorMessage(error), false);
+      });
+    }
   }
   if (nextPage === "telegram") {
     void loadTgSettings().catch((error) => {
@@ -1870,6 +1876,14 @@ const adminState = {
   redemptionCodeTotal: 0,
   redemptionCodeEditTarget: null,
   redemptionCodeEditRestoreFocus: null,
+  redemptionInviteTab: "codes",
+  invitationSettingsLoaded: false,
+  invitationSettings: null,
+  invitationRecordsLoaded: false,
+  invitationRows: [],
+  invitationOffset: 0,
+  invitationLimit: 20,
+  invitationTotal: 0,
   billingSelectedUserId: null,
   billingSelectedPoints: 0,
   billingLedgerRows: [],
@@ -5406,6 +5420,204 @@ async function checkRedemptionCodes() {
     node.classList.toggle("is-error", !health.ok);
   }
   return health;
+}
+
+const INVITATION_STATUS_LABELS = {
+  pending: "可用邀请码",
+  active: "待使用邀请码",
+  rewarded: "积分已结算",
+  completed: "积分已结算",
+  redeemed: "积分已结算",
+  pending_permission: "权限待开通",
+  revoked: "已失效",
+  expired: "已失效",
+};
+
+function normalizedInvitationStatus(item) {
+  const raw = String(item?.internal_status || item?.status || "").trim().toLowerCase();
+  if (raw === "pending_permission") return "pending_permission";
+  if (["completed", "rewarded", "redeemed", "bound", "used"].includes(raw) || item?.rewarded_at) return "rewarded";
+  if (["revoked", "expired", "invalid"].includes(raw)) return "revoked";
+  return "pending";
+}
+
+function invitationPartyLabel(item, side) {
+  const nested = item?.[side] && typeof item[side] === "object" ? item[side] : {};
+  const username = String(item?.[`${side}_username`] || nested.username || "").trim();
+  const name = String(item?.[`${side}_name`] || nested.full_name || nested.name || "").trim();
+  const id = item?.[`${side}_id`] ?? item?.[`${side}_user_id`] ?? nested.id;
+  return username || name || (id ? `ID ${id}` : side === "invitee" ? "尚未绑定" : "—");
+}
+
+function invitationRewardLabel(item) {
+  const inviterPoints = Number(item?.inviter_reward_points ?? item?.inviter_points ?? item?.rewards?.inviter_points ?? 0);
+  const inviteePoints = Number(item?.invitee_reward_points ?? item?.invitee_points ?? item?.rewards?.invitee_points ?? 0);
+  return `邀请人 ${formatBillingPoints(inviterPoints)} 点 · 受邀人 ${formatBillingPoints(inviteePoints)} 点`;
+}
+
+function renderInvitationPagination() {
+  const total = Math.max(0, Number(adminState.invitationTotal || 0));
+  const limit = Math.max(1, Number(adminState.invitationLimit || 20));
+  const offset = Math.max(0, Number(adminState.invitationOffset || 0));
+  const page = Math.floor(offset / limit) + 1;
+  const pageCount = Math.max(1, Math.ceil(total / limit));
+  setText("invitationPaginationSummary", total ? `共 ${total} 条邀请记录` : "暂无邀请记录");
+  setText("invitationPaginationPage", `第 ${page} / ${pageCount} 页`);
+  if (el("btnInvitationPrevious")) el("btnInvitationPrevious").disabled = offset <= 0;
+  if (el("btnInvitationNext")) el("btnInvitationNext").disabled = offset + limit >= total;
+}
+
+function renderInvitations(items = [], total = adminState.invitationTotal, counts = {}) {
+  const body = el("invitationBody");
+  if (!body) return;
+  adminState.invitationRows = Array.isArray(items) ? items : [];
+  adminState.invitationTotal = Math.max(0, Number(total || 0));
+  body.replaceChildren();
+  if (!adminState.invitationRows.length) {
+    const row = document.createElement("tr");
+    const cell = redemptionCodeCell(redemptionCodeText("span", "暂无邀请记录"));
+    cell.colSpan = 8;
+    cell.className = "admin-billing-empty";
+    row.appendChild(cell);
+    body.appendChild(row);
+  } else {
+    adminState.invitationRows.forEach((item) => {
+      const status = normalizedInvitationStatus(item);
+      const hasPermissionPlaceholder = Boolean(String(item?.inviter_entitlement_key || item?.invitee_entitlement_key || "").trim());
+      const permissionReward = normalizedInvitationStatus(item) === "pending_permission"
+        ? "待开通（占位）"
+        : hasPermissionPlaceholder ? "权限配置占位" : "未配置";
+      const row = document.createElement("tr");
+      row.append(
+        redemptionCodeCell(redemptionCodeText("strong", item.code_masked || item.invite_code || item.code || "—", "admin-billing-strong")),
+        redemptionCodeCell(redemptionCodeText("strong", invitationPartyLabel(item, "inviter"))),
+        redemptionCodeCell(redemptionCodeText("strong", invitationPartyLabel(item, "invitee"))),
+        redemptionCodeCell(redemptionCodeText("span", invitationRewardLabel(item), "admin-redemption-detail")),
+        redemptionCodeCell(redemptionCodeText("span", INVITATION_STATUS_LABELS[status], `admin-billing-status is-${status === "rewarded" ? "redeemed" : status === "pending_permission" ? "pending" : status === "revoked" ? "revoked" : "active"}`)),
+        redemptionCodeCell(redemptionCodeText("span", item.created_at ? formatBillingTime(item.created_at) : "—", "admin-redemption-detail")),
+        redemptionCodeCell(redemptionCodeText("span", item.bound_at || item.used_at || item.completed_at || item.rewarded_at ? formatBillingTime(item.bound_at || item.used_at || item.completed_at || item.rewarded_at) : "尚未绑定", "admin-redemption-detail")),
+        redemptionCodeCell(redemptionCodeText("span", permissionReward, "admin-redemption-detail")),
+      );
+      body.appendChild(row);
+    });
+  }
+  const rewarded = Number(counts.rewarded ?? counts.completed ?? counts.redeemed ?? adminState.invitationRows.filter((item) => normalizedInvitationStatus(item) === "rewarded").length);
+  const permissionPending = Number(counts.pending_permission ?? adminState.invitationRows.filter((item) => normalizedInvitationStatus(item) === "pending_permission").length);
+  const pending = Number(counts.pending ?? counts.active ?? adminState.invitationRows.filter((item) => normalizedInvitationStatus(item) === "pending").length);
+  const rewardPoints = Number(counts.reward_points ?? counts.points_awarded ?? 0);
+  setText("invitationHealth", `邀请记录 ${adminState.invitationTotal} · 积分已结算 ${rewarded} · 权限待开通 ${permissionPending} · 可用邀请码 ${pending} · 已发放 ${formatBillingPoints(rewardPoints)} 点`);
+  renderInvitationPagination();
+}
+
+async function loadInvitationSettings() {
+  const payload = await api("/api/admin/invitations/settings");
+  const settings = payload?.settings && typeof payload.settings === "object" ? payload.settings : payload;
+  adminState.invitationSettings = settings && typeof settings === "object" ? settings : {};
+  if (el("invitationEnabled")) el("invitationEnabled").value = settings?.enabled === false ? "false" : "true";
+  if (el("inviterRewardPoints")) el("inviterRewardPoints").value = String(settings?.inviter_reward_points ?? settings?.inviter_points ?? 0);
+  if (el("inviteeRewardPoints")) el("inviteeRewardPoints").value = String(settings?.invitee_reward_points ?? settings?.invitee_points ?? 0);
+  if (el("inviterRewardType")) el("inviterRewardType").value = String(settings?.inviter_reward_type || "points");
+  if (el("inviteeRewardType")) el("inviteeRewardType").value = String(settings?.invitee_reward_type || "points");
+  if (el("inviterEntitlementKey")) el("inviterEntitlementKey").value = String(settings?.inviter_entitlement_key || "");
+  if (el("inviteeEntitlementKey")) el("inviteeEntitlementKey").value = String(settings?.invitee_entitlement_key || "");
+  if (el("inviterDailyLimit")) el("inviterDailyLimit").value = String(settings?.inviter_daily_limit ?? 0);
+  if (el("sourceDailyLimit")) el("sourceDailyLimit").value = String(settings?.source_daily_limit ?? 0);
+  if (el("invitationExpectedVersion")) el("invitationExpectedVersion").value = String(settings?.version ?? 0);
+  if (el("invitationSettingsNote")) el("invitationSettingsNote").value = String(settings?.note || "");
+  adminState.invitationSettingsLoaded = true;
+  return payload;
+}
+
+async function saveInvitationSettings(event) {
+  event?.preventDefault?.();
+  const submit = el("btnSaveInvitationSettings");
+  const inviterRewardPoints = Number(el("inviterRewardPoints")?.value || 0);
+  const inviteeRewardPoints = Number(el("inviteeRewardPoints")?.value || 0);
+  const inviterDailyLimit = Number(el("inviterDailyLimit")?.value || 0);
+  const sourceDailyLimit = Number(el("sourceDailyLimit")?.value || 0);
+  if (!Number.isFinite(inviterRewardPoints) || inviterRewardPoints < 0 || !Number.isFinite(inviteeRewardPoints) || inviteeRewardPoints < 0) {
+    throw new Error("双方奖励积分必须为大于或等于 0 的数字");
+  }
+  if (!Number.isInteger(inviterDailyLimit) || inviterDailyLimit < 0 || !Number.isInteger(sourceDailyLimit) || sourceDailyLimit < 0) {
+    throw new Error("每日邀请上限必须为大于或等于 0 的整数");
+  }
+  if (submit) submit.disabled = true;
+  try {
+    const payload = await api("/api/admin/invitations/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: String(el("invitationEnabled")?.value || "true") === "true",
+        inviter_points: inviterRewardPoints,
+        invitee_points: inviteeRewardPoints,
+        inviter_reward_type: String(el("inviterRewardType")?.value || "points"),
+        invitee_reward_type: String(el("inviteeRewardType")?.value || "points"),
+        inviter_entitlement_key: String(el("inviterEntitlementKey")?.value || "").trim(),
+        invitee_entitlement_key: String(el("inviteeEntitlementKey")?.value || "").trim(),
+        inviter_daily_limit: inviterDailyLimit,
+        source_daily_limit: sourceDailyLimit,
+        expected_version: Number(el("invitationExpectedVersion")?.value || 0),
+        note: String(el("invitationSettingsNote")?.value || "").trim(),
+      }),
+    });
+    if (payload?.settings && typeof payload.settings === "object") {
+      adminState.invitationSettings = payload.settings;
+      if (el("invitationExpectedVersion")) el("invitationExpectedVersion").value = String(payload.settings.version ?? 0);
+    }
+    adminState.invitationSettingsLoaded = true;
+    setMsg("invitationSettingsMsg", "邀请奖励规则已保存", true);
+    return payload;
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
+async function loadInvitations() {
+  const selectedLimit = Number(el("invitationPageSize")?.value || adminState.invitationLimit || 20);
+  adminState.invitationLimit = [10, 20, 50, 100].includes(selectedLimit) ? selectedLimit : 20;
+  const query = new URLSearchParams({
+    limit: String(adminState.invitationLimit),
+    offset: String(adminState.invitationOffset),
+  });
+  const status = String(el("invitationStatus")?.value || "").trim();
+  const search = String(el("invitationQuery")?.value || "").trim();
+  if (status) query.set("status", status);
+  if (search) query.set("query", search);
+  const payload = await api(`/api/admin/invitations?${query}`);
+  adminState.invitationOffset = Math.max(0, Number(payload?.offset ?? adminState.invitationOffset));
+  renderInvitations(payload?.items || [], payload?.total || 0, payload?.counts || payload?.summary || {});
+  adminState.invitationRecordsLoaded = true;
+  return payload;
+}
+
+async function loadInvitationAdminWorkspace({ force = false } = {}) {
+  const requests = [];
+  if (force || !adminState.invitationSettingsLoaded) requests.push(loadInvitationSettings());
+  if (force || !adminState.invitationRecordsLoaded) requests.push(loadInvitations());
+  await Promise.all(requests);
+}
+
+function setRedemptionInviteTab(tabName, { focus = false, load = true } = {}) {
+  const nextTab = tabName === "invitations" ? "invitations" : "codes";
+  adminState.redemptionInviteTab = nextTab;
+  document.querySelectorAll("[data-redemption-invite-tab]").forEach((button) => {
+    const selected = button.dataset.redemptionInviteTab === nextTab;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+    button.tabIndex = selected ? 0 : -1;
+    if (selected && focus) button.focus({ preventScroll: true });
+  });
+  document.querySelectorAll("[data-redemption-invite-panel]").forEach((panel) => {
+    const selected = panel.dataset.redemptionInvitePanel === nextTab;
+    panel.classList.toggle("is-active", selected);
+    panel.setAttribute("aria-hidden", selected ? "false" : "true");
+  });
+  if (!load || adminState.activePage !== "redemptionCodes") return;
+  if (nextTab === "invitations") {
+    void loadInvitationAdminWorkspace().catch((error) => setMsg("invitationMsg", getErrorMessage(error), false));
+  } else {
+    void Promise.all([loadRedemptionCodes(), checkRedemptionCodes()]).catch((error) => setMsg("redemptionCodeMsg", getErrorMessage(error), false));
+  }
 }
 
 function renderRedemptionCodeCheckResult(result, isError = false) {
@@ -11013,6 +11225,65 @@ async function submitRecharge() {
 }
 
 function bindBillingActions() {
+  el("redemptionInviteTabs")?.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-redemption-invite-tab]");
+    if (!button) return;
+    setRedemptionInviteTab(button.dataset.redemptionInviteTab, { focus: true });
+  });
+  el("redemptionInviteTabs")?.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    const tabs = [...document.querySelectorAll("#redemptionInviteTabs button[data-redemption-invite-tab]")];
+    const currentIndex = tabs.indexOf(event.target.closest("button[data-redemption-invite-tab]"));
+    if (currentIndex < 0 || !tabs.length) return;
+    event.preventDefault();
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? tabs.length - 1
+        : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    setRedemptionInviteTab(tabs[nextIndex].dataset.redemptionInviteTab, { focus: true });
+  });
+  setRedemptionInviteTab(adminState.redemptionInviteTab, { load: false });
+  el("invitationSettingsForm")?.addEventListener("submit", async (event) => {
+    setMsg("invitationSettingsMsg", "");
+    try { await saveInvitationSettings(event); }
+    catch (error) {
+      event.preventDefault();
+      setMsg("invitationSettingsMsg", getErrorMessage(error), false);
+    }
+  });
+  el("btnReloadInvitations")?.addEventListener("click", async () => {
+    setMsg("invitationMsg", "");
+    try { await loadInvitationAdminWorkspace({ force: true }); }
+    catch (error) { setMsg("invitationMsg", getErrorMessage(error), false); }
+  });
+  el("invitationStatus")?.addEventListener("change", async () => {
+    adminState.invitationOffset = 0;
+    try { await loadInvitations(); }
+    catch (error) { setMsg("invitationMsg", getErrorMessage(error), false); }
+  });
+  el("invitationPageSize")?.addEventListener("change", async () => {
+    adminState.invitationOffset = 0;
+    try { await loadInvitations(); }
+    catch (error) { setMsg("invitationMsg", getErrorMessage(error), false); }
+  });
+  el("invitationQuery")?.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    adminState.invitationOffset = 0;
+    try { await loadInvitations(); }
+    catch (error) { setMsg("invitationMsg", getErrorMessage(error), false); }
+  });
+  el("btnInvitationPrevious")?.addEventListener("click", async () => {
+    adminState.invitationOffset = Math.max(0, adminState.invitationOffset - adminState.invitationLimit);
+    try { await loadInvitations(); }
+    catch (error) { setMsg("invitationMsg", getErrorMessage(error), false); }
+  });
+  el("btnInvitationNext")?.addEventListener("click", async () => {
+    adminState.invitationOffset += adminState.invitationLimit;
+    try { await loadInvitations(); }
+    catch (error) { setMsg("invitationMsg", getErrorMessage(error), false); }
+  });
   el("billingCatalogEditorTabs")?.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-billing-editor-tab]");
     if (!button) return;

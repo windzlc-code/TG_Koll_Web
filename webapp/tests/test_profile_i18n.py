@@ -85,6 +85,9 @@ class ProfileI18nTests(unittest.TestCase):
             "profileSaveFailed",
             "passwordChanged",
             "understood",
+            "invitationRecordRole",
+            "permissionPending",
+            "invitationDisabled",
         ):
             self.assertIn(f'"{key}"', self.source)
 

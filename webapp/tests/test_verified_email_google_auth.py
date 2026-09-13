@@ -103,6 +103,7 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         *,
         email: str = "new.user@gmail.com",
         username: str = "email-user",
+        invite_code: str = "",
     ) -> TestClient:
         client = TestClient(self.app)
         delivered = {}
@@ -134,6 +135,7 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
                 "password": "registered-pass-123",
                 "full_name": "Verified Email User",
                 "company": "Vecto QA",
+                "invite_code": invite_code,
                 "consent": True,
             },
         )
@@ -141,6 +143,50 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         self.assertEqual(registered.json()["approval_status"], "approved")
         self.assertIsNotNone(client.cookies.get("session_token"))
         return client
+
+    def test_verified_email_registration_applies_invitation_rewards_atomically(self):
+        inviter = self._register_email_user(
+            email="inviter@gmail.com",
+            username="invite-owner",
+        )
+        generated = inviter.post(
+            "/api/invitations/code",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(generated.status_code, 200, generated.text)
+        invite_code = generated.json()["code"]
+
+        invitee = self._register_email_user(
+            email="invitee@gmail.com",
+            username="invite-new-user",
+            invite_code=invite_code,
+        )
+        invitation = invitee.get("/api/invitations/me?limit=1&offset=0")
+        self.assertEqual(invitation.status_code, 200, invitation.text)
+        self.assertEqual(invitation.json()["total"], 1)
+        self.assertEqual(invitation.json()["records"][0]["viewer_role"], "invitee")
+        self.assertEqual(invitation.json()["next_offset"], 0)
+        admin_records = self.admin.get("/api/admin/invitations?status=rewarded")
+        self.assertEqual(admin_records.status_code, 200, admin_records.text)
+        self.assertEqual(admin_records.json()["total"], 1)
+        self.assertEqual(admin_records.json()["items"][0]["status"], "rewarded")
+        with db_module.db() as conn:
+            balances = {
+                str(row["username"]): int(row["credit_units"])
+                for row in conn.execute(
+                    "SELECT user.username, wallet.credit_units FROM users AS user "
+                    "JOIN billing_wallets AS wallet ON wallet.user_id = user.id "
+                    "WHERE user.username IN ('invite-owner', 'invite-new-user')"
+                ).fetchall()
+            }
+            claims = int(conn.execute("SELECT COUNT(*) FROM billing_invitation_claims").fetchone()[0])
+            rewards = int(conn.execute(
+                "SELECT COUNT(*) FROM billing_ledger WHERE ref_type='invitation_claim'"
+            ).fetchone()[0])
+        self.assertEqual(balances["invite-owner"], 40 * server.commercial_billing.POINT_SCALE)
+        self.assertEqual(balances["invite-new-user"], 40 * server.commercial_billing.POINT_SCALE)
+        self.assertEqual(claims, 1)
+        self.assertEqual(rewards, 2)
 
     def test_verified_email_registration_auto_activates_and_email_login_works(self):
         client = self._register_email_user()
@@ -474,6 +520,82 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         self.assertEqual(logged_in.status_code, 302, logged_in.text)
         self.assertEqual(logged_in.headers["location"], "/about-vecto.html")
         self.assertIsNotNone(second.cookies.get("session_token"))
+
+    def test_google_new_user_invitation_survives_flow_and_existing_login_does_not_reapply(self):
+        inviter = self._register_email_user(
+            email="google.inviter@gmail.com",
+            username="google-invite-owner",
+        )
+        generated = inviter.post(
+            "/api/invitations/code",
+            headers={"Origin": "http://testserver"},
+        )
+        self.assertEqual(generated.status_code, 200, generated.text)
+        invite_code = generated.json()["code"]
+        captured = {}
+
+        def authorization_url(state, nonce, redirect_uri):
+            captured.update(state=state, nonce=nonce, redirect_uri=redirect_uri)
+            return f"https://accounts.google.test/auth?state={state}"
+
+        client = TestClient(self.app)
+        with mock.patch.object(server, "create_google_authorization", side_effect=authorization_url):
+            started = client.get(
+                "/api/auth/google/start",
+                params={"return_url": "/pricing.html", "invite_code": invite_code},
+                follow_redirects=False,
+            )
+        self.assertEqual(started.status_code, 302, started.text)
+        with db_module.db() as conn:
+            flow = conn.execute(
+                "SELECT context_json FROM oauth_authorization_flows WHERE state_digest=?",
+                (server.oauth_token_digest(captured["state"]),),
+            ).fetchone()
+        context = server.json.loads(str(flow["context_json"]))
+        self.assertEqual(context["invite_code"], invite_code)
+        self.assertTrue(context["invitation_source_hash"])
+        self.assertNotIn("testclient", str(flow["context_json"]))
+
+        claims = {
+            "sub": "google-invited-subject",
+            "email": "google.invited@gmail.com",
+            "email_verified": True,
+            "name": "Google Invited",
+            "picture": "",
+        }
+        with mock.patch.object(server, "exchange_google_code", return_value=claims):
+            callback = client.get(
+                f"/api/auth/google/callback?state={captured['state']}&code=code-invited",
+                follow_redirects=False,
+            )
+        self.assertEqual(callback.status_code, 302, callback.text)
+        completed = client.post(
+            "/api/auth/google/complete",
+            headers={"Origin": "http://testserver"},
+            json={"username": "google-invited"},
+        )
+        self.assertEqual(completed.status_code, 200, completed.text)
+        self.assertEqual(completed.json()["invitation"]["code"], invite_code)
+
+        with db_module.db() as conn:
+            before = int(conn.execute("SELECT COUNT(*) FROM billing_invitation_claims").fetchone()[0])
+        second = TestClient(self.app)
+        captured.clear()
+        with mock.patch.object(server, "create_google_authorization", side_effect=authorization_url):
+            second.get(
+                "/api/auth/google/start",
+                params={"return_url": "/", "invite_code": invite_code},
+                follow_redirects=False,
+            )
+        with mock.patch.object(server, "exchange_google_code", return_value=claims):
+            logged_in = second.get(
+                f"/api/auth/google/callback?state={captured['state']}&code=code-login",
+                follow_redirects=False,
+            )
+        self.assertEqual(logged_in.status_code, 302, logged_in.text)
+        with db_module.db() as conn:
+            after = int(conn.execute("SELECT COUNT(*) FROM billing_invitation_claims").fetchone()[0])
+        self.assertEqual(after, before)
 
     def test_google_account_session_authorizes_current_user_without_replacing_session(self):
         client = self._register_email_user(

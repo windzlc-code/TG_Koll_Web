@@ -1712,6 +1712,57 @@ def initialize_new_user_wallet(
     return ensure_wallet(conn, target_id, now=current)
 
 
+def grant_promotional_credit(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    credit_units: int,
+    event_type: str,
+    idempotency_key: str,
+    ref_type: str,
+    ref_id: str,
+    meta: dict[str, Any] | None = None,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Grant non-cash promotional points exactly once inside the caller transaction."""
+    _ensure_immediate_transaction(conn)
+    current = int(now or _now())
+    target_id = int(user_id)
+    units = int(credit_units or 0)
+    if units < 0:
+        raise BillingError("PROMOTIONAL_CREDIT_INVALID", "赠送积分不能为负数", 422)
+    wallet = ensure_wallet(conn, target_id, now=current)
+    existing = conn.execute(
+        "SELECT id FROM billing_ledger WHERE idempotency_key = ?",
+        (str(idempotency_key),),
+    ).fetchone()
+    if existing is not None or units == 0:
+        return {
+            "applied": False,
+            "credit_units": int(wallet["credit_units"]),
+            "points": points_from_units(int(wallet["credit_units"])),
+        }
+    after = int(wallet["credit_units"] or 0) + units
+    conn.execute(
+        "UPDATE billing_wallets SET credit_units = ?, updated_at = ? WHERE user_id = ?",
+        (after, current, target_id),
+    )
+    _insert_ledger(
+        conn,
+        user_id=target_id,
+        asset_type="credit",
+        event_type=str(event_type),
+        amount_units=units,
+        balance_after_units=after,
+        ref_type=str(ref_type),
+        ref_id=str(ref_id),
+        idempotency_key=str(idempotency_key),
+        meta=meta or {},
+        now=current,
+    )
+    return {"applied": True, "credit_units": after, "points": points_from_units(after)}
+
+
 def _reservation_public(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     item = dict(row)
     meta = _loads(item.get("meta_json"), {})

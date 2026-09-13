@@ -94,6 +94,7 @@ from .google_oauth import (
     oauth_token_digest,
 )
 from . import commercial_billing
+from . import invitation_program
 from . import email_delivery_governance
 from . import governance
 from .password_vault import (
@@ -538,6 +539,22 @@ def _request_client_ip(request: Request) -> str:
         if forwarded:
             return forwarded[:64]
     return peer[:64] or "unknown"
+
+
+def _invitation_source_hash(request: Request) -> str:
+    source = _request_client_ip(request)
+    secret = str(
+        os.getenv("INVITATION_SOURCE_SECRET", "")
+        or os.getenv("AUTH_VERIFICATION_SECRET", "")
+        or ""
+    )
+    if not source or source == "unknown" or len(secret.encode("utf-8")) < 32:
+        return ""
+    return hmac.new(
+        secret.encode("utf-8"),
+        f"invitation-source-v1\x1f{source}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def _check_auth_rate_limit(bucket: str, key: str, *, limit: int, window_seconds: int) -> None:
@@ -13197,7 +13214,22 @@ class RegisterPayload(BaseModel):
     company: str = ""
     challenge_id: str = Field(default="", max_length=120)
     verification_code: str = Field(default="", max_length=16)
+    invite_code: str = Field(default="", max_length=128)
     consent: bool = False
+
+
+class InvitationSettingsPayload(BaseModel):
+    enabled: bool = True
+    inviter_points: float = Field(default=20, ge=0, le=1_000_000)
+    invitee_points: float = Field(default=20, ge=0, le=1_000_000)
+    inviter_reward_type: str = Field(default="points", max_length=32)
+    invitee_reward_type: str = Field(default="points", max_length=32)
+    inviter_entitlement_key: str = Field(default="", max_length=120)
+    invitee_entitlement_key: str = Field(default="", max_length=120)
+    inviter_daily_limit: int = Field(default=100, ge=0, le=100_000)
+    source_daily_limit: int = Field(default=20, ge=0, le=100_000)
+    expected_version: int = Field(ge=1)
+    note: str = Field(default="", max_length=500)
 
 
 class EmailVerificationSendPayload(BaseModel):
@@ -27229,6 +27261,7 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         now = _now_ts()
+        invitation_result: dict[str, Any] | None = None
         with db() as conn:
             try:
                 runtime = _get_runtime_config(conn)
@@ -27286,6 +27319,42 @@ def create_app() -> FastAPI:
                     source="email_registration",
                     now=now,
                 )
+                if str(payload.invite_code or "").strip():
+                    invitation_result = invitation_program.apply_registration_invitation(
+                        conn,
+                        invitee_user_id=user_id,
+                        raw_code=payload.invite_code,
+                        source_channel="email_registration",
+                        risk={"client_ip_present": bool(client_ip)},
+                        source_hash=_invitation_source_hash(request),
+                        now=now,
+                    )
+                    invitation_result["invitee_reward_points"] = invitation_result["invitee_points"]
+                    invitation_result["inviter_reward_points"] = invitation_result["inviter_points"]
+                    invitee_points = float(invitation_result["invitee_points"] or 0)
+                    inviter_points = float(invitation_result["inviter_points"] or 0)
+                    create_notification(
+                        conn,
+                        user_id=user_id,
+                        category="official",
+                        title=(f"邀请注册奖励 {invitee_points:g} 点已到账" if invitee_points > 0 else "邀请码已绑定，权限奖励待处理"),
+                        body=("邀请码已绑定，积分奖励已写入账户；权限类奖励当前仅保留审核占位。" if invitee_points > 0 else "邀请码已绑定；权限类奖励当前仅保留审核占位，未发放积分。"),
+                        source_key=f"invitation:{invitation_result['claim_id']}:invitee",
+                        action_url="/profile.html?view=invitation",
+                        action_label="查看邀请",
+                        now=now,
+                    )
+                    create_notification(
+                        conn,
+                        user_id=int(invitation_result["inviter_user_id"]),
+                        category="official",
+                        title=(f"好友注册奖励 {inviter_points:g} 点已到账" if inviter_points > 0 else "好友已通过邀请码注册"),
+                        body=("一位新用户已通过你的邀请码完成注册，积分奖励已写入账户。" if inviter_points > 0 else "一位新用户已通过你的邀请码完成注册；权限奖励仍待处理，未发放积分。"),
+                        source_key=f"invitation:{invitation_result['claim_id']}:inviter",
+                        action_url="/profile.html?view=invitation",
+                        action_label="查看记录",
+                        now=now,
+                    )
                 session_hours = int(_auth_login_policy(runtime)["session_hours"])
                 _revoke_presented_auth_sessions(
                     conn,
@@ -27353,6 +27422,7 @@ def create_app() -> FastAPI:
                 "approval_status": "approved",
                 "is_admin": False,
                 "message": "registration completed",
+                "invitation": invitation_result,
             }
         )
         _set_single_auth_cookie(
@@ -27474,8 +27544,18 @@ def create_app() -> FastAPI:
         return response
 
     @app.get("/api/auth/google/start")
-    def api_google_start(request: Request, return_url: str = "/"):
+    def api_google_start(request: Request, return_url: str = "/", invite_code: str = ""):
         safe_return = _safe_local_return_url(return_url, "/")
+        raw_invite_code = str(invite_code or "").strip()
+        if not raw_invite_code:
+            raw_invite_code = str(dict(parse_qsl(urlsplit(safe_return).query)).get("invite_code") or "").strip()
+        normalized_invite_code = invitation_program.normalize_code(raw_invite_code)
+        if raw_invite_code and not normalized_invite_code:
+            raise commercial_billing.BillingError("INVITATION_CODE_INVALID", "邀请码格式不正确", 422)
+        flow_context = {
+            "invite_code": normalized_invite_code,
+            "invitation_source_hash": _invitation_source_hash(request),
+        }
         client_ip = _request_client_ip(request)
         _enforce_auth_rate_limit(
             "google_oauth_start_ip",
@@ -27533,13 +27613,14 @@ def create_app() -> FastAPI:
                   state_digest, provider, nonce_digest, flow_token_digest,
                   return_path, context_json, request_ip, expires_at,
                   consumed_at, created_at
-                ) VALUES (?, 'google', ?, ?, ?, '{}', ?, ?, 0, ?)
+                ) VALUES (?, 'google', ?, ?, ?, ?, ?, ?, 0, ?)
                 """,
                 (
                     oauth_token_digest(state),
                     oauth_token_digest(nonce),
                     oauth_token_digest(nonce),
                     safe_return,
+                    json.dumps(flow_context, ensure_ascii=False, separators=(",", ":")),
                     client_ip,
                     now + 600,
                     now,
@@ -27874,6 +27955,7 @@ def create_app() -> FastAPI:
                     onboarding_expires_at,
                     json.dumps(
                         {
+                            **flow_context,
                             "sub": subject,
                             "email": email,
                             "name": str(claims.get("name") or "")[:500],
@@ -27913,6 +27995,7 @@ def create_app() -> FastAPI:
         if not onboarding_token:
             raise HTTPException(status_code=401, detail="Google onboarding session expired")
         now = _now_ts()
+        invitation_result: dict[str, Any] | None = None
         with db() as conn:
             try:
                 runtime = _get_runtime_config(conn)
@@ -28014,6 +28097,34 @@ def create_app() -> FastAPI:
                     source="google_oauth",
                     now=now,
                 )
+                raw_invite_code = str(claims.get("invite_code") or "").strip()
+                if raw_invite_code:
+                    invitation_result = invitation_program.apply_registration_invitation(
+                        conn,
+                        invitee_user_id=user_id,
+                        raw_code=raw_invite_code,
+                        source_channel="google_oauth",
+                        source_hash=str(claims.get("invitation_source_hash") or ""),
+                        now=now,
+                    )
+                    invitation_result["invitee_reward_points"] = invitation_result["invitee_points"]
+                    invitation_result["inviter_reward_points"] = invitation_result["inviter_points"]
+                    invitee_points = float(invitation_result["invitee_points"] or 0)
+                    inviter_points = float(invitation_result["inviter_points"] or 0)
+                    create_notification(
+                        conn, user_id=user_id, category="official",
+                        title=(f"邀请注册奖励 {invitee_points:g} 点已到账" if invitee_points > 0 else "邀请码已绑定，权限奖励待处理"),
+                        body=("邀请码已绑定，积分奖励已写入账户；权限类奖励当前仅保留审核占位。" if invitee_points > 0 else "邀请码已绑定；权限类奖励当前仅保留审核占位，未发放积分。"),
+                        source_key=f"invitation:{invitation_result['claim_id']}:invitee",
+                        action_url="/profile.html?view=invitation", action_label="查看邀请", now=now,
+                    )
+                    create_notification(
+                        conn, user_id=int(invitation_result["inviter_user_id"]), category="official",
+                        title=(f"好友注册奖励 {inviter_points:g} 点已到账" if inviter_points > 0 else "好友已通过邀请码注册"),
+                        body=("一位新用户已通过你的邀请码完成注册，积分奖励已写入账户。" if inviter_points > 0 else "一位新用户已通过你的邀请码完成注册；权限奖励仍待处理，未发放积分。"),
+                        source_key=f"invitation:{invitation_result['claim_id']}:inviter",
+                        action_url="/profile.html?view=invitation", action_label="查看记录", now=now,
+                    )
                 completed = conn.execute(
                     """
                     UPDATE oauth_authorization_flows
@@ -28072,6 +28183,7 @@ def create_app() -> FastAPI:
                 "approval_status": "approved",
                 "is_admin": False,
                 "password_login_enabled": False,
+                "invitation": invitation_result,
             }
         )
         _set_single_auth_cookie(
@@ -30820,6 +30932,119 @@ def create_app() -> FastAPI:
         with db() as conn:
             items = commercial_billing.list_ledger(conn, user_id=_workspace_user_id(user), limit=limit, before=before)
         return {"items": items, "next_before": int(items[-1]["created_at"]) if items else 0}
+
+    @app.get("/api/invitations/me")
+    def api_invitations_me(
+        limit: int = 50,
+        offset: int = 0,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        if _is_admin(user):
+            raise HTTPException(status_code=409, detail="管理员账号不参与邀请活动")
+        with db() as conn:
+            result = invitation_program.get_user_summary(
+                conn,
+                user_id=_identity_user_id(user),
+                limit=limit,
+                offset=offset,
+            )
+        return JSONResponse(content={"ok": True, **result}, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/invitations/code")
+    def api_invitations_code(
+        request: Request,
+        user: dict[str, Any] = Depends(get_current_user),
+    ):
+        _require_same_origin_when_supplied(request)
+        if _is_admin(user):
+            raise HTTPException(status_code=409, detail="管理员账号不参与邀请活动")
+        user_id = _identity_user_id(user)
+        _enforce_auth_rate_limit(
+            "invitation_code",
+            f"{user_id}:{_request_client_ip(request)}",
+            limit=12,
+            window_seconds=300,
+        )
+        with db() as conn:
+            item = invitation_program.ensure_user_code(conn, user_id=user_id)
+        return JSONResponse(
+            content={"ok": True, "code": item["code"], "code_info": item},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/admin/invitations/settings")
+    def api_admin_invitation_settings(_user: dict[str, Any] = Depends(require_admin)):
+        with db() as conn:
+            settings = invitation_program.get_settings(conn)
+        return JSONResponse(content={"ok": True, "settings": settings}, headers={"Cache-Control": "no-store"})
+
+    @app.patch("/api/admin/invitations/settings")
+    def api_admin_invitation_settings_update(
+        payload: InvitationSettingsPayload,
+        request: Request,
+        user: dict[str, Any] = Depends(require_admin),
+    ):
+        _require_same_origin_when_supplied(request)
+        with db() as conn:
+            settings = invitation_program.update_settings(
+                conn,
+                actor_user_id=_identity_user_id(user),
+                enabled=payload.enabled,
+                inviter_points=payload.inviter_points,
+                invitee_points=payload.invitee_points,
+                inviter_reward_type=payload.inviter_reward_type,
+                invitee_reward_type=payload.invitee_reward_type,
+                inviter_entitlement_key=payload.inviter_entitlement_key,
+                invitee_entitlement_key=payload.invitee_entitlement_key,
+                inviter_daily_limit=payload.inviter_daily_limit,
+                source_daily_limit=payload.source_daily_limit,
+                expected_version=payload.expected_version,
+                note=payload.note,
+            )
+            governance.record_audit(
+                conn,
+                actor_user_id=_identity_user_id(user),
+                target_user_id=0,
+                action="billing.invitation_settings_updated",
+                resource_type="billing_invitation_settings",
+                resource_id="1",
+                after=settings,
+                risk_level="medium",
+                **governance.request_context(request),
+            )
+        return JSONResponse(content={"ok": True, "settings": settings}, headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/admin/invitations")
+    def api_admin_invitations(
+        status: str = "",
+        query: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        _user: dict[str, Any] = Depends(require_admin),
+    ):
+        with db() as conn:
+            items, total = invitation_program.list_admin_records(
+                conn,
+                status=status,
+                query=query,
+                limit=limit,
+                offset=offset,
+            )
+            counts = invitation_program.get_admin_summary(conn)
+        clean_limit = min(max(int(limit), 1), 500)
+        clean_offset = max(int(offset), 0)
+        return JSONResponse(
+            content={
+                "ok": True,
+                "items": items,
+                "total": total,
+                "limit": clean_limit,
+                "offset": clean_offset,
+                "next_offset": clean_offset + len(items) if clean_offset + len(items) < total else 0,
+                "counts": counts,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post("/api/billing/redemption-codes/redeem")
     def api_billing_redemption_code_redeem(
@@ -34465,6 +34690,8 @@ def create_app() -> FastAPI:
                 "billing_ledger": int(conn.execute("SELECT COUNT(*) AS count FROM billing_ledger WHERE user_id = ?", (target_id,)).fetchone()["count"]),
                 "subscriptions": int(conn.execute("SELECT COUNT(*) AS count FROM billing_subscriptions WHERE user_id = ?", (target_id,)).fetchone()["count"]),
                 "orders": int(conn.execute("SELECT COUNT(*) AS count FROM billing_orders WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "invitation_codes": int(conn.execute("SELECT COUNT(*) AS count FROM billing_invitation_codes WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+                "invitation_records": int(conn.execute("SELECT COUNT(*) AS count FROM billing_invitation_claims WHERE inviter_user_id = ? OR invitee_user_id = ?", (target_id, target_id)).fetchone()["count"]),
                 "proxy_purchase_orders": int(conn.execute("SELECT COUNT(*) AS count FROM proxy_purchase_orders WHERE user_id = ?", (target_id,)).fetchone()["count"]),
                 "owned_proxy_assets": int(conn.execute("SELECT COUNT(*) AS count FROM proxy_market_items WHERE ownership_type = 'owned' AND owner_user_id = ?", (target_id,)).fetchone()["count"]),
             }
@@ -34811,6 +35038,31 @@ def create_app() -> FastAPI:
                         "UPDATE billing_ledger SET user_id = 0 "
                         "WHERE user_id = ? AND ref_type = 'redemption_code' "
                         "AND event_type = 'redemption_code_redeemed'",
+                        (target_id,),
+                    )
+                    # Invitation receipts remain auditable while personal user
+                    # references and active share codes are removed.
+                    conn.execute(
+                        "UPDATE billing_invitation_codes SET user_id = NULL, status = 'disabled', updated_at = ? "
+                        "WHERE user_id = ?",
+                        (_now_ts(), target_id),
+                    )
+                    conn.execute(
+                        "UPDATE billing_invitation_claims SET inviter_user_id = NULL WHERE inviter_user_id = ?",
+                        (target_id,),
+                    )
+                    conn.execute(
+                        "UPDATE billing_invitation_claims SET invitee_user_id = NULL WHERE invitee_user_id = ?",
+                        (target_id,),
+                    )
+                    conn.execute(
+                        "UPDATE billing_invitation_reward_grants SET beneficiary_user_id = NULL "
+                        "WHERE beneficiary_user_id = ?",
+                        (target_id,),
+                    )
+                    conn.execute(
+                        "UPDATE billing_ledger SET user_id = 0 "
+                        "WHERE user_id = ? AND ref_type = 'invitation_claim'",
                         (target_id,),
                     )
                     for billing_table in (

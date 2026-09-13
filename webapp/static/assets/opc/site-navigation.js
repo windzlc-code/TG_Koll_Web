@@ -98,6 +98,7 @@
       accountSettings: "账户设置",
       personalProfile: "个人信息",
       redeemCode: "兑换码",
+      inviteCode: "邀请码",
       redeemDialogTitle: "兑换积分",
       redeemDialogHelp: "输入管理员提供的兑换码，核验成功后积分会立即到账。",
       redeemCodePlaceholder: "请输入兑换码",
@@ -210,6 +211,7 @@
       accountSettings: "帳戶設定",
       personalProfile: "個人資訊",
       redeemCode: "兌換碼",
+      inviteCode: "邀請碼",
       redeemDialogTitle: "兌換積分",
       redeemDialogHelp: "輸入管理員提供的兌換碼，核驗成功後積分會立即到帳。",
       redeemCodePlaceholder: "請輸入兌換碼",
@@ -756,6 +758,7 @@
   function accountMenuMarkup(page = "console") {
     const workspaceActions = `<div class="site-account-action-row site-account-workspace-actions" aria-label="快捷操作" data-site-workspace-actions>
           <button type="button" data-site-open-redemption data-site-copy="redeemCode">兑换码</button>
+          <button type="button" data-site-open-invitation data-site-copy="inviteCode">邀请码</button>
           <button type="button" data-site-open-console-view="tasks" data-site-copy="taskQueue">任务队列</button>
           <button type="button" data-site-open-console-view="console_settings" data-site-copy="personalSettings">个人设置</button>
         </div>`;
@@ -2164,6 +2167,10 @@
       menu.querySelector("[data-site-open-redemption]")?.addEventListener("click", () => {
         setAccountMenuOpen(menu, false);
         openRedemptionCodeDialog();
+      });
+      menu.querySelector("[data-site-open-invitation]")?.addEventListener("click", () => {
+        setAccountMenuOpen(menu, false);
+        window.location.assign(adminOperationalPublicTarget("/profile.html?view=invitation"));
       });
       menu.querySelectorAll("[data-site-open-console-view]").forEach((button) => {
         button.addEventListener("click", () => {

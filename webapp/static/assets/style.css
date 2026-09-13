@@ -7073,7 +7073,8 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 }
 
 .page-admin #secRedemptionCodes .admin-compact-button,
-.page-admin #secRedemptionCodes .admin-redemption-form input {
+.page-admin #secRedemptionCodes .admin-redemption-form input,
+.page-admin #secRedemptionCodes .admin-redemption-form select {
   min-height: 38px;
 }
 
@@ -7089,6 +7090,10 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 .page-admin #secRedemptionCodes .admin-redemption-form input {
   width: 100%;
   min-height: 38px;
+}
+
+.page-admin #secRedemptionCodes .admin-redemption-form select {
+  width: 100%;
 }
 
 .page-admin #secRedemptionCodes .admin-redemption-created {
@@ -7114,6 +7119,41 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
 .page-admin #secRedemptionCodes .admin-redemption-table {
   min-width: 1120px;
   table-layout: fixed;
+}
+
+.page-admin #secRedemptionCodes .admin-invitation-table {
+  min-width: 1120px;
+  table-layout: fixed;
+}
+
+.page-admin #secRedemptionCodes .admin-invitation-table th,
+.page-admin #secRedemptionCodes .admin-invitation-table td {
+  padding: 7px 9px;
+  vertical-align: middle;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.page-admin #secRedemptionCodes .admin-invitation-table th:nth-child(1),
+.page-admin #secRedemptionCodes .admin-invitation-table td:nth-child(1) { width: 170px; }
+.page-admin #secRedemptionCodes .admin-invitation-table th:nth-child(2),
+.page-admin #secRedemptionCodes .admin-invitation-table td:nth-child(2),
+.page-admin #secRedemptionCodes .admin-invitation-table th:nth-child(3),
+.page-admin #secRedemptionCodes .admin-invitation-table td:nth-child(3) { width: 140px; }
+.page-admin #secRedemptionCodes .admin-invitation-table th:nth-child(4),
+.page-admin #secRedemptionCodes .admin-invitation-table td:nth-child(4) { width: 220px; }
+.page-admin #secRedemptionCodes .admin-invitation-table th:nth-child(5),
+.page-admin #secRedemptionCodes .admin-invitation-table td:nth-child(5) { width: 126px; }
+.page-admin #secRedemptionCodes .admin-invitation-table th:nth-child(6),
+.page-admin #secRedemptionCodes .admin-invitation-table td:nth-child(6),
+.page-admin #secRedemptionCodes .admin-invitation-table th:nth-child(7),
+.page-admin #secRedemptionCodes .admin-invitation-table td:nth-child(7) { width: 150px; }
+.page-admin #secRedemptionCodes .admin-invitation-table th:nth-child(8),
+.page-admin #secRedemptionCodes .admin-invitation-table td:nth-child(8) { width: 160px; }
+
+.page-admin #secRedemptionCodes .admin-invitation-table td:first-child {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .page-admin #secRedemptionCodes .admin-redemption-table th,

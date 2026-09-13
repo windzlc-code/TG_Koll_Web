@@ -834,7 +834,7 @@
           <button type="button" data-page="security">安全告警 <span class="small" id="adminAlertCount">0</span></button>
           <button type="button" data-page="proxyMarket">代理 IP</button>
           <button type="button" data-page="pricing">套餐与客户额度</button>
-          <button type="button" data-page="redemptionCodes">兑换码</button>
+          <button type="button" data-page="redemptionCodes">兑换邀请</button>
           <button type="button" data-page="telegram">Telegram</button>
           <button type="button" data-page="runtime">系统配置</button>
           <button type="button" data-page="sentimentCookies">舆情 Cookie</button>
@@ -1788,11 +1788,15 @@
       <section class="card section admin-page-view" id="secRedemptionCodes" data-page-view="redemptionCodes">
         <div class="section-head">
           <div>
-            <h2>兑换码</h2>
-            <div class="meta">生成并管理一次性积分兑换码，检测兑换状态与积分流水是否一致。</div>
+            <h2>兑换邀请</h2>
+            <div class="meta">统一管理一次性积分兑换码、用户邀请奖励与双方到账记录。</div>
           </div>
         </div>
-        <div class="admin-billing-stack">
+        <div id="redemptionInviteTabs" class="admin-model-tabs" role="tablist" aria-label="兑换与邀请管理">
+          <button id="redemptionCodesTab" class="admin-model-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="redemptionCodesPanel" data-redemption-invite-tab="codes">兑换码</button>
+          <button id="invitationAdminTab" class="admin-model-tab" type="button" role="tab" aria-selected="false" aria-controls="invitationAdminPanel" tabindex="-1" data-redemption-invite-tab="invitations">邀请管理</button>
+        </div>
+        <div id="redemptionCodesPanel" class="admin-billing-stack admin-model-tab-panel is-active" role="tabpanel" aria-labelledby="redemptionCodesTab" data-redemption-invite-panel="codes">
           <section class="admin-config-card admin-billing-panel" aria-labelledby="redemptionCodesTitle">
             <div class="admin-billing-panel-head">
               <div>
@@ -1846,6 +1850,50 @@
             <div class="table-wrap admin-billing-table-wrap"><table class="table admin-billing-table admin-redemption-table"><caption class="sr-only">兑换码列表</caption><thead><tr><th class="admin-redemption-select-cell"><input id="redemptionCodeSelectAll" type="checkbox" aria-label="全选当前页兑换码"></th><th>兑换码</th><th>说明</th><th>积分</th><th>状态</th><th>创建</th><th>兑换</th><th>操作</th></tr></thead><tbody id="redemptionCodeBody"><tr><td colspan="8" class="admin-billing-empty">正在读取兑换码...</td></tr></tbody></table></div>
             <div class="admin-redemption-pagination" aria-label="兑换码列表翻页"><span id="redemptionCodePaginationSummary">正在读取…</span><div><button id="btnRedemptionCodePrevious" class="ghost admin-compact-button" type="button">上一页</button><span id="redemptionCodePaginationPage">第 1 页</span><button id="btnRedemptionCodeNext" class="ghost admin-compact-button" type="button">下一页</button></div></div>
             <div id="redemptionCodeMsg" class="msg" role="status" aria-live="polite"></div>
+          </section>
+        </div>
+        <div id="invitationAdminPanel" class="admin-billing-stack admin-model-tab-panel" role="tabpanel" aria-labelledby="invitationAdminTab" aria-hidden="true" data-redemption-invite-panel="invitations">
+          <section class="admin-config-card admin-billing-panel" aria-labelledby="invitationSettingsTitle">
+            <div class="admin-billing-panel-head">
+              <div>
+                <div class="admin-config-card-title" id="invitationSettingsTitle">邀请奖励设置</div>
+                <div class="small">邀请关系在新用户注册时绑定，邀请人与受邀人分别按此规则到账。</div>
+              </div>
+              <button id="btnReloadInvitations" class="ghost admin-compact-button" type="button">刷新记录</button>
+            </div>
+            <form id="invitationSettingsForm" class="admin-redemption-form" novalidate>
+              <input id="invitationExpectedVersion" type="hidden" value="0">
+              <label><span>邀请功能</span><select id="invitationEnabled"><option value="true">启用</option><option value="false">停用</option></select></label>
+              <label><span>邀请人奖励积分</span><input id="inviterRewardPoints" type="number" min="0" max="1000000" step="0.01" inputmode="decimal" required></label>
+              <label><span>受邀人奖励积分</span><input id="inviteeRewardPoints" type="number" min="0" max="1000000" step="0.01" inputmode="decimal" required></label>
+              <label><span>邀请人奖励类型</span><select id="inviterRewardType"><option value="points">积分</option><option value="permission">权限</option><option value="points_and_permission">积分 + 权限</option></select></label>
+              <label><span>受邀人奖励类型</span><select id="inviteeRewardType"><option value="points">积分</option><option value="permission">权限</option><option value="points_and_permission">积分 + 权限</option></select></label>
+              <label><span>邀请人权限标识（占位）</span><input id="inviterEntitlementKey" maxlength="96" autocomplete="off" placeholder="例如：pro_trial_7d"></label>
+              <label><span>受邀人权限标识（占位）</span><input id="inviteeEntitlementKey" maxlength="96" autocomplete="off" placeholder="例如：pro_trial_7d"></label>
+              <label><span>每位邀请人每日上限</span><input id="inviterDailyLimit" type="number" min="0" max="100000" step="1" inputmode="numeric" required></label>
+              <label><span>同来源每日上限</span><input id="sourceDailyLimit" type="number" min="0" max="100000" step="1" inputmode="numeric" required></label>
+              <label><span>规则备注</span><input id="invitationSettingsNote" maxlength="200" autocomplete="off" placeholder="仅供后台识别，可留空"></label>
+              <button id="btnSaveInvitationSettings" class="primary admin-compact-button" type="submit">保存邀请规则</button>
+            </form>
+            <div id="invitationPermissionPlaceholder" class="admin-billing-active-summary"><strong>其他权限奖励（预留）</strong><span>权限标识会随邀请记录保存为待开通占位；当前不会自动开通订阅、额度或功能权限，也不会显示为已开通。</span></div>
+            <div id="invitationSettingsMsg" class="msg" role="status" aria-live="polite"></div>
+          </section>
+          <section class="admin-config-card admin-billing-panel" aria-labelledby="invitationRecordsTitle">
+            <div class="admin-billing-panel-head">
+              <div>
+                <div class="admin-config-card-title" id="invitationRecordsTitle">邀请记录</div>
+                <div class="small">查看邀请码归属、注册绑定状态以及双方实际奖励。</div>
+              </div>
+              <div class="admin-billing-toolbar">
+                <select id="invitationStatus" aria-label="邀请状态"><option value="">全部状态</option><option value="pending">可用邀请码</option><option value="rewarded">积分已结算</option><option value="pending_permission">权限待开通</option><option value="revoked">已失效</option></select>
+                <label class="admin-redemption-code-check"><span class="sr-only">搜索邀请人、受邀人或邀请码</span><input id="invitationQuery" type="search" maxlength="128" autocomplete="off" placeholder="搜索用户或邀请码"></label>
+                <label class="admin-redemption-page-size"><span>每页</span><select id="invitationPageSize" aria-label="每页显示邀请记录数量"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option><option value="100">100</option></select><span>条</span></label>
+              </div>
+            </div>
+            <div id="invitationHealth" class="admin-billing-active-summary" aria-live="polite">尚未读取邀请记录</div>
+            <div class="table-wrap admin-billing-table-wrap"><table class="table admin-billing-table admin-invitation-table"><caption class="sr-only">邀请记录列表</caption><thead><tr><th>邀请码</th><th>邀请人</th><th>受邀人</th><th>双方奖励</th><th>状态</th><th>创建</th><th>绑定</th><th>权限奖励</th></tr></thead><tbody id="invitationBody"><tr><td colspan="8" class="admin-billing-empty">切换到邀请管理后读取记录</td></tr></tbody></table></div>
+            <div class="admin-redemption-pagination" aria-label="邀请记录翻页"><span id="invitationPaginationSummary">暂无邀请记录</span><div><button id="btnInvitationPrevious" class="ghost admin-compact-button" type="button">上一页</button><span id="invitationPaginationPage">第 1 页</span><button id="btnInvitationNext" class="ghost admin-compact-button" type="button">下一页</button></div></div>
+            <div id="invitationMsg" class="msg" role="status" aria-live="polite"></div>
           </section>
         </div>
       </section>
