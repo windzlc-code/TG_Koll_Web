@@ -1582,7 +1582,7 @@ VIDEO_UI_MODULE_TASKS: dict[str, tuple[str, str | None]] = {
 
 VIDEO_UI_MODULE_METADATA: list[dict[str, Any]] = [
     {"id": "digital_human_video", "label": "数字人口播视频", "group": "视频生成", "task_type": "create_video"},
-    {"id": "ecommerce_short_video", "label": "广告 / 种草视频", "group": "视频生成", "task_type": "ecommerce_short_video"},
+    {"id": "ecommerce_short_video", "label": "广告短视频", "group": "视频生成", "task_type": "ecommerce_short_video"},
     {"id": "video_language_replace", "label": "视频语种更换", "group": "视频生成", "task_type": "video_language_replace"},
     {"id": "video_subject_replace", "label": "视频模特 / 商品替换", "group": "视频生成", "task_type": "replace_model", "task_types": ["replace_model", "replace_product", "replace_productANDmodel"]},
     {"id": "ecommerce_image", "label": "电商广告图", "group": "图片素材", "task_type": "image_generate", "modes": ["product_only", "model_product"]},

@@ -48,7 +48,8 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         self.assertIn('data-site-page="video"', self.video_html)
         self.assertIn('.video-workbench-nav-toggle[hidden]', self.console_css)
         self.assertIn('data-panel="video_workspace"', self.video_html)
-        self.assertIn('id="videoWorkspaceFlow"', self.video_html)
+        self.assertNotIn('id="videoWorkspaceFlow"', self.video_html)
+        self.assertNotIn('nav-parent-toggle', self.video_html)
         self.assertIn('id="videoModuleMenu"', self.video_html)
         panel = self.video_html.split('data-panel="video_workspace"', 1)[1].split('</section>', 1)[0]
         self.assertNotIn("<iframe", panel.lower())

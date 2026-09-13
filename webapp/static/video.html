@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=__SITE_NAVIGATION_CSS_VERSION__" />
   <link rel="stylesheet" href="/assets/console.css?v=__CONSOLE_CSS_VERSION__" />
   <link rel="stylesheet" href="/assets/video-workbench.css?v=__VIDEO_WORKBENCH_CSS_VERSION__" />
+  <link rel="stylesheet" href="/assets/video-editor.css?v=__VIDEO_EDITOR_CSS_VERSION__" />
   <script defer src="/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__"></script>
 </head>
 <body class="console-page video-page" data-login-redirect="/video.html">
@@ -46,14 +47,7 @@
         <button id="mobileNavClose" class="mobile-nav-close" type="button" aria-label="关闭导航">×</button>
       </div>
       <nav class="console-nav" aria-label="视频工作台导航">
-        <button type="button" class="is-active nav-parent-toggle" data-view="video_workspace" aria-expanded="true">
-          <span>视频工作台</span>
-          <span class="nav-toggle-arrow" aria-hidden="true"></span>
-        </button>
-        <div class="sidebar-flow video-workspace-flow is-open" id="videoWorkspaceFlow">
-          <div class="sidebar-flow-divider" aria-hidden="true"></div>
-          <div class="module-menu video-module-menu" id="videoModuleMenu" aria-label="视频工作台模块"></div>
-        </div>
+        <div class="module-menu video-module-menu video-module-menu--primary" id="videoModuleMenu" aria-label="视频工作台功能"></div>
       </nav>
       <div class="sidebar-bottom-actions"></div>
     </aside>
@@ -82,7 +76,7 @@
         </div>
         <a href="/admin.html#admin-users">返回账号管理</a>
       </div>
-      <section class="view video-workbench-view is-active" data-panel="video_workspace" aria-labelledby="viewTitle">
+      <section id="videoGenerationPanel" class="view video-workbench-view is-active" data-panel="video_workspace" aria-labelledby="viewTitle">
         <div id="videoWorkbenchRoot" class="video-workbench-root" aria-live="polite">
           <div class="video-workbench-state video-workbench-state--loading" role="status">
             <span class="video-workbench-loader" aria-hidden="true"></span>
@@ -91,11 +85,32 @@
           </div>
         </div>
       </section>
+      <section id="videoStudioPanel" class="view video-studio-view" data-panel="video_editor" aria-labelledby="viewTitle" hidden>
+        <nav id="videoStudioTabs" class="video-studio-tabs" role="tablist" aria-label="视频记录与剪辑">
+          <button id="videoRecordsTab" type="button" role="tab" aria-selected="false" aria-controls="videoRecordsPage" data-studio-tab="records">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M3 9h18M9 13h6"></path></svg>
+            <span>视频生成记录</span>
+          </button>
+          <button id="videoEditorTab" type="button" role="tab" aria-selected="true" aria-controls="videoEditorPage" data-studio-tab="editor">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="6" cy="7" r="3"></circle><circle cx="6" cy="17" r="3"></circle><path d="m8.6 8.5 11.4 7M8.6 15.5 20 8"></path></svg>
+            <span>视频剪辑器</span>
+          </button>
+        </nav>
+        <div id="videoRecordsPage" role="tabpanel" aria-labelledby="videoRecordsTab" data-studio-page="records" hidden>
+          <div id="videoRecordsRoot" class="video-records-root" aria-live="polite"></div>
+        </div>
+        <div id="videoEditorPage" role="tabpanel" aria-labelledby="videoEditorTab" data-studio-page="editor">
+          <div id="videoEditorRoot" class="video-editor-root" aria-live="polite"></div>
+        </div>
+      </section>
     </main>
   </div>
 
   <nav id="mobileTaskDock" class="mobile-task-dock" aria-label="任务快捷导航" hidden></nav>
   <script src="/assets/video-workbench.js?v=__VIDEO_WORKBENCH_JS_VERSION__"></script>
+  <script src="/assets/video-icons.js?v=__VIDEO_ICONS_JS_VERSION__"></script>
+  <script src="/assets/video-records.js?v=__VIDEO_RECORDS_JS_VERSION__"></script>
+  <script src="/assets/video-editor.js?v=__VIDEO_EDITOR_JS_VERSION__"></script>
   <script src="/assets/video-page.js?v=__VIDEO_PAGE_JS_VERSION__"></script>
 </body>
 </html>

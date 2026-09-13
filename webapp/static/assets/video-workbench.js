@@ -191,7 +191,7 @@
     },
     ecommerce_short_video: {
       id: "ecommerce_short_video",
-      label: "广告 / 种草视频",
+      label: "广告短视频",
       shortLabel: "短视频",
       kicker: "COMMERCE VIDEO",
       description: "上传商品素材，按广告视频或种草视频原流程生成短视频。",
@@ -248,7 +248,7 @@
       fields(values = {}) {
         const union = values.replace_mode === "union";
         return [
-          select("replace_mode", "替换模式", [{ value: "model", label: "模特替换" }, { value: "product", label: "商品替换" }, { value: "union", label: "联合替换" }], { default: "model", placement: "uploadFooter" }),
+          select("replace_mode", "替换模式", [{ value: "model", label: "模特替换" }, { value: "product", label: "商品替换" }, { value: "union", label: "联合替换" }], { default: "model", placement: "uploadTop" }),
           file("video", "原视频", "video/*", { required: true }),
           ...(union
             ? [

@@ -19,6 +19,7 @@ MODULES = [
     "poster_translate",
     "subject_generate",
 ]
+NAV_MODULES = [*MODULES, "video_editor"]
 
 PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
@@ -64,7 +65,8 @@ def main() -> None:
         page.locator("#videoWorkbenchRoot .video-workbench-shell").wait_for(state="visible")
         hero_box = page.locator(".video-workbench-hero").bounding_box()
         assert hero_box and 50 <= hero_box["height"] <= 56, hero_box
-        assert page.locator('[data-view="video_workspace"]').count() == 1
+        assert page.locator('#consoleSidebar [data-view="video_workspace"]').count() == 0
+        assert page.locator("#consoleSidebar .nav-parent-toggle").count() == 0
         form_handle = page.locator("#videoWorkbenchForm").element_handle()
         page.wait_for_timeout(5_500)
         assert page.evaluate(
@@ -81,14 +83,23 @@ def main() -> None:
         discovered = page.locator("[data-video-module]").evaluate_all(
             "nodes => [...new Set(nodes.map(node => node.dataset.videoModule))]"
         )
-        assert discovered == MODULES, f"unexpected module navigation: {discovered}"
+        assert discovered == NAV_MODULES, f"unexpected module navigation: {discovered}"
         sidebar_boxes = page.locator("#videoModuleMenu [data-video-module]").evaluate_all(
             "nodes => nodes.map(node => { const box = node.getBoundingClientRect(); return { x: box.x, y: box.y, width: box.width }; })"
         )
-        assert len(sidebar_boxes) == 8
+        assert len(sidebar_boxes) == 9
         assert max(abs(box["x"] - sidebar_boxes[0]["x"]) for box in sidebar_boxes) < 2, sidebar_boxes
         assert min(box["width"] for box in sidebar_boxes) > 140, sidebar_boxes
-        assert all(sidebar_boxes[index]["y"] < sidebar_boxes[index + 1]["y"] for index in range(7)), sidebar_boxes
+        assert all(sidebar_boxes[index]["y"] < sidebar_boxes[index + 1]["y"] for index in range(8)), sidebar_boxes
+
+        page.locator('[data-video-module="video_editor"]').click(force=True)
+        page.locator('[data-studio-tab="editor"]').click()
+        page.locator("#videoEditorRoot .video-editor-app").wait_for(state="visible")
+        assert page.locator("#videoGenerationPanel").is_hidden()
+        assert page.locator("[data-editor-drop-zone]").is_visible()
+        assert page.locator("[data-timeline-drop]").is_visible()
+        page.locator('[data-video-module="digital_human_video"]').click(force=True)
+        page.locator('form[data-video-module-form="digital_human_video"]').wait_for(state="visible")
 
         whole_card_choosers = []
         page.on("filechooser", lambda chooser: whole_card_choosers.append(chooser))
@@ -260,7 +271,7 @@ def main() -> None:
         assert page.locator('[data-panel="video_workspace"]').is_visible()
         assert page.locator('#mobileTaskDock [data-workspace-view="video_workspace"]').count() == 0
         assert page.locator('#mobileVideoWorkspaceButton').is_hidden()
-        assert page.locator("#videoModuleMenu [data-video-module]").count() == 8
+        assert page.locator("#videoModuleMenu [data-video-module]").count() == 10
         mobile_shell_handle = page.locator("#videoWorkbenchRoot .video-workbench-shell").element_handle()
         page.locator("#mobileNavToggle").click()
         assert page.locator("body").evaluate("node => node.classList.contains('mobile-nav-open')")
@@ -283,7 +294,7 @@ def main() -> None:
         assert not page_errors, f"uncaught page errors: {page_errors}"
         browser.close()
 
-    print("video workbench browser smoke: passed (desktop + mobile, 8 modules, no task submission)")
+    print("video workbench browser smoke: passed (desktop + mobile, 8 generators + video editor, no task submission)")
 
 
 if __name__ == "__main__":

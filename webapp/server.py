@@ -174,6 +174,12 @@ from .video_workbench import (
     server_video_route_dependencies,
     video_task_payload_for_storage,
 )
+from .video_editor import (
+    capture_generated_video_assets,
+    ensure_video_editor_schema,
+    register_video_editor_routes,
+    server_video_editor_dependencies,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -6215,7 +6221,7 @@ def _ensure_user_can_access_task(user: dict[str, Any], task_row: dict[str, Any])
 def _task_type_label(task_type: Any) -> str:
     mapping = {
         "create_video": "数字人口播视频",
-        "ecommerce_short_video": "广告 / 种草视频",
+        "ecommerce_short_video": "广告短视频",
         "video_language_replace": "视频语种更换",
         "replace_model": "视频模特替换",
         "replace_product": "视频商品替换",
@@ -12439,6 +12445,17 @@ def _task_worker_with_control(
         if task_type == "persona_post_image":
             _delete_persona_task_media(task_id)
         return
+    if status == "success":
+        try:
+            capture_generated_video_assets(
+                VIDEO_EDITOR_DEPENDENCIES,
+                user_id=int(user_id),
+                task_id=str(task_id),
+                task_type=str(task_type),
+                output_data=output_to_store if isinstance(output_to_store, dict) else {},
+            )
+        except Exception:
+            logger.exception("Failed to archive generated video assets for task %s", task_id)
 
 
 async def _save_upload_file(username: str, task_id: str, field_name: str, upload: UploadFile | None, *, max_bytes: int | None = None) -> str:
@@ -25827,12 +25844,14 @@ def _create_persona_group_with_owner(user: dict[str, Any], operation: Any) -> di
 
 
 VIDEO_WORKBENCH_INTEGRATION = inject_video_workbench(sys.modules[__name__])
+VIDEO_EDITOR_DEPENDENCIES = server_video_editor_dependencies(sys.modules[__name__])
 
 
 def create_app() -> FastAPI:
     boundary = deployment_boundary()
     _ensure_dirs()
     init_db()
+    ensure_video_editor_schema(VIDEO_EDITOR_DEPENDENCIES)
     configure_social_automation(data_dir=DATA_DIR, new_id=_new_id)
     _ensure_default_pricing()
     _ensure_default_runtime_config()
@@ -26565,6 +26584,10 @@ def create_app() -> FastAPI:
                 "__CONSOLE_CSS_VERSION__": _asset_version("assets", "console.css"),
                 "__VIDEO_WORKBENCH_CSS_VERSION__": _asset_version("assets", "video-workbench.css"),
                 "__VIDEO_WORKBENCH_JS_VERSION__": _asset_version("assets", "video-workbench.js"),
+                "__VIDEO_EDITOR_CSS_VERSION__": _asset_version("assets", "video-editor.css"),
+                "__VIDEO_ICONS_JS_VERSION__": _asset_version("assets", "video-icons.js"),
+                "__VIDEO_EDITOR_JS_VERSION__": _asset_version("assets", "video-editor.js"),
+                "__VIDEO_RECORDS_JS_VERSION__": _asset_version("assets", "video-records.js"),
                 "__VIDEO_PAGE_JS_VERSION__": _asset_version("assets", "video-page.js"),
                 "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
                 "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
@@ -26781,6 +26804,7 @@ def create_app() -> FastAPI:
         register_collector_routes(app)
     register_notification_routes(app)
     register_video_routes(app, server_video_route_dependencies(sys.modules[__name__]))
+    register_video_editor_routes(app, VIDEO_EDITOR_DEPENDENCIES)
 
     def _telegram_runtime_snapshot() -> dict[str, Any]:
         with db() as conn:
