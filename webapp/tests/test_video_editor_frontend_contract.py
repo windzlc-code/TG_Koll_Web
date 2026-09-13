@@ -54,6 +54,10 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertIn('window.VectoSiteNavigation?.showAuthFeedback', VIDEO_EDITOR)
         self.assertNotIn('window.prompt', VIDEO_EDITOR)
         self.assertNotIn('window.confirm', VIDEO_EDITOR)
+        self.assertNotIn('class="site-auth-feedback-confirm', VIDEO_EDITOR)
+        self.assertNotIn('class="site-auth-feedback-confirm', VIDEO_RECORDS)
+        self.assertIn('class="video-action-confirm', VIDEO_EDITOR)
+        self.assertIn('class="video-action-confirm', VIDEO_RECORDS)
         drop_start = VIDEO_EDITOR.index('<label class="video-upload-drop')
         drop_end = VIDEO_EDITOR.index('</label>', drop_start)
         upload_input = VIDEO_EDITOR.index('data-editor-upload', drop_start)
@@ -123,6 +127,25 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
             'window.VideoPage?.showStudioTab?.("editor"',
         ):
             self.assertIn(contract, VIDEO_RECORDS)
+
+    def test_editor_materials_use_server_pagination_and_capacity_management(self):
+        self.assertIn('page_size: String(state.assetPageSize)', VIDEO_EDITOR)
+        self.assertNotIn('page_size=1000', VIDEO_EDITOR)
+        self.assertIn('state.assetTotalPages', VIDEO_EDITOR)
+        self.assertIn('renderStorageNotice()', VIDEO_EDITOR)
+        self.assertIn('data-storage-manage', VIDEO_EDITOR)
+        self.assertIn('data-record-delete=', VIDEO_RECORDS)
+        self.assertIn('method: "DELETE"', VIDEO_RECORDS)
+        self.assertIn('.video-storage-notice', VIDEO_EDITOR_CSS)
+
+    def test_project_conflicts_and_visual_effect_controls_are_wired(self):
+        for contract in (
+            "version: Math.max(1", "error?.status !== 409", "另存为新项目",
+            "data-clip-rotate", "data-clip-flip", "data-clip-filter",
+            "data-clip-fit", "data-clip-fade-in", "data-clip-fade-out", "clipFadeOpacity",
+            "data-timeline-snap", "snapTimelineTime",
+        ):
+            self.assertIn(contract, VIDEO_EDITOR)
 
     def test_actions_use_accessible_standard_svg_icons(self):
         self.assertIn('viewBox="0 0 24 24"', VIDEO_ICONS)

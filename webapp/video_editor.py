@@ -36,6 +36,8 @@ class VideoEditorDependencies:
     data_dir: Path
     extract_output_paths: Callable[[dict[str, Any]], list[str]]
     max_upload_bytes: int = 1024 * 1024 * 1024
+    storage_soft_limit_bytes: int = 8 * 1024 * 1024 * 1024
+    storage_warning_ratio: float = 0.8
     now_ts: Callable[[], int] = lambda: int(time.time())
 
 
@@ -43,6 +45,7 @@ class VideoProjectPayload(BaseModel):
     name: str = Field(default="未命名剪辑", max_length=120)
     clips: list[dict[str, Any]] = Field(default_factory=list)
     settings: dict[str, Any] = Field(default_factory=dict)
+    version: int | None = Field(default=None, ge=1)
 
 
 class VideoExportPayload(BaseModel):
@@ -255,12 +258,16 @@ def ensure_video_editor_schema(dependencies: VideoEditorDependencies) -> None:
               name TEXT NOT NULL,
               timeline_json TEXT NOT NULL DEFAULT '[]',
               settings_json TEXT NOT NULL DEFAULT '{}',
+              version INTEGER NOT NULL DEFAULT 1,
               created_at INTEGER NOT NULL,
               updated_at INTEGER NOT NULL
             )
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_video_projects_user_updated ON video_projects(user_id, updated_at DESC)")
+        project_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(video_projects)").fetchall()}
+        if "version" not in project_columns:
+            conn.execute("ALTER TABLE video_projects ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS video_exports (
@@ -317,6 +324,28 @@ def _serialize_asset(row: dict[str, Any]) -> dict[str, Any]:
         "media_url": f"/api/video/editor/assets/{asset_id}/media",
         "download_url": f"/api/video/editor/assets/{asset_id}/download",
         "thumbnail_url": f"/api/video/editor/assets/{asset_id}/thumbnail" if str(row.get("thumbnail_path") or "") else "",
+    }
+
+
+def _storage_summary(dependencies: VideoEditorDependencies, user_id: int) -> dict[str, Any]:
+    with dependencies.db_factory() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM video_assets WHERE user_id = ? AND status = 'ready'",
+            (int(user_id),),
+        ).fetchone()
+    asset_count = int(row[0] or 0)
+    used_bytes = int(row[1] or 0)
+    soft_limit = max(0, int(dependencies.storage_soft_limit_bytes or 0))
+    warning_ratio = min(max(float(dependencies.storage_warning_ratio or 0.8), 0.1), 1.0)
+    warning_at = max(1, int(soft_limit * warning_ratio)) if soft_limit else 0
+    return {
+        "asset_count": asset_count,
+        "used_bytes": used_bytes,
+        "soft_limit_bytes": soft_limit,
+        "warning_at_bytes": warning_at,
+        "usage_ratio": round(used_bytes / soft_limit, 4) if soft_limit else 0,
+        "warning": bool(warning_at and used_bytes >= warning_at),
+        "critical": bool(soft_limit and used_bytes >= soft_limit),
     }
 
 
@@ -453,6 +482,7 @@ def _serialize_project(row: dict[str, Any]) -> dict[str, Any]:
         "name": str(row.get("name") or "未命名剪辑"),
         "clips": _json_loads(row.get("timeline_json"), []),
         "settings": _json_loads(row.get("settings_json"), {}),
+        "version": max(1, int(row.get("version") or 1)),
         "created_at": int(row.get("created_at") or 0),
         "updated_at": int(row.get("updated_at") or 0),
     }
@@ -497,12 +527,17 @@ def _normalise_project_payload(
             position_x = float(raw.get("position_x") if raw.get("position_x") is not None else (0.94 if track else 0.5))
             position_y = float(raw.get("position_y") if raw.get("position_y") is not None else (0.06 if track else 0.5))
             opacity = float(raw.get("opacity") if raw.get("opacity") is not None else 1)
+            rotation = int(raw.get("rotation") if raw.get("rotation") is not None else 0)
+            fade_in = float(raw.get("fade_in") if raw.get("fade_in") is not None else 0)
+            fade_out = float(raw.get("fade_out") if raw.get("fade_out") is not None else 0)
         except (TypeError, ValueError, OverflowError) as exc:
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段包含无效数值。") from exc
-        if not all(math.isfinite(value) for value in (total, start, end, volume, speed, timeline_start, scale, position_x, position_y, opacity)):
+        if not all(math.isfinite(value) for value in (total, start, end, volume, speed, timeline_start, scale, position_x, position_y, opacity, fade_in, fade_out)):
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段包含无效数值。")
         if track < 0 or track > 2:
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段的轨道无效。")
+        if rotation not in {0, 90, 180, 270}:
+            raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段的旋转角度无效。")
         end = min(max(end, 0), total)
         if start >= end or end - start < 0.05:
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段的裁剪范围无效。")
@@ -513,6 +548,16 @@ def _normalise_project_payload(
         position_x = min(max(position_x, 0), 1)
         position_y = min(max(position_y, 0), 1)
         opacity = min(max(opacity, 0.05), 1)
+        rendered_duration = (end - start) / speed
+        fade_limit = min(5.0, rendered_duration / 2)
+        fade_in = min(max(fade_in, 0), fade_limit)
+        fade_out = min(max(fade_out, 0), fade_limit)
+        filter_preset = str(raw.get("filter") or "none").strip().lower()
+        if filter_preset not in {"none", "warm", "cool", "mono", "vivid"}:
+            raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段的滤镜无效。")
+        fit_mode = str(raw.get("fit") or "contain").strip().lower()
+        if fit_mode not in {"contain", "cover"}:
+            raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段的画面适配方式无效。")
         clip_id = str(raw.get("id") or _new_id("clip"))[:96]
         if not _ASSET_ID_RE.fullmatch(clip_id) or clip_id in clip_ids:
             raise HTTPException(status_code=400, detail=f"第 {index + 1} 个片段标识无效或重复。")
@@ -530,6 +575,12 @@ def _normalise_project_payload(
             "position_x": round(position_x, 2),
             "position_y": round(position_y, 2),
             "opacity": round(opacity, 2),
+            "rotation": rotation,
+            "flip_horizontal": raw.get("flip_horizontal") is True,
+            "filter": filter_preset,
+            "fit": fit_mode,
+            "fade_in": round(fade_in, 2),
+            "fade_out": round(fade_out, 2),
         })
         track_cursors[track] = max(track_cursors[track], timeline_start + (end - start) / speed)
     if max(track_cursors, default=0) > 6 * 60 * 60:
@@ -643,11 +694,43 @@ def _run_export(dependencies: VideoEditorDependencies, export_id: str) -> None:
             opacity = min(max(float(clip.get("opacity") if clip.get("opacity") is not None else 1), 0.05), 1)
             position_x = min(max(float(clip.get("position_x") if clip.get("position_x") is not None else 0.5), 0), 1)
             position_y = min(max(float(clip.get("position_y") if clip.get("position_y") is not None else 0.5), 0), 1)
+            rotation = int(clip.get("rotation") or 0)
+            flip_horizontal = clip.get("flip_horizontal") is True
+            filter_preset = str(clip.get("filter") or "none")
+            fit_mode = str(clip.get("fit") or "contain")
+            rendered_duration = (float(clip.get("end") or 0) - float(clip.get("start") or 0)) / speed
+            fade_in = min(max(float(clip.get("fade_in") or 0), 0), rendered_duration / 2)
+            fade_out = min(max(float(clip.get("fade_out") or 0), 0), rendered_duration / 2)
             box_width = max(2, int(width * scale) // 2 * 2)
             box_height = max(2, int(height * scale) // 2 * 2)
+            effects: list[str] = []
+            if rotation == 90:
+                effects.append("transpose=clock")
+            elif rotation == 180:
+                effects.extend(("hflip", "vflip"))
+            elif rotation == 270:
+                effects.append("transpose=cclock")
+            if flip_horizontal:
+                effects.append("hflip")
+            effects.extend({
+                "warm": ["eq=contrast=1.04:saturation=1.12:gamma_r=1.05:gamma_b=0.96"],
+                "cool": ["colorbalance=bs=.08:rs=-.03"],
+                "mono": ["hue=s=0"],
+                "vivid": ["eq=contrast=1.08:saturation=1.25"],
+            }.get(filter_preset, []))
+            if fit_mode == "cover":
+                effects.append(f"scale={box_width}:{box_height}:force_original_aspect_ratio=increase")
+                effects.append(f"crop={box_width}:{box_height}")
+            else:
+                effects.append(f"scale={box_width}:{box_height}:force_original_aspect_ratio=decrease")
+            effects.append("format=rgba")
+            if fade_in > 0:
+                effects.append(f"fade=t=in:st=0:d={fade_in:.3f}:alpha=1")
+            if fade_out > 0:
+                effects.append(f"fade=t=out:st={max(0, rendered_duration - fade_out):.3f}:d={fade_out:.3f}:alpha=1")
             filters.append(
                 f"[{input_index}:v]setpts=(PTS-STARTPTS)/{speed:.3f},fps=30,"
-                f"scale={box_width}:{box_height}:force_original_aspect_ratio=decrease,format=rgba,"
+                f"{','.join(effects)},"
                 f"colorchannelmixer=aa={opacity:.3f},setpts=PTS+{timeline_start:.3f}/TB[v{source_index}]"
             )
             next_canvas = f"canvas{layer_index + 1}"
@@ -813,7 +896,12 @@ def register_video_editor_routes(app: Any, dependencies: VideoEditorDependencies
             "total": total,
             "total_pages": total_pages,
             "supported_formats": sorted(VIDEO_EDITOR_SUFFIXES),
+            "storage": _storage_summary(dependencies, user_id),
         }
+
+    def get_asset(asset_id: str, user: dict[str, Any] = Depends(dependencies.get_current_user)) -> dict[str, Any]:
+        user_id = int(dependencies.workspace_user_id(user))
+        return {"asset": _serialize_asset(_asset_row(dependencies, user_id, asset_id))}
 
     def serve_asset(asset_id: str, download: bool, user: dict[str, Any]) -> FileResponse:
         user_id = int(dependencies.workspace_user_id(user))
@@ -822,9 +910,11 @@ def register_video_editor_routes(app: Any, dependencies: VideoEditorDependencies
         root = _user_root(dependencies, user_id)
         if not _inside(path, root) or not path.is_file():
             raise HTTPException(status_code=404, detail="视频文件不存在。")
+        media_type = mimetypes.guess_type(str(path))[0] if download else str(row.get("mime_type") or "")
+        resolved_media_type = media_type or ("application/octet-stream" if download else "video/mp4")
         return FileResponse(
             str(path),
-            media_type=str(row.get("mime_type") or mimetypes.guess_type(str(path))[0] or "video/mp4"),
+            media_type=resolved_media_type,
             filename=f"{_safe_name(row.get('name'), 'video')}{path.suffix}" if download else None,
             content_disposition_type="attachment" if download else "inline",
             headers={"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=3600"},
@@ -873,22 +963,28 @@ def register_video_editor_routes(app: Any, dependencies: VideoEditorDependencies
         now = int(dependencies.now_ts())
         with dependencies.db_factory() as conn:
             conn.execute(
-                "INSERT INTO video_projects(id, user_id, name, timeline_json, settings_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO video_projects(id, user_id, name, timeline_json, settings_json, version, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
                 (project_id, user_id, name, _json_dumps(clips), _json_dumps(settings), now, now),
             )
-        return {"project": {"id": project_id, "name": name, "clips": clips, "settings": settings, "created_at": now, "updated_at": now}}
+        return {"project": {"id": project_id, "name": name, "clips": clips, "settings": settings, "version": 1, "created_at": now, "updated_at": now}}
 
     def update_project(project_id: str, payload: VideoProjectPayload, user: dict[str, Any] = Depends(dependencies.get_current_user)) -> dict[str, Any]:
         user_id = int(dependencies.workspace_user_id(user))
-        _project_row(dependencies, user_id, project_id)
+        current = _project_row(dependencies, user_id, project_id)
+        if payload.version is None:
+            raise HTTPException(status_code=409, detail="项目版本信息缺失，请刷新页面后再保存。")
         name, clips, settings = _normalise_project_payload(dependencies, user_id, payload)
         now = int(dependencies.now_ts())
+        expected_version = int(payload.version)
+        next_version = expected_version + 1
         with dependencies.db_factory() as conn:
-            conn.execute(
-                "UPDATE video_projects SET name = ?, timeline_json = ?, settings_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-                (name, _json_dumps(clips), _json_dumps(settings), now, project_id, user_id),
+            updated = conn.execute(
+                "UPDATE video_projects SET name = ?, timeline_json = ?, settings_json = ?, version = ?, updated_at = ? WHERE id = ? AND user_id = ? AND version = ?",
+                (name, _json_dumps(clips), _json_dumps(settings), next_version, now, project_id, user_id, expected_version),
             )
-        return {"project": {"id": project_id, "name": name, "clips": clips, "settings": settings, "updated_at": now}}
+            if updated.rowcount != 1:
+                raise HTTPException(status_code=409, detail="项目已在另一个窗口更新。请重新载入，或将当前内容另存为新项目。")
+        return {"project": {"id": project_id, "name": name, "clips": clips, "settings": settings, "version": next_version, "updated_at": now}}
 
     def delete_project(project_id: str, user: dict[str, Any] = Depends(dependencies.get_current_user)) -> dict[str, Any]:
         user_id = int(dependencies.workspace_user_id(user))
@@ -963,6 +1059,7 @@ def register_video_editor_routes(app: Any, dependencies: VideoEditorDependencies
     routes = [
         ("/api/video/editor/assets", list_assets, ["GET"], "video_editor_assets"),
         ("/api/video/editor/assets/upload", upload_asset, ["POST"], "video_editor_upload"),
+        ("/api/video/editor/assets/{asset_id}", get_asset, ["GET"], "video_editor_asset"),
         ("/api/video/editor/assets/{asset_id}/media", media_endpoint, ["GET"], "video_editor_media"),
         ("/api/video/editor/assets/{asset_id}/download", download_endpoint, ["GET"], "video_editor_download"),
         ("/api/video/editor/assets/{asset_id}/thumbnail", thumbnail_endpoint, ["GET"], "video_editor_thumbnail"),
@@ -981,6 +1078,14 @@ def register_video_editor_routes(app: Any, dependencies: VideoEditorDependencies
 
 
 def server_video_editor_dependencies(server_module: Any) -> VideoEditorDependencies:
+    try:
+        storage_soft_limit = int(os.environ.get("VIDEO_EDITOR_STORAGE_SOFT_LIMIT_BYTES", 8 * 1024 * 1024 * 1024))
+    except (TypeError, ValueError):
+        storage_soft_limit = 8 * 1024 * 1024 * 1024
+    try:
+        storage_warning_ratio = float(os.environ.get("VIDEO_EDITOR_STORAGE_WARNING_RATIO", "0.8"))
+    except (TypeError, ValueError):
+        storage_warning_ratio = 0.8
     return VideoEditorDependencies(
         get_current_user=server_module.get_current_user,
         workspace_user_id=server_module._workspace_user_id,
@@ -988,6 +1093,8 @@ def server_video_editor_dependencies(server_module: Any) -> VideoEditorDependenc
         data_dir=Path(server_module.DATA_DIR),
         extract_output_paths=server_module._extract_download_paths,
         max_upload_bytes=int(getattr(server_module, "MAX_UPLOAD_BYTES", 1024 * 1024 * 1024)),
+        storage_soft_limit_bytes=max(0, storage_soft_limit),
+        storage_warning_ratio=min(max(storage_warning_ratio, 0.1), 1.0),
         now_ts=server_module._now_ts,
     )
 

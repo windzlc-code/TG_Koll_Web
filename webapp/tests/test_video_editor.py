@@ -126,13 +126,20 @@ class VideoEditorTests(unittest.TestCase):
         project = create_project(
             video_editor.VideoProjectPayload(
                 name="闭环验收",
-                clips=[{"asset_id": asset_id, "start": 0.1, "end": 0.8, "volume": 0.8, "speed": 2}],
+                clips=[{
+                    "asset_id": asset_id, "start": 0.1, "end": 0.8, "volume": 0.8, "speed": 2,
+                    "rotation": 90, "flip_horizontal": True, "filter": "mono", "fit": "cover", "fade_in": 0.1, "fade_out": 0.1,
+                }],
                 settings={"ratio": "16:9", "quality": "720p"},
             ),
             {"id": 1},
         )["project"]
         self.assertEqual(project["clips"][0]["track"], 0)
         self.assertEqual(project["clips"][0]["timeline_start"], 0)
+        self.assertEqual(project["clips"][0]["rotation"], 90)
+        self.assertTrue(project["clips"][0]["flip_horizontal"])
+        self.assertEqual(project["clips"][0]["filter"], "mono")
+        self.assertEqual(project["clips"][0]["fit"], "cover")
         start_export = self.endpoint("/api/video/editor/projects/{project_id}/export", "POST")
         export = start_export(project["id"], video_editor.VideoExportPayload(name="闭环成品"), {"id": 1})["export"]
 
@@ -165,6 +172,8 @@ class VideoEditorTests(unittest.TestCase):
         row = video_editor._asset_row(self.dependencies, 1, asset["id"])
         self.assertEqual(Path(row["preview_path"]).suffix.lower(), ".mp4")
         self.assertTrue(Path(row["preview_path"]).is_file())
+        download = self.endpoint("/api/video/editor/assets/{asset_id}/download", "GET")(asset["id"], {"id": 1})
+        self.assertIn(download.media_type, {"video/avi", "video/x-msvideo"})
 
     def test_multitrack_overlay_is_saved_and_composited_into_export(self):
         red = self.make_video(self.root / "base-red.mp4", audio=False, color="red")
@@ -261,6 +270,67 @@ class VideoEditorTests(unittest.TestCase):
         self.assertEqual(len(first["items"]), 10)
         self.assertEqual(len(second["items"]), 6)
         self.assertTrue(set(item["id"] for item in first["items"]).isdisjoint(item["id"] for item in second["items"]))
+        self.assertEqual(first["storage"]["asset_count"], 31)
+        self.assertFalse(first["storage"]["warning"])
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("UPDATE video_assets SET size_bytes = ? WHERE id = ?", (7 * 1024 * 1024 * 1024, "video_page_000"))
+            conn.commit()
+        finally:
+            conn.close()
+        warned = endpoint(page=1, page_size=10, source_type="", q="", sync_generated=False, user={"id": 1})
+        self.assertTrue(warned["storage"]["warning"])
+        self.assertFalse(warned["storage"]["critical"])
+        self.assertEqual(warned["storage"]["soft_limit_bytes"], 8 * 1024 * 1024 * 1024)
+
+    def test_project_version_conflict_never_overwrites_newer_timeline(self):
+        source = self.make_video(self.root / "versioned.mp4", audio=False)
+        asset = video_editor._persist_video_asset(
+            self.dependencies, user_id=1, source=source, name="版本素材", source_type="upload", source_ref="upload:versioned",
+        )
+        create = self.endpoint("/api/video/editor/projects", "POST")
+        update = self.endpoint("/api/video/editor/projects/{project_id}", "PUT")
+        project = create(video_editor.VideoProjectPayload(name="并发项目", clips=[]), {"id": 1})["project"]
+        self.assertEqual(project["version"], 1)
+        saved = update(
+            project["id"],
+            video_editor.VideoProjectPayload(
+                name="窗口一", version=project["version"], clips=[{"asset_id": asset["id"], "start": 0, "end": 0.5}],
+            ),
+            {"id": 1},
+        )["project"]
+        self.assertEqual(saved["version"], 2)
+        with self.assertRaises(HTTPException) as missing_version:
+            update(project["id"], video_editor.VideoProjectPayload(name="旧客户端", clips=[]), {"id": 1})
+        self.assertEqual(missing_version.exception.status_code, 409)
+        with self.assertRaises(HTTPException) as conflict:
+            update(project["id"], video_editor.VideoProjectPayload(name="窗口二", version=1, clips=[]), {"id": 1})
+        self.assertEqual(conflict.exception.status_code, 409)
+        current = video_editor._serialize_project(video_editor._project_row(self.dependencies, 1, project["id"]))
+        self.assertEqual(current["name"], "窗口一")
+        self.assertEqual(current["version"], 2)
+        self.assertEqual(len(current["clips"]), 1)
+
+    def test_existing_project_schema_is_migrated_with_version_column(self):
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("DROP TABLE video_projects")
+            conn.execute(
+                "CREATE TABLE video_projects (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT NOT NULL, "
+                "timeline_json TEXT NOT NULL DEFAULT '[]', settings_json TEXT NOT NULL DEFAULT '{}', "
+                "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        video_editor.ensure_video_editor_schema(self.dependencies)
+        conn = sqlite3.connect(self.db_path)
+        try:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(video_projects)").fetchall()}
+        finally:
+            conn.close()
+        self.assertIn("version", columns)
 
     def test_project_rejects_duplicate_clip_ids_and_non_finite_values(self):
         source = self.make_video(self.root / "validation.mp4", audio=False)

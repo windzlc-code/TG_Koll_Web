@@ -92,7 +92,21 @@ def main() -> None:
             page.locator(".site-auth-feedback [data-video-action-confirm]").wait_for(state="visible")
             assert page.locator(".site-auth-feedback [data-video-dialog-input]").count() == 0
             page.locator(".site-auth-feedback [data-video-action-cancel]").click()
+            page.locator(".site-auth-feedback").wait_for(state="detached")
             assert not native_dialogs
+
+            page.locator("[data-project-new]").click()
+            page.locator(".site-auth-feedback [data-video-dialog-input]").fill("浏览器剪辑项目")
+            page.locator(".site-auth-feedback [data-video-action-confirm]").click()
+            page.wait_for_function("document.querySelectorAll('[data-project-select] option').length === 2")
+            assert page.locator("[data-project-select] option:checked").inner_text() == "浏览器剪辑项目"
+            page.locator("[data-project-rename]").click()
+            page.locator(".site-auth-feedback [data-video-dialog-input]").fill("浏览器剪辑项目-改名")
+            page.locator(".site-auth-feedback [data-video-action-confirm]").click()
+            page.wait_for_function("document.querySelector('[data-project-select] option:checked')?.textContent === '浏览器剪辑项目-改名'")
+            page.locator("[data-project-delete]").click()
+            page.locator(".site-auth-feedback [data-video-action-confirm]").click()
+            page.wait_for_function("document.querySelectorAll('[data-project-select] option').length === 1")
 
             assert page.locator("[data-editor-drop-zone] [data-editor-upload]").count() == 1
             with page.expect_file_chooser() as chooser_info:
@@ -100,6 +114,7 @@ def main() -> None:
             chooser_info.value.set_files(str(sample))
             page.locator(".video-asset-card").wait_for(state="visible", timeout=30_000)
             page.get_by_text("browser-sample", exact=False).first.wait_for(state="visible")
+            page.get_by_text("素材容量已超过管理阈值", exact=True).wait_for(state="visible")
             assert page.locator(".video-asset-card").count() == 1, page.locator(".video-asset-card").count()
             page.locator("[data-asset-delete]").click()
             page.locator(".site-auth-feedback [data-video-action-confirm]").wait_for(state="visible")
@@ -161,12 +176,44 @@ def main() -> None:
             page.locator("[data-clip-timeline-start]").fill("0.05")
             page.locator("[data-clip-timeline-start]").press("Enter")
             page.locator("[data-clip-scale]").fill("0.45")
+            page.locator("[data-clip-rotate]").click()
+            assert "90°" in page.locator(".video-clip-effect-actions").inner_text()
+            page.locator("[data-clip-flip]").click()
+            assert page.locator("[data-clip-flip]").get_attribute("aria-pressed") == "true"
+            page.locator("[data-clip-filter]").select_option("vivid")
+            page.locator("[data-clip-fit]").select_option("cover")
+            page.locator("[data-clip-fade-in]").fill("0.1")
+            page.locator("[data-clip-fade-out]").fill("0.1")
             page.locator("[data-preview-scrubber]").evaluate(
                 "node => { node.value = '0.10'; node.dispatchEvent(new Event('input', { bubbles: true })); }"
             )
             assert page.locator('[data-track-row="1"] .video-timeline-clip').count() == 1
             assert page.locator('[data-track-row="0"] .video-timeline-clip').count() == 2
             assert page.locator("[data-editor-preview]").count() == 2
+            page.wait_for_function("document.querySelector('[data-editor-save-state]')?.dataset.state === 'saved'", timeout=10_000)
+
+            project_id = page.locator("[data-project-select]").input_value()
+            concurrent_result = page.evaluate(
+                """async projectId => {
+                  const headers = { 'X-Admin-Console': '1' };
+                  const workspaceId = document.querySelector('meta[name="admin-workspace-user-id"]')?.content || '';
+                  if (workspaceId) headers['X-Admin-Workspace-User-ID'] = workspaceId;
+                  const projectsResponse = await fetch('/api/video/editor/projects', { credentials: 'include', headers });
+                  const projectsPayload = await projectsResponse.json();
+                  const project = projectsPayload.items.find(item => item.id === projectId);
+                  const response = await fetch(`/api/video/editor/projects/${encodeURIComponent(projectId)}`, {
+                    method: 'PUT', credentials: 'include', headers: { ...headers, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: '另一个窗口的修改', clips: project.clips, settings: project.settings, version: project.version }),
+                  });
+                  return { ok: response.ok, status: response.status, body: await response.text() };
+                }""",
+                project_id,
+            )
+            assert concurrent_result["ok"], concurrent_result
+            page.locator("[data-clip-filter]").select_option("warm")
+            page.get_by_text("检测到项目版本冲突", exact=True).wait_for(state="visible", timeout=10_000)
+            page.locator(".site-auth-feedback [data-video-action-confirm]").click()
+            page.wait_for_function("document.querySelector('[data-project-select] option:checked')?.textContent?.includes('冲突副本')", timeout=10_000)
             page.wait_for_function("document.querySelector('[data-editor-save-state]')?.dataset.state === 'saved'", timeout=10_000)
 
             page.locator("[data-project-export]").click()
@@ -217,7 +264,12 @@ def main() -> None:
             assert page.locator(".video-share-modal").count() == 0
             page.locator("[data-record-menu-toggle]").click()
             assert page.locator(".video-record-action-menu:not([hidden])").is_visible()
-            assert page.locator(".video-record-action-menu:not([hidden]) svg.video-icon").count() == 3
+            assert page.locator(".video-record-action-menu:not([hidden]) svg.video-icon").count() == 4
+            page.locator("[data-record-delete]").click()
+            page.locator(".site-auth-feedback [data-record-delete-confirm]").wait_for(state="visible")
+            page.locator(".site-auth-feedback [data-record-delete-cancel]").click()
+            assert page.locator(".video-record-card").count() == 1
+            page.locator("[data-record-menu-toggle]").click()
             if screenshot_dir:
                 page.evaluate("window.scrollTo(0, 0)")
                 page.screenshot(path=str(screenshot_dir / "video-records-desktop.png"), full_page=True)

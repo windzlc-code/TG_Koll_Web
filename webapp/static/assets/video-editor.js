@@ -11,6 +11,12 @@
     loaded: false,
     loading: false,
     assets: [],
+    assetCache: new Map(),
+    assetTotal: 0,
+    assetTotalPages: 0,
+    assetStorage: null,
+    assetRequestId: 0,
+    assetSearchTimer: 0,
     projects: [],
     project: null,
     selectedClipId: "",
@@ -21,6 +27,7 @@
     editRevision: 0,
     savedRevision: 0,
     savePromise: null,
+    saveConflict: false,
     saveTimer: 0,
     uploadBusy: false,
     uploadMessage: "",
@@ -34,6 +41,7 @@
     previewAnchorTime: 0,
     previewAnchorNow: 0,
     timelineZoom: 64,
+    timelineSnap: true,
     history: [],
     future: [],
     trimDrag: null,
@@ -119,7 +127,7 @@
       message,
       actionText: false,
       dialogClass: "is-form is-confirmation video-editor-action-window",
-      contentHtml: `<form class="site-auth-feedback-form" data-video-action-form>${inputMarkup}<div class="site-auth-feedback-actions"><button type="button" class="site-auth-feedback-cancel" data-video-action-cancel>取消</button><button type="submit" class="site-auth-feedback-confirm ${danger ? "is-danger" : ""}" data-video-action-confirm>${escapeHtml(confirmText)}</button></div></form>`,
+      contentHtml: `<form class="site-auth-feedback-form" data-video-action-form>${inputMarkup}<div class="site-auth-feedback-actions"><button type="button" class="site-auth-feedback-cancel" data-video-action-cancel>取消</button><button type="submit" class="video-action-confirm ${danger ? "is-danger" : ""}" data-video-action-confirm>${escapeHtml(confirmText)}</button></div></form>`,
       onOpen(modal, close) {
         const form = modal.querySelector("[data-video-action-form]");
         const input = modal.querySelector("[data-video-dialog-input]");
@@ -143,7 +151,7 @@
   }
 
   function assetById(assetId) {
-    return state.assets.find((item) => item.id === assetId) || null;
+    return state.assetCache.get(assetId) || state.assets.find((item) => item.id === assetId) || null;
   }
 
   function selectedClip() {
@@ -152,6 +160,25 @@
 
   function clipDuration(clip) {
     return Math.max(0, Number(clip?.end || 0) - Number(clip?.start || 0)) / Math.max(0.5, Number(clip?.speed || 1));
+  }
+
+  function clipFadeOpacity(clip, localTime) {
+    const duration = clipDuration(clip);
+    const at = Math.max(0, Math.min(Number(localTime) || 0, duration));
+    const fadeIn = Math.max(0, Math.min(Number(clip?.fade_in || 0), duration / 2));
+    const fadeOut = Math.max(0, Math.min(Number(clip?.fade_out || 0), duration / 2));
+    const inFactor = fadeIn > 0 ? Math.min(1, at / fadeIn) : 1;
+    const outFactor = fadeOut > 0 ? Math.min(1, (duration - at) / fadeOut) : 1;
+    return Math.max(0, Math.min(1, Number(clip?.opacity ?? 1) * inFactor * outFactor));
+  }
+
+  function previewFilter(filter) {
+    return ({
+      warm: "contrast(1.04) saturate(1.12) sepia(.08)",
+      cool: "contrast(1.02) saturate(1.04) hue-rotate(8deg)",
+      mono: "grayscale(1)",
+      vivid: "contrast(1.08) saturate(1.25)",
+    })[filter] || "none";
   }
 
   function timelineSegments() {
@@ -172,6 +199,18 @@
     return segments.reduce((duration, segment) => Math.max(duration, segment.to), 0);
   }
 
+  function snapTimelineTime(value, excludedClipId = "") {
+    const requested = Math.max(0, Number(value) || 0);
+    if (!state.timelineSnap) return requested;
+    const points = [0, Number(state.previewTimelineTime) || 0];
+    for (const segment of timelineSegments()) {
+      if (segment.clip.id === excludedClipId) continue;
+      points.push(segment.from, segment.to);
+    }
+    const nearest = points.reduce((best, point) => Math.abs(point - requested) < Math.abs(best - requested) ? point : best, requested);
+    return Math.abs(nearest - requested) <= 8 / Math.max(16, state.timelineZoom) ? nearest : requested;
+  }
+
   function projectPayload() {
     return {
       name: String(state.project?.name || "未命名剪辑").trim() || "未命名剪辑",
@@ -188,13 +227,21 @@
         position_x: Math.max(0, Math.min(1, Number(clip.position_x ?? (track ? 0.94 : 0.5)))),
         position_y: Math.max(0, Math.min(1, Number(clip.position_y ?? (track ? 0.06 : 0.5)))),
         opacity: Math.max(0.05, Math.min(1, Number(clip.opacity ?? 1))),
+        rotation: [0, 90, 180, 270].includes(Number(clip.rotation)) ? Number(clip.rotation) : 0,
+        flip_horizontal: clip.flip_horizontal === true,
+        filter: ["none", "warm", "cool", "mono", "vivid"].includes(String(clip.filter || "none")) ? String(clip.filter || "none") : "none",
+        fit: clip.fit === "cover" ? "cover" : "contain",
+        fade_in: Math.max(0, Math.min(5, Number(clip.fade_in || 0))),
+        fade_out: Math.max(0, Math.min(5, Number(clip.fade_out || 0))),
       })),
       settings: { ...(state.project?.settings || {}) },
+      version: Math.max(1, Number(state.project?.version || 1)),
     };
   }
 
   function markDirty() {
     state.dirty = true;
+    state.saveConflict = false;
     state.editRevision += 1;
     updateSaveState();
     window.clearTimeout(state.saveTimer);
@@ -204,8 +251,8 @@
   function updateSaveState(message = "") {
     const node = document.querySelector("[data-editor-save-state]");
     if (!node) return;
-    node.textContent = message || (state.saving ? "保存中…" : state.dirty ? "有更改待保存" : "已保存到服务器");
-    node.dataset.state = state.saving ? "saving" : state.dirty ? "dirty" : "saved";
+    node.textContent = message || (state.saving ? "保存中…" : state.saveConflict ? "保存冲突待处理" : state.dirty ? "有更改待保存" : "已保存到服务器");
+    node.dataset.state = state.saving ? "saving" : state.saveConflict ? "conflict" : state.dirty ? "dirty" : "saved";
   }
 
   async function saveProject() {
@@ -213,9 +260,9 @@
     if (state.saving) {
       await state.savePromise;
       if (state.dirty) return saveProject();
-      return;
+      return true;
     }
-    if (!state.dirty) return;
+    if (!state.dirty) return true;
     const revision = state.editRevision;
     const projectId = state.project.id;
     const body = projectPayload();
@@ -228,6 +275,7 @@
       });
     try {
       const payload = await state.savePromise;
+      state.saveConflict = false;
       if (state.project?.id === projectId && state.editRevision === revision) {
         state.project = { ...state.project, ...(payload.project || {}), clips: payload.project?.clips || state.project.clips };
         state.savedRevision = revision;
@@ -237,12 +285,42 @@
       }
       const index = state.projects.findIndex((item) => item.id === projectId);
       if (index >= 0 && state.project?.id === projectId) state.projects[index] = { ...state.project };
+    } catch (error) {
+      if (error?.status !== 409) throw error;
+      state.saveConflict = true;
+      const decision = await requestActionDialog({
+        title: "检测到项目版本冲突",
+        message: "这个项目已在另一个窗口更新。为避免覆盖对方内容，可以把当前时间线另存为新项目。",
+        confirmText: "另存为新项目",
+      });
+      if (!decision.confirmed) {
+        showError("当前更改尚未保存；请另存为新项目，或重新选择项目加载服务器版本。");
+        return false;
+      }
+      const forkBody = { ...body, name: `${body.name}（冲突副本）` };
+      delete forkBody.version;
+      const forkPayload = await request(`${API}/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(forkBody),
+      });
+      const fork = forkPayload.project;
+      state.projects.unshift(fork);
+      state.project = fork;
+      state.selectedClipId = fork.clips?.find((item) => item.id === state.selectedClipId)?.id || "";
+      state.saveConflict = false;
+      state.dirty = false;
+      state.savedRevision = state.editRevision;
+      showMessage("检测到并发修改，当前内容已安全另存为新项目。");
+      render();
+      return true;
     } finally {
       state.saving = false;
       state.savePromise = null;
       updateSaveState();
     }
     if (state.project?.id === projectId && state.dirty) return saveProject();
+    return true;
   }
 
   function timelineSnapshot() {
@@ -312,9 +390,37 @@
     node.dataset.type = type;
   }
 
-  async function loadAssets(syncGenerated = true) {
-    const payload = await request(`${API}/assets?page=1&page_size=1000&sync_generated=${syncGenerated ? "true" : "false"}`);
+  function cacheAssets(items) {
+    for (const asset of items || []) {
+      if (asset?.id) state.assetCache.set(asset.id, asset);
+    }
+  }
+
+  async function loadProjectAssets() {
+    const missing = [...new Set((state.project?.clips || []).map((clip) => clip.asset_id).filter((id) => id && !state.assetCache.has(id)))];
+    if (!missing.length) return;
+    const results = await Promise.all(missing.map((assetId) => request(`${API}/assets/${encodeURIComponent(assetId)}`).catch(() => null)));
+    cacheAssets(results.map((payload) => payload?.asset).filter(Boolean));
+  }
+
+  async function loadAssets(syncGenerated = true, requestedPage = state.assetPage) {
+    const requestId = ++state.assetRequestId;
+    const params = new URLSearchParams({
+      page: String(Math.max(1, Number(requestedPage) || 1)),
+      page_size: String(state.assetPageSize),
+      sync_generated: syncGenerated ? "true" : "false",
+    });
+    if (state.filter !== "all") params.set("source_type", state.filter);
+    if (state.search.trim()) params.set("q", state.search.trim());
+    const payload = await request(`${API}/assets?${params}`);
+    if (requestId !== state.assetRequestId) return;
     state.assets = Array.isArray(payload.items) ? payload.items : [];
+    cacheAssets(state.assets);
+    state.assetTotal = Math.max(0, Number(payload.total) || 0);
+    state.assetTotalPages = Math.max(0, Number(payload.total_pages) || 0);
+    state.assetPage = Math.max(1, Math.min(Number(payload.page) || 1, Math.max(1, state.assetTotalPages)));
+    state.assetStorage = payload.storage && typeof payload.storage === "object" ? payload.storage : null;
+    await loadProjectAssets();
   }
 
   async function createProject(name = "未命名剪辑") {
@@ -328,6 +434,7 @@
     state.project = project;
     state.selectedClipId = "";
     state.dirty = false;
+    state.saveConflict = false;
     state.editRevision = 0;
     state.savedRevision = 0;
     state.history = [];
@@ -359,6 +466,7 @@
     renderLoading();
     try {
       await Promise.all([loadAssets(true), loadProjects()]);
+      await loadProjectAssets();
       await loadExports();
       state.loaded = true;
       render();
@@ -369,20 +477,8 @@
     }
   }
 
-  function filteredAssets() {
-    const query = state.search.trim().toLowerCase();
-    return state.assets.filter((asset) => {
-      if (state.filter !== "all" && asset.source_type !== state.filter) return false;
-      return !query || String(asset.name || "").toLowerCase().includes(query);
-    });
-  }
-
   function pagedAssets() {
-    const assets = filteredAssets();
-    const totalPages = Math.max(1, Math.ceil(assets.length / state.assetPageSize));
-    state.assetPage = Math.max(1, Math.min(state.assetPage, totalPages));
-    const start = (state.assetPage - 1) * state.assetPageSize;
-    return { items: assets.slice(start, start + state.assetPageSize), total: assets.length, totalPages };
+    return { items: state.assets, total: state.assetTotal, totalPages: state.assetTotalPages };
   }
 
   function renderLoading() {
@@ -429,6 +525,7 @@
         <span class="video-upload-drop-copy"><strong>${state.uploadBusy ? "正在处理视频" : "点击或拖入视频"}</strong><small>MP4、MOV、MKV、AVI、WebM 等主流格式</small></span>
       </label>
       ${state.uploadMessage ? `<div class="video-upload-note">${escapeHtml(state.uploadMessage)}</div>` : ""}
+      ${renderStorageNotice()}
       <div class="video-library-tools">
         <input type="search" value="${escapeHtml(state.search)}" placeholder="搜索素材" aria-label="搜索视频素材" data-editor-search />
         <select aria-label="筛选素材来源" data-editor-filter>
@@ -443,7 +540,19 @@
   }
 
   function renderAssetPagination(page = pagedAssets()) {
-    return page.totalPages > 1 ? `<div class="video-library-pagination"><button class="video-icon-button" type="button" data-asset-page="${state.assetPage - 1}" ${state.assetPage <= 1 ? "disabled" : ""} aria-label="上一页" title="上一页">${icon("left")}</button><span>${state.assetPage} / ${page.totalPages}</span><button class="video-icon-button" type="button" data-asset-page="${state.assetPage + 1}" ${state.assetPage >= page.totalPages ? "disabled" : ""} aria-label="下一页" title="下一页">${icon("right")}</button></div>` : "";
+    return page.totalPages > 1 ? `<div class="video-library-pagination"><button class="video-icon-button" type="button" data-asset-page="${state.assetPage - 1}" ${state.assetPage <= 1 ? "disabled" : ""} aria-label="上一页" title="上一页">${icon("left")}</button><span>${state.assetPage} / ${page.totalPages} · ${page.total} 项</span><button class="video-icon-button" type="button" data-asset-page="${state.assetPage + 1}" ${state.assetPage >= page.totalPages ? "disabled" : ""} aria-label="下一页" title="下一页">${icon("right")}</button></div>` : "";
+  }
+
+  function renderStorageNotice() {
+    const storage = state.assetStorage;
+    if (!storage?.warning) return "";
+    const ratio = Math.max(0, Number(storage.usage_ratio) || 0);
+    const level = storage.critical ? "critical" : "warning";
+    return `<div class="video-storage-notice" data-level="${level}" role="status">
+      <span aria-hidden="true">${icon("warning")}</span>
+      <div><strong>${storage.critical ? "素材容量已超过管理阈值" : "素材容量接近管理阈值"}</strong><small>已使用 ${formatBytes(storage.used_bytes)} / ${formatBytes(storage.soft_limit_bytes)}（${Math.round(ratio * 100)}%），上传仍可继续，请及时删除不再使用的素材。</small></div>
+      <button class="video-icon-button" type="button" data-storage-manage aria-label="管理素材" title="管理素材">${icon("trash")}</button>
+    </div>`;
   }
 
   function updateAssetResults() {
@@ -532,6 +641,7 @@
           <button type="button" class="video-icon-button" data-clip-duplicate ${hasSelection ? "" : "disabled"} title="复制片段 Ctrl+D" aria-label="复制片段">${icon("copy")}</button>
           <button type="button" class="video-icon-button" data-clip-remove ${hasSelection ? "" : "disabled"} title="删除片段 Delete" aria-label="删除片段">${icon("trash")}</button>
           <button type="button" class="video-icon-button" data-timeline-marker-add ${clips.length ? "" : "disabled"} title="在播放头添加标记" aria-label="添加时间线标记">${icon("marker")}</button>
+          <button type="button" class="video-icon-button ${state.timelineSnap ? "is-active" : ""}" data-timeline-snap title="时间线吸附" aria-label="时间线吸附" aria-pressed="${state.timelineSnap}">${icon("magnet")}</button>
         </div>
         <div class="video-timeline-zoom" aria-label="时间线缩放">
           <button type="button" class="video-icon-button" data-timeline-zoom-out title="缩小时间线" aria-label="缩小时间线">${icon("zoomOut")}</button>
@@ -576,6 +686,14 @@
           <label>画面大小 <output data-scale-output>${Math.round(Number(clip.scale ?? (Number(clip.track) ? 0.42 : 1)) * 100)}%</output><input type="range" min="0.15" max="1" step="0.05" value="${clip.scale ?? (Number(clip.track) ? 0.42 : 1)}" data-clip-scale /></label>
           <div class="video-clip-layout-fields"><label>水平位置<input type="range" min="0" max="1" step="0.05" value="${clip.position_x ?? 0.5}" data-clip-position-x /></label><label>垂直位置<input type="range" min="0" max="1" step="0.05" value="${clip.position_y ?? 0.5}" data-clip-position-y /></label></div>
           <label>不透明度 <output data-opacity-output>${Math.round(Number(clip.opacity ?? 1) * 100)}%</output><input type="range" min="0.05" max="1" step="0.05" value="${clip.opacity ?? 1}" data-clip-opacity /></label>
+          <div class="video-clip-effect-actions" aria-label="画面变换">
+            <button type="button" class="video-icon-button" data-clip-rotate title="顺时针旋转 90°" aria-label="顺时针旋转 90°">${icon("rotate")}</button>
+            <button type="button" class="video-icon-button ${clip.flip_horizontal ? "is-active" : ""}" data-clip-flip title="水平镜像" aria-label="水平镜像" aria-pressed="${clip.flip_horizontal === true}">${icon("flip")}</button>
+            <span>${Number(clip.rotation || 0)}°</span>
+          </div>
+          <label>画面滤镜<select data-clip-filter>${[["none", "无滤镜"], ["warm", "暖色"], ["cool", "冷色"], ["mono", "黑白"], ["vivid", "鲜艳"]].map(([value, label]) => `<option value="${value}" ${String(clip.filter || "none") === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+          <label>画面适配<select data-clip-fit><option value="contain" ${clip.fit !== "cover" ? "selected" : ""}>完整显示</option><option value="cover" ${clip.fit === "cover" ? "selected" : ""}>填充裁切</option></select></label>
+          <div class="video-clip-layout-fields"><label>淡入（秒）<input type="number" min="0" max="${Math.min(5, clipDuration(clip) / 2).toFixed(2)}" step="0.1" value="${Number(clip.fade_in || 0)}" data-clip-fade-in /></label><label>淡出（秒）<input type="number" min="0" max="${Math.min(5, clipDuration(clip) / 2).toFixed(2)}" step="0.1" value="${Number(clip.fade_out || 0)}" data-clip-fade-out /></label></div>
         </div>` : '<div class="video-inspector-empty">选择时间线中的片段后，可调整裁剪范围和音量。</div>'}
       </section>
       <section class="video-export-panel">
@@ -631,7 +749,7 @@
     const track = Math.max(0, Math.min(VIDEO_TRACKS - 1, Math.trunc(Number(placement.track) || 0)));
     const trackEnd = timelineSegments().filter((segment) => segment.track === track).reduce((end, segment) => Math.max(end, segment.to), 0);
     const requestedStart = Number(placement.timelineStart);
-    const timelineStart = Number.isFinite(requestedStart) && requestedStart >= 0 ? requestedStart : trackEnd;
+    const timelineStart = Number.isFinite(requestedStart) && requestedStart >= 0 ? snapTimelineTime(requestedStart) : trackEnd;
     const clip = {
       id: `clip_${window.crypto?.randomUUID?.().replaceAll("-", "") || `${Date.now()}${Math.random().toString(16).slice(2)}`}`,
       asset_id: asset.id,
@@ -645,6 +763,12 @@
       position_x: track ? 0.94 : 0.5,
       position_y: track ? 0.06 : 0.5,
       opacity: 1,
+      rotation: 0,
+      flip_horizontal: false,
+      filter: "none",
+      fit: "contain",
+      fade_in: 0,
+      fade_out: 0,
     };
     mutateTimeline(() => {
       state.project.clips = [...(state.project.clips || []), clip];
@@ -658,7 +782,7 @@
     if (!clip) return;
     mutateTimeline(() => {
       clip.track = Math.max(0, Math.min(VIDEO_TRACKS - 1, Math.trunc(Number(track) || 0)));
-      clip.timeline_start = Number(Math.max(0, Number(timelineStart) || 0).toFixed(3));
+      clip.timeline_start = Number(snapTimelineTime(timelineStart, clip.id).toFixed(3));
       if (clip.scale === undefined) clip.scale = clip.track ? 0.42 : 1;
       if (clip.position_x === undefined) clip.position_x = clip.track ? 0.94 : 0.5;
       if (clip.position_y === undefined) clip.position_y = clip.track ? 0.06 : 0.5;
@@ -753,7 +877,8 @@
         body.append("video", videos[index]);
         await request(`${API}/assets/upload`, { method: "POST", body });
       }
-      await loadAssets(false);
+      state.assetPage = 1;
+      await loadAssets(false, 1);
       state.uploadMessage = `已保存 ${videos.length} 个视频素材`;
       render();
     } catch (error) {
@@ -771,29 +896,33 @@
     const decision = await requestActionDialog({ title: "删除视频素材", message: `确定删除“${asset.name}”吗？原始文件和预览文件都会删除。`, confirmText: "删除素材", danger: true });
     if (!decision.confirmed) return;
     await request(`${API}/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
-    state.assets = state.assets.filter((item) => item.id !== assetId);
+    state.assetCache.delete(assetId);
+    await loadAssets(false, state.assetPage);
+    if (!state.assets.length && state.assetTotal > 0) await loadAssets(false, state.assetPage);
     render();
     showMessage("素材已删除");
   }
 
   async function switchProject(projectId) {
-    if (state.dirty) await saveProject();
+    if (state.dirty && !(await saveProject())) return;
     const project = state.projects.find((item) => item.id === projectId);
     if (!project) return;
     state.project = project;
     state.selectedClipId = "";
     state.previewTimelineTime = 0;
     state.dirty = false;
+    state.saveConflict = false;
     state.editRevision = 0;
     state.savedRevision = 0;
     state.history = [];
     state.future = [];
+    await loadProjectAssets();
     await loadExports();
     render();
   }
 
   async function newProject() {
-    if (state.dirty) await saveProject();
+    if (state.dirty && !(await saveProject())) return;
     const decision = await requestActionDialog({ title: "新建剪辑项目", message: "为新的时间线输入一个便于识别的名称。", inputLabel: "项目名称", inputValue: `剪辑项目 ${state.projects.length + 1}`, confirmText: "新建项目" });
     if (!decision.confirmed) return;
     await createProject(decision.value);
@@ -806,7 +935,7 @@
     state.project.name = decision.value;
     markDirty();
     render();
-    await saveProject();
+    if (!(await saveProject())) return;
     render();
   }
 
@@ -830,7 +959,7 @@
 
   async function startExport() {
     if (!state.project?.clips?.length || ACTIVE_EXPORTS.has(state.exportJob?.status)) return;
-    await saveProject();
+    if (!(await saveProject())) return;
     const payload = await request(`${API}/projects/${encodeURIComponent(state.project.id)}/export`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -846,7 +975,8 @@
     const payload = await request(`${API}/exports/${encodeURIComponent(state.exportJob.id)}`);
     state.exportJob = payload.export;
     if (state.exportJob.status === "success") {
-      await loadAssets(false);
+      state.assetPage = 1;
+      await loadAssets(false, 1);
       render();
     } else {
       const host = document.querySelector("[data-export-status-host]");
@@ -884,10 +1014,13 @@
       const scale = Math.max(0.15, Math.min(1, Number(segment.clip.scale ?? (segment.track ? 0.42 : 1))));
       const x = Math.max(0, Math.min(1, Number(segment.clip.position_x ?? (segment.track ? 0.94 : 0.5))));
       const y = Math.max(0, Math.min(1, Number(segment.clip.position_y ?? (segment.track ? 0.06 : 0.5))));
-      const opacity = Math.max(0.05, Math.min(1, Number(segment.clip.opacity ?? 1)));
+      const opacity = clipFadeOpacity(segment.clip, Math.max(0, Number(time) - segment.from));
       const left = (1 - scale) * x * 100;
       const top = (1 - scale) * y * 100;
-      return `<video data-editor-preview data-preview-clip-id="${escapeHtml(segment.clip.id)}" src="${escapeHtml(authenticatedMediaUrl(asset.media_url))}" preload="auto" playsinline style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${(scale * 100).toFixed(2)}%;height:${(scale * 100).toFixed(2)}%;opacity:${opacity};z-index:${segment.track + 1}"></video>`;
+      const rotation = [0, 90, 180, 270].includes(Number(segment.clip.rotation)) ? Number(segment.clip.rotation) : 0;
+      const transform = `rotate(${rotation}deg) scaleX(${segment.clip.flip_horizontal === true ? -1 : 1})`;
+      const filter = previewFilter(String(segment.clip.filter || "none"));
+      return `<video data-editor-preview data-preview-clip-id="${escapeHtml(segment.clip.id)}" src="${escapeHtml(authenticatedMediaUrl(asset.media_url))}" preload="auto" playsinline style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%;width:${(scale * 100).toFixed(2)}%;height:${(scale * 100).toFixed(2)}%;opacity:${opacity};transform:${transform};filter:${filter};object-fit:${segment.clip.fit === "cover" ? "cover" : "contain"};z-index:${segment.track + 1}"></video>`;
     }).join("");
   }
 
@@ -914,6 +1047,7 @@
       const desired = Math.min(Number(clip.end) - 0.005, Number(clip.start) + Math.max(0, Number(time) - segment.from) * Math.max(0.5, Number(clip.speed || 1)));
       video.volume = Math.max(0, Math.min(1, Number(clip.volume ?? 1)));
       video.playbackRate = Math.max(0.5, Math.min(2, Number(clip.speed || 1)));
+      video.style.opacity = String(clipFadeOpacity(clip, Math.max(0, Number(time) - segment.from)));
       video.dataset.targetTime = String(Math.max(Number(clip.start), desired));
       if (video.dataset.previewBound !== "1") {
         video.dataset.previewBound = "1";
@@ -1029,7 +1163,13 @@
   function onClick(event) {
     if (event.target.closest("[data-editor-retry]")) return void loadAll();
     const assetPage = event.target.closest("[data-asset-page]");
-    if (assetPage && !assetPage.disabled) { state.assetPage = Number(assetPage.dataset.assetPage) || 1; render(); return; }
+    if (assetPage && !assetPage.disabled) { void loadAssets(false, Number(assetPage.dataset.assetPage) || 1).then(render).catch(showError); return; }
+    if (event.target.closest("[data-storage-manage]")) {
+      document.querySelector("[data-editor-search]")?.focus();
+      document.querySelector("[data-editor-assets]")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      showMessage("可使用素材卡片上的删除图标清理不再使用的视频。", "warning");
+      return;
+    }
     const add = event.target.closest("[data-asset-add]");
     if (add) return addAssetToTimeline(add.dataset.assetAdd);
     const preview = event.target.closest("[data-asset-preview]");
@@ -1047,7 +1187,23 @@
     if (event.target.closest("[data-timeline-zoom-out]")) return setTimelineZoom(state.timelineZoom - 12);
     if (event.target.closest("[data-timeline-zoom-in]")) return setTimelineZoom(state.timelineZoom + 12);
     if (event.target.closest("[data-timeline-zoom-fit]")) return fitTimeline();
+    if (event.target.closest("[data-timeline-snap]")) {
+      state.timelineSnap = !state.timelineSnap;
+      render();
+      showMessage(state.timelineSnap ? "时间线吸附已开启" : "时间线吸附已关闭", "success");
+      return;
+    }
     if (event.target.closest("[data-clip-duplicate]")) return duplicateSelectedClip();
+    if (event.target.closest("[data-clip-rotate]")) {
+      const clip = selectedClip();
+      if (clip) mutateTimeline(() => { clip.rotation = (Number(clip.rotation || 0) + 90) % 360; });
+      return;
+    }
+    if (event.target.closest("[data-clip-flip]")) {
+      const clip = selectedClip();
+      if (clip) mutateTimeline(() => { clip.flip_horizontal = clip.flip_horizontal !== true; });
+      return;
+    }
     if (event.target.closest("[data-trim-to-playhead]")) return trimSelectedToPlayhead(event.target.closest("[data-trim-to-playhead]").dataset.trimToPlayhead);
     if (event.target.closest("[data-timeline-marker-add]")) return addTimelineMarker();
     const marker = event.target.closest("[data-marker-time]");
@@ -1081,7 +1237,8 @@
     if (event.target.matches("[data-editor-search]")) {
       state.search = event.target.value;
       state.assetPage = 1;
-      updateAssetResults();
+      window.clearTimeout(state.assetSearchTimer);
+      state.assetSearchTimer = window.setTimeout(() => loadAssets(false, 1).then(updateAssetResults).catch(showError), 260);
       return;
     }
     const clip = selectedClip();
@@ -1114,6 +1271,14 @@
       syncPreviewLayers(state.previewTimelineTime, false, true);
       return;
     }
+    if (clip && event.target.matches("[data-clip-fade-in], [data-clip-fade-out]")) {
+      const field = event.target.matches("[data-clip-fade-in]") ? "fade_in" : "fade_out";
+      clip[field] = Math.max(0, Math.min(5, clipDuration(clip) / 2, Number(event.target.value) || 0));
+      event.target.value = String(Number(clip[field].toFixed(2)));
+      markDirty();
+      syncPreviewLayers(state.previewTimelineTime, false, true);
+      return;
+    }
     if (clip && event.target.matches("[data-clip-timeline-start]")) {
       clip.timeline_start = Number(Math.max(0, Number(event.target.value) || 0).toFixed(3));
       markDirty();
@@ -1127,7 +1292,7 @@
     if (event.target.matches("[data-editor-filter]")) {
       state.filter = event.target.value;
       state.assetPage = 1;
-      render();
+      void loadAssets(false, 1).then(render).catch(showError);
       return;
     }
     if (event.target.matches("[data-project-select]")) return void switchProject(event.target.value).catch(showError);
@@ -1148,6 +1313,16 @@
       recordHistory();
       clip.speed = Math.max(0.5, Math.min(2, Number(event.target.value) || 1));
       state.previewTimelineTime = Math.min(state.previewTimelineTime, timelineDuration());
+      markDirty();
+      render();
+      return;
+    }
+    if (event.target.matches("[data-clip-filter], [data-clip-fit]")) {
+      const clip = selectedClip();
+      if (!clip) return;
+      recordHistory();
+      if (event.target.matches("[data-clip-filter]")) clip.filter = event.target.value;
+      else clip.fit = event.target.value;
       markDirty();
       render();
       return;
@@ -1315,10 +1490,10 @@
     host.addEventListener("drop", onDrop);
     host.addEventListener("pointerdown", onPointerDown);
     host.addEventListener("focusin", (event) => {
-      if (event.target.matches("[data-clip-start], [data-clip-end], [data-clip-volume], [data-clip-timeline-start], [data-clip-scale], [data-clip-position-x], [data-clip-position-y], [data-clip-opacity]")) state.inspectorSnapshot = timelineSnapshot();
+      if (event.target.matches("[data-clip-start], [data-clip-end], [data-clip-volume], [data-clip-timeline-start], [data-clip-scale], [data-clip-position-x], [data-clip-position-y], [data-clip-opacity], [data-clip-fade-in], [data-clip-fade-out]")) state.inspectorSnapshot = timelineSnapshot();
     });
     host.addEventListener("focusout", (event) => {
-      if (!event.target.matches("[data-clip-start], [data-clip-end], [data-clip-volume], [data-clip-timeline-start], [data-clip-scale], [data-clip-position-x], [data-clip-position-y], [data-clip-opacity]")) return;
+      if (!event.target.matches("[data-clip-start], [data-clip-end], [data-clip-volume], [data-clip-timeline-start], [data-clip-scale], [data-clip-position-x], [data-clip-position-y], [data-clip-opacity], [data-clip-fade-in], [data-clip-fade-out]")) return;
       if (state.inspectorSnapshot && state.inspectorSnapshot !== timelineSnapshot()) recordHistory(state.inspectorSnapshot);
       state.inspectorSnapshot = "";
     });

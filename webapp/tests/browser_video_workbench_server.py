@@ -20,6 +20,8 @@ def main() -> None:
     os.environ["ADMIN_BOOTSTRAP_USERNAME"] = "browseradmin"
     os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = "BrowserSmoke-2026!"
     os.environ["SESSION_COOKIE_SECURE"] = "0"
+    os.environ["VIDEO_EDITOR_STORAGE_SOFT_LIMIT_BYTES"] = "1"
+    os.environ["VIDEO_EDITOR_STORAGE_WARNING_RATIO"] = "0.8"
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))

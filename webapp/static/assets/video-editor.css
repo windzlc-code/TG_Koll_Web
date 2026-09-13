@@ -682,6 +682,10 @@
   color: #9c632a;
 }
 
+.video-save-state[data-state="conflict"] {
+  color: #a44238;
+}
+
 .video-editor-message {
   background: #e8f5ee;
   border: 1px solid #afd8c0;
@@ -696,6 +700,31 @@
   background: #fff1ef;
   border-color: #e6bab4;
   color: #8e3d38;
+}
+
+.video-editor-message[data-type="warning"] {
+  background: #fff6dc;
+  border-color: #d7ad47;
+  color: #745312;
+}
+
+.site-auth-feedback-actions .video-action-confirm {
+  background: var(--dark-2, #102629);
+  border: 1px solid var(--dark-2, #102629);
+  color: #fff;
+}
+
+.site-auth-feedback-actions .video-action-confirm:hover,
+.site-auth-feedback-actions .video-action-confirm:focus-visible {
+  background: var(--public-cool-dark, #253746);
+  border-color: var(--public-cool-dark, #253746);
+}
+
+.site-auth-feedback-actions .video-action-confirm.is-danger,
+.site-auth-feedback-actions .video-action-confirm.is-danger:hover,
+.site-auth-feedback-actions .video-action-confirm.is-danger:focus-visible {
+  background: #a23c3c;
+  border-color: #a23c3c;
 }
 
 .video-editor-main-grid {
@@ -814,6 +843,58 @@
   border-radius: 7px;
   margin-bottom: 8px;
   padding: 7px 8px;
+}
+
+.video-storage-notice {
+  align-items: center;
+  background: #fff7df;
+  border: 1px solid #e4c46c;
+  border-radius: 9px;
+  color: #60470f;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 22px minmax(0, 1fr) 32px;
+  margin-bottom: 9px;
+  padding: 8px;
+}
+
+.video-storage-notice[data-level="critical"] {
+  background: #fff0ed;
+  border-color: #df9b8f;
+  color: #7e332c;
+}
+
+.video-storage-notice > span,
+.video-storage-notice > span .video-icon {
+  height: 20px;
+  width: 20px;
+}
+
+.video-storage-notice > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.video-storage-notice strong {
+  font-size: 10px;
+}
+
+.video-storage-notice small {
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.video-storage-notice .video-icon-button {
+  background: rgb(255 255 255 / 72%);
+  height: 32px;
+  padding: 0;
+  width: 32px;
+}
+
+.video-records-storage-notice {
+  grid-template-columns: 22px minmax(0, 1fr);
+  margin: 0 0 12px;
 }
 
 .video-library-tools {
@@ -976,6 +1057,38 @@
   justify-content: center;
   padding: 0;
   width: 32px;
+}
+
+.video-clip-effect-actions {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.video-clip-effect-actions .video-icon-button {
+  background: #f5f8f9;
+  border: 1px solid var(--editor-line);
+  height: 36px;
+  padding: 0;
+  width: 36px;
+}
+
+.video-clip-effect-actions .video-icon-button.is-active {
+  background: var(--editor-accent-soft);
+  border-color: var(--editor-accent);
+  color: #1e6c6a;
+}
+
+.video-timeline-toolbar .video-icon-button.is-active {
+  background: var(--editor-accent-soft);
+  border-color: var(--editor-accent);
+  color: #1e6c6a;
+}
+
+.video-clip-effect-actions > span {
+  color: var(--editor-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .video-library-empty,

@@ -22,6 +22,7 @@
     shareItemId: "",
     shareFile: null,
     shareFilePromise: null,
+    storage: null,
   };
 
   const root = () => document.getElementById("videoRecordsRoot");
@@ -39,16 +40,36 @@
     return `${url.pathname}${url.search}${url.hash}`;
   }
 
-  async function request(path) {
-    const headers = new Headers();
+  async function request(path, options = {}) {
+    const headers = new Headers(options.headers || {});
     if (ADMIN_WORKSPACE_USER_ID) headers.set("X-Admin-Workspace-User-ID", ADMIN_WORKSPACE_USER_ID);
     if (ADMIN_CONSOLE_SESSION) headers.set("X-Admin-Console", "1");
-    const response = await fetch(path, { credentials: "include", headers });
+    const response = await fetch(path, { credentials: "include", ...options, headers });
     const raw = await response.text();
     let payload = {};
     try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = { detail: raw }; }
     if (!response.ok) throw new Error(String(payload.detail || payload.error || "生成记录加载失败"));
     return payload;
+  }
+
+  async function confirmDelete(item) {
+    const presenter = window.VectoSiteNavigation?.showAuthFeedback;
+    if (typeof presenter !== "function") throw new Error("公共操作窗口尚未加载，请刷新页面后重试。");
+    let confirmed = false;
+    await presenter({
+      kind: "error",
+      showIcon: false,
+      title: "删除视频素材",
+      message: `确定删除“${item.name}”吗？原始文件和预览文件都会删除，且无法恢复。`,
+      actionText: false,
+      dialogClass: "is-form is-confirmation video-editor-action-window",
+      contentHtml: '<div class="site-auth-feedback-actions"><button type="button" class="site-auth-feedback-cancel" data-record-delete-cancel>取消</button><button type="button" class="video-action-confirm is-danger" data-record-delete-confirm>删除素材</button></div>',
+      onOpen(modal, close) {
+        modal.querySelector("[data-record-delete-cancel]")?.addEventListener("click", close);
+        modal.querySelector("[data-record-delete-confirm]")?.addEventListener("click", () => { confirmed = true; close(); });
+      },
+    });
+    return confirmed;
   }
 
   function formatDuration(seconds) {
@@ -128,6 +149,7 @@
               <button type="button" data-record-preview="${escapeHtml(item.id)}" aria-label="预览 ${escapeHtml(item.name)}" title="预览">${icon("eye")}<span>预览</span></button>
               <button type="button" data-record-edit="${escapeHtml(item.id)}" aria-label="剪辑 ${escapeHtml(item.name)}" title="加入剪辑器">${icon("scissors")}<span>剪辑</span></button>
               <a href="${escapeHtml(mediaUrl(item.download_url))}" download aria-label="下载 ${escapeHtml(item.name)}" title="下载原片">${icon("download")}<span>下载</span></a>
+              <button type="button" class="danger-link" data-record-delete="${escapeHtml(item.id)}" aria-label="删除 ${escapeHtml(item.name)}" title="删除素材">${icon("trash")}<span>删除</span></button>
             </div>
           </div>
         </div>
@@ -173,6 +195,7 @@
             <button class="video-icon-button" type="button" data-record-refresh aria-label="刷新视频记录" title="刷新">${icon("refresh")}</button>
           </div>
         </div>
+        ${state.storage?.warning ? `<div class="video-storage-notice video-records-storage-notice" data-level="${state.storage.critical ? "critical" : "warning"}" role="status"><span aria-hidden="true">${icon("warning")}</span><div><strong>${state.storage.critical ? "素材容量已超过管理阈值" : "素材容量接近管理阈值"}</strong><small>已使用 ${formatBytes(state.storage.used_bytes)} / ${formatBytes(state.storage.soft_limit_bytes)}（${Math.round(Number(state.storage.usage_ratio || 0) * 100)}%），请删除不再使用的视频。</small></div></div>` : ""}
         ${state.loading ? '<div class="video-records-state"><span class="video-workbench-loader"></span><strong>正在读取视频记录</strong></div>' : ""}
         ${state.error ? `<div class="video-records-state is-error"><strong>记录加载失败</strong><span>${escapeHtml(state.error)}</span><button type="button" data-record-refresh>重试</button></div>` : ""}
         ${!state.loading && !state.error ? `<div class="video-records-grid">${state.items.length ? state.items.map(card).join("") : '<div class="video-records-state"><strong>暂时没有符合条件的视频</strong><span>完成视频生成后，记录会自动保存到这里。</span></div>'}</div>${renderPagination()}` : ""}
@@ -198,6 +221,7 @@
       state.page = Number(payload.page) || state.page;
       state.total = Number(payload.total) || 0;
       state.totalPages = Number(payload.total_pages) || 0;
+      state.storage = payload.storage && typeof payload.storage === "object" ? payload.storage : null;
       state.loaded = true;
     } catch (error) {
       if (token !== state.requestToken) return;
@@ -216,6 +240,14 @@
     modal.innerHTML = `<div role="dialog" aria-modal="true" aria-label="视频生成记录预览"><header><strong>${escapeHtml(item.name)}</strong><button class="video-icon-button" type="button" data-preview-close aria-label="关闭预览" title="关闭">${icon("close")}</button></header><video src="${escapeHtml(mediaUrl(item.media_url))}" controls autoplay playsinline></video></div>`;
     modal.addEventListener("click", (event) => { if (event.target === modal || event.target.closest("[data-preview-close]")) modal.remove(); });
     document.body.appendChild(modal);
+  }
+
+  async function deleteRecord(itemId) {
+    const item = state.items.find((entry) => entry.id === itemId);
+    if (!item || !(await confirmDelete(item))) return;
+    await request(`${API}/${encodeURIComponent(itemId)}`, { method: "DELETE" });
+    if (state.items.length === 1 && state.page > 1) state.page -= 1;
+    await load();
   }
 
   function platformButtons(items) {
@@ -348,6 +380,8 @@
       if (item) { state.openActionId = ""; preview(item.dataset.recordPreview); return; }
       const edit = event.target.closest("[data-record-edit]");
       if (edit) { state.openActionId = ""; window.VideoPage?.showStudioTab?.("editor", { assetId: edit.dataset.recordEdit }); return; }
+      const remove = event.target.closest("[data-record-delete]");
+      if (remove) { state.openActionId = ""; void deleteRecord(remove.dataset.recordDelete).catch((error) => { state.error = String(error?.message || error); render(); }); return; }
       if (event.target.closest("[data-record-refresh]")) void load({ sync: true });
     });
     host.addEventListener("change", (event) => {
