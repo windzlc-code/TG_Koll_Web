@@ -2308,6 +2308,23 @@ describe("sentiment hot importer", () => {
     expect(candidates.map((candidate) => candidate.id)).toEqual(["short-threads-search"]);
   });
 
+  it("keeps current-qualified short Threads posts without the legacy 60-character reader gate", () => {
+    const candidates = finalizeSentimentHotCandidatesForDisplay([{
+      id: "short-threads-reader",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@demo/post/short-reader",
+      author: "demo",
+      content: "茶具挑选与日常冲泡心得分享与实用建议 https://example.com/a https://example.com/b",
+      media: [],
+      hotScore: 200,
+      engagement: { likeCount: 200 },
+      metrics: { source: "threads-account-search" },
+      capturedAt: new Date().toISOString(),
+    }] as any, 10);
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["short-threads-reader"]);
+  });
+
   it("rejects marked recent fallbacks when they are still below the heat gate", () => {
     const content = "茶文化活動分享茶葉保存、茶具選擇、茶席布置、沖泡水溫與品茶禮儀，也整理在家練習茶道時容易忽略的細節和實際經驗，並說明不同季節如何調整水溫、浸泡時間與茶葉用量。";
     const candidates = finalizeSentimentHotCandidatesForDisplay([

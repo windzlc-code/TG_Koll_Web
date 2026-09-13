@@ -24,6 +24,7 @@ from webapp.worker_server import (
     PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
     WorkerRuntime,
     WorkerSettings,
+    _global_available_candidate_count,
     _persona_available_candidate_count,
     _apply_hot_reader_execution_profile,
     _validate_envelope,
@@ -207,7 +208,11 @@ class RemoteFetchStoreTests(unittest.TestCase):
             candidates = [
                 {
                     "id": f"{mode}-{index}",
-                    "content": f"{mode} candidate {index} " + ("content " * 12),
+                    "content": (
+                        "短候选"
+                        if index == 0
+                        else f"{mode} candidate {index} " + ("content " * 12)
+                    ),
                     "publishedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
                 }
                 for index in range(count)
@@ -224,6 +229,26 @@ class RemoteFetchStoreTests(unittest.TestCase):
         self.assertEqual(
             _persona_available_candidate_count(self.runtime_dir, archive_id, now=now, search_mode="normal"),
             7,
+        )
+
+    def test_global_available_candidate_count_does_not_reapply_legacy_length_floor(self) -> None:
+        now = int(time.time())
+        global_db = sqlite3.connect(self.runtime_dir / "sentiment_hot_global_pool.sqlite3")
+        try:
+            global_db.execute(
+                "CREATE TABLE sentiment_hot_global_candidates(candidate_json TEXT, content_at_ms INTEGER)"
+            )
+            global_db.execute(
+                "INSERT INTO sentiment_hot_global_candidates VALUES(?, ?)",
+                (json.dumps({"id": "short-global", "content": "短候选"}), now * 1000),
+            )
+            global_db.commit()
+        finally:
+            global_db.close()
+
+        self.assertEqual(
+            _global_available_candidate_count(self.runtime_dir, now=now),
+            1,
         )
 
     def test_legacy_refill_target_schema_is_migrated_and_disabled(self) -> None:

@@ -317,8 +317,13 @@ def _persona_available_candidate_count(
             for candidate in candidates:
                 if not isinstance(candidate, dict):
                     continue
-                content = str(candidate.get("content") or candidate.get("text") or "").strip()
-                if len(content) < 60 or not _candidate_is_fresh(candidate, now=now, freshness_days=freshness_days):
+                # Cache shards are written by the Node canonical quality gate.
+                # Only apply the shared freshness/history rules here; the old
+                # 60-character count gate rejected current short hot posts.
+                if (
+                    not str(candidate.get("content") or candidate.get("text") or "").strip()
+                    or not _candidate_is_fresh(candidate, now=now, freshness_days=freshness_days)
+                ):
                     continue
                 identity = _candidate_identity(candidate)
                 if identity and identity not in blocked_ids:
@@ -684,6 +689,18 @@ def _move_persona_candidates_to_global(runtime_dir: Path, archive_id: str) -> in
 
 def _global_available_candidate_count(runtime_dir: Path, *, now: int) -> int:
     cutoff_ms = (now - 30 * 86400) * 1000
+
+    def has_candidate_content(raw: Any) -> bool:
+        try:
+            candidate = json.loads(str(raw or "{}"))
+        except (TypeError, json.JSONDecodeError):
+            return False
+        return (
+            isinstance(candidate, Mapping)
+            and bool(_candidate_identity(candidate))
+            and bool(str(candidate.get("content") or candidate.get("text") or "").strip())
+        )
+
     database_path = runtime_dir / "sentiment_hot_global_pool.sqlite3"
     try:
         connection = sqlite3.connect(str(database_path))
@@ -694,11 +711,9 @@ def _global_available_candidate_count(runtime_dir: Path, *, now: int) -> int:
             ).fetchall()
         finally:
             connection.close()
-        return sum(
-            1
-            for raw, _content_at_ms in rows
-            if len(str(json.loads(str(raw or "{}")).get("content") or "").strip()) >= 60
-        )
+        # Global rows have already passed the current Node quality gate.  This
+        # view is a fresh-row/statistics read, not a second content-length gate.
+        return sum(1 for raw, _content_at_ms in rows if has_candidate_content(raw))
     except (OSError, sqlite3.Error, json.JSONDecodeError):
         pass
     try:
@@ -712,7 +727,8 @@ def _global_available_candidate_count(runtime_dir: Path, *, now: int) -> int:
         1
         for candidate in candidates
         if isinstance(candidate, dict)
-        and len(str(candidate.get("content") or "").strip()) >= 60
+        and bool(_candidate_identity(candidate))
+        and bool(str(candidate.get("content") or candidate.get("text") or "").strip())
         and _candidate_is_fresh(candidate, now=now, freshness_days=30)
     )
 

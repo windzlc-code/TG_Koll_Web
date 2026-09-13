@@ -4124,10 +4124,6 @@ function sentimentHotReadableCharacterCount(value: unknown): number {
     .length;
 }
 
-function hasMinimumSentimentHotContentLength(candidate: SentimentHotCandidate): boolean {
-  return sentimentHotHanCount(candidate.content) >= MIN_SENTIMENT_HOT_QUALITY_HAN_COUNT;
-}
-
 function minimumSentimentHotHanCountForCandidate(candidate: SentimentHotCandidate): number {
   const source = sentimentCandidateSource(candidate);
   if (
@@ -4152,13 +4148,13 @@ function isNoisyReaderCandidateContent(candidate: SentimentHotCandidate, content
   const text = [raw, content].join(" ");
   const hanCount = sentimentHotHanCount(content);
   const latinCount = (content.match(/[A-Za-z]/g) || []).length;
-  const urlishCount = (text.match(/https?:\/\/|www\.|cdninstagram|scontent-|fbcdn|_nc_|\.jpg|\.png|\.webp|profile picture|URL Source|Markdown Content/gi) || []).length;
-  if (urlishCount >= 2 && hanCount < 60) return true;
-  if (latinCount > Math.max(80, hanCount * 5) && hanCount < 80) return true;
+  // candidateMeetsDisplayQuality already applies the current 8/20-Han floor.
+  // Keep only structural reader-artifact checks here; the former 50/60/80
+  // character gates were a second, stale content filter.
+  if (latinCount > Math.max(80, hanCount * 5)) return true;
   if (source === "instagram-reader-search") {
     if (/(?:\[\[|\]\(|!\[|Image\s+\d+:|This is a case where|Markdown Content|URL Source)/i.test(text)) return true;
-    if (urlishCount >= 1 && hanCount < 50) return true;
-    if (/(?:cdninstagram|scontent-|fbcdn|_nc_|dst-jpg|\.jpg|\.png|\.webp|profile picture|URL Source|Markdown Content)/i.test(text) && hanCount < 80) return true;
+    if (/(?:cdninstagram|scontent-|fbcdn|_nc_|dst-jpg|\.jpg|\.png|\.webp|profile picture|URL Source|Markdown Content)/i.test(text)) return true;
   }
   return false;
 }
