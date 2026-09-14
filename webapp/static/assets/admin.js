@@ -3223,6 +3223,17 @@ function tgMemberNameCell(item) {
   </div>`;
 }
 
+function tgMemberEmptyRow() {
+  return `<tr>
+    <td colspan="6" class="admin-tg-member-empty-cell">
+      <div class="admin-tg-member-empty task-empty" role="status">
+        <strong>暂无允许成员</strong>
+        <span>添加 Chat ID 后，授权成员会显示在这里</span>
+      </div>
+    </td>
+  </tr>`;
+}
+
 function renderTgSettings(data) {
   const rows = Array.isArray(data?.trusted_users) ? data.trusted_users : [];
   const status = el("tgBotTokenStatus");
@@ -3279,7 +3290,7 @@ function renderTgSettings(data) {
           <button class="danger mini-btn" type="button" data-act="tg_delete" data-id="${escapeHtml(String(item.chat_id || ""))}">删除</button>
         </td>
       </tr>`;
-    }).join("") : `<tr><td colspan="6" class="task-empty">暂无允许成员</td></tr>`;
+    }).join("") : tgMemberEmptyRow();
   }
 }
 
@@ -3431,7 +3442,7 @@ function renderTgTweetSettings(data) {
         <button class="danger mini-btn" type="button" data-act="tg_tweet_delete" data-id="${escapeHtml(String(item.chat_id || ""))}">删除</button>
       </td>
     </tr>`;
-  }).join("") : `<tr><td colspan="6" class="task-empty">暂无允许成员</td></tr>`;
+  }).join("") : tgMemberEmptyRow();
 }
 
 async function hydrateTgTweetBotTokenField(data) {
@@ -3501,22 +3512,24 @@ async function testTgTweetEnv() {
 
 async function saveTgTweetUser() {
   const chatId = String(el("tgTweetChatId")?.value || "").trim();
-  if (!/^\d+$/.test(chatId) || Number(chatId) <= 0) {
-    setMsg("tgTweetSettingsMsg", "请填写正数 Telegram Chat ID", false);
+  const numericChatId = /^\d+$/.test(chatId) && Number(chatId) > 0;
+  const usernameRef = /^@[A-Za-z0-9_]{5,32}$/.test(chatId);
+  if (!numericChatId && !usernameRef) {
+    setMsg("tgTweetSettingsMsg", "请填写正数 Chat ID 或 @用户名（5-32 位）", false);
     return;
   }
   const data = await api("/api/admin/tg_tweet/members", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      chat_id: Number(chatId),
+      chat_id: numericChatId ? Number(chatId) : chatId,
       label: String(el("tgTweetLabel")?.value || "").trim(),
       enabled: true,
     }),
   });
   renderTgTweetSettings(data.tg_settings || data);
   ["tgTweetChatId", "tgTweetLabel"].forEach((id) => { if (el(id)) el(id).value = ""; });
-  setMsg("tgTweetSettingsMsg", "成员已授权，可直接向推文 Bot 发送 /start 使用。", true);
+  setMsg("tgTweetSettingsMsg", "成员已保存（兼容旧绑定）；新用户可直接在 Telegram 使用 /bind 自助登录。", true);
 }
 
 async function loadRuntime() {

@@ -26951,6 +26951,18 @@ def create_app() -> FastAPI:
             merged.update(updates or {})
             _write_runtime_config_file(merged)
 
+    def _tweet_bot_web_session_active(web_user_id: int) -> bool:
+        with db() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM sessions
+                WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?
+                LIMIT 1
+                """,
+                (int(web_user_id), _now_ts()),
+            ).fetchone()
+        return row is not None
+
     def _tweet_bot_user(web_user_id: int) -> dict[str, Any]:
         with db() as conn:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (int(web_user_id),)).fetchone()
@@ -26964,6 +26976,14 @@ def create_app() -> FastAPI:
             or (not int(user.get("is_admin") or 0) and str(user.get("approval_status") or "") != "approved")
         ):
             raise HTTPException(status_code=403, detail="绑定的 VECTO 用户当前不可用")
+        if not _tweet_bot_web_session_active(int(web_user_id)):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": "web_login_required",
+                    "message": "请先登录 VECTO 网页后再使用 Telegram 推文工作台",
+                },
+            )
         _require_active_workspace_user(user)
         return user
 

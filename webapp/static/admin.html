@@ -376,25 +376,73 @@
     #secTelegram .admin-tg-split {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 18px 36px;
-      align-items: start;
+      grid-template-rows: 28px 48px 68px 68px 42px;
+      gap: 12px 36px;
+      align-items: stretch;
     }
     #secTelegram .admin-tg-bot-pane,
     #secTelegram .admin-tg-member-pane {
-      display: grid;
-      gap: 14px;
+      display: contents;
       min-width: 0;
     }
+    #secTelegram .admin-tg-bot-pane > .admin-config-card-title,
+    #secTelegram .admin-tg-member-pane > .admin-config-card-title {
+      align-self: center;
+      min-width: 0;
+      line-height: 1.3;
+    }
+    #secTelegram .admin-tg-bot-pane > .admin-config-card-title { grid-column: 1; grid-row: 1; }
+    #secTelegram .admin-tg-member-pane > .admin-config-card-title { grid-column: 2; grid-row: 1; }
+    #secTelegram .admin-tg-bot-pane > .small,
+    #secTelegram .admin-tg-member-pane > .small {
+      grid-row: 2;
+      align-self: center;
+      min-width: 0;
+      min-height: 0;
+      max-height: 48px;
+      overflow: hidden;
+      line-height: 1.45;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    #secTelegram .admin-tg-bot-pane > .small { grid-column: 1; }
+    #secTelegram .admin-tg-member-pane > .small { grid-column: 2; }
     #secTelegram .admin-tg-status-row {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 14px 20px;
-      align-items: start;
+      grid-column: 1;
+      grid-row: 3;
+      align-items: center;
+      min-width: 0;
     }
     #secTelegram .admin-tg-token-row,
-    #secTelegram .admin-tg-member-row {
-      display: grid;
-      gap: 12px;
+    #secTelegram .admin-tg-member-row { display: contents; }
+    #secTelegram .admin-tg-token-row > .admin-tg-token-field {
+      grid-column: 1;
+      grid-row: 4;
+      align-self: stretch;
+    }
+    #secTelegram .admin-tg-token-row > .admin-tg-inline-actions {
+      grid-column: 1;
+      grid-row: 5;
+      align-self: stretch;
+    }
+    #secTelegram .admin-tg-member-row > .admin-tg-field:first-child {
+      grid-column: 2;
+      grid-row: 3;
+      align-self: stretch;
+    }
+    #secTelegram .admin-tg-member-row > .admin-tg-field:nth-child(2) {
+      grid-column: 2;
+      grid-row: 4;
+      align-self: stretch;
+    }
+    #secTelegram .admin-tg-member-row > button {
+      grid-column: 2;
+      grid-row: 5;
+      align-self: stretch;
     }
     #secTelegram .admin-tg-field,
     #secTelegram .admin-tg-token-field {
@@ -442,14 +490,17 @@
     }
     #secTelegram .admin-tg-inline-actions {
       display: flex;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       gap: 8px;
       align-items: center;
+      min-height: 38px;
     }
     #secTelegram .admin-tg-inline-actions button,
     #secTelegram .admin-tg-member-row > button {
       width: auto;
-      min-height: 34px;
+      min-width: 88px;
+      height: 42px;
+      min-height: 42px;
       white-space: nowrap;
     }
     #secTelegram .admin-tg-member-row > button {
@@ -463,10 +514,20 @@
       max-width: none;
       box-sizing: border-box;
     }
-    #secTelegram #tgBotToken {
+    #secTelegram #tgBotToken,
+    #secTelegram #tgTweetBotToken {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
       letter-spacing: 0;
+    }
+    #secTelegram .admin-tg-token-row .sensitive-input,
+    #secTelegram .admin-tg-member-row input {
+      box-sizing: border-box;
+      height: 40px;
+      min-height: 40px;
+    }
+    #secTelegram .admin-tg-token-field .sensitive-input-wrap {
+      height: 40px;
     }
     #secTelegram #tgBotToken.is-saved-runtime-secret {
       letter-spacing: 0;
@@ -536,10 +597,80 @@
       color: #8a97a6;
       margin-right: 6px;
     }
+    #secTelegram .admin-tg-member-empty-cell {
+      padding: 12px 10px;
+    }
+    #secTelegram .admin-tg-member-empty {
+      min-height: 96px;
+      display: grid;
+      place-items: center;
+      align-content: center;
+      gap: 5px;
+      margin: 0;
+      padding: 16px;
+      border: 1px dashed #b8cad8;
+      border-radius: 8px;
+      background: #f7fafc;
+      color: #6b7c8d;
+      text-align: center;
+    }
+    #secTelegram .admin-tg-member-empty strong {
+      color: #31495d;
+      font-size: 13px;
+    }
+    #secTelegram .admin-tg-member-empty span {
+      font-size: 11px;
+    }
     @media (max-width: 980px) {
-      #secTelegram .admin-tg-split,
+      #secTelegram .admin-tg-split {
+        display: grid;
+        grid-template-columns: 1fr;
+        grid-template-rows: none;
+        gap: 14px;
+      }
+      #secTelegram .admin-tg-bot-pane,
+      #secTelegram .admin-tg-member-pane {
+        display: grid;
+        gap: 14px;
+      }
+      #secTelegram .admin-tg-bot-pane > .admin-config-card-title,
+      #secTelegram .admin-tg-member-pane > .admin-config-card-title,
+      #secTelegram .admin-tg-bot-pane > .small,
+      #secTelegram .admin-tg-member-pane > .small {
+        grid-column: auto;
+        grid-row: auto;
+      }
+      #secTelegram .admin-tg-token-row,
+      #secTelegram .admin-tg-member-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 12px;
+      }
+      #secTelegram .admin-tg-status-row,
+      #secTelegram .admin-tg-token-row > *,
+      #secTelegram .admin-tg-member-row > * {
+        grid-column: auto;
+        grid-row: auto;
+      }
       #secTelegram .admin-tg-status-row {
         grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 640px) {
+      #secTelegram .admin-tg-token-row,
+      #secTelegram .admin-tg-member-row {
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+      #secTelegram .admin-tg-inline-actions {
+        width: 100%;
+        flex-wrap: wrap;
+      }
+      #secTelegram .admin-tg-inline-actions button {
+        flex: 1 1 calc(33.333% - 6px);
+      }
+      #secTelegram .admin-tg-member-row > button {
+        width: 100%;
       }
     }
     .proxy-provider-secret-note { flex: 1 1 300px; margin: 0; color: #51677c; font-size: 11px; }
@@ -2270,7 +2401,7 @@
         <div class="section-head">
           <div>
             <h2>Telegram</h2>
-            <div class="meta">按工作台分别配置 Bot Token 和授权成员。当前已接入视频工作台，推文与采集版本先预留分页。</div>
+            <div class="meta">视频与推文工作台已接入。视频工作台保留成员授权；推文工作台支持用户从 Telegram 自助登录绑定，采集工作台保留分页入口。</div>
           </div>
         </div>
         <div class="admin-runtime-stack">
@@ -2356,7 +2487,7 @@
                 <div class="admin-tg-split">
                   <div class="admin-tg-bot-pane">
                     <div class="admin-config-card-title">Telegram Bot</div>
-                    <div class="small">填写 Token 并保存后自动开始轮询。授权以下方成员表为准。</div>
+                    <div class="small">填写 Token 并保存后自动开始轮询。用户从 Telegram 自助登录绑定，无需管理员预先加入成员。</div>
                     <div class="admin-tg-status-row">
                       <div class="admin-tg-field">
                         <span>Bot 状态</span>
@@ -2385,11 +2516,11 @@
                   </div>
                   <div class="admin-tg-member-pane">
                     <div class="admin-config-card-title">允许成员</div>
-                    <div class="small">填写正数 Telegram Chat ID 即可授权，无需用户预先发送 /start；保存后可直接向 Bot 发送消息使用。</div>
+                    <div class="small">自助绑定记录会自动出现在下方；此处用于查看、停用或迁移旧绑定。可填 Chat ID 或 @用户名，保存时自动读取 Telegram 用户名称；新用户无需维护白名单。</div>
                     <div class="admin-tg-member-row">
                       <label class="admin-tg-field">
                         <span>Chat ID</span>
-                        <input id="tgTweetChatId" inputmode="numeric" placeholder="Telegram Chat ID">
+                        <input id="tgTweetChatId" inputmode="text" placeholder="Chat ID 或 @用户名">
                       </label>
                       <label class="admin-tg-field">
                         <span>备注</span>

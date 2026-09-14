@@ -32,7 +32,9 @@ CONTROL_BUTTONS = frozenset({
 })
 HELP_TEXT = (
     "使用提示\n\n"
-    "• 管理员在后台加入当前 Chat ID 后，即可使用全部推文 Bot 功能。\n"
+    "• 首次使用请点击“绑定/打开网页”，在已登录的 VECTO 网页中完成一次绑定。\n"
+    "• Telegram 仅在绑定账号仍有有效网页登录会话时提供推文工作台功能。\n"
+    "• 未绑定或会话失效时发送 /bind，可重新打开安全绑定入口。\n"
     "• 人设、生成、草稿、收藏、媒体、热点和任务均可直接在 Telegram 内操作。\n"
     "• 首次发布前需已有可用的 Threads 或 Instagram 账号；若尚未授权，请从“账号与浏览器”完成一次 OAuth。\n"
     "• 在输入流程中点击任一总控按钮，会退出当前未提交的输入并切换模块。\n"
@@ -55,6 +57,8 @@ except ZoneInfoNotFoundError:
 
 Dispatch = Callable[[int, str, dict[str, Any]], Any]
 AsyncDispatch = Callable[[int, str, dict[str, Any]], Awaitable[Any]]
+WebAppUrlFactory = Callable[[int, str], str]
+WebSessionChecker = Callable[[dict[str, Any]], bool]
 
 
 @dataclass(frozen=True)
@@ -311,10 +315,16 @@ class NativeTweetBotController:
         ops: TweetWorkbenchOps,
         get_runtime: Callable[[], dict[str, Any]],
         load_member: Callable[[int], Any],
+        remember_member_profile: Callable[..., None] | None = None,
+        create_webapp_url: WebAppUrlFactory | None = None,
+        has_active_web_session: WebSessionChecker | None = None,
     ) -> None:
         self.ops = ops
         self.get_runtime = get_runtime
         self.load_member = load_member
+        self.remember_member_profile = remember_member_profile
+        self.create_webapp_url = create_webapp_url
+        self.has_active_web_session = has_active_web_session
 
     def _member(self, chat_id: int) -> dict[str, Any] | None:
         row = self.load_member(int(chat_id))
@@ -322,7 +332,15 @@ class NativeTweetBotController:
 
     def _member_still_bound(self, chat_id: int, user_id: int) -> bool:
         member = self._member(chat_id)
-        return member is not None and int(member.get("web_user_id") or 0) == int(user_id)
+        if member is None or int(member.get("web_user_id") or 0) != int(user_id):
+            return False
+        if self.has_active_web_session is None:
+            return True
+        try:
+            return bool(self.has_active_web_session(member))
+        except Exception:
+            logger.debug("Failed to validate bound web session", exc_info=True)
+            return False
 
     async def _call(self, user_id: int, action: str, payload: dict[str, Any] | None = None) -> Any:
         return await asyncio.to_thread(self.ops.dispatch, int(user_id), action, payload or {})
@@ -330,15 +348,102 @@ class NativeTweetBotController:
     async def _call_async(self, user_id: int, action: str, payload: dict[str, Any] | None = None) -> Any:
         return await self.ops.dispatch_async(int(user_id), action, payload or {})
 
-    async def _authorized(self, chat: Any, from_user: Any, reply: Callable[..., Awaitable[Any]]) -> dict[str, Any] | None:
+    def _webapp_markup(self, types: Any, chat_id: int) -> Any | None:
+        if self.create_webapp_url is None:
+            return None
+        try:
+            try:
+                url = str(self.create_webapp_url(int(chat_id), "home") or "").strip()
+            except TypeError:
+                # Keep compatibility with integrations that supplied the
+                # original one-argument URL factory before route keys were
+                # introduced.
+                url = str(self.create_webapp_url(int(chat_id)) or "").strip()  # type: ignore[misc]
+        except Exception:
+            logger.debug("Failed to create Telegram WebApp binding ticket", exc_info=True)
+            return None
+        if not url:
+            return None
+        button = types.InlineKeyboardButton
+        web_app_info_type = getattr(types, "WebAppInfo", None)
+        if web_app_info_type is not None:
+            return types.InlineKeyboardMarkup(inline_keyboard=[[
+                button(text="🔐 绑定/打开网页", web_app=web_app_info_type(url=url)),
+            ]])
+        return types.InlineKeyboardMarkup(inline_keyboard=[[
+            button(text="打开绑定页面", url=url),
+        ]])
+
+    async def send_web_login_link(self, message: Any, types: Any) -> None:
+        chat = getattr(message, "chat", None)
+        from_user = getattr(message, "from_user", None)
+        if (
+            chat is None
+            or str(getattr(chat, "type", "") or "") != "private"
+            or from_user is None
+            or int(getattr(from_user, "id", 0) or 0) != int(getattr(chat, "id", 0) or 0)
+        ):
+            await message.answer("绑定网页只支持与推文 Bot 私聊使用。")
+            return
+        markup = self._webapp_markup(types, int(chat.id))
+        if markup is None:
+            await message.answer("暂时无法生成绑定入口，请稍后重试。")
+            return
+        await message.answer(
+            "请点击下方按钮，在 Telegram 内完成一次 VECTO 网页登录/绑定。之后网页会话有效时即可使用推文工作台。",
+            reply_markup=markup,
+        )
+
+    async def _authorized(
+        self,
+        chat: Any,
+        from_user: Any,
+        reply: Callable[..., Awaitable[Any]],
+        *,
+        types: Any | None = None,
+        show_webapp_link: bool = False,
+    ) -> dict[str, Any] | None:
         chat_id = int(chat.id)
         if str(chat.type or "") != "private" or from_user is None or int(from_user.id) != chat_id:
             await reply("推文工作台仅支持与 Bot 私聊使用。")
             return None
         member = self._member(chat_id)
         if member is None:
-            await reply(f"当前 Chat ID：{chat_id}\n请让管理员在推文工作台授权列表中加入该 ID，然后重新发送 /start。")
+            markup = self._webapp_markup(types, chat_id) if show_webapp_link and types is not None else None
+            await reply(
+                "当前 Telegram 账号尚未绑定 VECTO 用户。请先登录网页并点击下方按钮完成绑定。",
+                **({"reply_markup": markup} if markup is not None else {}),
+            )
             return None
+        if self.has_active_web_session is not None:
+            try:
+                session_active = bool(self.has_active_web_session(member))
+            except Exception:
+                session_active = False
+            if not session_active:
+                markup = self._webapp_markup(types, chat_id) if show_webapp_link and types is not None else None
+                await reply(
+                    "网页登录会话已失效。请先重新登录 VECTO 网页，再点击下方按钮绑定后继续使用。",
+                    **({"reply_markup": markup} if markup is not None else {}),
+                )
+                return None
+        if self.remember_member_profile is not None:
+            username = str(getattr(from_user, "username", "") or "").strip().lstrip("@")
+            display_name = " ".join(
+                part for part in (
+                    str(getattr(from_user, "first_name", "") or "").strip(),
+                    str(getattr(from_user, "last_name", "") or "").strip(),
+                ) if part
+            ).strip()
+            if username or display_name:
+                try:
+                    self.remember_member_profile(
+                        chat_id,
+                        username=username,
+                        display_name=display_name,
+                    )
+                except Exception:
+                    logger.debug("Failed to remember Telegram tweet member profile", exc_info=True)
         return member
 
     @staticmethod
@@ -377,7 +482,13 @@ class NativeTweetBotController:
         ])
 
     async def send_main_menu(self, message: Any, types: Any) -> None:
-        member = await self._authorized(message.chat, message.from_user, message.answer)
+        member = await self._authorized(
+            message.chat,
+            message.from_user,
+            message.answer,
+            types=types,
+            show_webapp_link=True,
+        )
         if not member:
             return
         state = load_state(int(message.chat.id))
@@ -392,7 +503,7 @@ class NativeTweetBotController:
                 selected = ""
         clear_pending_state(int(message.chat.id))
         await message.answer(
-            f"当前 Chat ID 已授权。{selected}\n"
+            f"当前 Telegram 已绑定且网页登录会话有效。{selected}\n"
             "请使用输入框下方的固定入口；人设相关操作均从“我的人设”逐步进入。",
             reply_markup=self._main_keyboard(types),
         )
@@ -560,13 +671,16 @@ class NativeTweetBotController:
         lines = [f"{item.get('platform')} · @{item.get('username')} · {item.get('status')}" for item in accounts[:20]]
         base = str((self.get_runtime() or {}).get("telegram_tweet_public_base_url") or "").rstrip("/")
         rows = []
-        if base.startswith("https://"):
+        webapp_markup = self._webapp_markup(types, int(member.get("chat_id") or 0))
+        if webapp_markup is not None:
+            rows.extend(webapp_markup.inline_keyboard)
+        elif base.startswith("https://"):
             rows.append([types.InlineKeyboardButton(text="网页登录/授权", url=f"{base}/console.html?view=accounts")])
         rows.append([types.InlineKeyboardButton(text="返回", callback_data=return_callback)])
         text = (
             "账号与浏览器\n"
             + ("\n".join(lines) if lines else "暂无已绑定账号。")
-            + "\n\n登录、OAuth、代理和浏览器人工接管必须在网页端完成，Bot 不接收密码或验证码。"
+            + "\n\n请保持 VECTO 网页会话有效；登录、OAuth、代理和浏览器人工接管仍在网页端完成，Bot 不接收密码或验证码。"
         )
         return text, types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -917,7 +1031,29 @@ class NativeTweetBotController:
         if query.message is None:
             await query.answer("消息已失效", show_alert=True)
             return
-        member = await self._authorized(query.message.chat, query.from_user, query.answer)
+        async def authorization_reply(text: str, **kwargs: Any) -> Any:
+            # CallbackQuery.answer cannot carry reply_markup.  Send the
+            # self-service binding button as a normal message when the
+            # callback arrives after logout/expiry, while keeping ordinary
+            # authorization errors as callback alerts.
+            markup = kwargs.pop("reply_markup", None)
+            if markup is not None:
+                # Telegram keeps the callback spinner visible until the
+                # callback is answered.  The binding prompt is sent as a
+                # normal message because callback answers cannot carry a
+                # reply markup, so acknowledge it before sending that
+                # message.
+                await query.answer()
+                return await query.message.answer(text, reply_markup=markup, **kwargs)
+            return await query.answer(text, **kwargs)
+
+        member = await self._authorized(
+            query.message.chat,
+            query.from_user,
+            authorization_reply,
+            types=types,
+            show_webapp_link=True,
+        )
         if not member:
             return
         chat_id = int(query.message.chat.id)
@@ -1850,7 +1986,13 @@ class NativeTweetBotController:
             await query.answer(_error_text(exc)[:180], show_alert=True)
 
     async def handle_text(self, message: Any, types: Any) -> None:
-        member = await self._authorized(message.chat, message.from_user, message.answer)
+        member = await self._authorized(
+            message.chat,
+            message.from_user,
+            message.answer,
+            types=types,
+            show_webapp_link=True,
+        )
         if not member:
             return
         chat_id = int(message.chat.id)
@@ -2062,7 +2204,13 @@ class NativeTweetBotController:
             await message.answer(f"操作失败：{_error_text(exc)}\n状态已保留，可修正后重试，或发送 /cancel。")
 
     async def handle_media(self, message: Any, types: Any) -> None:
-        member = await self._authorized(message.chat, message.from_user, message.answer)
+        member = await self._authorized(
+            message.chat,
+            message.from_user,
+            message.answer,
+            types=types,
+            show_webapp_link=True,
+        )
         if not member:
             return
         chat_id = int(message.chat.id)
@@ -2293,6 +2441,11 @@ class NativeTweetBotController:
                     text="返回人设详情",
                     callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}),
                 )])
+                # State/keyboard construction can yield to a rebind or
+                # logout.  Re-check immediately before delivering candidates
+                # so a stale watcher cannot notify the newly bound account.
+                if not self._member_still_bound(chat_id, user_id):
+                    return
                 await bot.send_message(
                     chat_id,
                     "热点候选已完成，选择一条保存为草稿。" if candidates else "热点任务已完成，但没有可导入候选。",
@@ -2340,6 +2493,9 @@ async def run_native_tweet_bot(
     token: str,
     get_runtime: Callable[[], dict[str, Any]],
     load_member: Callable[[int], Any],
+    remember_member_profile: Callable[..., None] | None = None,
+    create_webapp_url: WebAppUrlFactory | None = None,
+    has_active_web_session: WebSessionChecker | None = None,
     ops: TweetWorkbenchOps,
     stop_event: Any,
     status_callback: Callable[[dict[str, Any]], None],
@@ -2351,10 +2507,24 @@ async def run_native_tweet_bot(
 
     bot = Bot(token=token)
     dispatcher = Dispatcher()
-    controller = NativeTweetBotController(ops=ops, get_runtime=get_runtime, load_member=load_member)
+    # A running production Bot must always have the session gate.  Keep the
+    # controller's optional callback for isolated unit tests and integrations,
+    # but fail closed if the worker wiring ever omits it.
+    session_checker = has_active_web_session or (lambda _member: False)
+    controller = NativeTweetBotController(
+        ops=ops,
+        get_runtime=get_runtime,
+        load_member=load_member,
+        remember_member_profile=remember_member_profile,
+        create_webapp_url=create_webapp_url,
+        has_active_web_session=session_checker,
+    )
 
     async def command_menu(message: types.Message) -> None:
         await controller.send_main_menu(message, types)
+
+    async def command_bind(message: types.Message) -> None:
+        await controller.send_web_login_link(message, types)
 
     async def callback(query: types.CallbackQuery) -> None:
         await controller.handle_callback(query, types)
@@ -2366,11 +2536,13 @@ async def run_native_tweet_bot(
         await controller.handle_text(message, types)
 
     dispatcher.message.register(command_menu, Command("start", "menu", "workbench"))
+    dispatcher.message.register(command_bind, Command("bind", "login"))
     dispatcher.message.register(media, F.photo | F.video | F.document)
     dispatcher.message.register(text, F.text)
     dispatcher.callback_query.register(callback, F.data.startswith("tt:"))
     await bot.set_my_commands([
         types.BotCommand(command="menu", description="打开推文工作台"),
+        types.BotCommand(command="bind", description="绑定网页登录会话"),
         types.BotCommand(command="cancel", description="取消当前操作"),
     ])
     polling = asyncio.create_task(dispatcher.start_polling(bot, handle_signals=False))
