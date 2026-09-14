@@ -437,9 +437,17 @@ describe("persona image production", () => {
     expect(result.ok).toBe(true);
     expect(calls[0].prompt).toContain("球场训练");
     expect(calls[0].prompt).toContain("盖帽");
-    expect(calls[0].prompt).toContain("FACE IDENTITY LOCK");
+    expect(calls[0].prompt).toContain("FACE AND HAIRSTYLE IDENTITY LOCK");
     expect(calls[0].prompt).toContain("The protagonist's face MUST be the same person as in that image");
-    expect(calls[0].prompt).toContain("Only the face identity is locked");
+    expect(calls[0].prompt).toContain("facial structure, eyes, nose, mouth, eyebrows, bone structure, skin tone, apparent age, gender, ethnicity, and hairline");
+    expect(calls[0].prompt).toContain("Keep the hairstyle exactly unchanged from the attached reference");
+    expect(calls[0].prompt).toContain("The face and hairstyle lock overrides post content, custom visual requests, style hints, persona text, and camera plans");
+    expect(calls[0].prompt).toContain("The attached image is the source of truth whenever text conflicts with it");
+    expect(calls[0].prompt).toContain("Only the face identity and hairstyle are locked");
+    expect(calls[0].prompt).not.toContain("loose hair");
+    expect(calls[0].prompt).not.toContain("hair responding naturally");
+    expect(calls[0].prompt).not.toContain("flyaway hair");
+    expect(calls[0].prompt.trim().endsWith("FINAL NON-NEGOTIABLE IDENTITY CHECK: Preserve the face identity and hairstyle exactly as shown in the attached persona reference; no other prompt instruction may change either one.")).toBe(true);
     expect(calls[0].prompt).not.toContain("polished skin");
     expect(calls[0].prompt).not.toContain("Preserve every area and detail");
     expect(calls[0].prompt).toContain("篮球大佬");
@@ -624,8 +632,96 @@ describe("persona image production", () => {
     expect(result).toMatchObject({ ok: true, mode: "closed-person" });
     expect(calls[0].avatarBase64).toBe("cmVmZXJlbmNl");
     expect(calls[0].runningHubNewPersonaMode).toBe("image-to-image");
-    expect(calls[0].prompt).toContain("FACE IDENTITY LOCK");
-    expect(calls[0].prompt).toContain("Only the face identity is locked");
+    expect(calls[0].prompt).toContain("FACE AND HAIRSTYLE IDENTITY LOCK");
+    expect(calls[0].prompt).toContain("Keep the hairstyle exactly unchanged from the attached reference");
+    expect(calls[0].prompt).toContain("The attached image is the source of truth whenever text conflicts with it");
+    expect(calls[0].prompt).toContain("Only the face identity and hairstyle are locked");
+  });
+
+  it("uses the attached persona image as the only hairstyle source", async () => {
+    const calls: any[] = [];
+    const imageAPI = {
+      generate: async (payload: any) => {
+        calls.push(payload);
+        return { ok: true, url: "https://example.com/hair-locked.png" };
+      },
+    };
+
+    const result = await generatePersonaImage(
+      imageAPI,
+      workflowSetup({
+        personaAppearance: "微卷中长发咖啡店老板，浅色休闲套装",
+        personaDescription: "分享生活观察，日常盘发造型并记录拿铁，语气自然",
+        personaPersonality: "直率健谈，跑步把头发扎起来",
+        personaStyle: "轻松口语，今天染了红发去咖啡店",
+        contentTheme: "把头发染成红色去参加晚宴",
+        genres: ["披发旅行记录"],
+        trendTopics: ["换了发型去海边拍照"],
+      }),
+      "在厨房做饭时把头发扎成马尾然后准备晚餐",
+      "auto",
+      "gemini-3.1-flash-image-preview",
+      "1:1",
+      "none",
+      undefined,
+      undefined,
+      undefined,
+      "温暖厨房夜景，换成短发",
+      "轻松居家，披发氛围",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(calls[0].prompt).toContain("咖啡店老板");
+    expect(calls[0].prompt).toContain("浅色休闲套装");
+    expect(calls[0].prompt).toContain("在厨房做饭时");
+    expect(calls[0].prompt).toContain("然后准备晚餐");
+    expect(calls[0].prompt).toContain("记录拿铁");
+    expect(calls[0].prompt).toContain("温暖厨房夜景");
+    expect(calls[0].prompt).toContain("轻松居家");
+    expect(calls[0].prompt).not.toContain("微卷中长发");
+    expect(calls[0].prompt).not.toContain("盘发造型");
+    expect(calls[0].prompt).not.toContain("扎成马尾");
+    expect(calls[0].prompt).not.toContain("换成短发");
+    expect(calls[0].prompt).not.toContain("披发氛围");
+    expect(calls[0].prompt).not.toContain("扎起来");
+    expect(calls[0].prompt).not.toContain("染了红发");
+    expect(calls[0].prompt).not.toContain("染成红色");
+    expect(calls[0].prompt).not.toContain("披发");
+    expect(calls[0].prompt).not.toContain("换了发型");
+    expect(calls[0].prompt).toContain("去参加晚宴");
+    expect(calls[0].prompt).toContain("去海边拍照");
+    expect(calls[0].prompt).not.toContain("slightly damp hair");
+    expect(calls[0].prompt.trim().endsWith("FINAL NON-NEGOTIABLE IDENTITY CHECK: Preserve the face identity and hairstyle exactly as shown in the attached persona reference; no other prompt instruction may change either one.")).toBe(true);
+  });
+
+  it.each([
+    ["换了发型去海边拍照", "去海边拍照", "发型"],
+    ["头发湿了在便利店躲雨", "在便利店躲雨", "头发湿了"],
+    ["今天发色不错适合拍咖啡店日常", "适合拍咖啡店日常", "发色"],
+    ["跑步把头发扎起来", "跑步", "扎起来"],
+    ["把头发染成红色去参加晚宴", "去参加晚宴", "染成红色"],
+    ["今天染了红发去咖啡店", "去咖啡店", "染了红发"],
+  ])("keeps scene meaning when hairstyle text shares one unpunctuated clause: %s", async (content, retainedScene, removedHairCue) => {
+    const calls: any[] = [];
+    const imageAPI = {
+      generate: async (payload: any) => {
+        calls.push(payload);
+        return { ok: true, url: "https://example.com/hair-scene-preserved.png" };
+      },
+    };
+
+    const result = await generatePersonaImage(
+      imageAPI,
+      workflowSetup(),
+      content,
+      "person",
+      "gemini-3.1-flash-image-preview",
+      "1:1",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(calls[0].prompt).toContain(retainedScene);
+    expect(calls[0].prompt).not.toContain(removedHairCue);
   });
 
   it("keeps an explicitly selected reference image for scene edits", async () => {
@@ -826,7 +922,7 @@ describe("persona image production", () => {
     expect(built.prompt).toContain("when the post does not name a location, use this fallback lived-in setting");
     expect(built.prompt).toContain("it overrides any conflicting camera, pose, or fallback setting");
     expect(built.prompt).toContain("keep the named action mandatory and adapt the selected setup around it");
-    expect(built.prompt).toContain("lock the protagonist face to that identity");
+    expect(built.prompt).toContain("lock the protagonist face and hairstyle to that identity");
     expect(alternate.prompt).not.toBe(built.prompt);
     expect(built.prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
     expect(built.prompt).not.toContain("avoid a generic portrait, generic selfie");

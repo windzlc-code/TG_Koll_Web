@@ -441,12 +441,31 @@ function normalizePromptCue(text: string) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+const TEXTUAL_HAIRSTYLE_PHRASE_PATTERNS = [
+  /(?:想要?|打算|准备|準備|尝试|嘗試|决定|決定)?(?:把|将|將)?(?:头发|頭髮|发色|髮色)(?:染|换|換|改)(?:成|为|為)?(?:(?!去|到|在|来|來|参加|參加|拍|做|吃|逛|上班|下班|然后|然後|再|并且|並且|同时|同時)[^，,。；;\n]){0,12}/gi,
+  /(?:想要?|打算|准备|準備|尝试|嘗試|决定|決定)?(?:把|将|將)?(?:头发|頭髮)(?:剪|烫|燙|梳|扎|紮|绑|綁|编|編|盘|盤|披)(?:成|为|為)?(?:起来|起來|下来|下來|微卷|自然卷|黑长直|黑長直|齐肩发|齊肩髮|波波头|波波頭|中长发|中長髮|长发|長髮|短发|短髮|卷发|捲髮|直发|直髮|刘海|瀏海|马尾|馬尾|丸子头|丸子頭|盘发|盤髮|披发|披髮|扎发|紮髮|绑发|綁髮|编发|編髮|辫子?|辮子?|寸头|寸頭|光头|光頭|秃发|禿髮)?/gi,
+  /(?:今天)?(?:染|燙|烫|剪|梳|扎|紮|绑|綁|编|編)(?:了|成)?[^，,。；;\n]{0,6}?(?:发|髮)(?=去|到|在|来|來|参加|參加|拍|做|吃|逛|上班|下班|然后|然後|再|并且|並且|同时|同時|[，,。；;\n]|$)/gi,
+  /(?:换了|換了|换个|換個|更换|更換|改变|改變|调整|調整)(?:新)?(?:发型|髮型|发色|髮色)/gi,
+  /(?:头发|頭髮)(?:湿了|濕了|湿润|濕潤|淋湿|淋濕)/gi,
+  /(?:发色|髮色)(?:不错|不錯|很好|好看|亮眼|特别|特別|很美|很酷)/gi,
+  /(?:换成|換成|改成|剪成|染成|烫成|燙成|梳成|扎成|紮成|绑成|綁成)?(?:微卷|自然卷|黑长直|黑長直)?(?:齐肩发|齊肩髮|波波头|波波頭|中长发|中長髮|长发|長髮|短发|短髮|卷发|捲髮|直发|直髮|刘海|瀏海|马尾|馬尾|丸子头|丸子頭|盘发造型?|盤髮造型?|披发|披髮|扎发|紮髮|绑发|綁髮|编发|編髮|辫子?|辮子?|寸头|寸頭|光头|光頭|秃发|禿髮)/gi,
+  /\b(?:(?:shoulder[- ]length|long|short|curly|straight|wavy|coily|braided|tied|loose|dyed)\s+)?(?:hair|hairstyle|haircut|bangs|fringe|ponytail|updo|braids?|dreadlocks?|bob|pixie)\b/gi,
+];
+
+function withoutTextualHairstyleDirections(text?: string): string {
+  let sanitized = String(text || "");
+  for (const pattern of TEXTUAL_HAIRSTYLE_PHRASE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, "");
+  }
+  return splitVisualClauses(sanitized).join(", ");
+}
+
 const PERSON_LIFESTYLE_CAMERA_SETUPS = [
   "slightly high-angle handheld selfie, torso placed diagonally, relaxed shoulders, gaze just beside the lens, irregular close crop",
   "close wide-angle phone selfie from slightly below eye level, one shoulder nearer the lens, asymmetric crop, casual hand position",
   "off-center mirror snapshot, body turned three-quarter, phone partly visible, relaxed weight shift, room depth visible behind the person",
   "side or three-quarter seated moment, upper body naturally leaning, gaze toward the surrounding activity rather than a formal camera pose",
-  "waist-up or full-body phone snapshot caught mid-step, clothing and hair responding naturally to movement, environment extending around the person",
+  "waist-up or full-body phone snapshot caught mid-step, clothing responding naturally to movement, environment extending around the person",
   "slightly low camera from a nearby seat or table height, relaxed bent posture, foreground object creating natural depth",
   "over-the-shoulder turning moment, face still recognizable, background activity readable, imperfect spontaneous timing",
   "top-down casual sitting or reclining moment, limbs placed naturally, frame rotated slightly instead of squared to the body",
@@ -464,7 +483,7 @@ const PERSON_LIFESTYLE_CAMERA_SETUPS = [
   "casual class, rehearsal, or group-activity moment with other people naturally continuing the activity in the background",
   "diagonal arm-extended bed snapshot while sitting, reclining, or turning on rumpled bedding, relaxed limbs and an imperfect overhead crop",
   "casual bedroom outfit-check near a mirror or window, body turned to show how the clothes sit, phone reflection and room edges left naturally visible",
-  "tight golden-hour coastal close-up with wind moving loose hair across the face, warm horizon blur and an intentionally imperfect edge crop",
+  "tight golden-hour coastal close-up with subtle wind movement in the scene, warm horizon blur and an intentionally imperfect edge crop",
   "outdoor exercise check-in caught mid-walk or mid-jog, one arm holding the phone and the other making a small natural gesture, mildly flushed rather than posed",
   "at-home hobby moment while actually holding or using a guitar, book, perfume, cosmetic, or other everyday object, hands engaged with the action rather than displaying a product",
   "window-side mood snapshot with a small pout, side glance, hand-on-hip, or folded-arm reaction, expression candid and body placement uneven",
@@ -475,7 +494,7 @@ const THIRD_PERSON_LIFESTYLE_CAMERA_SETUPS = [
   "side-profile candid shot with foreground depth, natural weight shift, gaze following the surrounding activity",
   "over-the-shoulder observation angle, face partly turned and recognizable, real background action kept readable",
   "slightly high-angle seated or leaning moment, asymmetric body placement, ordinary objects surrounding the person",
-  "slightly low-angle full-body moment caught mid-step, natural movement in clothing and hair, street or room depth visible",
+  "slightly low-angle full-body moment caught mid-step, natural movement in clothing, street or room depth visible",
   "medium-long candid frame from several steps away, person interacting with the place instead of posing against it",
   "street-corner candid while carrying a small shopping bag, laugh or conversation caught between steps, storefront depth behind",
   "full-body waiting moment beside a railing, bus stop, or station edge, one leg relaxed, attention directed toward the street",
@@ -489,7 +508,7 @@ const THIRD_PERSON_LIFESTYLE_CAMERA_SETUPS = [
   "group class or rehearsal-room candid where the person remains the subject while classmates continue naturally in the deeper background",
   "bedroom candid from beside or above the bed while the person reclines, turns, or adjusts clothing, with rumpled bedding and furniture edges kept in frame",
   "natural outfit-check captured near a mirror or bright window, full or three-quarter body visible with the phone, reflection, and room depth treated as ordinary context",
-  "coastal golden-hour portrait caught between poses, loose hair crossing the face and the horizon or promenade remaining softly readable",
+  "coastal golden-hour portrait caught between poses, subtle wind movement and the horizon or promenade remaining softly readable",
   "home hobby candid while the person plays an instrument, reads, applies fragrance, or handles an everyday object without turning the moment into a product advertisement",
 ];
 
@@ -539,7 +558,7 @@ const LIFESTYLE_CAPTURE_TIMINGS = [
   "capture immediately after a small event or reaction, before posture returns to a camera-ready pose",
   "catch a side glance, breath, laugh, pause, or distracted expression rather than a held smile",
   "freeze an ordinary transition between sitting, standing, walking, turning, reaching, or putting something down",
-  "use slight believable motion softness in hair, hand, clothing, traffic, or nearby people",
+  "use slight believable motion softness in hands, clothing, traffic, or nearby people",
   "frame the person while attention remains on the place, task, companion, or object outside the lens",
   "capture an unplanned off-beat instant with uneven spacing and a naturally imperfect crop",
   "show the action already underway, with props visibly being used rather than displayed",
@@ -562,12 +581,12 @@ function buildLifestyleCameraDirection(thirdPerson: boolean, selectionKey: strin
     `MANDATORY CURRENT SHOT PLAN: camera language: ${selectedCameraLanguage}; body staging: ${selectedBodyStaging}; capture timing: ${selectedCaptureTiming}`,
     `subject-specific context: use this specific camera and pose setup for this post: ${selectedCameraSetup}`,
     "output one single candid social-media photo with one instance of the person, never a character sheet, multi-view layout, pose lineup, collage, or studio cutout",
-    "if the persona reference is a three-view sheet, lock the protagonist face to that identity and do not copy its straight standing pose, eye-level camera, white or neutral background, or side-by-side presentation",
+    "if the persona reference is a three-view sheet, lock the protagonist face and hairstyle to that identity, using all visible views to preserve the hairstyle while not copying the straight standing pose, eye-level camera, white or neutral background, or side-by-side presentation",
     "do not default to a centered eye-level front-facing half-body pose; vary camera height, shot distance, body orientation, gaze direction, hand placement, weight shift, crop, and foreground depth across different posts and selected style hints",
     `when the post does not name a location, use this fallback lived-in setting: ${selectedBackgroundFallback}`,
     "if the post explicitly names a location, action, weather, time or event, it overrides any conflicting camera, pose, or fallback setting; keep the named action mandatory and adapt the selected setup around it, then enrich the real context with ordinary background detail, depth, small asymmetries, mild perspective distortion, and natural available light",
     "make it look captured by an ordinary phone in available light: realistic shadow falloff, locally uneven exposure and white balance, subtle sensor grain or motion softness, and natural depth instead of studio key light, rim light, HDR glow, or cinematic grading",
-    "retain pores, fine facial texture, flyaway hair, fabric creases, small surface wear, reflections, and ordinary background clutter; no beauty-filter smoothing, waxy skin, CGI-clean materials, or artificially spotless surroundings",
+    "retain pores, fine facial texture, natural hairstyle detail, fabric creases, small surface wear, reflections, and ordinary background clutter; no beauty-filter smoothing, waxy skin, CGI-clean materials, or artificially spotless surroundings",
     "people and props must be caught in use or between actions rather than squared to the lens like an advertisement or product presentation",
     "keep posture relaxed and physically plausible rather than symmetrical, mannequin-like, commercially posed, or excessively polished",
   ].join(", ");
@@ -640,14 +659,44 @@ export async function generatePersonaImage(
     };
   }
 
-  const built = buildPersonaImagePrompt(content, setup, requestedMode, referenceMode, styleHint, variationKey);
+  const initialBuilt = buildPersonaImagePrompt(content, setup, requestedMode, referenceMode, styleHint, variationKey);
+  const locksCurrentPersonaReference = initialBuilt.withAvatar && !explicitReferenceUrl;
+  const promptSetup = locksCurrentPersonaReference
+    ? {
+      ...setup,
+      personaName: withoutTextualHairstyleDirections(setup.personaName),
+      personaAppearance: withoutTextualHairstyleDirections(setup.personaAppearance),
+      personaDescription: withoutTextualHairstyleDirections(setup.personaDescription),
+      personaPersonality: withoutTextualHairstyleDirections(setup.personaPersonality),
+      personaStyle: withoutTextualHairstyleDirections(setup.personaStyle),
+      contentTheme: withoutTextualHairstyleDirections(setup.contentTheme),
+      personaReferenceIdentity: withoutTextualHairstyleDirections(setup.personaReferenceIdentity),
+      genres: (setup.genres || []).map((item) => withoutTextualHairstyleDirections(item)),
+      trendTopics: (setup.trendTopics || []).map((item) => withoutTextualHairstyleDirections(item)),
+    }
+    : setup;
+  const promptContent = locksCurrentPersonaReference ? withoutTextualHairstyleDirections(content) : content;
+  const promptStyleHint = locksCurrentPersonaReference ? withoutTextualHairstyleDirections(styleHint) : styleHint;
+  const builtPrompt = locksCurrentPersonaReference
+    ? buildPersonaImagePrompt(promptContent, promptSetup, requestedMode, referenceMode, promptStyleHint, variationKey)
+    : initialBuilt;
+  const built = locksCurrentPersonaReference
+    ? {
+      ...builtPrompt,
+      prompt: builtPrompt.prompt
+        .replace(/slightly damp hair/gi, "rain-dampened surroundings")
+        .replace(/hair or makeup logic/gi, "makeup logic"),
+    }
+    : builtPrompt;
   // An explicitly selected library image always means image-to-image editing.
   // Keep the normal scene/POV classifier for text-only generation, but do not
   // discard the user's source image just because the edit prompt describes a scene.
   const { prompt, mode } = built;
   const identityReferenceUrl = explicitReferenceUrl || route.referenceUrl || String(referenceSheetUrl || "").trim();
   const withAvatar = Boolean(explicitReferenceUrl) || built.withAvatar;
-  const customCue = customPrompt?.trim();
+  const customCue = locksCurrentPersonaReference
+    ? withoutTextualHairstyleDirections(customPrompt)
+    : customPrompt?.trim();
   const imageFilterCue = imageFilterPrompt?.trim();
   const mandatoryFilterDirective = imageFilterCue
     ? [
@@ -668,12 +717,15 @@ export async function generatePersonaImage(
       ].filter(Boolean).join("\n")
       : [
         mandatoryFilterDirective,
-        "FACE IDENTITY LOCK: The attached image is the currently selected persona reference. The protagonist's face MUST be the same person as in that image.",
+        "FACE AND HAIRSTYLE IDENTITY LOCK: The attached image is the currently selected persona reference. The protagonist's face MUST be the same person as in that image.",
         "Keep the exact same face: facial structure, eyes, nose, mouth, eyebrows, bone structure, skin tone, apparent age, gender, ethnicity, and hairline. Do not invent a similar new face, do not swap identity, and do not beautify the person into someone else.",
-        "Clothing, pose, scene, camera, lighting, and props may change freely to follow the current request. Only the face identity is locked.",
-        "If the attached image is a multi-view character sheet, use the front face for identity only. Do not copy the white studio, standing lineup, side-by-side views, or model-sheet composition.",
-        customCue ? `Highest priority current visual request: ${customCue}` : "",
+        "Keep the hairstyle exactly unchanged from the attached reference. Do not redesign, reinterpret, or replace it, and do not invent details that are not visible in the reference.",
+        "The face and hairstyle lock overrides post content, custom visual requests, style hints, persona text, and camera plans. The attached image is the source of truth whenever text conflicts with it.",
+        "Clothing, pose, scene, action, camera, lighting, and props may change freely to follow the current request. Only the face identity and hairstyle are locked.",
+        "If the attached image is a multi-view character sheet, use the front view for face identity and all available views for hairstyle consistency. Do not copy the white studio, standing lineup, side-by-side views, or model-sheet composition.",
+        customCue ? `Highest priority scene request after the face and hairstyle lock: ${customCue}` : "",
         prompt,
+        "FINAL NON-NEGOTIABLE IDENTITY CHECK: Preserve the face identity and hairstyle exactly as shown in the attached persona reference; no other prompt instruction may change either one.",
       ].filter(Boolean).join("\n")
     : [mandatoryFilterDirective, customCue ? `Highest priority current visual request: ${customCue}` : "", prompt].filter(Boolean).join("\n");
 
