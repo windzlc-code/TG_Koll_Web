@@ -4754,40 +4754,7 @@ def _serve_task_output_media(task_id: str, index: int, user: dict[str, Any]) -> 
 
 def _serve_task_output_media_thumbnail(task_id: str, index: int, user: dict[str, Any]) -> FileResponse:
     path = _task_output_media_path(task_id, index, user)
-    if path.suffix.lower() not in IMAGE_EXTS:
-        return _serve_persona_media_thumbnail(path)
-
-    stat = path.stat()
-    source_key = hashlib.sha256(
-        f"{path}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")
-    ).hexdigest()[:16]
-    safe_task_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(task_id or "").strip()) or "task"
-    cache_dir = OUTPUT_ROOT / ".thumbnails" / safe_task_id
-    cache_path = cache_dir / f"{int(index)}-{source_key}.jpg"
-    if not cache_path.is_file():
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        temp_path = cache_dir / f".{cache_path.name}.{uuid.uuid4().hex}.tmp"
-        try:
-            with Image.open(path) as source:
-                image = ImageOps.exif_transpose(source)
-                image.thumbnail((480, 480), Image.Resampling.LANCZOS)
-                if "A" in image.getbands():
-                    rgb = Image.new("RGB", image.size, "white")
-                    rgb.paste(image, mask=image.getchannel("A"))
-                else:
-                    rgb = image.convert("RGB")
-                rgb.save(temp_path, format="JPEG", quality=78, optimize=True)
-            temp_path.replace(cache_path)
-        finally:
-            temp_path.unlink(missing_ok=True)
-        for stale in cache_dir.glob(f"{int(index)}-*.jpg"):
-            if stale != cache_path:
-                stale.unlink(missing_ok=True)
-    return FileResponse(
-        str(cache_path),
-        media_type="image/jpeg",
-        headers=_immutable_media_headers(),
-    )
+    return _serve_persona_media_thumbnail(path)
 
 
 def _tool_r18_runtime_dir() -> Path:
@@ -11506,6 +11473,10 @@ def _persist_image_media(image_url: str, workdir: Path, stem: str) -> str:
         os.replace(temporary, target)
     finally:
         temporary.unlink(missing_ok=True)
+    try:
+        _ensure_persona_media_thumbnail(target)
+    except Exception as exc:
+        logger.warning("Image preview prewarm failed for %s: %s", target, exc)
     return str(target)
 
 
@@ -11530,6 +11501,7 @@ _PERSONA_POST_IMAGE_RENDER_STYLES: dict[str, tuple[str, str]] = {
     "anime_painterly": ("厚涂动漫", "Generate a painterly anime illustration with rich brushwork, dimensional color masses, expressive light, and carefully rendered character details."),
     "stylized_3d": ("3D 卡通", "Generate a stylized 3D character scene with appealing sculpted forms, rounded readable silhouettes, tactile materials, and soft physically based lighting."),
     "realistic_cg": ("写实 3D", "Generate high-end realistic 3D CGI with physically based materials, detailed geometry, convincing global illumination, and premium character-render quality."),
+    "cinematic_cg": ("影视 CG", "Generate a feature-film cinematic CGI frame with production-grade visual effects, physically based materials, detailed digital environments, dramatic narrative lighting, cinematic depth, and polished blockbuster compositing; make the image unmistakably high-end computer-generated cinema rather than ordinary live-action photography, simple 3D cartoon, or 2D illustration."),
     "three_render_two": ("3 渲 2", "Generate a 3D-to-2D hybrid image: preserve dimensional 3D form and lighting while using expressive 2D outlines, cel-shadow bands, and animation-style finishing."),
     "american_cartoon": ("美式卡通", "Generate an American cartoon illustration with bold silhouettes, confident outlines, lively exaggerated expression, strong shape language, and colorful narrative staging."),
     "comic_ink": ("漫画线描", "Generate comic-book ink artwork with energetic contour lines, selective cross-hatching or screentone texture, dramatic panel-like staging, and readable graphic contrast."),
@@ -18559,7 +18531,7 @@ def _extract_video_poster(path: Path, dest: Path) -> bool:
         temp_path.unlink(missing_ok=True)
 
 
-def _serve_persona_media_thumbnail(path: Path) -> FileResponse:
+def _ensure_persona_media_thumbnail(path: Path) -> Path | None:
     source_key = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
     version = _persona_media_cache_token(path)
     cache_dir = path.parent / ".thumbnails"
@@ -18594,10 +18566,24 @@ def _serve_persona_media_thumbnail(path: Path) -> FileResponse:
             if path.suffix.lower() in VIDEO_EXTS:
                 _write_video_poster_placeholder(cache_path)
             else:
-                return _serve_persona_media_file(path)
+                return None
         for stale in cache_dir.glob(f"{source_key}-*.jpg"):
             if stale != cache_path:
                 stale.unlink(missing_ok=True)
+    return cache_path
+
+
+def _delete_persona_media_thumbnails(path: Path) -> None:
+    source_key = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
+    cache_dir = path.parent / ".thumbnails"
+    for cached in cache_dir.glob(f"{source_key}-*.jpg") if cache_dir.is_dir() else []:
+        cached.unlink(missing_ok=True)
+
+
+def _serve_persona_media_thumbnail(path: Path) -> FileResponse:
+    cache_path = _ensure_persona_media_thumbnail(path)
+    if cache_path is None:
+        return _serve_persona_media_file(path)
     return FileResponse(
         str(cache_path),
         media_type="image/jpeg",
@@ -21754,7 +21740,20 @@ def _persona_library_preview_url(archive_id: str, image_id: str, raw_url: str) -
         return ""
     if text.startswith("data:") or re.match(r"^https?://", text, re.I):
         return text
-    return f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/images/{quote(str(image_id).strip(), safe='')}"
+    path = Path(text).expanduser()
+    version = f"?v={_persona_media_cache_token(path.resolve())}" if path.is_file() else ""
+    return f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/images/{quote(str(image_id).strip(), safe='')}/thumbnail{version}"
+
+
+def _persona_library_original_url(archive_id: str, image_id: str, raw_url: str) -> str:
+    text = str(raw_url or "").strip()
+    if not text:
+        return ""
+    if text.startswith("data:") or re.match(r"^https?://", text, re.I):
+        return text
+    path = Path(text).expanduser()
+    version = f"?v={_persona_media_cache_token(path.resolve())}" if path.is_file() else ""
+    return f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/images/{quote(str(image_id).strip(), safe='')}{version}"
 
 
 def _persona_avatar_float(value: Any, fallback: float) -> float:
@@ -21799,6 +21798,7 @@ def _compact_persona_image_library_item(archive_id: str, item: dict[str, Any]) -
         "id": image_id,
         "image_url": raw_url,
         "preview_url": _persona_library_preview_url(archive_id, image_id, raw_url),
+        "original_url": _persona_library_original_url(archive_id, image_id, raw_url),
         "created_at": str(item.get("createdAt") or "").strip(),
         "prompt": str(item.get("prompt") or "").strip(),
         "final_prompt": str(item.get("finalPrompt") or item.get("final_prompt") or "").strip(),
@@ -21867,7 +21867,39 @@ def _serve_persona_archive_image(archive_id: str, image_id: str) -> Response:
     path = Path(raw_url).expanduser().resolve()
     if not path.is_file():
         raise HTTPException(status_code=404, detail="人设图片源文件不存在。")
-    return FileResponse(str(path), filename=path.name)
+    return _serve_persona_media_file(path)
+
+
+def _serve_persona_archive_image_thumbnail(archive_id: str, image_id: str) -> Response:
+    clean_archive_id = str(archive_id or "").strip()
+    clean_image_id = str(image_id or "").strip()
+    if not clean_archive_id or not clean_image_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或图片 ID。")
+    _, _, archives = _persona_archive_source_for_write(clean_archive_id)
+    archive = _find_persona_archive(archives, clean_archive_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    library = archive.get("personaImageLibrary") if isinstance(archive.get("personaImageLibrary"), list) else []
+    item = next(
+        (
+            row for row in library
+            if isinstance(row, dict) and str(row.get("id") or "").strip() == clean_image_id
+        ),
+        None,
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="人设图片不存在。")
+    raw_url = str(item.get("imageUrl") or "").strip()
+    if not raw_url:
+        raise HTTPException(status_code=404, detail="人设图片不存在。")
+    if raw_url.startswith("data:"):
+        return Response(content=raw_url, media_type="text/plain; charset=utf-8")
+    if re.match(r"^https?://", raw_url, re.I):
+        return RedirectResponse(url=raw_url, status_code=307)
+    path = Path(raw_url).expanduser().resolve()
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="人设图片源文件不存在。")
+    return _serve_persona_media_thumbnail(path)
 
 
 @_persona_archive_write_locked
@@ -21942,7 +21974,9 @@ def _persona_archive_persist_reference_image(archive_id: str, *, image_url: str,
     try:
         _write_persona_archives_preserving_shape(path, raw, archives)
     except Exception:
-        Path(persisted_image_url).unlink(missing_ok=True)
+        persisted_path = Path(persisted_image_url)
+        _delete_persona_media_thumbnails(persisted_path)
+        persisted_path.unlink(missing_ok=True)
         raise
     data = _list_persona_archive_images(clean_id)
     data["saved_item_id"] = entry["id"]
@@ -22008,6 +22042,7 @@ def _delete_persona_archive_image(archive_id: str, image_id: str) -> dict[str, A
             stored_path = Path(deleted_url).expanduser().resolve()
             allowed_roots = (UPLOAD_ROOT.resolve(), (_persona_media_root() / "library").resolve())
             if any(stored_path.is_relative_to(root) for root in allowed_roots) and stored_path.is_file():
+                _delete_persona_media_thumbnails(stored_path)
                 stored_path.unlink()
         except Exception:
             pass
@@ -22118,7 +22153,9 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
     except Exception:
         with contextlib.suppress(Exception):
             if persisted_url:
-                Path(persisted_url).unlink(missing_ok=True)
+                persisted_path = Path(persisted_url)
+                _delete_persona_media_thumbnails(persisted_path)
+                persisted_path.unlink(missing_ok=True)
         raise
     finally:
         with contextlib.suppress(Exception):
@@ -22135,6 +22172,7 @@ async def _replace_persona_archive_image(archive_id: str, image_id: str, usernam
             old_path = Path(old_url).expanduser().resolve()
             allowed_roots = (UPLOAD_ROOT.resolve(), (_persona_media_root() / "library").resolve())
             if any(old_path.is_relative_to(root) for root in allowed_roots) and old_path.is_file():
+                _delete_persona_media_thumbnails(old_path)
                 old_path.unlink()
         except Exception:
             pass
@@ -30352,6 +30390,10 @@ def create_app() -> FastAPI:
     @app.get("/api/persona_dashboard/personas/{archive_id}/images/{image_id}")
     def api_persona_dashboard_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
         return _serve_persona_archive_image(archive_id, image_id)
+
+    @app.get("/api/persona_dashboard/personas/{archive_id}/images/{image_id}/thumbnail")
+    def api_persona_dashboard_persona_image_thumbnail(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _serve_persona_archive_image_thumbnail(archive_id, image_id)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/images/{image_id}/apply")
     def api_persona_dashboard_apply_persona_image(archive_id: str, image_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):

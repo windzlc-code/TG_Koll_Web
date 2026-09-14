@@ -2057,6 +2057,7 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertNotIn("${esc(personaImageLibraryPromptLabel(item))}", self.console_script)
         self.assertNotIn("未填写提示词", self.console_script)
         self.assertIn('class="persona-image-library-zoom-button"', image_preview)
+        self.assertIn('originalUrl: String(item.original_url || item.preview_url || item.image_url || "").trim()', self.console_script)
         self.assertNotIn("persona-image-library-edit-button", image_preview)
         self.assertNotIn("persona-image-library-preview-actions", image_preview)
         self.assertNotIn("${renderEditIcon()}", image_preview)
@@ -2066,6 +2067,14 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertNotIn('const zoomButton = unavailable', image_preview)
         self.assertIn('if (libraryWrap) return;', media_error)
         self.assertNotIn(".persona-image-reference-prompt-row {", self.styles)
+
+    def test_task_gallery_keeps_backend_thumbnail_instead_of_reloading_original(self):
+        collect_start = self.console_script.index("function collectTaskScreenshots(")
+        collect_end = self.console_script.index("\nfunction renderTaskScreenshotGallery", collect_start)
+        collect_source = self.console_script[collect_start:collect_end]
+
+        self.assertIn("item.thumbnail_url || item.thumbnailUrl", collect_source)
+        self.assertIn("thumbnailUrl", collect_source)
 
     def test_persona_image_delete_confirm_returns_to_profile_image_page(self):
         confirm_start = self.console_script.index("async function confirmDangerAction(")

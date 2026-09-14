@@ -2263,20 +2263,24 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_persona_image_upload_creates_current_reference_for_follow_up_generation(self):
         self._write_archives()
-        image_bytes = base64.b64decode(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-        )
+        image_buffer = BytesIO()
+        Image.effect_noise((1600, 1200), 100).convert("RGB").save(image_buffer, format="PNG")
+        image_bytes = image_buffer.getvalue()
         durable_root = self.data_dir / "persona_media"
         with mock.patch.object(server, "_persona_media_root", return_value=durable_root):
             response = self.client.post(
                 "/api/persona_dashboard/personas/persona-1/images/upload",
                 files={"image": ("persona-front-view.png", image_bytes, "image/png")},
             )
+            body = response.json()
+            preview_response = self.client.get(body["items"][0]["preview_url"])
+            original_response = self.client.get(body["items"][0]["original_url"])
 
         self.assertEqual(response.status_code, 200, response.text)
-        body = response.json()
         self.assertTrue(body["saved_item_id"])
         self.assertEqual(body["current_reference_url"], body["items"][0]["image_url"])
+        self.assertIn("/thumbnail?v=", body["items"][0]["preview_url"])
+        self.assertTrue(body["items"][0]["original_url"].split("?", 1)[0].endswith(body["saved_item_id"]))
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         archive = archives[0]
         self.assertEqual(archive["personaReferenceSheet"], body["current_reference_url"])
@@ -2289,6 +2293,32 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(stored_path.is_relative_to(durable_root.resolve()))
         self.assertTrue(stored_path.is_file())
         self.assertEqual(stored_path.read_bytes(), image_bytes)
+        prewarmed = list((stored_path.parent / ".thumbnails").glob("*.jpg"))
+        self.assertEqual(len(prewarmed), 1)
+        self.assertEqual(preview_response.status_code, 200, preview_response.text)
+        self.assertEqual(preview_response.headers["content-type"], "image/jpeg")
+        self.assertIn("immutable", preview_response.headers["cache-control"])
+        self.assertLess(len(preview_response.content), len(image_bytes))
+        with Image.open(BytesIO(preview_response.content)) as preview:
+            self.assertLessEqual(preview.width, 480)
+            self.assertLessEqual(preview.height, 480)
+        self.assertEqual(original_response.status_code, 200, original_response.text)
+        self.assertIn("immutable", original_response.headers["cache-control"])
+        self.assertEqual(original_response.content, image_bytes)
+
+    def test_generated_task_image_prewarms_thumbnail_without_changing_original(self):
+        source_path = self.root / "provider-result.png"
+        Image.effect_noise((1400, 1050), 100).convert("RGB").save(source_path, format="PNG")
+        original_bytes = source_path.read_bytes()
+        durable_root = self.data_dir / "persona_media"
+
+        with mock.patch.object(server, "_persona_media_root", return_value=durable_root):
+            saved_path = Path(server._persist_generated_image_for_task("task-prewarm", str(source_path), 1))
+
+        self.assertEqual(saved_path.read_bytes(), original_bytes)
+        previews = list((saved_path.parent / ".thumbnails").glob("*.jpg"))
+        self.assertEqual(len(previews), 1)
+        self.assertLess(previews[0].stat().st_size, saved_path.stat().st_size)
 
     def test_persona_image_upload_rejects_unsupported_format_and_oversize_file(self):
         self._write_archives()
@@ -2326,6 +2356,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             )
             self.assertEqual(created.status_code, 200, created.text)
             image_id = created.json()["saved_item_id"]
+            first_preview_url = created.json()["items"][0]["preview_url"]
             old_path = Path(created.json()["current_reference_url"])
             replaced = self.client.post(
                 f"/api/persona_dashboard/personas/persona-1/images/{image_id}/replace",
@@ -2337,6 +2368,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertTrue(new_path.is_relative_to(durable_root.resolve()))
         self.assertEqual(new_path.read_bytes(), replacement_bytes)
         self.assertFalse(old_path.exists())
+        replaced_item = next(item for item in replaced.json()["items"] if item["id"] == image_id)
+        self.assertNotEqual(replaced_item["preview_url"], first_preview_url)
+        self.assertIn("/thumbnail?v=", replaced_item["preview_url"])
+        self.assertEqual(len(list((new_path.parent / ".thumbnails").glob("*.jpg"))), 1)
 
     def test_persona_ai_keywords_calls_cli_and_returns_keywords(self):
         with mock.patch.object(
@@ -3137,7 +3172,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                             "content_source_mode": "manual",
                             "image_count": 3,
                             "aspect_ratio": "1:1",
-                            "image_render_style": "cel_shading",
+                            "image_render_style": "cinematic_cg",
                             "image_composition_label": "车窗侧面抓拍",
                         },
                         ensure_ascii=False,
@@ -3153,7 +3188,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["content_source_mode"], "manual")
         self.assertEqual(captured["payload"]["image_count"], 3)
         self.assertEqual(captured["payload"]["aspect_ratio"], "1:1")
-        self.assertEqual(captured["payload"]["image_render_style"], "cel_shading")
+        self.assertEqual(captured["payload"]["image_render_style"], "cinematic_cg")
         self.assertEqual(captured["payload"]["image_composition_label"], "车窗侧面抓拍")
 
     def test_task_submit_defaults_and_validates_persona_post_image_render_style(self):
@@ -8637,37 +8672,32 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 ),
             )
 
-        thumbnail_root = self.data_dir / "outputs"
-        with mock.patch.object(server, "OUTPUT_ROOT", thumbnail_root):
-            detail_response = self.client.get(f"/api/tasks/{task_id}")
-            self.assertEqual(detail_response.status_code, 200)
-            media_item = detail_response.json()["media_items"][0]
-            self.assertEqual(media_item["url"], f"/api/tasks/{task_id}/media/0")
-            self.assertEqual(
-                media_item["thumbnail_url"],
-                f"/api/tasks/{task_id}/media/0/thumbnail",
-            )
+        detail_response = self.client.get(f"/api/tasks/{task_id}")
+        self.assertEqual(detail_response.status_code, 200)
+        media_item = detail_response.json()["media_items"][0]
+        self.assertEqual(media_item["url"], f"/api/tasks/{task_id}/media/0")
+        self.assertEqual(
+            media_item["thumbnail_url"],
+            f"/api/tasks/{task_id}/media/0/thumbnail",
+        )
 
-            thumbnail_response = self.client.get(media_item["thumbnail_url"])
-            self.assertEqual(thumbnail_response.status_code, 200)
-            self.assertEqual(thumbnail_response.headers["content-type"], "image/jpeg")
-            self.assertIn("immutable", thumbnail_response.headers["cache-control"])
-            with Image.open(BytesIO(thumbnail_response.content)) as thumbnail:
-                self.assertLessEqual(thumbnail.width, 480)
-                self.assertLessEqual(thumbnail.height, 480)
-            self.assertLess(len(thumbnail_response.content), source_path.stat().st_size)
+        thumbnail_response = self.client.get(media_item["thumbnail_url"])
+        self.assertEqual(thumbnail_response.status_code, 200)
+        self.assertEqual(thumbnail_response.headers["content-type"], "image/jpeg")
+        self.assertIn("immutable", thumbnail_response.headers["cache-control"])
+        with Image.open(BytesIO(thumbnail_response.content)) as thumbnail:
+            self.assertLessEqual(thumbnail.width, 480)
+            self.assertLessEqual(thumbnail.height, 480)
+        self.assertLess(len(thumbnail_response.content), source_path.stat().st_size)
 
-            cached_response = self.client.get(media_item["thumbnail_url"])
-            self.assertEqual(cached_response.content, thumbnail_response.content)
-            self.assertEqual(
-                len(list((thumbnail_root / ".thumbnails" / task_id).glob("0-*.jpg"))),
-                1,
-            )
+        cached_response = self.client.get(media_item["thumbnail_url"])
+        self.assertEqual(cached_response.content, thumbnail_response.content)
+        self.assertEqual(len(list((source_path.parent / ".thumbnails").glob("*.jpg"))), 1)
 
-            original_response = self.client.get(media_item["url"])
-            self.assertEqual(original_response.status_code, 200)
-            self.assertIn("max-age=86400", original_response.headers["cache-control"])
-            self.assertEqual(original_response.content, source_path.read_bytes())
+        original_response = self.client.get(media_item["url"])
+        self.assertEqual(original_response.status_code, 200)
+        self.assertIn("immutable", original_response.headers["cache-control"])
+        self.assertEqual(original_response.content, source_path.read_bytes())
 
     def test_persona_generation_instruction_uses_native_locale_writing_rules(self):
         japanese = server._build_persona_generate_instruction(

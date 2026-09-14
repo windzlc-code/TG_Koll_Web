@@ -69,6 +69,7 @@ const PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS = [
     styles: [
       { id: "stylized_3d", label: "3D 卡通", detail: "圆润立体角色渲染" },
       { id: "realistic_cg", label: "写实 3D", detail: "高精度 CG 材质" },
+      { id: "cinematic_cg", label: "影视 CG", detail: "电影特效级叙事画面" },
       { id: "three_render_two", label: "3 渲 2", detail: "三维体积结合二维线条" },
     ],
   },
@@ -20989,13 +20990,15 @@ function collectTaskScreenshots(task = {}, logs = []) {
     const url = taskScreenshotFromValue(value);
     if (!url || seen.has(url)) return;
     seen.add(url);
-    rows.push({ previewUrl: url, originalUrl: url, thumbnailUrl: automationScreenshotThumbnailUrl(url), url, type: "image", label, time, ...meta });
+    rows.push({ previewUrl: url, originalUrl: url, thumbnailUrl: String(meta.thumbnailUrl || automationScreenshotThumbnailUrl(url)).trim(), url, type: "image", label, time, ...meta });
   };
   const pushMedia = (item, index = 0, labelPrefix = "任务图片") => {
     if (!item) return;
     const value = item.preview_url || item.previewUrl || item.url || item.image_url || item.imageUrl || item.path || item.file_path || item.filePath || "";
     const label = item.label || item.name || item.filename || `${labelPrefix} ${index + 1}`;
-    push(value, label, item.created_at || item.time || "");
+    push(value, label, item.created_at || item.time || "", {
+      thumbnailUrl: item.thumbnail_url || item.thumbnailUrl || "",
+    });
   };
   const taskMediaUrl = (index = 0) => task?.id ? `/api/tasks/${encodeURIComponent(task.id)}/media/${encodeURIComponent(index)}` : "";
   const result = task?.result && typeof task.result === "object"
@@ -27897,6 +27900,7 @@ function renderPersonaImageLibraryGrid(library, selectedImageId = "") {
     .map((item) => ({
       id: String(item.id || "").trim(),
       previewUrl: String(item.preview_url || item.image_url || "").trim(),
+      originalUrl: String(item.original_url || item.preview_url || item.image_url || "").trim(),
       type: "image",
       label: String(item.prompt || item.created_at || "人设图").trim() || "人设图",
       isReference: Boolean(item.is_reference || item.isReference),

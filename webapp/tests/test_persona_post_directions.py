@@ -160,6 +160,7 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert "setPersonaPostImageRenderStyleInteractionLocked(true)" in script
     assert "配图生成期间已锁定，完成后可重新选择" in script
     assert "cel_shading" in script
+    assert "cinematic_cg" in script
     assert "three_render_two" in script
     assert "american_cartoon" in script
     assert "image_render_style" in script
@@ -453,6 +454,20 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
     assert "American cartoon illustration" in captured["payload"]["imageRenderStylePrompt"]
     assert "bold silhouettes" in captured["payload"]["imageRenderStylePrompt"]
 
+    cinematic_cg_result = server._run_persona_post_image_task("task-cinematic-cg", {
+        "related_persona_id": "persona-1",
+        "related_post_id": "post-1",
+        "image_render_style": "cinematic_cg",
+        "image_count": 1,
+    })
+
+    assert cinematic_cg_result["ok"] is True
+    assert cinematic_cg_result["image_render_style"] == "cinematic_cg"
+    assert cinematic_cg_result["image_render_style_label"] == "影视 CG"
+    assert "feature-film cinematic CGI frame" in captured["payload"]["imageRenderStylePrompt"]
+    assert "production-grade visual effects" in captured["payload"]["imageRenderStylePrompt"]
+    assert "ordinary live-action photography" in captured["payload"]["imageRenderStylePrompt"]
+
     captured["payloads"].clear()
     multi_result = server._run_persona_post_image_task("task-3", {
         "related_persona_id": "persona-1",
@@ -478,6 +493,7 @@ def test_generation_style_catalog_is_not_the_removed_filter_catalog():
         "anime_painterly",
         "stylized_3d",
         "realistic_cg",
+        "cinematic_cg",
         "three_render_two",
         "american_cartoon",
         "comic_ink",

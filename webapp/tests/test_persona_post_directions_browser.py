@@ -191,7 +191,7 @@ def test_post_image_render_styles_are_grouped_before_generation_and_keep_origina
                 checked: host.querySelector('[data-persona-image-render-style][aria-checked="true"]')?.dataset.personaImageRenderStyle || "",
                 labels: Array.from(host.querySelectorAll("[data-persona-image-render-style] strong"), (node) => node.textContent.trim()),
               };
-              const selected = selectPersonaPostImageRenderStyle(mediaForm, "three_render_two");
+              const selected = selectPersonaPostImageRenderStyle(mediaForm, "cinematic_cg");
               const rejected = selectPersonaPostImageRenderStyle(mediaForm, "../../custom-prompt");
               host.innerHTML = renderPersonaPostImageRenderStylePicker(mediaForm);
               return {
@@ -205,19 +205,20 @@ def test_post_image_render_styles_are_grouped_before_generation_and_keep_origina
             }"""
         )
 
-        assert result["initial"]["count"] == 13
+        assert result["initial"]["count"] == 14
         assert result["initial"]["groupCount"] == 4
         assert result["initial"]["radioGroupCount"] == 1
         assert result["initial"]["semanticGroupCount"] == 4
         assert result["initial"]["checked"] == "original"
         assert "原有风格（默认）" in result["initial"]["labels"]
         assert "赛璐璐" in result["initial"]["labels"]
+        assert "影视 CG" in result["initial"]["labels"]
         assert "3 渲 2" in result["initial"]["labels"]
         assert "美式卡通" in result["initial"]["labels"]
         assert result["selected"] is True
         assert result["rejected"] is False
-        assert result["value"] == "three_render_two"
-        assert result["checked"] == "three_render_two"
+        assert result["value"] == "cinematic_cg"
+        assert result["checked"] == "cinematic_cg"
         assert result["checkedCount"] == 1
         browser.close()
 
@@ -338,7 +339,7 @@ def test_post_and_image_sections_use_responsive_dividers_without_mobile_overflow
         assert desktop["panel"] == "1px"
         assert desktop["divider"] != "rgba(0, 0, 0, 0)"
         assert desktop["groups"] == 4
-        assert desktop["options"] == 13
+        assert desktop["options"] == 14
 
         for width in (390, 320):
             page.set_viewport_size({"width": width, "height": 844})
