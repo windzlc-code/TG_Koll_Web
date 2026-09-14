@@ -188,6 +188,43 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         self.assertEqual(claims, 1)
         self.assertEqual(rewards, 2)
 
+    def test_registered_admin_can_open_and_generate_a_personal_invitation(self):
+        page = self.admin.get("/profile.html?view=invitation&admin_console=1")
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertIn('meta name="admin-console-session" content="1"', page.text)
+
+        summary = self.admin.get(
+            "/api/invitations/me?limit=10&offset=0",
+            headers={"X-Admin-Console": "1"},
+        )
+        self.assertEqual(summary.status_code, 200, summary.text)
+        self.assertEqual(summary.json()["total"], 0)
+
+        generated = self.admin.post(
+            "/api/invitations/code",
+            headers={"X-Admin-Console": "1", "Origin": "http://testserver"},
+        )
+        self.assertEqual(generated.status_code, 200, generated.text)
+        invite_code = generated.json()["code"]
+        self.assertTrue(invite_code.startswith("VCTO-I-"))
+
+        invitee = self._register_email_user(
+            email="admin.invitee@gmail.com",
+            username="admin-invitee",
+            invite_code=invite_code,
+        )
+        invitee_summary = invitee.get("/api/invitations/me?limit=10&offset=0")
+        self.assertEqual(invitee_summary.status_code, 200, invitee_summary.text)
+        self.assertEqual(invitee_summary.json()["records"][0]["viewer_role"], "invitee")
+
+        admin_summary = self.admin.get(
+            "/api/invitations/me?limit=10&offset=0",
+            headers={"X-Admin-Console": "1"},
+        )
+        self.assertEqual(admin_summary.status_code, 200, admin_summary.text)
+        self.assertEqual(admin_summary.json()["total"], 1)
+        self.assertEqual(admin_summary.json()["records"][0]["viewer_role"], "inviter")
+
     def test_verified_email_registration_auto_activates_and_email_login_works(self):
         client = self._register_email_user()
         me = client.get("/api/auth/me")

@@ -36,7 +36,6 @@ function registrationPanelMarkup() {
               <label class="field auth-placeholder-field" for="registerUsername"><span class="field-label">用户名</span><input id="registerUsername" name="username" autocomplete="username" maxlength="32" placeholder="3-32 位英文、數字或 ._-" aria-describedby="registerUsernameError" required /><small class="field-error" id="registerUsernameError"></small></label>
               <label class="field auth-placeholder-field" for="registerPassword"><span class="field-label">登入密碼</span><span class="auth-password-field"><input id="registerPassword" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="至少 8 位" aria-describedby="registerPasswordError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPassword" aria-label="顯示登入密碼" title="顯示登入密碼" aria-controls="registerPassword" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordError"></small></label>
               <label class="field auth-placeholder-field" for="registerPasswordConfirmation"><span class="field-label">再次確認密碼</span><span class="auth-password-field"><input id="registerPasswordConfirmation" name="password_confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="請再次輸入密碼" aria-describedby="registerPasswordConfirmationError" required /><button class="auth-password-toggle" type="button" data-register-password-toggle data-target="registerPasswordConfirmation" aria-label="顯示確認密碼" title="顯示確認密碼" aria-controls="registerPasswordConfirmation" aria-pressed="false"><svg class="auth-eye-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="3"></circle><path class="auth-eye-slash" d="M4 20L20 4"></path></svg></button></span><small class="field-error" id="registerPasswordConfirmationError"></small></label>
-              <label class="field auth-placeholder-field" for="registerCompany"><span class="field-label">公司 / 團隊（選填）</span><input id="registerCompany" name="company" autocomplete="organization" maxlength="120" placeholder="請輸入公司或團隊名稱" aria-describedby="registerCompanyError" /><small class="field-error" id="registerCompanyError"></small></label>
               <label class="field auth-placeholder-field" for="registerInviteCode"><span class="field-label">邀請碼（選填）</span><input id="registerInviteCode" name="invite_code" autocomplete="off" maxlength="64" autocapitalize="characters" spellcheck="false" placeholder="輸入好友分享的邀請碼" aria-describedby="registerInviteCodeError" /><small class="field-error" id="registerInviteCodeError"></small></label>
             </div>
             <button class="submit-button auth-primary auth-registration-next" type="button" data-register-next><span>下一步</span><span aria-hidden="true">→</span></button>
@@ -562,7 +561,6 @@ function validateRegistrationEmail({ showFieldError = true } = {}) {
 function validateRegistrationProfile({ focusInvalid = true } = {}) {
   if (!applicationForm) return false;
   const fullName = applicationForm.elements.full_name.value.trim();
-  const company = applicationForm.elements.company.value.trim();
   const inviteCode = applicationForm.elements.invite_code.value.trim();
   const password = applicationForm.elements.password.value;
   const passwordConfirmation = applicationForm.elements.password_confirmation.value;
@@ -571,7 +569,6 @@ function validateRegistrationProfile({ focusInvalid = true } = {}) {
     [applicationForm.elements.username, validRegistrationUsername(applicationForm.elements.username.value), "用户名需要 3-32 位英文、數字或 ._-。"],
     [applicationForm.elements.password, password.length >= 8 && password.length <= 256, "密碼需要 8-256 位。"],
     [applicationForm.elements.password_confirmation, password === passwordConfirmation && Boolean(passwordConfirmation), "兩次輸入的密碼不一致。"],
-    [applicationForm.elements.company, company.length <= 120, "公司或團隊名稱不能超過 120 個字元。"],
     [applicationForm.elements.invite_code, inviteCode.length <= 64, "邀請碼不能超過 64 個字元。"],
   ];
   let firstInvalid = null;
@@ -669,9 +666,6 @@ function registrationErrorField(code) {
   }
   if (["full_name_invalid", "invalid_full_name"].includes(normalized)) {
     return applicationForm.elements.full_name;
-  }
-  if (["company_invalid", "invalid_company"].includes(normalized)) {
-    return applicationForm.elements.company;
   }
   if (["password_invalid", "weak_password"].includes(normalized)) {
     return applicationForm.elements.password;
@@ -1123,7 +1117,6 @@ applicationForm?.addEventListener("submit", async (event) => {
         full_name: applicationForm.elements.full_name.value.trim(),
         username: applicationForm.elements.username.value.trim(),
         password: applicationForm.elements.password.value,
-        company: applicationForm.elements.company.value.trim(),
         invite_code: applicationForm.elements.invite_code.value.trim(),
         consent: applicationForm.elements.consent.checked,
       }),

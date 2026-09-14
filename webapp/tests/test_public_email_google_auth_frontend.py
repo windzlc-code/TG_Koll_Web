@@ -26,7 +26,9 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
         self.assertIn("challenge_id: registerChallengeId", self.script)
         self.assertIn("verification_code: applicationForm.elements.verification_code.value.trim()", self.script)
         self.assertIn("full_name: applicationForm.elements.full_name.value.trim()", self.script)
-        self.assertIn("company: applicationForm.elements.company.value.trim()", self.script)
+        self.assertNotIn("company: applicationForm.elements.company.value.trim()", self.script)
+        self.assertNotIn('name="company"', self.script)
+        self.assertNotIn("registerCompany", self.script)
         self.assertNotIn("use_case: applicationForm.elements.use_case.value", self.script)
         self.assertIn("consent: applicationForm.elements.consent.checked", self.script)
         self.assertNotIn("phone: applicationForm.elements.phone", self.script)
@@ -101,11 +103,11 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             "username",
             "password",
             "password_confirmation",
-            "company",
         ):
             with self.subTest(page="details", field=field):
                 self.assertIn(f'name="{field}"', details_page_markup)
                 self.assertNotIn(f'name="{field}"', email_page_markup)
+        self.assertNotIn('name="company"', registration_markup)
         for field in ("email", "verification_code", "consent"):
             with self.subTest(page="email", field=field):
                 self.assertNotIn(f'name="{field}"', details_page_markup)
@@ -122,12 +124,10 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             "用户名",
             "登入密碼",
             "再次確認密碼",
-            "公司 / 團隊（選填）",
         ):
             with self.subTest(label=label):
                 self.assertIn(f'<span class="field-label">{label}</span>', registration_markup)
         self.assertIn('placeholder="請輸入姓名"', registration_markup)
-        self.assertIn('placeholder="請輸入公司或團隊名稱"', registration_markup)
         self.assertNotIn('name="use_case"', registration_markup)
         self.assertNotIn("預計使用情境", registration_markup)
         self.assertIn(

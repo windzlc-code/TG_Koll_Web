@@ -682,7 +682,7 @@
   }
 
   async function setProfileView(view, { updateUrl = false } = {}) {
-    const invitationView = !isAdminSession && view === "invitation";
+    const invitationView = view === "invitation";
     state.view = invitationView ? "invitation" : "profile";
     document.body.classList.toggle("is-invitation-view", invitationView);
     if ($("profileForm")) $("profileForm").hidden = invitationView;
@@ -858,7 +858,6 @@
     $("profileUsername").textContent = String(account?.username || "-");
     $("profileAccountId").textContent = account?.id ? `#${account.id}` : "-";
     $("profileAccountEmail").textContent = String(account?.email || "-").trim() || "-";
-    if ($("profileInvitationEntry")) $("profileInvitationEntry").hidden = isAdminSession;
     $("profileBackLink").href = isAdminSession
       ? `/admin-console.html${returnManageUserId ? `?manage_user_id=${encodeURIComponent(returnManageUserId)}` : ""}`
       : "/console.html";

@@ -31286,8 +31286,6 @@ def create_app() -> FastAPI:
         offset: int = 0,
         user: dict[str, Any] = Depends(get_current_user),
     ):
-        if _is_admin(user):
-            raise HTTPException(status_code=409, detail="管理员账号不参与邀请活动")
         with db() as conn:
             result = invitation_program.get_user_summary(
                 conn,
@@ -31303,8 +31301,6 @@ def create_app() -> FastAPI:
         user: dict[str, Any] = Depends(get_current_user),
     ):
         _require_same_origin_when_supplied(request)
-        if _is_admin(user):
-            raise HTTPException(status_code=409, detail="管理员账号不参与邀请活动")
         user_id = _identity_user_id(user)
         _enforce_auth_rate_limit(
             "invitation_code",

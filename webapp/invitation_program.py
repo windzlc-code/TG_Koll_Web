@@ -61,8 +61,6 @@ def _active_customer(conn: sqlite3.Connection, user_id: int) -> sqlite3.Row:
     ).fetchone()
     if row is None:
         raise commercial_billing.BillingError("USER_NOT_FOUND", "账号不存在", 404)
-    if bool(int(row["is_admin"] or 0)):
-        raise commercial_billing.BillingError("INVITATION_ADMIN_NOT_SUPPORTED", "管理员账号不参与邀请活动", 409)
     if int(row["is_disabled"] or 0) or int(row["deleted_at"] or 0) or str(row["approval_status"] or "approved") != "approved":
         raise commercial_billing.BillingError("INVITATION_USER_INACTIVE", "账号当前不可参与邀请活动", 409)
     return row

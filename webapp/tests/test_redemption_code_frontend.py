@@ -77,6 +77,12 @@ def test_profile_invitation_respects_disabled_permission_pending_and_paginates_r
     assert "grid-template-columns: minmax(0, 1fr);" in PROFILE_CSS
 
 
+def test_profile_invitation_view_is_available_to_registered_admin_accounts():
+    assert 'const invitationView = view === "invitation";' in PROFILE_JS
+    assert 'const invitationView = !isAdminSession && view === "invitation";' not in PROFILE_JS
+    assert '$("profileInvitationEntry").hidden = isAdminSession' not in PROFILE_JS
+
+
 def test_profile_invitation_has_vecto_visual_story_without_changing_action_ids():
     for marker in (
         "profile-invitation-hero-visual",
