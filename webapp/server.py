@@ -172,6 +172,7 @@ from .telegram_tweet_admin import (
     inject_tweet_telegram_admin,
     start_tweet_telegram_bot_worker,
     stop_tweet_telegram_bot_worker,
+    validate_tweet_webapp_login_context,
 )
 from .telegram_tweet_bot import TweetWorkbenchOps
 from .telegram_internal import inject_telegram_internal_routes
@@ -13306,6 +13307,11 @@ class LoginPayload(BaseModel):
     security_verification_method: str = Field(default="", max_length=16)
     security_challenge_id: str = Field(default="", max_length=120)
     security_verification_code: str = Field(default="", max_length=16)
+    # These fields are only accepted as a pair from the Telegram WebApp login
+    # continuation.  The server validates the signed initData and one-time
+    # ticket before it permits an additional WebView session.
+    telegram_tweet_ticket: str = Field(default="", max_length=256)
+    telegram_init_data: str = Field(default="", max_length=8192)
 
 
 class ChangePasswordPayload(BaseModel):
@@ -28649,6 +28655,7 @@ def create_app() -> FastAPI:
         high_risk_login = False
         high_risk_verified = False
         high_risk_verification_method = ""
+        telegram_parallel_session = False
         remember_login = False
         session_ttl_seconds = 12 * 3600
         with db() as conn:
@@ -28823,6 +28830,22 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=403, detail="账号已禁用")
             if int(user.get("must_change_password") or 0) == 1 and _password_expiry(user) <= _now_ts():
                 raise HTTPException(status_code=403, detail=_password_change_required_detail(user))
+
+            telegram_ticket = str(payload.telegram_tweet_ticket or "").strip()
+            telegram_init_data = str(payload.telegram_init_data or "").strip()
+            if telegram_ticket or telegram_init_data:
+                if not telegram_ticket or not telegram_init_data:
+                    raise HTTPException(status_code=400, detail="Telegram 登录上下文不完整，请回到 Bot 重新打开绑定入口")
+                validate_tweet_webapp_login_context(
+                    telegram_ticket,
+                    telegram_init_data,
+                    runtime,
+                    conn=conn,
+                )
+                # Administrators retain the stricter single-session boundary;
+                # customer accounts may add the authenticated Telegram WebView
+                # without revoking an existing browser session.
+                telegram_parallel_session = not is_admin
 
             email_2fa_required = bool(email_2fa_enabled and not mfa_enabled)
             if email_2fa_required:
@@ -29125,7 +29148,7 @@ def create_app() -> FastAPI:
                     "mfa_enabled": mfa_enabled,
                     "last_login_at": previous_login_at,
                 }
-            elif (high_risk_login and high_risk_verified) or payload.force_takeover:
+            elif payload.force_takeover or (high_risk_login and high_risk_verified and not telegram_parallel_session):
                 conn.execute(
                     "UPDATE sessions SET revoked_at = ?, revoke_reason = ? "
                     "WHERE user_id = ? AND revoked_at = 0",
@@ -29137,7 +29160,7 @@ def create_app() -> FastAPI:
                 )
             elif len(active_tokens) == 1 and matching_presented_token:
                 delete_session(conn, matching_presented_token, reason="session_rotation")
-            elif active_tokens:
+            elif active_tokens and not telegram_parallel_session:
                 session_conflict = True
                 current_session = active_sessions[0]
                 session_conflict_details = {
@@ -29191,11 +29214,13 @@ def create_app() -> FastAPI:
                         "device_id": login_device_id,
                         "remember_login": remember_login,
                         "method": (
-                            f"password+{high_risk_verification_method}"
+                            f"telegram_webapp+password+{high_risk_verification_method}"
                             if high_risk_verification_method
                             else (
-                                "password+managed_recovery"
+                                "telegram_webapp+password+managed_recovery"
                                 if high_risk_login and password_only_managed_login
+                                else "telegram_webapp+password"
+                                if telegram_parallel_session
                                 else "password"
                             )
                         ),
@@ -29213,7 +29238,12 @@ def create_app() -> FastAPI:
                             f"账号 {username} 使用管理员创建的密码型账号从新设备和新网络登录；"
                             "该账号尚未配置独立二次验证方式。"
                             if password_only_managed_login
-                            else f"账号 {username} 已完成安全确认，并接管原有登录会话。"
+                            else (
+                                f"账号 {username} 已完成安全确认，并在 Telegram WebApp 增加登录会话；"
+                                "原有设备会话保持有效。"
+                                if telegram_parallel_session
+                                else f"账号 {username} 已完成安全确认，并接管原有登录会话。"
+                            )
                         ),
                         target_user_id=int(user["id"]),
                         fingerprint=(

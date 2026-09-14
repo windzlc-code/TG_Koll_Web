@@ -32,8 +32,8 @@ CONTROL_BUTTONS = frozenset({
 })
 HELP_TEXT = (
     "使用提示\n\n"
-    "• 首次使用请点击“绑定/打开网页”，在已登录的 VECTO 网页中完成一次绑定。\n"
-    "• Telegram 仅在绑定账号仍有有效网页登录会话时提供推文工作台功能。\n"
+    "• 首次使用请点击“一键登录并绑定”，在 Telegram 内的安全网页中完成一次登录。\n"
+    "• 登录后会在 Telegram WebView 建立独立会话，不会退出其他浏览器设备。\n"
     "• 未绑定或会话失效时发送 /bind，可重新打开安全绑定入口。\n"
     "• 人设、生成、草稿、收藏、媒体、热点和任务均可直接在 Telegram 内操作。\n"
     "• 首次发布前需已有可用的 Threads 或 Instagram 账号；若尚未授权，请从“账号与浏览器”完成一次 OAuth。\n"
@@ -368,7 +368,7 @@ class NativeTweetBotController:
         web_app_info_type = getattr(types, "WebAppInfo", None)
         if web_app_info_type is not None:
             return types.InlineKeyboardMarkup(inline_keyboard=[[
-                button(text="🔐 绑定/打开网页", web_app=web_app_info_type(url=url)),
+                button(text="🔐 一键登录并绑定", web_app=web_app_info_type(url=url)),
             ]])
         return types.InlineKeyboardMarkup(inline_keyboard=[[
             button(text="打开绑定页面", url=url),
@@ -390,7 +390,7 @@ class NativeTweetBotController:
             await message.answer("暂时无法生成绑定入口，请稍后重试。")
             return
         await message.answer(
-            "请点击下方按钮，在 Telegram 内完成一次 VECTO 网页登录/绑定。之后网页会话有效时即可使用推文工作台。",
+            "请点击下方“一键登录并绑定”，在 Telegram 内安全登录 VECTO。密码只在安全网页输入，不要发送到聊天框；登录后即可使用推文工作台。",
             reply_markup=markup,
         )
 
@@ -411,7 +411,7 @@ class NativeTweetBotController:
         if member is None:
             markup = self._webapp_markup(types, chat_id) if show_webapp_link and types is not None else None
             await reply(
-                "当前 Telegram 账号尚未绑定 VECTO 用户。请先登录网页并点击下方按钮完成绑定。",
+                "当前 Telegram 账号尚未绑定 VECTO 用户。请点击下方“一键登录并绑定”，在 Telegram 内安全登录；不要把密码发送到聊天框。",
                 **({"reply_markup": markup} if markup is not None else {}),
             )
             return None

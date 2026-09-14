@@ -1743,6 +1743,35 @@ class AuthSecurityHardeningTests(unittest.TestCase):
         self.assertRegex(conflict.json()["detail"]["message"], r"[\u4e00-\u9fff]")
         self.assertEqual(first_browser.get("/api/me").status_code, 200)
 
+    def test_telegram_webapp_login_adds_session_without_revoking_browser(self):
+        first_browser, user_id = self._approved_client("telegram_parallel_customer")
+        second_browser = TestClient(self.app)
+
+        # The Telegram bridge validates the signed ticket/initData in its own
+        # module; isolate this test on the auth policy so it proves the
+        # customer-only parallel-session branch does not weaken normal login.
+        with patch.object(server, "validate_tweet_webapp_login_context", return_value=101):
+            login = second_browser.post(
+                "/api/auth/user-login",
+                json={
+                    "username": "telegram_parallel_customer",
+                    "password": "guest123",
+                    "telegram_tweet_ticket": "short-lived-ticket",
+                    "telegram_init_data": "signed-init-data",
+                },
+            )
+
+        self.assertEqual(login.status_code, 200, login.text)
+        self.assertEqual(first_browser.get("/api/me").status_code, 200)
+        self.assertEqual(second_browser.get("/api/me").status_code, 200)
+        with server.db() as conn:
+            active_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM sessions "
+                "WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?",
+                (user_id, server._now_ts()),
+            ).fetchone()["count"]
+        self.assertEqual(int(active_count), 2)
+
     def test_customer_can_relogin_with_current_token_and_rotate_session(self):
         browser, _user_id = self._approved_client("same_browser_rotation")
         stale_token = browser.cookies.get("session_token")

@@ -679,6 +679,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
             )
         self.assertEqual(landing.status_code, 200, landing.text)
         self.assertIn("正在绑定 Telegram 推文工作台", landing.text)
+        self.assertIn("vecto-telegram-tweet-login-context", landing.text)
+        self.assertIn("telegram_tweet=1", landing.text)
         self.assertEqual(exchange.status_code, 200, exchange.text)
         self.assertEqual(exchange.json()["target"], tweet_tg.WEBAPP_TARGET)
         self.assertNotIn("session_token=", exchange.headers.get("set-cookie", ""))
@@ -688,6 +690,29 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(int(member["web_user_id"]), self.alice_id)
         self.assertEqual(str(member["linked_session_token_hash"]), session_storage_token(session))
         self.assertTrue(tweet_tg._member_has_active_web_session(member))
+
+    def test_login_context_requires_signed_webapp_data_and_live_ticket(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        ticket_url = tweet_tg._create_link_ticket(303, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        self.assertEqual(
+            tweet_tg.validate_tweet_webapp_login_context(
+                ticket,
+                self._telegram_init_data(303),
+                self.runtime,
+            ),
+            303,
+        )
+        with self.assertRaises(HTTPException) as context:
+            tweet_tg.validate_tweet_webapp_login_context(
+                ticket,
+                self._telegram_init_data(303, "wrong-token"),
+                self.runtime,
+            )
+        self.assertEqual(context.exception.status_code, 401)
 
     def test_admin_webapp_binding_returns_admin_console_target(self):
         self.runtime.update({

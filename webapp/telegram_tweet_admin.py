@@ -418,12 +418,19 @@ def _create_link_ticket(chat_id: int, get_runtime: GetRuntime) -> str:
     return f"{public_base}/telegram/tweet/open?{urlencode({'ticket': token})}"
 
 
-def _ticket_chat_id(token: str) -> int:
+def _ticket_chat_id(token: str, *, conn=None) -> int:
     clean = str(token or "").strip()
     if not clean or len(clean) > 256:
         raise HTTPException(status_code=410, detail="Telegram 绑定入口已失效，请回到 Bot 重新打开")
     digest = hashlib.sha256(clean.encode("utf-8")).hexdigest()
-    with db() as conn:
+    if conn is None:
+        with db() as owned_conn:
+            ensure_tweet_telegram_schema(owned_conn)
+            row = owned_conn.execute(
+                "SELECT chat_id, expires_at, used_at FROM telegram_tweet_link_tickets WHERE token_hash = ?",
+                (digest,),
+            ).fetchone()
+    else:
         ensure_tweet_telegram_schema(conn)
         row = conn.execute(
             "SELECT chat_id, expires_at, used_at FROM telegram_tweet_link_tickets WHERE token_hash = ?",
@@ -436,6 +443,30 @@ def _ticket_chat_id(token: str) -> int:
     ):
         raise HTTPException(status_code=410, detail="Telegram 绑定入口已失效，请回到 Bot 重新打开")
     return int(row["chat_id"])
+
+
+def validate_tweet_webapp_login_context(
+    ticket: str,
+    init_data: str,
+    runtime: dict[str, Any] | None = None,
+    *,
+    conn=None,
+) -> int:
+    """Validate the short-lived Telegram WebApp context used during login.
+
+    The context is deliberately separate from the Bot chat: the Bot never
+    receives a VECTO password.  A signed Telegram ``initData`` value and the
+    one-time ticket must both be valid before the login endpoint may opt into
+    an additional WebView session.  The ticket is consumed only by the later
+    exchange endpoint after the VECTO credentials have succeeded.
+    """
+    config = runtime if isinstance(runtime, dict) else {}
+    bot_token = str(config.get("telegram_tweet_bot_token") or "").strip()
+    if not bool(config.get("telegram_tweet_bot_enabled")) or not bot_token:
+        raise HTTPException(status_code=403, detail="推文 Bot 当前未启用")
+    expected_chat_id = _ticket_chat_id(ticket, conn=conn)
+    _validate_telegram_init_data(str(init_data or ""), bot_token, expected_chat_id)
+    return expected_chat_id
 
 
 def _validate_telegram_init_data(
@@ -1169,7 +1200,9 @@ def inject_tweet_telegram_admin(
 (async () => {
   const status = document.getElementById("status");
   const ticket = TICKET;
+  const loginContextKey = "vecto-telegram-tweet-login-context";
   const loginReturn = "/telegram/tweet/open?ticket=" + encodeURIComponent(ticket);
+  const loginPage = "/console-login.html?return_url=" + encodeURIComponent(loginReturn) + "&telegram_tweet=1";
   try {
     const webApp = window.Telegram?.WebApp;
     const initData = webApp?.initData || "";
@@ -1183,10 +1216,24 @@ def inject_tweet_telegram_admin(
     const payload = await response.json().catch(() => ({}));
     const detail = payload?.detail;
     if (response.status === 401 && detail?.code === "web_login_required") {
-      window.location.replace("/console-login.html?return_url=" + encodeURIComponent(loginReturn));
+      // Keep the signed Telegram context in this WebView's session storage
+      // while the user completes the normal VECTO login form. It never travels
+      // through the Bot chat or the URL; the server validates it again before
+      // allowing the login to keep another browser session alive.
+      try {
+        sessionStorage.setItem(loginContextKey, JSON.stringify({
+          ticket,
+          initData,
+          expiresAt: Date.now() + 150000,
+        }));
+      } catch (_) {
+        throw new Error("当前 Telegram WebView 不支持安全登录续接，请重新打开绑定入口");
+      }
+      window.location.replace(loginPage);
       return;
     }
     if (!response.ok) throw new Error(detail?.message || detail || "绑定失败");
+    try { sessionStorage.removeItem(loginContextKey); } catch (_) {}
     status.textContent = "绑定成功，正在打开推文工作台…";
     window.location.replace(payload.target || "/console.html?view=persona_dashboard");
   } catch (error) {
@@ -1238,6 +1285,7 @@ __all__ = [
     "inject_tweet_telegram_admin",
     "load_tweet_tg_settings",
     "remember_tweet_member_profile",
+    "validate_tweet_webapp_login_context",
     "start_tweet_telegram_bot_worker",
     "stop_tweet_telegram_bot_worker",
 ]

@@ -9,6 +9,7 @@
   const mfaField = document.getElementById("loginMfaField");
   const mfaInput = document.getElementById("loginMfaCode");
   const fallbackRedirect = String(document.body.dataset.loginRedirect || "/console.html");
+  const TELEGRAM_LOGIN_CONTEXT_KEY = "vecto-telegram-tweet-login-context";
 
   function loginDeviceId() {
     try {
@@ -61,6 +62,24 @@
 
   function requestedReturnUrl() {
     return safeReturnUrl(new URLSearchParams(window.location.search).get("return_url"), fallbackRedirect);
+  }
+
+  function telegramLoginContext() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("telegram_tweet") !== "1") return null;
+    try {
+      const target = new URL(requestedReturnUrl(), window.location.origin);
+      if (target.pathname !== "/telegram/tweet/open") return null;
+      const ticket = String(target.searchParams.get("ticket") || "").trim();
+      if (!ticket) return null;
+      const raw = sessionStorage.getItem(TELEGRAM_LOGIN_CONTEXT_KEY);
+      const context = raw ? JSON.parse(raw) : null;
+      if (!context || context.ticket !== ticket || !context.initData) return null;
+      if (Number(context.expiresAt || 0) <= Date.now()) return null;
+      return { ticket, initData: String(context.initData) };
+    } catch {
+      return null;
+    }
   }
 
   function setStatus(message, ok) {
@@ -120,6 +139,7 @@
 
   async function submitLogin(forceTakeover = false) {
     if (!form) return;
+    const telegramContext = telegramLoginContext();
     setStatus("");
     const submit = form.querySelector("button[type='submit']");
     submit.disabled = true;
@@ -136,6 +156,12 @@
           force_takeover: Boolean(forceTakeover),
           mfa_code: String(form.mfa_code?.value || "").trim(),
           device_id: loginDeviceId(),
+          ...(telegramContext
+            ? {
+                telegram_tweet_ticket: telegramContext.ticket,
+                telegram_init_data: telegramContext.initData,
+              }
+            : {}),
         }),
       });
       const isAdmin = result?.is_admin === true;
