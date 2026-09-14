@@ -29,6 +29,7 @@ from io import BytesIO
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from http.cookies import SimpleCookie
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -169,6 +170,8 @@ from .remote_fetch_client import (
 )
 from .telegram_admin import inject_telegram_admin, stop_telegram_bot_worker
 from .telegram_tweet_admin import (
+    _consume_link_ticket,
+    _create_link_ticket,
     inject_tweet_telegram_admin,
     start_tweet_telegram_bot_worker,
     stop_tweet_telegram_bot_worker,
@@ -27256,6 +27259,149 @@ def create_app() -> FastAPI:
             ),
         )
 
+    def _tweet_bot_login_request() -> Request:
+        """Build an internal request for the existing password-login policy.
+
+        The Bot is not an HTTP client and cannot receive a browser cookie, but
+        the authentication implementation is intentionally centralized in
+        ``_login_response``.  A synthetic request keeps its rate limits,
+        account lockout, MFA/email verification, session conflict handling and
+        governance audit intact instead of duplicating a partial verifier.
+        """
+        return Request({
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/api/auth/user-login",
+            "raw_path": b"/api/auth/user-login",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"telegram-bot.internal"),
+                (b"user-agent", b"Vecto-Telegram-Tweet-Bot/1"),
+                (b"x-forwarded-proto", b"https"),
+            ],
+            "client": ("127.0.0.1", 0),
+            "server": ("telegram-bot.internal", 443),
+            "root_path": "",
+            "extensions": {},
+        })
+
+    def _tweet_bot_signed_init_data(chat_id: int, profile: dict[str, Any], bot_token: str) -> str:
+        tg_user = {
+            "id": int(chat_id),
+            "first_name": str(profile.get("display_name") or "Telegram")[:64],
+            "username": str(profile.get("username") or "")[:64],
+        }
+        values = {
+            "auth_date": str(int(time.time())),
+            "user": json.dumps(tg_user, ensure_ascii=False, separators=(",", ":")),
+        }
+        data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+        secret_key = hmac.new(
+            str(bot_token).encode("utf-8"), b"WebAppData", hashlib.sha256,
+        ).digest()
+        values["hash"] = hmac.new(
+            secret_key, data_check.encode("utf-8"), hashlib.sha256,
+        ).hexdigest()
+        return urlencode(values)
+
+    def _invalidate_tweet_bot_ticket(ticket: str) -> None:
+        digest = hashlib.sha256(str(ticket or "").encode("utf-8")).hexdigest()
+        if not digest:
+            return
+        with db() as conn:
+            conn.execute(
+                "UPDATE telegram_tweet_link_tickets SET used_at = ? "
+                "WHERE token_hash = ? AND used_at = 0",
+                (_now_ts(), digest),
+            )
+
+    def _tweet_bot_chat_login(
+        chat_id: int,
+        username: str,
+        password: str,
+        profile: dict[str, Any],
+        verification: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Authenticate and bind a Telegram private chat without a WebApp.
+
+        ``password`` is accepted only for this call, passed through the normal
+        auth policy, and never persisted or included in an exception/audit
+        detail.  The temporary Telegram ticket is consumed only after the
+        normal login response issued a real session.
+        """
+        clean_chat_id = int(chat_id or 0)
+        clean_username = str(username or "").strip()
+        raw_password = str(password or "")
+        if clean_chat_id <= 0 or not clean_username or not raw_password:
+            raise HTTPException(status_code=400, detail="请完整输入账号和密码")
+        runtime = _telegram_runtime_snapshot() or {}
+        bot_token = str(runtime.get("telegram_tweet_bot_token") or "").strip()
+        if not bool(runtime.get("telegram_tweet_bot_enabled")) or not bot_token:
+            raise HTTPException(status_code=503, detail="推文 Bot 当前未启用")
+        tg_profile = {
+            "id": clean_chat_id,
+            "username": str((profile or {}).get("username") or "").strip().lstrip("@"),
+            "display_name": str((profile or {}).get("display_name") or "").strip(),
+        }
+        ticket_url = _create_link_ticket(clean_chat_id, _telegram_runtime_snapshot)
+        ticket = str(dict(parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)).get("ticket") or "").strip()
+        if not ticket:
+            raise HTTPException(status_code=503, detail="无法创建 Telegram 登录绑定票据")
+        raw_session_token = ""
+        try:
+            extra = dict(verification or {})
+            payload = LoginPayload(
+                username=clean_username,
+                password=raw_password,
+                remember_me=True,
+                device_id=f"telegram:{clean_chat_id}",
+                security_verification_method=str(extra.get("security_verification_method") or "").strip(),
+                security_challenge_id=str(extra.get("security_challenge_id") or "").strip(),
+                security_verification_code=str(extra.get("security_verification_code") or "").strip(),
+                telegram_tweet_ticket=ticket,
+                telegram_init_data=_tweet_bot_signed_init_data(clean_chat_id, tg_profile, bot_token),
+            )
+            response = _login_response(payload, _tweet_bot_login_request(), expected_admin=False)
+            for header_name, header_value in getattr(response, "raw_headers", ()):
+                if header_name not in {b"set-cookie", "set-cookie"}:
+                    continue
+                cookie = SimpleCookie()
+                cookie.load(bytes(header_value).decode("latin-1"))
+                morsel = cookie.get(SESSION_COOKIE)
+                if morsel is not None:
+                    raw_session_token = str(morsel.value or "").strip()
+                    break
+            if not raw_session_token:
+                raise HTTPException(status_code=502, detail="登录未返回有效会话")
+            body = json.loads(bytes(getattr(response, "body", b"{}")).decode("utf-8"))
+            web_user = {
+                "id": int(body.get("id") or 0),
+                "username": str(body.get("username") or ""),
+            }
+            if int(web_user["id"]) <= 0:
+                raise HTTPException(status_code=502, detail="登录未返回有效用户")
+            _consume_link_ticket(
+                ticket,
+                tg_profile,
+                web_user,
+                session_storage_token(raw_session_token),
+            )
+            return {"ok": True, "user_id": int(web_user["id"]), "username": web_user["username"]}
+        except Exception:
+            _invalidate_tweet_bot_ticket(ticket)
+            if raw_session_token:
+                with contextlib.suppress(Exception):
+                    with db() as conn:
+                        delete_session(conn, raw_session_token, reason="telegram_chat_login_bind_failed")
+            raise
+        finally:
+            # Do not keep a second reference to the plaintext password after
+            # the auth call returns.  The Bot controller also clears its local
+            # reference and deletes the incoming Telegram message best-effort.
+            raw_password = ""
+
+
     tweet_workbench_ops = TweetWorkbenchOps(
         dispatch=_tweet_bot_dispatch,
         dispatch_async=_tweet_bot_dispatch_async,
@@ -27275,6 +27421,7 @@ def create_app() -> FastAPI:
             get_runtime=_telegram_runtime_snapshot,
             save_runtime=_telegram_runtime_save,
             workbench_ops=tweet_workbench_ops,
+            chat_login=_tweet_bot_chat_login,
         )
 
     @app.post("/api/auth/apply")

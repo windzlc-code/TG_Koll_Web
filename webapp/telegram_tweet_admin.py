@@ -26,7 +26,12 @@ from .auth import (
 )
 from .db import db
 from .telegram_admin import fetch_telegram_chat_profile, verify_bot_token
-from .telegram_tweet_bot import TweetWorkbenchOps, ensure_native_bot_schema, run_native_tweet_bot
+from .telegram_tweet_bot import (
+    ChatLoginHandler,
+    TweetWorkbenchOps,
+    ensure_native_bot_schema,
+    run_native_tweet_bot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,7 @@ _BOT_STOP = threading.Event()
 _BOT_THREAD: threading.Thread | None = None
 _BOT_RELOAD_THREAD: threading.Thread | None = None
 _BOT_OPS: TweetWorkbenchOps | None = None
+_BOT_CHAT_LOGIN: ChatLoginHandler | None = None
 _BOT_OWNER_ID = f"{uuid.uuid4().hex}:{threading.get_native_id()}"
 _BOT_STATUS: dict[str, Any] = {
     "running": False,
@@ -1037,6 +1043,7 @@ async def _run_bot(get_runtime: GetRuntime) -> None:
                     int(chat_id), get_runtime
                 ),
                 has_active_web_session=_member_has_active_web_session,
+                chat_login=_BOT_CHAT_LOGIN,
                 ops=_BOT_OPS,
                 stop_event=_BOT_STOP,
                 status_callback=_update_bot_status,
@@ -1132,9 +1139,11 @@ def inject_tweet_telegram_admin(
     get_runtime: GetRuntime,
     save_runtime: SaveRuntime,
     workbench_ops: TweetWorkbenchOps,
+    chat_login: ChatLoginHandler | None = None,
 ) -> None:
-    global _BOT_OPS
+    global _BOT_OPS, _BOT_CHAT_LOGIN
     _BOT_OPS = workbench_ops
+    _BOT_CHAT_LOGIN = chat_login
     router = APIRouter()
 
     @router.get("/api/admin/tg_tweet/settings")

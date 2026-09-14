@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import secrets
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -32,13 +33,13 @@ CONTROL_BUTTONS = frozenset({
 })
 HELP_TEXT = (
     "使用提示\n\n"
-    "• 首次使用请点击“一键登录并绑定”，在 Telegram 内的安全网页中完成一次登录。\n"
-    "• 登录后会在 Telegram WebView 建立独立会话，不会退出其他浏览器设备。\n"
-    "• 未绑定或会话失效时发送 /bind，可重新打开安全绑定入口。\n"
+    "• 首次使用请点击“在聊天中登录并绑定”，按提示在本私聊中完成登录。\n"
+    "• 登录后会为该 Telegram 账号建立独立会话，不会退出其他浏览器设备。\n"
+    "• 未绑定或会话失效时发送 /bind，可重新开始聊天内登录。\n"
     "• 人设、生成、草稿、收藏、媒体、热点和任务均可直接在 Telegram 内操作。\n"
     "• 首次发布前需已有可用的 Threads 或 Instagram 账号；若尚未授权，请从“账号与浏览器”完成一次 OAuth。\n"
     "• 在输入流程中点击任一总控按钮，会退出当前未提交的输入并切换模块。\n"
-    "• Bot 不接收账号密码、验证码或浏览器凭证。"
+    "• 旧版网页绑定路径不接收账号密码；聊天内登录仅在私聊临时验证，密码不写入 Bot 状态或审计，请勿在群聊中发送。"
 )
 SUPPORTED_MEDIA_MIME_SUFFIXES = {
     "image/jpeg": ".jpg",
@@ -59,6 +60,13 @@ Dispatch = Callable[[int, str, dict[str, Any]], Any]
 AsyncDispatch = Callable[[int, str, dict[str, Any]], Awaitable[Any]]
 WebAppUrlFactory = Callable[[int, str], str]
 WebSessionChecker = Callable[[dict[str, Any]], bool]
+ChatLoginHandler = Callable[[int, str, str, dict[str, Any], dict[str, Any] | None], Any]
+
+CHAT_LOGIN_USERNAME_MODE = "chat_login_username"
+CHAT_LOGIN_PASSWORD_MODE = "chat_login_password"
+CHAT_LOGIN_VERIFICATION_MODE = "chat_login_verification"
+CHAT_LOGIN_TTL_SECONDS = 180
+CHAT_LOGIN_MAX_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -318,6 +326,7 @@ class NativeTweetBotController:
         remember_member_profile: Callable[..., None] | None = None,
         create_webapp_url: WebAppUrlFactory | None = None,
         has_active_web_session: WebSessionChecker | None = None,
+        chat_login: ChatLoginHandler | None = None,
     ) -> None:
         self.ops = ops
         self.get_runtime = get_runtime
@@ -325,6 +334,14 @@ class NativeTweetBotController:
         self.remember_member_profile = remember_member_profile
         self.create_webapp_url = create_webapp_url
         self.has_active_web_session = has_active_web_session
+        self.chat_login = chat_login
+        # Passwords are deliberately kept only in this process-local map while
+        # a Telegram chat completes the login challenge.  The durable Bot state
+        # stores the stage and username, never the password or verification
+        # secret.  A restart therefore fails closed and asks the user to start
+        # again rather than recovering credentials from disk.
+        self._chat_login_lock = threading.RLock()
+        self._chat_login_pending: dict[int, dict[str, Any]] = {}
 
     def _member(self, chat_id: int) -> dict[str, Any] | None:
         row = self.load_member(int(chat_id))
@@ -374,6 +391,261 @@ class NativeTweetBotController:
             button(text="打开绑定页面", url=url),
         ]])
 
+    def _binding_markup(self, types: Any, chat_id: int) -> Any | None:
+        """Return the production binding action without opening a WebApp.
+
+        The WebApp remains a compatibility fallback for isolated integrations
+        that do not inject ``chat_login``.  The production worker always
+        injects the chat-login callback, so users stay in the Telegram chat.
+        """
+        if self.chat_login is not None:
+            return types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(
+                    text="🔐 在聊天中登录并绑定",
+                    callback_data="tt:chatlogin",
+                ),
+            ]])
+        return self._webapp_markup(types, chat_id)
+
+    @staticmethod
+    def _force_reply(types: Any, placeholder: str) -> Any | None:
+        force_reply = getattr(types, "ForceReply", None)
+        if force_reply is None:
+            return None
+        return force_reply(
+            force_reply=True,
+            selective=True,
+            input_field_placeholder=str(placeholder or "")[:64],
+        )
+
+    def _clear_chat_login(self, chat_id: int) -> None:
+        with self._chat_login_lock:
+            self._chat_login_pending.pop(int(chat_id), None)
+        state = load_state(int(chat_id))
+        if state["mode"] in {
+            CHAT_LOGIN_USERNAME_MODE,
+            CHAT_LOGIN_PASSWORD_MODE,
+            CHAT_LOGIN_VERIFICATION_MODE,
+        }:
+            clear_pending_state(int(chat_id))
+
+    @staticmethod
+    async def _delete_sensitive_message(message: Any) -> None:
+        delete = getattr(message, "delete", None)
+        if delete is None:
+            return
+        try:
+            await delete()
+        except Exception:
+            # Deletion is best-effort: Telegram clients/permissions can reject
+            # it, but the password is still never written by this worker.
+            logger.debug("Unable to delete Telegram login message", exc_info=True)
+
+    @staticmethod
+    def _chat_login_error_code(exc: BaseException) -> str:
+        if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
+            return str(exc.detail.get("code") or "").strip()
+        return ""
+
+    @staticmethod
+    def _chat_login_verification_detail(exc: BaseException) -> dict[str, Any]:
+        if not isinstance(exc, HTTPException) or not isinstance(exc.detail, dict):
+            return {}
+        detail = exc.detail.get("verification")
+        return dict(detail) if isinstance(detail, dict) else {}
+
+    async def _start_chat_login(self, message: Any, types: Any, *, from_user: Any | None = None) -> None:
+        chat = getattr(message, "chat", None)
+        actor = from_user or getattr(message, "from_user", None)
+        chat_id = int(getattr(chat, "id", 0) or 0)
+        if (
+            chat is None
+            or str(getattr(chat, "type", "") or "") != "private"
+            or actor is None
+            or int(getattr(actor, "id", 0) or 0) != chat_id
+        ):
+            await message.answer("聊天内登录绑定只支持与推文 Bot 私聊使用。")
+            return
+        if self.chat_login is None:
+            markup = self._webapp_markup(types, chat_id)
+            await message.answer(
+                "当前版本暂未启用聊天内登录，请使用安全绑定入口。",
+                **({"reply_markup": markup} if markup is not None else {}),
+            )
+            return
+        self._clear_chat_login(chat_id)
+        started_at = time.time()
+        save_state(chat_id, mode=CHAT_LOGIN_USERNAME_MODE, payload={"started_at": started_at})
+        reply_markup = self._force_reply(types, "VECTO 用户名或邮箱")
+        kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
+        await message.answer(
+            "🔐 聊天内登录绑定\n"
+            "请发送 VECTO 用户名或邮箱（仅限私聊）。收到后再输入密码；"
+            "密码仅短暂用于验证，Bot 不保存密码。\n"
+            "发送 /cancel 可取消。",
+            **kwargs,
+        )
+
+    async def _handle_chat_login_text(self, message: Any, types: Any) -> bool:
+        if self.chat_login is None:
+            return False
+        chat = getattr(message, "chat", None)
+        actor = getattr(message, "from_user", None)
+        chat_id = int(getattr(chat, "id", 0) or 0)
+        if (
+            chat is None
+            or str(getattr(chat, "type", "") or "") != "private"
+            or actor is None
+            or int(getattr(actor, "id", 0) or 0) != chat_id
+        ):
+            return False
+        state = load_state(chat_id)
+        mode = str(state.get("mode") or "")
+        if mode not in {
+            CHAT_LOGIN_USERNAME_MODE,
+            CHAT_LOGIN_PASSWORD_MODE,
+            CHAT_LOGIN_VERIFICATION_MODE,
+        }:
+            return False
+        raw_text = str(getattr(message, "text", "") or "")
+        clean_text = raw_text.strip()
+        if clean_text == "/cancel":
+            self._clear_chat_login(chat_id)
+            await message.answer("已取消聊天内登录绑定。")
+            return True
+        if not clean_text:
+            await message.answer("输入不能为空，请重新发送；发送 /cancel 可取消。")
+            return True
+        if time.time() - float(state.get("updated_at") or 0) > CHAT_LOGIN_TTL_SECONDS:
+            self._clear_chat_login(chat_id)
+            await message.answer("登录绑定已超时，请重新点击“在聊天中登录并绑定”。")
+            return True
+        if mode == CHAT_LOGIN_USERNAME_MODE:
+            if clean_text.startswith("/") or len(clean_text) > 254:
+                await message.answer("请输入有效的 VECTO 用户名或邮箱，不要发送命令。")
+                return True
+            started_at = float(state["payload"].get("started_at") or time.time())
+            with self._chat_login_lock:
+                self._chat_login_pending[chat_id] = {
+                    "username": clean_text,
+                    "password": "",
+                    "attempts": 0,
+                    "started_at": started_at,
+                    "profile": {
+                        "id": chat_id,
+                        "username": str(getattr(actor, "username", "") or "").strip().lstrip("@"),
+                        "display_name": " ".join(
+                            part for part in (
+                                str(getattr(actor, "first_name", "") or "").strip(),
+                                str(getattr(actor, "last_name", "") or "").strip(),
+                            ) if part
+                        ).strip(),
+                    },
+                }
+            save_state(chat_id, mode=CHAT_LOGIN_PASSWORD_MODE, payload={
+                "username": clean_text,
+                "started_at": started_at,
+            })
+            await self._delete_sensitive_message(message)
+            reply_markup = self._force_reply(types, "VECTO 登录密码")
+            kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
+            await message.answer(
+                "账号已收到。请发送密码（单独一条消息）；验证后会立即尝试删除该消息。\n"
+                "发送 /cancel 可取消。",
+                **kwargs,
+            )
+            return True
+
+        with self._chat_login_lock:
+            pending = dict(self._chat_login_pending.get(chat_id) or {})
+        if not pending or not str(pending.get("username") or "").strip():
+            self._clear_chat_login(chat_id)
+            await message.answer("登录状态已丢失，请重新点击“在聊天中登录并绑定”。")
+            return True
+        password = raw_text if mode == CHAT_LOGIN_PASSWORD_MODE else str(pending.get("password") or "")
+        verification: dict[str, Any] | None = None
+        if mode == CHAT_LOGIN_PASSWORD_MODE:
+            if len(password) > 256:
+                await self._delete_sensitive_message(message)
+                await message.answer("密码长度无效，请重新发送或发送 /cancel 取消。")
+                return True
+            pending["password"] = password
+            pending["attempts"] = int(pending.get("attempts") or 0) + 1
+        else:
+            verification = {
+                "security_verification_method": str(pending.get("verification_method") or "").strip(),
+                "security_challenge_id": str(pending.get("security_challenge_id") or "").strip(),
+                "security_verification_code": clean_text,
+            }
+        await self._delete_sensitive_message(message)
+        try:
+            result = await asyncio.to_thread(
+                self.chat_login,
+                chat_id,
+                str(pending["username"]),
+                password,
+                dict(pending.get("profile") or {}),
+                verification,
+            )
+        except Exception as exc:
+            code = self._chat_login_error_code(exc)
+            verification_detail = self._chat_login_verification_detail(exc)
+            if code == "SECURITY_VERIFICATION_REQUIRED" and verification_detail:
+                method = str(
+                    verification_detail.get("primary_method")
+                    or ("email" if verification_detail.get("email_available") else "mfa")
+                ).strip().lower()
+                if method not in {"email", "mfa"}:
+                    method = "mfa"
+                pending["verification_method"] = method
+                pending["security_challenge_id"] = str(verification_detail.get("challenge_id") or "")
+                with self._chat_login_lock:
+                    self._chat_login_pending[chat_id] = pending
+                save_state(chat_id, mode=CHAT_LOGIN_VERIFICATION_MODE, payload={
+                    "username": str(pending["username"]),
+                    "started_at": float(pending.get("started_at") or time.time()),
+                    "verification_method": method,
+                })
+                label = "邮箱验证码" if method == "email" else "动态验证码或恢复码"
+                reply_markup = self._force_reply(types, label)
+                kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
+                await message.answer(
+                    f"账号密码已通过第一步校验，请发送{label}完成绑定。发送 /cancel 可取消。",
+                    **kwargs,
+                )
+                return True
+            attempts = int(pending.get("attempts") or 0)
+            with self._chat_login_lock:
+                self._chat_login_pending.pop(chat_id, None)
+            if attempts >= CHAT_LOGIN_MAX_ATTEMPTS or mode == CHAT_LOGIN_VERIFICATION_MODE:
+                self._clear_chat_login(chat_id)
+                await message.answer("登录失败次数过多或验证码无效，已结束本次绑定，请稍后重新开始。")
+            else:
+                with self._chat_login_lock:
+                    pending["password"] = ""
+                    self._chat_login_pending[chat_id] = pending
+                save_state(chat_id, mode=CHAT_LOGIN_PASSWORD_MODE, payload={
+                    "username": str(pending["username"]),
+                    "started_at": float(pending.get("started_at") or time.time()),
+                })
+                reply_markup = self._force_reply(types, "VECTO 登录密码")
+                kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
+                await message.answer(
+                    "登录失败，请检查账号或密码后重新发送；发送 /cancel 可取消。",
+                    **kwargs,
+                )
+            return True
+        finally:
+            # Drop the local reference as soon as the callback returns.  The
+            # callback itself must never log or persist the password.
+            password = ""
+        with self._chat_login_lock:
+            self._chat_login_pending.pop(chat_id, None)
+        clear_pending_state(chat_id)
+        await message.answer("✅ 登录并绑定成功，已进入推文工作台。")
+        await self.send_main_menu(message, types)
+        return True
+
     async def send_web_login_link(self, message: Any, types: Any) -> None:
         chat = getattr(message, "chat", None)
         from_user = getattr(message, "from_user", None)
@@ -385,12 +657,15 @@ class NativeTweetBotController:
         ):
             await message.answer("绑定网页只支持与推文 Bot 私聊使用。")
             return
+        if self.chat_login is not None:
+            await self._start_chat_login(message, types)
+            return
         markup = self._webapp_markup(types, int(chat.id))
         if markup is None:
             await message.answer("暂时无法生成绑定入口，请稍后重试。")
             return
         await message.answer(
-            "请点击下方“一键登录并绑定”，在 Telegram 内安全登录 VECTO。密码只在安全网页输入，不要发送到聊天框；登录后即可使用推文工作台。",
+            "请点击下方“一键登录并绑定”，在 Telegram 内安全登录 VECTO。登录后即可使用推文工作台。",
             reply_markup=markup,
         )
 
@@ -409,9 +684,9 @@ class NativeTweetBotController:
             return None
         member = self._member(chat_id)
         if member is None:
-            markup = self._webapp_markup(types, chat_id) if show_webapp_link and types is not None else None
+            markup = self._binding_markup(types, chat_id) if show_webapp_link and types is not None else None
             await reply(
-                "当前 Telegram 账号尚未绑定 VECTO 用户。请点击下方“一键登录并绑定”，在 Telegram 内安全登录；不要把密码发送到聊天框。",
+                "当前 Telegram 账号尚未绑定 VECTO 用户。请点击下方按钮，在聊天中依次输入账号和密码完成绑定。",
                 **({"reply_markup": markup} if markup is not None else {}),
             )
             return None
@@ -421,9 +696,9 @@ class NativeTweetBotController:
             except Exception:
                 session_active = False
             if not session_active:
-                markup = self._webapp_markup(types, chat_id) if show_webapp_link and types is not None else None
+                markup = self._binding_markup(types, chat_id) if show_webapp_link and types is not None else None
                 await reply(
-                    "网页登录会话已失效。请先重新登录 VECTO 网页，再点击下方按钮绑定后继续使用。",
+                    "网页登录会话已失效。请点击下方按钮，在聊天中重新输入账号和密码完成绑定。",
                     **({"reply_markup": markup} if markup is not None else {}),
                 )
                 return None
@@ -671,16 +946,16 @@ class NativeTweetBotController:
         lines = [f"{item.get('platform')} · @{item.get('username')} · {item.get('status')}" for item in accounts[:20]]
         base = str((self.get_runtime() or {}).get("telegram_tweet_public_base_url") or "").rstrip("/")
         rows = []
-        webapp_markup = self._webapp_markup(types, int(member.get("chat_id") or 0))
-        if webapp_markup is not None:
-            rows.extend(webapp_markup.inline_keyboard)
+        binding_markup = self._binding_markup(types, int(member.get("chat_id") or 0))
+        if binding_markup is not None:
+            rows.extend(binding_markup.inline_keyboard)
         elif base.startswith("https://"):
             rows.append([types.InlineKeyboardButton(text="网页登录/授权", url=f"{base}/console.html?view=accounts")])
         rows.append([types.InlineKeyboardButton(text="返回", callback_data=return_callback)])
         text = (
             "账号与浏览器\n"
             + ("\n".join(lines) if lines else "暂无已绑定账号。")
-            + "\n\n请保持 VECTO 网页会话有效；登录、OAuth、代理和浏览器人工接管仍在网页端完成，Bot 不接收密码或验证码。"
+            + "\n\nVECTO 账号登录和绑定可直接在此私聊完成；OAuth、代理和浏览器人工接管仍需网页端。"
         )
         return text, types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1031,6 +1306,18 @@ class NativeTweetBotController:
         if query.message is None:
             await query.answer("消息已失效", show_alert=True)
             return
+        data = str(query.data or "")
+        if data == "tt:chatlogin":
+            # This action is intentionally available before _authorized(): the
+            # whole point is to establish the first binding from a Telegram
+            # private chat without opening a WebApp or external browser.
+            await query.answer()
+            await self._start_chat_login(
+                query.message,
+                types,
+                from_user=getattr(query, "from_user", None),
+            )
+            return
         async def authorization_reply(text: str, **kwargs: Any) -> Any:
             # CallbackQuery.answer cannot carry reply_markup.  Send the
             # self-service binding button as a normal message when the
@@ -1058,7 +1345,6 @@ class NativeTweetBotController:
             return
         chat_id = int(query.message.chat.id)
         user_id = int(member["web_user_id"])
-        data = str(query.data or "")
         parts = data.split(":")
         action = parts[1] if len(parts) > 1 else ""
         try:
@@ -1067,8 +1353,14 @@ class NativeTweetBotController:
                 await query.message.edit_text("已返回推文工作台总控菜单。")
                 await query.message.answer("请选择总控功能。", reply_markup=self._main_keyboard(types))
             elif action == "help":
+                help_text = HELP_TEXT
+                if self.chat_login is not None:
+                    help_text = help_text.replace(
+                        "旧版网页绑定路径不接收账号密码；聊天内登录仅在私聊临时验证，密码不写入 Bot 状态或审计，请勿在群聊中发送。",
+                        "聊天内登录仅限私聊使用；密码只在验证期间短暂使用，不写入 Bot 状态或审计，请勿在群聊中发送。",
+                    )
                 await query.message.edit_text(
-                    HELP_TEXT,
+                    help_text,
                     reply_markup=self._return_keyboard(types),
                 )
             elif action == "taskmenu":
@@ -1986,6 +2278,8 @@ class NativeTweetBotController:
             await query.answer(_error_text(exc)[:180], show_alert=True)
 
     async def handle_text(self, message: Any, types: Any) -> None:
+        if await self._handle_chat_login_text(message, types):
+            return
         member = await self._authorized(
             message.chat,
             message.from_user,
@@ -2496,6 +2790,7 @@ async def run_native_tweet_bot(
     remember_member_profile: Callable[..., None] | None = None,
     create_webapp_url: WebAppUrlFactory | None = None,
     has_active_web_session: WebSessionChecker | None = None,
+    chat_login: ChatLoginHandler | None = None,
     ops: TweetWorkbenchOps,
     stop_event: Any,
     status_callback: Callable[[dict[str, Any]], None],
@@ -2518,6 +2813,7 @@ async def run_native_tweet_bot(
         remember_member_profile=remember_member_profile,
         create_webapp_url=create_webapp_url,
         has_active_web_session=session_checker,
+        chat_login=chat_login,
     )
 
     async def command_menu(message: types.Message) -> None:
@@ -2542,7 +2838,7 @@ async def run_native_tweet_bot(
     dispatcher.callback_query.register(callback, F.data.startswith("tt:"))
     await bot.set_my_commands([
         types.BotCommand(command="menu", description="打开推文工作台"),
-        types.BotCommand(command="bind", description="绑定网页登录会话"),
+        types.BotCommand(command="bind", description="聊天内登录并绑定"),
         types.BotCommand(command="cancel", description="取消当前操作"),
     ])
     polling = asyncio.create_task(dispatcher.start_polling(bot, handle_signals=False))
@@ -2565,6 +2861,7 @@ async def run_native_tweet_bot(
 
 
 __all__ = [
+    "ChatLoginHandler",
     "NativeTweetBotController",
     "TweetWorkbenchOps",
     "audit_action",
