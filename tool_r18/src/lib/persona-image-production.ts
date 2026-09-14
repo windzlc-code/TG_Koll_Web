@@ -643,7 +643,7 @@ export async function generatePersonaImage(
   customPrompt?: string,
   styleHint?: string,
   variationKey?: string,
-  imageFilterPrompt?: string,
+  imageRenderStylePrompt?: string,
 ): Promise<{ ok: boolean; url?: string; mode: PersonaImageResolvedMode; error?: string; timings?: unknown }> {
   if (!imageAPI?.generate) return { ok: false, mode: "closed-scene", error: "image API 不可用" };
 
@@ -697,18 +697,18 @@ export async function generatePersonaImage(
   const customCue = locksCurrentPersonaReference
     ? withoutTextualHairstyleDirections(customPrompt)
     : customPrompt?.trim();
-  const imageFilterCue = imageFilterPrompt?.trim();
-  const mandatoryFilterDirective = imageFilterCue
+  const imageRenderStyleCue = imageRenderStylePrompt?.trim();
+  const mandatoryRenderStyleDirective = imageRenderStyleCue
     ? [
-      "MANDATORY SELECTED IMAGE FILTER — this is a required final rendering constraint, not an optional style suggestion:",
-      imageFilterCue,
-      "Apply this filter consistently across the entire image, including the subject, skin, clothing, background, highlights, and shadows. Do not fall back to neutral or natural default grading.",
+      "MANDATORY SELECTED IMAGE GENERATION STYLE — this defines the native visual medium and rendering language, not a color-grade overlay or an optional suggestion:",
+      imageRenderStyleCue,
+      "Render the whole image natively in this generation style. Preserve the referenced person's exact face identity and hairstyle whenever a persona reference is attached; style changes may alter the medium, but must not redesign that identity.",
     ].join("\n")
     : "";
   const finalPrompt = withAvatar
     ? explicitReferenceUrl
       ? [
-        mandatoryFilterDirective,
+        mandatoryRenderStyleDirective,
         "Use the attached persona reference image as the source. Preserve every area and detail that the current request does not explicitly ask to change; do not replace it with an unrelated image.",
         "Keep the recognizable face and identity unchanged unless the current request explicitly asks to change the face or identity. Clothing, pose, scene, action, camera angle, lighting, and props should follow the current visual request instead of copying the source image unchanged.",
         customCue ? `Highest priority current visual request: ${customCue}` : "",
@@ -716,7 +716,7 @@ export async function generatePersonaImage(
         prompt,
       ].filter(Boolean).join("\n")
       : [
-        mandatoryFilterDirective,
+        mandatoryRenderStyleDirective,
         "FACE AND HAIRSTYLE IDENTITY LOCK: The attached image is the currently selected persona reference. The protagonist's face MUST be the same person as in that image.",
         "Keep the exact same face: facial structure, eyes, nose, mouth, eyebrows, bone structure, skin tone, apparent age, gender, ethnicity, and hairline. Do not invent a similar new face, do not swap identity, and do not beautify the person into someone else.",
         "Keep the hairstyle exactly unchanged from the attached reference. Do not redesign, reinterpret, or replace it, and do not invent details that are not visible in the reference.",
@@ -727,7 +727,7 @@ export async function generatePersonaImage(
         prompt,
         "FINAL NON-NEGOTIABLE IDENTITY CHECK: Preserve the face identity and hairstyle exactly as shown in the attached persona reference; no other prompt instruction may change either one.",
       ].filter(Boolean).join("\n")
-    : [mandatoryFilterDirective, customCue ? `Highest priority current visual request: ${customCue}` : "", prompt].filter(Boolean).join("\n");
+    : [mandatoryRenderStyleDirective, customCue ? `Highest priority current visual request: ${customCue}` : "", prompt].filter(Boolean).join("\n");
 
   const avatarSource = withAvatar ? identityReferenceUrl : undefined;
   const avatarBase64 = avatarSource ? avatarSource.replace(/^data:[^;]+;base64,/, "") : undefined;

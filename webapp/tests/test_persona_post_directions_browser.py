@@ -168,7 +168,7 @@ def test_generated_selection_actions_are_one_row_and_discard_is_right_aligned_on
         browser.close()
 
 
-def test_post_image_filters_are_available_before_generation_and_keep_basic_as_default():
+def test_post_image_render_styles_are_grouped_before_generation_and_keep_original_pipeline_as_default():
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as playwright:
         browser = _launch_browser(playwright)
@@ -181,39 +181,77 @@ def test_post_image_filters_are_available_before_generation_and_keep_basic_as_de
               const mediaForm = {};
               normalizePersonaMediaGenerationForm(mediaForm);
               const host = document.createElement("div");
-              host.innerHTML = renderPersonaPostImageFilterPicker(mediaForm);
+              host.innerHTML = renderPersonaPostImageRenderStylePicker(mediaForm);
               document.body.append(host);
               const initial = {
-                count: host.querySelectorAll("[data-persona-image-filter]").length,
-                checked: host.querySelector('[data-persona-image-filter][aria-checked="true"]')?.dataset.personaImageFilter || "",
-                labels: Array.from(host.querySelectorAll("[data-persona-image-filter] strong"), (node) => node.textContent.trim()),
+                count: host.querySelectorAll("[data-persona-image-render-style]").length,
+                groupCount: host.querySelectorAll(".persona-post-image-render-style-group").length,
+                radioGroupCount: host.querySelectorAll('[role="radiogroup"]').length,
+                semanticGroupCount: host.querySelectorAll('.persona-post-image-render-style-group[role="group"]').length,
+                checked: host.querySelector('[data-persona-image-render-style][aria-checked="true"]')?.dataset.personaImageRenderStyle || "",
+                labels: Array.from(host.querySelectorAll("[data-persona-image-render-style] strong"), (node) => node.textContent.trim()),
               };
-              const selected = selectPersonaPostImageFilter(mediaForm, "retro_film");
-              const rejected = selectPersonaPostImageFilter(mediaForm, "../../custom-prompt");
-              host.innerHTML = renderPersonaPostImageFilterPicker(mediaForm);
+              const selected = selectPersonaPostImageRenderStyle(mediaForm, "three_render_two");
+              const rejected = selectPersonaPostImageRenderStyle(mediaForm, "../../custom-prompt");
+              host.innerHTML = renderPersonaPostImageRenderStylePicker(mediaForm);
               return {
                 initial,
                 selected,
                 rejected,
-                value: mediaForm.imageFilter,
-                checked: host.querySelector('[data-persona-image-filter][aria-checked="true"]')?.dataset.personaImageFilter || "",
+                value: mediaForm.imageRenderStyle,
+                checked: host.querySelector('[data-persona-image-render-style][aria-checked="true"]')?.dataset.personaImageRenderStyle || "",
+                checkedCount: host.querySelectorAll('[data-persona-image-render-style][aria-checked="true"]').length,
               };
             }"""
         )
 
-        assert result["initial"]["count"] == 12
-        assert result["initial"]["checked"] == "basic"
-        assert "黑白" in result["initial"]["labels"]
-        assert "怀旧" in result["initial"]["labels"]
-        assert "复古胶片" in result["initial"]["labels"]
+        assert result["initial"]["count"] == 13
+        assert result["initial"]["groupCount"] == 4
+        assert result["initial"]["radioGroupCount"] == 1
+        assert result["initial"]["semanticGroupCount"] == 4
+        assert result["initial"]["checked"] == "original"
+        assert "原有风格（默认）" in result["initial"]["labels"]
+        assert "赛璐璐" in result["initial"]["labels"]
+        assert "3 渲 2" in result["initial"]["labels"]
+        assert "美式卡通" in result["initial"]["labels"]
         assert result["selected"] is True
         assert result["rejected"] is False
-        assert result["value"] == "retro_film"
-        assert result["checked"] == "retro_film"
+        assert result["value"] == "three_render_two"
+        assert result["checked"] == "three_render_two"
+        assert result["checkedCount"] == 1
         browser.close()
 
 
-def test_post_image_filter_selection_is_locked_immediately_during_submission():
+def test_stale_composition_direction_is_cleared_when_post_content_changes():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page()
+        page.set_content("<!doctype html><html><body></body></html>")
+        page.add_script_tag(path=str(CONSOLE_JS))
+
+        result = page.evaluate(
+            """() => {
+              const form = { imageStylesByPost: {} };
+              personaFormState = () => form;
+              const post = { id: "post-1", title: "旧标题", content: "旧正文" };
+              const oldFingerprint = personaImageStyleSourceFingerprint(post);
+              const styleState = personaImageStyleState("persona-1", post.id);
+              styleState.styles = [{ kind: "scene", label: "旧场景", kind_label: "场景" }];
+              styleState.selectedKey = personaImageStyleKey(styleState.styles[0]);
+              styleState.sourceFingerprint = oldFingerprint;
+              const nextPost = { ...post, title: "新标题", content: "新正文" };
+              const rows = personaImageStylesForPost("persona-1", post.id, personaImageStyleSourceFingerprint(nextPost));
+              const refreshedState = personaImageStyleState("persona-1", post.id);
+              return { count: rows.length, selectedKey: refreshedState.selectedKey, sourceFingerprint: refreshedState.sourceFingerprint };
+            }"""
+        )
+
+        assert result == {"count": 0, "selectedKey": "", "sourceFingerprint": ""}
+        browser.close()
+
+
+def test_post_image_render_style_selection_is_locked_immediately_during_submission():
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as playwright:
         browser = _launch_browser(playwright)
@@ -222,19 +260,22 @@ def test_post_image_filter_selection_is_locked_immediately_during_submission():
         page.add_script_tag(path=str(CONSOLE_JS))
         result = page.evaluate(
             """() => {
-              const mediaForm = { imageFilter: "film_noir" };
-              document.body.innerHTML = renderPersonaPostImageFilterPicker(mediaForm);
-              setPersonaPostImageFilterInteractionLocked(true);
-              const locked = Array.from(document.querySelectorAll("[data-persona-image-filter]"), (button) => button.disabled);
-              const selectedWhileLocked = document.querySelector('[data-persona-image-filter="film_noir"]')?.getAttribute("aria-checked");
-              setPersonaPostImageFilterInteractionLocked(false);
-              const unlocked = Array.from(document.querySelectorAll("[data-persona-image-filter]"), (button) => button.disabled);
-              return { locked, unlocked, selectedWhileLocked };
+              const mediaForm = { imageRenderStyle: "cel_shading" };
+              document.body.innerHTML = renderPersonaPostImageRenderStylePicker(mediaForm);
+              setPersonaPostImageRenderStyleInteractionLocked(true);
+              const locked = Array.from(document.querySelectorAll("[data-persona-image-render-style]"), (button) => button.disabled);
+              const selectedWhileLocked = document.querySelector('[data-persona-image-render-style="cel_shading"]')?.getAttribute("aria-checked");
+              const lockedCopy = renderPersonaPostImageRenderStylePicker(mediaForm, true);
+              setPersonaPostImageRenderStyleInteractionLocked(false);
+              const unlocked = Array.from(document.querySelectorAll("[data-persona-image-render-style]"), (button) => button.disabled);
+              return { locked, unlocked, selectedWhileLocked, lockedCopy };
             }"""
         )
         assert all(result["locked"])
         assert not any(result["unlocked"])
         assert result["selectedWhileLocked"] == "true"
+        assert "配图生成期间已锁定，完成后可重新选择" in result["lockedCopy"]
+        assert 'data-persona-image-render-style="cel_shading"' in result["lockedCopy"]
         browser.close()
 
 
@@ -267,48 +308,54 @@ def test_post_and_image_sections_use_responsive_dividers_without_mobile_overflow
     with sync_api.sync_playwright() as playwright:
         browser = _launch_browser(playwright)
         page = browser.new_page(viewport={"width": 1280, "height": 900})
-        page.set_content(
-            '''<!doctype html><html><body class="console-page">
-            <main class="persona-compose-workspace has-media">
-              <section class="persona-compose-copy">生成推文</section>
-              <section class="persona-compose-media-stack">
-                <div class="persona-post-image-filter-panel">
-                  <div class="persona-post-image-filter-grid">
-                    <button class="persona-post-image-filter is-selected"><span class="persona-post-image-filter-swatch"></span><span class="persona-post-image-filter-copy"><strong>基础（默认）</strong><small>保留原有自然色彩</small></span></button>
-                    <button class="persona-post-image-filter"><span class="persona-post-image-filter-swatch"></span><span class="persona-post-image-filter-copy"><strong>黑白</strong><small>经典灰阶</small></span></button>
-                  </div>
-                </div>
-                <div class="persona-post-image-settings-divider"><span>生成风格</span></div>
-              </section>
-            </main></body></html>'''
-        )
+        page.set_content('''<!doctype html><html><body class="console-page">
+          <main class="persona-compose-workspace has-media">
+            <section class="persona-compose-copy">生成推文</section>
+            <section class="persona-compose-media-stack" id="mediaStack"></section>
+          </main>
+        </body></html>''')
+        page.add_script_tag(path=str(CONSOLE_JS))
         page.add_style_tag(path=str(CONSOLE_CSS))
+        page.evaluate(
+            """() => {
+              document.querySelector('#mediaStack').innerHTML = `${renderPersonaPostImageRenderStylePicker({})}
+                <div class="persona-post-image-settings-divider"><span>构图方向</span></div>`;
+            }"""
+        )
 
         desktop = page.locator(".persona-compose-media-stack").evaluate(
             """node => ({
               left: getComputedStyle(node).borderLeftWidth,
               top: getComputedStyle(node).borderTopWidth,
-              panel: getComputedStyle(node.querySelector(".persona-post-image-filter-panel")).borderTopWidth,
+              panel: getComputedStyle(node.querySelector(".persona-post-image-render-style-panel")).borderTopWidth,
               divider: getComputedStyle(node.querySelector(".persona-post-image-settings-divider"), "::before").backgroundColor,
+              groups: node.querySelectorAll(".persona-post-image-render-style-group").length,
+              options: node.querySelectorAll("[data-persona-image-render-style]").length,
             })"""
         )
         assert desktop["left"] == "1px"
         assert desktop["top"] == "0px"
         assert desktop["panel"] == "1px"
         assert desktop["divider"] != "rgba(0, 0, 0, 0)"
+        assert desktop["groups"] == 4
+        assert desktop["options"] == 13
 
-        page.set_viewport_size({"width": 390, "height": 844})
-        mobile = page.evaluate(
-            """() => {
-              const node = document.querySelector(".persona-compose-media-stack");
-              const style = getComputedStyle(node);
-              return {
-                left: style.borderLeftWidth,
-                top: style.borderTopWidth,
-                overflow: document.documentElement.scrollWidth > window.innerWidth,
-                columns: getComputedStyle(document.querySelector(".persona-post-image-filter-grid")).gridTemplateColumns.split(" ").length,
-              };
-            }"""
-        )
-        assert mobile == {"left": "0px", "top": "1px", "overflow": False, "columns": 2}
+        for width in (390, 320):
+            page.set_viewport_size({"width": width, "height": 844})
+            mobile = page.evaluate(
+                """() => {
+                  const node = document.querySelector(".persona-compose-media-stack");
+                  const panel = document.querySelector(".persona-post-image-render-style-panel").getBoundingClientRect();
+                  const optionRects = Array.from(document.querySelectorAll("[data-persona-image-render-style]"), (button) => button.getBoundingClientRect());
+                  const style = getComputedStyle(node);
+                  return {
+                    left: style.borderLeftWidth,
+                    top: style.borderTopWidth,
+                    overflow: document.documentElement.scrollWidth > window.innerWidth,
+                    columns: getComputedStyle(document.querySelector(".persona-post-image-render-style-grid")).gridTemplateColumns.split(" ").length,
+                    optionsInside: optionRects.every((rect) => rect.left >= panel.left - 1 && rect.right <= panel.right + 1),
+                  };
+                }"""
+            )
+            assert mobile == {"left": "0px", "top": "1px", "overflow": False, "columns": 2, "optionsInside": True}
         browser.close()

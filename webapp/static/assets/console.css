@@ -12426,7 +12426,7 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   color: var(--accent-ink);
 }
 
-.persona-image-style-panel {
+.persona-image-composition-panel {
   margin-bottom: 0;
 }
 
@@ -12459,7 +12459,7 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   font-size: 14px;
 }
 
-.persona-post-image-filter-panel {
+.persona-post-image-render-style-panel {
   display: grid;
   gap: 10px;
   padding: 12px;
@@ -12468,7 +12468,7 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   background: var(--panel-solid);
 }
 
-.persona-post-image-filter-head {
+.persona-post-image-render-style-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -12476,24 +12476,24 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   min-width: 0;
 }
 
-.persona-post-image-filter-head > div {
+.persona-post-image-render-style-head > div {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-.persona-post-image-filter-head strong {
+.persona-post-image-render-style-head strong {
   color: var(--ink);
   font-size: 14px;
 }
 
-.persona-post-image-filter-head small {
+.persona-post-image-render-style-head small {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.35;
 }
 
-.persona-post-image-filter-head > span {
+.persona-post-image-render-style-head > span {
   flex: 0 0 auto;
   max-width: 112px;
   padding: 3px 7px;
@@ -12508,13 +12508,51 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   white-space: nowrap;
 }
 
-.persona-post-image-filter-grid {
+.persona-post-image-render-style-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.persona-post-image-render-style-group {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+}
+
+.persona-post-image-render-style-group:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.persona-post-image-render-style-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.persona-post-image-render-style-group-head strong {
+  color: var(--ink);
+  font-size: 11px;
+  letter-spacing: .04em;
+}
+
+.persona-post-image-render-style-group-head small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.persona-post-image-render-style-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
 }
 
-.persona-post-image-filter {
+.persona-post-image-render-style {
   display: grid;
   grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
@@ -12529,24 +12567,24 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   text-align: left;
 }
 
-.persona-post-image-filter:hover:not(:disabled) {
+.persona-post-image-render-style:hover:not(:disabled) {
   border-color: var(--line-strong, var(--line));
   background: var(--panel-solid);
 }
 
-.persona-post-image-filter-panel.is-locked .persona-post-image-filter:disabled {
+.persona-post-image-render-style-panel.is-locked .persona-post-image-render-style:disabled {
   cursor: not-allowed;
   opacity: 0.62;
 }
 
-.persona-post-image-filter.is-selected {
+.persona-post-image-render-style.is-selected {
   border-color: var(--accent);
   background: var(--panel-solid);
   background: color-mix(in srgb, var(--accent) 9%, var(--panel-solid));
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.persona-post-image-filter-swatch {
+.persona-post-image-render-style-swatch {
   position: relative;
   display: block;
   width: 30px;
@@ -12557,7 +12595,7 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   background: linear-gradient(135deg, #e9dec8 0%, #71908b 48%, #233e4a 100%);
 }
 
-.persona-post-image-filter-swatch::after {
+.persona-post-image-render-style-swatch::after {
   content: "";
   position: absolute;
   inset: 6px 5px;
@@ -12566,37 +12604,37 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   box-shadow: 7px -5px 0 -5px rgba(255, 255, 255, .85);
 }
 
-[data-persona-image-filter="black_white"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #fff 0 32%, #9c9c9c 32% 66%, #181818 66%); }
-[data-persona-image-filter="film_noir"] .persona-post-image-filter-swatch { background: linear-gradient(145deg, #f4f4f4 0 18%, #292929 18% 52%, #020202 52%); }
-[data-persona-image-filter="sepia"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #f1d19e, #9a5f2e 58%, #3d2114); }
-[data-persona-image-filter="nostalgia"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #ecd9be, #c18274 52%, #5a6960); }
-[data-persona-image-filter="retro_film"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #e7b44b, #aa4b38 48%, #244b47); }
-[data-persona-image-filter="polaroid"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #fff4dc, #e9a899 52%, #6c8f8b); box-shadow: inset 0 -5px 0 rgba(255,255,255,.8); }
-[data-persona-image-filter="cinematic"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #e68b48, #1f6e74 50%, #142c3a); }
-[data-persona-image-filter="warm_sunset"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #ffe08a, #f17b52 52%, #87465e); }
-[data-persona-image-filter="cool_blue"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #d8f4f5, #64a9bf 52%, #315071); }
-[data-persona-image-filter="soft_matte"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #f1e9e2, #b8c6bd 52%, #7c8583); }
-[data-persona-image-filter="vivid"] .persona-post-image-filter-swatch { background: linear-gradient(135deg, #ffe45b, #fb5578 48%, #3e71eb); }
+[data-persona-image-render-style="cinematic_realism"] .persona-post-image-render-style-swatch { background: linear-gradient(145deg, #f3b36b 0 26%, #1c5863 26% 64%, #172b38 64%); }
+[data-persona-image-render-style="editorial_fashion"] .persona-post-image-render-style-swatch { background: linear-gradient(135deg, #f8f1e9 0 35%, #c45b66 35% 66%, #273844 66%); }
+[data-persona-image-render-style="cel_shading"] .persona-post-image-render-style-swatch { background: linear-gradient(135deg, #fff2a6 0 30%, #ff6f91 30% 58%, #5268d8 58%); box-shadow: inset 0 0 0 2px #24324a; }
+[data-persona-image-render-style="japanese_anime"] .persona-post-image-render-style-swatch { background: linear-gradient(150deg, #c8ebff 0 34%, #a38bff 34% 62%, #ff9eb5 62%); }
+[data-persona-image-render-style="anime_painterly"] .persona-post-image-render-style-swatch { background: radial-gradient(circle at 70% 25%, #ffd890 0 18%, transparent 19%), linear-gradient(135deg, #734f96, #da6f77 55%, #285266); }
+[data-persona-image-render-style="stylized_3d"] .persona-post-image-render-style-swatch { background: radial-gradient(circle at 38% 34%, #fff 0 8%, #6fd2c3 10% 35%, #245b6b 68%); }
+[data-persona-image-render-style="realistic_cg"] .persona-post-image-render-style-swatch { background: conic-gradient(from 210deg, #dce5e8, #5d7b87, #122b37, #dce5e8); }
+[data-persona-image-render-style="three_render_two"] .persona-post-image-render-style-swatch { background: linear-gradient(135deg, #f8df75 0 47%, #263c61 48% 54%, #63c7bc 55%); }
+[data-persona-image-render-style="american_cartoon"] .persona-post-image-render-style-swatch { background: linear-gradient(135deg, #ffd949 0 30%, #ed4c55 30% 60%, #1b74bb 60%); box-shadow: inset 0 0 0 2px #172d3b; }
+[data-persona-image-render-style="comic_ink"] .persona-post-image-render-style-swatch { background: repeating-radial-gradient(circle at 30% 30%, #f7f1dc 0 2px, #1f3340 3px 4px); }
+[data-persona-image-render-style="storybook"] .persona-post-image-render-style-swatch { background: linear-gradient(145deg, #f6d6ad, #9bcbb6 48%, #8897c6); }
 
-.persona-post-image-filter-copy {
+.persona-post-image-render-style-copy {
   display: grid;
   gap: 1px;
   min-width: 0;
 }
 
-.persona-post-image-filter-copy strong,
-.persona-post-image-filter-copy small {
+.persona-post-image-render-style-copy strong,
+.persona-post-image-render-style-copy small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.persona-post-image-filter-copy strong {
+.persona-post-image-render-style-copy strong {
   font-size: 11px;
   font-weight: 800;
 }
 
-.persona-post-image-filter-copy small {
+.persona-post-image-render-style-copy small {
   color: var(--muted);
   font-size: 10px;
 }
@@ -12619,7 +12657,7 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   background: var(--line-strong, var(--line));
 }
 
-.persona-image-style-waiting {
+.persona-image-composition-waiting {
   display: grid;
   gap: 3px;
   padding: 10px 12px;
@@ -12628,18 +12666,18 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   background: var(--panel-soft);
 }
 
-.persona-image-style-waiting strong {
+.persona-image-composition-waiting strong {
   color: var(--ink);
   font-size: 13px;
 }
 
-.persona-image-style-waiting p {
+.persona-image-composition-waiting p {
   margin: 0;
   color: var(--muted);
   font-size: 11px;
 }
 
-.persona-image-style-head {
+.persona-image-composition-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -12647,14 +12685,14 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   min-width: 0;
 }
 
-.persona-image-style-head strong {
+.persona-image-composition-head strong {
   min-width: 0;
   color: var(--ink);
   font-size: 14px;
   line-height: 1.2;
 }
 
-.persona-image-style-action {
+.persona-image-composition-action {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
@@ -12673,7 +12711,7 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   white-space: nowrap;
 }
 
-.persona-image-style-action .ui-refresh-icon {
+.persona-image-composition-action .ui-refresh-icon {
   width: 14px;
   height: 14px;
   flex: 0 0 14px;
@@ -12684,8 +12722,8 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   stroke-width: 1.9;
 }
 
-.persona-image-style-action .task-button-busy,
-.persona-image-style-action .task-button-busy > span {
+.persona-image-composition-action .task-button-busy,
+.persona-image-composition-action .task-button-busy > span {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -12694,25 +12732,25 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   white-space: nowrap;
 }
 
-.persona-image-style-action .task-button-spinner {
+.persona-image-composition-action .task-button-spinner {
   width: 14px;
   height: 14px;
 }
 
-.persona-image-style-empty {
+.persona-image-composition-empty {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
 }
 
-.persona-image-style-tags {
+.persona-image-composition-tags {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
-.persona-image-style-tag {
+.persona-image-composition-tag {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -25731,12 +25769,13 @@ body.console-page {
     font-size: 11px;
   }
 
-  .console-page .persona-post-image-filter-head small,
-  .console-page .persona-post-image-filter-copy small {
+  .console-page .persona-post-image-render-style-head small,
+  .console-page .persona-post-image-render-style-copy small,
+  .console-page .persona-post-image-render-style-group-head small {
     display: none;
   }
 
-  .console-page .persona-post-image-filter {
+  .console-page .persona-post-image-render-style {
     min-height: 40px;
   }
 }
@@ -25751,23 +25790,23 @@ body.console-page {
     border-left: 0;
   }
 
-  .console-page .persona-post-image-filter-panel {
+  .console-page .persona-post-image-render-style-panel {
     gap: 8px;
     padding: 10px;
   }
 
-  .console-page .persona-post-image-filter-grid {
+  .console-page .persona-post-image-render-style-grid {
     gap: 6px;
   }
 
-  .console-page .persona-post-image-filter {
+  .console-page .persona-post-image-render-style {
     grid-template-columns: 26px minmax(0, 1fr);
     gap: 6px;
     min-height: 44px;
     padding: 5px 6px;
   }
 
-  .console-page .persona-post-image-filter-swatch {
+  .console-page .persona-post-image-render-style-swatch {
     width: 26px;
     height: 26px;
     border-radius: 7px;
@@ -25792,11 +25831,11 @@ body.console-page {
     font-size: 12px;
   }
 
-  .console-page .persona-image-style-head {
+  .console-page .persona-image-composition-head {
     gap: 6px;
   }
 
-  .console-page .persona-image-style-action {
+  .console-page .persona-image-composition-action {
     min-width: 76px;
     height: 30px;
     min-height: 30px;
@@ -25805,7 +25844,7 @@ body.console-page {
     font-size: 12px;
   }
 
-  .console-page .persona-image-style-tag {
+  .console-page .persona-image-composition-tag {
     min-height: 30px;
     padding: 4px 7px;
     font-size: 12px;

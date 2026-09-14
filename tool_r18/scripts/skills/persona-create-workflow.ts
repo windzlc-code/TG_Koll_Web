@@ -712,8 +712,8 @@ async function derivePostImageStylesWithCodex(
     ? "标签用于繁体中文控制台选择，统一输出繁体中文。"
     : "标签用于简体中文控制台选择，统一输出简体中文。";
   const instruction = [
-    "你是自动化推文运营控制台的配图风格策划助手。",
-    "任务：根据已经写好的推文正文，生成恰好 6 个可供用户选择的配图风格标签。",
+    "你是自动化推文运营控制台的构图方向策划助手。",
+    "任务：根据已经写好的推文正文，生成恰好 6 个可供用户选择的构图方向标签。",
     "这些标签用于决定配图怎么拍，不是推文选题，也不是直接写提示词长文。",
     "要求：",
     "1. 必须从这篇推文的主题、对象、场景、物品、情绪和动作提炼拍法，不能六条都是人物半身自拍。",
@@ -721,14 +721,14 @@ async function derivePostImageStylesWithCodex(
     "3. person=画面里要有这篇推文的人设主角；scene=不拍人设主角，但可以拍推文相关的背景、风景、建筑、街景，也可以有路人或行人，不是空无一人的空镜；object=只拍推文里的物品、食物或道具特写；pov=第一人称，最多露出手，不露脸；third_person=第三人称纪实，人设主角在真实场景里，但不是自拍、不是半身对着镜头。",
     "4. 6 个标签必须覆盖至少 4 种不同 kind；label 要短、具体、能看出拍什么，3 到 12 个中文字，必须从当前推文提炼，例如「便利店夜景」「冰美式特写」「手拿咖啡杯」，不要写空镜、无人、空旷。",
     `5. ${languageRule}`,
-    previousStyles.length ? `6. 这是“换一批”，尽量避开上一批配图风格及其近义表达：${previousStyles.join("、")}` : "6. 首次生成时优先覆盖场景、事物、第一人称、第三人称，人物自拍只保留一条。",
+    previousStyles.length ? `6. 这是“换一批”，尽量避开上一批构图方向及其近义表达：${previousStyles.join("、")}` : "6. 首次生成时优先覆盖场景、事物、第一人称、第三人称，人物自拍只保留一条。",
     "7. 只输出 JSON，不要 Markdown，不要解释。",
     "",
     "JSON schema:",
     JSON.stringify({
       image_styles: Array.from({ length: POST_IMAGE_STYLE_COUNT }, (_, index) => ({
         kind: POST_IMAGE_STYLE_KINDS[index % POST_IMAGE_STYLE_KINDS.length],
-        label: `配图风格${index + 1}`,
+        label: `构图方向${index + 1}`,
       })),
     }, null, 2),
     "",
@@ -1013,7 +1013,7 @@ async function main() {
       );
       printJson({ ok: true, action: input.action, personaName, image_styles: imageStyles });
     } catch (error: any) {
-      printJson({ ok: false, action: input.action, personaName, error: String(error?.message || "配图风格生成失败，请稍后重试。") });
+      printJson({ ok: false, action: input.action, personaName, error: String(error?.message || "构图方向生成失败，请稍后重试。") });
       process.exitCode = 1;
     }
     return;

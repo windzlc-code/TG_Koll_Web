@@ -11519,20 +11519,25 @@ _PERSONA_POST_IMAGE_ASPECT_RATIO_VALUES = {"auto", *_PERSONA_POST_IMAGE_ASPECT_R
 _PERSONA_POST_IMAGE_RATIO_TWEET_MAX_CHARS = 4000
 _PERSONA_POST_IMAGE_RATIO_PROMPT_MAX_CHARS = 2000
 _PERSONA_POST_IMAGE_MODES = ("auto", "person", "pov", "scene", "object", "third_person")
-_PERSONA_POST_IMAGE_FILTER_DEFAULT = "basic"
-_PERSONA_POST_IMAGE_FILTERS: dict[str, tuple[str, str]] = {
-    "basic": ("基础（默认）", ""),
-    "black_white": ("黑白", "Apply a clean black-and-white photographic treatment with clear gray tonal separation and natural detail."),
-    "film_noir": ("黑色电影", "Use a classic film-noir treatment with hard directional light, deep shadows, restrained highlights, and dramatic monochrome contrast."),
-    "sepia": ("棕褐旧照", "Apply an aged sepia-photo treatment with warm brown tones, softly faded highlights, and subtle antique print texture."),
-    "nostalgia": ("怀旧", "Use a nostalgic 1990s memory-photo treatment with gently faded warm colors, soft contrast, and a natural lived-in feeling."),
-    "retro_film": ("复古胶片", "Use a 1970s analog-film treatment with tasteful grain, slightly shifted film colors, soft highlight roll-off, and authentic vintage contrast."),
-    "polaroid": ("拍立得", "Use an instant Polaroid-style treatment with creamy highlights, gentle pastel colors, subtle paper softness, and casual snapshot character."),
-    "cinematic": ("电影感", "Apply cinematic color grading with controlled contrast, rich highlight latitude, natural skin tones, and a restrained teal-orange balance."),
-    "warm_sunset": ("暖阳", "Use warm golden-hour grading with amber highlights, soft sunlit skin tones, and a gentle sunset atmosphere."),
-    "cool_blue": ("冷调", "Use a clear cool blue-cyan treatment with clean whites, restrained saturation, and crisp modern tonal separation."),
-    "soft_matte": ("柔雾哑光", "Use a soft matte treatment with lifted shadows, low harshness, delicate skin tones, and a subtle diffused finish."),
-    "vivid": ("鲜活", "Use vivid but believable color grading with bright clean colors, lively contrast, and preserved natural texture without oversaturation."),
+_PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT = "original"
+_PERSONA_POST_IMAGE_RENDER_STYLES: dict[str, tuple[str, str]] = {
+    "original": ("原有风格（默认）", ""),
+    "photorealistic": ("写实摄影", "Generate a genuinely photorealistic image with real-world optics, physically plausible materials, natural human detail, and believable available light."),
+    "cinematic_realism": ("电影写实", "Generate a live-action cinematic-realism image with purposeful production design, realistic depth, expressive camera placement, and film-quality lighting while remaining photographic."),
+    "editorial_fashion": ("时尚杂志", "Generate a polished editorial-fashion image with intentional art direction, refined styling, graphic composition, and premium magazine photography quality."),
+    "cel_shading": ("赛璐璐", "Generate hand-drawn cel-animation artwork with clean decisive line art, controlled flat color regions, and crisp two-step cel shadows; do not render as a photograph."),
+    "japanese_anime": ("日系二次元", "Generate a detailed Japanese anime illustration with expressive character drawing, elegant linework, layered painted backgrounds, and cohesive animation-film art direction."),
+    "anime_painterly": ("厚涂动漫", "Generate a painterly anime illustration with rich brushwork, dimensional color masses, expressive light, and carefully rendered character details."),
+    "stylized_3d": ("3D 卡通", "Generate a stylized 3D character scene with appealing sculpted forms, rounded readable silhouettes, tactile materials, and soft physically based lighting."),
+    "realistic_cg": ("写实 3D", "Generate high-end realistic 3D CGI with physically based materials, detailed geometry, convincing global illumination, and premium character-render quality."),
+    "three_render_two": ("3 渲 2", "Generate a 3D-to-2D hybrid image: preserve dimensional 3D form and lighting while using expressive 2D outlines, cel-shadow bands, and animation-style finishing."),
+    "american_cartoon": ("美式卡通", "Generate an American cartoon illustration with bold silhouettes, confident outlines, lively exaggerated expression, strong shape language, and colorful narrative staging."),
+    "comic_ink": ("漫画线描", "Generate comic-book ink artwork with energetic contour lines, selective cross-hatching or screentone texture, dramatic panel-like staging, and readable graphic contrast."),
+    "storybook": ("绘本插画", "Generate a warm storybook illustration with hand-painted texture, gentle expressive shapes, atmospheric color, and a clear narrative moment."),
+}
+_LEGACY_PERSONA_POST_IMAGE_STYLE_IDS = {
+    "basic", "black_white", "film_noir", "sepia", "nostalgia", "retro_film",
+    "polaroid", "cinematic", "warm_sunset", "cool_blue", "soft_matte", "vivid",
 }
 _PERSONA_IMAGE_STYLE_COUNT = 6
 _PERSONA_IMAGE_STYLE_KIND_ORDER = ("person", "third_person", "pov", "scene", "object")
@@ -11594,16 +11599,18 @@ def _normalize_persona_post_image_mode(value: Any) -> str:
     return mode if mode in _PERSONA_POST_IMAGE_MODES else "auto"
 
 
-def _normalize_persona_post_image_filter(value: Any) -> str:
-    selected = re.sub(r"[\s-]+", "_", str(value or _PERSONA_POST_IMAGE_FILTER_DEFAULT).strip().lower())
-    if selected not in _PERSONA_POST_IMAGE_FILTERS:
-        raise ValueError(f"不支持的配图滤镜：{selected}")
+def _normalize_persona_post_image_render_style(value: Any) -> str:
+    selected = re.sub(r"[\s-]+", "_", str(value or _PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT).strip().lower())
+    if selected in _LEGACY_PERSONA_POST_IMAGE_STYLE_IDS:
+        return _PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT
+    if selected not in _PERSONA_POST_IMAGE_RENDER_STYLES:
+        raise ValueError(f"不支持的生成风格：{selected}")
     return selected
 
 
-def _persona_post_image_filter_detail(value: Any) -> tuple[str, str, str]:
-    selected = _normalize_persona_post_image_filter(value)
-    label, prompt = _PERSONA_POST_IMAGE_FILTERS[selected]
+def _persona_post_image_render_style_detail(value: Any) -> tuple[str, str, str]:
+    selected = _normalize_persona_post_image_render_style(value)
+    label, prompt = _PERSONA_POST_IMAGE_RENDER_STYLES[selected]
     return selected, label, prompt
 
 
@@ -11868,7 +11875,7 @@ def _resolve_persona_post_image_aspect_ratio(
             f"推文正文：{str(tweet_content or '').strip()[:_PERSONA_POST_IMAGE_RATIO_TWEET_MAX_CHARS] or '未提供'}",
             f"补充提示词：{str(custom_prompt or '').strip()[:_PERSONA_POST_IMAGE_RATIO_PROMPT_MAX_CHARS] or '未提供'}",
             f"已选构图类型：{composition or 'auto'}",
-            f"已选生成风格：{str(style_hint or '').strip()[:120] or '未选择'}",
+            f"已选构图方向：{str(style_hint or '').strip()[:120] or '未选择'}",
             "请选择最合适的画面比例。",
         ]
     )
@@ -12002,12 +12009,21 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         edit_reference_path = str(source_path)
     archive_load_ms = round((time.perf_counter() - started_at) * 1000, 1)
     try:
-        image_filter, image_filter_label, image_filter_prompt = _persona_post_image_filter_detail(
-            payload.get("image_filter") or payload.get("imageFilter")
+        image_render_style, image_render_style_label, image_render_style_prompt = _persona_post_image_render_style_detail(
+            payload.get("image_render_style")
+            or payload.get("imageRenderStyle")
+            or payload.get("image_filter")
+            or payload.get("imageFilter")
         )
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
-    style_hint = str(payload.get("image_style_label") or payload.get("style_hint") or payload.get("styleHint") or "").strip()[:24]
+    style_hint = str(
+        payload.get("image_composition_label")
+        or payload.get("image_style_label")
+        or payload.get("style_hint")
+        or payload.get("styleHint")
+        or ""
+    ).strip()[:24]
     image_mode = _normalize_persona_post_image_mode(payload.get("image_mode") or payload.get("mode") or ("auto" if style_hint else "person"))
     aspect_started_at = time.perf_counter()
     try:
@@ -12030,7 +12046,7 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "setup": cli_setup,
         "content": source_content or prompt,
         "customPrompt": prompt or None,
-        "imageFilterPrompt": image_filter_prompt or None,
+        "imageRenderStylePrompt": image_render_style_prompt or None,
         "styleHint": style_hint or None,
         "aspectRatio": aspect_ratio,
         "mode": image_mode,
@@ -12136,8 +12152,8 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "image_count": len(image_paths),
         "image_edit_mode": bool(edit_reference_path),
         "edit_source": payload.get("edit_source") if edit_reference_path else None,
-        "image_filter": image_filter,
-        "image_filter_label": image_filter_label,
+        "image_render_style": image_render_style,
+        "image_render_style_label": image_render_style_label,
         "aspect_ratio": aspect_ratio,
         "aspect_ratio_selection": aspect_ratio_selection,
         "timings": compatible_timings,
@@ -19893,7 +19909,7 @@ def _persona_dashboard_suggest_image_styles(
         content = content or str(post.get("content") or "").strip()
     user_content = "\n".join([item for item in [title, content] if item]).strip()
     if not user_content:
-        raise HTTPException(status_code=400, detail="请先选择一篇有正文的推文，再生成配图风格。")
+        raise HTTPException(status_code=400, detail="请先选择一篇有正文的推文，再生成构图方向。")
     previous_image_styles = [
         str(item or "").strip()
         for item in (payload.previous_image_styles or [])
@@ -19933,7 +19949,7 @@ def _persona_dashboard_suggest_image_styles(
         previous_labels=previous_image_styles,
     )
     if len(image_styles) < 4:
-        raise HTTPException(status_code=502, detail="配图风格生成失败：未返回足够可用的风格标签，请重试。")
+        raise HTTPException(status_code=502, detail="构图方向生成失败：未返回足够可用的构图标签，请重试。")
     return {
         "ok": True,
         "archive_id": clean_id,
@@ -31927,10 +31943,18 @@ def create_app() -> FastAPI:
                 payload["image_mode"] = _normalize_persona_post_image_mode(
                     payload.get("image_mode") or payload.get("mode")
                 )
-                payload["image_style_label"] = str(payload.get("image_style_label") or "").strip()[:24]
-                payload["image_filter"] = _normalize_persona_post_image_filter(
-                    payload.get("image_filter") or payload.get("imageFilter")
+                payload["image_composition_label"] = str(
+                    payload.get("image_composition_label") or payload.get("image_style_label") or ""
+                ).strip()[:24]
+                payload["image_render_style"] = _normalize_persona_post_image_render_style(
+                    payload.get("image_render_style")
+                    or payload.get("imageRenderStyle")
+                    or payload.get("image_filter")
+                    or payload.get("imageFilter")
                 )
+                payload.pop("image_style_label", None)
+                payload.pop("image_filter", None)
+                payload.pop("imageFilter", None)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             if not payload["related_persona_id"] or not payload["related_post_id"]:

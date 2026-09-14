@@ -147,19 +147,23 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert "/post_directions" in script
     assert "selected_directions" in script
     assert "data-persona-post-direction-keyword" in script
-    assert "data-persona-image-style-index" in script
-    assert "data-persona-generate-image-styles" in script
-    assert "function renderPersonaImageStylePicker" in script
+    assert "data-persona-image-composition-index" in script
+    assert "data-persona-generate-image-compositions" in script
+    assert "function renderPersonaImageCompositionPicker" in script
     assert "/image_styles" in script
-    assert "生成风格（按正文推荐，可选）" in script
+    assert "构图方向（按正文推荐，可选）" in script
     assert "image_mode" in script
-    assert "image_style_label" in script
-    assert "配图滤镜" in script
-    assert "基础（默认）" in script
-    assert "black_white" in script
-    assert "retro_film" in script
-    assert "image_filter" in script
-    assert "renderPersonaPostImageFilterPicker" in script
+    assert "image_composition_label" in script
+    assert "配图滤镜" not in script
+    assert "原有风格（默认）" in script
+    assert 'PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT = "original"' in script
+    assert "setPersonaPostImageRenderStyleInteractionLocked(true)" in script
+    assert "配图生成期间已锁定，完成后可重新选择" in script
+    assert "cel_shading" in script
+    assert "three_render_two" in script
+    assert "american_cartoon" in script
+    assert "image_render_style" in script
+    assert "renderPersonaPostImageRenderStylePicker" in script
     assert "renderPersonaPostImageControls" in script
     assert '?.kind || "person"' in script
     assert "请先生成并选择一种配图风格" not in script
@@ -171,9 +175,9 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert 'prompt: [String(draft.title || "").trim(), String(draft.content || "").trim()]' in script
     assert ".persona-post-direction-panel" in styles
     assert ".persona-post-direction-tag.is-selected" in styles
-    assert ".persona-image-style-tag" in styles
-    assert ".persona-image-style-action" in styles
-    assert ".persona-post-image-filter-grid" in styles
+    assert ".persona-image-composition-tag" in styles
+    assert ".persona-image-composition-action" in styles
+    assert ".persona-post-image-render-style-grid" in styles
     assert ".persona-post-image-settings-divider" in styles
     assert ".persona-compose-workspace.has-media > .persona-compose-media-stack" in styles
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in styles
@@ -185,16 +189,16 @@ def test_mobile_direction_picker_keeps_actions_aligned_and_reuses_selection_icon
     styles = CONSOLE_CSS.read_text(encoding="utf-8")
 
     picker = script.split("function renderPersonaPostDirectionPicker", 1)[1].split(
-        "function renderPersonaImageStylePicker", 1
+        "function renderPersonaImageCompositionPicker", 1
     )[0]
-    style_picker = script.split("function renderPersonaImageStylePicker", 1)[1].split(
+    style_picker = script.split("function renderPersonaImageCompositionPicker", 1)[1].split(
         "function persistPersonaHotImports", 1
     )[0]
     assert "生成风格" not in picker
-    assert "data-persona-generate-image-styles" in style_picker
-    assert "生成风格（按正文推荐，可选）" in style_picker
-    assert "data-persona-image-style-index" in style_picker
-    assert "persona-image-style-action" in style_picker
+    assert "data-persona-generate-image-compositions" in style_picker
+    assert "构图方向（按正文推荐，可选）" in style_picker
+    assert "data-persona-image-composition-index" in style_picker
+    assert "persona-image-composition-action" in style_picker
     assert "personaImageStyleCaption" in script
     assert "persona-post-direction-tools" not in style_picker
     assert "data-persona-image-style-key" not in style_picker
@@ -256,6 +260,8 @@ def test_model_prompt_requires_ten_distinct_directions_and_input_decomposition()
     assert "POST_IMAGE_STYLE_COUNT = 6" in source
     assert 'action: "suggest-post-directions"' in source
     assert 'action: "suggest-image-styles"' in source
+    assert "构图方向策划助手" in source
+    assert "构图方向标签" in source
     assert "主题、对象、场景、痛点、立场和预期结果" in source
     assert "不要输出近义改写或上下位重复" in source
     assert "尽量避开上一批关键词及其近义表达" in source
@@ -404,8 +410,8 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
         "related_persona_id": "persona-1",
         "related_post_id": "post-1",
         "image_mode": "scene",
-        "image_style_label": "便利店夜景",
-        "image_filter": "retro_film",
+        "image_render_style": "three_render_two",
+        "image_composition_label": "便利店夜景",
         "prompt": "保留雨夜路面反光",
         "image_count": 1,
     })
@@ -414,11 +420,11 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
     assert captured["payload"]["mode"] == "scene"
     assert captured["payload"]["styleHint"] == "便利店夜景"
     assert captured["payload"]["customPrompt"] == "保留雨夜路面反光"
-    assert "1970s analog-film treatment" in captured["payload"]["imageFilterPrompt"]
+    assert "3D-to-2D hybrid image" in captured["payload"]["imageRenderStylePrompt"]
     assert captured["payload"]["variationKey"] == "task-1:1:1"
     assert captured["payload"]["setup"]["personaReferenceIdentity"] == "中国地区特征，18至22岁的成年女性"
-    assert result["image_filter"] == "retro_film"
-    assert result["image_filter_label"] == "复古胶片"
+    assert result["image_render_style"] == "three_render_two"
+    assert result["image_render_style_label"] == "3 渲 2"
 
     default_result = server._run_persona_post_image_task("task-2", {
         "related_persona_id": "persona-1",
@@ -430,7 +436,22 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
     assert captured["payload"]["mode"] == "person"
     assert captured["payload"]["styleHint"] is None
     assert captured["payload"]["customPrompt"] is None
-    assert default_result["image_filter"] == "basic"
+    assert captured["payload"]["imageRenderStylePrompt"] is None
+    assert default_result["image_render_style"] == "original"
+    assert default_result["image_render_style_label"] == "原有风格（默认）"
+
+    crafted_result = server._run_persona_post_image_task("task-crafted", {
+        "related_persona_id": "persona-1",
+        "related_post_id": "post-1",
+        "image_render_style": "american_cartoon",
+        "image_count": 1,
+    })
+
+    assert crafted_result["ok"] is True
+    assert crafted_result["image_render_style"] == "american_cartoon"
+    assert crafted_result["image_render_style_label"] == "美式卡通"
+    assert "American cartoon illustration" in captured["payload"]["imageRenderStylePrompt"]
+    assert "bold silhouettes" in captured["payload"]["imageRenderStylePrompt"]
 
     captured["payloads"].clear()
     multi_result = server._run_persona_post_image_task("task-3", {
@@ -444,3 +465,35 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
         "task-3:1:2",
         "task-3:2:2",
     }
+
+
+def test_generation_style_catalog_is_not_the_removed_filter_catalog():
+    expected = {
+        "original",
+        "photorealistic",
+        "cinematic_realism",
+        "editorial_fashion",
+        "cel_shading",
+        "japanese_anime",
+        "anime_painterly",
+        "stylized_3d",
+        "realistic_cg",
+        "three_render_two",
+        "american_cartoon",
+        "comic_ink",
+        "storybook",
+    }
+
+    assert set(server._PERSONA_POST_IMAGE_RENDER_STYLES) == expected
+    non_default_prompts = [
+        prompt
+        for style_id, (_label, prompt) in server._PERSONA_POST_IMAGE_RENDER_STYLES.items()
+        if style_id != "original"
+    ]
+    assert len(set(non_default_prompts)) == len(expected) - 1
+    assert all(prompt.strip() for prompt in non_default_prompts)
+    assert server._PERSONA_POST_IMAGE_RENDER_STYLES["original"][1] == ""
+    assert server._normalize_persona_post_image_render_style(None) == "original"
+    assert server._normalize_persona_post_image_render_style("retro_film") == "original"
+    with pytest.raises(ValueError, match="不支持的生成风格"):
+        server._normalize_persona_post_image_render_style("../../custom-prompt")

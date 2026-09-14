@@ -3137,7 +3137,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
                             "content_source_mode": "manual",
                             "image_count": 3,
                             "aspect_ratio": "1:1",
-                            "image_filter": "nostalgia",
+                            "image_render_style": "cel_shading",
+                            "image_composition_label": "车窗侧面抓拍",
                         },
                         ensure_ascii=False,
                     ),
@@ -3152,9 +3153,10 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["content_source_mode"], "manual")
         self.assertEqual(captured["payload"]["image_count"], 3)
         self.assertEqual(captured["payload"]["aspect_ratio"], "1:1")
-        self.assertEqual(captured["payload"]["image_filter"], "nostalgia")
+        self.assertEqual(captured["payload"]["image_render_style"], "cel_shading")
+        self.assertEqual(captured["payload"]["image_composition_label"], "车窗侧面抓拍")
 
-    def test_task_submit_defaults_and_validates_persona_post_image_filter(self):
+    def test_task_submit_defaults_and_validates_persona_post_image_render_style(self):
         self._write_archives()
         captured = {}
 
@@ -3169,7 +3171,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "params_json": json.dumps({
                         "related_persona_id": "persona-1",
                         "related_post_id": "post-1",
-                        "generation_content": "默认滤镜配图",
+                            "generation_content": "默认沿用原生成风格配图",
                     }, ensure_ascii=False),
                 },
             )
@@ -3180,16 +3182,16 @@ class PersonaDashboardApiTests(unittest.TestCase):
                     "params_json": json.dumps({
                         "related_persona_id": "persona-1",
                         "related_post_id": "post-1",
-                        "generation_content": "非法滤镜配图",
-                        "image_filter": "../../custom-prompt",
+                        "generation_content": "非法生成风格配图",
+                        "image_render_style": "../../custom-prompt",
                     }, ensure_ascii=False),
                 },
             )
 
         self.assertEqual(default_resp.status_code, 200)
-        self.assertEqual(captured["payload"]["image_filter"], "basic")
+        self.assertEqual(captured["payload"]["image_render_style"], "original")
         self.assertEqual(invalid_resp.status_code, 400)
-        self.assertIn("不支持的配图滤镜", invalid_resp.text)
+        self.assertIn("不支持的生成风格", invalid_resp.text)
 
     def test_task_submit_accepts_one_owned_persona_post_image_as_edit_source(self):
         self._write_archives()

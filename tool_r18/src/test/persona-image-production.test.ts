@@ -776,9 +776,9 @@ describe("persona image production", () => {
     expect(calls[0].prompt).toContain("neat soft hands");
   });
 
-  it("keeps a selected filter as a mandatory top-level model constraint", async () => {
+  it("keeps a selected generation style as a mandatory top-level model constraint", async () => {
     const calls: any[] = [];
-    const filterPrompt = "Use a classic film-noir treatment with strict monochrome tones.";
+    const renderStylePrompt = "Generate a 3D-to-2D hybrid image with dimensional form and expressive 2D outlines.";
     await generatePersonaImage(
       { generate: async (payload: any) => {
         calls.push(payload);
@@ -796,13 +796,14 @@ describe("persona image production", () => {
       "保留雨夜路面反光",
       "便利店夜景",
       "variation-1",
-      filterPrompt,
+      renderStylePrompt,
     );
 
     expect(calls).toHaveLength(1);
-    expect(calls[0].prompt).toContain("MANDATORY SELECTED IMAGE FILTER");
-    expect(calls[0].prompt).toContain(filterPrompt);
-    expect(calls[0].prompt.indexOf(filterPrompt)).toBeLessThan(calls[0].prompt.indexOf("夜晚走过便利店"));
+    expect(calls[0].prompt).toContain("MANDATORY SELECTED IMAGE GENERATION STYLE");
+    expect(calls[0].prompt).toContain(renderStylePrompt);
+    expect(calls[0].prompt).toContain("not a color-grade overlay");
+    expect(calls[0].prompt.indexOf(renderStylePrompt)).toBeLessThan(calls[0].prompt.indexOf("夜晚走过便利店"));
   });
 
   it("anchors POV hands to age and gender from the active persona reference", async () => {
