@@ -78,16 +78,28 @@
       invitationProgram: "邀请计划",
       inviteFriends: "邀请好友加入 Vecto",
       invitationSummary: "生成专属邀请码或链接。新用户完成注册绑定后，双方会按当前规则获得奖励。",
+      invitationBenefits: "邀请计划特点",
+      invitationBenefitBoth: "双方都有奖励",
+      invitationBenefitTrack: "奖励记录可追踪",
+      invitationBenefitSecure: "注册绑定更安心",
       backToProfile: "返回个人资料",
       invitationCode: "我的邀请码",
+      invitationCodeHint: "你的专属邀请凭证",
       notGenerated: "尚未生成",
       generated: "已生成",
       generateInvitation: "生成邀请码",
       generatingInvitation: "生成中…",
       copyCode: "复制邀请码",
       invitationLink: "邀请好友链接",
-      invitationLinkHelp: "打开后自动填写邀请码",
-      copyLink: "复制邀请链接",
+      invitationLinkHelp: "可直接发送给好友",
+      invitationShareHint: "分享文案与专属链接已组合",
+      invitationShareMessage: "邀请好友分享文案",
+      invitationShareCopy: "我正在使用 Vecto 管理社媒内容，邀请你一起来体验。通过我的专属链接注册，完成绑定后双方都可按当前活动规则获得奖励：\n{link}",
+      copyLink: "复制分享文案与链接",
+      invitationJourney: "邀请流程",
+      invitationJourneyShare: "分享邀请码或链接",
+      invitationJourneyRegister: "好友完成新账号注册",
+      invitationJourneyReward: "双方奖励写入账户",
       invitationRecords: "邀请记录",
       invitationRecordsEmpty: "暂无邀请记录",
       invitationRecordRole: "邀请人：{inviter} · 受邀人：{invitee}",
@@ -191,16 +203,28 @@
       invitationProgram: "邀請計畫",
       inviteFriends: "邀請好友加入 Vecto",
       invitationSummary: "產生專屬邀請碼或連結。新用戶完成註冊綁定後，雙方會按目前規則獲得獎勵。",
+      invitationBenefits: "邀請計畫特點",
+      invitationBenefitBoth: "雙方都有獎勵",
+      invitationBenefitTrack: "獎勵記錄可追蹤",
+      invitationBenefitSecure: "註冊綁定更安心",
       backToProfile: "返回個人資料",
       invitationCode: "我的邀請碼",
+      invitationCodeHint: "你的專屬邀請憑證",
       notGenerated: "尚未產生",
       generated: "已產生",
       generateInvitation: "產生邀請碼",
       generatingInvitation: "產生中…",
       copyCode: "複製邀請碼",
       invitationLink: "邀請好友連結",
-      invitationLinkHelp: "開啟後自動填寫邀請碼",
-      copyLink: "複製邀請連結",
+      invitationLinkHelp: "可直接傳送給好友",
+      invitationShareHint: "分享文案與專屬連結已組合",
+      invitationShareMessage: "邀請好友分享文案",
+      invitationShareCopy: "我正在使用 Vecto 管理社群內容，邀請你一起來體驗。透過我的專屬連結註冊，完成綁定後雙方都可按目前活動規則獲得獎勵：\n{link}",
+      copyLink: "複製分享文案與連結",
+      invitationJourney: "邀請流程",
+      invitationJourneyShare: "分享邀請碼或連結",
+      invitationJourneyRegister: "好友完成新帳號註冊",
+      invitationJourneyReward: "雙方獎勵寫入帳戶",
       invitationRecords: "邀請記錄",
       invitationRecordsEmpty: "暫無邀請記錄",
       invitationRecordRole: "邀請人：{inviter} · 受邀人：{invitee}",
@@ -487,6 +511,11 @@
     return target.toString();
   }
 
+  function invitationShareText(link = invitationLink()) {
+    const normalizedLink = String(link || "").trim();
+    return normalizedLink ? profileText("invitationShareCopy", { link: normalizedLink }) : "";
+  }
+
   function invitationRewardPoints(side) {
     const settings = state.invitation?.settings || {};
     const rewards = state.invitation?.rewards || {};
@@ -627,10 +656,11 @@
   function renderInvitationWorkspace() {
     const code = invitationCode();
     const link = invitationLink();
+    const shareText = invitationShareText(link);
     const enabled = state.invitation?.enabled !== false;
     if ($("profileInvitationAvailability")) $("profileInvitationAvailability").hidden = enabled;
     if ($("profileInvitationCode")) $("profileInvitationCode").value = code || "—";
-    if ($("profileInvitationLink")) $("profileInvitationLink").value = link || "—";
+    if ($("profileInvitationLink")) $("profileInvitationLink").value = shareText || "—";
     setProfileCopy($("profileInvitationCodeState"), code ? "generated" : "notGenerated");
     if ($("profileGenerateInvitation")) {
       $("profileGenerateInvitation").hidden = Boolean(code);
@@ -654,6 +684,7 @@
   async function setProfileView(view, { updateUrl = false } = {}) {
     const invitationView = !isAdminSession && view === "invitation";
     state.view = invitationView ? "invitation" : "profile";
+    document.body.classList.toggle("is-invitation-view", invitationView);
     if ($("profileForm")) $("profileForm").hidden = invitationView;
     if ($("profileInvitationWorkspace")) $("profileInvitationWorkspace").hidden = !invitationView;
     renderProfileViewCopy();
@@ -1059,7 +1090,7 @@
     void copyInvitationValue(invitationCode(), $("profileInvitationCode"));
   });
   $("profileCopyInvitationLink")?.addEventListener("click", () => {
-    void copyInvitationValue(invitationLink(), $("profileInvitationLink"));
+    void copyInvitationValue(invitationShareText(), $("profileInvitationLink"));
   });
   $("profileInvitationPrevious")?.addEventListener("click", () => {
     void loadInvitation({ force: true, offset: Math.max(0, state.invitationOffset - state.invitationLimit) });

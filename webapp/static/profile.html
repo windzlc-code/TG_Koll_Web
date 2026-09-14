@@ -121,39 +121,91 @@
 
       <section id="profileInvitationWorkspace" class="profile-invitation-workspace" aria-labelledby="profileInvitationTitle" hidden>
         <div class="profile-invitation-hero">
-          <div>
-            <span class="profile-eyebrow" data-profile-i18n="invitationProgram">邀请计划</span>
+          <div class="profile-invitation-hero-copy">
+            <span class="profile-eyebrow profile-invitation-kicker">
+              <span class="profile-invitation-kicker-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M20 12v9H4v-9M2 7h20v5H2zM12 7v14M12 7H7.8A2.8 2.8 0 1 1 12 3.7M12 7h4.2A2.8 2.8 0 1 0 12 3.7"></path></svg>
+              </span>
+              <span data-profile-i18n="invitationProgram">邀请计划</span>
+            </span>
             <h2 id="profileInvitationTitle" data-profile-i18n="inviteFriends">邀请好友加入 Vecto</h2>
             <p id="profileInvitationSummary" data-profile-i18n="invitationSummary">生成专属邀请码或链接。新用户完成注册绑定后，双方会按当前规则获得奖励。</p>
+            <div class="profile-invitation-benefits" aria-label="邀请计划特点" data-profile-i18n-aria-label="invitationBenefits">
+              <span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M17 6.5c0-1.9-2.2-3.5-5-3.5S7 4.6 7 6.5 9.2 10 12 10s5 1.6 5 3.5S14.8 17 12 17s-5-1.6-5-3.5"></path></svg><span data-profile-i18n="invitationBenefitBoth">双方都有奖励</span></span>
+              <span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg><span data-profile-i18n="invitationBenefitTrack">奖励记录可追踪</span></span>
+              <span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.8 2.8 8.4 7 10 4.2-1.6 7-5.2 7-10V6zM9 12l2 2 4-5"></path></svg><span data-profile-i18n="invitationBenefitSecure">注册绑定更安心</span></span>
+            </div>
           </div>
-          <button id="profileInvitationBack" class="profile-password-action" type="button">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
-            <span data-profile-i18n="backToProfile">返回个人资料</span>
-          </button>
+          <div class="profile-invitation-hero-visual" aria-hidden="true">
+            <span class="profile-invitation-coin profile-invitation-coin--one">V</span>
+            <span class="profile-invitation-coin profile-invitation-coin--two">V</span>
+            <svg class="profile-invitation-network" viewBox="0 0 250 178">
+              <defs>
+                <linearGradient id="invitationHubGradient" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#65e7d5"></stop>
+                  <stop offset="1" stop-color="#8bea91"></stop>
+                </linearGradient>
+              </defs>
+              <path class="profile-invitation-network-line" d="M125 88 55 47M125 88l73-39M125 88l-67 53M125 88l72 50"></path>
+              <g class="profile-invitation-network-person" transform="translate(39 29)"><circle cx="16" cy="16" r="15"></circle><path d="M9 22c1.7-4.1 12.3-4.1 14 0M16 9a4 4 0 1 1 0 8 4 4 0 0 1 0-8"></path></g>
+              <g class="profile-invitation-network-person" transform="translate(182 30)"><circle cx="16" cy="16" r="15"></circle><path d="M9 22c1.7-4.1 12.3-4.1 14 0M16 9a4 4 0 1 1 0 8 4 4 0 0 1 0-8"></path></g>
+              <g class="profile-invitation-network-person" transform="translate(42 124)"><circle cx="16" cy="16" r="15"></circle><path d="M9 22c1.7-4.1 12.3-4.1 14 0M16 9a4 4 0 1 1 0 8 4 4 0 0 1 0-8"></path></g>
+              <g class="profile-invitation-network-person" transform="translate(181 121)"><circle cx="16" cy="16" r="15"></circle><path d="M9 22c1.7-4.1 12.3-4.1 14 0M16 9a4 4 0 1 1 0 8 4 4 0 0 1 0-8"></path></g>
+              <g class="profile-invitation-network-hub"><circle cx="125" cy="88" r="33" fill="url(#invitationHubGradient)"></circle><circle cx="125" cy="88" r="25"></circle><path d="M111 88h28M125 74v28"></path></g>
+            </svg>
+          </div>
+          <div class="profile-invitation-hero-actions">
+            <a id="profileInvitationWorkbench" class="profile-password-action" href="/console.html">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+              <span data-profile-i18n="backToConsole">返回推文工作台</span>
+            </a>
+            <button id="profileInvitationBack" class="profile-password-action" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+              <span data-profile-i18n="backToProfile">返回个人资料</span>
+            </button>
+          </div>
         </div>
 
         <div class="profile-invitation-share-grid">
           <p id="profileInvitationAvailability" class="profile-invitation-availability" role="status" hidden data-profile-i18n="invitationDisabled">邀请活动当前已停用，暂时不能生成或复制邀请码。</p>
-          <article class="profile-invitation-card">
-            <div class="profile-invitation-card-head"><span data-profile-i18n="invitationCode">我的邀请码</span><small id="profileInvitationCodeState" data-profile-i18n="notGenerated">尚未生成</small></div>
-            <input id="profileInvitationCode" class="profile-invitation-value" type="text" readonly aria-label="我的邀请码" data-profile-i18n-aria-label="invitationCode" value="—" />
+          <article class="profile-invitation-card profile-invitation-share-card profile-invitation-share-card--code">
+            <div class="profile-invitation-card-head">
+              <span class="profile-invitation-card-title"><span class="profile-invitation-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6.5h16v11H4zM8 6.5v11M16 6.5v11M11 12h2"></path></svg></span><span><span data-profile-i18n="invitationCode">我的邀请码</span><small data-profile-i18n="invitationCodeHint">你的专属邀请凭证</small></span></span>
+              <small id="profileInvitationCodeState" class="profile-invitation-state" data-profile-i18n="notGenerated">尚未生成</small>
+            </div>
+            <div class="profile-invitation-value-shell profile-invitation-value-shell--code">
+              <span class="profile-invitation-ticket-dots" aria-hidden="true"></span>
+              <input id="profileInvitationCode" class="profile-invitation-value" type="text" readonly aria-label="我的邀请码" data-profile-i18n-aria-label="invitationCode" value="—" />
+            </div>
             <div class="profile-invitation-card-actions">
               <button id="profileGenerateInvitation" class="profile-save" type="button" data-profile-i18n="generateInvitation">生成邀请码</button>
               <button id="profileCopyInvitationCode" class="profile-password-action" type="button" disabled data-profile-i18n="copyCode">复制邀请码</button>
             </div>
           </article>
-          <article class="profile-invitation-card">
-            <div class="profile-invitation-card-head"><span data-profile-i18n="invitationLink">邀请好友链接</span><small data-profile-i18n="invitationLinkHelp">打开后自动填写邀请码</small></div>
-            <input id="profileInvitationLink" class="profile-invitation-value" type="text" readonly aria-label="邀请好友链接" data-profile-i18n-aria-label="invitationLink" value="—" />
+          <article class="profile-invitation-card profile-invitation-share-card profile-invitation-share-card--link">
+            <div class="profile-invitation-card-head">
+              <span class="profile-invitation-card-title"><span class="profile-invitation-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"></path></svg></span><span><span data-profile-i18n="invitationLink">邀请好友链接</span><small data-profile-i18n="invitationShareHint">一键分享给你的好友</small></span></span>
+              <small class="profile-invitation-state" data-profile-i18n="invitationLinkHelp">打开后自动填写邀请码</small>
+            </div>
+            <div class="profile-invitation-value-shell profile-invitation-value-shell--message">
+              <textarea id="profileInvitationLink" class="profile-invitation-value profile-invitation-share-message" readonly rows="5" aria-label="邀请好友分享文案" data-profile-i18n-aria-label="invitationShareMessage">—</textarea>
+              <span class="profile-invitation-link-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m5 12 14-7-4 14-3-5z"></path></svg></span>
+            </div>
             <div class="profile-invitation-card-actions">
-              <button id="profileCopyInvitationLink" class="profile-save" type="button" disabled data-profile-i18n="copyLink">复制邀请链接</button>
+              <button id="profileCopyInvitationLink" class="profile-save" type="button" disabled data-profile-i18n="copyLink">复制分享文案与链接</button>
             </div>
           </article>
         </div>
 
+        <ol class="profile-invitation-journey" aria-label="邀请流程" data-profile-i18n-aria-label="invitationJourney">
+          <li><span class="profile-invitation-journey-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12v7h16v-7M12 16V3M7 8l5-5 5 5"></path></svg></span><span><small>01</small><strong data-profile-i18n="invitationJourneyShare">分享邀请码或链接</strong></span></li>
+          <li><span class="profile-invitation-journey-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 8v6M22 11h-6"></path></svg></span><span><small>02</small><strong data-profile-i18n="invitationJourneyRegister">好友完成新账号注册</strong></span></li>
+          <li><span class="profile-invitation-journey-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2 4 6v6c0 5 3.4 8.6 8 10 4.6-1.4 8-5 8-10V6zM8 12l2.5 2.5L16 9"></path></svg></span><span><small>03</small><strong data-profile-i18n="invitationJourneyReward">双方奖励写入账户</strong></span></li>
+        </ol>
+
         <div class="profile-invitation-detail-grid">
           <section class="profile-invitation-card profile-invitation-records" aria-labelledby="profileInvitationRecordsTitle">
-            <div class="profile-invitation-card-head"><span id="profileInvitationRecordsTitle" data-profile-i18n="invitationRecords">邀请记录</span><small id="profileInvitationRecordCount">0</small></div>
+            <div class="profile-invitation-card-head"><span class="profile-invitation-card-title"><span class="profile-invitation-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"></path></svg></span><span id="profileInvitationRecordsTitle" data-profile-i18n="invitationRecords">邀请记录</span></span><small id="profileInvitationRecordCount" class="profile-invitation-count">0</small></div>
             <div id="profileInvitationRecordList" class="profile-invitation-record-list"><p class="profile-invitation-empty" data-profile-i18n="invitationRecordsEmpty">暂无邀请记录</p></div>
             <div class="profile-invitation-pagination" aria-label="邀请记录翻页" data-profile-i18n-aria-label="invitationPagination">
               <button id="profileInvitationPrevious" class="profile-password-action" type="button" disabled data-profile-i18n="previousPage">上一页</button>
@@ -162,7 +214,7 @@
             </div>
           </section>
           <aside class="profile-invitation-card profile-invitation-rules" aria-labelledby="profileInvitationRulesTitle">
-            <div class="profile-invitation-card-head"><span id="profileInvitationRulesTitle" data-profile-i18n="invitationRules">活动说明</span></div>
+            <div class="profile-invitation-card-head"><span class="profile-invitation-card-title"><span class="profile-invitation-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18M17 6.5c0-1.9-2.2-3.5-5-3.5S7 4.6 7 6.5 9.2 10 12 10s5 1.6 5 3.5S14.8 17 12 17s-5-1.6-5-3.5"></path></svg></span><span id="profileInvitationRulesTitle" data-profile-i18n="invitationRules">活动说明</span></span></div>
             <ol>
               <li id="profileInviterRewardRule" data-profile-i18n="inviterRewardPending">邀请人奖励以当前活动规则为准。</li>
               <li id="profileInviteeRewardRule" data-profile-i18n="inviteeRewardPending">受邀人完成新账号注册后获得对应奖励。</li>

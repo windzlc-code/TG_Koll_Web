@@ -30,6 +30,42 @@ body.profile-page {
   letter-spacing: 0;
 }
 
+body.profile-page.is-invitation-view {
+  background:
+    radial-gradient(circle at 6% 18%, rgba(55, 190, 171, .2), transparent 26%),
+    radial-gradient(circle at 93% 24%, rgba(243, 198, 107, .2), transparent 23%),
+    radial-gradient(circle at 72% 92%, rgba(96, 183, 142, .13), transparent 28%),
+    linear-gradient(145deg, #e7f2ef 0%, #f7faf7 43%, #edf3ea 100%);
+}
+
+body.profile-page.is-invitation-view::before {
+  position: fixed;
+  z-index: 0;
+  inset: var(--site-header-height) 0 0;
+  background:
+    linear-gradient(120deg, transparent 0 48%, rgba(8, 127, 114, .035) 48% 49%, transparent 49% 100%),
+    radial-gradient(rgba(7, 78, 72, .1) .8px, transparent .8px);
+  background-size: 86px 86px, 22px 22px;
+  content: "";
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,.7) 58%, transparent 100%);
+  pointer-events: none;
+}
+
+.profile-page.is-invitation-view .profile-main {
+  position: relative;
+  z-index: 1;
+  width: min(1180px, calc(100% - 40px));
+  padding-top: calc(var(--site-header-height) + 34px);
+}
+
+.profile-page.is-invitation-view .profile-heading {
+  display: none;
+}
+
+.profile-page.is-invitation-view .profile-workspace {
+  padding-top: 0;
+}
+
 .profile-main {
   width: min(1120px, calc(100% - 40px));
   margin: 0 auto;
@@ -722,6 +758,697 @@ body.profile-page {
   font-size: 12px;
 }
 
+/* Invitation center: Vecto light-tech visual system. */
+.profile-invitation-workspace {
+  --invitation-deep: #0b3036;
+  --invitation-deeper: #071f26;
+  --invitation-cyan: #5bd9d0;
+  --invitation-green: #7cdd8d;
+  --invitation-gold: #f3c66b;
+  position: relative;
+  isolation: isolate;
+  gap: 20px;
+  overflow: hidden;
+  padding: clamp(16px, 2.5vw, 28px);
+  background:
+    radial-gradient(circle at 7% 4%, rgba(91, 217, 208, .22), transparent 24%),
+    radial-gradient(circle at 93% 98%, rgba(243, 198, 107, .24), transparent 28%),
+    linear-gradient(145deg, rgba(244, 252, 249, .92) 0%, rgba(220, 238, 233, .94) 100%);
+  border-color: #c9dad6;
+  border-radius: 20px;
+  box-shadow: 0 24px 60px rgba(15, 55, 51, .13);
+}
+
+.profile-invitation-workspace::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background-image: radial-gradient(rgba(8, 127, 114, .12) .8px, transparent .8px);
+  background-size: 20px 20px;
+  content: "";
+  mask-image: linear-gradient(135deg, #000, transparent 42%);
+  pointer-events: none;
+}
+
+.profile-invitation-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 31%);
+  align-items: center;
+  min-height: 270px;
+  overflow: hidden;
+  padding: clamp(28px, 4vw, 44px);
+  color: #f5fffd;
+  background:
+    radial-gradient(circle at 78% 18%, rgba(243, 198, 107, .21), transparent 24%),
+    radial-gradient(circle at 18% 118%, rgba(91, 217, 208, .28), transparent 42%),
+    linear-gradient(118deg, var(--invitation-deeper), #0b3a40 62%, #125651);
+  border: 1px solid rgba(118, 226, 210, .35);
+  border-radius: 18px;
+  box-shadow: 0 18px 40px rgba(5, 36, 39, .24);
+}
+
+.profile-invitation-hero::before,
+.profile-invitation-hero::after {
+  position: absolute;
+  content: "";
+  pointer-events: none;
+}
+
+.profile-invitation-hero::before {
+  inset: 0;
+  background: repeating-linear-gradient(128deg, transparent 0 18px, rgba(255,255,255,.025) 18px 19px);
+}
+
+.profile-invitation-hero::after {
+  right: -70px;
+  bottom: -115px;
+  width: 330px;
+  height: 250px;
+  border: 1px solid rgba(91, 217, 208, .19);
+  border-radius: 50%;
+  box-shadow: 0 0 0 32px rgba(91, 217, 208, .04), 0 0 0 68px rgba(91, 217, 208, .025);
+}
+
+.profile-invitation-hero-copy,
+.profile-invitation-hero-visual,
+.profile-invitation-hero-actions {
+  position: relative;
+  z-index: 1;
+}
+
+.profile-invitation-hero-copy {
+  max-width: 660px;
+  padding-right: 18px;
+}
+
+.profile-invitation-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  margin-bottom: 15px;
+  padding: 6px 11px 6px 7px;
+  color: #d6fff7;
+  background: rgba(95, 221, 205, .12);
+  border: 1px solid rgba(123, 232, 215, .28);
+  border-radius: 999px;
+  letter-spacing: .08em;
+}
+
+.profile-invitation-kicker-icon {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  color: #17352e;
+  background: linear-gradient(135deg, var(--invitation-gold), #fff0a8);
+  border-radius: 50%;
+  box-shadow: 0 5px 14px rgba(243, 198, 107, .28);
+}
+
+.profile-invitation-kicker-icon svg,
+.profile-invitation-benefits svg,
+.profile-invitation-card-icon svg,
+.profile-invitation-link-mark svg,
+.profile-invitation-journey-icon svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.profile-invitation-hero h2 {
+  max-width: 610px;
+  color: #ffffff;
+  font-size: clamp(29px, 4vw, 48px);
+  line-height: 1.08;
+  letter-spacing: -.035em;
+}
+
+.profile-invitation-hero p {
+  max-width: 610px;
+  margin-top: 14px;
+  color: #bcd5d3;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.profile-invitation-benefits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.profile-invitation-benefits > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  color: #eafffb;
+  background: rgba(255, 255, 255, .075);
+  border: 1px solid rgba(255, 255, 255, .11);
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 750;
+  backdrop-filter: blur(8px);
+}
+
+.profile-invitation-benefits svg {
+  width: 14px;
+  height: 14px;
+  color: var(--invitation-cyan);
+}
+
+.profile-invitation-hero-actions {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-invitation-hero-actions .profile-password-action {
+  min-height: 38px;
+  color: #eafffb;
+  background: rgba(3, 26, 31, .42);
+  border-color: rgba(255, 255, 255, .18);
+  backdrop-filter: blur(12px);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.profile-invitation-hero-actions .profile-password-action:hover,
+.profile-invitation-hero-actions .profile-password-action:focus-visible {
+  color: #ffffff;
+  background: rgba(3, 26, 31, .7);
+  border-color: rgba(91, 217, 208, .58);
+}
+
+.profile-invitation-hero-visual {
+  display: grid;
+  min-height: 190px;
+  place-items: center;
+  transform: translateY(12px);
+}
+
+.profile-invitation-network {
+  width: min(100%, 265px);
+  overflow: visible;
+  filter: drop-shadow(0 18px 25px rgba(0, 0, 0, .2));
+}
+
+.profile-invitation-network-line {
+  fill: none;
+  stroke: rgba(153, 235, 221, .48);
+  stroke-dasharray: 5 7;
+  stroke-width: 1.5;
+  animation: invitation-network-flow 9s linear infinite;
+}
+
+.profile-invitation-network-person circle {
+  fill: rgba(223, 255, 248, .11);
+  stroke: rgba(199, 255, 244, .55);
+}
+
+.profile-invitation-network-person path {
+  fill: none;
+  stroke: #d7f8f1;
+  stroke-linecap: round;
+  stroke-width: 1.5;
+}
+
+.profile-invitation-network-hub circle:last-of-type {
+  fill: #0b3738;
+  stroke: rgba(255, 255, 255, .45);
+}
+
+.profile-invitation-network-hub path {
+  fill: none;
+  stroke: #f8fffd;
+  stroke-linecap: round;
+  stroke-width: 3;
+}
+
+.profile-invitation-coin {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: #795a17;
+  background: linear-gradient(145deg, #fff3ad, #e7ae48);
+  border: 3px solid rgba(255,255,255,.38);
+  border-radius: 50%;
+  box-shadow: 0 12px 20px rgba(0,0,0,.23);
+  font-family: Georgia, serif;
+  font-size: 13px;
+  font-weight: 900;
+  animation: invitation-coin-float 4.8s ease-in-out infinite;
+}
+
+.profile-invitation-coin--one {
+  top: 10px;
+  left: 9%;
+  transform: rotate(-14deg);
+}
+
+.profile-invitation-coin--two {
+  right: 6%;
+  bottom: 9px;
+  width: 42px;
+  height: 42px;
+  animation-delay: -2.1s;
+}
+
+.profile-invitation-share-grid {
+  gap: 18px;
+}
+
+.profile-invitation-card {
+  gap: 16px;
+  padding: 20px;
+  background: rgba(255, 255, 255, .9);
+  border-color: #ccdbd8;
+  border-radius: 15px;
+  box-shadow: 0 10px 25px rgba(17, 67, 60, .07);
+  backdrop-filter: blur(8px);
+}
+
+.profile-invitation-share-card {
+  position: relative;
+  min-height: 214px;
+  overflow: hidden;
+}
+
+.profile-invitation-share-card::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, var(--invitation-cyan), var(--invitation-green));
+  content: "";
+}
+
+.profile-invitation-share-card--code {
+  background:
+    radial-gradient(circle at 100% 0, rgba(91, 217, 208, .16), transparent 34%),
+    rgba(255, 255, 255, .94);
+}
+
+.profile-invitation-share-card--link {
+  background:
+    radial-gradient(circle at 100% 0, rgba(243, 198, 107, .2), transparent 34%),
+    rgba(255, 255, 255, .94);
+}
+
+.profile-invitation-share-card--link::before {
+  background: linear-gradient(90deg, var(--invitation-gold), #ef9f73);
+}
+
+.profile-invitation-card-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-invitation-card-title > span:last-child {
+  display: grid;
+  gap: 3px;
+}
+
+.profile-invitation-card-title small {
+  color: var(--profile-muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.profile-invitation-card-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  color: #0a776d;
+  background: #dcf5f0;
+  border: 1px solid #bde5dc;
+  border-radius: 11px;
+}
+
+.profile-invitation-share-card--link .profile-invitation-card-icon,
+.profile-invitation-rules .profile-invitation-card-icon {
+  color: #87611e;
+  background: #fff4d8;
+  border-color: #ecd69b;
+}
+
+.profile-invitation-state,
+.profile-invitation-count {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  color: #3c6763 !important;
+  background: #edf5f3;
+  border: 1px solid #d4e3df;
+  border-radius: 999px;
+  font-weight: 800;
+}
+
+.profile-invitation-count {
+  min-width: 30px;
+  color: #ffffff !important;
+  background: var(--profile-accent);
+  border-color: var(--profile-accent);
+  text-align: center;
+}
+
+.profile-invitation-value-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 58px;
+  overflow: hidden;
+  background: #f3f8f7;
+  border: 1px solid #c1d5d1;
+  border-radius: 11px;
+}
+
+.profile-invitation-value-shell:focus-within {
+  border-color: var(--profile-accent);
+  box-shadow: 0 0 0 3px rgba(8, 127, 114, .1);
+}
+
+.profile-invitation-value-shell--code {
+  background:
+    linear-gradient(90deg, transparent 0 13px, rgba(8, 127, 114, .045) 13px 14px, transparent 14px 27px),
+    #eff8f6;
+  border-style: dashed;
+}
+
+.profile-invitation-value {
+  position: relative;
+  z-index: 1;
+  min-height: 56px;
+  padding: 0 52px 0 16px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+}
+
+.profile-invitation-value-shell--code .profile-invitation-value {
+  padding-inline: 22px;
+  color: #0b544d;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(20px, 3vw, 27px);
+  font-weight: 800;
+  letter-spacing: .11em;
+}
+
+.profile-invitation-value-shell--message {
+  align-items: stretch;
+  min-height: 112px;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.9), rgba(250,247,235,.86)),
+    #f6f8f5;
+}
+
+.profile-invitation-share-message {
+  min-height: 110px;
+  padding: 15px 58px 15px 16px;
+  resize: none;
+  color: #244c50;
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.profile-invitation-share-message::-webkit-scrollbar {
+  width: 5px;
+}
+
+.profile-invitation-share-message::-webkit-scrollbar-thumb {
+  background: #c8d9d4;
+  border-radius: 999px;
+}
+
+.profile-invitation-ticket-dots {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 0 50%, #ffffff 0 7px, transparent 7.5px),
+    radial-gradient(circle at 100% 50%, #ffffff 0 7px, transparent 7.5px);
+  pointer-events: none;
+}
+
+.profile-invitation-link-mark {
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: #8b641f;
+  background: #fff0c9;
+  border-radius: 9px;
+}
+
+.profile-invitation-card-actions {
+  gap: 9px;
+  margin-top: auto;
+}
+
+.profile-invitation-card-actions .profile-save,
+.profile-invitation-card-actions .profile-password-action {
+  min-height: 42px;
+  border-radius: 9px;
+}
+
+.profile-invitation-card-actions .profile-save {
+  background: linear-gradient(135deg, #087f72, #0b9c89);
+  box-shadow: 0 7px 16px rgba(8, 127, 114, .18);
+}
+
+.profile-invitation-journey {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  padding: 18px 20px;
+  list-style: none;
+  background: rgba(255,255,255,.76);
+  border: 1px solid #d2e0dd;
+  border-radius: 15px;
+  box-shadow: 0 9px 22px rgba(17, 67, 60, .055);
+}
+
+.profile-invitation-journey::before {
+  position: absolute;
+  top: 38px;
+  right: 17%;
+  left: 17%;
+  height: 1px;
+  background: linear-gradient(90deg, #73d8ca, #d7c172, #74d59a);
+  content: "";
+}
+
+.profile-invitation-journey li {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.profile-invitation-journey-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  color: #086f66;
+  background: #e0f6f1;
+  border: 4px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #bdded7, 0 5px 15px rgba(15, 95, 81, .13);
+}
+
+.profile-invitation-journey li:nth-child(2) .profile-invitation-journey-icon {
+  color: #87611e;
+  background: #fff1cd;
+  box-shadow: 0 0 0 1px #ead69d, 0 5px 15px rgba(122, 92, 31, .12);
+}
+
+.profile-invitation-journey li:nth-child(3) .profile-invitation-journey-icon {
+  color: #267a48;
+  background: #e5f7e9;
+  box-shadow: 0 0 0 1px #c3e5ca, 0 5px 15px rgba(38, 122, 72, .12);
+}
+
+.profile-invitation-journey li > span:last-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.profile-invitation-journey small {
+  color: #7a908c;
+  font: 800 9px/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: .12em;
+}
+
+.profile-invitation-journey strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-invitation-detail-grid {
+  grid-template-columns: minmax(0, 1.28fr) minmax(290px, .72fr);
+  gap: 18px;
+}
+
+.profile-invitation-records,
+.profile-invitation-rules {
+  min-height: 300px;
+}
+
+.profile-invitation-record {
+  padding: 12px 10px;
+  background: #f7faf9;
+  border: 1px solid #e0e9e7;
+  border-radius: 9px;
+}
+
+.profile-invitation-record:first-child {
+  border-top: 1px solid #e0e9e7;
+}
+
+.profile-invitation-record > span {
+  padding: 3px 7px;
+  background: #e4f5f1;
+  border-radius: 999px;
+}
+
+.profile-invitation-empty {
+  display: grid;
+  min-height: 170px;
+  margin: 0;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  color: #718783;
+  background:
+    radial-gradient(circle at 50% 40%, rgba(91, 217, 208, .13), transparent 33%),
+    linear-gradient(145deg, #f9fcfb, #f1f7f5);
+  border: 1px dashed #c3d7d2;
+  border-radius: 12px;
+}
+
+.profile-invitation-empty::before {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+  color: #ffffff;
+  background: linear-gradient(145deg, #0e8e80, #66d5c5);
+  border: 7px solid #e0f4f0;
+  border-radius: 50%;
+  box-shadow: 0 9px 22px rgba(8, 127, 114, .18);
+  content: "V";
+  font-family: Georgia, serif;
+  font-size: 19px;
+  font-weight: 900;
+}
+
+.profile-invitation-rules {
+  background:
+    radial-gradient(circle at 100% 0, rgba(243, 198, 107, .16), transparent 28%),
+    rgba(255,255,255,.92);
+}
+
+.profile-invitation-rules ol {
+  counter-reset: invitation-rule;
+  gap: 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.profile-invitation-rules li {
+  position: relative;
+  min-height: 31px;
+  padding: 5px 0 5px 38px;
+}
+
+.profile-invitation-rules li::before {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  color: #7c5c20;
+  background: #fff2d2;
+  border: 1px solid #ecd79f;
+  border-radius: 50%;
+  content: counter(invitation-rule, decimal-leading-zero);
+  counter-increment: invitation-rule;
+  font: 800 9px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.profile-invitation-permission-placeholder {
+  position: relative;
+  gap: 6px;
+  padding: 13px 13px 13px 43px;
+  background: linear-gradient(135deg, #f7fbfa, #fffaf0);
+  border-style: solid;
+  border-color: #d9dfca;
+  border-radius: 10px;
+}
+
+.profile-invitation-permission-placeholder::before {
+  position: absolute;
+  top: 13px;
+  left: 13px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  color: #86611d;
+  background: #ffedbd;
+  border-radius: 7px;
+  content: "✦";
+  font-size: 12px;
+}
+
+.profile-invitation-workspace > .profile-status {
+  padding-inline: 4px;
+  font-weight: 700;
+}
+
+@keyframes invitation-network-flow {
+  to { stroke-dashoffset: -48; }
+}
+
+@keyframes invitation-coin-float {
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -9px; }
+}
+
 @media (max-width: 720px) {
   .profile-main {
     width: min(100% - 24px, 620px);
@@ -746,6 +1473,11 @@ body.profile-page {
 
   .profile-section-label {
     align-self: center;
+  }
+
+  .profile-page.is-invitation-view .profile-main {
+    width: min(100% - 20px, 620px);
+    padding-top: calc(var(--site-header-height) + 18px);
   }
 
   .profile-avatar-column { align-items: center; text-align: center; }
@@ -783,15 +1515,55 @@ body.profile-page {
   }
 
   .profile-invitation-workspace {
-    padding: 24px 18px 28px;
+    gap: 14px;
+    padding: 12px;
+    border-radius: 15px;
   }
 
   .profile-invitation-hero {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+    padding: 66px 20px 20px;
+    border-radius: 14px;
   }
 
-  .profile-invitation-hero .profile-password-action {
-    width: 100%;
+  .profile-invitation-hero-copy {
+    padding-right: 0;
+  }
+
+  .profile-invitation-hero h2 {
+    font-size: clamp(27px, 9vw, 38px);
+  }
+
+  .profile-invitation-benefits {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profile-invitation-benefits > span:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .profile-invitation-hero-visual {
+    min-height: 165px;
+    margin-top: 4px;
+    transform: none;
+  }
+
+  .profile-invitation-hero-actions {
+    top: 16px;
+    right: 16px;
+    left: 16px;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .profile-invitation-hero-actions .profile-password-action {
+    position: static;
+    width: auto;
+    min-height: 36px;
+    padding-inline: 9px;
+    font-size: 11px;
   }
 
   .profile-invitation-share-grid,
@@ -800,12 +1572,61 @@ body.profile-page {
   }
 
   .profile-invitation-card-actions {
-    align-items: stretch;
-    flex-direction: column;
+    align-items: center;
+    flex-wrap: wrap;
   }
 
   .profile-invitation-card-actions .profile-password-action {
-    width: 100%;
+    flex: 1 1 130px;
+    width: auto;
+  }
+
+  .profile-invitation-card-actions .profile-save {
+    flex: 1 1 140px;
+    width: auto;
+  }
+
+  .profile-invitation-card {
+    padding: 17px;
+    border-radius: 13px;
+  }
+
+  .profile-invitation-value-shell--message,
+  .profile-invitation-share-message {
+    min-height: 174px;
+  }
+
+  .profile-invitation-card-head {
+    align-items: flex-start;
+  }
+
+  .profile-invitation-state {
+    max-width: 118px;
+    text-align: right;
+  }
+
+  .profile-invitation-journey {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 13px;
+    padding: 16px;
+  }
+
+  .profile-invitation-journey::before {
+    top: 34px;
+    right: auto;
+    bottom: 34px;
+    left: 36px;
+    width: 1px;
+    height: auto;
+  }
+
+  .profile-invitation-journey li {
+    justify-content: flex-start;
+    padding: 0;
+  }
+
+  .profile-invitation-journey strong {
+    white-space: normal;
   }
 
   .profile-invitation-pagination {
@@ -820,5 +1641,12 @@ body.profile-page {
   .profile-invitation-pagination button {
     grid-row: 2;
     width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-invitation-network-line,
+  .profile-invitation-coin {
+    animation: none;
   }
 }

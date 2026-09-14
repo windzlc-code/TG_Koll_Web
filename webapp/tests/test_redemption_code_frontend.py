@@ -77,6 +77,37 @@ def test_profile_invitation_respects_disabled_permission_pending_and_paginates_r
     assert "grid-template-columns: minmax(0, 1fr);" in PROFILE_CSS
 
 
+def test_profile_invitation_has_vecto_visual_story_without_changing_action_ids():
+    for marker in (
+        "profile-invitation-hero-visual",
+        "profile-invitation-network",
+        "profile-invitation-benefits",
+        "profile-invitation-journey",
+        "profile-invitation-value-shell--code",
+    ):
+        assert marker in PROFILE_HTML
+        assert f".{marker}" in PROFILE_CSS
+    for action_id in (
+        "profileGenerateInvitation",
+        "profileCopyInvitationCode",
+        "profileCopyInvitationLink",
+        "profileInvitationPrevious",
+        "profileInvitationNext",
+        "profileInvitationWorkbench",
+    ):
+        assert f'id="{action_id}"' in PROFILE_HTML
+    assert 'class="profile-invitation-hero-actions"' in PROFILE_HTML
+    assert ".profile-invitation-hero-actions" in PROFILE_CSS
+    assert "@media (prefers-reduced-motion: reduce)" in PROFILE_CSS
+    assert "invitationJourneyShare" in PROFILE_JS
+    assert "invitationJourneyRegister" in PROFILE_JS
+    assert "invitationJourneyReward" in PROFILE_JS
+    assert 'classList.toggle("is-invitation-view", invitationView)' in PROFILE_JS
+    assert 'profileText("invitationShareCopy", { link: normalizedLink })' in PROFILE_JS
+    assert "profile-invitation-value-shell--message" in PROFILE_HTML
+    assert ".profile-invitation-share-message" in PROFILE_CSS
+
+
 def test_profile_does_not_contain_a_second_redemption_entry_or_flow():
     assert 'id="profileRedeemCode"' not in PROFILE_HTML
     assert "/api/billing/redemption-codes/redeem" not in PROFILE_JS
