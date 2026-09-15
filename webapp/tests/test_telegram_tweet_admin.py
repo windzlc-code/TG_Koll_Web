@@ -1,20 +1,27 @@
 import asyncio
 import os
+import hashlib
+import hmac
+import json
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from webapp import telegram_admin, telegram_tweet_admin as tweet_tg
+from webapp.auth import create_session, session_storage_token
 from webapp.db import db, init_db
 from webapp.telegram_tweet_bot import (
     NativeTweetBotController,
     TweetWorkbenchOps,
+    _task_bucket,
+    _task_timestamp,
     callback_token,
     load_state,
     resolve_callback_token,
@@ -36,6 +43,11 @@ class _Markup:
         self.inline_keyboard = inline_keyboard
 
 
+class _WebAppInfo:
+    def __init__(self, *, url):
+        self.url = url
+
+
 class _ReplyMarkup:
     def __init__(self, *, keyboard, **kwargs):
         self.keyboard = keyboard
@@ -45,6 +57,7 @@ class _ReplyMarkup:
 class _Types:
     InlineKeyboardButton = _Button
     InlineKeyboardMarkup = _Markup
+    WebAppInfo = _WebAppInfo
     KeyboardButton = _Button
     ReplyKeyboardMarkup = _ReplyMarkup
 
@@ -100,7 +113,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.runtime = {
             "telegram_bot_token": "video-token-must-not-change",
             "telegram_bot_enabled": True,
-            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_token": "",
             "telegram_tweet_bot_enabled": False,
             "telegram_tweet_public_base_url": "https://console.example.test",
         }
@@ -139,6 +152,33 @@ class TelegramTweetAdminTests(unittest.TestCase):
             )
         return app
 
+    def _session(self, user_id):
+        with db() as conn:
+            return create_session(conn, int(user_id), ttl_seconds=3600)
+
+    def _telegram_init_data(self, chat_id, bot_token="123456:tweet-token"):
+        values = {
+            "auth_date": str(int(time.time())),
+            "user": json.dumps(
+                {
+                    "id": int(chat_id),
+                    "first_name": "Telegram",
+                    "last_name": "用户",
+                    "username": "telegram_user",
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        }
+        data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+        secret_key = hmac.new(
+            bot_token.encode("utf-8"), b"WebAppData", hashlib.sha256
+        ).digest()
+        values["hash"] = hmac.new(
+            secret_key, data_check.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        return urlencode(values)
+
     def test_members_need_only_positive_chat_id_and_keep_internal_owner_boundary(self):
         self._member(101, "tweet_alice")
         self._member(202, self.bob_id)
@@ -151,6 +191,106 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(added.status_code, 200, added.text)
         self.assertEqual(int(tweet_tg._load_enabled_member(303)["web_user_id"]), self.alice_id)
         self.assertEqual(rejected.status_code, 400)
+
+    def test_tweet_member_save_fetches_telegram_profile_and_keeps_custom_label(self):
+        self.runtime["telegram_tweet_bot_token"] = "123456:tweet-token"
+        with mock.patch.object(
+            tweet_tg,
+            "fetch_telegram_chat_profile",
+            return_value={"username": "tweet_user", "display_name": "推文用户"},
+        ) as fetch:
+            tweet_tg.upsert_tweet_member(
+                tweet_tg.TweetTgMemberPayload(chat_id=303, label="客户A"),
+                self._get,
+                default_web_user=self.alice_id,
+            )
+        fetch.assert_called_once_with("123456:tweet-token", 303)
+        row = tweet_tg._list_members()[0]
+        self.assertEqual(row["tg_username"], "tweet_user")
+        self.assertEqual(row["tg_display_name"], "推文用户")
+        self.assertEqual(row["label"], "客户A")
+
+    def test_tweet_member_username_reference_resolves_chat_id(self):
+        self.runtime["telegram_tweet_bot_token"] = "123456:tweet-token"
+        with mock.patch.object(
+            tweet_tg,
+            "fetch_telegram_chat_profile",
+            return_value={"chat_id": 404, "username": "tweet_user", "display_name": "推文用户"},
+        ) as fetch:
+            tweet_tg.upsert_tweet_member(
+                tweet_tg.TweetTgMemberPayload(chat_id="@tweet_user"),
+                self._get,
+                default_web_user=self.alice_id,
+            )
+        fetch.assert_called_once_with("123456:tweet-token", "@tweet_user")
+        row = tweet_tg._list_members()[0]
+        self.assertEqual(row["chat_id"], 404)
+        self.assertEqual(row["label"], "推文用户")
+
+    def test_tweet_member_profile_failure_does_not_block_authorization(self):
+        self.runtime["telegram_tweet_bot_token"] = "123456:tweet-token"
+        with mock.patch.object(tweet_tg, "fetch_telegram_chat_profile", side_effect=RuntimeError("offline")):
+            tweet_tg.upsert_tweet_member(
+                tweet_tg.TweetTgMemberPayload(chat_id=505),
+                self._get,
+                default_web_user=self.alice_id,
+            )
+        row = tweet_tg._list_members()[0]
+        self.assertEqual(row["chat_id"], 505)
+        self.assertEqual(row["tg_username"], "")
+        self.assertEqual(row["tg_display_name"], "")
+        self.assertEqual(row["label"], "TG-505")
+
+    def test_tweet_member_settings_backfill_missing_profile(self):
+        tweet_tg.upsert_tweet_member(
+            tweet_tg.TweetTgMemberPayload(chat_id=606, label="客户B"),
+            self._get,
+            default_web_user=self.alice_id,
+        )
+        self.runtime["telegram_tweet_bot_token"] = "123456:tweet-token"
+        with mock.patch.object(
+            tweet_tg,
+            "fetch_telegram_chat_profile",
+            return_value={"username": "backfilled", "display_name": "回填用户"},
+        ) as fetch:
+            settings = tweet_tg.load_tweet_tg_settings(self._get)
+        fetch.assert_called_once_with("123456:tweet-token", 606)
+        row = settings["trusted_users"][0]
+        self.assertEqual(row["tg_username"], "backfilled")
+        self.assertEqual(row["tg_display_name"], "回填用户")
+        self.assertEqual(row["label"], "客户B")
+
+    def test_tweet_bot_profile_fallback_keeps_existing_label(self):
+        tweet_tg.upsert_tweet_member(
+            tweet_tg.TweetTgMemberPayload(chat_id=707, label="固定备注"),
+            self._get,
+            default_web_user=self.alice_id,
+        )
+        tweet_tg.remember_tweet_member_profile(707, username="fallback_user", display_name="回退用户")
+        row = tweet_tg._list_members()[0]
+        self.assertEqual(row["tg_username"], "fallback_user")
+        self.assertEqual(row["tg_display_name"], "回退用户")
+        self.assertEqual(row["label"], "固定备注")
+
+    def test_tweet_bot_authorization_reports_profile_without_changing_member_binding(self):
+        remember = mock.Mock()
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id, "label": "固定备注"},
+            remember_member_profile=remember,
+        )
+        chat = SimpleNamespace(id=808, type="private")
+        from_user = SimpleNamespace(id=808, username="profile_user", first_name="资料", last_name="用户")
+        replies = []
+
+        async def reply(text, **_kwargs):
+            replies.append(text)
+
+        member = asyncio.run(controller._authorized(chat, from_user, reply))
+        self.assertEqual(member["label"], "固定备注")
+        remember.assert_called_once_with(808, username="profile_user", display_name="资料 用户")
+        self.assertEqual(replies, [])
 
     def test_disable_rebind_and_delete_clear_native_state(self):
         self._member(101, self.alice_id)
@@ -231,8 +371,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(
             [[button.text for button in row] for row in markup.keyboard],
             [
-                ["👤 我的人设", "📋 任务中心"],
-                ["🔐 账号与浏览器", "🛑 停止当前任务"],
+                ["👤 我的人设", "📊 排程状态"],
+                ["🔐 账号管理", "🛑 停止当前任务"],
             ],
         )
         self.assertTrue(markup.resize_keyboard)
@@ -263,8 +403,17 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         expected_callbacks = {
             "👤 我的人设": {"tt:matrix", "tt:persona_new", "tt:menu"},
-            "📋 任务中心": {"tt:tasks:0:active", "tt:tasks:0:failed", "tt:tasks:0:all"},
-            "🔐 账号与浏览器": {"tt:menu"},
+            "📊 排程状态": {
+                "tt:tasks:0:pending", "tt:tasks:0:failed", "tt:tasks:0:scheduled",
+                "tt:tasks:0:immediate", "tt:tasks:0:running",
+                "tt:tasks:0:manual", "tt:tasks:0:paused", "tt:tasks:0:completed", "tt:tasks:0:cancelled",
+                "tt:taskfilter:platform", "tt:taskfilter:persona", "tt:menu",
+            },
+            "🔐 账号管理": {
+                "tt:vectosession",
+                "tt:platformaccounts",
+                "tt:menu",
+            },
         }
         for label, callbacks in expected_callbacks.items():
             save_state(101, selected_persona_id="persona-a", mode="draft_edit", payload={"post_id": "p1"})
@@ -277,6 +426,208 @@ class TelegramTweetAdminTests(unittest.TestCase):
                 if getattr(button, "callback_data", None) and not button.callback_data.startswith("tt:p:")
             }
             self.assertEqual(actual, callbacks)
+
+    def test_schedule_status_summary_exposes_r18_style_buckets_and_filters(self):
+        def dispatch(_user_id, action, _payload):
+            if action == "tasks.list":
+                return [
+                    {
+                        "id": "scheduled-1", "status": "pending", "platform": "threads",
+                        "persona_id": "persona-a", "created_at": 1000, "scheduled_at": 2000,
+                        "task_type": "publish_post",
+                    },
+                    {
+                        "id": "immediate-1", "status": "queued", "platform": "instagram",
+                        "persona_id": "persona-a", "created_at": 1000, "scheduled_at": 0,
+                        "task_type": "publish_post",
+                    },
+                    {
+                        "id": "running-1", "status": "running", "platform": "threads",
+                        "persona_id": "persona-a", "task_type": "publish_post",
+                    },
+                    {
+                        "id": "failed-1", "status": "failed", "platform": "threads",
+                        "persona_id": "persona-a", "task_type": "publish_post",
+                    },
+                ]
+            if action == "personas.list":
+                return [{"id": "persona-a", "name": "科技观察员"}]
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message(text="📊 排程状态")
+        asyncio.run(controller.handle_text(message, _Types))
+        text = message.answers[-1][0]
+        self.assertIn("待发布：2", text)
+        self.assertIn("定时任务：1", text)
+        self.assertIn("立即任务：1", text)
+        self.assertIn("执行中：1", text)
+        self.assertIn("失败：1", text)
+        callbacks = {
+            button.callback_data
+            for row in message.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertTrue({
+            "tt:tasks:0:pending", "tt:tasks:0:scheduled", "tt:tasks:0:immediate",
+            "tt:tasks:0:running", "tt:tasks:0:failed", "tt:taskfilter:platform",
+            "tt:taskfilter:persona", "tt:menu",
+        }.issubset(callbacks))
+        asyncio.run(controller.handle_callback(_Query("tt:taskfilter:platform", message), _Types))
+        self.assertIn("按平台筛选任务", message.edits[-1][0])
+        platform_callbacks = [
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if str(getattr(button, "callback_data", "")).startswith("tt:taskview:")
+        ]
+        self.assertTrue(platform_callbacks)
+
+    def test_schedule_status_keeps_r18_terminal_and_manual_buckets_distinct(self):
+        now = int(time.time())
+        self.assertEqual(_task_bucket({"status": "preparing"}, now=now), "immediate")
+        self.assertEqual(_task_bucket({"status": "publishing"}, now=now), "running")
+        self.assertEqual(_task_bucket({"status": "need_manual"}, now=now), "manual")
+        self.assertEqual(_task_bucket({"status": "paused"}, now=now), "paused")
+        self.assertEqual(_task_bucket({"status": "done"}, now=now), "completed")
+        self.assertEqual(_task_bucket({"status": "cancelled"}, now=now), "cancelled")
+        self.assertEqual(
+            _task_timestamp("2026-09-15T12:30:00+08:00"),
+            _task_timestamp("2026-09-15T04:30:00Z"),
+        )
+
+    def test_account_management_drills_into_persona_binding_actions(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, dict(payload)))
+            if action == "accounts.list":
+                return [{
+                    "id": "account-a",
+                    "platform": "threads",
+                    "username": "alice",
+                    "status": "ready",
+                    "health_status": "alive",
+                    "auth_provider": "browser",
+                    "persona_id": "",
+                }]
+            if action == "personas.list":
+                return [{"id": "persona-a", "name": "科技观察员", "counts": {"posts": 1}}]
+            if action == "accounts.bind_persona":
+                return {"id": "account-a", "persona_id": "persona-a"}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message(text="🔐 账号管理")
+        asyncio.run(controller.handle_text(message, _Types))
+        menu_markup = message.answers[-1][1]["reply_markup"]
+        self.assertIn("tt:platformaccounts", {
+            button.callback_data
+            for row in menu_markup.inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        })
+
+        asyncio.run(controller.handle_callback(_Query("tt:platformaccounts", message), _Types))
+        list_markup = message.edits[-1][1]["reply_markup"]
+        account_callback = next(
+            button.callback_data
+            for row in list_markup.inline_keyboard
+            for button in row
+            if str(getattr(button, "callback_data", "")).startswith("tt:ac:")
+        )
+        asyncio.run(controller.handle_callback(_Query(account_callback, message), _Types))
+        detail_markup = message.edits[-1][1]["reply_markup"]
+        bind_callback = next(
+            button.callback_data
+            for row in detail_markup.inline_keyboard
+            for button in row
+            if str(getattr(button, "callback_data", "")).startswith("tt:acbind:")
+        )
+        asyncio.run(controller.handle_callback(_Query(bind_callback, message), _Types))
+        picker_markup = message.edits[-1][1]["reply_markup"]
+        bind_select = next(
+            button.callback_data
+            for row in picker_markup.inline_keyboard
+            for button in row
+            if str(getattr(button, "callback_data", "")).startswith("tt:acbindselect:")
+        )
+        asyncio.run(controller.handle_callback(_Query(bind_select, message), _Types))
+        self.assertIn(
+            ("accounts.bind_persona", {"account_id": "account-a", "persona_id": "persona-a", "replace_existing_binding": True}),
+            calls,
+        )
+
+    def test_vecto_session_and_platform_accounts_are_separate_callback_pages(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, dict(payload)))
+            if action == "accounts.list":
+                return [{"id": "account-a", "platform": "threads", "username": "alice", "status": "ready"}]
+            if action == "auth.logout":
+                return {"ok": True, "revoked_sessions": 2}
+            return []
+
+        async def chat_login(*_args, **_kwargs):
+            return None
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {
+                "chat_id": chat_id,
+                "web_user_id": self.alice_id,
+                "web_username": "tweet_alice",
+            },
+            chat_login=chat_login,
+        )
+        message = _Message(text="🔐 账号管理")
+        asyncio.run(controller.handle_text(message, _Types))
+        menu = message.answers[-1][1]["reply_markup"]
+        callbacks = {
+            button.callback_data
+            for row in menu.inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertEqual(callbacks, {"tt:vectosession", "tt:platformaccounts", "tt:menu"})
+
+        asyncio.run(controller.handle_callback(_Query("tt:vectosession", message), _Types))
+        vecto_text, vecto_kwargs = message.edits[-1]
+        self.assertIn("VECTO 网页账号", vecto_text)
+        vecto_callbacks = {
+            button.callback_data
+            for row in vecto_kwargs["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertEqual(vecto_callbacks, {"tt:chatlogin", "tt:aclogout", "tt:accountmenu"})
+
+        asyncio.run(controller.handle_callback(_Query("tt:platformaccounts", message), _Types))
+        platform_text, platform_kwargs = message.edits[-1]
+        self.assertIn("已绑定账号", platform_text)
+        self.assertNotIn("VECTO 网页账号", platform_text)
+        platform_callbacks = {
+            button.callback_data
+            for row in platform_kwargs["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertIn("tt:accountmenu", platform_callbacks)
+
+        asyncio.run(controller.handle_callback(_Query("tt:aclogout", message), _Types))
+        self.assertIn(("auth.logout", {"chat_id": 101}), calls)
+        self.assertIn("Telegram 推文工作台也已停止使用", message.edits[-1][0])
 
     def test_persona_list_and_detail_keep_related_actions_in_one_path(self):
         def dispatch(_user_id, action, _payload):
@@ -362,7 +713,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         message = _Message(text="🛑 停止当前任务")
         asyncio.run(controller.handle_text(message, _Types))
         cancelled = [payload["task_id"] for action, payload in calls if action == "tasks.cancel"]
-        self.assertEqual(cancelled, ["running-a"])
+        self.assertEqual(cancelled, ["running-a", "scheduled-a"])
         self.assertEqual(load_state(101)["mode"], "")
         self.assertEqual(load_state(101)["payload"], {})
         self.assertIn("未提交的输入步骤已取消", message.answers[-1][0])
@@ -490,6 +841,19 @@ class TelegramTweetAdminTests(unittest.TestCase):
             )
         self.assertTrue(allowed["ok"])
 
+    def test_tweet_token_verification_errors_are_actionable_and_not_persisted(self):
+        with mock.patch.object(tweet_tg, "verify_bot_token", side_effect=RuntimeError("Not Found")):
+            with self.assertRaises(HTTPException) as ctx:
+                tweet_tg.save_tweet_tg_env(
+                    tweet_tg.TweetTgEnvPayload(bot_token="123456:invalid", bot_enabled=True),
+                    self._get,
+                    self._save,
+                )
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("无效或已撤销", str(ctx.exception.detail))
+        self.assertEqual(self.runtime["telegram_tweet_bot_token"], "")
+        self.assertFalse(self.runtime["telegram_tweet_bot_enabled"])
+
     def test_database_lease_allows_only_one_poller_owner(self):
         token = "123456:tweet-token"
         with db() as conn:
@@ -504,7 +868,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertTrue(tweet_tg._acquire_or_renew_bot_lease(token))
         tweet_tg._release_bot_lease(token)
 
-    def test_disabled_worker_is_not_started_and_legacy_web_session_routes_are_gone(self):
+    def test_disabled_worker_is_not_started_and_binding_routes_require_enabled_bot(self):
         tweet_tg._BOT_OPS = TweetWorkbenchOps(
             dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch,
         )
@@ -515,9 +879,349 @@ class TelegramTweetAdminTests(unittest.TestCase):
             landing = client.get("/telegram/tweet/open?ticket=anything")
             exchange = client.post("/telegram/tweet/exchange", json={"ticket": "x", "init_data": "y"})
         self.assertEqual(landing.status_code, 410)
-        self.assertEqual(exchange.status_code, 410)
+        self.assertEqual(exchange.status_code, 403)
         self.assertNotIn("session_token=", landing.headers.get("set-cookie", ""))
         self.assertNotIn("session_token=", exchange.headers.get("set-cookie", ""))
+
+    def test_telegram_webapp_binds_chat_to_logged_in_user_without_admin_member_setup(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        session = self._session(self.alice_id)
+        ticket_url = tweet_tg._create_link_ticket(101, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        init_data = self._telegram_init_data(101)
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", session)
+            landing = client.get(ticket_url)
+            exchange = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": ticket, "init_data": init_data},
+            )
+            reused = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": ticket, "init_data": init_data},
+            )
+        self.assertEqual(landing.status_code, 200, landing.text)
+        self.assertIn("正在绑定 Telegram 推文工作台", landing.text)
+        self.assertIn("vecto-telegram-tweet-login-context", landing.text)
+        self.assertIn("telegram_tweet=1", landing.text)
+        self.assertEqual(exchange.status_code, 200, exchange.text)
+        self.assertEqual(exchange.json()["target"], tweet_tg.WEBAPP_TARGET)
+        self.assertNotIn("session_token=", exchange.headers.get("set-cookie", ""))
+        self.assertEqual(reused.status_code, 410)
+        member = tweet_tg._load_enabled_member(101)
+        self.assertIsNotNone(member)
+        self.assertEqual(int(member["web_user_id"]), self.alice_id)
+        self.assertEqual(str(member["linked_session_token_hash"]), session_storage_token(session))
+        self.assertTrue(tweet_tg._member_has_active_web_session(member))
+
+    def test_login_context_requires_signed_webapp_data_and_live_ticket(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        ticket_url = tweet_tg._create_link_ticket(303, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        self.assertEqual(
+            tweet_tg.validate_tweet_webapp_login_context(
+                ticket,
+                self._telegram_init_data(303),
+                self.runtime,
+            ),
+            303,
+        )
+        with self.assertRaises(HTTPException) as context:
+            tweet_tg.validate_tweet_webapp_login_context(
+                ticket,
+                self._telegram_init_data(303, "wrong-token"),
+                self.runtime,
+            )
+        self.assertEqual(context.exception.status_code, 401)
+
+    def test_admin_webapp_binding_returns_admin_console_target(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        with db() as conn:
+            conn.execute("UPDATE users SET is_admin = 1 WHERE id = ?", (self.bob_id,))
+            admin_session = create_session(
+                conn,
+                self.bob_id,
+                ttl_seconds=3600,
+                is_admin_session=True,
+            )
+        ticket_url = tweet_tg._create_link_ticket(111, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            client.cookies.set("admin_session_token", admin_session)
+            exchange = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": ticket, "init_data": self._telegram_init_data(111)},
+            )
+        self.assertEqual(exchange.status_code, 200, exchange.text)
+        self.assertEqual(exchange.json()["target"], tweet_tg.WEBAPP_ADMIN_TARGET)
+
+    def test_binding_requires_browser_session_and_rejects_invalid_telegram_signature(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        ticket_url = tweet_tg._create_link_ticket(202, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            unauthenticated = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": ticket, "init_data": self._telegram_init_data(202)},
+            )
+        self.assertEqual(unauthenticated.status_code, 401)
+        self.assertEqual(unauthenticated.json()["detail"]["code"], "web_login_required")
+
+        session = self._session(self.alice_id)
+        invalid_ticket_url = tweet_tg._create_link_ticket(202, self._get)
+        invalid_ticket = parse_qsl(urlsplit(invalid_ticket_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", session)
+            rejected = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": invalid_ticket, "init_data": self._telegram_init_data(202, "wrong-token")},
+            )
+        self.assertEqual(rejected.status_code, 401)
+        self.assertIsNone(tweet_tg._load_enabled_member(202))
+
+    def test_deleted_member_invalidates_pending_self_service_ticket(self):
+        ticket_url = tweet_tg._create_link_ticket(242, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            deleted = client.delete("/api/admin/tg_tweet/members/242")
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        with self.assertRaises(HTTPException) as context:
+            tweet_tg._ticket_chat_id(ticket)
+        self.assertEqual(context.exception.status_code, 410)
+
+    def test_disabling_member_invalidates_pending_self_service_ticket(self):
+        self._member(262, self.alice_id)
+        ticket_url = tweet_tg._create_link_ticket(262, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            disabled = client.post(
+                "/api/admin/tg_tweet/members/262/toggle",
+                json={"enabled": False},
+            )
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        with self.assertRaises(HTTPException) as context:
+            tweet_tg._ticket_chat_id(ticket)
+        self.assertEqual(context.exception.status_code, 410)
+
+    def test_signed_non_object_telegram_user_is_rejected_without_server_error(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        ticket_url = tweet_tg._create_link_ticket(252, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        values = {
+            "auth_date": str(int(time.time())),
+            "user": json.dumps([], separators=(",", ":")),
+        }
+        data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+        secret_key = hmac.new(
+            b"123456:tweet-token", b"WebAppData", hashlib.sha256
+        ).digest()
+        values["hash"] = hmac.new(
+            secret_key, data_check.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        session = self._session(self.alice_id)
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", session)
+            rejected = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": ticket, "init_data": urlencode(values)},
+            )
+        self.assertEqual(rejected.status_code, 401, rejected.text)
+        self.assertEqual(rejected.json()["detail"], "Telegram 用户身份无效")
+
+    def test_mfa_setup_challenge_is_not_downgraded_to_login_required(self):
+        request = SimpleNamespace(cookies={"session_token": "session-token"})
+        challenge = HTTPException(
+            status_code=428,
+            detail={"code": "mfa_setup_required", "message": "administrator MFA enrollment is required"},
+        )
+        with mock.patch.object(tweet_tg, "get_current_user_for_session", side_effect=challenge):
+            with self.assertRaises(HTTPException) as context:
+                tweet_tg._authenticated_web_session(request)
+        self.assertEqual(context.exception.status_code, 428)
+        self.assertEqual(context.exception.detail["code"], "mfa_setup_required")
+
+    def test_active_binding_cannot_be_claimed_by_another_logged_in_account(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        alice_session = self._session(self.alice_id)
+        first_url = tweet_tg._create_link_ticket(212, self._get)
+        first_ticket = parse_qsl(urlsplit(first_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", alice_session)
+            first = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": first_ticket, "init_data": self._telegram_init_data(212)},
+            )
+        self.assertEqual(first.status_code, 200, first.text)
+
+        bob_session = self._session(self.bob_id)
+        second_url = tweet_tg._create_link_ticket(212, self._get)
+        second_ticket = parse_qsl(urlsplit(second_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", bob_session)
+            rejected = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": second_ticket, "init_data": self._telegram_init_data(212)},
+            )
+        self.assertEqual(rejected.status_code, 409)
+        self.assertEqual(rejected.json()["detail"]["code"], "telegram_already_bound")
+        self.assertEqual(int(tweet_tg._load_enabled_member(212)["web_user_id"]), self.alice_id)
+
+    def test_stale_binding_can_be_reclaimed_after_old_web_session_logout(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        alice_session = self._session(self.alice_id)
+        first_url = tweet_tg._create_link_ticket(222, self._get)
+        first_ticket = parse_qsl(urlsplit(first_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", alice_session)
+            first = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": first_ticket, "init_data": self._telegram_init_data(222)},
+            )
+        self.assertEqual(first.status_code, 200, first.text)
+        with db() as conn:
+            conn.execute(
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'test_logout' WHERE token = ?",
+                (int(time.time()), session_storage_token(alice_session)),
+            )
+
+        bob_session = self._session(self.bob_id)
+        second_url = tweet_tg._create_link_ticket(222, self._get)
+        second_ticket = parse_qsl(urlsplit(second_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", bob_session)
+            rebound = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": second_ticket, "init_data": self._telegram_init_data(222)},
+            )
+        self.assertEqual(rebound.status_code, 200, rebound.text)
+        self.assertEqual(int(tweet_tg._load_enabled_member(222)["web_user_id"]), self.bob_id)
+
+    def test_admin_disabled_binding_cannot_be_reenabled_by_self_service(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        session = self._session(self.alice_id)
+        first_url = tweet_tg._create_link_ticket(232, self._get)
+        first_ticket = parse_qsl(urlsplit(first_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", session)
+            first = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": first_ticket, "init_data": self._telegram_init_data(232)},
+            )
+            self.assertEqual(first.status_code, 200, first.text)
+            disabled = client.post("/api/admin/tg_tweet/members/232/toggle", json={"enabled": False})
+            self.assertEqual(disabled.status_code, 200, disabled.text)
+
+        second_url = tweet_tg._create_link_ticket(232, self._get)
+        second_ticket = parse_qsl(urlsplit(second_url).query, keep_blank_values=True)[0][1]
+        # Disabling a member revokes the linked session.  A fresh login still
+        # must not be able to self-enable that administrator decision.
+        fresh_session = self._session(self.alice_id)
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", fresh_session)
+            rejected = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": second_ticket, "init_data": self._telegram_init_data(232)},
+            )
+        self.assertEqual(rejected.status_code, 403)
+        self.assertEqual(rejected.json()["detail"]["code"], "telegram_binding_disabled")
+        self.assertIsNone(tweet_tg._load_enabled_member(232))
+
+    def test_bot_denies_bound_member_after_browser_session_logout(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        session = self._session(self.alice_id)
+        ticket_url = tweet_tg._create_link_ticket(303, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", session)
+            exchange = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": ticket, "init_data": self._telegram_init_data(303)},
+            )
+        self.assertEqual(exchange.status_code, 200, exchange.text)
+        member = tweet_tg._load_enabled_member(303)
+        self.assertTrue(tweet_tg._member_has_active_web_session(member))
+        with db() as conn:
+            conn.execute(
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'test_logout' WHERE token = ?",
+                (int(time.time()), session_storage_token(session)),
+            )
+        self.assertFalse(tweet_tg._member_has_active_web_session(member))
+        replies = []
+
+        async def reply(text, **_kwargs):
+            replies.append(text)
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=tweet_tg._load_enabled_member,
+            has_active_web_session=tweet_tg._member_has_active_web_session,
+        )
+        result = asyncio.run(
+            controller._authorized(
+                SimpleNamespace(id=303, type="private"),
+                SimpleNamespace(id=303),
+                reply,
+            )
+        )
+        self.assertIsNone(result)
+        self.assertIn("网页登录会话已失效", replies[-1])
+
+    def test_unbound_bot_entry_offers_signed_webapp_binding_button(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda _chat_id: None,
+            create_webapp_url=lambda chat_id, route: f"https://console.example.test/telegram/tweet/open?chat={chat_id}&route={route}",
+        )
+        message = _Message(chat_id=404)
+        asyncio.run(controller.send_main_menu(message, _Types))
+        self.assertIn("尚未绑定", message.answers[-1][0])
+        markup = message.answers[-1][1]["reply_markup"]
+        button = markup.inline_keyboard[0][0]
+        self.assertEqual(button.web_app.url, "https://console.example.test/telegram/tweet/open?chat=404&route=home")
+
+    def test_unauthorized_callback_acknowledges_spinner_before_binding_prompt(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda _chat_id: None,
+            create_webapp_url=lambda chat_id, route: f"https://console.example.test/telegram/tweet/open?chat={chat_id}&route={route}",
+        )
+        message = _Message(chat_id=414)
+        query = _Query("tt:help", message)
+        asyncio.run(controller.handle_callback(query, _Types))
+        self.assertTrue(query.answers)
+        self.assertTrue(message.answers)
+        self.assertIn("尚未绑定", message.answers[-1][0])
+        self.assertIn("reply_markup", message.answers[-1][1])
 
     def test_admin_and_native_bot_frontend_contracts(self):
         webapp = Path(__file__).resolve().parents[1]
@@ -527,23 +1231,43 @@ class TelegramTweetAdminTests(unittest.TestCase):
         bot_source = (webapp / "telegram_tweet_bot.py").read_text(encoding="utf-8")
         admin_source = (webapp / "telegram_tweet_admin.py").read_text(encoding="utf-8")
         console_panel = html[html.index('data-tg-workbench-panel="console"'):html.index('data-tg-workbench-panel="crm"')]
+        telegram_section = html[html.index('id="secTelegram"'):]
         self.assertNotIn('id="tgTweetContentSettingsEnabled"', console_panel)
         self.assertNotIn('id="tgTweetWebUser"', console_panel)
         self.assertNotIn('id="tgTweetPublicBaseUrl"', console_panel)
         self.assertNotIn('id="btnClearTgTweetToken"', console_panel)
-        self.assertIn('填写正数 Telegram Chat ID 即可授权', console_panel)
+        self.assertIn('可填 Chat ID 或 @用户名', console_panel)
+        self.assertIn('自动读取 Telegram 用户名称', console_panel)
+        self.assertIn('视频与推文工作台已接入', telegram_section)
         self.assertIn('<div class="admin-config-card-title">Telegram Bot</div>', console_panel)
         self.assertIn('<div class="admin-config-card-title">允许成员</div>', console_panel)
         self.assertIn('<th scope="col">用户名称</th>', console_panel)
         self.assertIn('<th scope="col">授权状态</th>', console_panel)
         self.assertIn('<th scope="col">时间</th>', console_panel)
+        self.assertIn('placeholder="Chat ID 或 @用户名"', console_panel)
+        self.assertIn('grid-template-rows: 28px 48px 68px 68px 42px', html)
+        self.assertGreaterEqual(html.count('display: contents;'), 2)
+        self.assertIn('grid-column: 1;\n      grid-row: 4;', html)
+        self.assertIn('grid-column: 2;\n      grid-row: 4;', html)
+        self.assertIn('height: 40px;', html)
+        self.assertIn('flex-wrap: nowrap', html)
+        self.assertIn('min-width: 88px', html)
+        self.assertIn('admin-tg-member-empty', admin_js)
+        self.assertIn('colspan="6"', admin_js)
         self.assertIn('/api/admin/tg_tweet/settings', admin_js)
         self.assertIn('/api/admin/runtime_config/secrets/telegram_tweet_bot_token', admin_js)
         self.assertIn('tgTweetBotTokenInputValue()', admin_js)
         self.assertIn('tgTweetBotToken: "telegram_tweet_bot_token"', admin_js)
+        self.assertIn('input.dataset.runtimeSecretDirty === "true"', admin_js)
+        self.assertIn('setButtonLoading("btnSaveTgTweetEnv", true, "保存中...")', admin_js)
+        self.assertIn('setButtonLoading("btnTestTgTweetEnv", true, "检测中...")', admin_js)
         self.assertIn('callback_data="tt:personas:0"', bot_source)
         self.assertIn('F.photo | F.video | F.document', bot_source)
-        self.assertNotIn("WebAppInfo", bot_source)
+        self.assertIn('remember_member_profile', bot_source)
+        self.assertIn('remember_tweet_member_profile', admin_source)
+        self.assertIn("WebAppInfo", bot_source)
+        self.assertIn("create_webapp_url", bot_source)
+        self.assertIn("has_active_web_session", bot_source)
         self.assertNotIn("create_session(", admin_source)
         self.assertNotIn('initialConsoleParams.get("module")', console_js)
 
@@ -805,6 +1529,32 @@ class TelegramTweetAdminTests(unittest.TestCase):
         ]
         self.assertEqual(len(task_buttons), 1)
 
+    def test_task_submenu_routes_manual_terminal_filters(self):
+        def dispatch(_user_id, action, _payload):
+            if action == "tasks.list":
+                return [
+                    {"id": "manual-1", "status": "need_manual", "task_type": "publish_post"},
+                    {"id": "paused-1", "status": "paused", "task_type": "publish_post"},
+                    {"id": "done-1", "status": "done", "task_type": "publish_post"},
+                    {"id": "cancelled-1", "status": "cancelled", "task_type": "publish_post"},
+                ]
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        for callback, expected in (
+            ("tt:tasks:0:manual", "待人工/暂停任务（2 条）"),
+            ("tt:tasks:0:paused", "已暂停任务（1 条）"),
+            ("tt:tasks:0:completed", "已完成任务（1 条）"),
+            ("tt:tasks:0:cancelled", "已取消任务（1 条）"),
+        ):
+            asyncio.run(controller.handle_callback(_Query(callback, message), _Types))
+            self.assertIn(expected, message.edits[-1][0])
+
     def test_generation_failure_offers_regenerate_not_unsupported_retry(self):
         def dispatch(_user_id, action, _payload):
             if action == "tasks.get":
@@ -849,7 +1599,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         message = _Message()
         asyncio.run(controller.handle_callback(_Query("tt:help", message), _Types))
-        self.assertIn("加入当前 Chat ID", message.edits[-1][0])
+        self.assertIn("绑定", message.edits[-1][0])
         self.assertIn("Threads 或 Instagram 账号", message.edits[-1][0])
         self.assertIn("不接收账号密码", message.edits[-1][0])
 

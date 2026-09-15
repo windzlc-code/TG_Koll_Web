@@ -1034,6 +1034,7 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('personaForm.generate.composeMode = "tweet";', selection)
         self.assertIn('personaForm.media.operationMode = "generate";', selection)
         self.assertIn("personaForm.media.focusPostId = finalizedPostId;", selection)
+        self.assertIn("openPersonaDraftEditor(finalizedPostId, savedPost)", selection)
         self.assertIn("generate_posts/tasks/${encodeURIComponent(cleanTaskId)}/resolve", selection)
         self.assertNotIn("discardPersonaGeneratedCandidatePosts(", selection)
         self.assertIn('deletePersonaGeneratedPreview(persona.id, "tweet");', selection)
@@ -3065,6 +3066,13 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
             self.console_script.index("async function deletePersonaDraftPost")
         ]
         self.assertIn("closePersonaDraftMenus();", editor)
+        self.assertIn("function openPersonaDraftEditor(postId, fallbackPost = null)", editor)
+        self.assertIn("post.content || post.full_content", editor)
+        self.assertIn('$("personaDraftContent").value = draftContent', editor)
+        self.assertLess(
+            editor.index('$("personaDraftContent").value = draftContent'),
+            editor.index("renderPersonaDetail();"),
+        )
         self.assertLess(
             editor.index("closePersonaDraftMenus();"),
             editor.index("renderPersonaDetail();"),

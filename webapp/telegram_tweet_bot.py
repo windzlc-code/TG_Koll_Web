@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import secrets
+import threading
 import time
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -21,22 +24,28 @@ logger = logging.getLogger(__name__)
 PAGE_SIZE = 6
 MAX_TELEGRAM_MEDIA_BYTES = 20 * 1024 * 1024
 PERSONA_CONTROL_BUTTON = "👤 我的人设"
-TASK_CONTROL_BUTTON = "📋 任务中心"
-ACCOUNT_CONTROL_BUTTON = "🔐 账号与浏览器"
+TASK_CONTROL_BUTTON = "📊 排程状态"
+LEGACY_TASK_CONTROL_BUTTON = "📋 任务中心"
+ACCOUNT_CONTROL_BUTTON = "🔐 账号管理"
+LEGACY_ACCOUNT_CONTROL_BUTTON = "🔐 账号与浏览器"
 STOP_CONTROL_BUTTON = "🛑 停止当前任务"
 CONTROL_BUTTONS = frozenset({
     PERSONA_CONTROL_BUTTON,
     TASK_CONTROL_BUTTON,
+    LEGACY_TASK_CONTROL_BUTTON,
     ACCOUNT_CONTROL_BUTTON,
+    LEGACY_ACCOUNT_CONTROL_BUTTON,
     STOP_CONTROL_BUTTON,
 })
 HELP_TEXT = (
     "使用提示\n\n"
-    "• 管理员在后台加入当前 Chat ID 后，即可使用全部推文 Bot 功能。\n"
+    "• 首次使用请点击“在聊天中登录并绑定”，按提示在本私聊中完成登录。\n"
+    "• 登录后会为该 Telegram 账号建立独立会话，不会退出其他浏览器设备。\n"
+    "• 未绑定或会话失效时发送 /bind，可重新开始聊天内登录。\n"
     "• 人设、生成、草稿、收藏、媒体、热点和任务均可直接在 Telegram 内操作。\n"
-    "• 首次发布前需已有可用的 Threads 或 Instagram 账号；若尚未授权，请从“账号与浏览器”完成一次 OAuth。\n"
+    "• 首次发布前需已有可用的 Threads 或 Instagram 账号；可从“账号管理”逐步完成授权、登录检测和人设绑定。\n"
     "• 在输入流程中点击任一总控按钮，会退出当前未提交的输入并切换模块。\n"
-    "• Bot 不接收账号密码、验证码或浏览器凭证。"
+    "• 旧版网页绑定路径不接收账号密码；聊天内登录仅在私聊临时验证，密码不写入 Bot 状态或审计，请勿在群聊中发送。"
 )
 SUPPORTED_MEDIA_MIME_SUFFIXES = {
     "image/jpeg": ".jpg",
@@ -55,12 +64,42 @@ except ZoneInfoNotFoundError:
 
 Dispatch = Callable[[int, str, dict[str, Any]], Any]
 AsyncDispatch = Callable[[int, str, dict[str, Any]], Awaitable[Any]]
+WebAppUrlFactory = Callable[[int, str], str]
+WebSessionChecker = Callable[[dict[str, Any]], bool]
+ChatLoginHandler = Callable[[int, str, str, dict[str, Any], dict[str, Any] | None], Any]
+
+CHAT_LOGIN_USERNAME_MODE = "chat_login_username"
+CHAT_LOGIN_PASSWORD_MODE = "chat_login_password"
+CHAT_LOGIN_VERIFICATION_MODE = "chat_login_verification"
+CHAT_LOGIN_TTL_SECONDS = 180
+CHAT_LOGIN_MAX_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
 class TweetWorkbenchOps:
     dispatch: Dispatch
     dispatch_async: AsyncDispatch
+
+
+def _detect_telegram_proxy() -> str | None:
+    """Return the same system proxy used by the other Telegram Bot worker.
+
+    ``aiohttp`` (used by Aiogram) does not read ``HTTP(S)_PROXY`` by default,
+    while ``urllib`` (used for the admin token check) does.  On hosts where
+    Telegram is reachable only through the configured proxy this mismatch
+    makes token verification succeed but polling fail immediately.  Keep the
+    lookup opt-in and fail closed to a direct connection when no proxy is
+    configured, preserving production environments that have direct egress.
+    """
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        value = str(os.getenv(name) or "").strip()
+        if value:
+            return value
+    try:
+        proxies = urllib.request.getproxies()
+    except Exception:
+        return None
+    return str(proxies.get("https") or proxies.get("http") or "").strip() or None
 
 
 def _json_loads(value: Any, default: Any) -> Any:
@@ -304,6 +343,100 @@ def _task_status(task: dict[str, Any]) -> str:
     return str(task.get("status") or task.get("state") or "unknown").strip().lower()
 
 
+def _task_timestamp(value: Any) -> int:
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            # The native API currently returns Unix seconds, while R18-style
+            # queue projections may use ISO-8601.  Accept both so a task is
+            # never silently downgraded from scheduled to immediate.
+            try:
+                value = float(text)
+            except ValueError:
+                try:
+                    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=BUSINESS_TIMEZONE)
+                    return max(0, int(parsed.timestamp()))
+                except ValueError:
+                    return 0
+    try:
+        return max(0, int(float(value or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _task_is_pending(task: dict[str, Any]) -> bool:
+    return _task_status(task) in {"preparing", "pending", "queued", "scheduled"}
+
+
+def _task_is_scheduled(task: dict[str, Any], *, now: int | None = None) -> bool:
+    if not _task_is_pending(task):
+        return False
+    scheduled_at = _task_timestamp(task.get("scheduled_at"))
+    if scheduled_at <= 0:
+        return False
+    created_at = _task_timestamp(task.get("created_at"))
+    current = int(now if now is not None else time.time())
+    # Match the R18 distinction: a task scheduled materially after creation
+    # is a timed task; an immediate queue item is not.
+    return scheduled_at > current + 60 or (created_at > 0 and scheduled_at - created_at > 60)
+
+
+def _task_bucket(task: dict[str, Any], *, now: int | None = None) -> str:
+    status = _task_status(task)
+    manual_required = bool(task.get("manual_intervention_required"))
+    if status == "paused":
+        return "paused"
+    if status == "need_manual" or manual_required:
+        return "manual"
+    if status in {"failed", "error"}:
+        return "failed"
+    if status in {"running", "publishing", "retrying"}:
+        return "running"
+    if _task_is_pending(task):
+        return "scheduled" if _task_is_scheduled(task, now=now) else "immediate"
+    if status in {"cancelled", "canceled"}:
+        return "cancelled"
+    if status in {"success", "succeeded", "done", "completed", "complete"}:
+        return "completed"
+    return "completed"
+
+
+def _task_time_text(value: Any) -> str:
+    timestamp = _task_timestamp(value)
+    if timestamp <= 0:
+        return "未安排"
+    return datetime.fromtimestamp(timestamp, BUSINESS_TIMEZONE).strftime("%m-%d %H:%M")
+
+
+def _task_display_name(task: dict[str, Any]) -> str:
+    summary = task.get("task_summary") if isinstance(task.get("task_summary"), dict) else {}
+    detail = str(summary.get("detail") or "").strip()
+    if detail:
+        return detail[:72]
+    task_type = str(task.get("type") or task.get("task_type") or "任务").strip()
+    platform = str(task.get("platform") or "").strip()
+    return " · ".join(item for item in (platform, task_type) if item)[:72]
+
+
+def _task_list_label(task: dict[str, Any], *, now: int | None = None) -> str:
+    """Keep the list button useful without making Telegram rows too dense."""
+    status = _task_status(task)
+    platform = str(task.get("platform") or "").strip()
+    account = str(
+        task.get("account_display_name")
+        or task.get("account_username")
+        or ""
+    ).strip()
+    persona = str(task.get("persona_name") or task.get("persona_id") or "").strip()
+    when = _task_timestamp(task.get("scheduled_at"))
+    context = " / ".join(item for item in (platform, account or persona) if item)
+    timing = _task_time_text(when) if when and _task_bucket(task, now=now) == "scheduled" else ""
+    suffix = " · ".join(item for item in (context, timing) if item)
+    return " · ".join(item for item in (status, suffix, _task_display_name(task)) if item)[:56]
+
+
 class NativeTweetBotController:
     def __init__(
         self,
@@ -311,10 +444,25 @@ class NativeTweetBotController:
         ops: TweetWorkbenchOps,
         get_runtime: Callable[[], dict[str, Any]],
         load_member: Callable[[int], Any],
+        remember_member_profile: Callable[..., None] | None = None,
+        create_webapp_url: WebAppUrlFactory | None = None,
+        has_active_web_session: WebSessionChecker | None = None,
+        chat_login: ChatLoginHandler | None = None,
     ) -> None:
         self.ops = ops
         self.get_runtime = get_runtime
         self.load_member = load_member
+        self.remember_member_profile = remember_member_profile
+        self.create_webapp_url = create_webapp_url
+        self.has_active_web_session = has_active_web_session
+        self.chat_login = chat_login
+        # Passwords are deliberately kept only in this process-local map while
+        # a Telegram chat completes the login challenge.  The durable Bot state
+        # stores the stage and username, never the password or verification
+        # secret.  A restart therefore fails closed and asks the user to start
+        # again rather than recovering credentials from disk.
+        self._chat_login_lock = threading.RLock()
+        self._chat_login_pending: dict[int, dict[str, Any]] = {}
 
     def _member(self, chat_id: int) -> dict[str, Any] | None:
         row = self.load_member(int(chat_id))
@@ -322,7 +470,15 @@ class NativeTweetBotController:
 
     def _member_still_bound(self, chat_id: int, user_id: int) -> bool:
         member = self._member(chat_id)
-        return member is not None and int(member.get("web_user_id") or 0) == int(user_id)
+        if member is None or int(member.get("web_user_id") or 0) != int(user_id):
+            return False
+        if self.has_active_web_session is None:
+            return True
+        try:
+            return bool(self.has_active_web_session(member))
+        except Exception:
+            logger.debug("Failed to validate bound web session", exc_info=True)
+            return False
 
     async def _call(self, user_id: int, action: str, payload: dict[str, Any] | None = None) -> Any:
         return await asyncio.to_thread(self.ops.dispatch, int(user_id), action, payload or {})
@@ -330,15 +486,360 @@ class NativeTweetBotController:
     async def _call_async(self, user_id: int, action: str, payload: dict[str, Any] | None = None) -> Any:
         return await self.ops.dispatch_async(int(user_id), action, payload or {})
 
-    async def _authorized(self, chat: Any, from_user: Any, reply: Callable[..., Awaitable[Any]]) -> dict[str, Any] | None:
+    def _webapp_markup(self, types: Any, chat_id: int) -> Any | None:
+        if self.create_webapp_url is None:
+            return None
+        try:
+            try:
+                url = str(self.create_webapp_url(int(chat_id), "home") or "").strip()
+            except TypeError:
+                # Keep compatibility with integrations that supplied the
+                # original one-argument URL factory before route keys were
+                # introduced.
+                url = str(self.create_webapp_url(int(chat_id)) or "").strip()  # type: ignore[misc]
+        except Exception:
+            logger.debug("Failed to create Telegram WebApp binding ticket", exc_info=True)
+            return None
+        if not url:
+            return None
+        button = types.InlineKeyboardButton
+        web_app_info_type = getattr(types, "WebAppInfo", None)
+        if web_app_info_type is not None:
+            return types.InlineKeyboardMarkup(inline_keyboard=[[
+                button(text="🔐 一键登录并绑定", web_app=web_app_info_type(url=url)),
+            ]])
+        return types.InlineKeyboardMarkup(inline_keyboard=[[
+            button(text="打开绑定页面", url=url),
+        ]])
+
+    def _binding_markup(self, types: Any, chat_id: int) -> Any | None:
+        """Return the production binding action without opening a WebApp.
+
+        The WebApp remains a compatibility fallback for isolated integrations
+        that do not inject ``chat_login``.  The production worker always
+        injects the chat-login callback, so users stay in the Telegram chat.
+        """
+        if self.chat_login is not None:
+            return types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(
+                    text="🔐 在聊天中登录并绑定",
+                    callback_data="tt:chatlogin",
+                ),
+            ]])
+        return self._webapp_markup(types, chat_id)
+
+    @staticmethod
+    def _force_reply(types: Any, placeholder: str) -> Any | None:
+        force_reply = getattr(types, "ForceReply", None)
+        if force_reply is None:
+            return None
+        return force_reply(
+            force_reply=True,
+            selective=True,
+            input_field_placeholder=str(placeholder or "")[:64],
+        )
+
+    def _clear_chat_login(self, chat_id: int) -> None:
+        with self._chat_login_lock:
+            self._chat_login_pending.pop(int(chat_id), None)
+        state = load_state(int(chat_id))
+        if state["mode"] in {
+            CHAT_LOGIN_USERNAME_MODE,
+            CHAT_LOGIN_PASSWORD_MODE,
+            CHAT_LOGIN_VERIFICATION_MODE,
+        }:
+            clear_pending_state(int(chat_id))
+
+    @staticmethod
+    async def _delete_sensitive_message(message: Any) -> None:
+        delete = getattr(message, "delete", None)
+        if delete is None:
+            return
+        try:
+            await delete()
+        except Exception:
+            # Deletion is best-effort: Telegram clients/permissions can reject
+            # it, but the password is still never written by this worker.
+            logger.debug("Unable to delete Telegram login message", exc_info=True)
+
+    @staticmethod
+    def _chat_login_error_code(exc: BaseException) -> str:
+        if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
+            return str(exc.detail.get("code") or "").strip()
+        return ""
+
+    @staticmethod
+    def _chat_login_verification_detail(exc: BaseException) -> dict[str, Any]:
+        if not isinstance(exc, HTTPException) or not isinstance(exc.detail, dict):
+            return {}
+        detail = exc.detail.get("verification")
+        return dict(detail) if isinstance(detail, dict) else {}
+
+    async def _start_chat_login(self, message: Any, types: Any, *, from_user: Any | None = None) -> None:
+        chat = getattr(message, "chat", None)
+        actor = from_user or getattr(message, "from_user", None)
+        chat_id = int(getattr(chat, "id", 0) or 0)
+        if (
+            chat is None
+            or str(getattr(chat, "type", "") or "") != "private"
+            or actor is None
+            or int(getattr(actor, "id", 0) or 0) != chat_id
+        ):
+            await message.answer("聊天内登录绑定只支持与推文 Bot 私聊使用。")
+            return
+        if self.chat_login is None:
+            markup = self._webapp_markup(types, chat_id)
+            await message.answer(
+                "当前版本暂未启用聊天内登录，请使用安全绑定入口。",
+                **({"reply_markup": markup} if markup is not None else {}),
+            )
+            return
+        self._clear_chat_login(chat_id)
+        started_at = time.time()
+        save_state(chat_id, mode=CHAT_LOGIN_USERNAME_MODE, payload={"started_at": started_at})
+        reply_markup = self._force_reply(types, "VECTO 用户名或邮箱")
+        kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
+        await message.answer(
+            "🔐 聊天内登录绑定\n"
+            "请发送 VECTO 用户名或邮箱（仅限私聊）。收到后再输入密码；"
+            "密码仅短暂用于验证，Bot 不保存密码。\n"
+            "发送 /cancel 可取消。",
+            **kwargs,
+        )
+
+    async def _handle_chat_login_text(self, message: Any, types: Any) -> bool:
+        if self.chat_login is None:
+            return False
+        chat = getattr(message, "chat", None)
+        actor = getattr(message, "from_user", None)
+        chat_id = int(getattr(chat, "id", 0) or 0)
+        if (
+            chat is None
+            or str(getattr(chat, "type", "") or "") != "private"
+            or actor is None
+            or int(getattr(actor, "id", 0) or 0) != chat_id
+        ):
+            return False
+        state = load_state(chat_id)
+        mode = str(state.get("mode") or "")
+        if mode not in {
+            CHAT_LOGIN_USERNAME_MODE,
+            CHAT_LOGIN_PASSWORD_MODE,
+            CHAT_LOGIN_VERIFICATION_MODE,
+        }:
+            return False
+        raw_text = str(getattr(message, "text", "") or "")
+        clean_text = raw_text.strip()
+        if clean_text == "/cancel":
+            self._clear_chat_login(chat_id)
+            await message.answer("已取消聊天内登录绑定。")
+            return True
+        if not clean_text:
+            await message.answer("输入不能为空，请重新发送；发送 /cancel 可取消。")
+            return True
+        if time.time() - float(state.get("updated_at") or 0) > CHAT_LOGIN_TTL_SECONDS:
+            self._clear_chat_login(chat_id)
+            await message.answer("登录绑定已超时，请重新点击“在聊天中登录并绑定”。")
+            return True
+        if mode == CHAT_LOGIN_USERNAME_MODE:
+            if clean_text.startswith("/") or len(clean_text) > 254:
+                await message.answer("请输入有效的 VECTO 用户名或邮箱，不要发送命令。")
+                return True
+            started_at = float(state["payload"].get("started_at") or time.time())
+            with self._chat_login_lock:
+                self._chat_login_pending[chat_id] = {
+                    "username": clean_text,
+                    "password": "",
+                    "attempts": 0,
+                    "started_at": started_at,
+                    "profile": {
+                        "id": chat_id,
+                        "username": str(getattr(actor, "username", "") or "").strip().lstrip("@"),
+                        "display_name": " ".join(
+                            part for part in (
+                                str(getattr(actor, "first_name", "") or "").strip(),
+                                str(getattr(actor, "last_name", "") or "").strip(),
+                            ) if part
+                        ).strip(),
+                    },
+                }
+            save_state(chat_id, mode=CHAT_LOGIN_PASSWORD_MODE, payload={
+                "username": clean_text,
+                "started_at": started_at,
+            })
+            await self._delete_sensitive_message(message)
+            reply_markup = self._force_reply(types, "VECTO 登录密码")
+            kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
+            await message.answer(
+                "账号已收到。请发送密码（单独一条消息）；验证后会立即尝试删除该消息。\n"
+                "发送 /cancel 可取消。",
+                **kwargs,
+            )
+            return True
+
+        with self._chat_login_lock:
+            pending = dict(self._chat_login_pending.get(chat_id) or {})
+        if not pending or not str(pending.get("username") or "").strip():
+            self._clear_chat_login(chat_id)
+            await message.answer("登录状态已丢失，请重新点击“在聊天中登录并绑定”。")
+            return True
+        password = raw_text if mode == CHAT_LOGIN_PASSWORD_MODE else str(pending.get("password") or "")
+        verification: dict[str, Any] | None = None
+        if mode == CHAT_LOGIN_PASSWORD_MODE:
+            if len(password) > 256:
+                await self._delete_sensitive_message(message)
+                await message.answer("密码长度无效，请重新发送或发送 /cancel 取消。")
+                return True
+            pending["password"] = password
+            pending["attempts"] = int(pending.get("attempts") or 0) + 1
+        else:
+            verification = {
+                "security_verification_method": str(pending.get("verification_method") or "").strip(),
+                "security_challenge_id": str(pending.get("security_challenge_id") or "").strip(),
+                "security_verification_code": clean_text,
+            }
+        await self._delete_sensitive_message(message)
+        try:
+            result = await asyncio.to_thread(
+                self.chat_login,
+                chat_id,
+                str(pending["username"]),
+                password,
+                dict(pending.get("profile") or {}),
+                verification,
+            )
+        except Exception as exc:
+            code = self._chat_login_error_code(exc)
+            verification_detail = self._chat_login_verification_detail(exc)
+            if code == "SECURITY_VERIFICATION_REQUIRED" and verification_detail:
+                method = str(
+                    verification_detail.get("primary_method")
+                    or ("email" if verification_detail.get("email_available") else "mfa")
+                ).strip().lower()
+                if method not in {"email", "mfa"}:
+                    method = "mfa"
+                pending["verification_method"] = method
+                pending["security_challenge_id"] = str(verification_detail.get("challenge_id") or "")
+                with self._chat_login_lock:
+                    self._chat_login_pending[chat_id] = pending
+                save_state(chat_id, mode=CHAT_LOGIN_VERIFICATION_MODE, payload={
+                    "username": str(pending["username"]),
+                    "started_at": float(pending.get("started_at") or time.time()),
+                    "verification_method": method,
+                })
+                label = "邮箱验证码" if method == "email" else "动态验证码或恢复码"
+                reply_markup = self._force_reply(types, label)
+                kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
+                await message.answer(
+                    f"账号密码已通过第一步校验，请发送{label}完成绑定。发送 /cancel 可取消。",
+                    **kwargs,
+                )
+                return True
+            attempts = int(pending.get("attempts") or 0)
+            with self._chat_login_lock:
+                self._chat_login_pending.pop(chat_id, None)
+            if attempts >= CHAT_LOGIN_MAX_ATTEMPTS or mode == CHAT_LOGIN_VERIFICATION_MODE:
+                self._clear_chat_login(chat_id)
+                await message.answer("登录失败次数过多或验证码无效，已结束本次绑定，请稍后重新开始。")
+            else:
+                with self._chat_login_lock:
+                    pending["password"] = ""
+                    self._chat_login_pending[chat_id] = pending
+                save_state(chat_id, mode=CHAT_LOGIN_PASSWORD_MODE, payload={
+                    "username": str(pending["username"]),
+                    "started_at": float(pending.get("started_at") or time.time()),
+                })
+                reply_markup = self._force_reply(types, "VECTO 登录密码")
+                kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
+                await message.answer(
+                    "登录失败，请检查账号或密码后重新发送；发送 /cancel 可取消。",
+                    **kwargs,
+                )
+            return True
+        finally:
+            # Drop the local reference as soon as the callback returns.  The
+            # callback itself must never log or persist the password.
+            password = ""
+        with self._chat_login_lock:
+            self._chat_login_pending.pop(chat_id, None)
+        clear_pending_state(chat_id)
+        await message.answer("✅ 登录并绑定成功，已进入推文工作台。")
+        await self.send_main_menu(message, types)
+        return True
+
+    async def send_web_login_link(self, message: Any, types: Any) -> None:
+        chat = getattr(message, "chat", None)
+        from_user = getattr(message, "from_user", None)
+        if (
+            chat is None
+            or str(getattr(chat, "type", "") or "") != "private"
+            or from_user is None
+            or int(getattr(from_user, "id", 0) or 0) != int(getattr(chat, "id", 0) or 0)
+        ):
+            await message.answer("绑定网页只支持与推文 Bot 私聊使用。")
+            return
+        if self.chat_login is not None:
+            await self._start_chat_login(message, types)
+            return
+        markup = self._webapp_markup(types, int(chat.id))
+        if markup is None:
+            await message.answer("暂时无法生成绑定入口，请稍后重试。")
+            return
+        await message.answer(
+            "请点击下方“一键登录并绑定”，在 Telegram 内安全登录 VECTO。登录后即可使用推文工作台。",
+            reply_markup=markup,
+        )
+
+    async def _authorized(
+        self,
+        chat: Any,
+        from_user: Any,
+        reply: Callable[..., Awaitable[Any]],
+        *,
+        types: Any | None = None,
+        show_webapp_link: bool = False,
+    ) -> dict[str, Any] | None:
         chat_id = int(chat.id)
         if str(chat.type or "") != "private" or from_user is None or int(from_user.id) != chat_id:
             await reply("推文工作台仅支持与 Bot 私聊使用。")
             return None
         member = self._member(chat_id)
         if member is None:
-            await reply(f"当前 Chat ID：{chat_id}\n请让管理员在推文工作台授权列表中加入该 ID，然后重新发送 /start。")
+            markup = self._binding_markup(types, chat_id) if show_webapp_link and types is not None else None
+            await reply(
+                "当前 Telegram 账号尚未绑定 VECTO 用户。请点击下方按钮，在聊天中依次输入账号和密码完成绑定。",
+                **({"reply_markup": markup} if markup is not None else {}),
+            )
             return None
+        if self.has_active_web_session is not None:
+            try:
+                session_active = bool(self.has_active_web_session(member))
+            except Exception:
+                session_active = False
+            if not session_active:
+                markup = self._binding_markup(types, chat_id) if show_webapp_link and types is not None else None
+                await reply(
+                    "网页登录会话已失效。请点击下方按钮，在聊天中重新输入账号和密码完成绑定。",
+                    **({"reply_markup": markup} if markup is not None else {}),
+                )
+                return None
+        if self.remember_member_profile is not None:
+            username = str(getattr(from_user, "username", "") or "").strip().lstrip("@")
+            display_name = " ".join(
+                part for part in (
+                    str(getattr(from_user, "first_name", "") or "").strip(),
+                    str(getattr(from_user, "last_name", "") or "").strip(),
+                ) if part
+            ).strip()
+            if username or display_name:
+                try:
+                    self.remember_member_profile(
+                        chat_id,
+                        username=username,
+                        display_name=display_name,
+                    )
+                except Exception:
+                    logger.debug("Failed to remember Telegram tweet member profile", exc_info=True)
         return member
 
     @staticmethod
@@ -372,12 +873,23 @@ class NativeTweetBotController:
     def _task_filter_keyboard(types: Any) -> Any:
         button = types.InlineKeyboardButton
         return types.InlineKeyboardMarkup(inline_keyboard=[
-            [button(text="⏳ 进行中任务", callback_data="tt:tasks:0:active"), button(text="❌ 失败任务", callback_data="tt:tasks:0:failed")],
-            [button(text="📋 全部任务", callback_data="tt:tasks:0:all")],
+            [button(text="📋 待发布", callback_data="tt:tasks:0:pending"), button(text="❌ 失败任务", callback_data="tt:tasks:0:failed")],
+            [button(text="⏰ 定时任务", callback_data="tt:tasks:0:scheduled"), button(text="⚡ 立即任务", callback_data="tt:tasks:0:immediate")],
+            [button(text="🔄 执行中", callback_data="tt:tasks:0:running"), button(text="🛠 待人工", callback_data="tt:tasks:0:manual")],
+            [button(text="✅ 已完成", callback_data="tt:tasks:0:completed"), button(text="⏸ 已暂停", callback_data="tt:tasks:0:paused")],
+            [button(text="🚫 已取消", callback_data="tt:tasks:0:cancelled"), button(text="📚 全部任务", callback_data="tt:tasks:0:all")],
+            [button(text="🧵 按平台筛选", callback_data="tt:taskfilter:platform"), button(text="👤 按人设筛选", callback_data="tt:taskfilter:persona")],
+            [button(text="返回总控菜单", callback_data="tt:menu")],
         ])
 
     async def send_main_menu(self, message: Any, types: Any) -> None:
-        member = await self._authorized(message.chat, message.from_user, message.answer)
+        member = await self._authorized(
+            message.chat,
+            message.from_user,
+            message.answer,
+            types=types,
+            show_webapp_link=True,
+        )
         if not member:
             return
         state = load_state(int(message.chat.id))
@@ -392,7 +904,7 @@ class NativeTweetBotController:
                 selected = ""
         clear_pending_state(int(message.chat.id))
         await message.answer(
-            f"当前 Chat ID 已授权。{selected}\n"
+            f"当前 Telegram 已绑定且网页登录会话有效。{selected}\n"
             "请使用输入框下方的固定入口；人设相关操作均从“我的人设”逐步进入。",
             reply_markup=self._main_keyboard(types),
         )
@@ -414,10 +926,11 @@ class NativeTweetBotController:
             if text == PERSONA_CONTROL_BUTTON:
                 page_text, markup = await self._persona_list_payload(types, member, chat_id, 0)
                 await message.answer(page_text, reply_markup=markup)
-            elif text == TASK_CONTROL_BUTTON:
-                await message.answer("任务中心\n请选择要查看的任务状态。", reply_markup=self._task_filter_keyboard(types))
-            elif text == ACCOUNT_CONTROL_BUTTON:
-                page_text, markup = await self._accounts_payload(types, member, return_callback="tt:menu")
+            elif text in {TASK_CONTROL_BUTTON, LEGACY_TASK_CONTROL_BUTTON}:
+                status_text, status_markup = await self._task_status_payload(types, member)
+                await message.answer(status_text, reply_markup=status_markup)
+            elif text in {ACCOUNT_CONTROL_BUTTON, LEGACY_ACCOUNT_CONTROL_BUTTON}:
+                page_text, markup = await self._account_management_payload(types, member)
                 await message.answer(page_text, reply_markup=markup)
             else:
                 await self._stop_current_tasks(message, types, member)
@@ -550,25 +1063,301 @@ class NativeTweetBotController:
         *,
         return_callback: str,
         persona_id: str = "",
+        operation: str = "",
     ) -> tuple[str, Any]:
+        chat_id = int(member.get("chat_id") or 0)
         accounts = await self._call(int(member["web_user_id"]), "accounts.list")
         if persona_id:
             accounts = [
                 item for item in accounts
                 if str(item.get("persona_id") or "") == str(persona_id)
             ]
-        lines = [f"{item.get('platform')} · @{item.get('username')} · {item.get('status')}" for item in accounts[:20]]
-        base = str((self.get_runtime() or {}).get("telegram_tweet_public_base_url") or "").rstrip("/")
+        persona_names: dict[str, str] = {}
+        try:
+            personas = await self._call(int(member["web_user_id"]), "personas.list")
+            persona_names = {
+                str(item.get("id") or ""): str(item.get("name") or "未命名人设")
+                for item in personas if str(item.get("id") or "")
+            }
+        except Exception:
+            # Account operations remain usable if a stale persona archive makes
+            # the optional display-name lookup fail.
+            logger.debug("Failed to load persona names for Telegram account list", exc_info=True)
         rows = []
+        operation_labels = {
+            "switch": "选择并重新登录",
+            "bind": "选择并绑定人设",
+            "unbind": "选择并解绑人设",
+        }
+        for item in accounts[:20]:
+            account_id = str(item.get("id") or "").strip()
+            if not account_id:
+                continue
+            platform = str(item.get("platform") or "未知平台").strip()
+            username = str(item.get("username") or "未设置账号").strip().lstrip("@")
+            status = str(item.get("status") or "unknown").strip()
+            bound_persona_id = str(item.get("persona_id") or "").strip()
+            bound_persona = persona_names.get(bound_persona_id, "未绑定人设") if bound_persona_id else "未绑定人设"
+            label = f"{platform} · @{username} · {status} · {bound_persona}"
+            token = callback_token(chat_id, "ac", {
+                "account_id": account_id,
+                "operation": operation,
+            })
+            rows.append([types.InlineKeyboardButton(
+                text=(operation_labels.get(operation) or "查看账号详情") + f"：{label[:42]}",
+                callback_data=token,
+            )])
+        if not rows:
+            text = "已绑定账号\n\n暂无平台账号。可先添加账号，再在账号详情中完成登录检测和人设绑定。"
+        else:
+            intro = operation_labels.get(operation, "查看账号详情")
+            text = f"已绑定账号 · {intro}\n\n请选择一个账号继续操作。"
+            if len(accounts) > 20:
+                text += "\n仅显示最近 20 个账号，请从网页账号管理查看完整列表。"
+        base = str((self.get_runtime() or {}).get("telegram_tweet_public_base_url") or "").rstrip("/")
         if base.startswith("https://"):
-            rows.append([types.InlineKeyboardButton(text="网页登录/授权", url=f"{base}/console.html?view=accounts")])
+            rows.append([types.InlineKeyboardButton(
+                text="➕ 添加/授权平台账号（网页安全登录）",
+                url=f"{base}/console.html?view=accounts",
+            )])
         rows.append([types.InlineKeyboardButton(text="返回", callback_data=return_callback)])
-        text = (
-            "账号与浏览器\n"
-            + ("\n".join(lines) if lines else "暂无已绑定账号。")
-            + "\n\n登录、OAuth、代理和浏览器人工接管必须在网页端完成，Bot 不接收密码或验证码。"
-        )
         return text, types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def _vecto_session_payload(self, types: Any, member: dict[str, Any]) -> tuple[str, Any]:
+        """Show VECTO web-session controls separately from platform accounts."""
+        username = str(member.get("web_username") or member.get("username") or "").strip()
+        rows = [
+            [types.InlineKeyboardButton(text="🔁 登录/切换 VECTO 账号", callback_data="tt:chatlogin")],
+            [types.InlineKeyboardButton(text="🚪 退出 VECTO 账号", callback_data="tt:aclogout")],
+            [types.InlineKeyboardButton(text="返回账号管理", callback_data="tt:accountmenu")],
+        ]
+        return (
+            "VECTO 网页账号\n\n"
+            f"当前账号：{username or '已绑定账号'}\n"
+            "当前 Telegram 推文工作台使用的是这次绑定的 VECTO 网页会话。\n"
+            "网页端退出会撤销该会话，Telegram 将立即要求重新登录；Telegram 不会独立保持一份永久登录。\n"
+            "退出网页或 Telegram 会撤销该 VECTO 账号的全部活动会话（包括其他设备）。\n"
+            "这里的登录/退出只管理 VECTO 账号，不会登录或退出 Threads、Instagram 等平台账号。",
+            types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _account_management_payload(self, types: Any, member: dict[str, Any]) -> tuple[str, Any]:
+        """Build the account-management second level without exposing secrets.
+
+        VECTO login is the existing private-chat flow.  Platform account
+        credentials/OAuth remain in the secure web/browser automation path;
+        Telegram only starts those jobs and reports their task state.
+        """
+        accounts = await self._call(int(member["web_user_id"]), "accounts.list")
+        rows = [
+            [types.InlineKeyboardButton(text="🔐 VECTO 网页账号（登录/退出）", callback_data="tt:vectosession")],
+            [types.InlineKeyboardButton(text=f"🌐 平台授权账号（{len(accounts)}）", callback_data="tt:platformaccounts")],
+            [types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")],
+        ]
+        return (
+            "账号管理\n\n"
+            "已将两类账号分开：\n"
+            "• VECTO 网页账号：Telegram 工作台登录、切换和退出。\n"
+            "• 平台授权账号：Threads、Instagram 等平台授权、登录检测和人设绑定。\n"
+            "平台账号密码、验证码不会通过 Telegram 传输；需要登录时会进入安全浏览器/OAuth流程。",
+            types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _account_detail_payload(
+        self,
+        types: Any,
+        member: dict[str, Any],
+        account_id: str,
+        *,
+        return_callback: str = "tt:platformaccounts",
+    ) -> tuple[str, Any]:
+        accounts = await self._call(int(member["web_user_id"]), "accounts.list")
+        account = next((item for item in accounts if str(item.get("id") or "") == str(account_id)), None)
+        if not account:
+            raise HTTPException(status_code=404, detail="账号不存在或已被移除")
+        chat_id = int(member.get("chat_id") or 0)
+        token_payload = {"account_id": str(account_id)}
+        platform = str(account.get("platform") or "未知平台")
+        username = str(account.get("username") or "未设置账号").lstrip("@")
+        persona_id = str(account.get("persona_id") or "").strip()
+        persona_name = "未绑定人设"
+        if persona_id:
+            try:
+                personas = await self._call(int(member["web_user_id"]), "personas.list")
+                persona = next((item for item in personas if str(item.get("id") or "") == persona_id), None)
+                persona_name = str((persona or {}).get("name") or "已绑定人设")
+            except Exception:
+                persona_name = "已绑定人设"
+        provider = str(account.get("auth_provider") or "browser").strip().lower()
+        provider_label = "平台授权" if provider == "bundle" else "安全浏览器"
+        account_action_note = (
+            "平台授权账号需要从网页账号管理重新授权；"
+            if provider == "bundle"
+            else "重新登录会创建安全浏览器任务；"
+        )
+        rows = [
+            [
+                types.InlineKeyboardButton(
+                    text="🔎 检测登录状态",
+                    callback_data=callback_token(chat_id, "accheck", token_payload),
+                ),
+                types.InlineKeyboardButton(
+                    text="🔁 重新登录",
+                    callback_data=callback_token(chat_id, "aclogin", token_payload),
+                ),
+            ],
+        ]
+        if provider == "bundle":
+            # Bundle accounts are OAuth-managed.  Do not expose the browser
+            # login action that the backend intentionally rejects for them.
+            rows[0] = rows[0][:1]
+        if persona_id:
+            rows.append([
+                types.InlineKeyboardButton(
+                    text="👤 更换绑定人设",
+                    callback_data=callback_token(chat_id, "acbind", token_payload),
+                ),
+                types.InlineKeyboardButton(
+                    text="↩️ 解绑人设",
+                    callback_data=callback_token(chat_id, "acunbind", token_payload),
+                ),
+            ])
+        else:
+            rows.append([types.InlineKeyboardButton(
+                text="👤 绑定到人设",
+                callback_data=callback_token(chat_id, "acbind", token_payload),
+            )])
+        rows.append([types.InlineKeyboardButton(
+            text="🗑️ 移除账号",
+            callback_data=callback_token(chat_id, "acremove", token_payload),
+        )])
+        rows.append([types.InlineKeyboardButton(text="返回账号列表", callback_data=return_callback)])
+        return (
+            f"账号详情\n\n平台：{platform}\n账号：@{username}\n"
+            f"登录方式：{provider_label}\n状态：{account.get('status') or 'unknown'}\n"
+            f"健康：{account.get('health_status') or 'unknown'}\n人设：{persona_name}\n\n"
+            f"{account_action_note}解绑只改变人设对应关系，不会删除账号。",
+            types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _account_persona_picker(
+        self,
+        query: Any,
+        types: Any,
+        member: dict[str, Any],
+        account_id: str,
+    ) -> None:
+        personas = await self._call(int(member["web_user_id"]), "personas.list")
+        chat_id = int(query.message.chat.id)
+        rows = []
+        for persona in personas[:50]:
+            persona_id = str(persona.get("id") or "").strip()
+            if not persona_id:
+                continue
+            token = callback_token(chat_id, "acbindselect", {
+                "account_id": str(account_id),
+                "persona_id": persona_id,
+            })
+            counts = persona.get("counts") if isinstance(persona.get("counts"), dict) else {}
+            rows.append([types.InlineKeyboardButton(
+                text=f"👤 {str(persona.get('name') or '未命名人设')[:32]} · {int(counts.get('posts') or 0)}篇",
+                callback_data=token,
+            )])
+        rows.append([types.InlineKeyboardButton(
+            text="返回账号详情",
+            callback_data=callback_token(chat_id, "ac", {"account_id": str(account_id), "operation": ""}),
+        )])
+        await query.message.edit_text(
+            "选择要绑定的人设\n\n同一平台同一人设只保留一个账号；确认绑定后，原有同平台账号会按后端规则解绑。",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _task_status_payload(self, types: Any, member: dict[str, Any]) -> tuple[str, Any]:
+        """Render the R18-style schedule overview before opening a list.
+
+        The overview intentionally uses the same task projection as the list
+        and detail pages, so counts and drill-downs cannot disagree about
+        ownership or status.  The server caps the projection at 100 recent
+        tasks; the note makes that boundary explicit instead of presenting a
+        truncated list as an exact lifetime total.
+        """
+        try:
+            summary = await self._call(int(member["web_user_id"]), "tasks.summary", {})
+        except Exception:
+            # Keep older workers usable during a rolling restart; the local
+            # projection below still renders a bounded, honest fallback.
+            summary = {}
+        tasks = await self._call(int(member["web_user_id"]), "tasks.list", {"limit": 100})
+        tasks = [item for item in tasks if isinstance(item, dict)] if isinstance(tasks, list) else []
+        now = int(time.time())
+        local_counts = {
+            "pending": sum(1 for item in tasks if _task_is_pending(item)),
+            "scheduled": sum(1 for item in tasks if _task_bucket(item, now=now) == "scheduled"),
+            "immediate": sum(1 for item in tasks if _task_bucket(item, now=now) == "immediate"),
+            "running": sum(1 for item in tasks if _task_bucket(item, now=now) == "running"),
+            "manual": sum(1 for item in tasks if _task_bucket(item, now=now) == "manual"),
+            "paused": sum(1 for item in tasks if _task_bucket(item, now=now) == "paused"),
+            "failed": sum(1 for item in tasks if _task_bucket(item, now=now) == "failed"),
+            "completed": sum(1 for item in tasks if _task_bucket(item, now=now) == "completed"),
+            "cancelled": sum(1 for item in tasks if _task_bucket(item, now=now) == "cancelled"),
+        }
+        counts = summary if isinstance(summary, dict) and isinstance(summary.get("counts"), dict) else local_counts
+        def count(name: str, fallback: int) -> int:
+            try:
+                return max(0, int(counts.get(name, fallback) or 0))
+            except (TypeError, ValueError):
+                return max(0, int(fallback))
+        pending = [item for item in tasks if _task_is_pending(item)]
+        scheduled = [item for item in pending if _task_is_scheduled(item, now=now)]
+        running = [item for item in tasks if _task_bucket(item, now=now) == "running"]
+        failed = [item for item in tasks if _task_bucket(item, now=now) == "failed"]
+        lines = [
+            "📊 排程状态",
+            "",
+            f"⏳ 待发布：{count('pending', len(pending))}",
+            f"⏰ 定时任务：{count('scheduled', len(scheduled))}",
+            f"⚡ 立即任务：{count('immediate', local_counts['immediate'])}",
+            f"🔄 执行中：{count('running', len(running))}",
+            f"🛠 待人工：{count('manual', local_counts['manual'])}",
+            f"⏸ 已暂停：{count('paused', local_counts['paused'])}",
+            f"❌ 失败：{count('failed', len(failed))}",
+            f"✅ 已完成：{count('completed', local_counts['completed'])}",
+            f"🚫 已取消：{count('cancelled', local_counts['cancelled'])}",
+        ]
+        if running:
+            lines.extend(["", "正在执行："])
+            for item in running[:5]:
+                lines.append(f"• {_task_display_name(item)}")
+            if len(running) > 5:
+                lines.append(f"• 其余 {len(running) - 5} 个执行中任务略过")
+        if scheduled:
+            lines.extend(["", "最近定时任务："])
+            for item in sorted(
+                scheduled,
+                key=lambda row: _task_timestamp(row.get("scheduled_at")) or 2**31,
+            )[:3]:
+                lines.append(
+                    f"• {_task_display_name(item)} · {_task_time_text(item.get('scheduled_at'))}"
+                )
+        summary_total = int(summary.get("total") or 0) if isinstance(summary, dict) else 0
+        lines.extend([
+            "",
+            f"任务总数：{summary_total or len(tasks)}；点击下方分类查看详情。",
+            "列表默认加载最近 100 条，分类后可分页查看。",
+        ])
+        button = types.InlineKeyboardButton
+        rows = [
+            [button(text="📋 查看待发布", callback_data="tt:tasks:0:pending"), button(text="❌ 查看失败", callback_data="tt:tasks:0:failed")],
+            [button(text="⏰ 仅看定时任务", callback_data="tt:tasks:0:scheduled"), button(text="⚡ 查看立即任务", callback_data="tt:tasks:0:immediate")],
+            [button(text="🔄 查看执行中", callback_data="tt:tasks:0:running")],
+            [button(text="🛠 待人工", callback_data="tt:tasks:0:manual"), button(text="⏸ 已暂停", callback_data="tt:tasks:0:paused")],
+            [button(text="✅ 已完成", callback_data="tt:tasks:0:completed"), button(text="🚫 已取消", callback_data="tt:tasks:0:cancelled")],
+            [button(text="🧵 按平台筛选", callback_data="tt:taskfilter:platform"), button(text="👤 按人设筛选", callback_data="tt:taskfilter:persona")],
+        ]
+        if failed or count("failed", 0):
+            rows.append([button(text="🔄 处理失败任务", callback_data="tt:tasks:0:failed")])
+        rows.append([button(text="返回总控菜单", callback_data="tt:menu")])
+        return "\n".join(lines), types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _stop_current_tasks(self, message: Any, types: Any, member: dict[str, Any]) -> None:
         chat_id = int(message.chat.id)
@@ -584,7 +1373,10 @@ class NativeTweetBotController:
             failures.append(f"读取当前任务失败：{_error_text(exc)}")
         active = [
             item for item in tasks
-            if _task_status(item) in {"queued", "pending", "running", "retrying"}
+            if _task_status(item) in {
+                "preparing", "queued", "pending", "scheduled", "running",
+                "publishing", "need_manual", "retrying",
+            }
         ]
         stopped_ids = []
         for item in active:
@@ -592,8 +1384,12 @@ class NativeTweetBotController:
             if not task_id:
                 continue
             try:
-                await self._call(user_id, "tasks.cancel", {"task_id": task_id})
-                stopped_ids.append(task_id)
+                result = await self._call(user_id, "tasks.cancel", {"task_id": task_id})
+                result_status = str(result.get("status") or result.get("state") or "").strip().lower() if isinstance(result, dict) else ""
+                if result_status and result_status not in {"cancelled", "canceled"} and not bool(result.get("cancelled")):
+                    failures.append(f"{task_id[:10]}：任务当前状态为 {result_status}，未取消")
+                else:
+                    stopped_ids.append(task_id)
             except Exception as exc:
                 failures.append(f"{task_id[:10]}：{_error_text(exc)}")
         if not stopped_ids and not stopped_input and not failures:
@@ -763,45 +1559,160 @@ class NativeTweetBotController:
         member: dict[str, Any],
         page: int,
         status_filter: str = "all",
+        platform_filter: str = "",
+        persona_filter: str = "",
     ) -> None:
-        tasks = await self._call(int(member["web_user_id"]), "tasks.list", {"limit": 30})
+        tasks = await self._call(int(member["web_user_id"]), "tasks.list", {"limit": 100})
+        tasks = [item for item in tasks if isinstance(item, dict)] if isinstance(tasks, list) else []
+        now = int(time.time())
         if status_filter == "active":
             tasks = [
                 item for item in tasks
-                if _task_status(item) in {"queued", "pending", "running", "retrying", "scheduled"}
+                if _task_is_pending(item) or _task_bucket(item, now=now) == "running"
             ]
+        elif status_filter == "pending":
+            tasks = [item for item in tasks if _task_is_pending(item)]
         elif status_filter == "failed":
-            tasks = [item for item in tasks if _task_status(item) == "failed"]
+            tasks = [item for item in tasks if _task_bucket(item, now=now) == "failed"]
+        elif status_filter == "scheduled":
+            tasks = [item for item in tasks if _task_bucket(item, now=now) == "scheduled"]
+        elif status_filter == "immediate":
+            tasks = [item for item in tasks if _task_bucket(item, now=now) == "immediate"]
+        elif status_filter == "running":
+            tasks = [item for item in tasks if _task_bucket(item, now=now) == "running"]
+        elif status_filter == "manual":
+            tasks = [
+                item for item in tasks
+                if _task_bucket(item, now=now) in {"manual", "paused"}
+            ]
+        elif status_filter == "paused":
+            tasks = [item for item in tasks if _task_bucket(item, now=now) == "paused"]
+        elif status_filter == "completed":
+            tasks = [item for item in tasks if _task_bucket(item, now=now) == "completed"]
+        elif status_filter == "cancelled":
+            tasks = [item for item in tasks if _task_bucket(item, now=now) == "cancelled"]
         else:
             status_filter = "all"
+        platform_filter = str(platform_filter or "").strip().lower()
+        persona_filter = str(persona_filter or "").strip()
+        if platform_filter:
+            tasks = [
+                item for item in tasks
+                if str(item.get("platform") or "").strip().lower() == platform_filter
+            ]
+        if persona_filter:
+            tasks = [item for item in tasks if str(item.get("persona_id") or "").strip() == persona_filter]
         page = max(0, int(page))
         start = page * PAGE_SIZE
         rows = []
         for item in tasks[start:start + PAGE_SIZE]:
             task_id = str(item.get("id") or "")
             task_kind = str(item.get("_tg_task_kind") or "social")
-            label = f"{_task_status(item)} · {str(item.get('type') or item.get('task_type') or 'task')[:18]}"
+            label = _task_list_label(item, now=now)
             rows.append([types.InlineKeyboardButton(
-                text=label,
+                text=label[:56],
                 callback_data=callback_token(
                     int(query.message.chat.id), "t", {
                         "task_id": task_id,
                         "task_kind": task_kind,
+                        "page": page,
                         "status_filter": status_filter,
+                        "platform": platform_filter,
+                        "persona_id": persona_filter,
                     },
                 ),
             )])
         nav = []
         if page > 0:
-            nav.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"tt:tasks:{page - 1}:{status_filter}"))
+            nav_data = callback_token(int(query.message.chat.id), "taskview", {
+                "page": page - 1,
+                "status_filter": status_filter,
+                "platform": platform_filter,
+                "persona_id": persona_filter,
+            }) if (platform_filter or persona_filter) else f"tt:tasks:{page - 1}:{status_filter}"
+            nav.append(types.InlineKeyboardButton(text="⬅️", callback_data=nav_data))
         if start + PAGE_SIZE < len(tasks):
-            nav.append(types.InlineKeyboardButton(text="➡️", callback_data=f"tt:tasks:{page + 1}:{status_filter}"))
+            nav_data = callback_token(int(query.message.chat.id), "taskview", {
+                "page": page + 1,
+                "status_filter": status_filter,
+                "platform": platform_filter,
+                "persona_id": persona_filter,
+            }) if (platform_filter or persona_filter) else f"tt:tasks:{page + 1}:{status_filter}"
+            nav.append(types.InlineKeyboardButton(text="➡️", callback_data=nav_data))
         if nav:
             rows.append(nav)
-        rows.append([types.InlineKeyboardButton(text="返回任务中心", callback_data="tt:taskmenu")])
-        filter_label = {"active": "进行中", "failed": "失败", "all": "全部"}[status_filter]
+        rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
+        filter_label = {
+            "active": "进行中",
+            "pending": "待发布",
+            "failed": "失败",
+            "scheduled": "定时",
+            "immediate": "立即",
+            "running": "执行中",
+            "manual": "待人工/暂停",
+            "paused": "已暂停",
+            "completed": "已完成",
+            "cancelled": "已取消",
+            "all": "全部",
+        }[status_filter]
+        filter_suffix = ""
+        if platform_filter:
+            filter_suffix += f" · 平台 {platform_filter}"
+        if persona_filter:
+            filter_suffix += f" · 人设 {persona_filter[:18]}"
         await query.message.edit_text(
-            f"{filter_label}任务（{len(tasks)} 条）" if tasks else f"暂无{filter_label}任务。",
+            f"{filter_label}任务{filter_suffix}（{len(tasks)} 条）" if tasks else f"暂无{filter_label}任务{filter_suffix}。",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _task_filter_picker(
+        self,
+        query: Any,
+        types: Any,
+        member: dict[str, Any],
+        filter_kind: str,
+    ) -> None:
+        chat_id = int(query.message.chat.id)
+        user_id = int(member["web_user_id"])
+        rows = []
+        if filter_kind == "platform":
+            tasks = await self._call(user_id, "tasks.list", {"limit": 100})
+            platforms = sorted({
+                str(item.get("platform") or "").strip().lower()
+                for item in (tasks if isinstance(tasks, list) else [])
+                if isinstance(item, dict) and str(item.get("platform") or "").strip()
+            })
+            for platform in platforms:
+                rows.append([types.InlineKeyboardButton(
+                    text=platform.title(),
+                    callback_data=callback_token(chat_id, "taskview", {
+                        "page": 0, "status_filter": "all", "platform": platform,
+                    }),
+                )])
+            title = "按平台筛选任务"
+            empty = "最近 100 条任务中暂无可筛选的平台。"
+        else:
+            personas = await self._call(user_id, "personas.list")
+            personas = personas if isinstance(personas, list) else []
+            for persona in personas[:50]:
+                persona_id = str(persona.get("id") or "").strip()
+                if not persona_id:
+                    continue
+                rows.append([types.InlineKeyboardButton(
+                    text=f"👤 {str(persona.get('name') or '未命名人设')[:32]}",
+                    callback_data=callback_token(chat_id, "taskview", {
+                        "page": 0, "status_filter": "all", "persona_id": persona_id,
+                    }),
+                )])
+            title = "按人设筛选任务"
+            empty = "当前没有可筛选的人设。"
+        if not rows:
+            text = empty
+        else:
+            text = title + "\n\n请选择一个筛选项："
+        rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
+        await query.message.edit_text(
+            text,
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -917,12 +1828,45 @@ class NativeTweetBotController:
         if query.message is None:
             await query.answer("消息已失效", show_alert=True)
             return
-        member = await self._authorized(query.message.chat, query.from_user, query.answer)
+        data = str(query.data or "")
+        if data == "tt:chatlogin":
+            # This action is intentionally available before _authorized(): the
+            # whole point is to establish the first binding from a Telegram
+            # private chat without opening a WebApp or external browser.
+            await query.answer()
+            await self._start_chat_login(
+                query.message,
+                types,
+                from_user=getattr(query, "from_user", None),
+            )
+            return
+        async def authorization_reply(text: str, **kwargs: Any) -> Any:
+            # CallbackQuery.answer cannot carry reply_markup.  Send the
+            # self-service binding button as a normal message when the
+            # callback arrives after logout/expiry, while keeping ordinary
+            # authorization errors as callback alerts.
+            markup = kwargs.pop("reply_markup", None)
+            if markup is not None:
+                # Telegram keeps the callback spinner visible until the
+                # callback is answered.  The binding prompt is sent as a
+                # normal message because callback answers cannot carry a
+                # reply markup, so acknowledge it before sending that
+                # message.
+                await query.answer()
+                return await query.message.answer(text, reply_markup=markup, **kwargs)
+            return await query.answer(text, **kwargs)
+
+        member = await self._authorized(
+            query.message.chat,
+            query.from_user,
+            authorization_reply,
+            types=types,
+            show_webapp_link=True,
+        )
         if not member:
             return
         chat_id = int(query.message.chat.id)
         user_id = int(member["web_user_id"])
-        data = str(query.data or "")
         parts = data.split(":")
         action = parts[1] if len(parts) > 1 else ""
         try:
@@ -931,15 +1875,173 @@ class NativeTweetBotController:
                 await query.message.edit_text("已返回推文工作台总控菜单。")
                 await query.message.answer("请选择总控功能。", reply_markup=self._main_keyboard(types))
             elif action == "help":
+                help_text = HELP_TEXT
+                if self.chat_login is not None:
+                    help_text = help_text.replace(
+                        "旧版网页绑定路径不接收账号密码；聊天内登录仅在私聊临时验证，密码不写入 Bot 状态或审计，请勿在群聊中发送。",
+                        "聊天内登录仅限私聊使用；密码只在验证期间短暂使用，不写入 Bot 状态或审计，请勿在群聊中发送。",
+                    )
                 await query.message.edit_text(
-                    HELP_TEXT,
+                    help_text,
                     reply_markup=self._return_keyboard(types),
                 )
             elif action == "taskmenu":
                 clear_pending_state(chat_id)
+                status_text, status_markup = await self._task_status_payload(types, member)
                 await query.message.edit_text(
-                    "任务中心\n请选择要查看的任务状态。",
-                    reply_markup=self._task_filter_keyboard(types),
+                    status_text,
+                    reply_markup=status_markup,
+                )
+            elif action == "accountmenu":
+                clear_pending_state(chat_id)
+                page_text, markup = await self._account_management_payload(types, member)
+                await query.message.edit_text(page_text, reply_markup=markup)
+            elif action == "vectosession":
+                page_text, markup = await self._vecto_session_payload(types, member)
+                await query.message.edit_text(page_text, reply_markup=markup)
+            elif action == "platformaccounts":
+                page_text, markup = await self._accounts_payload(
+                    types, member, return_callback="tt:accountmenu",
+                )
+                await query.message.edit_text(page_text, reply_markup=markup)
+            elif action == "accounts":
+                # Compatibility for older notifications/bookmarks that still
+                # point at tt:accounts. Platform accounts now have their own
+                # page and must not be mixed with VECTO session controls.
+                page_text, markup = await self._accounts_payload(
+                    types, member, return_callback="tt:accountmenu",
+                )
+                await query.message.edit_text(page_text, reply_markup=markup)
+            elif action == "accountadd":
+                base = str((self.get_runtime() or {}).get("telegram_tweet_public_base_url") or "").rstrip("/")
+                rows = []
+                if base.startswith("https://"):
+                    rows.append([types.InlineKeyboardButton(
+                        text="🔐 打开安全账号授权",
+                        url=f"{base}/console.html?view=accounts",
+                    )])
+                rows.extend([
+                    [types.InlineKeyboardButton(text="📋 查看已授权账号", callback_data="tt:platformaccounts")],
+                    [types.InlineKeyboardButton(text="返回账号管理", callback_data="tt:accountmenu")],
+                ])
+                await query.message.edit_text(
+                    "添加平台账号\n\n"
+                    "平台账号登录、OAuth 和验证码必须在已有的安全网页/浏览器会话中完成。\n"
+                    "完成后返回 Telegram，点击“查看已绑定账号”，再进入账号详情检测登录状态并绑定人设。\n"
+                    "Bot 不接收或保存平台账号密码。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                )
+            elif action in {"accountswitch", "accountbind", "accountunbind"}:
+                operation = {
+                    "accountswitch": "switch",
+                    "accountbind": "bind",
+                    "accountunbind": "unbind",
+                }[action]
+                page_text, markup = await self._accounts_payload(
+                    types,
+                    member,
+                    return_callback="tt:platformaccounts",
+                    operation=operation,
+                )
+                await query.message.edit_text(page_text, reply_markup=markup)
+            elif action == "ac" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "ac", parts[2])
+                account_id = str(reference.get("account_id") or "").strip()
+                if not account_id:
+                    raise HTTPException(status_code=410, detail="账号操作已失效，请重新选择")
+                operation = str(reference.get("operation") or "").strip()
+                if operation == "bind":
+                    await self._account_persona_picker(query, types, member, account_id)
+                else:
+                    detail_text, detail_markup = await self._account_detail_payload(
+                        types, member, account_id, return_callback="tt:platformaccounts",
+                    )
+                    await query.message.edit_text(detail_text, reply_markup=detail_markup)
+            elif action == "aclogout":
+                result = await self._call(user_id, "auth.logout", {"chat_id": chat_id})
+                self._clear_chat_login(chat_id)
+                revoked = int(result.get("revoked_sessions") or 0) if isinstance(result, dict) else 0
+                markup = self._binding_markup(types, chat_id)
+                await query.message.edit_text(
+                    "VECTO 网页账号已退出。\n"
+                    f"已撤销 {revoked} 个登录会话；Telegram 推文工作台也已停止使用。\n"
+                    "如需继续，请在本私聊中重新登录并绑定。",
+                    reply_markup=markup,
+                )
+            elif action in {"accheck", "aclogin"} and len(parts) > 2:
+                token_action = action
+                reference = resolve_callback_token(chat_id, token_action, parts[2], consume=True)
+                account_id = str(reference.get("account_id") or "").strip()
+                dispatch_action = "accounts.check_login" if action == "accheck" else "accounts.open_login"
+                result = await self._call(user_id, dispatch_action, {"account_id": account_id})
+                if bool(result.get("authorized")):
+                    message_text = "平台账号当前已授权，登录状态有效。"
+                else:
+                    task = result.get("task") if isinstance(result, dict) else {}
+                    task_id = str((task or {}).get("id") or (task or {}).get("task_id") or "")
+                    message_text = (
+                        ("已创建登录检测任务。" if action == "accheck" else "已创建重新登录任务，请在安全浏览器中完成登录。")
+                        + (f"\n任务：{task_id}" if task_id else "")
+                    )
+                audit_action(chat_id, user_id, dispatch_action, status="success", resource_type="account", resource_id=account_id)
+                detail_text, detail_markup = await self._account_detail_payload(
+                    types, member, account_id, return_callback="tt:platformaccounts",
+                )
+                await query.message.edit_text(message_text + "\n\n" + detail_text, reply_markup=detail_markup)
+            elif action == "acbind" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "acbind", parts[2])
+                account_id = str(reference.get("account_id") or "").strip()
+                await self._account_persona_picker(query, types, member, account_id)
+            elif action == "acbindselect" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "acbindselect", parts[2], consume=True)
+                account_id = str(reference.get("account_id") or "").strip()
+                persona_id = str(reference.get("persona_id") or "").strip()
+                result = await self._call(user_id, "accounts.bind_persona", {
+                    "account_id": account_id,
+                    "persona_id": persona_id,
+                    "replace_existing_binding": True,
+                })
+                audit_action(chat_id, user_id, "accounts.bind_persona", status="success", resource_type="account", resource_id=account_id)
+                detail_text, detail_markup = await self._account_detail_payload(
+                    types, member, account_id, return_callback="tt:platformaccounts",
+                )
+                await query.message.edit_text("人设绑定已更新。\n\n" + detail_text, reply_markup=detail_markup)
+            elif action == "acunbind" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "acunbind", parts[2], consume=True)
+                account_id = str(reference.get("account_id") or "").strip()
+                await self._call(user_id, "accounts.unbind_persona", {"account_id": account_id})
+                audit_action(chat_id, user_id, "accounts.unbind_persona", status="success", resource_type="account", resource_id=account_id)
+                page_text, markup = await self._accounts_payload(
+                    types, member, return_callback="tt:platformaccounts", operation="unbind",
+                )
+                await query.message.edit_text("人设已解绑，账号资料仍保留。\n\n" + page_text, reply_markup=markup)
+            elif action == "acremove" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "acremove", parts[2])
+                account_id = str(reference.get("account_id") or "").strip()
+                confirm_token = callback_token(chat_id, "acremoveconfirm", {"account_id": account_id})
+                await query.message.edit_text(
+                    "确认移除账号？\n\n这会停用账号、取消进行中的自动化任务并删除账号记录；如果只是更换人设，请选择“解绑人设”。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="确认移除", callback_data=confirm_token)
+                    ], [
+                        types.InlineKeyboardButton(
+                            text="取消",
+                            callback_data=callback_token(chat_id, "ac", {"account_id": account_id, "operation": ""}),
+                        )
+                    ]]),
+                )
+            elif action == "acremoveconfirm" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "acremoveconfirm", parts[2], consume=True)
+                account_id = str(reference.get("account_id") or "").strip()
+                result = await self._call(user_id, "accounts.disable", {"account_id": account_id})
+                deleted = int(result.get("deleted") or 0) if isinstance(result, dict) else 0
+                audit_action(chat_id, user_id, "accounts.disable", status="success", resource_type="account", resource_id=account_id)
+                await query.message.edit_text(
+                    "账号已移除。" if deleted else "账号已停用或已不存在。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="返回账号管理", callback_data="tt:accountmenu"),
+                        types.InlineKeyboardButton(text="查看平台账号", callback_data="tt:platformaccounts"),
+                    ]]),
                 )
             elif action in {"personamenu", "creationmenu", "contentmenu", "publishmenu"}:
                 clear_pending_state(chat_id)
@@ -1760,6 +2862,19 @@ class NativeTweetBotController:
                             types.InlineKeyboardButton(text="继续矩阵发布", callback_data="tt:matrix"),
                         ]]),
                     )
+            elif action == "taskfilter" and len(parts) > 2:
+                await self._task_filter_picker(query, types, member, str(parts[2] or "platform"))
+            elif action == "taskview" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "taskview", parts[2])
+                await self._tasks(
+                    query,
+                    types,
+                    member,
+                    int(reference.get("page") or 0),
+                    str(reference.get("status_filter") or "pending"),
+                    str(reference.get("platform") or ""),
+                    str(reference.get("persona_id") or ""),
+                )
             elif action == "tasks":
                 await self._tasks(
                     query,
@@ -1776,22 +2891,64 @@ class NativeTweetBotController:
                 task_kind = str(task.get("_tg_task_kind") or task_kind)
                 status = _task_status(task)
                 rows = []
-                if status in {"queued", "running", "scheduled", "pending"}:
+                if status in {"preparing", "queued", "running", "scheduled", "pending", "publishing", "need_manual", "retrying"}:
                     rows.append([types.InlineKeyboardButton(text="取消任务", callback_data=callback_token(chat_id, "tcancel", {
                         "task_id": task_id, "task_kind": task_kind,
+                        "page": max(0, int(reference.get("page") or 0)),
                         "status_filter": str(reference.get("status_filter") or "active"),
+                        "platform": str(reference.get("platform") or ""),
+                        "persona_id": str(reference.get("persona_id") or ""),
                     }))])
                 if status == "failed" and task_kind == "social":
                     rows.append([types.InlineKeyboardButton(text="重试任务", callback_data=callback_token(chat_id, "tretry", {
                         "task_id": task_id, "task_kind": task_kind,
+                        "page": max(0, int(reference.get("page") or 0)),
                         "status_filter": str(reference.get("status_filter") or "failed"),
+                        "platform": str(reference.get("platform") or ""),
+                        "persona_id": str(reference.get("persona_id") or ""),
                     }))])
                 elif status == "failed" and task_kind == "normal":
                     rows.append([types.InlineKeyboardButton(text="重新生成", callback_data="tt:generate")])
                 status_filter = str(reference.get("status_filter") or "all")
-                rows.append([types.InlineKeyboardButton(text="返回任务", callback_data=f"tt:tasks:0:{status_filter}")])
+                platform_filter = str(reference.get("platform") or "")
+                persona_filter = str(reference.get("persona_id") or "")
+                page = max(0, int(reference.get("page") or 0))
+                back_data = callback_token(chat_id, "taskview", {
+                    "page": page,
+                    "status_filter": status_filter,
+                    "platform": platform_filter,
+                    "persona_id": persona_filter,
+                }) if (platform_filter or persona_filter) else f"tt:tasks:{page}:{status_filter}"
+                rows.append([types.InlineKeyboardButton(text="返回任务", callback_data=back_data)])
+                scheduled_at = _task_timestamp(task.get("scheduled_at"))
+                summary = _task_display_name(task)
+                account = str(
+                    task.get("account_display_name")
+                    or task.get("account_username")
+                    or task.get("account_id")
+                    or "—"
+                ).strip()
+                detail_lines = [
+                    f"任务：{task_id}",
+                    f"类型：{task.get('type') or task.get('task_type')}",
+                    f"状态：{status}",
+                    f"平台：{task.get('platform') or '—'}",
+                    f"账号：{account}",
+                    f"人设：{task.get('persona_id') or '—'}",
+                    f"计划时间：{_task_time_text(scheduled_at) if scheduled_at else '立即'}",
+                    f"摘要：{summary}",
+                ]
+                if task.get("failure_step"):
+                    detail_lines.append(f"失败步骤：{str(task.get('failure_step'))[:240]}")
+                if status in {"need_manual", "paused"} or bool(task.get("manual_intervention_required")):
+                    detail_lines.append("人工处理：是（任务已暂停，需完成处理后再继续）")
+                if task.get("retry_count") is not None:
+                    detail_lines.append(f"重试：{int(task.get('retry_count') or 0)}/{int(task.get('max_retries') or 0)}")
+                error_text = str(task.get("error") or task.get("message") or "").strip()
+                if error_text:
+                    detail_lines.append(error_text[:1500])
                 await query.message.edit_text(
-                    f"任务：{task_id}\n类型：{task.get('type') or task.get('task_type')}\n状态：{status}\n{str(task.get('error') or task.get('message') or '')[:1500]}",
+                    "\n".join(detail_lines),
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
             elif action in {"tcancel", "tretry"} and len(parts) > 2:
@@ -1803,10 +2960,19 @@ class NativeTweetBotController:
                 result = await self._call(user_id, task_action, {"task_id": task_id})
                 audit_action(chat_id, user_id, task_action, status="success", resource_type="task", resource_id=task_id)
                 status_filter = str(reference.get("status_filter") or "all")
+                platform_filter = str(reference.get("platform") or "")
+                persona_filter = str(reference.get("persona_id") or "")
+                page = max(0, int(reference.get("page") or 0))
+                back_data = callback_token(chat_id, "taskview", {
+                    "page": page,
+                    "status_filter": status_filter,
+                    "platform": platform_filter,
+                    "persona_id": persona_filter,
+                }) if (platform_filter or persona_filter) else f"tt:tasks:{page}:{status_filter}"
                 await query.message.edit_text(
                     str(result.get("message") or "操作已提交"),
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text="返回任务", callback_data=f"tt:tasks:0:{status_filter}"),
+                        types.InlineKeyboardButton(text="返回任务", callback_data=back_data),
                     ]]),
                 )
             elif action == "profile":
@@ -1850,7 +3016,15 @@ class NativeTweetBotController:
             await query.answer(_error_text(exc)[:180], show_alert=True)
 
     async def handle_text(self, message: Any, types: Any) -> None:
-        member = await self._authorized(message.chat, message.from_user, message.answer)
+        if await self._handle_chat_login_text(message, types):
+            return
+        member = await self._authorized(
+            message.chat,
+            message.from_user,
+            message.answer,
+            types=types,
+            show_webapp_link=True,
+        )
         if not member:
             return
         chat_id = int(message.chat.id)
@@ -2062,7 +3236,13 @@ class NativeTweetBotController:
             await message.answer(f"操作失败：{_error_text(exc)}\n状态已保留，可修正后重试，或发送 /cancel。")
 
     async def handle_media(self, message: Any, types: Any) -> None:
-        member = await self._authorized(message.chat, message.from_user, message.answer)
+        member = await self._authorized(
+            message.chat,
+            message.from_user,
+            message.answer,
+            types=types,
+            show_webapp_link=True,
+        )
         if not member:
             return
         chat_id = int(message.chat.id)
@@ -2293,6 +3473,11 @@ class NativeTweetBotController:
                     text="返回人设详情",
                     callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}),
                 )])
+                # State/keyboard construction can yield to a rebind or
+                # logout.  Re-check immediately before delivering candidates
+                # so a stale watcher cannot notify the newly bound account.
+                if not self._member_still_bound(chat_id, user_id):
+                    return
                 await bot.send_message(
                     chat_id,
                     "热点候选已完成，选择一条保存为草稿。" if candidates else "热点任务已完成，但没有可导入候选。",
@@ -2340,21 +3525,44 @@ async def run_native_tweet_bot(
     token: str,
     get_runtime: Callable[[], dict[str, Any]],
     load_member: Callable[[int], Any],
+    remember_member_profile: Callable[..., None] | None = None,
+    create_webapp_url: WebAppUrlFactory | None = None,
+    has_active_web_session: WebSessionChecker | None = None,
+    chat_login: ChatLoginHandler | None = None,
     ops: TweetWorkbenchOps,
     stop_event: Any,
     status_callback: Callable[[dict[str, Any]], None],
     heartbeat: Callable[[], bool] | None = None,
 ) -> None:
     from aiogram import Bot, Dispatcher, F
+    from aiogram.client.session.aiohttp import AiohttpSession
     from aiogram.filters import Command
     from aiogram import types
 
-    bot = Bot(token=token)
+    # Aiogram's aiohttp session does not consume HTTP(S)_PROXY from the
+    # environment by default.  Reuse the system proxy when present so the
+    # polling worker uses the same egress path as the admin token check.
+    bot = Bot(token=token, session=AiohttpSession(proxy=_detect_telegram_proxy()))
     dispatcher = Dispatcher()
-    controller = NativeTweetBotController(ops=ops, get_runtime=get_runtime, load_member=load_member)
+    # A running production Bot must always have the session gate.  Keep the
+    # controller's optional callback for isolated unit tests and integrations,
+    # but fail closed if the worker wiring ever omits it.
+    session_checker = has_active_web_session or (lambda _member: False)
+    controller = NativeTweetBotController(
+        ops=ops,
+        get_runtime=get_runtime,
+        load_member=load_member,
+        remember_member_profile=remember_member_profile,
+        create_webapp_url=create_webapp_url,
+        has_active_web_session=session_checker,
+        chat_login=chat_login,
+    )
 
     async def command_menu(message: types.Message) -> None:
         await controller.send_main_menu(message, types)
+
+    async def command_bind(message: types.Message) -> None:
+        await controller.send_web_login_link(message, types)
 
     async def callback(query: types.CallbackQuery) -> None:
         await controller.handle_callback(query, types)
@@ -2366,15 +3574,17 @@ async def run_native_tweet_bot(
         await controller.handle_text(message, types)
 
     dispatcher.message.register(command_menu, Command("start", "menu", "workbench"))
+    dispatcher.message.register(command_bind, Command("bind", "login"))
     dispatcher.message.register(media, F.photo | F.video | F.document)
     dispatcher.message.register(text, F.text)
     dispatcher.callback_query.register(callback, F.data.startswith("tt:"))
     await bot.set_my_commands([
         types.BotCommand(command="menu", description="打开推文工作台"),
+        types.BotCommand(command="bind", description="聊天内登录并绑定"),
         types.BotCommand(command="cancel", description="取消当前操作"),
     ])
     polling = asyncio.create_task(dispatcher.start_polling(bot, handle_signals=False))
-    status_callback({"running": True, "last_error": "", "updated_at": time.time()})
+    status_callback({"running": True, "starting": False, "last_error": "", "updated_at": time.time()})
     try:
         while not stop_event.is_set() and not polling.done():
             if heartbeat is not None and not heartbeat():
@@ -2383,16 +3593,33 @@ async def run_native_tweet_bot(
             if not bool(latest.get("telegram_tweet_bot_enabled")) or str(latest.get("telegram_tweet_bot_token") or "").strip() != token:
                 break
             await asyncio.sleep(2)
+        cancelled_before_start = False
         if not polling.done():
-            await dispatcher.stop_polling()
+            try:
+                await dispatcher.stop_polling()
+            except RuntimeError as exc:
+                # ``start_polling`` acquires its running lock only after the
+                # task gets its first event-loop turn.  A config reload can
+                # therefore ask us to stop during that small startup window,
+                # when aiogram quite correctly reports "Polling is not
+                # started".  This is a normal shutdown, not a Bot failure;
+                # cancel the not-yet-started task and let the gather below
+                # drain it without poisoning the status shown in the admin UI.
+                if str(exc) != "Polling is not started":
+                    raise
+                cancelled_before_start = True
+                polling.cancel()
         results = await asyncio.gather(polling, return_exceptions=True)
         if results and isinstance(results[0], BaseException):
-            raise results[0]
+            result = results[0]
+            if not (cancelled_before_start and isinstance(result, asyncio.CancelledError)):
+                raise result
     finally:
         await bot.session.close()
 
 
 __all__ = [
+    "ChatLoginHandler",
     "NativeTweetBotController",
     "TweetWorkbenchOps",
     "audit_action",

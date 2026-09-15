@@ -29,6 +29,7 @@ from io import BytesIO
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from http.cookies import SimpleCookie
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
@@ -169,9 +170,12 @@ from .remote_fetch_client import (
 )
 from .telegram_admin import inject_telegram_admin, stop_telegram_bot_worker
 from .telegram_tweet_admin import (
+    _consume_link_ticket,
+    _create_link_ticket,
     inject_tweet_telegram_admin,
     start_tweet_telegram_bot_worker,
     stop_tweet_telegram_bot_worker,
+    validate_tweet_webapp_login_context,
 )
 from .telegram_tweet_bot import TweetWorkbenchOps
 from .telegram_internal import inject_telegram_internal_routes
@@ -12799,6 +12803,61 @@ def _cancel_task_record_for_user(
     }
 
 
+def _telegram_normal_task_projection(row: Any) -> dict[str, Any]:
+    """Expose the same safe scheduling fields as social tasks to Telegram.
+
+    The normal ``tasks`` table intentionally stores its request as JSON rather
+    than duplicating every social-task column.  Parse only display metadata;
+    never return the raw prompt/input payload from the Bot dispatch layer.
+    """
+    item = dict(row)
+    input_payload = _json_loads(item.get("input_json"), {})
+    if not isinstance(input_payload, dict):
+        input_payload = {}
+    persona_id = str(
+        input_payload.get("persona_id")
+        or input_payload.get("archive_id")
+        or input_payload.get("related_persona_id")
+        or ""
+    ).strip()
+    platform = str(input_payload.get("platform") or "threads").strip().lower()
+    try:
+        scheduled_at = max(0, int(float(input_payload.get("scheduled_at") or 0)))
+    except (TypeError, ValueError):
+        try:
+            scheduled_at = max(0, int(_parse_business_iso_timestamp(input_payload.get("scheduled_at"))))
+        except (TypeError, ValueError):
+            scheduled_at = 0
+    detail = str(
+        input_payload.get("prompt")
+        or input_payload.get("topic")
+        or input_payload.get("supplement_prompt")
+        or "推文生成任务"
+    ).strip().replace("\n", " ")[:160]
+    return {
+        "id": str(item.get("id") or ""),
+        "type": str(item.get("type") or ""),
+        "task_type": str(item.get("type") or ""),
+        "status": str(item.get("status") or ""),
+        "error": str(item.get("error") or ""),
+        "created_at": int(item.get("created_at") or 0),
+        "updated_at": int(item.get("updated_at") or 0),
+        "persona_id": persona_id,
+        "account_id": "",
+        "account_username": "",
+        "account_display_name": "",
+        "platform": platform,
+        "scheduled_at": scheduled_at,
+        "started_at": 0,
+        "finished_at": int(item.get("updated_at") or 0) if str(item.get("status") or "").lower() in {"success", "failed", "cancelled"} else 0,
+        "task_summary": {"detail": detail},
+        "retry_count": 0,
+        "max_retries": 0,
+        "failure_step": "",
+        "manual_intervention_required": False,
+    }
+
+
 def _cancel_normal_tasks_for_deleted_user(user_id: int) -> list[str]:
     with db() as conn:
         rows = conn.execute(
@@ -13294,6 +13353,11 @@ class LoginPayload(BaseModel):
     security_verification_method: str = Field(default="", max_length=16)
     security_challenge_id: str = Field(default="", max_length=120)
     security_verification_code: str = Field(default="", max_length=16)
+    # These fields are only accepted as a pair from the Telegram WebApp login
+    # continuation.  The server validates the signed initData and one-time
+    # ticket before it permits an additional WebView session.
+    telegram_tweet_ticket: str = Field(default="", max_length=256)
+    telegram_init_data: str = Field(default="", max_length=8192)
 
 
 class ChangePasswordPayload(BaseModel):
@@ -19832,16 +19896,21 @@ def _persona_dashboard_suggest_post_directions(
         if str(item or "").strip()
     ][:20]
     interface_language = "zh-Hant" if str(payload.interface_language or "").strip() == "zh-Hant" else "zh-Hans"
-    result = _run_persona_create_cli({
-        "action": "suggest-post-directions",
-        "personaName": persona_name,
-        "personaCore": json.dumps(persona_core, ensure_ascii=False, separators=(",", ":")),
-        "userContent": user_content,
-        "previousKeywords": previous_keywords,
-        "interfaceLanguage": interface_language,
-        "platform": _normalize_persona_content_platform(payload.platform),
-        "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
-    }, timeout_seconds=90)
+    try:
+        result = _run_persona_create_cli({
+            "action": "suggest-post-directions",
+            "personaName": persona_name,
+            "personaCore": json.dumps(persona_core, ensure_ascii=False, separators=(",", ":")),
+            "userContent": user_content,
+            "previousKeywords": previous_keywords,
+            "interfaceLanguage": interface_language,
+            "platform": _normalize_persona_content_platform(payload.platform),
+            "writingLocale": _normalize_persona_writing_locale(payload.writing_locale),
+        }, timeout_seconds=102)
+    except HTTPException as exc:
+        if exc.status_code == 504 or "超时" in str(exc.detail or "") or "逾時" in str(exc.detail or ""):
+            raise HTTPException(status_code=504, detail="推文方向生成超时，请重新生成。") from exc
+        raise
     keywords = []
     seen: set[str] = set()
     for item in result.get("keywords") if isinstance(result.get("keywords"), list) else []:
@@ -25767,6 +25836,7 @@ def _build_persona_dashboard_console_overview(
                 "published": published_count,
                 "published_raw": len(publish_history),
                 "published_hidden": max(0, len(publish_history) - published_count),
+                "automation_publish": automation_publish,
                 "images": image_count,
                 "platform_posts": {str(k): len(v) if isinstance(v, list) else 0 for k, v in platform_posts.items()},
             },
@@ -27005,6 +27075,18 @@ def create_app() -> FastAPI:
             merged.update(updates or {})
             _write_runtime_config_file(merged)
 
+    def _tweet_bot_web_session_active(web_user_id: int) -> bool:
+        with db() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM sessions
+                WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?
+                LIMIT 1
+                """,
+                (int(web_user_id), _now_ts()),
+            ).fetchone()
+        return row is not None
+
     def _tweet_bot_user(web_user_id: int) -> dict[str, Any]:
         with db() as conn:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (int(web_user_id),)).fetchone()
@@ -27018,6 +27100,14 @@ def create_app() -> FastAPI:
             or (not int(user.get("is_admin") or 0) and str(user.get("approval_status") or "") != "approved")
         ):
             raise HTTPException(status_code=403, detail="绑定的 VECTO 用户当前不可用")
+        if not _tweet_bot_web_session_active(int(web_user_id)):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": "web_login_required",
+                    "message": "请先登录 VECTO 网页后再使用 Telegram 推文工作台",
+                },
+            )
         _require_active_workspace_user(user)
         return user
 
@@ -27029,6 +27119,29 @@ def create_app() -> FastAPI:
         action = str(action or "").strip()
         payload = payload if isinstance(payload, dict) else {}
         persona_id = str(payload.get("persona_id") or "").strip()
+
+        if action == "auth.logout":
+            chat_id = max(0, int(payload.get("chat_id") or 0))
+            if chat_id <= 0:
+                raise HTTPException(status_code=400, detail="Telegram 会话标识无效")
+            with db() as conn:
+                member = conn.execute(
+                    "SELECT web_user_id, enabled FROM telegram_tweet_members WHERE chat_id = ?",
+                    (chat_id,),
+                ).fetchone()
+                if (
+                    member is None
+                    or not int(member["enabled"] or 0)
+                    or int(member["web_user_id"] or 0) != user_id
+                ):
+                    raise HTTPException(status_code=404, detail="Telegram 会话绑定不存在")
+                now_ts = _now_ts()
+                result = conn.execute(
+                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'telegram_account_logout' "
+                    "WHERE user_id = ? AND revoked_at = 0",
+                    (now_ts, user_id),
+                )
+            return {"ok": True, "revoked_sessions": max(0, int(result.rowcount or 0))}
 
         if action == "personas.list":
             overview = _build_persona_dashboard_console_overview(
@@ -27164,21 +27277,159 @@ def create_app() -> FastAPI:
         if action == "accounts.list":
             with db() as conn:
                 rows = conn.execute(
-                    "SELECT id, persona_id, platform, username, display_name, status, health_status "
+                    "SELECT id, persona_id, platform, username, display_name, status, health_status, "
+                    "auth_provider, updated_at, created_at "
                     "FROM social_accounts WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100",
                     (user_id,),
                 ).fetchall()
             return [dict(row) for row in rows]
+        if action == "accounts.detail":
+            account_id = str(payload.get("account_id") or "").strip()
+            if not account_id:
+                raise HTTPException(status_code=400, detail="请选择账号")
+            social_api._require_account_access(account_id, user)
+            return social_api.get_social_account(account_id)
+        if action in {
+            "accounts.bind_persona",
+            "accounts.bind",
+            "accounts.unbind_persona",
+            "accounts.unbind",
+            "accounts.check_login",
+            "accounts.open_login",
+            "accounts.disable",
+            "accounts.delete",
+        }:
+            account_id = str(payload.get("account_id") or "").strip()
+            if not account_id:
+                raise HTTPException(status_code=400, detail="请选择账号")
+            account = social_api._require_account_access(account_id, user)
+            account_provider = str(dict(account).get("auth_provider") or "browser").strip().lower()
+            if action in {"accounts.bind_persona", "accounts.bind"}:
+                target_persona_id = str(payload.get("persona_id") or "").strip()
+                if not target_persona_id:
+                    raise HTTPException(status_code=400, detail="请选择要绑定的人设")
+                _require_persona_access(target_persona_id, user)
+                return social_api.update_social_account(
+                    account_id,
+                    social_api.SocialAccountPatchPayload(
+                        persona_id=target_persona_id,
+                        replace_existing_binding=bool(payload.get("replace_existing_binding")),
+                    ),
+                    allow_admin_inventory=bool(_is_admin_workspace(user) or _is_admin(user)),
+                )
+            if action in {"accounts.unbind_persona", "accounts.unbind"}:
+                return social_api.update_social_account(
+                    account_id,
+                    social_api.SocialAccountPatchPayload(persona_id=""),
+                    allow_admin_inventory=bool(_is_admin_workspace(user) or _is_admin(user)),
+                )
+            if action == "accounts.check_login":
+                if account_provider == "bundle":
+                    return {"ok": True, "authorized": True, "account": social_api.get_social_account(account_id)}
+                return {
+                    "ok": True,
+                    "task": social_api.create_account_task(
+                        account_id,
+                        "check_login",
+                        {},
+                        billing_admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+                    ),
+                }
+            if action == "accounts.open_login":
+                if account_provider == "bundle":
+                    raise HTTPException(status_code=409, detail="该账号使用平台授权，请从账号列表重新授权")
+                return {
+                    "ok": True,
+                    "task": social_api.create_account_task(
+                        account_id,
+                        "open_login",
+                        {"auto_submit": True},
+                        billing_admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+                    ),
+                }
+            # This operation is intentionally separate from unbinding.  It
+            # stops active tasks and removes the account record only after the
+            # Telegram UI has shown an explicit confirmation button.
+            return {
+                "ok": True,
+                "deleted": social_api.delete_social_account(account_id),
+            }
+        if action == "tasks.summary":
+            now = _now_ts()
+            rows: list[dict[str, Any]] = []
+            with db() as conn:
+                normal_rows = conn.execute(
+                    "SELECT status, input_json, created_at FROM tasks "
+                    "WHERE user_id = ? AND type = 'persona_post_generation'",
+                    (user_id,),
+                ).fetchall()
+                social_rows = conn.execute(
+                    "SELECT status, scheduled_at, created_at FROM social_automation_tasks WHERE user_id = ?",
+                    (user_id,),
+                ).fetchall()
+            for row in normal_rows:
+                input_payload = _json_loads(row["input_json"], {})
+                scheduled_at = 0
+                if isinstance(input_payload, dict):
+                    try:
+                        scheduled_at = max(0, int(float(input_payload.get("scheduled_at") or 0)))
+                    except (TypeError, ValueError):
+                        try:
+                            scheduled_at = max(0, int(_parse_business_iso_timestamp(input_payload.get("scheduled_at"))))
+                        except (TypeError, ValueError):
+                            scheduled_at = 0
+                rows.append({
+                    "status": str(row["status"] or "").strip().lower(),
+                    "scheduled_at": scheduled_at,
+                    "created_at": int(row["created_at"] or 0),
+                    "manual": False,
+                })
+            for row in social_rows:
+                rows.append({
+                    "status": str(row["status"] or "").strip().lower(),
+                    "scheduled_at": int(row["scheduled_at"] or 0),
+                    "created_at": int(row["created_at"] or 0),
+                    "manual": False,
+                })
+            counts = {
+                "pending": 0, "scheduled": 0, "immediate": 0, "running": 0,
+                "manual": 0, "paused": 0, "failed": 0, "completed": 0, "cancelled": 0,
+            }
+            for row in rows:
+                status = row["status"]
+                if status == "paused":
+                    bucket = "paused"
+                elif status == "need_manual":
+                    bucket = "manual"
+                elif status in {"failed", "error"}:
+                    bucket = "failed"
+                elif status in {"running", "publishing", "retrying"}:
+                    bucket = "running"
+                elif status in {"preparing", "pending", "queued", "scheduled"}:
+                    counts["pending"] += 1
+                    scheduled_at = int(row["scheduled_at"] or 0)
+                    created_at = int(row["created_at"] or 0)
+                    if scheduled_at > now + 60 or (created_at > 0 and scheduled_at - created_at > 60):
+                        counts["scheduled"] += 1
+                    else:
+                        counts["immediate"] += 1
+                    continue
+                elif status in {"cancelled", "canceled"}:
+                    bucket = "cancelled"
+                else:
+                    bucket = "completed"
+                counts[bucket] += 1
+            return {"ok": True, "total": len(rows), "counts": counts}
         if action == "tasks.list":
             limit = max(1, min(int(payload.get("limit") or 30), 100))
             with db() as conn:
                 normal_rows = conn.execute(
-                    "SELECT id, type, status, error, created_at, updated_at FROM tasks "
+                    "SELECT * FROM tasks "
                     "WHERE user_id = ? AND type = 'persona_post_generation' "
                     "ORDER BY created_at DESC LIMIT ?",
                     (user_id, limit),
                 ).fetchall()
-            normal = [{**dict(row), "_tg_task_kind": "normal"} for row in normal_rows]
+            normal = [{**_telegram_normal_task_projection(row), "_tg_task_kind": "normal"} for row in normal_rows]
             social = [{**item, "type": item.get("task_type"), "_tg_task_kind": "social"}
                       for item in social_api.list_social_tasks(limit=limit, user_id=user_id)]
             return sorted(normal + social, key=lambda item: int(item.get("created_at") or 0), reverse=True)[:limit]
@@ -27194,6 +27445,7 @@ def create_app() -> FastAPI:
                 if action == "tasks.get":
                     return {
                         **_build_task_detail_payload(task=dict(normal_row), include_logs=False, log_limit=0),
+                        **_telegram_normal_task_projection(normal_row),
                         "_tg_task_kind": "normal",
                     }
                 if action == "tasks.cancel":
@@ -27284,6 +27536,148 @@ def create_app() -> FastAPI:
             ),
         )
 
+    def _tweet_bot_login_request() -> Request:
+        """Build an internal request for the existing password-login policy.
+
+        The Bot is not an HTTP client and cannot receive a browser cookie, but
+        the authentication implementation is intentionally centralized in
+        ``_login_response``.  A synthetic request keeps its rate limits,
+        account lockout, MFA/email verification, session conflict handling and
+        governance audit intact instead of duplicating a partial verifier.
+        """
+        return Request({
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/api/auth/user-login",
+            "raw_path": b"/api/auth/user-login",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"telegram-bot.internal"),
+                (b"user-agent", b"Vecto-Telegram-Tweet-Bot/1"),
+                (b"x-forwarded-proto", b"https"),
+            ],
+            "client": ("127.0.0.1", 0),
+            "server": ("telegram-bot.internal", 443),
+            "root_path": "",
+            "extensions": {},
+        })
+
+    def _tweet_bot_signed_init_data(chat_id: int, profile: dict[str, Any], bot_token: str) -> str:
+        tg_user = {
+            "id": int(chat_id),
+            "first_name": str(profile.get("display_name") or "Telegram")[:64],
+            "username": str(profile.get("username") or "")[:64],
+        }
+        values = {
+            "auth_date": str(int(time.time())),
+            "user": json.dumps(tg_user, ensure_ascii=False, separators=(",", ":")),
+        }
+        data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+        secret_key = hmac.new(
+            str(bot_token).encode("utf-8"), b"WebAppData", hashlib.sha256,
+        ).digest()
+        values["hash"] = hmac.new(
+            secret_key, data_check.encode("utf-8"), hashlib.sha256,
+        ).hexdigest()
+        return urlencode(values)
+
+    def _invalidate_tweet_bot_ticket(ticket: str) -> None:
+        digest = hashlib.sha256(str(ticket or "").encode("utf-8")).hexdigest()
+        if not digest:
+            return
+        with db() as conn:
+            conn.execute(
+                "UPDATE telegram_tweet_link_tickets SET used_at = ? "
+                "WHERE token_hash = ? AND used_at = 0",
+                (_now_ts(), digest),
+            )
+
+    def _tweet_bot_chat_login(
+        chat_id: int,
+        username: str,
+        password: str,
+        profile: dict[str, Any],
+        verification: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Authenticate and bind a Telegram private chat without a WebApp.
+
+        ``password`` is accepted only for this call, passed through the normal
+        auth policy, and never persisted or included in an exception/audit
+        detail.  The temporary Telegram ticket is consumed only after the
+        normal login response issued a real session.
+        """
+        clean_chat_id = int(chat_id or 0)
+        clean_username = str(username or "").strip()
+        raw_password = str(password or "")
+        if clean_chat_id <= 0 or not clean_username or not raw_password:
+            raise HTTPException(status_code=400, detail="请完整输入账号和密码")
+        runtime = _telegram_runtime_snapshot() or {}
+        bot_token = str(runtime.get("telegram_tweet_bot_token") or "").strip()
+        if not bool(runtime.get("telegram_tweet_bot_enabled")) or not bot_token:
+            raise HTTPException(status_code=503, detail="推文 Bot 当前未启用")
+        tg_profile = {
+            "id": clean_chat_id,
+            "username": str((profile or {}).get("username") or "").strip().lstrip("@"),
+            "display_name": str((profile or {}).get("display_name") or "").strip(),
+        }
+        ticket_url = _create_link_ticket(clean_chat_id, _telegram_runtime_snapshot)
+        ticket = str(dict(parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)).get("ticket") or "").strip()
+        if not ticket:
+            raise HTTPException(status_code=503, detail="无法创建 Telegram 登录绑定票据")
+        raw_session_token = ""
+        try:
+            extra = dict(verification or {})
+            payload = LoginPayload(
+                username=clean_username,
+                password=raw_password,
+                remember_me=True,
+                device_id=f"telegram:{clean_chat_id}",
+                security_verification_method=str(extra.get("security_verification_method") or "").strip(),
+                security_challenge_id=str(extra.get("security_challenge_id") or "").strip(),
+                security_verification_code=str(extra.get("security_verification_code") or "").strip(),
+                telegram_tweet_ticket=ticket,
+                telegram_init_data=_tweet_bot_signed_init_data(clean_chat_id, tg_profile, bot_token),
+            )
+            response = _login_response(payload, _tweet_bot_login_request(), expected_admin=False)
+            for header_name, header_value in getattr(response, "raw_headers", ()):
+                if header_name not in {b"set-cookie", "set-cookie"}:
+                    continue
+                cookie = SimpleCookie()
+                cookie.load(bytes(header_value).decode("latin-1"))
+                morsel = cookie.get(SESSION_COOKIE)
+                if morsel is not None:
+                    raw_session_token = str(morsel.value or "").strip()
+                    break
+            if not raw_session_token:
+                raise HTTPException(status_code=502, detail="登录未返回有效会话")
+            body = json.loads(bytes(getattr(response, "body", b"{}")).decode("utf-8"))
+            web_user = {
+                "id": int(body.get("id") or 0),
+                "username": str(body.get("username") or ""),
+            }
+            if int(web_user["id"]) <= 0:
+                raise HTTPException(status_code=502, detail="登录未返回有效用户")
+            _consume_link_ticket(
+                ticket,
+                tg_profile,
+                web_user,
+                session_storage_token(raw_session_token),
+            )
+            return {"ok": True, "user_id": int(web_user["id"]), "username": web_user["username"]}
+        except Exception:
+            _invalidate_tweet_bot_ticket(ticket)
+            if raw_session_token:
+                with contextlib.suppress(Exception):
+                    with db() as conn:
+                        delete_session(conn, raw_session_token, reason="telegram_chat_login_bind_failed")
+            raise
+        finally:
+            # Do not keep a second reference to the plaintext password after
+            # the auth call returns.  The Bot controller also clears its local
+            # reference and deletes the incoming Telegram message best-effort.
+            raw_password = ""
+
     tweet_workbench_ops = TweetWorkbenchOps(
         dispatch=_tweet_bot_dispatch,
         dispatch_async=_tweet_bot_dispatch_async,
@@ -27303,6 +27697,7 @@ def create_app() -> FastAPI:
             get_runtime=_telegram_runtime_snapshot,
             save_runtime=_telegram_runtime_save,
             workbench_ops=tweet_workbench_ops,
+            chat_login=_tweet_bot_chat_login,
         )
 
     @app.post("/api/auth/apply")
@@ -28683,6 +29078,7 @@ def create_app() -> FastAPI:
         high_risk_login = False
         high_risk_verified = False
         high_risk_verification_method = ""
+        telegram_parallel_session = False
         remember_login = False
         session_ttl_seconds = 12 * 3600
         with db() as conn:
@@ -28857,6 +29253,22 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=403, detail="账号已禁用")
             if int(user.get("must_change_password") or 0) == 1 and _password_expiry(user) <= _now_ts():
                 raise HTTPException(status_code=403, detail=_password_change_required_detail(user))
+
+            telegram_ticket = str(payload.telegram_tweet_ticket or "").strip()
+            telegram_init_data = str(payload.telegram_init_data or "").strip()
+            if telegram_ticket or telegram_init_data:
+                if not telegram_ticket or not telegram_init_data:
+                    raise HTTPException(status_code=400, detail="Telegram 登录上下文不完整，请回到 Bot 重新打开绑定入口")
+                validate_tweet_webapp_login_context(
+                    telegram_ticket,
+                    telegram_init_data,
+                    runtime,
+                    conn=conn,
+                )
+                # Administrators retain the stricter single-session boundary;
+                # customer accounts may add the authenticated Telegram WebView
+                # without revoking an existing browser session.
+                telegram_parallel_session = not is_admin
 
             email_2fa_required = bool(email_2fa_enabled and not mfa_enabled)
             if email_2fa_required:
@@ -29159,7 +29571,7 @@ def create_app() -> FastAPI:
                     "mfa_enabled": mfa_enabled,
                     "last_login_at": previous_login_at,
                 }
-            elif (high_risk_login and high_risk_verified) or payload.force_takeover:
+            elif payload.force_takeover or (high_risk_login and high_risk_verified and not telegram_parallel_session):
                 conn.execute(
                     "UPDATE sessions SET revoked_at = ?, revoke_reason = ? "
                     "WHERE user_id = ? AND revoked_at = 0",
@@ -29171,7 +29583,7 @@ def create_app() -> FastAPI:
                 )
             elif len(active_tokens) == 1 and matching_presented_token:
                 delete_session(conn, matching_presented_token, reason="session_rotation")
-            elif active_tokens:
+            elif active_tokens and not telegram_parallel_session:
                 session_conflict = True
                 current_session = active_sessions[0]
                 session_conflict_details = {
@@ -29225,11 +29637,13 @@ def create_app() -> FastAPI:
                         "device_id": login_device_id,
                         "remember_login": remember_login,
                         "method": (
-                            f"password+{high_risk_verification_method}"
+                            f"telegram_webapp+password+{high_risk_verification_method}"
                             if high_risk_verification_method
                             else (
-                                "password+managed_recovery"
+                                "telegram_webapp+password+managed_recovery"
                                 if high_risk_login and password_only_managed_login
+                                else "telegram_webapp+password"
+                                if telegram_parallel_session
                                 else "password"
                             )
                         ),
@@ -29247,7 +29661,12 @@ def create_app() -> FastAPI:
                             f"账号 {username} 使用管理员创建的密码型账号从新设备和新网络登录；"
                             "该账号尚未配置独立二次验证方式。"
                             if password_only_managed_login
-                            else f"账号 {username} 已完成安全确认，并接管原有登录会话。"
+                            else (
+                                f"账号 {username} 已完成安全确认，并在 Telegram WebApp 增加登录会话；"
+                                "原有设备会话保持有效。"
+                                if telegram_parallel_session
+                                else f"账号 {username} 已完成安全确认，并接管原有登录会话。"
+                            )
                         ),
                         target_user_id=int(user["id"]),
                         fingerprint=(

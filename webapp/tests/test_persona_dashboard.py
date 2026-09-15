@@ -3378,6 +3378,58 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("一群人在宽阔海岸线上奔跑", captured["user_input"])
         self.assertIn("电影感远景构图", captured["user_input"])
 
+    def test_auto_persona_post_image_ratio_analyzes_selected_person_composition(self):
+        captured = {}
+
+        def fake_request(**kwargs):
+            captured.update(kwargs)
+            return (
+                {"ok": True, "parsed": {"aspect_ratio": "9:16", "reason": "全身奔跑与纵向空间"}},
+                {"model": "test-text-model"},
+                [{"ok": True, "model": "test-text-model"}],
+            )
+
+        with mock.patch.object(server, "_request_llm_json_with_fallback", side_effect=fake_request) as request_mock:
+            ratio, detail = server._resolve_persona_post_image_aspect_ratio(
+                {"aspect_ratio": "auto"},
+                tweet_content="敏姐从写字楼门口快步跑向路边出租车",
+                custom_prompt="低机位拍到完整步态和高楼纵深",
+                image_mode="person",
+                style_hint="人物奔跑抓拍",
+            )
+
+        self.assertEqual(ratio, "9:16")
+        self.assertEqual(detail["mode"], "auto")
+        self.assertIn("已选构图类型：person", captured["user_input"])
+        self.assertIn("已选构图方向：人物奔跑抓拍", captured["user_input"])
+        self.assertIn("低机位拍到完整步态和高楼纵深", captured["user_input"])
+        request_mock.assert_called_once()
+
+    def test_auto_persona_post_image_ratio_uses_the_same_analysis_for_objects(self):
+        captured = {}
+
+        def fake_request(**kwargs):
+            captured.update(kwargs)
+            return (
+                {"ok": True, "parsed": {"aspect_ratio": "4:3", "reason": "多件静物横向排列并保留桌面环境"}},
+                {"model": "test-text-model"},
+                [{"ok": True, "model": "test-text-model"}],
+            )
+
+        with mock.patch.object(server, "_request_llm_json_with_fallback", side_effect=fake_request):
+            ratio, detail = server._resolve_persona_post_image_aspect_ratio(
+                {"aspect_ratio": "auto"},
+                tweet_content="桌上放着咖啡杯、账本和三份房产资料",
+                custom_prompt="保留窗边办公桌环境和横向排列关系",
+                image_mode="object",
+                style_hint="桌面资料特写",
+            )
+
+        self.assertEqual(ratio, "4:3")
+        self.assertEqual(detail["mode"], "auto")
+        self.assertIn("已选构图类型：object", captured["user_input"])
+        self.assertIn("桌面资料特写", captured["user_input"])
+
     def test_auto_persona_post_image_ratio_ignores_client_llm_settings(self):
         captured = {}
         trusted_runtime = {

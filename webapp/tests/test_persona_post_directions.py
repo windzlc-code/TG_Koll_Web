@@ -52,8 +52,33 @@ def test_post_direction_helper_uses_persona_input_and_previous_batch(monkeypatch
     assert captured["previousKeywords"] == ["旧方向"]
     assert "previousImageStyles" not in captured
     assert captured["interfaceLanguage"] == "zh-Hant"
-    assert captured["timeout_seconds"] == 90
+    assert captured["timeout_seconds"] == 102
     assert "image_styles" not in result
+
+
+def test_post_direction_timeout_asks_user_to_regenerate(monkeypatch):
+    archive = {
+        "id": "persona-1",
+        "name": "理发师",
+        "content": "专注真实理发现场和发型建议",
+        "setup": {},
+    }
+    monkeypatch.setattr(server, "_persona_archive_source_for_write", lambda _archive_id: (Path("unused"), {}, [archive]))
+
+    def boom(_payload, timeout_seconds=0):
+        raise server.HTTPException(status_code=504, detail=f"AI 新建人设超时：{timeout_seconds} 秒。")
+
+    monkeypatch.setattr(server, "_run_persona_create_cli", boom)
+
+    with pytest.raises(server.HTTPException) as error:
+        server._persona_dashboard_suggest_post_directions(
+            "persona-1",
+            server.PersonaDashboardPostDirectionsPayload(),
+        )
+
+    assert error.value.status_code == 504
+    assert "推文方向生成超时" in str(error.value.detail)
+    assert "重新生成" in str(error.value.detail)
 
 
 def test_post_direction_helper_rejects_a_replayed_previous_batch(monkeypatch):
@@ -145,6 +170,8 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert 'tweet: defaultPersonaPostDirectionState()' in script
     assert 'tweet_media: defaultPersonaPostDirectionState()' in script
     assert "/post_directions" in script
+    assert "推文方向生成超时，请重新生成。" in script
+    assert "clearPersonaStepOperationKey(operationStep, operationKey)" in script
     assert "selected_directions" in script
     assert "data-persona-post-direction-keyword" in script
     assert "data-persona-image-composition-index" in script
@@ -227,6 +254,7 @@ def test_generated_post_media_action_scrolls_to_the_media_composer():
     )[0]
 
     assert 'selection.action === "media"' in resolver
+    assert "openPersonaDraftEditor(finalizedPostId, savedPost)" in resolver
     assert "scrollPersonaMediaComposerIntoView" not in resolver
     scroller = script.split("function scrollPersonaMediaComposerIntoView", 1)[1].split(
         "async function resolvePersonaOrdinaryGeneratedCandidates", 1
@@ -275,8 +303,9 @@ def test_model_prompt_requires_ten_distinct_directions_and_input_decomposition()
         "async function derivePostImageStylesWithCodex", 1
     )[0]
     assert "image_styles" not in directions_fn
-    assert "runCodexJsonInstruction" in directions_fn
-    assert "runTextModelJsonInstruction" not in directions_fn
+    assert "runTextModelJsonInstruction" in directions_fn
+    assert "POST_DIRECTION_MODEL_TIMEOUT_MS = 30_000" in source
+    assert "推文方向生成超时，请重新生成。" in source
 
 
 def test_image_style_helper_requires_tweet_content(monkeypatch):

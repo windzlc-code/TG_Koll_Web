@@ -62,12 +62,25 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertIn("linear-gradient(105deg, #237fb2 0 8%, #155f96 24%, #123f69 56%, #102c47 100%)", self.fixed_light_styles)
         self.assertIn(".admin-model-tab-panel.admin-runtime-block", self.fixed_light_styles)
 
-    def test_provider_field_sync_stays_with_purchase_workspace(self):
+    def test_provider_purchase_workspace_is_removed_from_proxy_market(self):
         proxy_start = self.markup.index('id="secProxyMarket"')
         proxy_end = self.markup.index('id="secPricing"', proxy_start)
         proxy_panel = self.markup[proxy_start:proxy_end]
-        self.assertIn('id="proxyProviderFieldDetails"', proxy_panel)
-        self.assertIn('id="proxyPurchaseConfigForm"', proxy_panel)
+        self.assertNotIn('id="proxyPurchaseAdminWorkspace"', proxy_panel)
+        self.assertNotIn('id="proxyProviderFieldDetails"', proxy_panel)
+        self.assertNotIn('id="proxyPurchaseConfigForm"', proxy_panel)
+        self.assertNotIn("Proxy-Cheap 供应商采购", proxy_panel)
+        self.assertNotIn("供应商采购订单", proxy_panel)
+        self.assertIn('id="proxyMarketRecordsBand"', proxy_panel)
+        workspace = self._function("loadProxyMarketWorkspace", "resetProxyMarketEditor")
+        self.assertNotIn("loadProxyPurchaseConfig()", workspace)
+        self.assertNotIn("loadProxyPurchaseProviderOptions(", workspace)
+        self.assertNotIn("loadProxyPurchaseExchangeRate()", workspace)
+        self.assertNotIn("loadProxyPurchaseOrders()", workspace)
+        self.assertIn("loadProxyMarketItems()", workspace)
+        self.assertIn("loadProxyMarketAllocations()", workspace)
+        self.assertIn("loadProxyPurchasedAssets()", workspace)
+        self.assertIn("loadProxyMarketSettings()", workspace)
 
     def test_runtime_page_loads_provider_credential_status(self):
         active_page = self._function("setActiveAdminPage", "clearStoredAdminWorkspaceContext")
@@ -131,9 +144,7 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertNotIn('.value = ""', status)
 
     def test_purchase_config_hides_provider_owned_defaults_and_publish_step_up(self):
-        proxy_start = self.markup.index('id="proxyPurchaseAdminWorkspace"')
-        proxy_end = self.markup.index('id="proxyPurchaseOrderSummary"', proxy_start)
-        workspace = self.markup[proxy_start:proxy_end]
+        self.assertNotIn('id="proxyPurchaseAdminWorkspace"', self.markup)
         for control_id in (
             "proxyPurchaseDefaultIsp",
             "proxyPurchaseDefaultPackage",
@@ -142,17 +153,14 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
             "proxyPurchaseAdminPassword",
             "proxyPurchaseTotpCode",
         ):
-            self.assertNotIn(f'id="{control_id}"', workspace)
-        self.assertIn('<option value="1">1 个月</option>', workspace)
+            self.assertNotIn(f'id="{control_id}"', self.markup)
         publish = self._function("publishProxyPurchaseConfig", "renderProxyPurchaseOrders")
         self.assertNotIn("adminPassword", publish)
         self.assertNotIn("totpCode", publish)
         self.assertIn("JSON.stringify({})", publish)
 
     def test_purchase_config_groups_duration_range_and_uses_ntd_profit_only(self):
-        proxy_start = self.markup.index('id="proxyPurchaseAdminWorkspace"')
-        proxy_end = self.markup.index('id="proxyPurchaseOrderSummary"', proxy_start)
-        workspace = self.markup[proxy_start:proxy_end]
+        self.assertNotIn('id="proxyPurchaseAdminWorkspace"', self.markup)
         for control_id in (
             "proxyPurchaseDefaultPeriod",
             "proxyPurchaseMinPeriod",
@@ -163,21 +171,7 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
             "proxyPurchaseFxRate",
             "btnRefreshProxyPurchaseFx",
         ):
-            self.assertIn(f'id="{control_id}"', workspace)
-        self.assertIn("购买时长区间", workspace)
-        self.assertIn('class="proxy-purchase-period-range-controls"', workspace)
-        self.assertIn("用户端不显示时长选项", workspace)
-        for removed_id in (
-            "proxyPurchaseServiceId",
-            "proxyPurchaseDefaultCountry",
-            "proxyPurchasePointsPerUsd",
-            "proxyPurchaseUsdToNtdRate",
-            "proxyPurchasePaymentFeeRate",
-            "proxyPurchaseFixedFeePoints",
-            "proxyPurchaseSafetyBufferUsd",
-            "proxyPurchaseMinProfitUsd",
-        ):
-            self.assertNotIn(f'id="{removed_id}"', workspace)
+            self.assertNotIn(f'id="{control_id}"', self.markup)
         payload = self._function("proxyPurchaseConfigPayload", "saveProxyPurchaseConfig")
         self.assertIn('pricing_mode: "supplier_plus_profit_ntd"', payload)
         self.assertIn("profit_ntd:", payload)
@@ -189,12 +183,11 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertIn('default_country: ""', payload)
         self.assertIn("/api/admin/proxy-purchases/exchange-rate", self.script)
         self.assertIn("const PROXY_PURCHASE_FX_REFRESH_INTERVAL_MS = 15 * 60 * 1000", self.script)
-        self.assertIn('adminState.activePage !== "proxyMarket"', self.script)
+        self.assertIn('if (!el("proxyPurchaseAdminWorkspace")) return;', self.script)
         self.assertIn("loadProxyPurchaseExchangeRate({ refresh: true })", self.script)
-        self.assertIn("每 15 分钟自动刷新", self.script)
 
     def test_purchase_sync_status_has_explicit_contrast_colors(self):
-        self.assertIn("#proxyProviderFieldRevision", self.markup)
+        self.assertNotIn('id="proxyProviderFieldRevision"', self.markup)
         self.assertIn("#proxyPurchaseConfigMsg.msg.ok", self.markup)
 
     def test_healthy_status_does_not_keep_header_chips_visible(self):

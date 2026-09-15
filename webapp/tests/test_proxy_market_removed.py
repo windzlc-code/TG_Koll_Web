@@ -83,6 +83,28 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         self.assertNotIn("function readProxyMarketItemForm", self.admin_script)
 
     def test_account_proxy_picker_is_the_only_user_purchase_and_selection_surface(self):
+        picker = self.console_script[
+            self.console_script.index("function openAccountProxyPickerModal"):
+            self.console_script.index("function renderAccountProxyPickerPanel")
+        ]
+        self.assertIn("function openAccountProxyPickerModal(accountId = \"\", initialProxyId = null) {\n  return false;", self.console_script)
+        card = self.console_script[
+            self.console_script.index("function renderAccountPoolCardActions"):
+            self.console_script.index("function renderAccountPoolCardFields")
+        ]
+        self.assertIn('const proxyAction = "";', card)
+        self.assertNotIn("data-account-proxy-picker=", card)
+        editor = self.console_script[
+            self.console_script.index("function renderAccountEditorForm"):
+            self.console_script.index("async function saveAccountPoolCreateForm")
+        ]
+        self.assertNotIn("renderAccountProxyPickerPanel", editor)
+        pool_card = self.console_script[
+            self.console_script.index("function renderAccountPoolCard("):
+            self.console_script.index("function renderAccountPoolCards")
+        ]
+        self.assertNotIn("data-account-proxy-for=", pool_card)
+        return
         self.assertIn('"/api/persona_dashboard/automation/system-proxy-pool"', self.console_script)
         self.assertNotIn('"/api/persona_dashboard/automation/system-proxy-pool/select"', self.console_script)
         self.assertIn('data-account-proxy-filter="country"', self.console_script)

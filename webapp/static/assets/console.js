@@ -420,7 +420,7 @@ let googleAccountSessionResultConsumed = false;
 const VIDEO_WORKBENCH_ENABLED = false;
 const VIDEO_WORKSPACE_MODULES = [
   { id: "digital_human_video", label: "数字人口播视频" },
-  { id: "ecommerce_short_video", label: "广告 / 种草视频" },
+  { id: "ecommerce_short_video", label: "广告短视频" },
   { id: "video_language_replace", label: "视频语种更换" },
   { id: "video_subject_replace", label: "视频模特 / 商品替换" },
   { id: "ecommerce_image", label: "电商广告图" },
@@ -1883,7 +1883,7 @@ const modules = [
 
 const taskMeta = {
   create_video: { title: "数字人口播视频", minImages: 0, files: "人物素材、音频与生成结果均按任务隔离保存。", callback: "统一任务队列" },
-  ecommerce_short_video: { title: "广告 / 种草视频", minImages: 0, files: "商品、模特与分镜素材按任务隔离保存。", callback: "统一任务队列" },
+  ecommerce_short_video: { title: "广告短视频", minImages: 0, files: "商品、模特与分镜素材按任务隔离保存。", callback: "统一任务队列" },
   video_language_replace: { title: "视频语种更换", minImages: 0, files: "原视频、目标音频与字幕按任务隔离保存。", callback: "统一任务队列" },
   replace_model: { title: "视频模特替换", minImages: 0, files: "替换素材按任务隔离保存。", callback: "统一任务队列" },
   replace_product: { title: "视频商品替换", minImages: 0, files: "替换素材按任务隔离保存。", callback: "统一任务队列" },
@@ -12600,7 +12600,7 @@ function renderPersonaAccountPoolPickerCard(account, currentPersona = selectedPe
   const binding = personaAccountBindingDisplay(account, currentPersona);
   return `<button type="button" class="persona-account-picker-card" data-persona-account-pool-select="${esc(accountId)}">
     ${renderAccountPoolCardFields(account, { includeContinueLogin: false })}
-    <span class="persona-account-picker-card-meta"><span class="persona-account-picker-binding ${esc(binding.className)}">${esc(binding.label)}</span><span class="persona-account-picker-proxy">${esc(accountResidentialProxyLabel(account))}</span></span>
+    <span class="persona-account-picker-card-meta"><span class="persona-account-picker-binding ${esc(binding.className)}">${esc(binding.label)}</span></span>
     <span class="persona-account-picker-card-action is-${esc(binding.actionKind)}">${renderPersonaAccountBindingIcon(binding.actionKind)}<span>${esc(binding.action)}</span></span>
   </button>`;
 }
@@ -22983,6 +22983,8 @@ async function resolvePersonaOrdinaryGeneratedCandidates(persona, taskId, genera
     personaForm.media.focusPostId = finalizedPostId;
     state.personaPanels.content = "generate";
     pendingPersonaMediaScrollId = String(persona.id || "");
+    const savedPost = personaDraftPosts(persona).find((item) => String(item.id) === finalizedPostId) || selectedPost;
+    if (savedPost) openPersonaDraftEditor(finalizedPostId, savedPost);
     showMsg("commandMsg", "已保留所选草稿，可以继续生成配图。", true);
   } else if (selection.action === "save" && selectedPostId) {
     personaFormState(persona.id).media.focusPostId = "";
@@ -23135,7 +23137,15 @@ async function preparePersonaPostDirections() {
     clearPersonaStepOperationKey(operationStep, operationKey);
     showMsg("commandMsg", withBillingChargeMessage("已生成 10 个推文方向，可单选或多选。", result), true);
   } catch (error) {
-    if (!personaStepErrorKeepsOperationKey(error)) clearPersonaStepOperationKey(operationStep, operationKey);
+    const detail = String(error?.detail || error?.message || "");
+    const timedOut = Number(error?.status) === 504 || /超时|逾時|timeout/i.test(detail);
+    if (timedOut || !personaStepErrorKeepsOperationKey(error)) {
+      clearPersonaStepOperationKey(operationStep, operationKey);
+    }
+    if (timedOut) {
+      showMsg("commandMsg", "推文方向生成超时，请重新生成。", false);
+      return;
+    }
     throw error;
   } finally {
     setActionLocked(lockParts, false);
@@ -24632,11 +24642,13 @@ function resetPersonaNewDraftComposer(personaId) {
   }
 }
 
-function openPersonaDraftEditor(postId) {
+function openPersonaDraftEditor(postId, fallbackPost = null) {
   const persona = selectedPersona();
   if (!persona) return;
   const source = personaPostSource(persona);
-  const post = personaSourcePosts(persona, source).find((item) => String(item.id) === String(postId || "").trim());
+  const cleanPostId = String(postId || "").trim();
+  const post = personaSourcePosts(persona, source).find((item) => String(item.id) === cleanPostId)
+    || (String(fallbackPost?.id || "").trim() === cleanPostId ? fallbackPost : null);
   if (!post) {
     showMsg("commandMsg", source === "favorites" ? "当前收藏不存在或已移出。" : "当前草稿不存在或已被删除。", false);
     return;
@@ -24644,19 +24656,22 @@ function openPersonaDraftEditor(postId) {
   closePersonaDraftMenus();
   const form = personaFormState(persona.id);
   const originalMediaItems = personaEditablePostMediaItems(persona.id, post).map(clonePersonaDraftMediaItem);
+  const draftContent = String(post.content || post.full_content || "");
   form.generate.mode = "custom";
   form.draft = defaultPersonaDraftForm({
     title: String(post.title || "").trim(),
-    content: String(post.content || ""),
+    content: draftContent,
     editingPostId: String(post.id || "").trim(),
     editingSource: source,
     originalTitle: String(post.title || "").trim(),
-    originalContent: String(post.content || ""),
+    originalContent: draftContent,
     originalMediaSignature: personaMediaSignature(originalMediaItems),
     mediaItems: originalMediaItems,
     mediaOps: [],
     dirty: false,
   });
+  if ($("personaDraftTitle")) $("personaDraftTitle").value = String(post.title || "").trim();
+  if ($("personaDraftContent")) $("personaDraftContent").value = draftContent;
   if (form.media?.customModifySource) {
     if (String(form.media.customModifySource.previewUrl || "").startsWith("blob:")) {
       URL.revokeObjectURL(form.media.customModifySource.previewUrl);
@@ -31247,10 +31262,9 @@ async function toggleAccountPasswordVisibility(button) {
 
 function renderAccountPoolCardActions(account, { context = "pool", personaAccountAction = null } = {}) {
   const accountId = String(account?.id || "");
-  const proxyLabel = account?.proxy_id ? "切换代理" : "选择代理";
   const activeLoginTask = activeOpenLoginTaskForAccount(accountId);
   const usesPlatformAuthorization = String(account?.auth_provider || "browser") === "bundle";
-  const proxyAction = usesPlatformAuthorization ? "" : `<button type="button" class="account-card-action account-card-action--proxy" data-account-proxy-picker="${esc(accountId)}">${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span></button>`;
+  const proxyAction = "";
   const loginAction = (attribute) => {
     if (activeLoginTask?.id) {
       return `<button type="button" class="primary account-card-action account-card-action--login" ${attribute}="${esc(accountId)}" data-open-login-task-id="${esc(activeLoginTask.id)}" aria-busy="true">${renderAccountOpenLoginButtonContent(activeLoginTask, account)}</button>`;
@@ -31261,7 +31275,6 @@ function renderAccountPoolCardActions(account, { context = "pool", personaAccoun
     const changeAction = personaAccountAction ? `<button type="button" class="account-card-action persona-account-card-action persona-account-card-change" data-persona-account-add data-persona-account-platform="${esc(personaAccountAction.platform || "")}" title="${esc(personaAccountAction.title || "更换当前账号")}" aria-label="${esc(personaAccountAction.title || "更换当前账号")}">${renderPersonaAccountBindingIcon("replace")}<span>更换</span></button>` : "";
     return `<div class="row-actions persona-account-summary-actions">
       ${loginAction("data-persona-account-open-login")}
-      ${usesPlatformAuthorization ? "" : `<button type="button" class="account-card-action account-card-action--proxy" data-persona-account-proxy="${esc(accountId)}">${renderNetworkIcon()}<span data-account-proxy-label>${esc(proxyLabel)}</span></button>`}
       ${usesPlatformAuthorization ? "" : `<button type="button" class="account-card-action account-card-action--edit" data-persona-account-edit="${esc(accountId)}">${renderEditIcon()}<span>编辑</span></button>`}
       <button type="button" class="account-card-action persona-account-card-action persona-account-card-unbind" data-persona-account-unbind="${esc(accountId)}" ${account.persona_id ? "" : "disabled"}>${renderPersonaAccountBindingIcon("remove")}<span>移除</span></button>
       ${changeAction}
@@ -31334,9 +31347,6 @@ function renderAccountPoolCard(account, { variant = "pool", active = false, chec
       loginActionAttribute: isPersonaSettings ? "data-persona-account-open-login" : "data-social-open-login",
     })}
     ${COLLECTOR_DEPLOYMENT || isPersonaSettings ? "" : `<strong class="account-pool-bound-persona ${boundPersona ? "is-bound" : "is-unbound"}" title="${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}">${esc(boundPersona ? `已绑定：${boundPersona.name || boundPersona.id}` : "未绑定人设")}</strong>`}
-    <div class="account-card-meta">
-      <span data-account-proxy-for="${esc(accountId)}">${esc(accountResidentialProxyLabel(account))}</span>
-    </div>
     ${renderAccountPoolCardActions(account, { context: isPersonaSettings ? "persona-settings" : "pool", personaAccountAction })}
     ${isPersonaSettings || COLLECTOR_DEPLOYMENT ? "" : renderPersonaProfileListToggle("accountPoolPersonaSidebar")}
   </article>`;
@@ -31699,7 +31709,6 @@ function renderAccountEditorForm(account = null, mode = "create") {
       <strong>${esc(platformLabel(platform))}</strong>
     </div>
     ${renderAccountIdentityFields(account, mode)}
-    ${usesPlatformAuthorization ? "" : renderAccountProxyPickerPanel(account, mode)}
   </div>`;
 }
 
@@ -33081,6 +33090,7 @@ async function loadAccountProxyEntryStatus(container) {
 }
 
 function openAccountProxyPickerModal(accountId = "", initialProxyId = null) {
+  return false;
   const options = arguments[2] || {};
   const cleanAccountId = String(accountId || "").trim();
   const mode = cleanAccountId ? "edit" : (options.mode === "create" ? "create" : "edit");

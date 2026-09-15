@@ -550,12 +550,19 @@ function runtimeSecretInputValue(inputId) {
 function setRuntimeSecretInputState(inputId, configured, maskedValue) {
   const input = el(inputId);
   if (!input) return;
+  // A settings refresh can arrive while an administrator is replacing a
+  // secret.  Keep that in-flight draft intact; otherwise the async response
+  // would replace the typed Token with an empty/masked value before Save is
+  // clicked.  Successful save paths clear this marker before rendering the
+  // server-authoritative state.
+  if (input.dataset.runtimeSecretDirty === "true") return;
   const isConfigured = !!configured;
   const mask = isConfigured ? String(maskedValue || "") : "";
   input.type = "password";
   input.value = mask;
   input.dataset.runtimeSecretSaved = isConfigured ? "true" : "false";
   input.dataset.runtimeSecretMask = mask;
+  input.dataset.runtimeSecretDirty = "false";
   input.classList.toggle("is-saved-runtime-secret", isConfigured);
   input.placeholder = isConfigured ? "已保存 API Key，输入新 Key 后替换" : input.dataset.emptyPlaceholder || input.placeholder;
   const button = getSensitiveToggleButton(inputId);
@@ -1943,7 +1950,7 @@ const REMOTE_COMFY_TASKS = [
 ];
 const TASK_TYPE_LABELS = {
   create_video: "数字人口播视频",
-  ecommerce_short_video: "广告 / 种草视频",
+  ecommerce_short_video: "广告短视频",
   video_language_replace: "视频语种更换",
   replace_model: "视频模特替换",
   replace_product: "视频商品替换",
@@ -2785,6 +2792,7 @@ function initRuntimeSecretMaskInputs() {
     });
     input.addEventListener("input", () => {
       if (input.value === input.dataset.runtimeSecretMask) return;
+      input.dataset.runtimeSecretDirty = "true";
       input.dataset.runtimeSecretSaved = "false";
       input.classList.remove("is-saved-runtime-secret");
       const button = getSensitiveToggleButton(id);
@@ -3223,6 +3231,17 @@ function tgMemberNameCell(item) {
   </div>`;
 }
 
+function tgMemberEmptyRow() {
+  return `<tr>
+    <td colspan="6" class="admin-tg-member-empty-cell">
+      <div class="admin-tg-member-empty task-empty" role="status">
+        <strong>暂无允许成员</strong>
+        <span>添加 Chat ID 后，授权成员会显示在这里</span>
+      </div>
+    </td>
+  </tr>`;
+}
+
 function renderTgSettings(data) {
   const rows = Array.isArray(data?.trusted_users) ? data.trusted_users : [];
   const status = el("tgBotTokenStatus");
@@ -3279,18 +3298,18 @@ function renderTgSettings(data) {
           <button class="danger mini-btn" type="button" data-act="tg_delete" data-id="${escapeHtml(String(item.chat_id || ""))}">删除</button>
         </td>
       </tr>`;
-    }).join("") : `<tr><td colspan="6" class="task-empty">暂无允许成员</td></tr>`;
+    }).join("") : tgMemberEmptyRow();
   }
 }
 
 async function hydrateTgBotTokenField(data) {
   if (!data?.bot_token_configured) return;
   const input = el("tgBotToken");
-  if (!input || input.dataset.runtimeSecretSaved !== "true") return;
+  if (!input || input.dataset.runtimeSecretSaved !== "true" || input.dataset.runtimeSecretDirty === "true") return;
   try {
     const response = await api("/api/admin/runtime_config/secrets/telegram_bot_token", { method: "POST" });
     const value = String(response?.value || "");
-    if (!value || input.dataset.runtimeSecretSaved !== "true") return;
+    if (!value || input.dataset.runtimeSecretSaved !== "true" || input.dataset.runtimeSecretDirty === "true") return;
     input.value = value;
     input.dataset.runtimeSecretMask = value;
     input.type = "password";
@@ -3315,36 +3334,51 @@ function tgBotTokenInputValue() {
 }
 
 async function saveTgEnv() {
-  const token = tgBotTokenInputValue();
-  const payload = {
-    bot_enabled: token ? true : Boolean(el("tgBotEnabled")?.checked),
-  };
-  if (token !== null) {
-    payload.bot_token = token;
-    if (!token) payload.bot_enabled = false;
+  const button = el("btnSaveTgEnv");
+  if (button?.disabled) return;
+  setButtonLoading("btnSaveTgEnv", true, "保存中...");
+  try {
+    const token = tgBotTokenInputValue();
+    const payload = {
+      bot_enabled: token ? true : Boolean(el("tgBotEnabled")?.checked),
+    };
+    if (token !== null) {
+      payload.bot_token = token;
+      if (!token) payload.bot_enabled = false;
+    }
+    const data = await api("/api/admin/tg_env", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (el("tgBotToken")) el("tgBotToken").dataset.runtimeSecretDirty = "false";
+    renderTgSettings(data.tg_settings || data);
+    const cleared = token === "";
+    setMsg(
+      "tgSettingsMsg",
+      cleared ? "Telegram Token 已清除，轮询已停止。" : "Telegram 配置已保存，Token 已检测，Bot 按开关状态运行。",
+      true,
+    );
+  } finally {
+    setButtonLoading("btnSaveTgEnv", false);
   }
-  const data = await api("/api/admin/tg_env", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  renderTgSettings(data.tg_settings || data);
-  const cleared = token === "";
-  setMsg(
-    "tgSettingsMsg",
-    cleared ? "Telegram Token 已清除，轮询已停止。" : "Telegram 配置已保存，Token 已检测，Bot 按开关状态运行。",
-    true,
-  );
 }
 
 async function testTgEnv() {
-  const token = tgBotTokenInputValue();
-  const data = await api("/api/admin/tg_env/test", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ bot_token: token || "" }),
-  });
-  setMsg("tgSettingsMsg", data?.username ? `Token 有效：@${data.username}` : "Token 有效", true);
+  const button = el("btnTestTgEnv");
+  if (button?.disabled) return;
+  setButtonLoading("btnTestTgEnv", true, "检测中...");
+  try {
+    const token = tgBotTokenInputValue();
+    const data = await api("/api/admin/tg_env/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bot_token: token || "" }),
+    });
+    setMsg("tgSettingsMsg", data?.username ? `Token 有效：@${data.username}` : "Token 有效", true);
+  } finally {
+    setButtonLoading("btnTestTgEnv", false);
+  }
 }
 
 async function saveTgUser() {
@@ -3381,13 +3415,14 @@ function renderTgTweetSettings(data) {
   const rows = Array.isArray(data?.trusted_users) ? data.trusted_users : [];
   const configured = Boolean(data?.bot_token_configured);
   const running = Boolean(data?.bot_running);
+  const starting = Boolean(data?.bot_starting);
   const error = String(data?.bot_last_error || "").trim();
   const status = el("tgTweetBotStatus");
   if (status) {
     status.className = "admin-tg-status-tags";
     status.innerHTML = [
       tgStatusBadge(configured ? "已配置" : "未配置", configured ? "enabled" : "disabled"),
-      tgStatusBadge(running ? "运行中" : "未运行", running ? "enabled" : (configured ? "pending" : "rejected")),
+      tgStatusBadge(running ? "运行中" : (starting ? "启动中" : "未运行"), running ? "enabled" : (configured ? "pending" : "rejected")),
       error ? tgStatusBadge(error, "locked") : "",
     ].filter(Boolean).join("");
   }
@@ -3431,19 +3466,20 @@ function renderTgTweetSettings(data) {
         <button class="danger mini-btn" type="button" data-act="tg_tweet_delete" data-id="${escapeHtml(String(item.chat_id || ""))}">删除</button>
       </td>
     </tr>`;
-  }).join("") : `<tr><td colspan="6" class="task-empty">暂无允许成员</td></tr>`;
+  }).join("") : tgMemberEmptyRow();
 }
 
 async function hydrateTgTweetBotTokenField(data) {
   if (!data?.bot_token_configured) return;
   const input = el("tgTweetBotToken");
-  if (!input || input.dataset.runtimeSecretSaved !== "true") return;
+  if (!input || input.dataset.runtimeSecretSaved !== "true" || input.dataset.runtimeSecretDirty === "true") return;
   try {
     const response = await api("/api/admin/runtime_config/secrets/telegram_tweet_bot_token", { method: "POST" });
     const value = String(response?.value || "");
-    if (!value || input.dataset.runtimeSecretSaved !== "true") return;
+    if (!value || input.dataset.runtimeSecretSaved !== "true" || input.dataset.runtimeSecretDirty === "true") return;
     input.value = value;
     input.dataset.runtimeSecretMask = value;
+    input.dataset.runtimeSecretDirty = "false";
     input.type = "password";
     input.classList.add("is-saved-runtime-secret");
     updateSensitiveToggleVisual(getSensitiveToggleButton("tgTweetBotToken"), false);
@@ -3466,57 +3502,74 @@ function tgTweetBotTokenInputValue() {
 }
 
 async function saveTgTweetEnv() {
-  const token = tgTweetBotTokenInputValue();
-  const payload = {
-    bot_enabled: token ? true : Boolean(el("tgTweetBotEnabled")?.checked),
-  };
-  if (token !== null) {
-    payload.bot_token = token;
-    if (!token) payload.bot_enabled = false;
+  const button = el("btnSaveTgTweetEnv");
+  if (button?.disabled) return;
+  setButtonLoading("btnSaveTgTweetEnv", true, "保存中...");
+  try {
+    const token = tgTweetBotTokenInputValue();
+    const payload = {
+      bot_enabled: token ? true : Boolean(el("tgTweetBotEnabled")?.checked),
+    };
+    if (token !== null) {
+      payload.bot_token = token;
+      if (!token) payload.bot_enabled = false;
+    }
+    const data = await api("/api/admin/tg_tweet/env", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (el("tgTweetBotToken")) el("tgTweetBotToken").dataset.runtimeSecretDirty = "false";
+    renderTgTweetSettings(data.tg_settings || data);
+    const cleared = token === "";
+    setMsg(
+      "tgTweetSettingsMsg",
+      cleared ? "推文 Bot Token 已清除，轮询已停止。" : "推文 Bot 配置已保存，Token 已检测，Bot 按开关状态运行。",
+      true,
+    );
+  } finally {
+    setButtonLoading("btnSaveTgTweetEnv", false);
   }
-  const data = await api("/api/admin/tg_tweet/env", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  renderTgTweetSettings(data.tg_settings || data);
-  const cleared = token === "";
-  setMsg(
-    "tgTweetSettingsMsg",
-    cleared ? "推文 Bot Token 已清除，轮询已停止。" : "推文 Bot 配置已保存，Token 已检测，Bot 按开关状态运行。",
-    true,
-  );
 }
 
 async function testTgTweetEnv() {
-  const token = tgTweetBotTokenInputValue();
-  const payload = { bot_token: token || "" };
-  const data = await api("/api/admin/tg_tweet/env/test", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  setMsg("tgTweetSettingsMsg", data?.username ? `Token 有效：@${data.username}` : "Token 有效", true);
+  const button = el("btnTestTgTweetEnv");
+  if (button?.disabled) return;
+  setButtonLoading("btnTestTgTweetEnv", true, "检测中...");
+  try {
+    const token = tgTweetBotTokenInputValue();
+    const payload = { bot_token: token || "" };
+    const data = await api("/api/admin/tg_tweet/env/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    setMsg("tgTweetSettingsMsg", data?.username ? `Token 有效：@${data.username}` : "Token 有效", true);
+  } finally {
+    setButtonLoading("btnTestTgTweetEnv", false);
+  }
 }
 
 async function saveTgTweetUser() {
   const chatId = String(el("tgTweetChatId")?.value || "").trim();
-  if (!/^\d+$/.test(chatId) || Number(chatId) <= 0) {
-    setMsg("tgTweetSettingsMsg", "请填写正数 Telegram Chat ID", false);
+  const numericChatId = /^\d+$/.test(chatId) && Number(chatId) > 0;
+  const usernameRef = /^@[A-Za-z0-9_]{5,32}$/.test(chatId);
+  if (!numericChatId && !usernameRef) {
+    setMsg("tgTweetSettingsMsg", "请填写正数 Chat ID 或 @用户名（5-32 位）", false);
     return;
   }
   const data = await api("/api/admin/tg_tweet/members", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      chat_id: Number(chatId),
+      chat_id: numericChatId ? Number(chatId) : chatId,
       label: String(el("tgTweetLabel")?.value || "").trim(),
       enabled: true,
     }),
   });
   renderTgTweetSettings(data.tg_settings || data);
   ["tgTweetChatId", "tgTweetLabel"].forEach((id) => { if (el(id)) el(id).value = ""; });
-  setMsg("tgTweetSettingsMsg", "成员已授权，可直接向推文 Bot 发送 /start 使用。", true);
+  setMsg("tgTweetSettingsMsg", "成员已保存（兼容旧绑定）；新用户可直接在 Telegram 使用 /bind 自助登录。", true);
 }
 
 async function loadRuntime() {
@@ -3598,7 +3651,12 @@ async function saveRuntime() {
   });
   const cfg = runtimeConfigResponseToConfig(resp);
   clearModelDraft();
-  if (cfg) fillRuntimeForm(cfg);
+  if (cfg) {
+    [...SENSITIVE_RUNTIME_INPUT_IDS, "rtNewPersonaRunningHubApiKey"].forEach((id) => {
+      if (el(id)) el(id).dataset.runtimeSecretDirty = "false";
+    });
+    fillRuntimeForm(cfg);
+  }
   return cfg;
 }
 
@@ -10662,12 +10720,6 @@ async function loadProxyMarketWorkspace({ silent = false } = {}) {
     section?.classList.remove("proxy-market-loading");
     await Promise.allSettled([
       loadProxyMarketSettings(),
-      loadProxyPurchaseConfig().then(() => loadProxyPurchaseProviderOptions({
-        serviceId: "static-residential-ipv4",
-        planId: String(el("proxyPurchasePlanId")?.value || ""),
-      })),
-      loadProxyPurchaseExchangeRate(),
-      loadProxyPurchaseOrders(),
     ]);
   })().finally(() => {
     section?.classList.remove("proxy-market-loading");
@@ -12967,6 +13019,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   }, SENTIMENT_COOKIE_POLL_INTERVAL_MS);
   setInterval(() => {
     if (document.hidden || adminState.activePage !== "proxyMarket") return;
+    if (!el("proxyPurchaseAdminWorkspace")) return;
     void loadProxyPurchaseExchangeRate({ refresh: true }).catch((error) => {
       setText("proxyPurchaseFxMeta", `自动刷新失败：${getErrorMessage(error)}`);
     });

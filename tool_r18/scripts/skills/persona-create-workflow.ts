@@ -23,6 +23,7 @@ const CREATE_PERSONA_MIN_SELECTED_KEYWORDS = 2;
 const CREATE_PERSONA_GROUP_MAX_SELECTED_KEYWORDS = 2;
 const CREATE_PERSONA_TOTAL_MAX_SELECTED_KEYWORDS = 4;
 const POST_DIRECTION_KEYWORD_COUNT = 10;
+const POST_DIRECTION_MODEL_TIMEOUT_MS = 30_000;
 const POST_IMAGE_STYLE_COUNT = 6;
 const POST_IMAGE_STYLE_KINDS = ["person", "third_person", "pov", "scene", "object"] as const;
 
@@ -501,6 +502,17 @@ function personaKeywordSuggestionError(error: unknown): Error {
   return new Error("关键词提炼失败：模型未返回有效关键词，请稍后重试。");
 }
 
+function personaPostDirectionError(error: unknown): Error {
+  const message = String((error as any)?.message || error || "").toLowerCase();
+  if (/402|insufficient_funds|余额不足|餘額不足|quota/.test(message)) {
+    return new Error("推文方向生成失败：上游模型余额不足，请充值后重试。");
+  }
+  if (/timeout|timed out|超时|逾時|請求超時|请求超时/.test(message)) {
+    return new Error("推文方向生成超时，请重新生成。");
+  }
+  return new Error("推文方向生成失败：模型未返回 10 个有效方向，请重试。");
+}
+
 async function derivePersonaDirectionKeywordsWithCodex(personaName: string, userPrompt: string): Promise<string[]> {
   const originalText = String(userPrompt || "").trim();
   const aiInput = compactLongAiInput(originalText, 3000);
@@ -683,13 +695,16 @@ async function derivePostDirectionKeywordsWithCodex(
     contentInput ? `用户本次输入内容：${contentInput}` : "用户本次未输入内容，请只依据人设内核生成方向。",
   ].join("\n");
   try {
-    const keywords = normalizePostDirectionKeywords(await runCodexJsonInstruction(instruction), previous);
+    const keywords = normalizePostDirectionKeywords(
+      await runTextModelJsonInstruction(instruction, POST_DIRECTION_MODEL_TIMEOUT_MS),
+      previous,
+    );
     if (keywords.length !== POST_DIRECTION_KEYWORD_COUNT) {
       throw new Error(`模型仅返回 ${keywords.length} 个足够区分的有效方向`);
     }
     return keywords;
   } catch (error: any) {
-    const userError = personaKeywordSuggestionError(error);
+    const userError = personaPostDirectionError(error);
     console.warn("[persona-create][post_direction_error]", error?.message || error);
     throw userError;
   }
