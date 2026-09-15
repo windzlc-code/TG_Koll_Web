@@ -27325,7 +27325,46 @@ def create_app() -> FastAPI:
                 )
             if action == "accounts.check_login":
                 if account_provider == "bundle":
-                    return {"ok": True, "authorized": True, "account": social_api.get_social_account(account_id)}
+                    account_row = dict(account)
+                    team_id = str(account_row.get("external_team_id") or "").strip()
+                    platform = str(account_row.get("platform") or "").strip().lower()
+                    if not team_id or platform not in {"threads", "instagram"}:
+                        return {
+                            "ok": True,
+                            "authorized": False,
+                            "account": social_api.get_social_account(account_id),
+                            "message": "平台授权资料不完整，请重新授权。",
+                        }
+                    try:
+                        from .bundle_social import BundleSocialClient
+
+                        inspection = BundleSocialClient().inspect_social_account(
+                            team_id=team_id,
+                            platform=platform,
+                        )
+                        if not isinstance(inspection, dict):
+                            inspection = {}
+                    except Exception:
+                        logger.exception("Bundle account login check failed for %s", account_id)
+                        inspection = {"valid": False, "reason": "unavailable"}
+                    if bool(inspection.get("valid")):
+                        return {
+                            "ok": True,
+                            "authorized": True,
+                            "account": social_api.get_social_account(account_id),
+                        }
+                    reason = str(inspection.get("reason") or "expired").strip().lower()
+                    message = (
+                        "平台授权已失效，请点击重新授权。"
+                        if reason in {"expired", "disconnected", "missing"}
+                        else "平台授权状态暂时无法确认，请稍后重试或重新授权。"
+                    )
+                    return {
+                        "ok": True,
+                        "authorized": False,
+                        "account": social_api.get_social_account(account_id),
+                        "message": message,
+                    }
                 return {
                     "ok": True,
                     "task": social_api.create_account_task(

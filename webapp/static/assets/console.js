@@ -416,7 +416,14 @@ const initialConsoleParams = new URLSearchParams(window.location.search);
 const initialConsoleView = initialConsoleParams.get("view");
 const initialAccountBrowserPanel = initialConsoleParams.get("browser_panel");
 const initialGoogleAccountSessionResult = initialConsoleParams.get("google_account_session");
+// Telegram platform-authorization buttons land here with an explicit
+// platform. Keep the value in the URL until the authenticated account list
+// has loaded, so a normal VECTO login can resume the requested OAuth flow.
+const initialAccountAuthorizationPlatform = String(initialConsoleParams.get("authorize_platform") || "").trim().toLowerCase();
+const initialAccountAuthorizationId = String(initialConsoleParams.get("authorize_account_id") || "").trim();
+const initialAccountAuthorizationPlatformIsSupported = ["threads", "instagram"].includes(initialAccountAuthorizationPlatform);
 let googleAccountSessionResultConsumed = false;
+let initialAccountAuthorizationConsumed = false;
 const VIDEO_WORKBENCH_ENABLED = false;
 const VIDEO_WORKSPACE_MODULES = [
   { id: "digital_human_video", label: "数字人口播视频" },
@@ -34090,11 +34097,11 @@ function jumpToOfficialAuthorization(oauthUrl = "") {
   window.location.assign(url);
 }
 
-async function startBundleAccountAuthorization({ platform = "", personaId = "", accountId = "", preparedResult = null } = {}) {
+async function startBundleAccountAuthorization({ platform = "", personaId = "", accountId = "", preparedResult = null, skipConfirmation = false } = {}) {
   const selectedPlatform = normalizeAccountPoolPlatform(platform || accountById(accountId)?.platform || state.accountPoolPlatform);
   const isNewAccount = !String(accountId || "").trim();
   try {
-    if (isNewAccount && !preparedResult) {
+    if (isNewAccount && !preparedResult && !skipConfirmation) {
       const confirmed = await confirmAddAccountSwitch(selectedPlatform);
       if (!confirmed) return null;
     }
@@ -39571,6 +39578,30 @@ function consumeBundleAuthorizationResult() {
   void applyBundleAuthorizationResult({ status, platform, message, accountId });
 }
 
+// A Telegram platform button opens the normal console with a platform hint.
+// Once the VECTO session and account list are ready, start that platform's
+// existing OAuth flow directly. The hint is removed before navigation so the
+// callback return page cannot accidentally start a second authorization.
+function consumeInitialAccountAuthorization() {
+  if (
+    initialAccountAuthorizationConsumed
+    || !initialAccountAuthorizationPlatformIsSupported
+    || state.view !== "accounts"
+  ) return;
+  initialAccountAuthorizationConsumed = true;
+  const url = new URL(window.location.href);
+  url.searchParams.delete("authorize_platform");
+  url.searchParams.delete("authorize_account_id");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  void startBundleAccountAuthorization({
+    platform: initialAccountAuthorizationPlatform,
+    accountId: initialAccountAuthorizationId,
+    skipConfirmation: true,
+  }).catch((error) => {
+    showMsg("socialMsg", error?.detail || error?.message || "启动平台授权失败", false);
+  });
+}
+
 function bindIdentityRevalidationEvents() {
   if (identityRevalidationEventsBound) return;
   identityRevalidationEventsBound = true;
@@ -39624,6 +39655,7 @@ async function init() {
     updateAccountStatusViews();
     consumeGoogleAccountSessionResult();
     consumeBundleAuthorizationResult();
+    consumeInitialAccountAuthorization();
     if (!hasPersonaBootstrap || isPersonaWorkspaceModule() || state.activeModule === "publishing" || state.activeModule === "automation") scheduleWorkspaceRender(false);
   }).catch(() => {});
   const personasReady = loadPersonas().then(() => {

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import Any, Awaitable, Callable
+from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
@@ -1116,8 +1117,20 @@ class NativeTweetBotController:
                 text += "\n仅显示最近 20 个账号，请从网页账号管理查看完整列表。"
         base = str((self.get_runtime() or {}).get("telegram_tweet_public_base_url") or "").rstrip("/")
         if base.startswith("https://"):
+            text += "\n点击下方平台按钮会直接进入对应官方授权页；请确保打开的浏览器已有 VECTO 主站登录会话。"
+            # Keep the platform choice explicit in Telegram.  The console
+            # consumes ``authorize_platform`` after the existing VECTO web
+            # session is loaded and starts the matching official OAuth flow;
+            # no platform credentials ever pass through the bot.
             rows.append([types.InlineKeyboardButton(
-                text="➕ 添加/授权平台账号（网页安全登录）",
+                text="➕ 授权 Threads",
+                url=f"{base}/console.html?view=accounts&authorize_platform=threads",
+            ), types.InlineKeyboardButton(
+                text="➕ 授权 Instagram",
+                url=f"{base}/console.html?view=accounts&authorize_platform=instagram",
+            )])
+            rows.append([types.InlineKeyboardButton(
+                text="📂 打开平台账号管理",
                 url=f"{base}/console.html?view=accounts",
             )])
         rows.append([types.InlineKeyboardButton(text="返回", callback_data=return_callback)])
@@ -1159,7 +1172,8 @@ class NativeTweetBotController:
             "已将两类账号分开：\n"
             "• VECTO 网页账号：Telegram 工作台登录、切换和退出。\n"
             "• 平台授权账号：Threads、Instagram 等平台授权、登录检测和人设绑定。\n"
-            "平台账号密码、验证码不会通过 Telegram 传输；需要登录时会进入安全浏览器/OAuth流程。",
+            "平台账号密码、验证码不会通过 Telegram 传输；需要登录时会进入安全浏览器/OAuth流程。\n"
+            "网页账号登录状态只负责确认 VECTO 用户身份，不会替代 Threads/Instagram 的官方授权。",
             types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -1191,7 +1205,7 @@ class NativeTweetBotController:
         provider = str(account.get("auth_provider") or "browser").strip().lower()
         provider_label = "平台授权" if provider == "bundle" else "安全浏览器"
         account_action_note = (
-            "平台授权账号需要从网页账号管理重新授权；"
+            "点击“重新授权”会打开对应平台官方授权页；"
             if provider == "bundle"
             else "重新登录会创建安全浏览器任务；"
         )
@@ -1211,6 +1225,16 @@ class NativeTweetBotController:
             # Bundle accounts are OAuth-managed.  Do not expose the browser
             # login action that the backend intentionally rejects for them.
             rows[0] = rows[0][:1]
+            base = str((self.get_runtime() or {}).get("telegram_tweet_public_base_url") or "").rstrip("/")
+            if base.startswith("https://") and platform.lower() in {"threads", "instagram"}:
+                rows.insert(1, [types.InlineKeyboardButton(
+                    text="🔁 重新授权",
+                    url=(
+                        f"{base}/console.html?view=accounts"
+                        f"&authorize_platform={quote(platform.lower(), safe='')}"
+                        f"&authorize_account_id={quote(str(account_id), safe='')}"
+                    ),
+                )])
         if persona_id:
             rows.append([
                 types.InlineKeyboardButton(
@@ -1917,7 +1941,14 @@ class NativeTweetBotController:
                 rows = []
                 if base.startswith("https://"):
                     rows.append([types.InlineKeyboardButton(
-                        text="🔐 打开安全账号授权",
+                        text="➕ 授权 Threads",
+                        url=f"{base}/console.html?view=accounts&authorize_platform=threads",
+                    ), types.InlineKeyboardButton(
+                        text="➕ 授权 Instagram",
+                        url=f"{base}/console.html?view=accounts&authorize_platform=instagram",
+                    )])
+                    rows.append([types.InlineKeyboardButton(
+                        text="📂 打开平台账号管理",
                         url=f"{base}/console.html?view=accounts",
                     )])
                 rows.extend([
@@ -1979,10 +2010,13 @@ class NativeTweetBotController:
                 else:
                     task = result.get("task") if isinstance(result, dict) else {}
                     task_id = str((task or {}).get("id") or (task or {}).get("task_id") or "")
-                    message_text = (
-                        ("已创建登录检测任务。" if action == "accheck" else "已创建重新登录任务，请在安全浏览器中完成登录。")
-                        + (f"\n任务：{task_id}" if task_id else "")
-                    )
+                    if action == "accheck" and not task_id:
+                        message_text = str(result.get("message") or "平台授权状态无法确认，请点击重新授权。")
+                    else:
+                        message_text = (
+                            ("已创建登录检测任务。" if action == "accheck" else "已创建重新登录任务，请在安全浏览器中完成登录。")
+                            + (f"\n任务：{task_id}" if task_id else "")
+                        )
                 audit_action(chat_id, user_id, dispatch_action, status="success", resource_type="account", resource_id=account_id)
                 detail_text, detail_markup = await self._account_detail_payload(
                     types, member, account_id, return_callback="tt:platformaccounts",
