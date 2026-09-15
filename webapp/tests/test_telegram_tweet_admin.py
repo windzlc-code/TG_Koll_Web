@@ -20,6 +20,9 @@ from webapp.db import db, init_db
 from webapp.telegram_tweet_bot import (
     NativeTweetBotController,
     TweetWorkbenchOps,
+    _persona_image_option_definition,
+    _reconcile_persona_image_options,
+    _pagination_rows,
     _task_bucket,
     _task_timestamp,
     callback_token,
@@ -402,7 +405,9 @@ class TelegramTweetAdminTests(unittest.TestCase):
             },
         )
         expected_callbacks = {
-            "👤 我的人设": {"tt:matrix", "tt:persona_new", "tt:menu"},
+            "👤 我的人设": {
+                "tt:matrix", "tt:persona_new", "tt:persona_ai_new", "tt:persona_copy_new", "tt:menu",
+            },
             "📊 排程状态": {
                 "tt:tasks:0:pending", "tt:tasks:0:failed", "tt:tasks:0:scheduled",
                 "tt:tasks:0:immediate", "tt:tasks:0:running",
@@ -718,6 +723,147 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(load_state(101)["payload"], {})
         self.assertIn("未提交的输入步骤已取消", message.answers[-1][0])
 
+    def test_r18_pagination_has_first_previous_next_last_and_clamps_stale_page(self):
+        rows, page, total_pages = _pagination_rows(
+            _Types,
+            page=1,
+            total_items=15,
+            callback_for_page=lambda target: f"tt:test:{target}",
+            page_size=6,
+        )
+        self.assertEqual((page, total_pages), (1, 3))
+        labels = [button.text for row in rows for button in row]
+        self.assertIn("⏮ 首页", labels)
+        self.assertIn("◀️ 上一页", labels)
+        self.assertIn("下一页 ▶️", labels)
+        self.assertIn("尾页 ⏭", labels)
+        self.assertEqual(
+            {button.callback_data for row in rows for button in row},
+            {"tt:test:0", "tt:test:1", "tt:test:2"},
+        )
+        _rows, clamped_page, _clamped_total = _pagination_rows(
+            _Types,
+            page=99,
+            total_items=15,
+            callback_for_page=lambda target: f"tt:test:{target}",
+            page_size=6,
+        )
+        self.assertEqual(clamped_page, 2)
+
+    def test_persona_image_options_follow_web_dependency_buckets_and_keep_china_default(self):
+        options = {
+            "character_gender": "female",
+            "character_age": "23_27",
+            "character_hairstyle": "crew_cut",
+            "character_temperament": "street",
+            "character_clothing": "dark_suit_male",
+        }
+        reconciled = _reconcile_persona_image_options(options)
+        self.assertNotIn("character_hairstyle", reconciled)
+        self.assertNotIn("character_temperament", reconciled)
+        self.assertNotIn("character_clothing", reconciled)
+        _label, hair_values = _persona_image_option_definition("character_hairstyle", reconciled)
+        self.assertIn("soft_wave", {key for key, _caption in hair_values})
+        _region_label, region_values = _persona_image_option_definition("digital_human_character_region", {})
+        self.assertEqual(region_values[0][0], "china")
+
+    def test_image_post_list_enters_image_options_and_submits_canonical_payload(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "posts.list":
+                return [{"id": "post-a", "content": "在咖啡店观察 AI 产品"}]
+            if action == "image.styles":
+                return {"image_styles": [{"kind": "scene", "label": "咖啡店街景"}]}
+            if action == "image.generate":
+                return {"task_id": "image-task-1"}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        message = _Message()
+        post_button = callback_token(101, "d", {
+            "persona_id": "persona-a", "post_id": "post-a", "source": "posts", "intent": "image",
+        })
+        with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
+            asyncio.run(controller.handle_callback(_Query(post_button, message), _Types))
+        self.assertIn("推文配图设置", message.edits[-1][0])
+        style_button = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if "写实摄影" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(style_button.callback_data, message), _Types))
+        direction_button = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if "生成构图方向" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(direction_button.callback_data, message), _Types))
+        composition_button = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if "咖啡店街景" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(composition_button.callback_data, message), _Types))
+        generate_button = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(button.text).endswith("提交配图任务")
+        )
+        with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
+            asyncio.run(controller.handle_callback(_Query(generate_button.callback_data, message), _Types))
+        image_calls = [payload for action, payload in calls if action == "image.generate"]
+        self.assertEqual(len(image_calls), 1)
+        self.assertEqual(image_calls[0]["post_id"], "post-a")
+        self.assertEqual(image_calls[0]["image_render_style"], "photorealistic")
+        self.assertIn("aspect_ratio", image_calls[0])
+        self.assertEqual(image_calls[0]["image_mode"], "scene")
+        self.assertEqual(image_calls[0]["image_composition_label"], "咖啡店街景")
+        self.assertEqual(image_calls[0]["image_count"], 1)
+
+    def test_persona_image_options_keep_defaults_and_support_library_actions(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "persona_image.list":
+                return {"items": [{"id": "img-1", "created_at": "2026-09-15T10:00:00", "source": "生成", "is_reference": True}]}
+            if action == "persona_image.generate":
+                return {"task_id": "persona-image-task"}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        message = _Message()
+        with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
+            asyncio.run(controller.handle_callback(_Query("tt:personaimage", message), _Types))
+        self.assertIn("人设图与图库", message.edits[-1][0])
+        region = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(button.text).startswith("地区特征")
+        )
+        asyncio.run(controller.handle_callback(_Query(region.callback_data, message), _Types))
+        europe = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if "欧美" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(europe.callback_data, message), _Types))
+        direct = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if "直接生成" in str(button.text)
+        )
+        with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
+            asyncio.run(controller.handle_callback(_Query(direct.callback_data, message), _Types))
+        image_calls = [payload for action, payload in calls if action == "persona_image.generate"]
+        self.assertEqual(image_calls[0]["persona_image_options"]["digital_human_character_region"], "europe_america")
+        self.assertIn("persona_image.list", [action for action, _payload in calls])
+
     def test_generation_resumes_after_persona_and_confirms_before_enqueue(self):
         calls = []
 
@@ -761,6 +907,97 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(generated[0]["count"], 3)
         self.assertEqual(generated[0]["target_words"], 120)
         self.assertEqual(generated[0]["prompt"], "AI 产品趋势")
+
+    def test_generation_memory_picker_keeps_selected_context_in_enqueue_payload(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "profile.memories":
+                return {"memories": [
+                    {"id": "memory-1", "summary": "保持科技观察员的克制语气"},
+                    {"id": "memory-2", "summary": "优先使用真实案例和可执行建议"},
+                ]}
+            if action == "generation.start":
+                return {"task_id": "memory-gen-task"}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a", mode="generate_confirm", payload={
+            "count": 1,
+            "target_words": 120,
+            "prompt": "AI 产品趋势",
+            "platform": "threads",
+            "writing_locale": "zh-TW",
+            "selected_memory_ids": [],
+            "selected_memory_summaries": [],
+            "selected_directions": ["真实案例"],
+            "selection_required": True,
+        })
+        message = _Message()
+        opening = callback_token(101, "gmem", {"page": 0})
+        asyncio.run(controller.handle_callback(_Query(opening, message), _Types))
+        memory_button = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(getattr(button, "callback_data", "")).startswith("tt:gmempick:")
+        )
+        asyncio.run(controller.handle_callback(_Query(memory_button.callback_data, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_memories")
+        self.assertEqual(load_state(101)["payload"]["selected_memory_ids"], ["memory-1"])
+        confirm_button = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(getattr(button, "callback_data", "")).startswith("tt:gmemconfirm:")
+        )
+        asyncio.run(controller.handle_callback(_Query(confirm_button.callback_data, message), _Types))
+        submit_button = message.edits[-1][1]["reply_markup"].inline_keyboard[0][0]
+        with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
+            asyncio.run(controller.handle_callback(_Query(submit_button.callback_data, message), _Types))
+        generated = [payload for action, payload in calls if action == "generation.start"]
+        self.assertEqual(len(generated), 1)
+        self.assertEqual(generated[0]["selected_memory_ids"], ["memory-1"])
+        self.assertEqual(generated[0]["selected_memory_summaries"], ["保持科技观察员的克制语气"])
+        self.assertEqual(generated[0]["selected_directions"], ["真实案例"])
+
+    def test_generation_direction_picker_can_refresh_without_dropping_confirmation_state(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "post_directions":
+                return {"keywords": [
+                    "方向一", "方向二", "方向三", "方向四", "方向五",
+                    "方向六", "方向七", "方向八", "方向九", "方向十",
+                ]}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a", mode="generate_confirm", payload={
+            "prompt": "AI 产品趋势", "platform": "threads", "writing_locale": "zh-TW",
+        })
+        message = _Message()
+        first = callback_token(101, "gdir", {})
+        asyncio.run(controller.handle_callback(_Query(first, message), _Types))
+        refresh = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(button.text) == "换一批"
+        )
+        asyncio.run(controller.handle_callback(_Query(refresh.callback_data, message), _Types))
+        direction_calls = [payload for action, payload in calls if action == "post_directions"]
+        self.assertEqual(len(direction_calls), 2)
+        self.assertEqual(direction_calls[1]["previous_keywords"], direction_calls[0]["previous_keywords"] or [
+            "方向一", "方向二", "方向三", "方向四", "方向五",
+            "方向六", "方向七", "方向八", "方向九", "方向十",
+        ])
+        self.assertNotEqual(direction_calls[0]["idempotency_key"], direction_calls[1]["idempotency_key"])
+        self.assertEqual(load_state(101)["mode"], "generate_directions")
 
     def test_return_callback_restores_reply_control_keyboard(self):
         controller = NativeTweetBotController(
@@ -1228,6 +1465,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         html = (webapp / "static" / "admin.html").read_text(encoding="utf-8")
         admin_js = (webapp / "static" / "assets" / "admin.js").read_text(encoding="utf-8")
         console_js = (webapp / "static" / "assets" / "console.js").read_text(encoding="utf-8")
+        server_source = (webapp / "server.py").read_text(encoding="utf-8")
         bot_source = (webapp / "telegram_tweet_bot.py").read_text(encoding="utf-8")
         admin_source = (webapp / "telegram_tweet_admin.py").read_text(encoding="utf-8")
         console_panel = html[html.index('data-tg-workbench-panel="console"'):html.index('data-tg-workbench-panel="crm"')]
@@ -1270,6 +1508,11 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("has_active_web_session", bot_source)
         self.assertNotIn("create_session(", admin_source)
         self.assertNotIn('initialConsoleParams.get("module")', console_js)
+        self.assertIn('"hot.rewrite"', server_source)
+        self.assertIn('"personas.ai_create"', server_source)
+        self.assertIn('"personas.copy_analyze"', server_source)
+        self.assertIn('mode == "hot_rewrite"', bot_source)
+        self.assertIn('text="✍️ 改写"', bot_source)
 
     def test_hot_start_accepts_service_id_and_exposes_status_and_cancel(self):
         def dispatch(_user_id, action, _payload):
@@ -1294,6 +1537,134 @@ class TelegramTweetAdminTests(unittest.TestCase):
         buttons = message.edits[-1][1]["reply_markup"].inline_keyboard[0]
         self.assertTrue(buttons[0].callback_data.startswith("tt:hotstatus:"))
         self.assertTrue(buttons[1].callback_data.startswith("tt:hotcancel:"))
+
+    def test_hot_candidate_can_be_rewritten_then_imported(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "hot.rewrite":
+                return {"ok": True, "content": "改写后的生活化热点正文，保留核心事实。"}
+            if action == "hot.import":
+                return {"posts": [{"id": "post-hot-1", "content": payload["candidates"][0]["content"]}]}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a", mode="hot_select", payload={
+            "hot_candidates": [{"title": "热点标题", "content": "原始热点正文。", "platform": "threads"}],
+            "last_hot_task_id": "hot-task-1",
+            "last_hot_persona_id": "persona-a",
+        })
+        message = _Message()
+        rewrite = callback_token(101, "hotrewrite", {
+            "index": 0, "task_id": "hot-task-1", "persona_id": "persona-a",
+        })
+        asyncio.run(controller.handle_callback(_Query(rewrite, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "hot_rewrite")
+        rewritten_message = _Message(text="/auto")
+        asyncio.run(controller.handle_text(rewritten_message, _Types))
+        state = load_state(101)
+        self.assertEqual(state["mode"], "hot_select")
+        self.assertEqual(state["payload"]["hot_candidates"][0]["content"], "改写后的生活化热点正文，保留核心事实。")
+        rewrite_payload = next(payload for action, payload in calls if action == "hot.rewrite")
+        self.assertTrue(rewrite_payload["idempotency_key"].startswith("tg:hot-rewrite:101:"))
+        save = next(
+            button
+            for row in rewritten_message.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if str(button.text).startswith("保存")
+        )
+        asyncio.run(controller.handle_callback(_Query(save.callback_data, message), _Types))
+        imported = [payload for action, payload in calls if action == "hot.import"]
+        self.assertEqual(len(imported), 1)
+        self.assertEqual(imported[0]["candidates"][0]["content"], "改写后的生活化热点正文，保留核心事实。")
+
+    def test_persona_ai_and_copy_creation_are_reachable_from_telegram(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "personas.ai_create":
+                return {"profile": {"id": "persona-ai", "name": "AI 人设"}}
+            if action == "personas.copy_analyze":
+                return {
+                    "source": {"platform": "threads", "url": "https://www.threads.net/@public"},
+                    "profile": {"name": "复制人设", "content": "复制后的简介", "setup": {"personaGender": "female"}},
+                }
+            if action == "personas.create":
+                return {"id": "persona-copy", "name": payload["name"]}
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:persona_ai_new", message), _Types))
+        asyncio.run(controller.handle_text(_Message(text="AI观察员｜关注科技趋势并保持克制专业"), _Types))
+        self.assertEqual(load_state(101)["selected_persona_id"], "persona-ai")
+        self.assertTrue(any(action == "personas.ai_create" for action, _payload in calls))
+
+        asyncio.run(controller.handle_callback(_Query("tt:persona_copy_new", message), _Types))
+        asyncio.run(controller.handle_text(_Message(text="复制观察员｜https://www.threads.net/@public"), _Types))
+        self.assertEqual(load_state(101)["mode"], "persona_copy_confirm")
+        asyncio.run(controller.handle_callback(_Query("tt:persona_copy_confirm", message), _Types))
+        created = [payload for action, payload in calls if action == "personas.create"]
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["copy_source"]["platform"], "threads")
+        self.assertEqual(created[0]["setup"]["personaGender"], "female")
+
+    def test_persona_ai_keyword_selection_matches_web_limits_and_creates(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "personas.ai_keywords":
+                return {
+                    "ok": True,
+                    "keywords": ["长期方向一", "长期方向二", "长期方向三", "长期方向四", "长期方向五"],
+                    "hot_keywords": ["热门方向一", "热门方向二", "热门方向三", "热门方向四", "热门方向五"],
+                    "hot_keyword_source": {"available": True, "candidate_count": 12},
+                }
+            if action == "personas.ai_create":
+                return {"profile": {"id": "persona-keyword", "name": payload["name"]}}
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:persona_ai_new", message), _Types))
+        keyword_message = _Message(text="生活观察员｜记录日常生活和城市见闻")
+        asyncio.run(controller.handle_text(keyword_message, _Types))
+        self.assertEqual(load_state(101)["mode"], "persona_ai_keyword_select")
+        regular = next(
+            button for row in keyword_message.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(button.text).endswith("长期方向一")
+        )
+        hot = next(
+            button for row in keyword_message.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(button.text).endswith("热门方向一")
+        )
+        asyncio.run(controller.handle_callback(_Query(regular.callback_data, keyword_message), _Types))
+        asyncio.run(controller.handle_callback(_Query(hot.callback_data, keyword_message), _Types))
+        confirm = next(
+            button for row in keyword_message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(button.text).startswith("确认生成人设")
+        )
+        asyncio.run(controller.handle_callback(_Query(confirm.callback_data, keyword_message), _Types))
+        created = [payload for action, payload in calls if action == "personas.ai_create"]
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["selected_regular_keywords"], ["长期方向一"])
+        self.assertEqual(created[0]["selected_hot_keywords"], ["热门方向一"])
+        self.assertEqual(load_state(101)["selected_persona_id"], "persona-keyword")
 
     def test_watchers_stop_when_member_is_disabled_or_rebound(self):
         calls = []

@@ -6236,6 +6236,8 @@ def _task_type_label(task_type: Any) -> str:
         "get_gemini": "Gemini 分析",
         "image_generate": "图片生成",
         "persona_post_generation": "AI 推文草稿生成",
+        "persona_post_image": "AI 推文配图",
+        "persona_image": "AI 人设图生成",
     }
     key = str(task_type or "").strip()
     return mapping.get(key, key or "未知工作流")
@@ -20615,6 +20617,15 @@ def _attach_task_output_to_persona_post(
         raise HTTPException(status_code=404, detail="任务不存在。")
     task = dict(row)
     _ensure_user_can_access_task(user, task)
+    if str(task.get("type") or "").strip() != "persona_post_image":
+        raise HTTPException(status_code=400, detail="只有推文配图任务可以回写到草稿。")
+    task_input = _json_loads(task.get("input_json"), {})
+    if (
+        not isinstance(task_input, dict)
+        or str(task_input.get("related_persona_id") or "").strip() != str(archive_id or "").strip()
+        or str(task_input.get("related_post_id") or "").strip() != str(post_id or "").strip()
+    ):
+        raise HTTPException(status_code=404, detail="任务与当前人设草稿不匹配。")
     if str(task.get("status") or "").strip().lower() != "success":
         raise HTTPException(status_code=409, detail="任务尚未成功完成，暂时不能回写到草稿。")
     output_data = _json_loads(task.get("output_json"), {})
@@ -27158,17 +27169,218 @@ def create_app() -> FastAPI:
                         PersonaDashboardPersonaCreatePayload(
                             name=str(payload.get("name") or "").strip(),
                             content=str(payload.get("content") or "").strip(),
+                            setup=payload.get("setup") if isinstance(payload.get("setup"), dict) else {},
+                            copy_source=payload.get("copy_source") if isinstance(payload.get("copy_source"), dict) else {},
                         )
                     ),
                 )
-        if action in {"profile.get", "profile.update", "posts.list", "posts.create", "posts.update", "posts.delete", "posts.favorite", "generation.start", "generation.status", "publish.start", "hot.start", "hot.status", "hot.import", "hot.cancel", "media.delete"}:
+        if action == "personas.ai_keywords":
+            request_payload = PersonaDashboardPersonaAiKeywordsPayload(
+                name=str(payload.get("name") or "").strip(),
+                prompt=str(payload.get("prompt") or "").strip(),
+                include_hot_keywords=bool(payload.get("include_hot_keywords", True)),
+            )
+            return _run_billable_operation(
+                user,
+                ref_type="persona_ai_keywords",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: _persona_dashboard_suggest_keywords(request_payload),
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+                request_fingerprint=_persona_ai_request_fingerprint(request_payload),
+            )
+        if action == "personas.ai_create":
+            request_payload = PersonaDashboardPersonaAiCreatePayload(
+                name=str(payload.get("name") or "").strip(),
+                prompt=str(payload.get("prompt") or "").strip(),
+                selected_keywords=[
+                    str(item or "").strip()
+                    for item in (payload.get("selected_keywords") or [])
+                    if str(item or "").strip()
+                ][:2],
+                selected_regular_keywords=[
+                    str(item or "").strip()
+                    for item in (payload.get("selected_regular_keywords") or [])
+                    if str(item or "").strip()
+                ][:2],
+                selected_hot_keywords=[
+                    str(item or "").strip()
+                    for item in (payload.get("selected_hot_keywords") or [])
+                    if str(item or "").strip()
+                ][:2],
+            )
+            with TENANT_RESOURCE_LIFECYCLE_LOCK:
+                return _run_billable_operation(
+                    user,
+                    ref_type="persona_ai_create",
+                    sku="basic_text_post",
+                    quantity=1,
+                    operation=lambda: _create_persona_with_owner(
+                        user,
+                        lambda: _persona_dashboard_create_persona_with_ai(request_payload),
+                    ),
+                    idempotency_key=str(payload.get("idempotency_key") or ""),
+                    request_fingerprint=_persona_ai_request_fingerprint(request_payload),
+                )
+        if action == "personas.copy_analyze":
+            request_payload = PersonaDashboardPersonaCopyAnalyzePayload(
+                url=str(payload.get("url") or "").strip(),
+                name=str(payload.get("name") or "").strip(),
+            )
+            return _run_billable_operation(
+                user,
+                ref_type="persona_copy_analyze",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: _persona_dashboard_analyze_copy(request_payload),
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+                request_fingerprint=_persona_copy_request_fingerprint(request_payload),
+            )
+        # The Web persona console exposes groups as a first-class resource.
+        # Keep the Telegram bridge on the same owner-scoped helpers instead
+        # of maintaining a second grouping store or bypassing tenant checks.
+        if action == "persona.groups":
+            visible_personas = _visible_persona_ids(user)
+            archives, _ = _read_tool_r18_persona_archives()
+            archive_ids = {
+                str(item.get("id") or "").strip()
+                for item in archives
+                if isinstance(item, dict)
+            }
+            archive_ids &= visible_personas
+            result = _read_persona_groups(archive_ids)
+            visible_groups = _visible_persona_group_ids(user)
+            result["groups"] = [
+                group for group in (result.get("groups") or [])
+                if str(group.get("id") or "").strip() in visible_groups
+            ]
+            result["assigned_persona_ids"] = sorted({
+                str(persona_id or "").strip()
+                for group in result["groups"]
+                for persona_id in (group.get("persona_ids") or [])
+                if str(persona_id or "").strip() in visible_personas
+            })
+            result["ungrouped_persona_ids"] = [
+                str(persona_id or "").strip()
+                for persona_id in (result.get("ungrouped_persona_ids") or [])
+                if str(persona_id or "").strip() in visible_personas
+            ]
+            return result
+        if action == "persona.group.create":
+            with TENANT_RESOURCE_LIFECYCLE_LOCK:
+                _require_active_workspace_user(user)
+                return _create_persona_group_with_owner(
+                    user,
+                    lambda: _create_persona_group(
+                        PersonaDashboardGroupCreatePayload(
+                            name=str(payload.get("name") or "").strip(),
+                        )
+                    ),
+                )
+        if action in {
+            "persona.group.rename", "persona.group.delete", "persona.group.add",
+            "persona.group.remove", "persona.group.collapse", "persona.groups.reorder",
+        }:
+            group_id = str(payload.get("group_id") or "").strip()
+            if action != "persona.groups.reorder" and not group_id:
+                raise HTTPException(status_code=400, detail="请选择人设分组")
+            if action != "persona.groups.reorder":
+                _require_persona_group_access(group_id, user)
+            if action == "persona.group.rename":
+                return _rename_persona_group(
+                    group_id,
+                    PersonaDashboardGroupRenamePayload(
+                        name=str(payload.get("name") or "").strip(),
+                    ),
+                )
+            if action == "persona.group.delete":
+                result = _delete_persona_group(group_id)
+                _delete_persona_group_owners([group_id])
+                return result
+            if action == "persona.group.collapse":
+                return _set_persona_group_collapsed(group_id, bool(payload.get("collapsed")))
+            if action == "persona.group.add":
+                target_persona_id = str(payload.get("persona_id") or "").strip()
+                _require_persona_access(target_persona_id, user)
+                return _add_persona_to_group(
+                    group_id,
+                    PersonaDashboardGroupPersonaPayload(persona_id=target_persona_id),
+                )
+            if action == "persona.group.remove":
+                target_persona_id = str(payload.get("persona_id") or "").strip()
+                _require_persona_access(target_persona_id, user)
+                return _remove_persona_from_group(group_id, target_persona_id)
+            reorder_groups = payload.get("groups") if isinstance(payload.get("groups"), list) else []
+            reorder_payload = PersonaDashboardGroupReorderPayload(
+                groups=[
+                    PersonaDashboardGroupReorderItemPayload(**item)
+                    for item in reorder_groups
+                    if isinstance(item, dict)
+                ],
+                ungrouped_persona_ids=[
+                    str(item or "").strip()
+                    for item in (payload.get("ungrouped_persona_ids") or [])
+                    if str(item or "").strip()
+                ],
+            )
+            for item in reorder_payload.groups:
+                _require_persona_group_access(item.id, user)
+                for target_persona_id in item.persona_ids:
+                    _require_persona_access(target_persona_id, user)
+            for target_persona_id in reorder_payload.ungrouped_persona_ids:
+                _require_persona_access(target_persona_id, user)
+            return _reorder_persona_groups(
+                reorder_payload,
+                visible_group_ids=_visible_persona_group_ids(user),
+                visible_persona_ids=_visible_persona_ids(user),
+            )
+        if action in {
+            "profile.get", "profile.update", "posts.list", "posts.create", "posts.update", "posts.delete",
+            "posts.favorite", "generation.start", "generation.status", "publish.start", "hot.start", "hot.status",
+            "hot.import", "hot.rewrite", "hot.cancel", "media.delete", "post_directions", "image.styles", "image.options",
+            "image.generate", "image.status", "image.attach", "persona_image.generate",
+            "persona_image.list", "persona_image.apply", "persona_image.delete", "persona_image.upload",
+            "profile.ai", "profile.memories", "profile.memory.create", "profile.memory.delete",
+            "profile.history", "profile.history.requeue", "profile.history.delete", "profile.history.recognize",
+            "profile.threads.bind", "profile.threads.unbind", "generation.resolve",
+            "persona.duplicate", "persona.delete", "persona.rename", "persona.refresh",
+        }:
             _require_persona_access(persona_id, user)
+        if action == "persona.duplicate":
+            with TENANT_RESOURCE_LIFECYCLE_LOCK:
+                return _create_persona_with_owner(user, lambda: _duplicate_persona_archive(persona_id))
+        if action == "persona.delete":
+            with TENANT_RESOURCE_LIFECYCLE_LOCK:
+                result = _delete_persona_dashboard_persona(persona_id)
+                _delete_persona_owner(persona_id)
+                return result
+        if action == "persona.rename":
+            return _rename_persona_archive(
+                persona_id,
+                PersonaDashboardPersonaRenamePayload(name=str(payload.get("name") or "").strip()),
+            )
+        if action == "persona.refresh":
+            source = str(payload.get("source") or "http_first").strip().lower() or "http_first"
+            if source == "browser":
+                source = "http_first"
+            if source not in {"rsshub", "http_first"}:
+                raise HTTPException(status_code=400, detail="刷新来源仅支持 http_first 或 rsshub")
+            return _start_persona_dashboard_refresh(
+                persona_id,
+                source=source,
+                archive_ids=[persona_id],
+                user_id=user_id,
+                platform=str(payload.get("platform") or "").strip(),
+            )
         if action == "profile.get":
             return _read_persona_dashboard_profile(persona_id)
         if action == "profile.update":
             allowed = {
                 key: payload.get(key)
-                for key in ("content", "tweet_style_sample")
+                for key in (
+                    "name", "content", "tweet_style_sample", "bound_pad_code", "bound_pad_name",
+                    "active_link_preset_id", "link_presets", "avatar",
+                )
                 if key in payload
             }
             if not allowed:
@@ -27177,6 +27389,65 @@ def create_app() -> FastAPI:
                 persona_id,
                 PersonaDashboardPersonaProfilePayload(**allowed),
             )
+        if action == "profile.ai":
+            request_payload = PersonaDashboardPersonaAiProfilePayload(
+                name=str(payload.get("name") or "").strip(),
+                prompt=str(payload.get("prompt") or "").strip(),
+                selected_keywords=[
+                    str(item or "").strip()
+                    for item in (payload.get("selected_keywords") or [])
+                    if str(item or "").strip()
+                ][:2],
+            )
+            return _run_billable_operation(
+                user,
+                ref_type="persona_ai_profile",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: _persona_dashboard_generate_profile_content(request_payload),
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+            )
+        if action == "profile.memories":
+            return {"ok": True, "memories": _list_selectable_persona_memories(persona_id)}
+        if action == "profile.memory.create":
+            return _create_persona_dashboard_memory_entry(
+                persona_id,
+                str(payload.get("summary") or ""),
+            )
+        if action == "profile.memory.delete":
+            return _delete_persona_dashboard_memory_entry(
+                persona_id,
+                str(payload.get("memory_id") or ""),
+            )
+        if action == "profile.history":
+            return {"ok": True, "publish_history": _list_persona_archive_publish_history(persona_id)}
+        if action == "profile.history.requeue":
+            return _requeue_persona_publish_record(
+                persona_id,
+                str(payload.get("history_id") or ""),
+            )
+        if action == "profile.history.delete":
+            history_ids = [
+                str(item or "").strip()
+                for item in (payload.get("history_ids") or [payload.get("history_id")])
+                if str(item or "").strip()
+            ]
+            return _delete_persona_publish_records(persona_id, history_ids)
+        if action == "profile.history.recognize":
+            if bool(payload.get("auto")):
+                return _auto_recognize_persona_publish_records(persona_id)
+            url = str(payload.get("url") or "").strip()
+            if not url:
+                raise HTTPException(status_code=400, detail="缺少帖子链接")
+            return _recognize_persona_publish_record(
+                persona_id,
+                url,
+                str(payload.get("caption") or "").strip(),
+            )
+        if action == "profile.threads.bind":
+            return _bind_persona_threads_username(persona_id, str(payload.get("username") or ""))
+        if action == "profile.threads.unbind":
+            return _unbind_persona_threads_username(persona_id)
         if action == "posts.list":
             source = "favorites" if str(payload.get("source") or "") == "favorites" else "posts"
             return _list_persona_archive_posts(persona_id, source)
@@ -27219,10 +27490,29 @@ def create_app() -> FastAPI:
             generation_payload = PersonaDashboardGeneratePostsPayload(
                 count=max(1, min(int(payload.get("count") or 3), 5)),
                 prompt=str(payload.get("prompt") or "").strip(),
-                platform="threads",
+                platform=str(payload.get("platform") or "threads").strip() or "threads",
                 target_words=max(20, min(int(payload.get("target_words") or 120), 1000)),
-                writing_locale="zh-TW",
-                selection_required=False,
+                content_time_slot=str(payload.get("content_time_slot") or "").strip(),
+                writing_locale=str(payload.get("writing_locale") or "zh-TW").strip() or "zh-TW",
+                selected_memory_ids=[
+                    str(item or "").strip()
+                    for item in (payload.get("selected_memory_ids") or [])
+                    if str(item or "").strip()
+                ][:20],
+                selected_memory_summaries=[
+                    str(item or "").strip()
+                    for item in (payload.get("selected_memory_summaries") or [])
+                    if str(item or "").strip()
+                ][:20],
+                selected_directions=[
+                    str(item or "").strip()
+                    for item in (payload.get("selected_directions") or [])
+                    if str(item or "").strip()
+                ][:10],
+                selection_required=bool(payload.get("selection_required")),
+                rewrite_source_post_id=str(payload.get("rewrite_source_post_id") or "").strip(),
+                rewrite_source_title=str(payload.get("rewrite_source_title") or "").strip(),
+                rewrite_source_content=str(payload.get("rewrite_source_content") or "").strip(),
             )
             task_id, replayed = _enqueue_persona_post_generation_task(
                 archive_id=persona_id,
@@ -27231,6 +27521,33 @@ def create_app() -> FastAPI:
                 idempotency_key=str(payload.get("idempotency_key") or ""),
             )
             return {"ok": True, "task_id": task_id, "replayed": bool(replayed)}
+        if action == "generation.resolve":
+            task_id = str(payload.get("task_id") or "").strip()
+            task = _persona_post_generation_task_row(task_id, user_id, persona_id)
+            task_input = _json_loads(task.get("input_json"), {})
+            task_output = _json_loads(task.get("output_json"), {})
+            if str(task.get("status") or "").strip().lower() != "success":
+                raise HTTPException(status_code=409, detail="生成任务尚未完成")
+            if not _to_bool((task_input or {}).get("selection_required"), False):
+                raise HTTPException(status_code=409, detail="该生成任务不需要候选确认")
+            expected_ids = {
+                str(item or "").strip()
+                for item in ((task_output or {}).get("post_ids") if isinstance((task_output or {}).get("post_ids"), list) else [])
+                if str(item or "").strip()
+            }
+            if not expected_ids:
+                expected_ids = {
+                    str(item.get("id") or "").strip()
+                    for item in ((task_output or {}).get("posts") if isinstance((task_output or {}).get("posts"), list) else [])
+                    if isinstance(item, dict) and str(item.get("id") or "").strip()
+                }
+            return _finalize_persona_generated_candidates(
+                persona_id,
+                operation_id=task_id,
+                selected_post_id=str(payload.get("selected_post_id") or "").strip(),
+                title=(str(payload.get("title") or "").strip() if "title" in payload else None),
+                expected_post_ids=expected_ids,
+            )
         if action == "generation.status":
             task = _persona_post_generation_task_row(
                 str(payload.get("task_id") or "").strip(), user_id, persona_id,
@@ -27279,7 +27596,7 @@ def create_app() -> FastAPI:
                 rows = conn.execute(
                     "SELECT id, persona_id, platform, username, display_name, status, health_status, "
                     "auth_provider, updated_at, created_at "
-                    "FROM social_accounts WHERE user_id = ? ORDER BY updated_at DESC LIMIT 100",
+                    "FROM social_accounts WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1000",
                     (user_id,),
                 ).fetchall()
             return [dict(row) for row in rows]
@@ -27289,6 +27606,73 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=400, detail="请选择账号")
             social_api._require_account_access(account_id, user)
             return social_api.get_social_account(account_id)
+        if action == "automation.plans.list":
+            return {
+                "ok": True,
+                "plans": social_api.list_social_automation_plans(user_id=user_id),
+            }
+        if action == "automation.plans.create":
+            account_id = str(payload.get("account_id") or "").strip()
+            if not account_id:
+                raise HTTPException(status_code=400, detail="请选择自动化执行账号")
+            raw_items = payload.get("items") if isinstance(payload.get("items"), list) else []
+            items = [
+                social_api.SocialAutomationPlanItemPayload(**item)
+                for item in raw_items
+                if isinstance(item, dict)
+            ]
+            if not items:
+                raise HTTPException(status_code=400, detail="自动化计划至少需要一个步骤")
+            plan_payload = social_api.SocialAutomationPlanPayload(
+                persona_id=str(payload.get("persona_id") or "").strip(),
+                account_id=account_id,
+                platform=str(payload.get("platform") or "threads").strip() or "threads",
+                mode=str(payload.get("mode") or "list").strip() or "list",
+                items=items,
+            )
+            return {
+                "ok": True,
+                "plan": social_api.create_social_automation_plan(plan_payload, user=user),
+            }
+        if action == "automation.plans.cancel":
+            return {
+                "ok": True,
+                "plan": social_api.cancel_social_automation_plan(
+                    str(payload.get("plan_id") or "").strip(),
+                    user_id=user_id,
+                ),
+            }
+        if action == "automation.plans.delete":
+            plan_ids = [
+                str(item or "").strip()
+                for item in (payload.get("plan_ids") or [payload.get("plan_id")])
+                if str(item or "").strip()
+            ]
+            return social_api.delete_social_automation_plans(plan_ids, user_id=user_id)
+        if action == "automation.tasks.list":
+            return {
+                "ok": True,
+                "tasks": social_api.list_social_tasks(
+                    status=str(payload.get("status") or "").strip(),
+                    account_id=str(payload.get("account_id") or "").strip(),
+                    limit=max(1, min(int(payload.get("limit") or 60), 200)),
+                    user_id=user_id,
+                ),
+            }
+        if action in {"automation.tasks.get", "automation.tasks.cancel", "automation.tasks.retry"}:
+            task_id = str(payload.get("task_id") or "").strip()
+            social_api._require_task_access(task_id, user)
+            if action == "automation.tasks.get":
+                return {"ok": True, "task": social_api.get_social_task(task_id)}
+            if action == "automation.tasks.cancel":
+                return {"ok": True, "task": social_api.cancel_social_task(task_id, "Telegram 用户取消")}
+            return {
+                "ok": True,
+                "task": social_api.retry_social_task(
+                    task_id,
+                    billing_admin_waived=bool(_is_admin_workspace(user) or _is_admin(user)),
+                ),
+            }
         if action in {
             "accounts.bind_persona",
             "accounts.bind",
@@ -27399,7 +27783,7 @@ def create_app() -> FastAPI:
             with db() as conn:
                 normal_rows = conn.execute(
                     "SELECT status, input_json, created_at FROM tasks "
-                    "WHERE user_id = ? AND type = 'persona_post_generation'",
+                    "WHERE user_id = ? AND type IN ('persona_post_generation', 'persona_post_image', 'persona_image')",
                     (user_id,),
                 ).fetchall()
                 social_rows = conn.execute(
@@ -27458,26 +27842,39 @@ def create_app() -> FastAPI:
                 else:
                     bucket = "completed"
                 counts[bucket] += 1
-            return {"ok": True, "total": len(rows), "counts": counts}
+            return {
+                "ok": True,
+                "total": len(rows),
+                "counts": counts,
+                "queue_counts": {
+                    "normal": len(normal_rows),
+                    "automation": len(social_rows),
+                },
+            }
         if action == "tasks.list":
-            limit = max(1, min(int(payload.get("limit") or 30), 100))
+            limit = max(1, min(int(payload.get("limit") or 30), 1000))
+            queue = str(payload.get("queue") or "all").strip().lower()
+            if queue not in {"all", "normal", "automation"}:
+                raise HTTPException(status_code=400, detail="任务队列仅支持 normal、automation 或 all")
             with db() as conn:
-                normal_rows = conn.execute(
+                normal_rows = [] if queue == "automation" else conn.execute(
                     "SELECT * FROM tasks "
-                    "WHERE user_id = ? AND type = 'persona_post_generation' "
+                    "WHERE user_id = ? AND type IN ('persona_post_generation', 'persona_post_image', 'persona_image') "
                     "ORDER BY created_at DESC LIMIT ?",
                     (user_id, limit),
                 ).fetchall()
             normal = [{**_telegram_normal_task_projection(row), "_tg_task_kind": "normal"} for row in normal_rows]
-            social = [{**item, "type": item.get("task_type"), "_tg_task_kind": "social"}
-                      for item in social_api.list_social_tasks(limit=limit, user_id=user_id)]
+            social = [] if queue == "normal" else [
+                {**item, "type": item.get("task_type"), "_tg_task_kind": "social"}
+                for item in social_api.list_social_tasks(limit=limit, user_id=user_id)
+            ]
             return sorted(normal + social, key=lambda item: int(item.get("created_at") or 0), reverse=True)[:limit]
         if action in {"tasks.get", "tasks.cancel", "tasks.retry"}:
             task_id = str(payload.get("task_id") or "").strip()
             with db() as conn:
                 normal_row = conn.execute(
                     "SELECT * FROM tasks WHERE id = ? AND user_id = ? "
-                    "AND type = 'persona_post_generation'",
+                    "AND type IN ('persona_post_generation', 'persona_post_image', 'persona_image')",
                     (task_id, user_id),
                 ).fetchone()
             if normal_row is not None:
@@ -27536,21 +27933,200 @@ def create_app() -> FastAPI:
                 PersonaDashboardHotCandidatesImportPayload(candidates=candidates, platform="threads"),
             )
             return _apply_persona_post_retention(result, user)
+        if action == "hot.rewrite":
+            request_payload = PersonaDashboardHotRewritePayload(
+                source_content=str(payload.get("source_content") or "").strip(),
+                writing_locale=str(payload.get("writing_locale") or "zh-TW").strip() or "zh-TW",
+                platform=str(payload.get("platform") or "threads").strip() or "threads",
+                instruction=str(payload.get("instruction") or "").strip(),
+            )
+            return _run_billable_operation(
+                user,
+                ref_type="persona_hot_rewrite",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: _rewrite_persona_hot_candidate_content(persona_id, request_payload),
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+            )
         if action == "hot.cancel":
             task_cancelled = _cancel_persona_hot_candidate_tasks(persona_id, user_id)
             process_cancelled = _cancel_persona_hot_workflow(persona_id)
             return {"ok": True, "cancelled": bool(task_cancelled or process_cancelled)}
+        if action == "post_directions":
+            request_payload = PersonaDashboardPostDirectionsPayload(
+                input_title=str(payload.get("input_title") or "").strip(),
+                input_content=str(payload.get("input_content") or "").strip(),
+                platform=str(payload.get("platform") or "threads").strip() or "threads",
+                writing_locale=str(payload.get("writing_locale") or "zh-TW").strip() or "zh-TW",
+                interface_language=str(payload.get("interface_language") or "zh-Hans").strip() or "zh-Hans",
+                previous_keywords=[str(item or "").strip() for item in (payload.get("previous_keywords") or []) if str(item or "").strip()][:20],
+            )
+            return _run_billable_operation(
+                user,
+                ref_type="persona_post_directions",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: _persona_dashboard_suggest_post_directions(persona_id, request_payload),
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+                request_fingerprint=_persona_post_directions_request_fingerprint(persona_id, request_payload),
+            )
+        if action in {"image.styles", "image.options"}:
+            if action == "image.options":
+                return {
+                    "ok": True,
+                    "aspect_ratios": ["auto", *_PERSONA_POST_IMAGE_ASPECT_RATIOS],
+                    "modes": list(_PERSONA_POST_IMAGE_MODES),
+                    "render_styles": [
+                        {"id": key, "label": value[0]}
+                        for key, value in _PERSONA_POST_IMAGE_RENDER_STYLES.items()
+                    ],
+                }
+            request_payload = PersonaDashboardImageStylesPayload(
+                post_id=str(payload.get("post_id") or "").strip(),
+                input_title=str(payload.get("input_title") or "").strip(),
+                input_content=str(payload.get("input_content") or "").strip(),
+                platform=str(payload.get("platform") or "threads").strip() or "threads",
+                writing_locale=str(payload.get("writing_locale") or "zh-TW").strip() or "zh-TW",
+                interface_language=str(payload.get("interface_language") or "zh-Hans").strip() or "zh-Hans",
+                previous_image_styles=[str(item or "").strip() for item in (payload.get("previous_image_styles") or []) if str(item or "").strip()][:20],
+            )
+            return _run_billable_operation(
+                user,
+                ref_type="persona_image_styles",
+                sku="basic_text_post",
+                quantity=1,
+                operation=lambda: _persona_dashboard_suggest_image_styles(persona_id, request_payload),
+                idempotency_key=str(payload.get("idempotency_key") or ""),
+                request_fingerprint=_persona_image_styles_request_fingerprint(persona_id, request_payload),
+            )
+        if action == "image.generate":
+            post_id = str(payload.get("post_id") or payload.get("related_post_id") or "").strip()
+            if not post_id:
+                raise HTTPException(status_code=400, detail="推文配图需要关联草稿")
+            posts = _list_persona_archive_posts(persona_id, "favorites" if str(payload.get("source") or "") == "favorites" else "posts")
+            post = next((item for item in posts if str(item.get("id") or "") == post_id), None)
+            if not post:
+                raise HTTPException(status_code=404, detail="草稿不存在")
+            try:
+                image_count = min(max(int(float(payload.get("image_count") or payload.get("count") or 1)), 1), 4)
+            except (TypeError, ValueError):
+                image_count = 1
+            try:
+                aspect_ratio = _normalize_persona_post_image_aspect_ratio(
+                    payload.get("aspect_ratio") or "auto", default="auto",
+                )
+                image_mode = _normalize_persona_post_image_mode(payload.get("image_mode") or payload.get("mode"))
+                image_render_style = _normalize_persona_post_image_render_style(
+                    payload.get("image_render_style") or payload.get("image_filter") or "original",
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            task_id = _new_id("task")
+            image_payload = {
+                "related_persona_id": persona_id,
+                "related_post_id": post_id,
+                "prompt": str(payload.get("prompt") or payload.get("custom_prompt") or "").strip(),
+                "custom_prompt": str(payload.get("prompt") or payload.get("custom_prompt") or "").strip(),
+                "generation_content": str(payload.get("generation_content") or post.get("content") or "").strip(),
+                "content_source_mode": "draft",
+                "image_count": image_count,
+                "aspect_ratio": aspect_ratio,
+                "image_mode": image_mode,
+                "image_composition_label": str(payload.get("image_composition_label") or "").strip()[:24],
+                "image_render_style": image_render_style,
+                "image_edit_mode": False,
+                "uploaded_files": [],
+            }
+            _enqueue_task_for_user(task_id, _workspace_user_id(user), "persona_post_image", image_payload, user)
+            return {"ok": True, "task_id": task_id, "id": task_id, "status": "queued"}
+        if action == "persona_image.generate":
+            task_id = _new_id("task")
+            image_payload = {
+                "related_persona_id": persona_id,
+                "prompt": str(payload.get("prompt") or payload.get("supplement_prompt") or "").strip(),
+                "supplement_prompt": str(payload.get("supplement_prompt") or payload.get("prompt") or "").strip(),
+                "persona_image_options": payload.get("persona_image_options") if isinstance(payload.get("persona_image_options"), dict) else {},
+                "aspect_ratio": str(payload.get("aspect_ratio") or "1:1").strip() or "1:1",
+                "mode": str(payload.get("mode") or "person").strip() or "person",
+                "uploaded_files": [],
+            }
+            _enqueue_task_for_user(task_id, _workspace_user_id(user), "persona_image", image_payload, user)
+            return {"ok": True, "task_id": task_id, "id": task_id, "status": "queued"}
+        if action == "persona_image.list":
+            return _list_persona_archive_images(persona_id)
+        if action == "persona_image.apply":
+            return _apply_persona_archive_reference_image(
+                persona_id,
+                str(payload.get("image_id") or "").strip(),
+            )
+        if action == "persona_image.delete":
+            return _delete_persona_archive_image(
+                persona_id,
+                str(payload.get("image_id") or "").strip(),
+            )
+        if action == "image.status":
+            task_id = str(payload.get("task_id") or "").strip()
+            with db() as conn:
+                row = conn.execute("SELECT * FROM tasks WHERE id = ? AND user_id = ?", (task_id, user_id)).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="图片任务不存在")
+            task = dict(row)
+            task_input = _json_loads(task.get("input_json"), {})
+            if str(task.get("type") or "") not in {"persona_post_image", "persona_image"} or str((task_input or {}).get("related_persona_id") or (task_input or {}).get("archive_id") or "") != persona_id:
+                raise HTTPException(status_code=404, detail="图片任务不存在")
+            detail = _build_task_detail_payload(task=task, include_logs=False, log_limit=0)
+            output = _json_loads(task.get("output_json"), {})
+            media_paths = _extract_download_paths(output)
+            if not media_paths and str(task.get("type") or "") == "persona_image":
+                library = output.get("library") if isinstance(output.get("library"), dict) else {}
+                items = library.get("items") if isinstance(library.get("items"), list) else []
+                media_paths = [
+                    str(item.get("image_url") or "").strip()
+                    for item in items
+                    if isinstance(item, dict) and str(item.get("image_url") or "").strip()
+                ]
+            detail["media_paths"] = media_paths
+            return detail
+        if action == "image.attach":
+            post_id = str(payload.get("post_id") or "").strip()
+            task_id = str(payload.get("task_id") or "").strip()
+            return _attach_task_output_to_persona_post(
+                persona_id,
+                post_id,
+                task_id,
+                replace_existing=bool(payload.get("replace_existing")),
+                media_indexes=[int(item) for item in (payload.get("media_indexes") or []) if isinstance(item, int) and not isinstance(item, bool)],
+                user=user,
+            )
         raise HTTPException(status_code=400, detail=f"不支持的 Telegram 推文操作：{action}")
 
     async def _tweet_bot_dispatch_async(web_user_id: int, action: str, payload: dict[str, Any]) -> Any:
         user = _tweet_bot_user(web_user_id)
-        if action != "media.add":
+        if action not in {"media.add", "persona_image.upload"}:
             return await asyncio.to_thread(_tweet_bot_dispatch, web_user_id, action, payload)
         persona_id = str(payload.get("persona_id") or "").strip()
         _require_persona_access(persona_id, user)
         content = payload.get("content")
         if not isinstance(content, (bytes, bytearray)) or not content:
             raise HTTPException(status_code=400, detail="媒体内容为空")
+        if action == "persona_image.upload":
+            upload = UploadFile(
+                file=BytesIO(bytes(content)),
+                filename=str(payload.get("filename") or "telegram-image")[:180],
+            )
+            replace_image_id = str(payload.get("replace_image_id") or "").strip()
+            if replace_image_id:
+                return await _replace_persona_archive_image(
+                    persona_id,
+                    replace_image_id,
+                    _workspace_username(user),
+                    upload,
+                )
+            return await _upload_persona_archive_image(
+                persona_id,
+                _workspace_username(user),
+                upload,
+            )
         upload = UploadFile(
             file=BytesIO(bytes(content)),
             filename=str(payload.get("filename") or "telegram-media")[:180],
@@ -27631,7 +28207,6 @@ def create_app() -> FastAPI:
                 "WHERE token_hash = ? AND used_at = 0",
                 (_now_ts(), digest),
             )
-
     def _tweet_bot_chat_login(
         chat_id: int,
         username: str,

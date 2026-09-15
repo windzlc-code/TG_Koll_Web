@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -11,6 +12,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -57,6 +59,152 @@ SUPPORTED_MEDIA_MIME_SUFFIXES = {
     "video/quicktime": ".mov",
     "video/webm": ".webm",
 }
+PERSONA_CONTENT_PLATFORMS: tuple[tuple[str, str], ...] = (
+    ("threads", "Threads"),
+    ("instagram", "Instagram"),
+)
+PERSONA_WRITING_LOCALES: tuple[tuple[str, str], ...] = (
+    ("zh-TW", "繁体中文（默认）"),
+    ("zh-CN", "简体中文"),
+    ("en-US", "英语"),
+    ("ja-JP", "日语"),
+    ("ko-KR", "韩语"),
+    ("vi-VN", "越南语"),
+    ("th-TH", "泰语"),
+    ("id-ID", "印度尼西亚语"),
+    ("ms-MY", "马来语"),
+    ("es-ES", "西班牙语"),
+    ("pt-BR", "葡萄牙语"),
+    ("fr-FR", "法语"),
+    ("de-DE", "德语"),
+)
+PERSONA_CONTENT_TIME_SLOTS: tuple[tuple[str, str], ...] = (
+    ("", "不指定"),
+    ("morning", "早上文案"),
+    ("night", "晚上文案"),
+)
+# Keep the Telegram controls on the same canonical values used by the Web
+# persona-image form.  Empty values mean “自动”; the backend deliberately
+# omits them so untouched defaults still use the original R18 prompt path.
+PERSONA_IMAGE_OPTION_DEFINITIONS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
+    "digital_human_character_region": (
+        "地区特征",
+        (("china", "中国（默认）"), ("europe_america", "欧美"), ("indonesia", "印尼"),
+         ("thailand", "泰国"), ("japan", "日本"), ("malaysia", "马来西亚")),
+    ),
+    "character_gender": (
+        "性别",
+        (("", "自动"), ("female", "女性"), ("male", "男性")),
+    ),
+    "character_age": (
+        "年龄段",
+        (("", "自动"), ("18_22", "18-22岁"), ("23_27", "23-27岁"), ("28_32", "28-32岁"),
+         ("33_38", "33-38岁"), ("39_45", "39-45岁"), ("46_55", "46-55岁"), ("56_plus", "56岁以上")),
+    ),
+    "character_hairstyle": (
+        "发型",
+        (("", "自动"), ("short_clean", "利落短发"), ("side_part", "偏分短发"), ("bob", "波波头"),
+         ("shoulder_length", "中长发"), ("long_straight", "长直发"), ("soft_wave", "微卷发"),
+         ("ponytail", "马尾"), ("bun", "盘发"), ("air_bangs_long", "刘海长发"),
+         ("crew_cut", "寸头"), ("textured_short", "纹理短发"), ("slick_back", "背头"),
+         ("medium_layered", "中短层次发")),
+    ),
+    "character_temperament": (
+        "气质风格",
+        (("", "自动"), ("gentle", "亲和自然"), ("business", "商务干练"), ("elegant", "优雅知性"),
+         ("lively", "活力外向"), ("sweet", "清新亲切"), ("cool", "高级冷感"), ("calm", "沉稳大气"),
+         ("adult_glamour", "妩媚性感"), ("sunny", "阳光亲和"), ("elite", "精英专业"), ("street", "潮流自信")),
+    ),
+    "character_clothing": (
+        "服装风格",
+        (("", "自动"), ("formal_suit", "正式西装套装"), ("smart_casual_set", "通勤休闲套装"),
+         ("soft_knit_set", "针织舒适套装"), ("casual_jacket_set", "休闲夹克套装"), ("sporty", "运动套装"),
+         ("tailored_suit_female", "女士西装套装"), ("business_dress_female", "轻商务裙装套装"),
+         ("elegant_commute_female", "优雅通勤套装"), ("soft_knit_set_female", "温柔针织套装"),
+         ("sporty_female", "运动休闲套装"), ("intimate_glamour_female", "福利诱惑套装"),
+         ("blazer_dress_female", "轻商务连衣裙套装"), ("shirt_skirt_female", "学院感半裙套装"),
+         ("knit_jeans_female", "针织休闲套装"), ("sweet_female", "清新甜美裙装套装"),
+         ("silk_blouse_trousers_female", "高级通勤套装"), ("elegant_female", "优雅知性裙装套装"),
+         ("knit_cardigan_female", "温柔针织裙装套装"), ("daily_female", "简洁日常套装"),
+         ("dark_suit_male", "男士西装套装"), ("smart_commute_male", "商务通勤套装"),
+         ("polo_casual_male", "商务休闲套装"), ("casual_jacket_male", "成熟休闲套装"),
+         ("sporty_male", "运动休闲套装"), ("shirt_chinos_male", "清爽通勤套装"),
+         ("polo_chinos_male", "轻商务休闲套装"), ("street_male", "潮流街头套装"),
+         ("knit_male", "简约针织套装"), ("knit_cardigan_male", "温和针织套装"),
+         ("shirt_trousers_male", "稳重通勤套装"),
+    ),
+    ),
+}
+
+# The Web form narrows hairstyle/temperament/clothing choices when gender or
+# age changes.  Keep the same dependency rules in Telegram so an old choice
+# cannot silently override a newly selected profile bucket.
+_PERSONA_IMAGE_DYNAMIC_KEYS: dict[str, dict[str, tuple[str, ...]]] = {
+    "character_hairstyle": {
+        "default": ("", "short_clean", "shoulder_length", "long_straight"),
+        "female": ("", "bob", "shoulder_length", "long_straight", "soft_wave", "ponytail", "bun", "air_bangs_long"),
+        "male": ("", "short_clean", "side_part", "crew_cut", "textured_short", "slick_back", "medium_layered"),
+    },
+    "character_temperament": {
+        "default": ("", "gentle", "business", "elegant", "lively", "adult_glamour"),
+        "female": ("", "elegant", "gentle", "sweet", "cool", "business", "adult_glamour"),
+        "female_young": ("", "sweet", "lively", "gentle", "cool", "elegant", "adult_glamour"),
+        "female_mature": ("", "elegant", "business", "gentle", "cool", "calm", "adult_glamour"),
+        "male": ("", "business", "calm", "sunny", "elite", "elegant"),
+        "male_young": ("", "lively", "business", "sunny", "cool", "street"),
+        "male_mature": ("", "business", "calm", "gentle", "elite", "elegant"),
+    },
+    "character_clothing": {
+        "default": ("", "formal_suit", "smart_casual_set", "soft_knit_set", "casual_jacket_set", "sporty", "intimate_glamour_female"),
+        "female": ("", "tailored_suit_female", "business_dress_female", "elegant_commute_female", "soft_knit_set_female", "sporty_female", "intimate_glamour_female"),
+        "female_young": ("", "blazer_dress_female", "shirt_skirt_female", "knit_jeans_female", "sweet_female", "sporty_female", "intimate_glamour_female"),
+        "female_mature": ("", "tailored_suit_female", "silk_blouse_trousers_female", "elegant_female", "knit_cardigan_female", "daily_female", "intimate_glamour_female"),
+        "male": ("", "dark_suit_male", "smart_commute_male", "polo_casual_male", "casual_jacket_male", "sporty_male"),
+        "male_young": ("", "shirt_chinos_male", "polo_chinos_male", "street_male", "knit_male", "sporty_male"),
+        "male_mature": ("", "dark_suit_male", "shirt_trousers_male", "polo_casual_male", "casual_jacket_male", "knit_cardigan_male"),
+    },
+}
+
+
+def _persona_image_character_profile(options: dict[str, Any]) -> str:
+    gender = str(options.get("character_gender") or "").strip()
+    if gender not in {"female", "male"}:
+        return "default"
+    age = str(options.get("character_age") or "").strip()
+    if age in {"18_22", "23_27", "28_32"}:
+        return f"{gender}_young"
+    if age:
+        return f"{gender}_mature"
+    return gender
+
+
+def _persona_image_option_definition(
+    field: str,
+    options: dict[str, Any] | None = None,
+) -> tuple[str, tuple[tuple[str, str], ...]] | None:
+    definition = PERSONA_IMAGE_OPTION_DEFINITIONS.get(field)
+    if not definition:
+        return None
+    allowed_by_profile = _PERSONA_IMAGE_DYNAMIC_KEYS.get(field)
+    if not allowed_by_profile:
+        return definition
+    if field == "character_hairstyle":
+        gender = str((options or {}).get("character_gender") or "").strip()
+        profile = gender if gender in {"female", "male"} else "default"
+    else:
+        profile = _persona_image_character_profile(options or {})
+    allowed = set(allowed_by_profile.get(profile) or allowed_by_profile["default"])
+    return definition[0], tuple((key, caption) for key, caption in definition[1] if key in allowed)
+
+
+def _reconcile_persona_image_options(options: dict[str, Any]) -> dict[str, Any]:
+    next_options = dict(options or {})
+    for field in _PERSONA_IMAGE_DYNAMIC_KEYS:
+        definition = _persona_image_option_definition(field, next_options)
+        allowed = {key for key, _caption in definition[1]} if definition else {""}
+        if str(next_options.get(field) or "") not in allowed:
+            next_options.pop(field, None)
+    return next_options
 try:
     BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
 except ZoneInfoNotFoundError:
@@ -338,6 +486,44 @@ def _post_label(post: dict[str, Any], index: int) -> str:
     title = str(post.get("title") or "").strip()
     content = str(post.get("content") or "").strip().replace("\n", " ")
     return (title or content or f"推文 {index + 1}")[:28]
+
+
+def _pagination_rows(
+    types: Any,
+    *,
+    page: int,
+    total_items: int,
+    callback_for_page: Callable[[int], str],
+    page_size: int = PAGE_SIZE,
+) -> tuple[list[list[Any]], int, int]:
+    """Build the R18-style first/previous/page/next/last controls.
+
+    Every list in the Telegram workbench goes through this helper so a stale
+    callback can never render an empty out-of-range page and all list views use
+    the same navigation labels.  The returned rows mirror R18: first/previous,
+    page indicator, and next/last are separate compact rows.
+    """
+    size = max(1, int(page_size or PAGE_SIZE))
+    total = max(0, int(total_items or 0))
+    total_pages = max(1, (total + size - 1) // size)
+    safe_page = min(max(0, int(page or 0)), total_pages - 1)
+    if total_pages <= 1:
+        return [], safe_page, total_pages
+    rows: list[list[Any]] = []
+    if safe_page > 0:
+        rows.append([
+            types.InlineKeyboardButton(text="⏮ 首页", callback_data=callback_for_page(0)),
+            types.InlineKeyboardButton(text="◀️ 上一页", callback_data=callback_for_page(safe_page - 1)),
+        ])
+    rows.append([
+        types.InlineKeyboardButton(text=f"{safe_page + 1}/{total_pages}", callback_data=callback_for_page(safe_page)),
+    ])
+    if safe_page < total_pages - 1:
+        rows.append([
+            types.InlineKeyboardButton(text="下一页 ▶️", callback_data=callback_for_page(safe_page + 1)),
+            types.InlineKeyboardButton(text="尾页 ⏭", callback_data=callback_for_page(total_pages - 1)),
+        ])
+    return rows, safe_page, total_pages
 
 
 def _task_status(task: dict[str, Any]) -> str:
@@ -1003,7 +1189,6 @@ class NativeTweetBotController:
     ) -> tuple[str, Any]:
         personas = await self._call(int(member["web_user_id"]), "personas.list")
         page = max(0, int(page))
-        start = page * PAGE_SIZE
         total_pages = max(1, (len(personas) + PAGE_SIZE - 1) // PAGE_SIZE)
         page = min(page, total_pages - 1)
         start = page * PAGE_SIZE
@@ -1014,7 +1199,20 @@ class NativeTweetBotController:
             for item in personas
         ):
             rows.append([types.InlineKeyboardButton(text="🚀 矩阵发布", callback_data="tt:matrix")])
-        rows.append([types.InlineKeyboardButton(text="➕ 新建人设", callback_data="tt:persona_new")])
+        # Older rolling workers do not expose the groups projection.  Only
+        # render the entry when the canonical Web-compatible response is
+        # available, keeping the legacy menu contract stable during a restart.
+        try:
+            group_result = await self._call(int(member["web_user_id"]), "persona.groups", {})
+        except Exception:
+            group_result = None
+        if isinstance(group_result, dict) and isinstance(group_result.get("groups"), list):
+            rows.append([types.InlineKeyboardButton(text="🗂 人设分组", callback_data="tt:personagroups:0")])
+        rows.append([
+            types.InlineKeyboardButton(text="➕ 手工新建人设", callback_data="tt:persona_new"),
+            types.InlineKeyboardButton(text="✨ AI 生成人设", callback_data="tt:persona_ai_new"),
+        ])
+        rows.append([types.InlineKeyboardButton(text="🔗 复制公开人设", callback_data="tt:persona_copy_new")])
         state = load_state(chat_id)
         for item in personas[start:start + PAGE_SIZE]:
             persona_id = str(item.get("id") or "")
@@ -1024,13 +1222,13 @@ class NativeTweetBotController:
                 text=f"{marker}{str(item.get('name') or '未命名人设')[:24]}（{count}篇）",
                 callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}),
             )])
-        nav = []
-        if page > 0:
-            nav.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"tt:personas:{page - 1}"))
-        if start + PAGE_SIZE < len(personas):
-            nav.append(types.InlineKeyboardButton(text="➡️", callback_data=f"tt:personas:{page + 1}"))
-        if nav:
-            rows.append(nav)
+        nav, page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(personas),
+            callback_for_page=lambda target: f"tt:personas:{target}",
+        )
+        rows.extend(nav)
         rows.append([types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")])
         resume_action = str(state["payload"].get("resume_action") or "")
         resume_text = {
@@ -1057,6 +1255,197 @@ class NativeTweetBotController:
         )
         await query.message.edit_text(text, reply_markup=markup)
 
+    async def _persona_groups(self, query: Any, types: Any, member: dict[str, Any], page: int = 0) -> None:
+        """Render the same owner-scoped persona groups exposed by the Web UI."""
+        chat_id = int(query.message.chat.id)
+        result = await self._call(int(member["web_user_id"]), "persona.groups", {})
+        groups = result.get("groups") if isinstance(result, dict) and isinstance(result.get("groups"), list) else []
+        groups = [item for item in groups if isinstance(item, dict)]
+        personas = await self._call(int(member["web_user_id"]), "personas.list")
+        persona_names = {
+            str(item.get("id") or "").strip(): str(item.get("name") or "未命名人设")
+            for item in (personas if isinstance(personas, list) else [])
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        nav, safe_page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(groups),
+            callback_for_page=lambda target: f"tt:personagroups:{target}",
+        )
+        rows: list[list[Any]] = []
+        start = safe_page * PAGE_SIZE
+        for group in groups[start:start + PAGE_SIZE]:
+            group_id = str(group.get("id") or "").strip()
+            if not group_id:
+                continue
+            members = [
+                persona_names.get(str(persona_id or "").strip(), "未命名人设")
+                for persona_id in (group.get("persona_ids") or [])
+                if str(persona_id or "").strip()
+            ]
+            label = f"🗂 {str(group.get('name') or '未命名分组')[:24]}（{len(members)}）"
+            rows.append([types.InlineKeyboardButton(
+                text=label,
+                callback_data=callback_token(chat_id, "group", {"group_id": group_id}),
+            )])
+        rows.extend(nav)
+        rows.append([types.InlineKeyboardButton(text="➕ 新建分组", callback_data="tt:groupnew")])
+        rows.append([types.InlineKeyboardButton(text="返回我的人设", callback_data="tt:personas:0")])
+        text = (
+            f"人设分组（{len(groups)}）\n第 {safe_page + 1}/{total_pages}\n请选择分组管理成员。"
+            if groups else "暂无人设分组，可先新建一个。"
+        )
+        await query.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows))
+
+    async def _persona_group_detail(
+        self,
+        query: Any,
+        types: Any,
+        member: dict[str, Any],
+        group_id: str,
+        page: int = 0,
+    ) -> None:
+        chat_id = int(query.message.chat.id)
+        result = await self._call(int(member["web_user_id"]), "persona.groups", {})
+        groups = result.get("groups") if isinstance(result, dict) and isinstance(result.get("groups"), list) else []
+        group = next((item for item in groups if isinstance(item, dict) and str(item.get("id") or "") == group_id), None)
+        if not group:
+            raise HTTPException(status_code=404, detail="人设分组不存在")
+        personas = await self._call(int(member["web_user_id"]), "personas.list")
+        persona_names = {
+            str(item.get("id") or "").strip(): str(item.get("name") or "未命名人设")
+            for item in (personas if isinstance(personas, list) else [])
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        member_ids = [
+            str(persona_id or "").strip()
+            for persona_id in (group.get("persona_ids") or [])
+            if str(persona_id or "").strip()
+        ]
+        nav, safe_page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(member_ids),
+            callback_for_page=lambda target: callback_token(
+                chat_id, "group", {"group_id": group_id, "page": target},
+            ),
+        )
+        rows: list[list[Any]] = []
+        start = safe_page * PAGE_SIZE
+        for persona_id in member_ids[start:start + PAGE_SIZE]:
+            clean_id = str(persona_id or "").strip()
+            if not clean_id:
+                continue
+            rows.append([types.InlineKeyboardButton(
+                text=f"👤 {persona_names.get(clean_id, '未命名人设')[:24]}",
+                callback_data=callback_token(chat_id, "groupremove", {
+                    "group_id": group_id, "persona_id": clean_id,
+                }),
+            )])
+        rows.extend(nav)
+        rows.extend([
+            [types.InlineKeyboardButton(
+                text="➕ 添加人设",
+                callback_data=callback_token(chat_id, "groupadd", {"group_id": group_id, "page": 0}),
+            )],
+            [types.InlineKeyboardButton(text="✏️ 重命名", callback_data=callback_token(chat_id, "grouprename", {"group_id": group_id}))],
+            [types.InlineKeyboardButton(text="🗑 删除分组", callback_data=callback_token(chat_id, "groupdeleteask", {"group_id": group_id}))],
+            [types.InlineKeyboardButton(text="返回人设分组", callback_data="tt:personagroups:0")],
+        ])
+        visible_member_ids = member_ids[start:start + PAGE_SIZE]
+        members_text = "、".join(
+            persona_names.get(persona_id, "未命名人设")
+            for persona_id in visible_member_ids
+        ) or "暂无成员"
+        await query.message.edit_text(
+            f"人设分组：{str(group.get('name') or '未命名分组')}\n\n成员（{len(member_ids)}，第 {safe_page + 1}/{total_pages} 页）：{members_text}\n\n点击成员可移出分组。",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _persona_group_add_picker(
+        self,
+        query: Any,
+        types: Any,
+        member: dict[str, Any],
+        group_id: str,
+        page: int = 0,
+    ) -> None:
+        chat_id = int(query.message.chat.id)
+        result = await self._call(int(member["web_user_id"]), "persona.groups", {})
+        groups = result.get("groups") if isinstance(result, dict) and isinstance(result.get("groups"), list) else []
+        group = next((item for item in groups if isinstance(item, dict) and str(item.get("id") or "") == group_id), None)
+        if not group:
+            raise HTTPException(status_code=404, detail="人设分组不存在")
+        assigned = {str(item or "").strip() for item in (group.get("persona_ids") or []) if str(item or "").strip()}
+        personas = await self._call(int(member["web_user_id"]), "personas.list")
+        candidates = [
+            item for item in (personas if isinstance(personas, list) else [])
+            if isinstance(item, dict) and str(item.get("id") or "").strip() not in assigned
+        ]
+        nav, safe_page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(candidates),
+            callback_for_page=lambda target: callback_token(chat_id, "groupadd", {"group_id": group_id, "page": target}),
+        )
+        rows: list[list[Any]] = []
+        start = safe_page * PAGE_SIZE
+        for persona in candidates[start:start + PAGE_SIZE]:
+            persona_id = str(persona.get("id") or "").strip()
+            rows.append([types.InlineKeyboardButton(
+                text=f"👤 {str(persona.get('name') or '未命名人设')[:32]}",
+                callback_data=callback_token(chat_id, "groupaddselect", {"group_id": group_id, "persona_id": persona_id}),
+            )])
+        rows.extend(nav)
+        rows.append([types.InlineKeyboardButton(text="返回分组", callback_data=callback_token(chat_id, "group", {"group_id": group_id}))])
+        await query.message.edit_text(
+            f"添加人设到分组（第 {safe_page + 1}/{total_pages} 页）\n请选择一个人设；它会从原分组移动到当前分组。",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _persona_group_assign_picker(
+        self,
+        query: Any,
+        types: Any,
+        member: dict[str, Any],
+        persona_id: str,
+        page: int = 0,
+    ) -> None:
+        chat_id = int(query.message.chat.id)
+        result = await self._call(int(member["web_user_id"]), "persona.groups", {})
+        groups = result.get("groups") if isinstance(result, dict) and isinstance(result.get("groups"), list) else []
+        nav, safe_page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(groups),
+            callback_for_page=lambda target: callback_token(
+                chat_id, "groupassign", {"persona_id": persona_id, "page": target},
+            ),
+        )
+        start = safe_page * PAGE_SIZE
+        rows = [
+            [types.InlineKeyboardButton(
+                text=f"🗂 {str(group.get('name') or '未命名分组')[:32]}",
+                callback_data=callback_token(chat_id, "groupassignselect", {
+                    "group_id": str(group.get("id") or ""),
+                    "persona_id": persona_id,
+                }),
+            )]
+            for group in groups[start:start + PAGE_SIZE]
+            if isinstance(group, dict) and str(group.get("id") or "").strip()
+        ]
+        rows.extend(nav)
+        rows.append([types.InlineKeyboardButton(text="返回人设详情", callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}))])
+        await query.message.edit_text(
+            (
+                f"请选择要加入的人设分组（第 {safe_page + 1}/{total_pages} 页，共 {len(groups)} 个）。"
+                "重新选择会自动从原分组移动。"
+                if groups else "暂无分组，请先创建一个分组。"
+            ),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
     async def _accounts_payload(
         self,
         types: Any,
@@ -1065,6 +1454,7 @@ class NativeTweetBotController:
         return_callback: str,
         persona_id: str = "",
         operation: str = "",
+        page: int = 0,
     ) -> tuple[str, Any]:
         chat_id = int(member.get("chat_id") or 0)
         accounts = await self._call(int(member["web_user_id"]), "accounts.list")
@@ -1084,13 +1474,29 @@ class NativeTweetBotController:
             # Account operations remain usable if a stale persona archive makes
             # the optional display-name lookup fail.
             logger.debug("Failed to load persona names for Telegram account list", exc_info=True)
+        page_rows, page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(accounts),
+            callback_for_page=lambda target: callback_token(
+                chat_id,
+                "accountspage",
+                {
+                    "page": target,
+                    "persona_id": persona_id,
+                    "operation": operation,
+                    "return_callback": return_callback,
+                },
+            ),
+        )
+        start = page * PAGE_SIZE
         rows = []
         operation_labels = {
             "switch": "选择并重新登录",
             "bind": "选择并绑定人设",
             "unbind": "选择并解绑人设",
         }
-        for item in accounts[:20]:
+        for item in accounts[start:start + PAGE_SIZE]:
             account_id = str(item.get("id") or "").strip()
             if not account_id:
                 continue
@@ -1113,8 +1519,8 @@ class NativeTweetBotController:
         else:
             intro = operation_labels.get(operation, "查看账号详情")
             text = f"已绑定账号 · {intro}\n\n请选择一个账号继续操作。"
-            if len(accounts) > 20:
-                text += "\n仅显示最近 20 个账号，请从网页账号管理查看完整列表。"
+            text += f"\n第 {page + 1}/{total_pages} 页，共 {len(accounts)} 个账号。"
+        rows.extend(page_rows)
         base = str((self.get_runtime() or {}).get("telegram_tweet_public_base_url") or "").rstrip("/")
         if base.startswith("https://"):
             text += "\n点击下方平台按钮会直接进入对应官方授权页；请确保打开的浏览器已有 VECTO 主站登录会话。"
@@ -1270,11 +1676,23 @@ class NativeTweetBotController:
         types: Any,
         member: dict[str, Any],
         account_id: str,
+        page: int = 0,
     ) -> None:
         personas = await self._call(int(member["web_user_id"]), "personas.list")
         chat_id = int(query.message.chat.id)
+        page_rows, page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(personas),
+            callback_for_page=lambda target: callback_token(
+                chat_id,
+                "acbindpage",
+                {"account_id": str(account_id), "page": target},
+            ),
+        )
         rows = []
-        for persona in personas[:50]:
+        start = page * PAGE_SIZE
+        for persona in personas[start:start + PAGE_SIZE]:
             persona_id = str(persona.get("id") or "").strip()
             if not persona_id:
                 continue
@@ -1287,12 +1705,13 @@ class NativeTweetBotController:
                 text=f"👤 {str(persona.get('name') or '未命名人设')[:32]} · {int(counts.get('posts') or 0)}篇",
                 callback_data=token,
             )])
+        rows.extend(page_rows)
         rows.append([types.InlineKeyboardButton(
             text="返回账号详情",
             callback_data=callback_token(chat_id, "ac", {"account_id": str(account_id), "operation": ""}),
         )])
         await query.message.edit_text(
-            "选择要绑定的人设\n\n同一平台同一人设只保留一个账号；确认绑定后，原有同平台账号会按后端规则解绑。",
+            f"选择要绑定的人设（第 {page + 1}/{total_pages} 页，共 {len(personas)} 个）\n\n同一平台同一人设只保留一个账号；确认绑定后，原有同平台账号会按后端规则解绑。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -1301,9 +1720,10 @@ class NativeTweetBotController:
 
         The overview intentionally uses the same task projection as the list
         and detail pages, so counts and drill-downs cannot disagree about
-        ownership or status.  The server caps the projection at 100 recent
-        tasks; the note makes that boundary explicit instead of presenting a
-        truncated list as an exact lifetime total.
+        ownership or status.  The list is bounded to the server-supported
+        Telegram projection (currently 1000 rows); the note makes that
+        boundary explicit instead of presenting a truncated list as an exact
+        lifetime total.
         """
         try:
             summary = await self._call(int(member["web_user_id"]), "tasks.summary", {})
@@ -1311,7 +1731,7 @@ class NativeTweetBotController:
             # Keep older workers usable during a rolling restart; the local
             # projection below still renders a bounded, honest fallback.
             summary = {}
-        tasks = await self._call(int(member["web_user_id"]), "tasks.list", {"limit": 100})
+        tasks = await self._call(int(member["web_user_id"]), "tasks.list", {"limit": 1000})
         tasks = [item for item in tasks if isinstance(item, dict)] if isinstance(tasks, list) else []
         now = int(time.time())
         local_counts = {
@@ -1367,7 +1787,7 @@ class NativeTweetBotController:
         lines.extend([
             "",
             f"任务总数：{summary_total or len(tasks)}；点击下方分类查看详情。",
-            "列表默认加载最近 100 条，分类后可分页查看。",
+            "列表默认加载最近 1000 条，分类后可分页查看。",
         ])
         button = types.InlineKeyboardButton
         rows = [
@@ -1378,6 +1798,13 @@ class NativeTweetBotController:
             [button(text="✅ 已完成", callback_data="tt:tasks:0:completed"), button(text="🚫 已取消", callback_data="tt:tasks:0:cancelled")],
             [button(text="🧵 按平台筛选", callback_data="tt:taskfilter:platform"), button(text="👤 按人设筛选", callback_data="tt:taskfilter:persona")],
         ]
+        queue_counts = summary.get("queue_counts") if isinstance(summary, dict) and isinstance(summary.get("queue_counts"), dict) else {}
+        if queue_counts:
+            rows.append([
+                button(text=f"🧱 普通生成（{int(queue_counts.get('normal') or 0)}）", callback_data="tt:tasks:0:all:normal"),
+                button(text=f"⚙️ 自动化队列（{int(queue_counts.get('automation') or 0)}）", callback_data="tt:tasks:0:all:automation"),
+            ])
+            rows.append([button(text="🗓 自动化计划", callback_data="tt:automationplans:0")])
         if failed or count("failed", 0):
             rows.append([button(text="🔄 处理失败任务", callback_data="tt:tasks:0:failed")])
         rows.append([button(text="返回总控菜单", callback_data="tt:menu")])
@@ -1391,7 +1818,7 @@ class NativeTweetBotController:
         save_state(chat_id, mode="", payload={})
         failures = []
         try:
-            tasks = await self._call(user_id, "tasks.list", {"limit": 30})
+            tasks = await self._call(user_id, "tasks.list", {"limit": 1000})
         except Exception as exc:
             tasks = []
             failures.append(f"读取当前任务失败：{_error_text(exc)}")
@@ -1443,6 +1870,7 @@ class NativeTweetBotController:
         source: str,
         page: int,
         intro: str = "",
+        intent: str = "",
     ) -> None:
         state = load_state(int(query.message.chat.id))
         persona_id = state["selected_persona_id"]
@@ -1451,7 +1879,15 @@ class NativeTweetBotController:
             await self._persona_list(query, types, member, 0)
             return
         posts = await self._call(int(member["web_user_id"]), "posts.list", {"persona_id": persona_id, "source": source})
-        page = max(0, int(page))
+        # Clamp a stale callback before slicing.  The final navigation rows
+        # are generated below with the same target/source/intent callback so
+        # the page indicator cannot point back to a different list.
+        _page_rows, page, _total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(posts),
+            callback_for_page=lambda target: f"tt:{'favorites' if source == 'favorites' else 'drafts'}:{target}",
+        )
         start = page * PAGE_SIZE
         prefix = "f" if source == "favorites" else "d"
         rows = [[types.InlineKeyboardButton(
@@ -1462,17 +1898,18 @@ class NativeTweetBotController:
                     "persona_id": persona_id,
                     "post_id": str(post.get("id") or ""),
                     "source": source,
+                    "intent": intent,
                 },
             ),
         )] for index, post in enumerate(posts[start:start + PAGE_SIZE])]
-        nav = []
-        target = "publishposts" if intro and source == "posts" else ("favorites" if source == "favorites" else "drafts")
-        if page > 0:
-            nav.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"tt:{target}:{page - 1}"))
-        if start + PAGE_SIZE < len(posts):
-            nav.append(types.InlineKeyboardButton(text="➡️", callback_data=f"tt:{target}:{page + 1}"))
-        if nav:
-            rows.append(nav)
+        target = "imageposts" if intent == "image" else ("publishposts" if intro and source == "posts" else ("favorites" if source == "favorites" else "drafts"))
+        nav, page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(posts),
+            callback_for_page=lambda target_page: f"tt:{target}:{target_page}",
+        )
+        rows.extend(nav)
         if source == "posts":
             rows.append([types.InlineKeyboardButton(text="➕ 手工新建草稿", callback_data="tt:draft_new")])
         rows.append([types.InlineKeyboardButton(
@@ -1482,11 +1919,282 @@ class NativeTweetBotController:
             ),
         )])
         list_text = (
-            f"{'收藏' if source == 'favorites' else '草稿'}（{len(posts)}）"
+            f"{'收藏' if source == 'favorites' else '草稿'}（{len(posts)}，第 {page + 1}/{total_pages} 页）"
             if posts else f"当前人设暂无{'收藏' if source == 'favorites' else '草稿'}。"
         )
         await query.message.edit_text(
             f"{intro}\n\n{list_text}" if intro else list_text,
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_image_options(
+        self,
+        query: Any,
+        types: Any,
+        member: dict[str, Any],
+        *,
+        persona_id: str,
+        post_id: str,
+        source: str = "posts",
+        notice: str = "",
+    ) -> None:
+        chat_id = int(query.message.chat.id)
+        posts = await self._call(int(member["web_user_id"]), "posts.list", {
+            "persona_id": persona_id,
+            "source": "favorites" if source == "favorites" else "posts",
+        })
+        post = next((item for item in posts if str(item.get("id") or "") == str(post_id)), None)
+        if not post:
+            raise HTTPException(status_code=404, detail="推文不存在或已删除")
+        state = load_state(chat_id)
+        current = state["payload"] if state["mode"] in {"image_options", "image_prompt"} else {}
+        payload = {
+            "persona_id": persona_id,
+            "post_id": post_id,
+            "source": "favorites" if source == "favorites" else "posts",
+            "image_count": min(max(int(current.get("image_count") or 1), 1), 4),
+            "aspect_ratio": str(current.get("aspect_ratio") or "auto"),
+            "image_mode": str(current.get("image_mode") or "auto"),
+            "image_render_style": str(current.get("image_render_style") or "original"),
+            "image_composition_label": str(current.get("image_composition_label") or ""),
+            "image_styles": current.get("image_styles") if isinstance(current.get("image_styles"), list) else [],
+            "custom_prompt": str(current.get("custom_prompt") or ""),
+        }
+        save_state(chat_id, selected_persona_id=persona_id, mode="image_options", payload=payload)
+        rows: list[list[Any]] = []
+        def option_button(label: str, field: str, value: Any) -> Any:
+            next_payload = dict(payload)
+            next_payload["field"] = field
+            next_payload["value"] = value
+            return types.InlineKeyboardButton(
+                text=("✅ " if str(payload.get(field)) == str(value) else "") + label,
+                callback_data=callback_token(chat_id, "imgopt", next_payload),
+            )
+        rows.append([option_button(f"{count}张", "image_count", count) for count in (1, 2, 3, 4)])
+        rows.append([option_button(ratio, "aspect_ratio", ratio) for ratio in ("auto", "1:1", "3:4", "4:3")])
+        rows.append([option_button(ratio, "aspect_ratio", ratio) for ratio in ("9:16", "16:9")])
+        rows.append([option_button(label, "image_mode", value) for value, label in (
+            ("auto", "自动构图"), ("person", "人物"), ("pov", "第一人称"),
+            ("scene", "场景"), ("object", "事物"), ("third_person", "第三人称"),
+        )])
+        style_labels = {
+            "original": "原有风格（默认）", "photorealistic": "写实摄影", "cinematic_realism": "电影写实",
+            "editorial_fashion": "时尚杂志", "cel_shading": "赛璐璐", "japanese_anime": "日系二次元",
+            "anime_painterly": "厚涂动漫", "stylized_3d": "3D 卡通", "realistic_cg": "写实 3D",
+            "cinematic_cg": "影视 CG", "three_render_two": "3 渲 2", "american_cartoon": "美式卡通",
+            "comic_ink": "漫画线描", "storybook": "绘本插画",
+        }
+        style_items = list(style_labels.items())
+        for index in range(0, len(style_items), 2):
+            rows.append([option_button(label, "image_render_style", value) for value, label in style_items[index:index + 2]])
+        if payload["image_styles"]:
+            composition_buttons = []
+            for item in payload["image_styles"][:4]:
+                label = str(item.get("label") if isinstance(item, dict) else item)[:24]
+                kind = str(item.get("kind") or "") if isinstance(item, dict) else ""
+                composition_payload = dict(payload)
+                composition_payload.update({
+                    "field": "image_composition_label",
+                    "value": label,
+                    "composition_mode": kind,
+                })
+                composition_buttons.append(types.InlineKeyboardButton(
+                    text=("✅ " if str(payload.get("image_composition_label") or "") == label else "") + label[:18],
+                    callback_data=callback_token(chat_id, "imgopt", composition_payload),
+                ))
+            rows.append(composition_buttons)
+        rows.extend([
+            [types.InlineKeyboardButton(text="🧭 生成构图方向", callback_data=callback_token(chat_id, "imgstyles", payload))],
+            [types.InlineKeyboardButton(text="✍️ 补充提示词", callback_data=callback_token(chat_id, "imgprompt", payload))],
+            [types.InlineKeyboardButton(text="🚀 提交配图任务", callback_data=callback_token(chat_id, "imggenerate", payload))],
+            [types.InlineKeyboardButton(text="返回推文详情", callback_data=callback_token(chat_id, "d", {"persona_id": persona_id, "post_id": post_id, "source": source}))],
+        ])
+        selected = (
+            f"数量 {payload['image_count']} · 比例 {payload['aspect_ratio']} · 构图 {payload['image_mode']} · "
+            f"风格 {style_labels.get(payload['image_render_style'], payload['image_render_style'])}"
+        )
+        await query.message.edit_text(
+            f"{notice.strip()}\n\n" if notice.strip() else ""
+            f"推文配图设置\n\n{str(post.get('content') or '')[:600]}\n\n当前：{selected}"
+            + (f"\n构图方向：{payload['image_composition_label']}" if payload["image_composition_label"] else ""),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_persona_image_options(
+        self,
+        query: Any,
+        types: Any,
+        member: dict[str, Any],
+        *,
+        persona_id: str,
+        page: int = 0,
+        notice: str = "",
+    ) -> None:
+        """Render the Web-equivalent persona image form and image library.
+
+        The Web console keeps the image options, prompt, generated library and
+        current reference in one persona panel.  Telegram mirrors that state
+        instead of creating a second generation path, so a generated/uploaded
+        image can be applied, replaced or deleted without leaving the chat.
+        """
+        chat_id = int(query.message.chat.id)
+        state = load_state(chat_id)
+        current = state["payload"] if state["mode"] in {
+            "persona_image_options", "persona_image_prompt", "persona_image_upload",
+        } else {}
+        image_options = current.get("persona_image_options") if isinstance(current.get("persona_image_options"), dict) else {}
+        image_options = _reconcile_persona_image_options(image_options)
+        supplement_prompt = str(current.get("supplement_prompt") or "")
+        result = await self._call(int(member["web_user_id"]), "persona_image.list", {"persona_id": persona_id})
+        items = result.get("items") if isinstance(result, dict) and isinstance(result.get("items"), list) else []
+        items = [item for item in items if isinstance(item, dict)]
+        total_items = len(items)
+        nav, safe_page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=total_items,
+            callback_for_page=lambda target: callback_token(chat_id, "pimgpage", {
+                "persona_id": persona_id, "page": target,
+            }),
+        )
+        save_state(
+            chat_id,
+            selected_persona_id=persona_id,
+            mode="persona_image_options",
+            payload={
+                "persona_id": persona_id,
+                "persona_image_options": image_options,
+                "supplement_prompt": supplement_prompt,
+                "page": safe_page,
+            },
+        )
+        rows: list[list[Any]] = []
+        start = safe_page * PAGE_SIZE
+        for item in items[start:start + PAGE_SIZE]:
+            image_id = str(item.get("id") or "").strip()
+            if not image_id:
+                continue
+            marker = "✅ " if bool(item.get("is_reference")) else ""
+            created = str(item.get("created_at") or "")[:16].replace("T", " ")
+            source = str(item.get("source") or "生成")
+            label = f"{marker}{source} · {created or '人设图'}"[:42]
+            rows.append([types.InlineKeyboardButton(
+                text=label,
+                callback_data=callback_token(chat_id, "pimgnoop", {"persona_id": persona_id}),
+            )])
+            rows.append([
+                types.InlineKeyboardButton(
+                    text="设为当前" if not item.get("is_reference") else "当前使用中",
+                    callback_data=callback_token(chat_id, "pimgapply", {
+                        "persona_id": persona_id, "image_id": image_id, "page": safe_page,
+                    }),
+                ),
+                types.InlineKeyboardButton(
+                    text="替换",
+                    callback_data=callback_token(chat_id, "pimgreplace", {
+                        "persona_id": persona_id, "image_id": image_id, "page": safe_page,
+                    }),
+                ),
+                types.InlineKeyboardButton(
+                    text="删除",
+                    callback_data=callback_token(chat_id, "pimgdeleteconfirm", {
+                        "persona_id": persona_id, "image_id": image_id, "page": safe_page,
+                    }),
+                ),
+                types.InlineKeyboardButton(
+                    text="设为头像",
+                    callback_data=callback_token(chat_id, "pimgavatar", {
+                        "persona_id": persona_id, "image_id": image_id, "page": safe_page,
+                    }),
+                ),
+            ])
+        rows.extend(nav)
+        for field in PERSONA_IMAGE_OPTION_DEFINITIONS:
+            definition = _persona_image_option_definition(field, image_options)
+            if not definition:
+                continue
+            label, values = definition
+            value = str(
+                image_options.get(field)
+                or ("china" if field == "digital_human_character_region" else "")
+            )
+            value_label = next((caption for key, caption in values if key == value), "自动")
+            rows.append([types.InlineKeyboardButton(
+                text=f"{label}：{value_label}",
+                callback_data=callback_token(chat_id, "pimgfield", {
+                    "persona_id": persona_id, "field": field, "page": safe_page,
+                }),
+            )])
+        rows.extend([
+            [types.InlineKeyboardButton(
+                text="✍️ 补充提示词" if not supplement_prompt else "✍️ 修改补充提示词",
+                callback_data=callback_token(chat_id, "pimgprompt", {"persona_id": persona_id, "page": safe_page}),
+            )],
+            [
+                types.InlineKeyboardButton(text="🚀 直接生成", callback_data=callback_token(chat_id, "personaimmediate", {"persona_id": persona_id})),
+                types.InlineKeyboardButton(text="⬆️ 上传自定义图", callback_data=callback_token(chat_id, "pimgupload", {"persona_id": persona_id})),
+            ],
+            [types.InlineKeyboardButton(text="返回人设详情", callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}))],
+        ])
+        selected_labels: list[str] = []
+        for field in PERSONA_IMAGE_OPTION_DEFINITIONS:
+            definition = _persona_image_option_definition(field, image_options)
+            if not definition:
+                continue
+            _label, values = definition
+            selected_labels.extend(
+                caption
+                for key, caption in values
+                if key == str(image_options.get(field) or ("china" if field == "digital_human_character_region" else ""))
+                and key
+                and not (field == "digital_human_character_region" and key == "china")
+            )
+        selected_options = "、".join(selected_labels)
+        text = (
+            f"{notice.strip()}\n\n" if notice.strip() else ""
+        ) + (
+            f"人设图与图库\n\n图库：{total_items} 张，第 {safe_page + 1}/{total_pages} 页\n"
+            f"当前选项：{selected_options or '全部自动（保持原有人设生成链路）'}\n"
+            f"补充提示词：{supplement_prompt[:220] if supplement_prompt else '未填写'}"
+        )
+        await query.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows))
+
+    async def _render_persona_image_field(
+        self,
+        query: Any,
+        types: Any,
+        *,
+        persona_id: str,
+        field: str,
+        page: int = 0,
+    ) -> None:
+        state = load_state(int(query.message.chat.id))
+        state_options = state["payload"].get("persona_image_options") if isinstance(state.get("payload"), dict) else {}
+        definition = _persona_image_option_definition(field, state_options if isinstance(state_options, dict) else {})
+        if not definition:
+            raise HTTPException(status_code=400, detail="人设图选项无效")
+        chat_id = int(query.message.chat.id)
+        payload = state["payload"] if isinstance(state.get("payload"), dict) else {}
+        options = payload.get("persona_image_options") if isinstance(payload.get("persona_image_options"), dict) else {}
+        current = str(
+            options.get(field)
+            or ("china" if field == "digital_human_character_region" else "")
+        )
+        label, values = definition
+        rows: list[list[Any]] = []
+        for index in range(0, len(values), 2):
+            rows.append([
+                types.InlineKeyboardButton(
+                    text=("✅ " if key == current else "") + caption,
+                    callback_data=callback_token(chat_id, "pimgopt", {
+                        "persona_id": persona_id, "field": field, "value": key, "page": page,
+                    }),
+                )
+                for key, caption in values[index:index + 2]
+            ])
+        rows.append([types.InlineKeyboardButton(text="返回人设图设置", callback_data=callback_token(chat_id, "personaimage", {"persona_id": persona_id, "page": page}))])
+        await query.message.edit_text(
+            f"人设图设置 · {label}\n请选择一个值；选择“自动”只影响这一项，其余未定义项保持原有人设简介。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -1510,6 +2218,7 @@ class NativeTweetBotController:
         rows = [
             [types.InlineKeyboardButton(text="✏️ 编辑", callback_data=callback_token(int(query.message.chat.id), "edit", {"persona_id": state["selected_persona_id"], "source": source, "post_id": post_id})),
              types.InlineKeyboardButton(text="📎 添加媒体", callback_data=callback_token(int(query.message.chat.id), "media", {"persona_id": state["selected_persona_id"], "source": source, "post_id": post_id}))],
+            [types.InlineKeyboardButton(text="🖼 生成推文配图", callback_data=callback_token(int(query.message.chat.id), "image", {"persona_id": state["selected_persona_id"], "source": source, "post_id": post_id}))],
             [types.InlineKeyboardButton(text="立即发布", callback_data=callback_token(int(query.message.chat.id), "pub", {"persona_id": state["selected_persona_id"], "source": source, "post_id": post_id})),
              types.InlineKeyboardButton(text="定时发布", callback_data=callback_token(int(query.message.chat.id), "sched", {"persona_id": state["selected_persona_id"], "source": source, "post_id": post_id}))],
         ]
@@ -1540,6 +2249,7 @@ class NativeTweetBotController:
         source: str,
         post_id: str,
         scheduled: bool,
+        page: int = 0,
     ) -> None:
         chat_id = int(query.message.chat.id)
         state = load_state(chat_id)
@@ -1551,8 +2261,25 @@ class NativeTweetBotController:
         ]
         if not eligible:
             raise HTTPException(status_code=409, detail="当前人设没有绑定 Threads 或 Instagram 账号，请先在网页端完成账号授权")
+        page_rows, page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(eligible),
+            callback_for_page=lambda target: callback_token(
+                chat_id,
+                "papage",
+                {
+                    "persona_id": state["selected_persona_id"],
+                    "source": source,
+                    "post_id": post_id,
+                    "scheduled": bool(scheduled),
+                    "page": target,
+                },
+            ),
+        )
         rows = []
-        for account in eligible[:12]:
+        start = page * PAGE_SIZE
+        for account in eligible[start:start + PAGE_SIZE]:
             account_id = str(account.get("id") or "")
             label = str(account.get("display_name") or account.get("username") or account_id)[:32]
             platform = str(account.get("platform") or "threads").strip().lower()
@@ -1567,12 +2294,13 @@ class NativeTweetBotController:
                     "scheduled": bool(scheduled),
                 }),
             )])
+        rows.extend(page_rows)
         rows.append([types.InlineKeyboardButton(
             text="取消",
             callback_data=f"tt:{'favorites' if source == 'favorites' else 'drafts'}:0",
         )])
         await query.message.edit_text(
-            "请选择用于发布的账号。",
+            f"请选择用于发布的账号（第 {page + 1}/{total_pages} 页，共 {len(eligible)} 个）。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -1585,8 +2313,12 @@ class NativeTweetBotController:
         status_filter: str = "all",
         platform_filter: str = "",
         persona_filter: str = "",
+        queue: str = "all",
     ) -> None:
-        tasks = await self._call(int(member["web_user_id"]), "tasks.list", {"limit": 100})
+        queue = str(queue or "all").strip().lower()
+        if queue not in {"all", "normal", "automation"}:
+            queue = "all"
+        tasks = await self._call(int(member["web_user_id"]), "tasks.list", {"limit": 1000, "queue": queue})
         tasks = [item for item in tasks if isinstance(item, dict)] if isinstance(tasks, list) else []
         now = int(time.time())
         if status_filter == "active":
@@ -1627,6 +2359,8 @@ class NativeTweetBotController:
         if persona_filter:
             tasks = [item for item in tasks if str(item.get("persona_id") or "").strip() == persona_filter]
         page = max(0, int(page))
+        total_pages = max(1, (len(tasks) + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = min(page, total_pages - 1)
         start = page * PAGE_SIZE
         rows = []
         for item in tasks[start:start + PAGE_SIZE]:
@@ -1643,28 +2377,27 @@ class NativeTweetBotController:
                         "status_filter": status_filter,
                         "platform": platform_filter,
                         "persona_id": persona_filter,
+                        "queue": queue,
                     },
                 ),
             )])
-        nav = []
-        if page > 0:
-            nav_data = callback_token(int(query.message.chat.id), "taskview", {
-                "page": page - 1,
+        def _task_page_callback(target_page: int) -> str:
+            payload = {
+                "page": target_page,
                 "status_filter": status_filter,
                 "platform": platform_filter,
                 "persona_id": persona_filter,
-            }) if (platform_filter or persona_filter) else f"tt:tasks:{page - 1}:{status_filter}"
-            nav.append(types.InlineKeyboardButton(text="⬅️", callback_data=nav_data))
-        if start + PAGE_SIZE < len(tasks):
-            nav_data = callback_token(int(query.message.chat.id), "taskview", {
-                "page": page + 1,
-                "status_filter": status_filter,
-                "platform": platform_filter,
-                "persona_id": persona_filter,
-            }) if (platform_filter or persona_filter) else f"tt:tasks:{page + 1}:{status_filter}"
-            nav.append(types.InlineKeyboardButton(text="➡️", callback_data=nav_data))
-        if nav:
-            rows.append(nav)
+                "queue": queue,
+            }
+            return callback_token(int(query.message.chat.id), "taskview", payload)
+
+        nav, page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(tasks),
+            callback_for_page=_task_page_callback,
+        )
+        rows.extend(nav)
         rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
         filter_label = {
             "active": "进行中",
@@ -1680,12 +2413,14 @@ class NativeTweetBotController:
             "all": "全部",
         }[status_filter]
         filter_suffix = ""
+        if queue != "all":
+            filter_suffix += f" · {'普通生成' if queue == 'normal' else '自动化'}"
         if platform_filter:
             filter_suffix += f" · 平台 {platform_filter}"
         if persona_filter:
             filter_suffix += f" · 人设 {persona_filter[:18]}"
         await query.message.edit_text(
-            f"{filter_label}任务{filter_suffix}（{len(tasks)} 条）" if tasks else f"暂无{filter_label}任务{filter_suffix}。",
+            (f"{filter_label}任务{filter_suffix}（{len(tasks)} 条）\n第 {page + 1}/{total_pages} 页" if tasks else f"暂无{filter_label}任务{filter_suffix}。"),
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -1695,18 +2430,26 @@ class NativeTweetBotController:
         types: Any,
         member: dict[str, Any],
         filter_kind: str,
+        page: int = 0,
     ) -> None:
         chat_id = int(query.message.chat.id)
         user_id = int(member["web_user_id"])
         rows = []
         if filter_kind == "platform":
-            tasks = await self._call(user_id, "tasks.list", {"limit": 100})
+            tasks = await self._call(user_id, "tasks.list", {"limit": 1000})
             platforms = sorted({
                 str(item.get("platform") or "").strip().lower()
                 for item in (tasks if isinstance(tasks, list) else [])
                 if isinstance(item, dict) and str(item.get("platform") or "").strip()
             })
-            for platform in platforms:
+            nav, page, total_pages = _pagination_rows(
+                types,
+                page=page,
+                total_items=len(platforms),
+                callback_for_page=lambda target: callback_token(chat_id, "taskfilterpage", {"kind": "platform", "page": target}),
+            )
+            start = page * PAGE_SIZE
+            for platform in platforms[start:start + PAGE_SIZE]:
                 rows.append([types.InlineKeyboardButton(
                     text=platform.title(),
                     callback_data=callback_token(chat_id, "taskview", {
@@ -1714,11 +2457,27 @@ class NativeTweetBotController:
                     }),
                 )])
             title = "按平台筛选任务"
-            empty = "最近 100 条任务中暂无可筛选的平台。"
+            empty = "当前任务中暂无可筛选的平台。"
         else:
+            tasks = await self._call(user_id, "tasks.list", {"limit": 1000})
+            task_persona_ids = {
+                str(item.get("persona_id") or "").strip()
+                for item in (tasks if isinstance(tasks, list) else [])
+                if isinstance(item, dict) and str(item.get("persona_id") or "").strip()
+            }
             personas = await self._call(user_id, "personas.list")
-            personas = personas if isinstance(personas, list) else []
-            for persona in personas[:50]:
+            personas = [
+                item for item in (personas if isinstance(personas, list) else [])
+                if isinstance(item, dict) and str(item.get("id") or "").strip() in task_persona_ids
+            ]
+            nav, page, total_pages = _pagination_rows(
+                types,
+                page=page,
+                total_items=len(personas),
+                callback_for_page=lambda target: callback_token(chat_id, "taskfilterpage", {"kind": "persona", "page": target}),
+            )
+            start = page * PAGE_SIZE
+            for persona in personas[start:start + PAGE_SIZE]:
                 persona_id = str(persona.get("id") or "").strip()
                 if not persona_id:
                     continue
@@ -1730,10 +2489,11 @@ class NativeTweetBotController:
                 )])
             title = "按人设筛选任务"
             empty = "当前没有可筛选的人设。"
+        rows.extend(nav)
         if not rows:
             text = empty
         else:
-            text = title + "\n\n请选择一个筛选项："
+            text = title + f"\n\n第 {page + 1}/{total_pages} 页，请选择一个筛选项："
         rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
         await query.message.edit_text(
             text,
@@ -1760,6 +2520,8 @@ class NativeTweetBotController:
             str(item) for item in state["payload"].get("matrix_persona_ids") or [] if str(item)
         }
         page = max(0, int(page))
+        total_pages = max(1, (len(eligible) + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = min(page, total_pages - 1)
         start = page * PAGE_SIZE
         rows = []
         for persona in eligible[start:start + PAGE_SIZE]:
@@ -1771,13 +2533,13 @@ class NativeTweetBotController:
                     int(query.message.chat.id), "mx", {"persona_id": persona_id, "page": page},
                 ),
             )])
-        nav = []
-        if page > 0:
-            nav.append(types.InlineKeyboardButton(text="⬅️", callback_data=f"tt:matrixpage:{page - 1}"))
-        if start + PAGE_SIZE < len(eligible):
-            nav.append(types.InlineKeyboardButton(text="➡️", callback_data=f"tt:matrixpage:{page + 1}"))
-        if nav:
-            rows.append(nav)
+        nav, page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(eligible),
+            callback_for_page=lambda target: f"tt:matrixpage:{target}",
+        )
+        rows.extend(nav)
         if selected:
             rows.append([types.InlineKeyboardButton(
                 text=f"下一步：确认 {len(selected)} 个人设",
@@ -1787,7 +2549,7 @@ class NativeTweetBotController:
         await query.message.edit_text(
             "矩阵发布 · 第 1/4 步\n"
             "请选择要发布的人设；后续再选择内容来源和发布平台。\n"
-            f"已选择：{len(selected)} 个",
+            f"已选择：{len(selected)} 个；第 {page + 1}/{total_pages} 页，共 {len(eligible)} 个人设",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -1847,6 +2609,513 @@ class NativeTweetBotController:
             message,
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
+
+    async def _render_generation_directions(self, query: Any, types: Any, *, notice: str = "") -> None:
+        """Render Web-compatible direction selection without bypassing confirmation."""
+        chat_id = int(query.message.chat.id)
+        state = load_state(chat_id)
+        if state["mode"] not in {"generate_confirm", "generate_directions"}:
+            raise HTTPException(status_code=409, detail="生成步骤已失效，请重新开始")
+        payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+        directions = [
+            str(item or "").strip()[:24]
+            for item in (payload.get("direction_options") or [])
+            if str(item or "").strip()
+        ][:10]
+        selected = {
+            str(item or "").strip()
+            for item in (payload.get("selected_directions") or [])
+            if str(item or "").strip()
+        }
+        rows: list[list[Any]] = []
+        for direction in directions:
+            rows.append([types.InlineKeyboardButton(
+                text=("✅ " if direction in selected else "▫️ ") + direction,
+                callback_data=callback_token(chat_id, "gdirpick", {"direction": direction}),
+            )])
+        rows.append([
+            types.InlineKeyboardButton(
+                text=f"确认使用（{len(selected)}）",
+                callback_data=callback_token(chat_id, "gdirconfirm", {}),
+            ),
+            types.InlineKeyboardButton(
+                text="不使用方向",
+                callback_data=callback_token(chat_id, "gdirclear", {}),
+            ),
+        ])
+        rows.append([
+            types.InlineKeyboardButton(text="换一批", callback_data=callback_token(chat_id, "gdir", {"refresh": True})),
+            types.InlineKeyboardButton(text="返回确认", callback_data=callback_token(chat_id, "gdirback", {})),
+        ])
+        rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
+        await query.message.edit_text(
+            (f"{notice.strip()}\n\n" if notice.strip() else "")
+            + "AI 生成推文 · 选择推文方向\n"
+            + "方向只作为生成链路的辅助约束；可多选，也可以明确不使用。\n"
+            + f"当前已选：{len(selected)} 个。",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    @staticmethod
+    def _generation_confirmation_text(payload: dict[str, Any], *, notice: str = "") -> str:
+        """Build the single confirmation view shared by all generation branches.
+
+        Keeping this in one renderer is important: direction/memory pickers
+        must return to the same state instead of silently dropping one of the
+        selected context sources.
+        """
+        count = int(payload.get("count") or 3)
+        target_words = int(payload.get("target_words") or 120)
+        prompt = str(payload.get("prompt") or "")[:1200]
+        platform = str(payload.get("platform") or "threads").strip().lower() or "threads"
+        platform_label = dict(PERSONA_CONTENT_PLATFORMS).get(platform, platform.title())
+        locale = str(payload.get("writing_locale") or "zh-TW").strip()
+        locale_label = dict(PERSONA_WRITING_LOCALES).get(locale, locale)
+        slot = str(payload.get("content_time_slot") or "").strip().lower()
+        slot_label = dict(PERSONA_CONTENT_TIME_SLOTS).get(slot, "不指定")
+        directions = [
+            str(item or "").strip()
+            for item in (payload.get("selected_directions") or [])
+            if str(item or "").strip()
+        ][:10]
+        memories = [
+            str(item or "").strip()
+            for item in (payload.get("selected_memory_summaries") or [])
+            if str(item or "").strip()
+        ][:20]
+        prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
+        return (
+            prefix
+            + "AI 生成推文 · 提交确认\n"
+            + f"数量：{count} 篇 · 每篇约 {target_words} 字\n"
+            + f"平台：{platform_label} · 语言：{locale_label} · 时段：{slot_label}\n"
+            + f"主题：{prompt}\n"
+            + f"方向：{', '.join(directions) or '未使用'}\n"
+            + f"人设记忆：{', '.join(memories)[:900] or '未选择'}\n\n"
+            + "确认后才会提交生成任务。"
+        )
+
+    @staticmethod
+    def _generation_confirmation_markup(types: Any, chat_id: int, payload: dict[str, Any]) -> Any:
+        selected_directions = [
+            str(item or "").strip()
+            for item in (payload.get("selected_directions") or [])
+            if str(item or "").strip()
+        ]
+        selected_memories = [
+            str(item or "").strip()
+            for item in (payload.get("selected_memory_ids") or [])
+            if str(item or "").strip()
+        ]
+        rows = [[
+            types.InlineKeyboardButton(
+                text="确认生成",
+                callback_data=callback_token(chat_id, "gsubmit", {}),
+            ),
+            types.InlineKeyboardButton(text="修改参数", callback_data="tt:generate"),
+        ], [
+            types.InlineKeyboardButton(
+                text=f"🌐 平台：{dict(PERSONA_CONTENT_PLATFORMS).get(str(payload.get('platform') or 'threads').strip().lower(), 'Threads')}",
+                callback_data=callback_token(chat_id, "gplatform", {}),
+            ),
+            types.InlineKeyboardButton(
+                text=f"🗣 语言：{dict(PERSONA_WRITING_LOCALES).get(str(payload.get('writing_locale') or 'zh-TW').strip(), str(payload.get('writing_locale') or 'zh-TW'))}",
+                callback_data=callback_token(chat_id, "glocale", {}),
+            ),
+        ], [
+            types.InlineKeyboardButton(
+                text=f"⏱ 时段：{dict(PERSONA_CONTENT_TIME_SLOTS).get(str(payload.get('content_time_slot') or '').strip().lower(), '不指定')}",
+                callback_data=callback_token(chat_id, "gslot", {}),
+            ),
+        ], [
+            types.InlineKeyboardButton(
+                text=f"🧭 选择推文方向 ({len(selected_directions)})",
+                callback_data=callback_token(chat_id, "gdir", {}),
+            ),
+        ], [
+            types.InlineKeyboardButton(
+                text=f"🧠 选择人设记忆 ({len(selected_memories)})",
+                callback_data=callback_token(chat_id, "gmem", {"page": 0}),
+            ),
+        ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]
+        return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def _render_generation_confirmation(
+        self,
+        query: Any,
+        types: Any,
+        *,
+        payload: dict[str, Any],
+        notice: str = "",
+    ) -> None:
+        await query.message.edit_text(
+            self._generation_confirmation_text(payload, notice=notice),
+            reply_markup=self._generation_confirmation_markup(
+                types, int(query.message.chat.id), payload,
+            ),
+        )
+
+    async def _render_generation_memories(
+        self,
+        query: Any,
+        types: Any,
+        *,
+        page: int = 0,
+        notice: str = "",
+    ) -> None:
+        """Render selectable persona memories for the pending generation.
+
+        The options are fetched from the canonical profile-memory endpoint on
+        every render so deleted memories cannot be submitted from a stale
+        Telegram callback.  Only the selected IDs and their current summaries
+        are persisted in the short-lived chat state.
+        """
+        chat_id = int(query.message.chat.id)
+        state = load_state(chat_id)
+        if state["mode"] not in {"generate_confirm", "generate_memories"}:
+            raise HTTPException(status_code=409, detail="生成确认已失效，请重新开始")
+        persona_id = str(state["selected_persona_id"] or "").strip()
+        if not persona_id:
+            raise HTTPException(status_code=409, detail="请先选择人设")
+        member = self._member(chat_id)
+        if not member:
+            raise HTTPException(status_code=401, detail="Telegram 会话未绑定")
+        result = await self._call(
+            int(member["web_user_id"]),
+            "profile.memories",
+            {"persona_id": persona_id},
+        )
+        memories = result.get("memories") if isinstance(result, dict) else []
+        memories = [item for item in memories if isinstance(item, dict) and str(item.get("id") or "").strip()]
+        payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+        available = {str(item.get("id") or "").strip(): item for item in memories}
+        selected_ids = [
+            str(item or "").strip()
+            for item in (payload.get("selected_memory_ids") or [])
+            if str(item or "").strip() in available
+        ][:8]
+        selected_summaries = [
+            str(available[memory_id].get("summary") or "").strip()
+            for memory_id in selected_ids
+            if str(available[memory_id].get("summary") or "").strip()
+        ]
+        payload["selected_memory_ids"] = selected_ids
+        payload["selected_memory_summaries"] = selected_summaries
+        save_state(chat_id, mode="generate_memories", payload=payload)
+        nav, safe_page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(memories),
+            callback_for_page=lambda target: callback_token(chat_id, "gmem", {"page": target}),
+        )
+        rows: list[list[Any]] = []
+        start = safe_page * PAGE_SIZE
+        for item in memories[start:start + PAGE_SIZE]:
+            memory_id = str(item.get("id") or "").strip()
+            summary = str(item.get("summary") or "").strip().replace("\n", " ")[:58]
+            marker = "✅ " if memory_id in selected_ids else "▫️ "
+            rows.append([types.InlineKeyboardButton(
+                text=f"{marker}{summary or '未命名记忆'}",
+                callback_data=callback_token(chat_id, "gmempick", {
+                    "memory_id": memory_id,
+                    "page": safe_page,
+                }),
+            )])
+        rows.append([
+            types.InlineKeyboardButton(
+                text=f"确认使用（{len(selected_ids)}）",
+                callback_data=callback_token(chat_id, "gmemconfirm", {}),
+            ),
+            types.InlineKeyboardButton(
+                text="清空选择",
+                callback_data=callback_token(chat_id, "gmemclear", {}),
+            ),
+        ])
+        rows.extend(nav)
+        rows.append([types.InlineKeyboardButton(
+            text="返回生成确认",
+            callback_data=callback_token(chat_id, "gmemback", {}),
+        )])
+        await query.message.edit_text(
+            (f"{notice.strip()}\n\n" if notice.strip() else "")
+            + "AI 生成推文 · 选择人设记忆\n"
+            + f"第 {safe_page + 1}/{total_pages} 页；最多选择 8 条。\n"
+            + ("记忆会作为本次生成的上下文，不会覆盖人设简介。" if memories else "当前人设暂无可选记忆，可返回确认页继续生成。"),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_profile_memories(self, query: Any, types: Any, *, page: int = 0) -> None:
+        chat_id = int(query.message.chat.id)
+        member = self._member(chat_id)
+        if not member:
+            raise HTTPException(status_code=401, detail="Telegram 会话未绑定")
+        state = load_state(chat_id)
+        persona_id = str(state["selected_persona_id"] or "").strip()
+        if not persona_id:
+            raise HTTPException(status_code=409, detail="请先选择人设")
+        result = await self._call(int(member["web_user_id"]), "profile.memories", {"persona_id": persona_id})
+        memories = result.get("memories") if isinstance(result, dict) and isinstance(result.get("memories"), list) else []
+        memories = [item for item in memories if isinstance(item, dict)]
+        nav, safe_page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(memories),
+            callback_for_page=lambda target: callback_token(chat_id, "pmemories", {"page": target}),
+        )
+        rows: list[list[Any]] = []
+        start = safe_page * PAGE_SIZE
+        for item in memories[start:start + PAGE_SIZE]:
+            memory_id = str(item.get("id") or "").strip()
+            summary = str(item.get("summary") or "").strip().replace("\n", " ")[:48]
+            if not memory_id:
+                continue
+            rows.append([types.InlineKeyboardButton(
+                text=f"🧠 {summary or '未命名记忆'}",
+                callback_data=callback_token(chat_id, "pmemnoop", {}),
+            ), types.InlineKeyboardButton(
+                text="删除",
+                callback_data=callback_token(chat_id, "pmemdelete", {"memory_id": memory_id, "page": safe_page}),
+            )])
+        rows.extend(nav)
+        rows.append([types.InlineKeyboardButton(text="➕ 新增记忆", callback_data="tt:pmemadd")])
+        rows.append([types.InlineKeyboardButton(text="返回内容设置", callback_data="tt:profile")])
+        await query.message.edit_text(
+            f"人设记忆（{len(memories)} 条）\n第 {safe_page + 1}/{total_pages}\n"
+            "生成推文时可将选中的记忆作为上下文，删除只会隐藏该条记忆。",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_profile_links(self, query: Any, types: Any, *, page: int = 0) -> None:
+        chat_id = int(query.message.chat.id)
+        member = self._member(chat_id)
+        if not member:
+            raise HTTPException(status_code=401, detail="Telegram 会话未绑定")
+        state = load_state(chat_id)
+        persona_id = str(state["selected_persona_id"] or "").strip()
+        if not persona_id:
+            raise HTTPException(status_code=409, detail="请先选择人设")
+        profile = await self._call(int(member["web_user_id"]), "profile.get", {"persona_id": persona_id})
+        presets = profile.get("link_presets") if isinstance(profile, dict) and isinstance(profile.get("link_presets"), list) else []
+        active_id = str(profile.get("active_link_preset_id") or "")
+        nav, safe_page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(presets),
+            callback_for_page=lambda target: callback_token(chat_id, "plinks", {"page": target}),
+        )
+        rows: list[list[Any]] = []
+        start = safe_page * PAGE_SIZE
+        for item in presets[start:start + PAGE_SIZE]:
+            if not isinstance(item, dict):
+                continue
+            preset_id = str(item.get("id") or "").strip()
+            if not preset_id:
+                continue
+            marker = "✅ " if preset_id == active_id else ""
+            rows.append([types.InlineKeyboardButton(
+                text=f"{marker}{str(item.get('name') or '链接模板')[:26]}",
+                callback_data=callback_token(chat_id, "plinkactivate", {"preset_id": preset_id, "page": safe_page}),
+            ), types.InlineKeyboardButton(
+                text="删除",
+                callback_data=callback_token(chat_id, "plinkdelete", {"preset_id": preset_id, "page": safe_page}),
+            )])
+        rows.extend(nav)
+        rows.append([types.InlineKeyboardButton(text="➕ 新增链接模板", callback_data="tt:plinkadd")])
+        rows.append([types.InlineKeyboardButton(text="返回内容设置", callback_data="tt:profile")])
+        await query.message.edit_text(
+            f"链接模板（{len(presets)} 条，第 {safe_page + 1}/{total_pages} 页）\n\n"
+            + ("\n".join(
+                f"• {str(item.get('name') or '链接模板')}：{str(item.get('link_url') or '')[:90]}"
+                for item in presets[start:start + PAGE_SIZE] if isinstance(item, dict)
+            ) or "暂无链接模板。"),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _render_automation_plans(self, query: Any, types: Any, *, page: int = 0) -> None:
+        chat_id = int(query.message.chat.id)
+        member = self._member(chat_id)
+        if not member:
+            raise HTTPException(status_code=401, detail="Telegram 会话未绑定")
+        result = await self._call(int(member["web_user_id"]), "automation.plans.list", {})
+        plans = result.get("plans") if isinstance(result, dict) and isinstance(result.get("plans"), list) else []
+        plans = [item for item in plans if isinstance(item, dict)]
+        nav, safe_page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(plans),
+            callback_for_page=lambda target: f"tt:automationplans:{target}",
+        )
+        rows: list[list[Any]] = []
+        start = safe_page * PAGE_SIZE
+        for plan in plans[start:start + PAGE_SIZE]:
+            plan_id = str(plan.get("id") or "").strip()
+            if not plan_id:
+                continue
+            status = str(plan.get("status") or "unknown").strip()
+            platform = str(plan.get("platform") or "").strip()
+            rows.append([types.InlineKeyboardButton(
+                text=f"{status} · {platform or '平台'} · {int(plan.get('task_count') or 0)}步",
+                callback_data=callback_token(chat_id, "automationplan", {"plan_id": plan_id}),
+            )])
+        rows.extend(nav)
+        rows.append([types.InlineKeyboardButton(text="➕ 新建自动化计划", callback_data="tt:automationplannew")])
+        rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
+        await query.message.edit_text(
+            f"自动化计划（{len(plans)} 条）\n第 {safe_page + 1}/{total_pages}\n"
+            "计划会按平台账号和人设绑定执行；停止计划不会删除账号。",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    @staticmethod
+    def _persona_ai_keyword_values(value: Any, *, limit: int = 12) -> list[str]:
+        """Normalize model keyword candidates before putting them in chat state.
+
+        The Web flow displays at most twelve candidates per group and keeps the
+        regular/hot groups separate.  Telegram callbacks only carry an index;
+        the authoritative values therefore stay in the short-lived state and
+        are revalidated on every click.
+        """
+        values: list[str] = []
+        for item in value if isinstance(value, list) else []:
+            text = str(item or "").strip()
+            if text and text not in values:
+                values.append(text[:80])
+            if len(values) >= max(1, int(limit or 12)):
+                break
+        return values
+
+    @classmethod
+    def _persona_ai_keywords_markup(cls, types: Any, chat_id: int, payload: dict[str, Any]) -> Any:
+        regular = cls._persona_ai_keyword_values(payload.get("ai_keywords"))
+        hot = cls._persona_ai_keyword_values(payload.get("ai_hot_keywords"))
+        selected_regular = cls._persona_ai_keyword_values(payload.get("ai_selected_regular_keywords"), limit=2)
+        selected_hot = cls._persona_ai_keyword_values(payload.get("ai_selected_hot_keywords"), limit=2)
+        selected = set(selected_regular) | set(selected_hot)
+        rows: list[list[Any]] = []
+        for kind, title, values, chosen in (
+            ("regular", "普通关键词（长期方向）", regular, set(selected_regular)),
+            ("hot", "热门关键词（可选热点方向）", hot, set(selected_hot)),
+        ):
+            if not values:
+                continue
+            rows.append([types.InlineKeyboardButton(text=title, callback_data="tt:persona_ai_noop")])
+            for index in range(0, len(values), 2):
+                row = []
+                for offset in (0, 1):
+                    candidate_index = index + offset
+                    if candidate_index >= len(values):
+                        continue
+                    keyword = values[candidate_index]
+                    row.append(types.InlineKeyboardButton(
+                        text=("✅ " if keyword in chosen else "▫️ ") + keyword[:32],
+                        callback_data=callback_token(chat_id, "persona_ai_keyword", {
+                            "kind": kind,
+                            "index": candidate_index,
+                        }),
+                    ))
+                if row:
+                    rows.append(row)
+        rows.append([
+            types.InlineKeyboardButton(
+                text=f"确认生成人设（{len(selected)}）",
+                callback_data=callback_token(chat_id, "persona_ai_confirm", {}),
+            ),
+            types.InlineKeyboardButton(
+                text="清空选择",
+                callback_data=callback_token(chat_id, "persona_ai_clear", {}),
+            ),
+        ])
+        rows.append([
+            types.InlineKeyboardButton(
+                text="返回修改提示词",
+                callback_data=callback_token(chat_id, "persona_ai_back", {}),
+            ),
+            types.InlineKeyboardButton(
+                text="跳过关键词直接创建",
+                callback_data=callback_token(chat_id, "persona_ai_direct", {}),
+            ),
+        ])
+        rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
+        return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @classmethod
+    def _persona_ai_keywords_text(cls, payload: dict[str, Any], *, notice: str = "") -> str:
+        regular = cls._persona_ai_keyword_values(payload.get("ai_keywords"))
+        hot = cls._persona_ai_keyword_values(payload.get("ai_hot_keywords"))
+        selected_regular = cls._persona_ai_keyword_values(payload.get("ai_selected_regular_keywords"), limit=2)
+        selected_hot = cls._persona_ai_keyword_values(payload.get("ai_selected_hot_keywords"), limit=2)
+        source = payload.get("ai_hot_keyword_source") if isinstance(payload.get("ai_hot_keyword_source"), dict) else {}
+        if source.get("available"):
+            source_text = f"热门候选参考 {int(source.get('candidate_count') or 0)} 条公开趋势内容。"
+        elif source.get("fallback") == "persona_model":
+            source_text = "未取得可核验实时热度，热门候选由模型按人设生成。"
+        else:
+            source_text = "热门候选为模型按人设生成的可选方向。"
+        prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
+        return (
+            prefix
+            + "AI 生成人设 · 选择关键词\n"
+            + f"名称：{str(payload.get('ai_name') or '')[:160]}\n"
+            + f"提示词：{str(payload.get('ai_prompt') or '')[:800]}\n\n"
+            + f"普通候选 {len(regular)} 个，热门候选 {len(hot)} 个。每列最多选 2 个，至少选 2 个；共最多 4 个。\n"
+            + f"当前已选：普通 {len(selected_regular)} / 2，热门 {len(selected_hot)} / 2。\n"
+            + source_text
+        )
+
+    async def _finish_persona_ai_create(
+        self,
+        *,
+        user_id: int,
+        chat_id: int,
+        types: Any,
+        name: str,
+        prompt: str,
+        selected_keywords: list[str],
+        selected_regular_keywords: list[str],
+        selected_hot_keywords: list[str],
+        idempotency_key: str,
+        reply: Callable[..., Awaitable[Any]],
+    ) -> str:
+        """Submit AI persona creation and render the same success surface.
+
+        Both the direct-create fallback and the keyword-confirm path use this
+        method, so they cannot drift in billing, idempotency, state cleanup or
+        the follow-up persona actions.
+        """
+        result = await self._call(user_id, "personas.ai_create", {
+            "name": name[:160],
+            "prompt": prompt[:2000],
+            "selected_keywords": list(selected_keywords)[:4],
+            "selected_regular_keywords": list(selected_regular_keywords)[:2],
+            "selected_hot_keywords": list(selected_hot_keywords)[:2],
+            "idempotency_key": str(idempotency_key or "")[:240],
+        })
+        profile = result.get("profile") if isinstance(result, dict) and isinstance(result.get("profile"), dict) else {}
+        new_id = str(profile.get("id") or (result.get("id") if isinstance(result, dict) else "") or "")
+        if not new_id:
+            raise HTTPException(status_code=502, detail="AI 未返回新建人设标识")
+        created_name = str(profile.get("name") or (result.get("name") if isinstance(result, dict) else "") or name)
+        clear_pending_state(chat_id)
+        save_state(chat_id, selected_persona_id=new_id, payload={})
+        audit_action(
+            chat_id,
+            user_id,
+            "persona.ai_create",
+            status="success",
+            resource_type="persona",
+            resource_id=new_id,
+        )
+        await reply(
+            f"AI 人设已创建：{created_name}",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(
+                    text="打开人设",
+                    callback_data=callback_token(chat_id, "p", {"persona_id": new_id}),
+                ),
+                types.InlineKeyboardButton(text="查看我的人设", callback_data="tt:personas:0"),
+            ]]),
+        )
+        return new_id
 
     async def handle_callback(self, query: Any, types: Any) -> None:
         if query.message is None:
@@ -1926,6 +3195,17 @@ class NativeTweetBotController:
             elif action == "platformaccounts":
                 page_text, markup = await self._accounts_payload(
                     types, member, return_callback="tt:accountmenu",
+                )
+                await query.message.edit_text(page_text, reply_markup=markup)
+            elif action == "accountspage" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "accountspage", parts[2])
+                page_text, markup = await self._accounts_payload(
+                    types,
+                    member,
+                    return_callback=str(reference.get("return_callback") or "tt:platformaccounts"),
+                    persona_id=str(reference.get("persona_id") or ""),
+                    operation=str(reference.get("operation") or ""),
+                    page=int(reference.get("page") or 0),
                 )
                 await query.message.edit_text(page_text, reply_markup=markup)
             elif action == "accounts":
@@ -2026,6 +3306,26 @@ class NativeTweetBotController:
                 reference = resolve_callback_token(chat_id, "acbind", parts[2])
                 account_id = str(reference.get("account_id") or "").strip()
                 await self._account_persona_picker(query, types, member, account_id)
+            elif action == "acbindpage" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "acbindpage", parts[2])
+                await self._account_persona_picker(
+                    query,
+                    types,
+                    member,
+                    str(reference.get("account_id") or "").strip(),
+                    page=int(reference.get("page") or 0),
+                )
+            elif action == "papage" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "papage", parts[2])
+                await self._publish_account_picker(
+                    query,
+                    types,
+                    member,
+                    source=str(reference.get("source") or "posts"),
+                    post_id=str(reference.get("post_id") or ""),
+                    scheduled=bool(reference.get("scheduled")),
+                    page=int(reference.get("page") or 0),
+                )
             elif action == "acbindselect" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "acbindselect", parts[2], consume=True)
                 account_id = str(reference.get("account_id") or "").strip()
@@ -2082,6 +3382,126 @@ class NativeTweetBotController:
                 await self._persona_list(query, types, member, 0)
             elif action == "personas":
                 await self._persona_list(query, types, member, int(parts[2]) if len(parts) > 2 else 0)
+            elif action == "personagroups":
+                await self._persona_groups(query, types, member, int(parts[2]) if len(parts) > 2 else 0)
+            elif action == "group" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "group", parts[2])
+                await self._persona_group_detail(
+                    query,
+                    types,
+                    member,
+                    str(reference.get("group_id") or ""),
+                    page=int(reference.get("page") or 0),
+                )
+            elif action == "groupnew":
+                save_state(chat_id, mode="persona_group_create", payload={})
+                await query.message.edit_text("请发送分组名称。发送 /cancel 取消。")
+            elif action == "groupadd" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "groupadd", parts[2])
+                await self._persona_group_add_picker(
+                    query, types, member,
+                    str(reference.get("group_id") or ""),
+                    int(reference.get("page") or 0),
+                )
+            elif action == "groupaddselect" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "groupaddselect", parts[2], consume=True)
+                await self._call(user_id, "persona.group.add", {
+                    "group_id": str(reference.get("group_id") or ""),
+                    "persona_id": str(reference.get("persona_id") or ""),
+                })
+                await self._persona_group_detail(query, types, member, str(reference.get("group_id") or ""))
+            elif action == "groupremove" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "groupremove", parts[2], consume=True)
+                await self._call(user_id, "persona.group.remove", {
+                    "group_id": str(reference.get("group_id") or ""),
+                    "persona_id": str(reference.get("persona_id") or ""),
+                })
+                await self._persona_group_detail(query, types, member, str(reference.get("group_id") or ""))
+            elif action == "groupassign" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "groupassign", parts[2])
+                await self._persona_group_assign_picker(
+                    query,
+                    types,
+                    member,
+                    str(reference.get("persona_id") or ""),
+                    page=int(reference.get("page") or 0),
+                )
+            elif action == "groupassignselect" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "groupassignselect", parts[2], consume=True)
+                await self._call(user_id, "persona.group.add", {
+                    "group_id": str(reference.get("group_id") or ""),
+                    "persona_id": str(reference.get("persona_id") or ""),
+                })
+                await query.message.edit_text(
+                    "人设已加入分组。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
+                        text="返回人设详情",
+                        callback_data=callback_token(chat_id, "p", {"persona_id": str(reference.get("persona_id") or "")}),
+                    )]]),
+                )
+            elif action == "grouprename" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "grouprename", parts[2])
+                save_state(chat_id, mode="persona_group_rename", payload={"group_id": str(reference.get("group_id") or "")})
+                await query.message.edit_text("请发送新的分组名称。发送 /cancel 取消。")
+            elif action == "groupdeleteask" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "groupdeleteask", parts[2])
+                await query.message.edit_text(
+                    "确认删除这个人设分组？组内人设不会被删除，只会解除分组关系。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(
+                            text="确认删除分组",
+                            callback_data=callback_token(chat_id, "groupdelete", {"group_id": str(reference.get("group_id") or "")}),
+                        ),
+                        types.InlineKeyboardButton(text="取消", callback_data=callback_token(chat_id, "group", {"group_id": str(reference.get("group_id") or "")})),
+                    ]]),
+                )
+            elif action == "groupdelete" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "groupdelete", parts[2], consume=True)
+                await self._call(user_id, "persona.group.delete", {"group_id": str(reference.get("group_id") or "")})
+                await self._persona_groups(query, types, member, 0)
+            elif action == "pduplicate" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pduplicate", parts[2], consume=True)
+                result = await self._call(user_id, "persona.duplicate", {
+                    "persona_id": str(reference.get("persona_id") or ""),
+                })
+                profile = result.get("profile") if isinstance(result, dict) and isinstance(result.get("profile"), dict) else {}
+                duplicate_id = str(profile.get("id") or result.get("id") or "")
+                await query.message.edit_text(
+                    f"人设已复制：{str(profile.get('name') or '副本人设')}。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="打开副本人设", callback_data=callback_token(chat_id, "p", {"persona_id": duplicate_id})),
+                        types.InlineKeyboardButton(text="返回我的人设", callback_data="tt:personas:0"),
+                    ]]),
+                )
+            elif action == "pdeleteask" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pdeleteask", parts[2])
+                await query.message.edit_text(
+                    "确认删除该人设？草稿、收藏、发布历史、人设图库和绑定关系都会一并移除，无法恢复。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="确认删除人设", callback_data=callback_token(chat_id, "pdelete", {"persona_id": str(reference.get("persona_id") or "")})),
+                        types.InlineKeyboardButton(text="取消", callback_data=callback_token(chat_id, "p", {"persona_id": str(reference.get("persona_id") or "")})),
+                    ]]),
+                )
+            elif action == "pdelete" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pdelete", parts[2], consume=True)
+                persona_id = str(reference.get("persona_id") or "")
+                await self._call(user_id, "persona.delete", {"persona_id": persona_id})
+                state = load_state(chat_id)
+                if state["selected_persona_id"] == persona_id:
+                    save_state(chat_id, selected_persona_id="", mode="", payload={})
+                await self._persona_list(query, types, member, 0)
+            elif action == "prefresh" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "prefresh", parts[2], consume=True)
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"] or "")
+                task = await self._call(user_id, "persona.refresh", {
+                    "persona_id": persona_id, "source": "http_first", "platform": "",
+                })
+                await query.message.edit_text(
+                    f"人设数据刷新已提交：{str(task.get('id') or '已排队')}\n后台会更新绑定平台的公开数据和热点指标。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
+                        text="返回人设详情", callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}),
+                    )]]),
+                )
             elif action == "p" and len(parts) > 2:
                 persona_id = str(resolve_callback_token(chat_id, "p", parts[2]).get("persona_id") or "")
                 personas = await self._call(user_id, "personas.list")
@@ -2121,8 +3541,11 @@ class NativeTweetBotController:
                     return
                 rows = [
                     [types.InlineKeyboardButton(text="📝 查看推文", callback_data="tt:postsmenu"), types.InlineKeyboardButton(text="🕘 发布历史", callback_data="tt:persona_history")],
+                    [types.InlineKeyboardButton(text="🖼 推文配图", callback_data="tt:imageposts:0"), types.InlineKeyboardButton(text="🧑‍🎨 生成人设图", callback_data="tt:personaimage")],
                     [types.InlineKeyboardButton(text="✍️ 新建推文", callback_data="tt:createmenu"), types.InlineKeyboardButton(text="⚙️ 人设设置", callback_data="tt:profile")],
                     [types.InlineKeyboardButton(text="🔐 账号状态", callback_data="tt:persona_accounts")],
+                    [types.InlineKeyboardButton(text="🗂 加入分组", callback_data=callback_token(chat_id, "groupassign", {"persona_id": persona_id})), types.InlineKeyboardButton(text="🔄 刷新数据", callback_data=callback_token(chat_id, "prefresh", {"persona_id": persona_id}))],
+                    [types.InlineKeyboardButton(text="📄 复制人设", callback_data=callback_token(chat_id, "pduplicate", {"persona_id": persona_id})), types.InlineKeyboardButton(text="🗑 删除人设", callback_data=callback_token(chat_id, "pdeleteask", {"persona_id": persona_id}))],
                     [types.InlineKeyboardButton(text="🚀 发布推文", callback_data="tt:publish_one")],
                     [types.InlineKeyboardButton(text="返回我的人设", callback_data="tt:personas:0")],
                 ]
@@ -2142,6 +3565,161 @@ class NativeTweetBotController:
                 }
                 save_state(chat_id, mode="persona_new", payload=retained)
                 await query.message.edit_text("请发送：人设名称｜简介\n例如：科技观察员｜关注 AI 产品与创业趋势\n发送 /cancel 取消。")
+            elif action == "persona_ai_new":
+                save_state(chat_id, mode="persona_ai_create", payload={})
+                await query.message.edit_text(
+                    "AI 生成人设\n请发送：人设名称｜人设提示词\n"
+                    "例如：科技观察员｜关注 AI 产品、创业趋势，语气克制专业。\n发送 /cancel 取消。"
+                )
+            elif action == "persona_ai_noop":
+                await query.answer("请选择下方关键词，标题本身不可操作。")
+                return
+            elif action == "persona_ai_keyword" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "persona_ai_keyword", parts[2])
+                state = load_state(chat_id)
+                if state["mode"] != "persona_ai_keyword_select":
+                    raise HTTPException(status_code=409, detail="关键词选择已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                kind = str(reference.get("kind") or "").strip().lower()
+                if kind not in {"regular", "hot"}:
+                    raise HTTPException(status_code=400, detail="关键词分组无效")
+                try:
+                    index = int(reference.get("index"))
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail="关键词索引无效") from exc
+                field = "ai_keywords" if kind == "regular" else "ai_hot_keywords"
+                selected_field = (
+                    "ai_selected_regular_keywords"
+                    if kind == "regular"
+                    else "ai_selected_hot_keywords"
+                )
+                options = self._persona_ai_keyword_values(payload.get(field))
+                if index < 0 or index >= len(options):
+                    raise HTTPException(status_code=400, detail="关键词选项已失效，请重新提炼")
+                keyword = options[index]
+                selected = self._persona_ai_keyword_values(payload.get(selected_field), limit=2)
+                if keyword in selected:
+                    selected = [item for item in selected if item != keyword]
+                else:
+                    if len(selected) >= 2:
+                        raise HTTPException(status_code=400, detail="每组最多选择 2 个关键词")
+                    all_selected = set(
+                        self._persona_ai_keyword_values(payload.get("ai_selected_regular_keywords"), limit=2)
+                        + self._persona_ai_keyword_values(payload.get("ai_selected_hot_keywords"), limit=2)
+                    )
+                    if len(all_selected) >= 4:
+                        raise HTTPException(status_code=400, detail="最多选择 4 个关键词")
+                    selected.append(keyword)
+                payload[selected_field] = selected
+                payload["ai_selected_keywords"] = list(dict.fromkeys(
+                    self._persona_ai_keyword_values(payload.get("ai_selected_regular_keywords"), limit=2)
+                    + self._persona_ai_keyword_values(payload.get("ai_selected_hot_keywords"), limit=2)
+                ))[:4]
+                save_state(chat_id, mode="persona_ai_keyword_select", payload=payload)
+                await query.message.edit_text(
+                    self._persona_ai_keywords_text(payload),
+                    reply_markup=self._persona_ai_keywords_markup(types, chat_id, payload),
+                )
+            elif action in {"persona_ai_clear", "persona_ai_back", "persona_ai_direct", "persona_ai_confirm"} and len(parts) > 2:
+                # Do not consume the confirmation token before validation: a
+                # user who clicked too early must be able to select another
+                # keyword and confirm again.  The server-side idempotency key
+                # keeps duplicate Telegram deliveries safe.
+                reference = resolve_callback_token(chat_id, action, parts[2])
+                state = load_state(chat_id)
+                if state["mode"] != "persona_ai_keyword_select":
+                    raise HTTPException(status_code=409, detail="关键词选择已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                name = str(payload.get("ai_name") or "").strip()
+                prompt = str(payload.get("ai_prompt") or "").strip()
+                if not name or not prompt:
+                    raise HTTPException(status_code=409, detail="AI 人设输入已失效，请重新填写")
+                if action == "persona_ai_clear":
+                    payload["ai_selected_regular_keywords"] = []
+                    payload["ai_selected_hot_keywords"] = []
+                    payload["ai_selected_keywords"] = []
+                    save_state(chat_id, mode="persona_ai_keyword_select", payload=payload)
+                    await query.message.edit_text(
+                        self._persona_ai_keywords_text(payload, notice="已清空关键词选择。"),
+                        reply_markup=self._persona_ai_keywords_markup(types, chat_id, payload),
+                    )
+                elif action == "persona_ai_back":
+                    save_state(chat_id, mode="persona_ai_create", payload={
+                        "ai_name": name,
+                        "ai_prompt": prompt,
+                    })
+                    await query.message.edit_text(
+                        "请发送新的 AI 人设输入：人设名称｜人设提示词\n发送 /cancel 取消。"
+                    )
+                else:
+                    selected_regular = self._persona_ai_keyword_values(
+                        payload.get("ai_selected_regular_keywords"), limit=2,
+                    )
+                    selected_hot = self._persona_ai_keyword_values(
+                        payload.get("ai_selected_hot_keywords"), limit=2,
+                    )
+                    if action == "persona_ai_confirm":
+                        if len(set(selected_regular) | set(selected_hot)) < 2:
+                            raise HTTPException(status_code=400, detail="请至少选择 2 个人设关键词，或点击直接创建")
+                        await self._finish_persona_ai_create(
+                            user_id=user_id,
+                            chat_id=chat_id,
+                            types=types,
+                            name=name,
+                            prompt=prompt,
+                            selected_keywords=list(dict.fromkeys(selected_regular + selected_hot)),
+                            selected_regular_keywords=selected_regular,
+                            selected_hot_keywords=selected_hot,
+                            idempotency_key=str(payload.get("ai_create_idempotency_key") or f"tg:persona-ai-create:{chat_id}:{query.message.message_id}"),
+                            reply=query.message.edit_text,
+                        )
+                    else:
+                        await self._finish_persona_ai_create(
+                            user_id=user_id,
+                            chat_id=chat_id,
+                            types=types,
+                            name=name,
+                            prompt=prompt,
+                            selected_keywords=[],
+                            selected_regular_keywords=[],
+                            selected_hot_keywords=[],
+                            idempotency_key=str(payload.get("ai_create_idempotency_key") or f"tg:persona-ai-create:{chat_id}:{query.message.message_id}"),
+                            reply=query.message.edit_text,
+                        )
+            elif action == "persona_copy_new":
+                save_state(chat_id, mode="persona_copy_analyze", payload={})
+                await query.message.edit_text(
+                    "复制公开人设\n请发送公开 Threads 或 Instagram 用户主页链接；\n"
+                    "如需指定新名称，可发送：新名称｜公开主页链接。\n发送 /cancel 取消。"
+                )
+            elif action == "persona_copy_confirm":
+                state = load_state(chat_id)
+                if state["mode"] != "persona_copy_confirm":
+                    raise HTTPException(status_code=409, detail="复制分析已失效，请重新开始")
+                profile = state["payload"].get("copy_profile") if isinstance(state["payload"].get("copy_profile"), dict) else {}
+                source = state["payload"].get("copy_source") if isinstance(state["payload"].get("copy_source"), dict) else {}
+                name = str(profile.get("name") or "").strip()
+                content = str(profile.get("content") or "").strip()
+                if not name or not content:
+                    raise HTTPException(status_code=409, detail="复制分析结果不完整，请重新分析")
+                result = await self._call(user_id, "personas.create", {
+                    "name": name[:160],
+                    "content": content[:5000],
+                    "setup": profile.get("setup") if isinstance(profile.get("setup"), dict) else {},
+                    "copy_source": source,
+                })
+                persona = result.get("persona") if isinstance(result, dict) and isinstance(result.get("persona"), dict) else result
+                new_id = str((persona or {}).get("id") or result.get("id") or "")
+                created_name = str((persona or {}).get("name") or name)
+                clear_pending_state(chat_id)
+                save_state(chat_id, selected_persona_id=new_id, payload={})
+                await query.message.edit_text(
+                    f"复制人设已创建：{created_name}",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="打开人设", callback_data=callback_token(chat_id, "p", {"persona_id": new_id})),
+                        types.InlineKeyboardButton(text="查看我的人设", callback_data="tt:personas:0"),
+                    ]]),
+                )
             elif action == "generate":
                 if not load_state(chat_id)["selected_persona_id"]:
                     self._resume_payload(chat_id, "generate")
@@ -2173,6 +3751,172 @@ class NativeTweetBotController:
                     "推文内容\n请选择查看草稿、收藏，或手工新建一篇草稿。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
+            elif action == "imageposts":
+                state = load_state(chat_id)
+                if not state["selected_persona_id"]:
+                    await self._persona_list(query, types, member, 0)
+                    return
+                await self._post_list(
+                    query,
+                    types,
+                    member,
+                    source="posts",
+                    page=int(parts[2]) if len(parts) > 2 else 0,
+                    intro="推文配图 · 请选择要生成图片的草稿。",
+                    intent="image",
+                )
+            elif action == "personaimage":
+                state = load_state(chat_id)
+                persona_id = str((state["selected_persona_id"] or "")).strip()
+                page = 0
+                if len(parts) > 2:
+                    reference = resolve_callback_token(chat_id, "personaimage", parts[2])
+                    persona_id = str(reference.get("persona_id") or persona_id).strip()
+                    page = int(reference.get("page") or 0)
+                if not persona_id:
+                    await self._persona_list(query, types, member, 0)
+                    return
+                await self._render_persona_image_options(
+                    query, types, member, persona_id=persona_id, page=page,
+                )
+            elif action == "personaimmediate":
+                state = load_state(chat_id)
+                reference = resolve_callback_token(chat_id, "personaimmediate", parts[2], consume=True) if len(parts) > 2 else {}
+                persona_id = str(reference.get("persona_id") or state["selected_persona_id"] or "").strip()
+                if not persona_id:
+                    raise HTTPException(status_code=409, detail="请先选择人设")
+                options = state["payload"].get("persona_image_options") if isinstance(state.get("payload"), dict) and isinstance(state["payload"].get("persona_image_options"), dict) else {}
+                result = await self._call(user_id, "persona_image.generate", {
+                    "persona_id": persona_id,
+                    "supplement_prompt": str(state["payload"].get("supplement_prompt") or "") if isinstance(state.get("payload"), dict) else "",
+                    "persona_image_options": options,
+                    "aspect_ratio": "1:1",
+                    "mode": "person",
+                })
+                task_id = str(result.get("task_id") or result.get("id") or "")
+                clear_pending_state(chat_id)
+                await query.message.edit_text(f"人设图任务已提交：{task_id}\n完成后会发送结果。")
+                asyncio.create_task(self._watch_image_generation(
+                    query.message.bot, chat_id, user_id, persona_id, task_id, types,
+                    persona_task=True,
+                ))
+            elif action == "pimgnoop":
+                await query.answer("请使用下方按钮管理这张人设图")
+            elif action == "pimgpage" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgpage", parts[2])
+                await self._render_persona_image_options(
+                    query, types, member,
+                    persona_id=str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
+                    page=int(reference.get("page") or 0),
+                )
+            elif action == "pimgfield" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgfield", parts[2])
+                await self._render_persona_image_field(
+                    query, types,
+                    persona_id=str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
+                    field=str(reference.get("field") or ""),
+                    page=int(reference.get("page") or 0),
+                )
+            elif action == "pimgopt" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgopt", parts[2])
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"])
+                field = str(reference.get("field") or "")
+                state = load_state(chat_id)
+                state_options = state["payload"].get("persona_image_options") if isinstance(state.get("payload"), dict) else {}
+                definition = _persona_image_option_definition(field, state_options if isinstance(state_options, dict) else {})
+                if not definition or str(reference.get("value") or "") not in {key for key, _caption in definition[1]}:
+                    raise HTTPException(status_code=400, detail="人设图选项无效")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                options = dict(payload.get("persona_image_options") if isinstance(payload.get("persona_image_options"), dict) else {})
+                value = str(reference.get("value") or "")
+                if value:
+                    options[field] = value
+                else:
+                    options.pop(field, None)
+                options = _reconcile_persona_image_options(options)
+                payload.update({"persona_id": persona_id, "persona_image_options": options})
+                save_state(chat_id, selected_persona_id=persona_id, mode="persona_image_options", payload=payload)
+                await self._render_persona_image_options(
+                    query, types, member,
+                    persona_id=persona_id,
+                    page=int(reference.get("page") or 0),
+                )
+            elif action == "pimgprompt" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgprompt", parts[2])
+                state = load_state(chat_id)
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                payload["persona_id"] = str(reference.get("persona_id") or state["selected_persona_id"])
+                payload["page"] = int(reference.get("page") or 0)
+                save_state(chat_id, selected_persona_id=payload["persona_id"], mode="persona_image_prompt", payload=payload)
+                await query.message.edit_text("请发送人设图补充提示词；发送 /cancel 取消。\n未填写的选项将继续沿用原有人设简介。")
+            elif action == "pimgupload" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgupload", parts[2])
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"])
+                save_state(chat_id, selected_persona_id=persona_id, mode="persona_image_upload", payload={
+                    "persona_id": persona_id,
+                    "page": int(reference.get("page") or 0),
+                })
+                await query.message.edit_text("请发送一张自定义人设图；支持 JPG、PNG、WebP、GIF，发送 /cancel 取消。")
+            elif action == "pimgreplace" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgreplace", parts[2])
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"])
+                save_state(chat_id, selected_persona_id=persona_id, mode="persona_image_upload", payload={
+                    "persona_id": persona_id,
+                    "replace_image_id": str(reference.get("image_id") or ""),
+                    "page": int(reference.get("page") or 0),
+                })
+                await query.message.edit_text("请发送用于替换的人设图；发送 /cancel 取消。")
+            elif action == "pimgapply" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgapply", parts[2], consume=True)
+                result = await self._call(user_id, "persona_image.apply", {
+                    "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
+                    "image_id": str(reference.get("image_id") or ""),
+                })
+                await self._render_persona_image_options(
+                    query, types, member,
+                    persona_id=str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
+                    page=int(reference.get("page") or 0),
+                    notice="已设为当前人设参考图。",
+                )
+            elif action == "pimgavatar" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgavatar", parts[2], consume=True)
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"] or "")
+                await self._call(user_id, "profile.update", {
+                    "persona_id": persona_id,
+                    "avatar": {
+                        "image_id": str(reference.get("image_id") or ""),
+                        "crop_x": 50,
+                        "crop_y": 50,
+                        "zoom": 1,
+                    },
+                })
+                await self._render_persona_image_options(
+                    query, types, member, persona_id=persona_id,
+                    page=int(reference.get("page") or 0), notice="已设为人设头像。",
+                )
+            elif action == "pimgdeleteconfirm" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgdeleteconfirm", parts[2])
+                await query.message.edit_text(
+                    "确认删除这张人设图？如果它是当前参考图，系统会自动切换到最近的剩余图片。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="确认删除", callback_data=callback_token(chat_id, "pimgdelete", reference)),
+                        types.InlineKeyboardButton(text="取消", callback_data=callback_token(chat_id, "personaimage", {
+                            "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
+                            "page": int(reference.get("page") or 0),
+                        })),
+                    ]]),
+                )
+            elif action == "pimgdelete" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgdelete", parts[2], consume=True)
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"])
+                await self._call(user_id, "persona_image.delete", {
+                    "persona_id": persona_id,
+                    "image_id": str(reference.get("image_id") or ""),
+                })
+                await self._render_persona_image_options(
+                    query, types, member, persona_id=persona_id,
+                    page=int(reference.get("page") or 0), notice="人设图已删除。",
+                )
             elif action == "createmenu":
                 state = load_state(chat_id)
                 if not state["selected_persona_id"]:
@@ -2199,28 +3943,147 @@ class NativeTweetBotController:
                 if not persona_id:
                     await self._persona_list(query, types, member, 0)
                     return
-                tasks = await self._call(user_id, "tasks.list", {"limit": 30})
-                history = [
-                    item for item in tasks
-                    if str(item.get("_tg_task_kind") or "") == "social"
-                    and str(item.get("persona_id") or item.get("archive_id") or "") == persona_id
-                    and _task_status(item) in {"success", "succeeded", "completed", "published"}
-                ]
-                rows = [[types.InlineKeyboardButton(
-                    text=f"{_task_status(item)} · {str(item.get('platform') or item.get('task_type') or '发布')[:18]}",
-                    callback_data=callback_token(chat_id, "t", {
-                        "task_id": str(item.get("id") or ""),
-                        "task_kind": "social",
-                        "status_filter": "all",
-                    }),
-                )] for item in history[:10] if str(item.get("id") or "")]
+                history_result = await self._call(user_id, "profile.history", {"persona_id": persona_id})
+                history = history_result.get("publish_history") if isinstance(history_result, dict) else []
+                history = [item for item in history if isinstance(item, dict)]
+                history_from_archive = (
+                    isinstance(history_result, dict)
+                    and isinstance(history_result.get("publish_history"), list)
+                )
+                # Compatibility with a rolling restart/older dispatch layer:
+                # the canonical archive history is preferred, but a task
+                # projection still keeps already-published records reachable.
+                if not history and not history_from_archive:
+                    tasks = await self._call(user_id, "tasks.list", {"limit": 1000})
+                    history = [
+                        item for item in tasks
+                        if str(item.get("_tg_task_kind") or "") == "social"
+                        and str(item.get("persona_id") or item.get("archive_id") or "") == persona_id
+                        and _task_status(item) in {"success", "succeeded", "completed", "published"}
+                    ]
+                requested_page = int(parts[2]) if len(parts) > 2 else 0
+                total_pages = max(1, (len(history) + PAGE_SIZE - 1) // PAGE_SIZE)
+                page = min(max(0, requested_page), total_pages - 1)
+                start = page * PAGE_SIZE
+                rows = []
+                for item in history[start:start + PAGE_SIZE]:
+                    history_id = str(item.get("id") or item.get("history_id") or "").strip()
+                    if not history_id:
+                        continue
+                    label = str(item.get("status") or item.get("platform") or item.get("task_type") or "发布").strip()
+                    callback_data = (
+                        callback_token(chat_id, "phistory", {
+                            "history_id": history_id,
+                            "persona_id": persona_id,
+                        })
+                        if history_from_archive
+                        else callback_token(chat_id, "t", {
+                            "task_id": history_id,
+                            "task_kind": "social",
+                            "status_filter": "all",
+                        })
+                    )
+                    rows.append([types.InlineKeyboardButton(
+                        text=f"{label[:12]} · {str(item.get('title') or item.get('content') or '发布记录')[:24]}",
+                        callback_data=callback_data,
+                    )])
+                nav, page, total_pages = _pagination_rows(
+                    types,
+                    page=page,
+                    total_items=len(history),
+                    callback_for_page=lambda target: f"tt:persona_history:{target}",
+                )
+                rows.extend(nav)
+                if history_from_archive:
+                    rows.append([
+                        types.InlineKeyboardButton(
+                            text="🔄 自动识别已发布内容",
+                            callback_data=callback_token(chat_id, "phrecognizeauto", {"persona_id": persona_id}),
+                        ),
+                        types.InlineKeyboardButton(
+                            text="➕ 手动录入链接",
+                            callback_data=callback_token(chat_id, "phrecognize", {"persona_id": persona_id}),
+                        ),
+                    ])
                 rows.append([types.InlineKeyboardButton(
                     text="返回人设详情",
                     callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}),
                 )])
                 await query.message.edit_text(
-                    f"发布历史（{len(history)} 条）" if history else "当前人设暂无发布历史。",
+                    (f"发布历史（{len(history)} 条）\n第 {page + 1}/{total_pages} 页" if history else "当前人设暂无发布历史。"),
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                )
+            elif action == "phistory" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "phistory", parts[2])
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"] or "")
+                history_result = await self._call(user_id, "profile.history", {"persona_id": persona_id})
+                history = history_result.get("publish_history") if isinstance(history_result, dict) else []
+                history_id = str(reference.get("history_id") or "")
+                record = next((item for item in history if isinstance(item, dict) and str(item.get("id") or "") == history_id), None)
+                if not record:
+                    raise HTTPException(status_code=404, detail="发布记录不存在")
+                content = str(record.get("content") or record.get("caption") or record.get("text") or "").strip()
+                rows = [[
+                    types.InlineKeyboardButton(text="重新加入草稿", callback_data=callback_token(chat_id, "phrequeue", {
+                        "persona_id": persona_id, "history_id": history_id,
+                    })),
+                    types.InlineKeyboardButton(text="删除记录", callback_data=callback_token(chat_id, "phdelete", {
+                        "persona_id": persona_id, "history_id": history_id,
+                    })),
+                ], [types.InlineKeyboardButton(text="返回发布历史", callback_data="tt:persona_history:0")]]
+                await query.message.edit_text(
+                    f"发布记录\n\n平台：{record.get('platform') or '—'}\n账号：{record.get('account_username') or record.get('username') or '—'}\n"
+                    f"时间：{record.get('published_at') or record.get('captured_at') or '—'}\n\n{content[:2200] or '该记录没有可显示正文。'}",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                )
+            elif action == "phrequeue" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "phrequeue", parts[2], consume=True)
+                result = await self._call(user_id, "profile.history.requeue", {
+                    "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
+                    "history_id": str(reference.get("history_id") or ""),
+                })
+                await query.message.edit_text(
+                    "发布记录已重新加入草稿。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="查看草稿", callback_data="tt:drafts:0"),
+                        types.InlineKeyboardButton(text="返回发布历史", callback_data="tt:persona_history:0"),
+                    ]]),
+                )
+            elif action == "phdelete" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "phdelete", parts[2], consume=True)
+                await self._call(user_id, "profile.history.delete", {
+                    "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
+                    "history_id": str(reference.get("history_id") or ""),
+                })
+                await query.message.edit_text(
+                    "发布记录已删除。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="返回发布历史", callback_data="tt:persona_history:0"),
+                    ]]),
+                )
+            elif action == "phrecognizeauto" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "phrecognizeauto", parts[2], consume=True)
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"] or "")
+                result = await self._call(user_id, "profile.history.recognize", {
+                    "persona_id": persona_id,
+                    "auto": True,
+                })
+                added = int(result.get("added_count") or 0) if isinstance(result, dict) else 0
+                updated = int(result.get("updated_count") or 0) if isinstance(result, dict) else 0
+                await query.message.edit_text(
+                    f"已完成发布历史识别：新增 {added} 条，更新 {updated} 条。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="查看发布历史", callback_data="tt:persona_history:0"),
+                    ]]),
+                )
+            elif action == "phrecognize" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "phrecognize", parts[2])
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"] or "")
+                save_state(chat_id, selected_persona_id=persona_id, mode="history_recognize", payload={
+                    "persona_id": persona_id,
+                })
+                await query.message.edit_text(
+                    "请发送已发布帖子链接；如需补充正文，可发送：链接｜正文。\n发送 /cancel 取消。"
                 )
             elif action == "gcount" and len(parts) > 2:
                 state = load_state(chat_id)
@@ -2260,6 +4123,255 @@ class NativeTweetBotController:
                     f"数量：{int(state['payload'].get('count') or 3)} 篇 · 每篇约 {target_words} 字\n"
                     "请发送本次主题或写作要求。\n收到后会先显示确认页，不会立即提交。"
                 )
+            elif action in {"gplatform", "glocale", "gslot"} and len(parts) > 2:
+                resolve_callback_token(chat_id, action, parts[2])
+                state = load_state(chat_id)
+                if state["mode"] != "generate_confirm":
+                    raise HTTPException(status_code=409, detail="生成确认已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                if action == "gplatform":
+                    save_state(chat_id, mode="generate_platform", payload=payload)
+                    rows = [[types.InlineKeyboardButton(
+                        text=("✅ " if str(payload.get("platform") or "threads") == value else "") + label,
+                        callback_data=callback_token(chat_id, "gplatformpick", {"platform": value}),
+                    )] for value, label in PERSONA_CONTENT_PLATFORMS]
+                    rows.append([types.InlineKeyboardButton(text="返回生成确认", callback_data=callback_token(chat_id, "gplatformback", {}))])
+                    await query.message.edit_text(
+                        "AI 生成推文 · 选择目标平台\n平台会影响语气、互动方式和生成链路。",
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                    )
+                elif action == "glocale":
+                    save_state(chat_id, mode="generate_locale", payload=payload)
+                    locale_rows = []
+                    for index in range(0, len(PERSONA_WRITING_LOCALES), 2):
+                        locale_rows.append([
+                            types.InlineKeyboardButton(
+                                text=("✅ " if str(payload.get("writing_locale") or "zh-TW") == value else "") + label,
+                                callback_data=callback_token(chat_id, "glocalepick", {"locale": value}),
+                            )
+                            for value, label in PERSONA_WRITING_LOCALES[index:index + 2]
+                        ])
+                    locale_rows.append([types.InlineKeyboardButton(text="返回生成确认", callback_data=callback_token(chat_id, "glocaleback", {}))])
+                    await query.message.edit_text(
+                        "AI 生成推文 · 选择语言与地区口吻\n生成内容会统一使用所选语言，不会与其他语言混写。",
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=locale_rows),
+                    )
+                else:
+                    save_state(chat_id, mode="generate_slot", payload=payload)
+                    rows = [[types.InlineKeyboardButton(
+                        text=("✅ " if str(payload.get("content_time_slot") or "") == value else "") + label,
+                        callback_data=callback_token(chat_id, "gslotpick", {"slot": value}),
+                    )] for value, label in PERSONA_CONTENT_TIME_SLOTS]
+                    rows.append([types.InlineKeyboardButton(text="返回生成确认", callback_data=callback_token(chat_id, "gslotback", {}))])
+                    await query.message.edit_text(
+                        "AI 生成推文 · 选择文案时段\n当前后端支持早上、晚上或不指定。",
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                    )
+            elif action in {"gplatformpick", "glocalepick", "gslotpick"} and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, action, parts[2])
+                state = load_state(chat_id)
+                expected_mode = {
+                    "gplatformpick": "generate_platform",
+                    "glocalepick": "generate_locale",
+                    "gslotpick": "generate_slot",
+                }[action]
+                if state["mode"] != expected_mode:
+                    raise HTTPException(status_code=409, detail="生成选项已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                if action == "gplatformpick":
+                    platform = str(reference.get("platform") or "").strip().lower()
+                    if platform not in dict(PERSONA_CONTENT_PLATFORMS):
+                        raise HTTPException(status_code=400, detail="目标平台无效")
+                    payload["platform"] = platform
+                elif action == "glocalepick":
+                    locale = str(reference.get("locale") or "").strip()
+                    if locale not in dict(PERSONA_WRITING_LOCALES):
+                        raise HTTPException(status_code=400, detail="写作语言无效")
+                    payload["writing_locale"] = locale
+                else:
+                    slot = str(reference.get("slot") or "").strip().lower()
+                    if slot not in dict(PERSONA_CONTENT_TIME_SLOTS):
+                        raise HTTPException(status_code=400, detail="文案时段无效")
+                    payload["content_time_slot"] = slot
+                save_state(chat_id, mode="generate_confirm", payload=payload)
+                await self._render_generation_confirmation(query, types, payload=payload, notice="生成参数已更新。")
+            elif action in {"gplatformback", "glocaleback", "gslotback"} and len(parts) > 2:
+                resolve_callback_token(chat_id, action, parts[2])
+                state = load_state(chat_id)
+                if state["mode"] not in {"generate_platform", "generate_locale", "generate_slot"}:
+                    raise HTTPException(status_code=409, detail="生成选项已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                save_state(chat_id, mode="generate_confirm", payload=payload)
+                await self._render_generation_confirmation(query, types, payload=payload)
+            elif action == "gdir" and len(parts) > 2:
+                state = load_state(chat_id)
+                # The direction picker keeps its own transient mode while it
+                # is open.  Allow the same callback to request another batch
+                # from that view; rejecting it here made the visible
+                # “换一批” button a dead end after the first render.
+                if state["mode"] not in {"generate_confirm", "generate_directions"}:
+                    raise HTTPException(status_code=409, detail="生成确认已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                previous = payload.get("direction_options") if isinstance(payload.get("direction_options"), list) else []
+                reference = resolve_callback_token(chat_id, "gdir", parts[2])
+                refresh = bool(reference.get("refresh"))
+                result = await self._call(user_id, "post_directions", {
+                    "persona_id": state["selected_persona_id"],
+                    "input_content": str(payload.get("prompt") or ""),
+                    "platform": str(payload.get("platform") or "threads"),
+                    "writing_locale": str(payload.get("writing_locale") or "zh-TW"),
+                    "previous_keywords": previous if refresh else [],
+                    # A refresh is a new billable suggestion request.  The
+                    # opaque callback token makes each visible button unique
+                    # while retaining idempotency for Telegram retries of the
+                    # same click.
+                    "idempotency_key": f"tg:directions:{chat_id}:{int(query.message.message_id)}:{parts[2]}",
+                })
+                keywords = result.get("keywords") if isinstance(result, dict) else []
+                payload["direction_options"] = [str(item or "").strip() for item in keywords if str(item or "").strip()][:10]
+                payload["selected_directions"] = []
+                save_state(chat_id, mode="generate_directions", payload=payload)
+                await self._render_generation_directions(query, types, notice="推文方向已生成")
+            elif action == "gdirpick" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "gdirpick", parts[2])
+                state = load_state(chat_id)
+                if state["mode"] != "generate_directions":
+                    raise HTTPException(status_code=409, detail="方向选择已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                direction = str(reference.get("direction") or "").strip()
+                options = {str(item or "").strip() for item in (payload.get("direction_options") or []) if str(item or "").strip()}
+                if direction not in options:
+                    raise HTTPException(status_code=400, detail="方向选项无效")
+                selected = [str(item or "").strip() for item in (payload.get("selected_directions") or []) if str(item or "").strip()]
+                if direction in selected:
+                    selected = [item for item in selected if item != direction]
+                elif len(selected) < 5:
+                    selected.append(direction)
+                payload["selected_directions"] = selected
+                save_state(chat_id, mode="generate_directions", payload=payload)
+                await self._render_generation_directions(query, types)
+            elif action == "gdirconfirm" and len(parts) > 2:
+                resolve_callback_token(chat_id, "gdirconfirm", parts[2], consume=True)
+                state = load_state(chat_id)
+                if state["mode"] != "generate_directions":
+                    raise HTTPException(status_code=409, detail="方向选择已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                if not payload.get("selected_directions"):
+                    raise HTTPException(status_code=400, detail="请至少选择一个方向，或点击“不使用方向”")
+                payload["selection_required"] = True
+                save_state(chat_id, mode="generate_confirm", payload=payload)
+                await self._render_generation_confirmation(
+                    query, types, payload=payload, notice="方向已选择，可返回确认页提交生成。",
+                )
+            elif action == "gdirclear" and len(parts) > 2:
+                resolve_callback_token(chat_id, "gdirclear", parts[2], consume=True)
+                state = load_state(chat_id)
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                payload["selected_directions"] = []
+                payload["selection_required"] = False
+                save_state(chat_id, mode="generate_confirm", payload=payload)
+                await self._render_generation_confirmation(
+                    query,
+                    types,
+                    payload=payload,
+                    notice="已选择不使用推文方向；其他人设上下文仍会保留。",
+                )
+            elif action == "gdirback" and len(parts) > 2:
+                state = load_state(chat_id)
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                save_state(chat_id, mode="generate_confirm", payload=payload)
+                await self._render_generation_confirmation(query, types, payload=payload)
+            elif action == "gmem" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "gmem", parts[2])
+                await self._render_generation_memories(
+                    query, types, page=int(reference.get("page") or 0),
+                )
+            elif action == "gmempick" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "gmempick", parts[2])
+                state = load_state(chat_id)
+                if state["mode"] != "generate_memories":
+                    raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
+                persona_id = str(state["selected_persona_id"] or "").strip()
+                memories_result = await self._call(user_id, "profile.memories", {"persona_id": persona_id})
+                memories = memories_result.get("memories") if isinstance(memories_result, dict) else []
+                available = {
+                    str(item.get("id") or "").strip(): str(item.get("summary") or "").strip()
+                    for item in memories if isinstance(item, dict) and str(item.get("id") or "").strip()
+                }
+                memory_id = str(reference.get("memory_id") or "").strip()
+                if memory_id not in available:
+                    raise HTTPException(status_code=404, detail="该人设记忆已不存在")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                selected = [
+                    str(item or "").strip()
+                    for item in (payload.get("selected_memory_ids") or [])
+                    if str(item or "").strip() in available
+                ]
+                if memory_id in selected:
+                    selected.remove(memory_id)
+                elif len(selected) < 8:
+                    selected.append(memory_id)
+                else:
+                    raise HTTPException(status_code=400, detail="最多选择 8 条人设记忆")
+                payload["selected_memory_ids"] = selected
+                payload["selected_memory_summaries"] = [available[item] for item in selected if available[item]]
+                save_state(chat_id, mode="generate_memories", payload=payload)
+                await self._render_generation_memories(
+                    query, types, page=int(reference.get("page") or 0),
+                )
+            elif action == "gmemconfirm" and len(parts) > 2:
+                resolve_callback_token(chat_id, "gmemconfirm", parts[2], consume=True)
+                state = load_state(chat_id)
+                if state["mode"] != "generate_memories":
+                    raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                save_state(chat_id, mode="generate_confirm", payload=payload)
+                await self._render_generation_confirmation(
+                    query,
+                    types,
+                    payload=payload,
+                    notice=f"已选择 {len(payload.get('selected_memory_ids') or [])} 条人设记忆。",
+                )
+            elif action == "gmemclear" and len(parts) > 2:
+                resolve_callback_token(chat_id, "gmemclear", parts[2], consume=True)
+                state = load_state(chat_id)
+                if state["mode"] != "generate_memories":
+                    raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                payload["selected_memory_ids"] = []
+                payload["selected_memory_summaries"] = []
+                save_state(chat_id, mode="generate_confirm", payload=payload)
+                await self._render_generation_confirmation(
+                    query, types, payload=payload, notice="已清空本次生成的人设记忆选择。",
+                )
+            elif action == "gmemback" and len(parts) > 2:
+                resolve_callback_token(chat_id, "gmemback", parts[2], consume=True)
+                state = load_state(chat_id)
+                if state["mode"] != "generate_memories":
+                    raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                save_state(chat_id, mode="generate_confirm", payload=payload)
+                await self._render_generation_confirmation(query, types, payload=payload)
+            elif action == "gresolve" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "gresolve", parts[2], consume=True)
+                selected_persona_id = str(load_state(chat_id)["selected_persona_id"] or "")
+                await self._call(user_id, "generation.resolve", {
+                    "persona_id": selected_persona_id,
+                    "task_id": str(reference.get("task_id") or ""),
+                    "selected_post_id": str(reference.get("post_id") or ""),
+                    "title": str(reference.get("title") or ""),
+                })
+                await query.message.edit_text(
+                    "已保留所选推文候选，其他候选已清理。\n现在可以在草稿列表中编辑、配图或发布。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="查看生成草稿", callback_data=callback_token(chat_id, "gendrafts", {
+                            "persona_id": selected_persona_id,
+                        })),
+                        types.InlineKeyboardButton(text="查看任务", callback_data=callback_token(chat_id, "t", {
+                            "task_id": str(reference.get("task_id") or ""), "task_kind": "normal", "status_filter": "completed",
+                        })),
+                    ]]),
+                )
             elif action == "gsubmit" and len(parts) > 2:
                 resolve_callback_token(chat_id, "gsubmit", parts[2], consume=True)
                 state = load_state(chat_id)
@@ -2272,6 +4384,16 @@ class NativeTweetBotController:
                         "prompt": str(payload.get("prompt") or ""),
                         "count": int(payload.get("count") or 3),
                         "target_words": int(payload.get("target_words") or 120),
+                        "platform": str(payload.get("platform") or "threads"),
+                        "content_time_slot": str(payload.get("content_time_slot") or ""),
+                        "writing_locale": str(payload.get("writing_locale") or "zh-TW"),
+                        "selected_memory_ids": payload.get("selected_memory_ids") if isinstance(payload.get("selected_memory_ids"), list) else [],
+                        "selected_memory_summaries": payload.get("selected_memory_summaries") if isinstance(payload.get("selected_memory_summaries"), list) else [],
+                        "selected_directions": payload.get("selected_directions") if isinstance(payload.get("selected_directions"), list) else [],
+                        "selection_required": bool(payload.get("selection_required")),
+                        "rewrite_source_post_id": str(payload.get("rewrite_source_post_id") or ""),
+                        "rewrite_source_title": str(payload.get("rewrite_source_title") or ""),
+                        "rewrite_source_content": str(payload.get("rewrite_source_content") or ""),
                         "idempotency_key": f"tg:{chat_id}:{int(query.message.message_id)}",
                     })
                 except Exception as exc:
@@ -2328,12 +4450,127 @@ class NativeTweetBotController:
                     page=int(parts[2]) if len(parts) > 2 else 0,
                     intro="单篇发布 · 请选择要发布的草稿。",
                 )
+            elif action == "image" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "image", parts[2])
+                reference_persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"])
+                if reference_persona_id:
+                    save_state(chat_id, selected_persona_id=reference_persona_id)
+                await self._render_image_options(
+                    query,
+                    types,
+                    member,
+                    persona_id=reference_persona_id,
+                    post_id=str(reference.get("post_id") or ""),
+                    source=str(reference.get("source") or "posts"),
+                )
+            elif action == "imgopt" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "imgopt", parts[2])
+                field = str(reference.get("field") or "").strip()
+                if field not in {"image_count", "aspect_ratio", "image_mode", "image_render_style", "image_composition_label"}:
+                    raise HTTPException(status_code=400, detail="配图选项无效")
+                state = load_state(chat_id)
+                payload = dict(state["payload"])
+                value = reference.get("value")
+                if field == "image_count":
+                    value = min(max(int(value or 1), 1), 4)
+                payload[field] = value
+                if field == "image_composition_label":
+                    composition_mode = str(reference.get("composition_mode") or "").strip()
+                    if composition_mode in {"auto", "person", "pov", "scene", "object", "third_person"}:
+                        payload["image_mode"] = composition_mode
+                save_state(chat_id, selected_persona_id=str(reference.get("persona_id") or state["selected_persona_id"]), mode="image_options", payload=payload)
+                await self._render_image_options(
+                    query, types, member,
+                    persona_id=str(payload.get("persona_id") or state["selected_persona_id"]),
+                    post_id=str(payload.get("post_id") or ""),
+                    source=str(payload.get("source") or "posts"),
+                )
+            elif action == "imgstyles" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "imgstyles", parts[2])
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"])
+                post_id = str(reference.get("post_id") or "")
+                result = await self._call(user_id, "image.styles", {
+                    "persona_id": persona_id,
+                    "post_id": post_id,
+                    "previous_image_styles": [str(item.get("label") if isinstance(item, dict) else item) for item in (reference.get("image_styles") or []) if str(item.get("label") if isinstance(item, dict) else item)],
+                })
+                payload = dict(reference)
+                payload.pop("field", None)
+                payload.pop("value", None)
+                payload["image_styles"] = result.get("image_styles") if isinstance(result, dict) else []
+                save_state(chat_id, selected_persona_id=persona_id, mode="image_options", payload=payload)
+                await self._render_image_options(query, types, member, persona_id=persona_id, post_id=post_id, source=str(payload.get("source") or "posts"), notice="构图方向已生成，可点击标签选择")
+            elif action == "imgprompt" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "imgprompt", parts[2])
+                save_state(chat_id, selected_persona_id=str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]), mode="image_prompt", payload=reference)
+                await query.message.edit_text("请发送配图补充提示词；发送 /cancel 取消。")
+            elif action == "imggenerate" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "imggenerate", parts[2], consume=True)
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"])
+                result = await self._call(user_id, "image.generate", {
+                    "persona_id": persona_id,
+                    "post_id": str(reference.get("post_id") or ""),
+                    "source": str(reference.get("source") or "posts"),
+                    "image_count": int(reference.get("image_count") or 1),
+                    "aspect_ratio": str(reference.get("aspect_ratio") or "auto"),
+                    "image_mode": str(reference.get("image_mode") or "auto"),
+                    "image_render_style": str(reference.get("image_render_style") or "original"),
+                    "image_composition_label": str(reference.get("image_composition_label") or ""),
+                    "prompt": str(reference.get("custom_prompt") or ""),
+                })
+                task_id = str(result.get("task_id") or result.get("id") or "")
+                clear_pending_state(chat_id)
+                await query.message.edit_text(f"推文配图任务已提交：{task_id}\n完成后会发送图片预览。")
+                asyncio.create_task(self._watch_image_generation(
+                    query.message.bot,
+                    chat_id,
+                    user_id,
+                    persona_id,
+                    task_id,
+                    types,
+                    post_id=str(reference.get("post_id") or ""),
+                    source=str(reference.get("source") or "posts"),
+                ))
+            elif action == "imgattach" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "imgattach", parts[2], consume=True)
+                result = await self._call(user_id, "image.attach", {
+                    "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
+                    "post_id": str(reference.get("post_id") or ""),
+                    "task_id": str(reference.get("task_id") or ""),
+                    "replace_existing": bool(reference.get("replace_existing")),
+                    "media_indexes": reference.get("media_indexes") if isinstance(reference.get("media_indexes"), list) else [],
+                })
+                await query.message.edit_text(
+                    "已将生成图片添加到推文媒体。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
+                        text="查看推文详情",
+                        callback_data=callback_token(chat_id, "d", {
+                            "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
+                            "post_id": str(reference.get("post_id") or ""),
+                            "source": str(reference.get("source") or "posts"),
+                        }),
+                    )]]),
+                )
             elif action in {"d", "f"} and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, action, parts[2])
                 reference_persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"])
                 if reference_persona_id:
                     save_state(chat_id, selected_persona_id=reference_persona_id)
-                await self._post_detail(query, types, member, str(reference.get("post_id") or ""), str(reference.get("source") or "posts"))
+                # The image-focused list uses the same compact post buttons as
+                # drafts/favorites.  Preserve its intent when the user taps a
+                # post, otherwise the click would drop into the generic detail
+                # view and hide the image controls behind an extra step.
+                if str(reference.get("intent") or "") == "image":
+                    await self._render_image_options(
+                        query,
+                        types,
+                        member,
+                        persona_id=reference_persona_id,
+                        post_id=str(reference.get("post_id") or ""),
+                        source=str(reference.get("source") or "posts"),
+                    )
+                else:
+                    await self._post_detail(query, types, member, str(reference.get("post_id") or ""), str(reference.get("source") or "posts"))
             elif action == "gendrafts" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "gendrafts", parts[2])
                 reference_persona_id = str(reference.get("persona_id") or "")
@@ -2625,12 +4862,23 @@ class NativeTweetBotController:
                             payload={"hot_candidates": candidates, "last_hot_task_id": task_id,
                                      "last_hot_persona_id": persona_id},
                         )
-                        rows = [[types.InlineKeyboardButton(
-                            text=str(item.get("title") or item.get("content") or f"候选 {index + 1}")[:28],
-                            callback_data=callback_token(chat_id, "hotpick", {
-                                "index": index, "task_id": task_id, "persona_id": persona_id,
-                            }),
-                        )] for index, item in enumerate(candidates)]
+                        rows = []
+                        for index, item in enumerate(candidates):
+                            title = str(item.get("title") or item.get("content") or item.get("text") or f"候选 {index + 1}")[:28]
+                            rows.append([
+                                types.InlineKeyboardButton(
+                                    text=f"保存 {index + 1}. {title}",
+                                    callback_data=callback_token(chat_id, "hotpick", {
+                                        "index": index, "task_id": task_id, "persona_id": persona_id,
+                                    }),
+                                ),
+                                types.InlineKeyboardButton(
+                                    text="✍️ 改写",
+                                    callback_data=callback_token(chat_id, "hotrewrite", {
+                                        "index": index, "task_id": task_id, "persona_id": persona_id,
+                                    }),
+                                ),
+                            ])
                         rows.append([types.InlineKeyboardButton(
                             text="返回人设详情",
                             callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}),
@@ -2639,7 +4887,7 @@ class NativeTweetBotController:
                             "热点候选已完成，选择一条保存为草稿。" if candidates else "热点任务已完成，但没有可导入候选。",
                             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                         )
-                    elif status in {"queued", "running"}:
+                    elif status in {"preparing", "queued", "pending", "scheduled", "running", "publishing", "retrying"}:
                         rows = [[
                             types.InlineKeyboardButton(
                                 text="刷新状态",
@@ -2672,6 +4920,72 @@ class NativeTweetBotController:
                                 ),
                             ]]),
                         )
+            elif action == "hotrewrite" and len(parts) > 2:
+                state = load_state(chat_id)
+                candidates = state["payload"].get("hot_candidates") if isinstance(state["payload"].get("hot_candidates"), list) else []
+                reference = resolve_callback_token(chat_id, "hotrewrite", parts[2], consume=True)
+                persona_id = str(reference.get("persona_id") or "")
+                task_id = str(reference.get("task_id") or "")
+                if (
+                    state["mode"] != "hot_select"
+                    or not persona_id
+                    or persona_id != state["selected_persona_id"]
+                    or task_id != str(state["payload"].get("last_hot_task_id") or "")
+                ):
+                    raise HTTPException(status_code=410, detail="热点候选已失效，请重新开始")
+                index = int(reference.get("index") or 0)
+                if index < 0 or index >= len(candidates):
+                    raise HTTPException(status_code=404, detail="热点候选已过期")
+                candidate = candidates[index] if isinstance(candidates[index], dict) else {}
+                source_content = str(candidate.get("content") or candidate.get("text") or candidate.get("body") or "").strip()
+                if not source_content:
+                    raise HTTPException(status_code=400, detail="该热点候选没有可改写正文")
+                save_state(chat_id, selected_persona_id=persona_id, mode="hot_rewrite", payload={
+                    "hot_candidates": candidates,
+                    "hot_candidate_index": index,
+                    "last_hot_task_id": task_id,
+                    "last_hot_persona_id": persona_id,
+                })
+                await query.message.edit_text(
+                    "请发送改写要求；例如：改成更生活化的语气、保留数字但换一个开头。\n"
+                    "如果只按当前人设正常改写，请发送 /auto。\n发送 /cancel 取消。\n\n"
+                    f"当前候选：{source_content[:1800]}"
+                )
+            elif action == "hotlist" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "hotlist", parts[2])
+                state = load_state(chat_id)
+                persona_id = str(reference.get("persona_id") or state["selected_persona_id"] or "")
+                task_id = str(reference.get("task_id") or state["payload"].get("last_hot_task_id") or "")
+                candidates = state["payload"].get("hot_candidates") if isinstance(state["payload"].get("hot_candidates"), list) else []
+                if state["mode"] != "hot_select" or not persona_id or persona_id != state["selected_persona_id"] or not task_id:
+                    raise HTTPException(status_code=410, detail="热点候选已失效，请重新开始")
+                rows = []
+                for index, item in enumerate(candidates):
+                    if not isinstance(item, dict):
+                        continue
+                    title = str(item.get("title") or item.get("content") or item.get("text") or f"候选 {index + 1}")[:28]
+                    rows.append([
+                        types.InlineKeyboardButton(
+                            text=f"保存 {index + 1}. {title}",
+                            callback_data=callback_token(chat_id, "hotpick", {
+                                "index": index, "task_id": task_id, "persona_id": persona_id,
+                            }),
+                        ),
+                        types.InlineKeyboardButton(
+                            text="✍️ 改写",
+                            callback_data=callback_token(chat_id, "hotrewrite", {
+                                "index": index, "task_id": task_id, "persona_id": persona_id,
+                            }),
+                        ),
+                    ])
+                rows.append([types.InlineKeyboardButton(
+                    text="返回人设详情",
+                    callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}),
+                )])
+                await query.message.edit_text(
+                    "热点候选已完成，选择保存为草稿或先改写。" if candidates else "热点任务已完成，但没有可用候选。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                )
             elif action == "hotpick" and len(parts) > 2:
                 state = load_state(chat_id)
                 candidates = state["payload"].get("hot_candidates") if isinstance(state["payload"].get("hot_candidates"), list) else []
@@ -2896,8 +5210,56 @@ class NativeTweetBotController:
                             types.InlineKeyboardButton(text="继续矩阵发布", callback_data="tt:matrix"),
                         ]]),
                     )
+            elif action == "automationplans":
+                await self._render_automation_plans(query, types, page=int(parts[2]) if len(parts) > 2 else 0)
+            elif action == "automationplan" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "automationplan", parts[2])
+                plan_id = str(reference.get("plan_id") or "")
+                plans = await self._call(user_id, "automation.plans.list", {})
+                plan_rows = plans.get("plans") if isinstance(plans, dict) else []
+                plan = next((item for item in plan_rows if isinstance(item, dict) and str(item.get("id") or "") == plan_id), None)
+                if not plan:
+                    raise HTTPException(status_code=404, detail="自动化计划不存在")
+                rows = [[
+                    types.InlineKeyboardButton(text="停止计划", callback_data=callback_token(chat_id, "automationplanstop", {"plan_id": plan_id})),
+                    types.InlineKeyboardButton(text="删除计划", callback_data=callback_token(chat_id, "automationplandelete", {"plan_id": plan_id})),
+                ], [types.InlineKeyboardButton(text="返回自动化计划", callback_data="tt:automationplans:0")]]
+                await query.message.edit_text(
+                    f"自动化计划\n\nID：{plan_id}\n平台：{plan.get('platform') or '—'}\n状态：{plan.get('status') or '—'}\n"
+                    f"步骤：{int(plan.get('task_count') or 0)}\n下次执行：{plan.get('next_run_at') or '—'}",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                )
+            elif action in {"automationplanstop", "automationplandelete"} and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, action, parts[2], consume=True)
+                plan_id = str(reference.get("plan_id") or "")
+                if action == "automationplanstop":
+                    await self._call(user_id, "automation.plans.cancel", {"plan_id": plan_id})
+                    notice = "自动化计划已停止。"
+                else:
+                    await self._call(user_id, "automation.plans.delete", {"plan_id": plan_id})
+                    notice = "自动化计划已删除。"
+                await query.message.edit_text(notice, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                    types.InlineKeyboardButton(text="返回自动化计划", callback_data="tt:automationplans:0"),
+                ]]))
+            elif action == "automationplannew":
+                save_state(chat_id, mode="automation_plan_create", payload={})
+                await query.message.edit_text(
+                    "请发送自动化计划 JSON：\n"
+                    '{"account_id":"账号ID","platform":"instagram","mode":"list",'
+                    '"items":[{"task_type":"instagram_warmup","payload":{},"reservation_minutes":0}]}\n'
+                    "账号必须已授权并绑定人设；发送 /cancel 取消。"
+                )
             elif action == "taskfilter" and len(parts) > 2:
                 await self._task_filter_picker(query, types, member, str(parts[2] or "platform"))
+            elif action == "taskfilterpage" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "taskfilterpage", parts[2])
+                await self._task_filter_picker(
+                    query,
+                    types,
+                    member,
+                    str(reference.get("kind") or "platform"),
+                    page=int(reference.get("page") or 0),
+                )
             elif action == "taskview" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "taskview", parts[2])
                 await self._tasks(
@@ -2908,6 +5270,7 @@ class NativeTweetBotController:
                     str(reference.get("status_filter") or "pending"),
                     str(reference.get("platform") or ""),
                     str(reference.get("persona_id") or ""),
+                    str(reference.get("queue") or "all"),
                 )
             elif action == "tasks":
                 await self._tasks(
@@ -2916,6 +5279,7 @@ class NativeTweetBotController:
                     member,
                     int(parts[2]) if len(parts) > 2 else 0,
                     str(parts[3]) if len(parts) > 3 else "all",
+                    queue=(str(parts[4]) if len(parts) > 4 else "all"),
                 )
             elif action == "t" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "t", parts[2])
@@ -2932,6 +5296,7 @@ class NativeTweetBotController:
                         "status_filter": str(reference.get("status_filter") or "active"),
                         "platform": str(reference.get("platform") or ""),
                         "persona_id": str(reference.get("persona_id") or ""),
+                        "queue": str(reference.get("queue") or "all"),
                     }))])
                 if status == "failed" and task_kind == "social":
                     rows.append([types.InlineKeyboardButton(text="重试任务", callback_data=callback_token(chat_id, "tretry", {
@@ -2940,19 +5305,22 @@ class NativeTweetBotController:
                         "status_filter": str(reference.get("status_filter") or "failed"),
                         "platform": str(reference.get("platform") or ""),
                         "persona_id": str(reference.get("persona_id") or ""),
+                        "queue": str(reference.get("queue") or "all"),
                     }))])
                 elif status == "failed" and task_kind == "normal":
                     rows.append([types.InlineKeyboardButton(text="重新生成", callback_data="tt:generate")])
                 status_filter = str(reference.get("status_filter") or "all")
                 platform_filter = str(reference.get("platform") or "")
                 persona_filter = str(reference.get("persona_id") or "")
+                queue_filter = str(reference.get("queue") or "all")
                 page = max(0, int(reference.get("page") or 0))
                 back_data = callback_token(chat_id, "taskview", {
                     "page": page,
                     "status_filter": status_filter,
                     "platform": platform_filter,
                     "persona_id": persona_filter,
-                }) if (platform_filter or persona_filter) else f"tt:tasks:{page}:{status_filter}"
+                    "queue": queue_filter,
+                }) if (platform_filter or persona_filter or queue_filter != "all") else f"tt:tasks:{page}:{status_filter}"
                 rows.append([types.InlineKeyboardButton(text="返回任务", callback_data=back_data)])
                 scheduled_at = _task_timestamp(task.get("scheduled_at"))
                 summary = _task_display_name(task)
@@ -2996,13 +5364,15 @@ class NativeTweetBotController:
                 status_filter = str(reference.get("status_filter") or "all")
                 platform_filter = str(reference.get("platform") or "")
                 persona_filter = str(reference.get("persona_id") or "")
+                queue_filter = str(reference.get("queue") or "all")
                 page = max(0, int(reference.get("page") or 0))
                 back_data = callback_token(chat_id, "taskview", {
                     "page": page,
                     "status_filter": status_filter,
                     "platform": platform_filter,
                     "persona_id": persona_filter,
-                }) if (platform_filter or persona_filter) else f"tt:tasks:{page}:{status_filter}"
+                    "queue": queue_filter,
+                }) if (platform_filter or persona_filter or queue_filter != "all") else f"tt:tasks:{page}:{status_filter}"
                 await query.message.edit_text(
                     str(result.get("message") or "操作已提交"),
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
@@ -3018,6 +5388,21 @@ class NativeTweetBotController:
                     types.InlineKeyboardButton(text="编辑简介", callback_data="tt:bio"),
                     types.InlineKeyboardButton(text="编辑推文风格", callback_data="tt:style"),
                 ], [types.InlineKeyboardButton(
+                    text="✏️ 修改人设名称",
+                    callback_data="tt:profilename",
+                ), types.InlineKeyboardButton(
+                    text="🤖 AI 重写简介",
+                    callback_data="tt:profileai",
+                )], [types.InlineKeyboardButton(
+                    text="🧠 人设记忆",
+                    callback_data="tt:pmemories:0",
+                ), types.InlineKeyboardButton(
+                    text="🔗 链接模板",
+                    callback_data="tt:plinks",
+                )], [types.InlineKeyboardButton(
+                    text="🧵 Threads 人设绑定",
+                    callback_data="tt:pthreads",
+                )], [types.InlineKeyboardButton(
                     text="返回人设详情",
                     callback_data=callback_token(chat_id, "p", {"persona_id": state["selected_persona_id"]}),
                 )]]
@@ -3028,6 +5413,66 @@ class NativeTweetBotController:
             elif action in {"bio", "style"}:
                 save_state(chat_id, mode="profile_content" if action == "bio" else "profile_style", payload={})
                 await query.message.edit_text("请发送新的内容。发送 /cancel 取消。")
+            elif action == "profilename":
+                save_state(chat_id, mode="profile_name", payload={})
+                await query.message.edit_text("请发送新的人设名称。发送 /cancel 取消。")
+            elif action == "profileai":
+                profile = await self._call(user_id, "profile.get", {"persona_id": load_state(chat_id)["selected_persona_id"]})
+                save_state(chat_id, mode="profile_ai", payload={"name": str(profile.get("name") or "")})
+                await query.message.edit_text(
+                    "请发送希望 AI 优化的人设方向或补充要求。\n"
+                    "AI 只会更新简介字段，不会覆盖名称、链接模板或图库。发送 /cancel 取消。"
+                )
+            elif action == "pmemories":
+                reference = resolve_callback_token(chat_id, "pmemories", parts[2]) if len(parts) > 2 else {}
+                await self._render_profile_memories(query, types, page=int(reference.get("page") or 0))
+            elif action == "pmemnoop":
+                await query.answer("请使用删除按钮管理记忆")
+            elif action == "pmemadd":
+                save_state(chat_id, mode="profile_memory_create", payload={})
+                await query.message.edit_text("请发送要保存的人设记忆摘要。发送 /cancel 取消。")
+            elif action == "pmemdelete" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pmemdelete", parts[2], consume=True)
+                await self._call(user_id, "profile.memory.delete", {
+                    "persona_id": load_state(chat_id)["selected_persona_id"],
+                    "memory_id": str(reference.get("memory_id") or ""),
+                })
+                await self._render_profile_memories(query, types, page=int(reference.get("page") or 0))
+            elif action == "plinks":
+                reference = resolve_callback_token(chat_id, "plinks", parts[2]) if len(parts) > 2 else {}
+                await self._render_profile_links(query, types, page=int(reference.get("page") or 0))
+            elif action == "plinkadd":
+                save_state(chat_id, mode="profile_link_create", payload={})
+                await query.message.edit_text("请发送：模板名称｜链接｜结尾文案\n例如：官网｜https://example.com｜了解更多。\n发送 /cancel 取消。")
+            elif action in {"plinkactivate", "plinkdelete"} and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, action, parts[2], consume=True)
+                profile = await self._call(user_id, "profile.get", {"persona_id": load_state(chat_id)["selected_persona_id"]})
+                presets = [dict(item) for item in (profile.get("link_presets") or []) if isinstance(item, dict)]
+                preset_id = str(reference.get("preset_id") or "")
+                if action == "plinkdelete":
+                    presets = [item for item in presets if str(item.get("id") or "") != preset_id]
+                    active = str(profile.get("active_link_preset_id") or "")
+                    if active == preset_id:
+                        active = str(presets[0].get("id") or "") if presets else ""
+                else:
+                    active = preset_id
+                await self._call(user_id, "profile.update", {
+                    "persona_id": load_state(chat_id)["selected_persona_id"],
+                    "link_presets": presets,
+                    "active_link_preset_id": active,
+                })
+                await self._render_profile_links(
+                    query,
+                    types,
+                    page=int(reference.get("page") or 0),
+                )
+            elif action == "pthreads":
+                profile = await self._call(user_id, "profile.get", {"persona_id": load_state(chat_id)["selected_persona_id"]})
+                current = str(profile.get("threads_handle") or "").strip()
+                save_state(chat_id, mode="profile_threads", payload={})
+                await query.message.edit_text(
+                    f"当前 Threads 人设绑定：@{current}\n请发送新的 Threads 用户名；发送 /unbind 解除绑定，/cancel 取消。"
+                )
             elif action in {"accounts", "persona_accounts"}:
                 state = load_state(chat_id)
                 return_callback = "tt:menu"
@@ -3134,6 +5579,126 @@ class NativeTweetBotController:
                 else:
                     save_state(chat_id, selected_persona_id=new_id, mode="", payload={})
                     await message.answer(f"人设已创建：{created_name}", reply_markup=self._main_keyboard(types))
+            elif mode == "persona_ai_create":
+                name, separator, prompt = text.partition("｜")
+                if not separator:
+                    name, separator, prompt = text.partition("|")
+                name, prompt = name.strip(), prompt.strip()
+                if not name or not prompt:
+                    raise HTTPException(status_code=400, detail="格式应为：人设名称｜人设提示词")
+                keyword_key = f"tg:persona-ai-keywords:{chat_id}:{int(message.message_id)}"
+                create_key = f"tg:persona-ai-create:{chat_id}:{int(message.message_id)}"
+                try:
+                    keyword_result = await self._call(user_id, "personas.ai_keywords", {
+                        "name": name[:160],
+                        "prompt": prompt[:2000],
+                        "include_hot_keywords": True,
+                        "idempotency_key": keyword_key,
+                    })
+                except HTTPException as exc:
+                    # A rolling worker that predates the keyword action can
+                    # still complete the original direct-create flow.  Do
+                    # not mask billing/model failures from a current worker.
+                    if exc.status_code not in {404, 405, 501}:
+                        raise
+                    keyword_result = None
+                regular = self._persona_ai_keyword_values(
+                    keyword_result.get("keywords") if isinstance(keyword_result, dict) else [],
+                )
+                hot = self._persona_ai_keyword_values(
+                    keyword_result.get("hot_keywords") if isinstance(keyword_result, dict) else [],
+                )
+                if regular or hot:
+                    payload = {
+                        "ai_name": name[:160],
+                        "ai_prompt": prompt[:2000],
+                        "ai_keywords": regular,
+                        "ai_hot_keywords": hot,
+                        "ai_hot_keyword_source": (
+                            keyword_result.get("hot_keyword_source")
+                            if isinstance(keyword_result, dict)
+                            and isinstance(keyword_result.get("hot_keyword_source"), dict)
+                            else {}
+                        ),
+                        "ai_selected_keywords": [],
+                        "ai_selected_regular_keywords": [],
+                        "ai_selected_hot_keywords": [],
+                        "ai_keyword_idempotency_key": keyword_key,
+                        "ai_create_idempotency_key": create_key,
+                    }
+                    save_state(chat_id, mode="persona_ai_keyword_select", payload=payload)
+                    await message.answer(
+                        self._persona_ai_keywords_text(payload),
+                        reply_markup=self._persona_ai_keywords_markup(types, chat_id, payload),
+                    )
+                else:
+                    await self._finish_persona_ai_create(
+                        user_id=user_id,
+                        chat_id=chat_id,
+                        types=types,
+                        name=name,
+                        prompt=prompt,
+                        selected_keywords=[],
+                        selected_regular_keywords=[],
+                        selected_hot_keywords=[],
+                        idempotency_key=create_key,
+                        reply=message.answer,
+                    )
+            elif mode == "persona_copy_analyze":
+                first, separator, second = text.partition("｜")
+                if not separator:
+                    first, separator, second = text.partition("|")
+                first, second = first.strip(), second.strip()
+                if separator and first.startswith(("http://", "https://")):
+                    url, name = first, second
+                elif separator and second.startswith(("http://", "https://")):
+                    name, url = first, second
+                else:
+                    url, name = text.strip(), ""
+                if not url.startswith(("http://", "https://")):
+                    raise HTTPException(status_code=400, detail="请发送 Threads 或 Instagram 公开主页链接")
+                result = await self._call(user_id, "personas.copy_analyze", {
+                    "url": url[:500],
+                    "name": name[:160],
+                    "idempotency_key": f"tg:persona-copy-analyze:{chat_id}:{int(message.message_id)}",
+                })
+                profile = result.get("profile") if isinstance(result, dict) and isinstance(result.get("profile"), dict) else {}
+                source = result.get("source") if isinstance(result, dict) and isinstance(result.get("source"), dict) else {}
+                if not str(profile.get("name") or "").strip() or not str(profile.get("content") or "").strip():
+                    raise HTTPException(status_code=502, detail="公开资料分析未返回完整人设内容")
+                save_state(chat_id, mode="persona_copy_confirm", payload={
+                    "copy_profile": profile,
+                    "copy_source": source,
+                })
+                await message.answer(
+                    "公开资料分析完成，请确认后创建人设。\n\n"
+                    f"名称：{str(profile.get('name') or '')[:160]}\n\n"
+                    f"简介：{str(profile.get('content') or '')[:2200]}",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="确认并创建", callback_data="tt:persona_copy_confirm"),
+                        types.InlineKeyboardButton(text="重新分析", callback_data="tt:persona_copy_new"),
+                    ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]),
+                )
+            elif mode == "persona_group_create":
+                result = await self._call(user_id, "persona.group.create", {"name": text[:80]})
+                clear_pending_state(chat_id)
+                group = result.get("group") if isinstance(result, dict) and isinstance(result.get("group"), dict) else {}
+                await message.answer(
+                    f"人设分组已创建：{str(group.get('name') or text[:80])}。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
+                        text="查看人设分组", callback_data="tt:personagroups:0",
+                    )]]),
+                )
+            elif mode == "persona_group_rename":
+                group_id = str(state["payload"].get("group_id") or "")
+                await self._call(user_id, "persona.group.rename", {"group_id": group_id, "name": text[:80]})
+                clear_pending_state(chat_id)
+                await message.answer(
+                    "人设分组已重命名。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
+                        text="查看人设分组", callback_data="tt:personagroups:0",
+                    )]]),
+                )
             elif mode == "generate_prompt":
                 if not text:
                     raise HTTPException(status_code=400, detail="主题或写作要求不能为空")
@@ -3143,19 +5708,50 @@ class NativeTweetBotController:
                     "count": count,
                     "target_words": target_words,
                     "prompt": text,
+                    "platform": "threads",
+                    "writing_locale": "zh-TW",
+                    "selected_memory_ids": [],
+                    "selected_memory_summaries": [],
+                    "selected_directions": [],
+                    "selection_required": False,
                 })
-                rows = [[
-                    types.InlineKeyboardButton(
-                        text="确认生成",
-                        callback_data=callback_token(chat_id, "gsubmit", {}),
-                    ),
-                    types.InlineKeyboardButton(text="修改参数", callback_data="tt:generate"),
-                ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]
+                confirmation_payload = load_state(chat_id)["payload"]
                 await message.answer(
-                    "AI 生成推文 · 提交确认\n"
-                    f"数量：{count} 篇 · 每篇约 {target_words} 字\n"
-                    f"主题：{text[:1200]}\n\n确认后才会提交生成任务。",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                    self._generation_confirmation_text(confirmation_payload),
+                    reply_markup=self._generation_confirmation_markup(types, chat_id, confirmation_payload),
+                )
+            elif mode == "persona_image_prompt":
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                options = payload.get("persona_image_options") if isinstance(payload.get("persona_image_options"), dict) else {}
+                result = await self._call(user_id, "persona_image.generate", {
+                    "persona_id": persona_id,
+                    "supplement_prompt": text,
+                    "persona_image_options": options,
+                    "aspect_ratio": "1:1",
+                    "mode": "person",
+                })
+                task_id = str(result.get("task_id") or result.get("id") or "")
+                clear_pending_state(chat_id)
+                await message.answer(f"人设图任务已提交：{task_id}\n完成后会发送结果。")
+                asyncio.create_task(self._watch_image_generation(
+                    message.bot, chat_id, user_id, persona_id, task_id, types, persona_task=True,
+                ))
+            elif mode == "image_prompt":
+                payload = dict(state["payload"])
+                payload["custom_prompt"] = text[:1200]
+                save_state(chat_id, selected_persona_id=persona_id, mode="image_options", payload=payload)
+                await message.answer(
+                    "配图补充提示词已保存。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(
+                            text="返回配图设置",
+                            callback_data=callback_token(chat_id, "image", {
+                                "persona_id": persona_id,
+                                "post_id": str(payload.get("post_id") or ""),
+                                "source": str(payload.get("source") or "posts"),
+                            }),
+                        ),
+                    ]]),
                 )
             elif mode == "draft_new":
                 result = await self._call(user_id, "posts.create", {"persona_id": persona_id, "content": text})
@@ -3229,6 +5825,27 @@ class NativeTweetBotController:
                     f"北京时间：{scheduled_text}\n\n确认后才会提交发布队列。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
+            elif mode == "history_recognize":
+                url, separator, caption = text.partition("｜")
+                if not separator:
+                    url, separator, caption = text.partition("|")
+                url = url.strip()
+                if not url:
+                    raise HTTPException(status_code=400, detail="帖子链接不能为空")
+                history_persona_id = str(state["payload"].get("persona_id") or persona_id).strip()
+                result = await self._call(user_id, "profile.history.recognize", {
+                    "persona_id": history_persona_id,
+                    "url": url,
+                    "caption": caption.strip(),
+                })
+                clear_pending_state(chat_id)
+                reused = bool(result.get("reused")) if isinstance(result, dict) else False
+                await message.answer(
+                    "发布记录已识别并保存。" + ("（已存在记录已复用）" if reused else ""),
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="查看发布历史", callback_data="tt:persona_history:0"),
+                    ]]),
+                )
             elif mode in {"profile_content", "profile_style"}:
                 key = "content" if mode == "profile_content" else "tweet_style_sample"
                 await self._call(user_id, "profile.update", {"persona_id": persona_id, key: text})
@@ -3239,6 +5856,142 @@ class NativeTweetBotController:
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(text="返回内容设置", callback_data="tt:profile"),
                     ]]),
+                )
+            elif mode == "profile_name":
+                await self._call(user_id, "profile.update", {"persona_id": persona_id, "name": text[:120]})
+                clear_pending_state(chat_id)
+                await message.answer("人设名称已更新。", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                    types.InlineKeyboardButton(text="返回内容设置", callback_data="tt:profile"),
+                ]]))
+            elif mode == "profile_ai":
+                name = str(state["payload"].get("name") or "")
+                result = await self._call(user_id, "profile.ai", {
+                    "persona_id": persona_id,
+                    "name": name,
+                    "prompt": text[:1200],
+                    "idempotency_key": f"tg:profile-ai:{chat_id}:{int(message.message_id)}",
+                })
+                content = str(result.get("content") or "").strip() if isinstance(result, dict) else ""
+                if not content:
+                    raise HTTPException(status_code=502, detail="AI 未返回有效人设简介")
+                await self._call(user_id, "profile.update", {"persona_id": persona_id, "content": content})
+                clear_pending_state(chat_id)
+                await message.answer(
+                    "AI 已重写人设简介并保存。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="返回内容设置", callback_data="tt:profile"),
+                    ]]),
+                )
+            elif mode == "profile_memory_create":
+                await self._call(user_id, "profile.memory.create", {"persona_id": persona_id, "summary": text[:1000]})
+                clear_pending_state(chat_id)
+                await message.answer("人设记忆已保存。", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                    types.InlineKeyboardButton(text="查看人设记忆", callback_data="tt:pmemories:0"),
+                ]]))
+            elif mode == "profile_link_create":
+                parts = [part.strip() for part in re.split(r"[｜|]", text, maxsplit=2)]
+                if len(parts) < 2 or not parts[0] or not parts[1]:
+                    raise HTTPException(status_code=400, detail="格式应为：模板名称｜链接｜结尾文案")
+                profile = await self._call(user_id, "profile.get", {"persona_id": persona_id})
+                presets = [dict(item) for item in (profile.get("link_presets") or []) if isinstance(item, dict)]
+                preset = {
+                    "id": f"tg-link-{int(time.time() * 1000)}",
+                    "name": parts[0][:80],
+                    "link_url": parts[1][:500],
+                    "ending_text": (parts[2] if len(parts) > 2 else "")[:300],
+                    "enabled": True,
+                }
+                presets.append(preset)
+                await self._call(user_id, "profile.update", {
+                    "persona_id": persona_id,
+                    "link_presets": presets,
+                    "active_link_preset_id": str(profile.get("active_link_preset_id") or preset["id"]),
+                })
+                clear_pending_state(chat_id)
+                await message.answer("链接模板已保存。", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                    types.InlineKeyboardButton(text="查看链接模板", callback_data="tt:plinks"),
+                ]]))
+            elif mode == "profile_threads":
+                if text == "/unbind":
+                    await self._call(user_id, "profile.threads.unbind", {"persona_id": persona_id})
+                    notice = "Threads 人设绑定已解除。"
+                else:
+                    await self._call(user_id, "profile.threads.bind", {"persona_id": persona_id, "username": text})
+                    notice = "Threads 人设绑定已更新。"
+                clear_pending_state(chat_id)
+                await message.answer(notice, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                    types.InlineKeyboardButton(text="返回内容设置", callback_data="tt:profile"),
+                ]]))
+            elif mode == "automation_plan_create":
+                try:
+                    plan_payload = json.loads(text)
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    raise HTTPException(status_code=400, detail="计划 JSON 格式无效") from exc
+                if not isinstance(plan_payload, dict):
+                    raise HTTPException(status_code=400, detail="计划 JSON 必须是对象")
+                result = await self._call(user_id, "automation.plans.create", plan_payload)
+                clear_pending_state(chat_id)
+                plan = result.get("plan") if isinstance(result, dict) and isinstance(result.get("plan"), dict) else {}
+                await message.answer(
+                    f"自动化计划已创建：{str(plan.get('id') or '已提交')}。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="查看自动化计划", callback_data="tt:automationplans:0"),
+                    ]]),
+                )
+            elif mode == "hot_rewrite":
+                candidates = state["payload"].get("hot_candidates") if isinstance(state["payload"].get("hot_candidates"), list) else []
+                index = int(state["payload"].get("hot_candidate_index") or 0)
+                if index < 0 or index >= len(candidates) or not isinstance(candidates[index], dict):
+                    raise HTTPException(status_code=410, detail="热点候选已失效，请重新开始热点创作")
+                candidate = dict(candidates[index])
+                source_content = str(candidate.get("content") or candidate.get("text") or candidate.get("body") or "").strip()
+                if not source_content:
+                    raise HTTPException(status_code=400, detail="该热点候选没有可改写正文")
+                instruction = "" if text.strip().lower() in {"/auto", "auto", "按人设改写"} else text[:1200]
+                result = await self._call(user_id, "hot.rewrite", {
+                    "persona_id": persona_id,
+                    "source_content": source_content,
+                    "instruction": instruction,
+                    "platform": str(candidate.get("platform") or "threads").strip() or "threads",
+                    "writing_locale": str(state["payload"].get("writing_locale") or "zh-TW").strip() or "zh-TW",
+                    "idempotency_key": f"tg:hot-rewrite:{chat_id}:{int(message.message_id)}",
+                })
+                rewritten = str(result.get("content") or "").strip() if isinstance(result, dict) else ""
+                if not rewritten:
+                    raise HTTPException(status_code=502, detail="模型没有返回可用改写正文")
+                candidate["content"] = rewritten
+                candidate["text"] = rewritten
+                candidates[index] = candidate
+                task_id = str(state["payload"].get("last_hot_task_id") or "")
+                save_state(chat_id, selected_persona_id=persona_id, mode="hot_select", payload={
+                    "hot_candidates": candidates,
+                    "last_hot_task_id": task_id,
+                    "last_hot_persona_id": persona_id,
+                })
+                title = str(candidate.get("title") or rewritten)[:28]
+                rows = [[
+                    types.InlineKeyboardButton(
+                        text=f"保存 {index + 1}. {title}",
+                        callback_data=callback_token(chat_id, "hotpick", {
+                            "index": index, "task_id": task_id, "persona_id": persona_id,
+                        }),
+                    ),
+                    types.InlineKeyboardButton(
+                        text="✍️ 再次改写",
+                        callback_data=callback_token(chat_id, "hotrewrite", {
+                            "index": index, "task_id": task_id, "persona_id": persona_id,
+                        }),
+                    ),
+                ], [types.InlineKeyboardButton(
+                    text="返回候选列表",
+                    callback_data=callback_token(chat_id, "hotlist", {
+                        "task_id": task_id, "persona_id": persona_id,
+                    }),
+                )]]
+                await message.answer(
+                    "热点候选已按人设改写，可保存为草稿或继续调整。\n\n"
+                    + rewritten[:3000],
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
             elif mode == "hot_prompt":
                 if not text:
@@ -3282,8 +6035,8 @@ class NativeTweetBotController:
         chat_id = int(message.chat.id)
         user_id = int(member["web_user_id"])
         state = load_state(chat_id)
-        if state["mode"] not in {"media_upload", "media_replace"}:
-            await message.answer("请先从草稿详情选择“添加媒体”。", reply_markup=self._main_keyboard(types))
+        if state["mode"] not in {"media_upload", "media_replace", "persona_image_upload"}:
+            await message.answer("请先从草稿详情或人设图设置选择上传入口。", reply_markup=self._main_keyboard(types))
             return
         media = None
         filename = "telegram-media"
@@ -3316,6 +6069,29 @@ class NativeTweetBotController:
             await message.bot.download(media, destination=target)
             content = target.getvalue()
             payload = state["payload"]
+            if state["mode"] == "persona_image_upload":
+                if not mime_type.lower().startswith("image/"):
+                    await message.answer("人设图只支持 JPG、PNG、WebP 或 GIF 图片。")
+                    return
+                result = await self._call_async(user_id, "persona_image.upload", {
+                    "persona_id": state["selected_persona_id"],
+                    "filename": filename,
+                    "mime_type": mime_type,
+                    "content": content,
+                    "replace_image_id": str(payload.get("replace_image_id") or ""),
+                })
+                clear_pending_state(chat_id)
+                audit_action(chat_id, user_id, "persona_image.upload", status="success", resource_type="persona", resource_id=state["selected_persona_id"])
+                await message.answer(
+                    "人设图已上传并保存到图库。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
+                        text="返回人设图设置",
+                        callback_data=callback_token(chat_id, "personaimage", {
+                            "persona_id": state["selected_persona_id"], "page": int(payload.get("page") or 0),
+                        }),
+                    )]]),
+                )
+                return
             await self._call_async(user_id, "media.add", {
                 "persona_id": state["selected_persona_id"],
                 "source": payload.get("source"),
@@ -3346,7 +6122,13 @@ class NativeTweetBotController:
                 await message.answer("媒体已添加。可继续发送，或发送 /done 完成。")
         except Exception as exc:
             logger.exception("Telegram media upload failed")
-            audit_action(chat_id, user_id, "media.add", status="failed", detail=_error_text(exc))
+            audit_action(
+                chat_id,
+                user_id,
+                "persona_image.upload" if state["mode"] == "persona_image_upload" else "media.add",
+                status="failed",
+                detail=_error_text(exc),
+            )
             await message.answer(f"媒体上传失败：{_error_text(exc)}")
 
     async def _watch_generation(self, bot: Any, chat_id: int, user_id: int, persona_id: str, task_id: str, types: Any) -> None:
@@ -3359,12 +6141,50 @@ class NativeTweetBotController:
             except Exception:
                 return
             status = _task_status(task)
-            if status in {"queued", "running"}:
+            if status in {"preparing", "queued", "pending", "running", "publishing", "retrying", "scheduled"}:
                 continue
             if status == "success":
                 output = task.get("output") if isinstance(task.get("output"), dict) else {}
                 posts = output.get("posts") if isinstance(output.get("posts"), list) else []
                 posts = [post for post in posts if isinstance(post, dict)]
+                task_input = task.get("input") if isinstance(task.get("input"), dict) else {}
+                if bool(task_input.get("selection_required")) and posts:
+                    candidate_rows = [
+                        post for post in posts
+                        if bool(post.get("generation_candidate", post.get("generationCandidate", True)))
+                    ] or posts
+                    candidate_buttons = []
+                    for index, post in enumerate(candidate_rows[:10], start=1):
+                        post_id = str(post.get("id") or "").strip()
+                        if not post_id:
+                            continue
+                        title = str(post.get("title") or f"候选 {index}").strip()[:40]
+                        candidate_buttons.append([types.InlineKeyboardButton(
+                            text=f"{index}. {title}",
+                            callback_data=callback_token(chat_id, "gresolve", {
+                                "task_id": task_id,
+                                "post_id": post_id,
+                                "title": title,
+                            }),
+                        )])
+                    candidate_buttons.append([types.InlineKeyboardButton(
+                        text="查看任务详情",
+                        callback_data=callback_token(chat_id, "t", {
+                            "task_id": task_id, "task_kind": "normal", "status_filter": "completed",
+                        }),
+                    )])
+                    if not self._member_still_bound(chat_id, user_id):
+                        return
+                    await bot.send_message(
+                        chat_id,
+                        "推文生成完成。该任务要求保留一个候选，请点击要保留的内容。\n\n"
+                        + "\n\n".join(
+                            f"{index}. {str(post.get('content') or '')[:260]}"
+                            for index, post in enumerate(candidate_rows[:5], start=1)
+                        ),
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=candidate_buttons),
+                    )
+                    return
                 post_ids = [str(item or "") for item in output.get("post_ids") or [] if str(item or "")]
                 if not posts and post_ids:
                     all_posts = await self._call(user_id, "posts.list", {"persona_id": persona_id, "source": "posts"})
@@ -3421,6 +6241,107 @@ class NativeTweetBotController:
                 ]]),
             )
 
+    async def _watch_image_generation(
+        self,
+        bot: Any,
+        chat_id: int,
+        user_id: int,
+        persona_id: str,
+        task_id: str,
+        types: Any,
+        *,
+        post_id: str = "",
+        source: str = "posts",
+        persona_task: bool = False,
+    ) -> None:
+        """Poll the canonical Web image task and deliver local media previews."""
+        for _ in range(240):
+            await asyncio.sleep(3)
+            if not self._member_still_bound(chat_id, user_id):
+                return
+            try:
+                task = await self._call(user_id, "image.status", {
+                    "persona_id": persona_id,
+                    "task_id": task_id,
+                })
+            except Exception:
+                return
+            status = _task_status(task)
+            if status in {"queued", "pending", "running", "preparing", "publishing", "retrying", "scheduled"}:
+                continue
+            if status in {"success", "succeeded", "completed"}:
+                raw_paths = task.get("media_paths") if isinstance(task.get("media_paths"), list) else []
+                paths = [str(item or "").strip() for item in raw_paths if str(item or "").strip()]
+                sent = 0
+                try:
+                    from aiogram.types import FSInputFile
+                except Exception:
+                    FSInputFile = None  # type: ignore[assignment]
+                for raw_path in paths[:4]:
+                    path = Path(raw_path).expanduser()
+                    if not path.is_file() or FSInputFile is None:
+                        continue
+                    if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+                        await bot.send_photo(chat_id, photo=FSInputFile(str(path)))
+                    else:
+                        await bot.send_document(chat_id, document=FSInputFile(str(path)))
+                    sent += 1
+                if not sent and persona_task:
+                    library = task.get("output", {}).get("library") if isinstance(task.get("output"), dict) else {}
+                    items = library.get("items") if isinstance(library, dict) and isinstance(library.get("items"), list) else []
+                    if items:
+                        fallback_path = str(items[0].get("image_url") or "") if isinstance(items[0], dict) else ""
+                        if fallback_path and Path(fallback_path).is_file() and FSInputFile is not None:
+                            await bot.send_photo(chat_id, photo=FSInputFile(fallback_path))
+                            sent = 1
+                rows: list[list[Any]] = []
+                if post_id and not persona_task:
+                    rows.append([types.InlineKeyboardButton(
+                        text="➕ 添加到当前推文",
+                        callback_data=callback_token(chat_id, "imgattach", {
+                            "persona_id": persona_id,
+                            "post_id": post_id,
+                            "source": source,
+                            "task_id": task_id,
+                            "media_indexes": list(range(min(len(paths), 4))),
+                        }),
+                    )])
+                rows.append([types.InlineKeyboardButton(
+                    text="查看任务",
+                    callback_data=callback_token(chat_id, "t", {
+                        "task_id": task_id, "task_kind": "normal", "status_filter": "completed",
+                    }),
+                )])
+                if self._member_still_bound(chat_id, user_id):
+                    await bot.send_message(
+                        chat_id,
+                        ("人设图生成完成。" if persona_task else "推文配图生成完成。")
+                        + (f" 已发送 {sent} 张图片。" if sent else " 结果已保存，可从任务详情查看。"),
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                    )
+            else:
+                if self._member_still_bound(chat_id, user_id):
+                    await bot.send_message(
+                        chat_id,
+                        f"{'人设图' if persona_task else '推文配图'}任务{status}：{str(task.get('error') or '')[:1200]}",
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
+                            text="返回人设详情",
+                            callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}),
+                        )]]),
+                    )
+            return
+        if self._member_still_bound(chat_id, user_id):
+            await bot.send_message(
+                chat_id,
+                "配图任务仍在后台执行，可从排程状态查看。",
+                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
+                    text="查看任务",
+                    callback_data=callback_token(chat_id, "t", {
+                        "task_id": task_id, "task_kind": "normal", "status_filter": "active",
+                    }),
+                )]]),
+            )
+
     async def _watch_publish(self, bot: Any, chat_id: int, user_id: int, task_id: str, types: Any) -> None:
         for _ in range(240):
             await asyncio.sleep(3)
@@ -3431,7 +6352,7 @@ class NativeTweetBotController:
             except Exception:
                 return
             status = _task_status(task)
-            if status in {"queued", "pending", "running", "retrying", "scheduled"}:
+            if status in {"preparing", "queued", "pending", "running", "publishing", "retrying", "scheduled"}:
                 continue
             result = task.get("result") if isinstance(task.get("result"), dict) else {}
             url = str(
@@ -3497,12 +6418,23 @@ class NativeTweetBotController:
                     "last_hot_task_id": task_id,
                     "last_hot_persona_id": persona_id,
                 })
-                rows = [[types.InlineKeyboardButton(
-                    text=str(item.get("title") or item.get("content") or f"候选 {index + 1}")[:28],
-                    callback_data=callback_token(chat_id, "hotpick", {
-                        "index": index, "task_id": task_id, "persona_id": persona_id,
-                    }),
-                )] for index, item in enumerate(candidates)]
+                rows = []
+                for index, item in enumerate(candidates):
+                    title = str(item.get("title") or item.get("content") or item.get("text") or f"候选 {index + 1}")[:28]
+                    rows.append([
+                        types.InlineKeyboardButton(
+                            text=f"保存 {index + 1}. {title}",
+                            callback_data=callback_token(chat_id, "hotpick", {
+                                "index": index, "task_id": task_id, "persona_id": persona_id,
+                            }),
+                        ),
+                        types.InlineKeyboardButton(
+                            text="✍️ 改写",
+                            callback_data=callback_token(chat_id, "hotrewrite", {
+                                "index": index, "task_id": task_id, "persona_id": persona_id,
+                            }),
+                        ),
+                    ])
                 rows.append([types.InlineKeyboardButton(
                     text="返回人设详情",
                     callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}),
