@@ -1527,6 +1527,94 @@ def _dashboard_media_proxy_url(path: Path) -> str:
     return f"/api/persona_dashboard/media/{token}"
 
 
+def _is_allowed_hot_preview_url(url: str) -> bool:
+    host = str(urlsplit(str(url or "").strip()).hostname or "").lower().strip(".")
+    if not host:
+        return False
+    return host.endswith((
+        "cdninstagram.com",
+        "fbcdn.net",
+        "instagram.com",
+        "threads.net",
+        "threads.com",
+    ))
+
+
+def _hot_preview_token(source: str) -> str:
+    return base64.urlsafe_b64encode(str(source or "").encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _hot_preview_url(source: str) -> str:
+    clean = str(source or "").strip()
+    if not clean:
+        return ""
+    return f"/api/persona_dashboard/hot_preview/{_hot_preview_token(clean)}"
+
+
+def _rewrite_hot_candidate_media_previews(
+    items: list[dict[str, str]],
+    raw_candidate: dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    local_by_url: dict[str, str] = {}
+    raw_media: list[Any] = []
+    if isinstance(raw_candidate, dict):
+        for key in ("media", "mediaItems", "media_items"):
+            value = raw_candidate.get(key)
+            if isinstance(value, list):
+                raw_media.extend(value)
+    for raw in raw_media:
+        if not isinstance(raw, dict):
+            continue
+        remote = str(raw.get("url") or "").strip()
+        local = str(raw.get("localPath") or raw.get("local_path") or "").strip()
+        if remote and local:
+            local_by_url[remote] = local
+    rows: list[dict[str, str]] = []
+    for item in items or []:
+        url = str((item or {}).get("url") or "").strip()
+        local = str(local_by_url.get(url) or "").strip()
+        if not local and url and not re.match(r"^https?://", url, re.I):
+            local = url
+        preview = ""
+        if local:
+            path = Path(local).expanduser()
+            if path.is_file() and _is_allowed_dashboard_media_path(path):
+                preview = _hot_preview_url(str(path.resolve()))
+        if not preview and _is_allowed_hot_preview_url(url):
+            preview = _hot_preview_url(url)
+        if not preview and _is_direct_preview_media_url(url):
+            preview = url
+        row = dict(item or {})
+        row["preview_url"] = preview
+        if preview and not row.get("thumbnail_url"):
+            row["thumbnail_url"] = preview
+        row["unavailable"] = not bool(preview)
+        if not preview:
+            row["reason"] = "媒体未缓存到本地" if url else "媒体文件不存在"
+        rows.append(row)
+    return rows
+
+
+def _serve_hot_preview(token: str, *, range_header: str = "") -> Response:
+    raw = str(token or "").strip()
+    if not raw:
+        raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="媒体文件不存在。") from exc
+    source = str(decoded or "").strip()
+    if re.match(r"^https?://", source, re.I):
+        if not _is_allowed_hot_preview_url(source):
+            raise HTTPException(status_code=404, detail="媒体源文件不存在。")
+        return _proxy_remote_persona_media(source, range_header=range_header)
+    path = Path(source).expanduser().resolve()
+    if not path.is_file() or not _is_allowed_dashboard_media_path(path):
+        raise HTTPException(status_code=404, detail="媒体源文件不存在。")
+    return _serve_persona_media_file(path)
+
+
 def _immutable_media_headers() -> dict[str, str]:
     return {
         "Cache-Control": "public, max-age=31536000, immutable",
@@ -15383,7 +15471,10 @@ def _normalize_persona_hot_candidate(candidate: Any) -> dict[str, Any] | None:
             for item in (candidate.get("warnings") if isinstance(candidate.get("warnings"), list) else [])
             if str(item or "").strip()
         ],
-        "media_items": _compact_dashboard_media_items(candidate, limit=None),
+        "media_items": _rewrite_hot_candidate_media_previews(
+            _compact_dashboard_media_items(candidate, limit=None),
+            candidate,
+        ),
     }
 
 
@@ -31301,6 +31392,10 @@ def create_app() -> FastAPI:
     @app.get("/api/persona_dashboard/media/{token}")
     def api_persona_dashboard_media_proxy(token: str, _user: dict[str, Any] = Depends(require_admin)):
         return _serve_dashboard_media_proxy(token)
+
+    @app.get("/api/persona_dashboard/hot_preview/{token}")
+    def api_persona_dashboard_hot_preview(token: str, request: Request, _user: dict[str, Any] = Depends(get_current_user)):
+        return _serve_hot_preview(token, range_header=request.headers.get("range", ""))
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history")
     def api_persona_dashboard_persona_publish_history(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):

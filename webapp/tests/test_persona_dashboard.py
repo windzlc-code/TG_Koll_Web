@@ -6674,6 +6674,28 @@ class PersonaDashboardApiTests(unittest.TestCase):
         identities = [server._media_asset_identity(item["url"]) for item in candidate["media_items"]]
         self.assertEqual(len(identities), len(set(identities)))
         self.assertTrue(all("stp=" not in item["url"] for item in candidate["media_items"]))
+        self.assertTrue(all(item["preview_url"].startswith("/api/persona_dashboard/hot_preview/") for item in candidate["media_items"]))
+        self.assertFalse(any(item.get("unavailable") for item in candidate["media_items"]))
+
+    def test_hot_candidate_preview_uses_local_file_when_download_succeeded(self):
+        local = self.tool_runtime_dir / "sentiment-hot-media" / "hot-1-1.png"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (12, 12), "red").save(local)
+        cdn = "https://scontent.cdninstagram.com/v/t51.2885-15/hot-1-1.png"
+        candidate = server._normalize_persona_hot_candidate({
+            "id": "hot-local-media",
+            "platform": "threads",
+            "content": "已下载的热点图",
+            "media": [{"url": cdn, "type": "image", "localPath": str(local)}],
+        })
+        self.assertIsNotNone(candidate)
+        item = candidate["media_items"][0]
+        self.assertEqual(item["url"], cdn)
+        self.assertTrue(item["preview_url"].startswith("/api/persona_dashboard/hot_preview/"))
+        self.assertFalse(item["unavailable"])
+        response = self.client.get(item["preview_url"])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
 
     def test_hot_candidates_api_returns_only_original_unique_post_media(self):
         self._write_archives()

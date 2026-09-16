@@ -5243,17 +5243,21 @@ function personaHotImportMetaFromCandidate(candidate) {
 function personaHotCandidateMediaItems(candidate) {
   const rows = Array.isArray(candidate?.media_items) ? candidate.media_items : [];
   const mapped = rows.map((item) => {
-    const url = String(item?.url || item?.previewUrl || item?.preview_url || "").trim();
+    const preview = String(item?.preview_url || item?.previewUrl || "").trim();
+    const url = preview || String(item?.url || "").trim();
     if (!url) return null;
     const type = guessMediaType(url, item?.type || "");
     const thumbnailUrl = String(item?.thumbnailUrl || item?.thumbnail_url || "").trim();
+    const unavailable = Boolean(item?.unavailable) || !url;
     return {
       previewUrl: url,
       url,
-      originalUrl: url,
+      originalUrl: String(item?.url || url).trim(),
       thumbnailUrl: thumbnailUrl && thumbnailUrl !== url ? thumbnailUrl : "",
       type,
       label: String(item?.label || mediaKindLabel(type) || "热点媒体").trim() || mediaKindLabel(type),
+      unavailable,
+      reason: String(item?.reason || "").trim(),
     };
   }).filter(Boolean);
   return collapseHotMediaPosterPairs(mapped);
