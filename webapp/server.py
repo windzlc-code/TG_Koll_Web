@@ -16562,6 +16562,7 @@ def _persona_hot_payload_keywords(raw_keywords: Any) -> list[str]:
 PERSONA_HOT_KEYWORD_STRATEGY_VERSION = 67
 PERSONA_HOT_NORMAL_KEYWORD_PROMPT_VERSION = 6
 PERSONA_HOT_KEYWORD_PLAN_SIZE = 20
+PERSONA_HOT_KEYWORD_PLAN_MIN_SIZE = 18
 PERSONA_HOT_KEYWORD_BATCH_SIZE = 10
 PERSONA_HOT_KEYWORD_BATCH_MAX_USES = 2
 PERSONA_HOT_KEYWORD_PLAN_MAX_CYCLES = 1
@@ -16803,9 +16804,11 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
             if _normalize_hot_workflow_text(item)
         ]
         all_keywords = _persona_hot_payload_keywords(result.get("keywords"))
-        if all_keywords and len(all_keywords) != PERSONA_HOT_KEYWORD_PLAN_SIZE:
+        if len(all_keywords) > PERSONA_HOT_KEYWORD_PLAN_SIZE:
+            all_keywords = all_keywords[:PERSONA_HOT_KEYWORD_PLAN_SIZE]
+        if all_keywords and len(all_keywords) < PERSONA_HOT_KEYWORD_PLAN_MIN_SIZE:
             warnings.append(
-                f"热点关键词模型必须返回 {PERSONA_HOT_KEYWORD_PLAN_SIZE} 个有效关键词，本次得到 {len(all_keywords)} 个，请重新生成。"
+                f"热点关键词模型必须至少返回 {PERSONA_HOT_KEYWORD_PLAN_MIN_SIZE} 个有效关键词，本次得到 {len(all_keywords)} 个，请重新生成。"
             )
             all_keywords = []
         row = {

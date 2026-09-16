@@ -6421,7 +6421,27 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(result["keywords"], new_keywords[:10])
         self.assertFalse(mocked.call_args.args[0]["forceRegenerate"])
 
-    def test_persona_hot_keyword_plan_rejects_less_than_twenty_generated_terms(self):
+    def test_persona_hot_keyword_plan_accepts_nineteen_generated_terms(self):
+        self._write_archives()
+        payload = server.PersonaDashboardHotCandidatesFetchPayload(
+            search_mode="normal",
+            writing_locale="zh-CN",
+        )
+        keywords = [f"short-{index}" for index in range(19)]
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value={
+            "ok": True,
+            "archiveName": "History Teacher",
+            "keywords": keywords,
+            "searchMode": "normal",
+            "warnings": [],
+        }):
+            result = server._prepare_persona_hot_keywords("persona-1", payload)
+
+        self.assertEqual(result["all_keywords"], keywords)
+        self.assertEqual(result["keywords"], keywords[:10])
+        self.assertFalse(any("必须返回" in item for item in result["warnings"]))
+
+    def test_persona_hot_keyword_plan_rejects_less_than_eighteen_generated_terms(self):
         self._write_archives()
         payload = server.PersonaDashboardHotCandidatesFetchPayload(
             search_mode="normal",
@@ -6430,7 +6450,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value={
             "ok": True,
             "archiveName": "History Teacher",
-            "keywords": [f"short-{index}" for index in range(19)],
+            "keywords": [f"short-{index}" for index in range(17)],
             "searchMode": "normal",
             "warnings": [],
         }):
@@ -6438,7 +6458,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
         self.assertEqual(result["keywords"], [])
         self.assertEqual(result["all_keywords"], [])
-        self.assertTrue(any("必须返回 20 个" in item for item in result["warnings"]))
+        self.assertTrue(any("至少返回 18 个" in item for item in result["warnings"]))
 
     def test_persona_hot_keyword_batch_is_not_consumed_when_collection_fails(self):
         self._write_archives()

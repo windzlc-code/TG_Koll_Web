@@ -1558,6 +1558,11 @@ function sentimentHotKeywordTargetForMode(mode: SentimentHotSearchMode): number 
   return mode === "normal" ? SENTIMENT_HOT_NORMAL_KEYWORD_TARGET : SENTIMENT_HOT_STRICT_KEYWORD_TARGET;
 }
 
+function sentimentHotKeywordCountIsUsable(count: number, mode: SentimentHotSearchMode): boolean {
+  const target = sentimentHotKeywordTargetForMode(mode);
+  return count >= Math.max(1, target - 2) && count <= target;
+}
+
 function prepareSentimentHotKeywordsForMode(keywords: string[], mode: SentimentHotSearchMode): string[] {
   const normalized = filterConflictingSearchKeywords([...new Set(
     expandSentimentHotCoreKeywordVariants(keywords).map(cleanText).filter((item) => isConcreteSearchKeyword(item)),
@@ -2543,8 +2548,8 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
           const expansion = [...new Set((candidate.broadQueries || []).map(cleanText).filter(Boolean))];
           const uniqueCount = resolveSentimentHotModelStrategyKeywords(candidate, searchMode).length;
           const hasChinese = ([...queries, ...expansion].join("").match(/[\u3400-\u9fff]/gu) || []).length >= 16;
-          if (queries.length !== 10 || uniqueCount !== sentimentHotKeywordTargetForMode(searchMode) || !hasChinese) {
-            const reason = queries.length !== 10 || uniqueCount !== sentimentHotKeywordTargetForMode(searchMode) ? "missing_terms" : "not_chinese";
+          if (queries.length < 8 || !sentimentHotKeywordCountIsUsable(uniqueCount, searchMode) || !hasChinese) {
+            const reason = queries.length < 8 || !sentimentHotKeywordCountIsUsable(uniqueCount, searchMode) ? "missing_terms" : "not_chinese";
             console.info(`[sentiment_hot_model_unusable] reason=${reason} mode=${searchMode} primary=${queries.length} unique=${uniqueCount} sample=${JSON.stringify(queries.slice(0, 8))}`);
             return false;
           }
@@ -2561,7 +2566,7 @@ async function buildSentimentHotSearchStrategyWithModel(args: {
       archiveName: cleanText(archive.name),
       sourceText: personaText,
     });
-    if (resolveSentimentHotModelStrategyKeywords(strategy, searchMode).length === sentimentHotKeywordTargetForMode(searchMode)) {
+    if (sentimentHotKeywordCountIsUsable(resolveSentimentHotModelStrategyKeywords(strategy, searchMode).length, searchMode)) {
       console.info(`[sentiment_hot_model_strategy] model=${JSON.stringify(result.model)} domain=${JSON.stringify(strategy.domainSummary)}`);
       writeCachedSentimentHotSearchStrategy(cacheKey, strategy);
       return strategy;
