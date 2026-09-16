@@ -659,16 +659,25 @@ class TelegramTweetAdminTests(unittest.TestCase):
             button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertTrue({
-            "tt:postsmenu", "tt:persona_history", "tt:createmenu", "tt:publish_one",
-            "tt:profile", "tt:persona_accounts", "tt:personas:0",
-        }.issubset(callbacks))
+        self.assertEqual(callbacks, {
+            "tt:pmod:create", "tt:pmod:content", "tt:pmod:publish", "tt:pmod:settings", "tt:personas:0",
+        })
+        self.assertNotIn("tt:postsmenu", callbacks)
+        self.assertNotIn("tt:createmenu", callbacks)
+        asyncio.run(controller.handle_callback(_Query("tt:pmod:create", message), _Types))
+        create_module_callbacks = {
+            button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertIn("tt:createmenu", create_module_callbacks)
+        self.assertIn("tt:imageposts:0", create_module_callbacks)
+        self.assertIn("tt:personaimage", create_module_callbacks)
         asyncio.run(controller.handle_callback(_Query("tt:createmenu", message), _Types))
         create_callbacks = {
             button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
             if getattr(button, "callback_data", None) and not button.callback_data.startswith("tt:p:")
         }
-        self.assertEqual(create_callbacks, {"tt:generate", "tt:hot", "tt:draft_new"})
+        self.assertEqual(create_callbacks, {"tt:generate", "tt:hot", "tt:draft_new", "tt:pmod:create"})
 
     def test_persona_publish_history_is_scoped_to_selected_persona(self):
         def dispatch(_user_id, action, _payload):
