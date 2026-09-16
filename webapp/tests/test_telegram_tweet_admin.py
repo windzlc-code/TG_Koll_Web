@@ -406,12 +406,13 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         expected_callbacks = {
             "👤 我的人设": {
-                "tt:matrix", "tt:persona_new", "tt:persona_ai_new", "tt:persona_copy_new", "tt:menu",
+                "tt:personamanage", "tt:menu",
             },
             "📊 排程状态": {
                 "tt:tasks:0:pending", "tt:tasks:0:failed", "tt:tasks:0:scheduled",
                 "tt:tasks:0:immediate", "tt:tasks:0:running",
                 "tt:tasks:0:manual", "tt:tasks:0:paused", "tt:tasks:0:completed", "tt:tasks:0:cancelled",
+                "tt:tasks:0:all",
                 "tt:taskfilter:platform", "tt:taskfilter:persona", "tt:menu",
             },
             "🔐 账号管理": {
@@ -481,7 +482,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertTrue({
             "tt:tasks:0:pending", "tt:tasks:0:scheduled", "tt:tasks:0:immediate",
             "tt:tasks:0:running", "tt:tasks:0:failed", "tt:taskfilter:platform",
-            "tt:taskfilter:persona", "tt:menu",
+            "tt:taskfilter:persona", "tt:tasks:0:all", "tt:menu",
         }.issubset(callbacks))
         asyncio.run(controller.handle_callback(_Query("tt:taskfilter:platform", message), _Types))
         self.assertIn("按平台筛选任务", message.edits[-1][0])
@@ -648,8 +649,15 @@ class TelegramTweetAdminTests(unittest.TestCase):
         message = _Message(text="👤 我的人设")
         asyncio.run(controller.handle_text(message, _Types))
         list_markup = message.answers[-1][1]["reply_markup"]
-        self.assertEqual(list_markup.inline_keyboard[0][0].callback_data, "tt:matrix")
-        self.assertEqual(list_markup.inline_keyboard[1][0].callback_data, "tt:persona_new")
+        list_callbacks = {
+            button.callback_data
+            for row in list_markup.inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertIn("tt:personamanage", list_callbacks)
+        self.assertNotIn("tt:matrix", list_callbacks)
+        self.assertNotIn("tt:persona_new", list_callbacks)
         persona_callback = next(
             button.callback_data for row in list_markup.inline_keyboard for button in row
             if str(getattr(button, "callback_data", "")).startswith("tt:p:")
@@ -660,25 +668,115 @@ class TelegramTweetAdminTests(unittest.TestCase):
             if getattr(button, "callback_data", None)
         }
         self.assertEqual(callbacks, {
-            "tt:pmod:settings", "tt:pmod:generate", "tt:pmod:publish", "tt:personas:0",
+            "tt:pmod:create", "tt:pmod:content", "tt:pmod:publish", "tt:pmod:settings", "tt:personas:0",
         })
         self.assertNotIn("tt:postsmenu", callbacks)
         self.assertNotIn("tt:createmenu", callbacks)
-        asyncio.run(controller.handle_callback(_Query("tt:pmod:generate", message), _Types))
-        generate_module_callbacks = {
+        asyncio.run(controller.handle_callback(_Query("tt:personamanage", message), _Types))
+        management_callbacks = {
             button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertIn("tt:createmenu", generate_module_callbacks)
-        self.assertIn("tt:postsmenu", generate_module_callbacks)
-        self.assertIn("tt:imageposts:0", generate_module_callbacks)
-        self.assertIn("tt:persona_history", generate_module_callbacks)
-        asyncio.run(controller.handle_callback(_Query("tt:createmenu", message), _Types))
-        create_callbacks = {
+        self.assertEqual(management_callbacks, {
+            "tt:persona_new", "tt:persona_ai_new", "tt:persona_copy_new",
+            "tt:personagroups:0", "tt:matrix", "tt:personas:0",
+        })
+        asyncio.run(controller.handle_callback(_Query("tt:personamenu", message), _Types))
+        self.assertIn("人设管理", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:pmod:create", message), _Types))
+        create_module_callbacks = {
+            button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertEqual(
+            {item for item in create_module_callbacks if not item.startswith("tt:p:")},
+            {"tt:generate", "tt:hot", "tt:draft_new"},
+        )
+        self.assertEqual(sum(item.startswith("tt:p:") for item in create_module_callbacks), 1)
+        asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
+        content_module_callbacks = {
             button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
             if getattr(button, "callback_data", None) and not button.callback_data.startswith("tt:p:")
         }
-        self.assertEqual(create_callbacks, {"tt:generate", "tt:hot", "tt:draft_new", "tt:pmod:generate"})
+        self.assertEqual(content_module_callbacks, {
+            "tt:postsmenu", "tt:favorites:0", "tt:imageposts:0",
+        })
+        asyncio.run(controller.handle_callback(_Query("tt:pmod:publish", message), _Types))
+        publish_module_callbacks = {
+            button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertEqual(
+            {item for item in publish_module_callbacks if not item.startswith("tt:p:")},
+            {"tt:publish_one", "tt:matrix", "tt:persona_history:0"},
+        )
+        self.assertEqual(sum(item.startswith("tt:p:") for item in publish_module_callbacks), 1)
+
+        # Saved messages from the previous taxonomy remain usable and now
+        # land in the matching module instead of returning to the selector.
+        asyncio.run(controller.handle_callback(_Query("tt:pmod:generate", message), _Types))
+        self.assertIn("新建推文", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:creationmenu", message), _Types))
+        self.assertIn("新建推文", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:createmenu", message), _Types))
+        self.assertIn("新建推文", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:contentmenu", message), _Types))
+        self.assertIn("推文内容", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:publishmenu", message), _Types))
+        self.assertIn("发布管理", message.edits[-1][0])
+
+    def test_persona_management_and_module_back_preserve_list_page(self):
+        personas = [
+            {"id": f"persona-{index}", "name": f"人设 {index}", "counts": {"posts": 0}}
+            for index in range(7)
+        ]
+
+        def dispatch(_user_id, action, _payload):
+            if action == "personas.list":
+                return personas
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:personas:1", message), _Types))
+        management_button = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(getattr(button, "text", "")).endswith("人设管理")
+        )
+        management_reference = resolve_callback_token(101, "personamanage", management_button.callback_data.split(":", 2)[2])
+        self.assertEqual(management_reference["page"], 1)
+        asyncio.run(controller.handle_callback(_Query(management_button.callback_data, message), _Types))
+        management_callbacks = {
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if getattr(button, "callback_data", None)
+        }
+        self.assertIn("tt:personas:1", management_callbacks)
+
+        asyncio.run(controller.handle_callback(_Query("tt:personas:1", message), _Types))
+        persona_button = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(getattr(button, "callback_data", "")).startswith("tt:p:")
+        )
+        asyncio.run(controller.handle_callback(_Query(persona_button.callback_data, message), _Types))
+        home_callbacks = {
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if getattr(button, "callback_data", None)
+        }
+        self.assertIn("tt:personas:1", home_callbacks)
+
+        asyncio.run(controller.handle_callback(_Query("tt:pmod:create", message), _Types))
+        module_back = next(
+            button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(getattr(button, "callback_data", "")).startswith("tt:p:")
+        )
+        module_reference = resolve_callback_token(101, "p", module_back.split(":", 2)[2])
+        self.assertEqual(module_reference["page"], 1)
 
     def test_persona_publish_history_is_scoped_to_selected_persona(self):
         def dispatch(_user_id, action, _payload):
@@ -854,6 +952,11 @@ class TelegramTweetAdminTests(unittest.TestCase):
         with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
             asyncio.run(controller.handle_callback(_Query("tt:personaimage", message), _Types))
         self.assertIn("人设图与图库", message.edits[-1][0])
+        image_back = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if str(getattr(button, "text", "")) == "上一步"
+        )
+        self.assertEqual(image_back.callback_data, "tt:pmod:settings")
         region = next(
             button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
             for button in row if str(button.text).startswith("地区特征")
@@ -1928,7 +2031,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         message = _Message()
         for callback, expected in (
-            ("tt:tasks:0:manual", "待人工/暂停任务（2 条）"),
+            ("tt:tasks:0:manual", "待人工任务（1 条）"),
             ("tt:tasks:0:paused", "已暂停任务（1 条）"),
             ("tt:tasks:0:completed", "已完成任务（1 条）"),
             ("tt:tasks:0:cancelled", "已取消任务（1 条）"),
@@ -1968,6 +2071,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         save_state(101, selected_persona_id="persona-a")
         message = _Message()
         asyncio.run(controller.handle_callback(_Query("tt:profile", message), _Types))
+        self.assertIn("基础资料", message.edits[-1][0])
         self.assertIn("简介", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:bio", message), _Types))
         self.assertEqual(load_state(101)["mode"], "profile_content")
