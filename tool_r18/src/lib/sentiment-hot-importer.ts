@@ -135,8 +135,8 @@ const SENTIMENT_HOT_REFRESH_STRATEGY_TIMEOUT_MS = 8_000;
 const SENTIMENT_HOT_STRICT_PARENT_SUPPLEMENT_LIMIT = 8;
 const SENTIMENT_HOT_ARCHIVE_BACKFILL_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const SENTIMENT_HOT_MAX_PUBLISHED_AGE_MS = 730 * 24 * 60 * 60 * 1000;
-const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 53;
-const SENTIMENT_HOT_NORMAL_KEYWORD_PROMPT_VERSION = 6;
+const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 54;
+const SENTIMENT_HOT_NORMAL_KEYWORD_PROMPT_VERSION = 7;
 const SENTIMENT_HOT_TIMEOUT_WARNING = "\u71b1\u9ede\u6293\u53d6\u5df2\u8d85\u6642\uff0c\u5df2\u505c\u6b62\u5f8c\u7e8c\u8017\u6642\u6b65\u9a5f\uff1b\u8acb\u7a0d\u5f8c\u5237\u65b0\u6216\u6aa2\u67e5 Cookie / sessionid\u3002";
 const THREADS_SEARCH_CACHE_WARNING = "当前 Threads 搜索被限流，已使用 24 小时内缓存热点。";
 const SENTIMENT_HOT_NORMAL_KEYWORD_TARGET = 20;
@@ -1909,6 +1909,7 @@ export function resolveSentimentHotModelStrategyKeywords(
     && isPublicSearchableKeywordLength(term)
     && !isTruncatedModelSearchKeyword(term)
     && !isHollowSearchKeyword(term)
+    && !/韭菜/u.test(term)
   )))];
   if (primary.length < 5) {
     if (!sentimentHotStrategyHasModelTerms(strategy)) return [];
@@ -2386,6 +2387,19 @@ export function resolveSentimentHotTextModelPreference(): string {
     .join(",");
 }
 
+export function sentimentHotKeywordModelSharedBanList(): string {
+  return [
+    "程序会丢掉不合格词；被丢掉就会少过 20 个。请一次直出 20 个都能过关的词，不要依赖事后过滤。",
+    "每个词必须是单一明确含义的可搜索对象：行业物件、服务、场所、工具、产品、作品或具体交易动作。",
+    "禁止双关或歧义词：搜索时既可能是普通蔬菜/生活词，又可能是黑话或情绪词。尤其禁止：韭菜、割韭菜、接盘、躺平、收割。股市语境请改用散戶、當沖、套牢、融資、停損等单一含义的交易词。",
+    "禁止空词与模板词：日常、生活、搞笑、分享、心得、攻略、教程、教學、评测、推荐、經驗、好物、气氛、爱好者、大叔、便宜、烟火气。",
+    "禁止截断残缺：東京宅、豪宅貸、傳承策、收益算、物件檢、股市碎。完整词超过 5 字时改写成完整常用上位短词，不要砍最后一个字。",
+    "禁止外貌、穿著、体型、姿势、道具、图片视觉描述：T恤、白T、牛仔褲、眼鏡、站姿、背景。",
+    "禁止在词尾加攻略、教程、分享、心得、评测、推荐、經驗。",
+    "2-5 个汉字，互不重复；同一个词不要繁简各写一遍。",
+  ].join("\n");
+}
+
 export function sentimentHotKeywordModelInstructionForMode(value: unknown): string {
   const mode = normalizeSentimentHotSearchMode(value);
   if (mode === "normal") {
@@ -2398,13 +2412,16 @@ export function sentimentHotKeywordModelInstructionForMode(value: unknown): stri
       "允许与严格垂直有少量自然重叠，也允许保留模型认为必要的核心词；不要为了追求零重叠而制造生硬词，也不要规定固定重叠数量。",
       "可以使用通勤、搬家、装修、孩子教育、家庭聚餐、人际关系、休闲娱乐等自然生活主题，只要模型判断它们与当前人设类型或受众具有合理弱关联；不能只输出日常、生活、分享等没有搜索对象的空词。",
       "每个词必须是平台用户会自然输入的完整常用词，2-5 个汉字，不得为了缩短长度而截断词尾。",
+      sentimentHotKeywordModelSharedBanList(),
     ].join("\n");
   }
   return [
     "当前模式：严格垂直。必须独立生成本模式自己的 20 个搜索词，不得复用泛垂直模式的关键词计划。",
-    "primaryQueries 和 domainExpansion 的全部词都必须直接指向人设的核心行业、核心对象或核心服务。",
+    "primaryQueries 和 domainExpansion 的全部词都必须直接指向当前这个人设的核心行业、核心对象或核心服务，让人一眼能看出属于该人设，而不是可套到任何人的生活词或蔬菜词。",
+    "若人设有两个核心职业，两个领域都要出具体对象；仍禁止用双关词把领域糊在一起。",
     "禁止单独输出资产配置、理财、家族传承、生活、职场等上位宽词；若确属核心业务，必须和具体行业对象组合成可搜索词。",
     "每个词必须是平台用户会自然输入的完整高流量词，优先 2-4 个汉字，最多 5 个汉字；不得截断、造简称或输出東京宅、豪宅貸、傳承策这类残缺词。",
+    sentimentHotKeywordModelSharedBanList(),
   ].join("\n");
 }
 
@@ -2420,14 +2437,14 @@ export function sentimentHotKeywordModelJsonContractForMode(value: unknown): str
       "JSON 结构：",
       "{\"primaryQueries\":[\"...\"],\"normalQueries\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
       "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，normalQueries 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
-      "合计必须给出 20 个互不重复的泛垂直生活搜索词，供下游按 10 个一批轮换搜索。不要多也不要少。",
+      "合计必须给出 20 个互不重复、且都能通过上述禁词规则的泛垂直生活搜索词，供下游按 10 个一批轮换搜索。不要多也不要少，不要用稍后会被丢掉的词凑数。",
     ];
   }
   return [
     "JSON 结构：",
     "{\"primaryQueries\":[\"...\"],\"domainExpansion\":[\"...\"],\"rejectTerms\":[\"...\"],\"domainSummary\":\"...\"}",
     "所有列表字段必须是 JSON 数组。字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个，rejectTerms 4-8 个，domainSummary 一句话。",
-    "合计必须给出 20 个互不重复的可搜索词，供下游按 10 个一批轮换搜索。不要多也不要少。",
+    "合计必须给出 20 个互不重复、且都能通过上述禁词规则的可搜索词，供下游按 10 个一批轮换搜索。不要多也不要少，不要用稍后会被丢掉的词凑数。",
   ];
 }
 

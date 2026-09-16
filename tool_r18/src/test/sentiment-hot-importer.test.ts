@@ -3531,7 +3531,7 @@ Title: Instagram
     expect(source).toContain("domainSummary");
     expect(source).toContain("字段数量：primaryQueries 正好 10 个，domainExpansion 正好 10 个");
     expect(source).toContain("domainExpansion");
-    expect(source).toContain("合计必须给出 20 个互不重复的可搜索词");
+    expect(source).toContain("合计必须给出 20 个互不重复、且都能通过上述禁词规则的可搜索词");
     expect(source).toContain("2-5 个汉字的完整自然词语");
     expect(source).toContain("禁止为了凑长度而截断词尾或自造简称");
     expect(source).toContain("禁止输出带这些后缀或整词的合成搜索词");
@@ -3548,7 +3548,10 @@ Title: Instagram
     expect(source).not.toContain("expandNormalLifestyleSearchTerms");
     expect(source).not.toContain('["通勤", "停车", "洗车", "年检"]');
     expect(source).not.toContain('["约会妆", "换季", "赶时间"]');
-    expect(source).toContain("const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 53");
+    expect(source).toContain("const SENTIMENT_HOT_SEARCH_STRATEGY_VERSION = 54");
+    expect(source).toContain("禁止双关或歧义词");
+    expect(source).toContain("韭菜");
+    expect(source).toContain("程序会丢掉不合格词");
   });
 
   it("indexes and reads the global hotspot pool by platform", () => {
