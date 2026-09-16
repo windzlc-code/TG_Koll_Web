@@ -1540,6 +1540,23 @@ def _is_allowed_hot_preview_url(url: str) -> bool:
     ))
 
 
+def _instagram_cdn_fallback_urls(url: str) -> list[str]:
+    clean = str(url or "").strip()
+    if not clean:
+        return []
+    urls = [clean]
+    generic = re.sub(
+        r"^https://(?:scontent[^/]*\.cdninstagram\.com|instagram\.[^/]+\.fna\.fbcdn\.net|scontent[^/]*\.(?:xx\.)?fbcdn\.net)",
+        "https://scontent.cdninstagram.com",
+        clean,
+        count=1,
+        flags=re.I,
+    )
+    if generic.startswith("https://") and generic not in urls:
+        urls.append(generic)
+    return urls
+
+
 def _hot_preview_token(source: str) -> str:
     return base64.urlsafe_b64encode(str(source or "").encode("utf-8")).decode("ascii").rstrip("=")
 
@@ -1551,13 +1568,122 @@ def _hot_preview_url(source: str) -> str:
     return f"/api/persona_dashboard/hot_preview/{_hot_preview_token(clean)}"
 
 
+def _hot_media_dir() -> Path:
+    return TOOL_R18_RUNTIME_DIR / "sentiment-hot-media"
+
+
+def _hot_preview_cache_dir() -> Path:
+    return _hot_media_dir() / "preview-cache"
+
+
+def _safe_hot_media_stem(value: str) -> str:
+    text = re.sub(r"[^A-Za-z0-9._-]+", "", str(value or "").strip())
+    return text[:80]
+
+
+def _existing_hot_media_file(path: Path | str) -> str:
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except Exception:
+        return ""
+    if resolved.is_file() and _is_allowed_dashboard_media_path(resolved):
+        return str(resolved)
+    return ""
+
+
+def _find_hot_local_media(url: str, *, candidate_id: str = "", index: int = 0, explicit_local: str = "") -> str:
+    found = _existing_hot_media_file(explicit_local)
+    if found:
+        return found
+    clean_url = str(url or "").strip()
+    if clean_url and not re.match(r"^https?://", clean_url, re.I):
+        found = _existing_hot_media_file(clean_url)
+        if found:
+            return found
+    identity = _safe_hot_media_stem(_media_asset_identity(clean_url))
+    stems: list[str] = []
+    if identity:
+        stems.append(identity)
+    cid = _safe_hot_media_stem(candidate_id)
+    if cid:
+        stems.append(f"{cid}-{max(0, int(index)) + 1}")
+        if int(index) == 0:
+            stems.append(cid)
+    roots = (_hot_preview_cache_dir(), _hot_media_dir())
+    seen: set[str] = set()
+    for stem in stems:
+        if not stem or stem in seen:
+            continue
+        seen.add(stem)
+        for root in roots:
+            try:
+                if not root.is_dir():
+                    continue
+            except Exception:
+                continue
+            for path in root.glob(f"{stem}.*"):
+                found = _existing_hot_media_file(path)
+                if found:
+                    return found
+    return ""
+
+
+def _hot_preview_source_url(url: str, *, candidate_id: str = "", index: int = 0, explicit_local: str = "") -> str:
+    local = _find_hot_local_media(
+        url,
+        candidate_id=candidate_id,
+        index=index,
+        explicit_local=explicit_local,
+    )
+    if local:
+        return _hot_preview_url(local)
+    clean = str(url or "").strip()
+    if _is_allowed_hot_preview_url(clean):
+        return _hot_preview_url(clean)
+    if _is_direct_preview_media_url(clean):
+        return clean
+    return ""
+
+
+def _store_hot_preview_cache(url: str, body: bytes, content_type: str) -> str:
+    if not body or len(body) < 32 or len(body) > 12 * 1024 * 1024:
+        return ""
+    identity = _safe_hot_media_stem(_media_asset_identity(url))
+    if not identity:
+        identity = hashlib.sha256(str(url or "").encode("utf-8")).hexdigest()[:24]
+    ext = ".bin"
+    lower_type = str(content_type or "").split(";", 1)[0].strip().lower()
+    if "png" in lower_type:
+        ext = ".png"
+    elif "webp" in lower_type:
+        ext = ".webp"
+    elif "gif" in lower_type:
+        ext = ".gif"
+    elif "mp4" in lower_type or "video/" in lower_type:
+        ext = ".mp4"
+    elif "jpeg" in lower_type or "jpg" in lower_type or "image/" in lower_type:
+        ext = ".jpg"
+    dest = _hot_preview_cache_dir() / f"{identity}{ext}"
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex}.tmp")
+        tmp.write_bytes(body)
+        tmp.replace(dest)
+        return str(dest.resolve())
+    except Exception:
+        return ""
+
+
 def _rewrite_hot_candidate_media_previews(
     items: list[dict[str, str]],
     raw_candidate: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     local_by_url: dict[str, str] = {}
+    local_by_identity: dict[str, str] = {}
     raw_media: list[Any] = []
+    candidate_id = ""
     if isinstance(raw_candidate, dict):
+        candidate_id = str(raw_candidate.get("id") or raw_candidate.get("candidateId") or "").strip()
         for key in ("media", "mediaItems", "media_items"):
             value = raw_candidate.get(key)
             if isinstance(value, list):
@@ -1569,24 +1695,47 @@ def _rewrite_hot_candidate_media_previews(
         local = str(raw.get("localPath") or raw.get("local_path") or "").strip()
         if remote and local:
             local_by_url[remote] = local
+            identity = _media_asset_identity(remote)
+            if identity:
+                local_by_identity[identity] = local
+        thumb = str(raw.get("thumbnailUrl") or raw.get("thumbnail_url") or "").strip()
+        thumb_local = str(raw.get("thumbnailPath") or raw.get("thumbnail_path") or "").strip()
+        if thumb and thumb_local:
+            local_by_url[thumb] = thumb_local
+            identity = _media_asset_identity(thumb)
+            if identity:
+                local_by_identity[identity] = thumb_local
     rows: list[dict[str, str]] = []
-    for item in items or []:
+    for index, item in enumerate(items or []):
         url = str((item or {}).get("url") or "").strip()
-        local = str(local_by_url.get(url) or "").strip()
-        if not local and url and not re.match(r"^https?://", url, re.I):
-            local = url
-        preview = ""
-        if local:
-            path = Path(local).expanduser()
-            if path.is_file() and _is_allowed_dashboard_media_path(path):
-                preview = _hot_preview_url(str(path.resolve()))
-        if not preview and _is_allowed_hot_preview_url(url):
-            preview = _hot_preview_url(url)
-        if not preview and _is_direct_preview_media_url(url):
-            preview = url
+        local = str(
+            local_by_url.get(url)
+            or local_by_identity.get(_media_asset_identity(url))
+            or ""
+        ).strip()
+        preview = _hot_preview_source_url(
+            url,
+            candidate_id=candidate_id,
+            index=index,
+            explicit_local=local,
+        )
         row = dict(item or {})
         row["preview_url"] = preview
-        if preview and not row.get("thumbnail_url"):
+        thumb = str(row.get("thumbnail_url") or row.get("thumbnailUrl") or "").strip()
+        thumb_local = str(
+            local_by_url.get(thumb)
+            or local_by_identity.get(_media_asset_identity(thumb))
+            or ""
+        ).strip()
+        thumb_preview = _hot_preview_source_url(
+            thumb,
+            candidate_id=candidate_id,
+            index=index,
+            explicit_local=thumb_local,
+        ) if thumb else ""
+        if thumb_preview:
+            row["thumbnail_url"] = thumb_preview
+        elif preview:
             row["thumbnail_url"] = preview
         row["unavailable"] = not bool(preview)
         if not preview:
@@ -1606,6 +1755,9 @@ def _serve_hot_preview(token: str, *, range_header: str = "") -> Response:
         raise HTTPException(status_code=404, detail="媒体文件不存在。") from exc
     source = str(decoded or "").strip()
     if re.match(r"^https?://", source, re.I):
+        cached = _find_hot_local_media(source)
+        if cached:
+            return _serve_persona_media_file(Path(cached))
         if not _is_allowed_hot_preview_url(source):
             raise HTTPException(status_code=404, detail="媒体源文件不存在。")
         return _proxy_remote_persona_media(source, range_header=range_header)
@@ -18589,47 +18741,67 @@ def _proxy_remote_persona_media(url: str, *, range_header: str = "") -> Response
     clean = str(url or "").strip()
     if not re.match(r"^https?://", clean, re.I):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
-    try:
-        request_headers = {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "image/avif,image/webp,image/*,video/*,*/*;q=0.8",
-            "Referer": "https://www.threads.net/",
-        }
-        clean_range = str(range_header or "").strip()
-        if clean_range.lower().startswith("bytes=") and "\r" not in clean_range and "\n" not in clean_range:
-            request_headers["Range"] = clean_range
-        upstream = requests.get(
-            clean,
-            timeout=15,
-            stream=True,
-            headers=request_headers,
-        )
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=404, detail="媒体源文件不存在。") from exc
-    if int(getattr(upstream, "status_code", 0) or 0) >= 400:
-        upstream.close()
-        raise HTTPException(status_code=404, detail="媒体源文件不存在。")
-    content_type = str(upstream.headers.get("Content-Type") or "application/octet-stream").split(";", 1)[0].strip() or "application/octet-stream"
-
-    def chunks():
+    request_headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "image/avif,image/webp,image/*,video/*,*/*;q=0.8",
+        "Referer": "https://www.threads.net/",
+    }
+    clean_range = str(range_header or "").strip()
+    use_range = clean_range.lower().startswith("bytes=") and "\r" not in clean_range and "\n" not in clean_range
+    if use_range:
+        request_headers["Range"] = clean_range
+    last_error: Exception | None = None
+    for candidate in _instagram_cdn_fallback_urls(clean):
+        upstream = None
         try:
-            for chunk in upstream.iter_content(64 * 1024):
-                if chunk:
-                    yield chunk
+            upstream = requests.get(
+                candidate,
+                timeout=15,
+                stream=True,
+                headers=request_headers,
+            )
+        except requests.RequestException as exc:
+            last_error = exc
+            continue
+        status = int(getattr(upstream, "status_code", 0) or 0)
+        if status >= 400:
+            upstream.close()
+            last_error = HTTPException(status_code=404, detail="媒体源文件不存在。")
+            continue
+        content_type = str(upstream.headers.get("Content-Type") or "application/octet-stream").split(";", 1)[0].strip() or "application/octet-stream"
+        if use_range:
+            def chunks(stream=upstream):
+                try:
+                    for chunk in stream.iter_content(64 * 1024):
+                        if chunk:
+                            yield chunk
+                finally:
+                    stream.close()
+
+            response_headers = {"Cache-Control": "private, max-age=60"}
+            for header in ("Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"):
+                value = str(upstream.headers.get(header) or "").strip()
+                if value:
+                    response_headers[header] = value
+            return StreamingResponse(
+                chunks(),
+                media_type=content_type,
+                status_code=status or 200,
+                headers=response_headers,
+            )
+        try:
+            body = b"".join(chunk for chunk in upstream.iter_content(64 * 1024) if chunk)
         finally:
             upstream.close()
-
-    response_headers = {"Cache-Control": "private, max-age=60"}
-    for header in ("Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"):
-        value = str(upstream.headers.get(header) or "").strip()
-        if value:
-            response_headers[header] = value
-    return StreamingResponse(
-        chunks(),
-        media_type=content_type,
-        status_code=int(getattr(upstream, "status_code", 200) or 200),
-        headers=response_headers,
-    )
+        if str(content_type).lower().startswith(("image/", "video/")):
+            _store_hot_preview_cache(clean, body, content_type)
+        response_headers = {"Cache-Control": "private, max-age=300"}
+        if body:
+            response_headers["Content-Length"] = str(len(body))
+        return Response(content=body, media_type=content_type, status_code=status or 200, headers=response_headers)
+    if isinstance(last_error, HTTPException):
+        raise last_error
+    raise HTTPException(status_code=404, detail="媒体源文件不存在。") from last_error
 
 
 def _persona_media_cache_token(path: Path) -> str:

@@ -277,8 +277,19 @@ export async function fetchHotCandidates(input: FetchHotCandidatesInput) {
     cookieStatuses: result.cookieStatuses,
     warnings: result.warnings,
     emptyReason: result.emptyReason,
-    candidates: result.candidates,
+    candidates: await attachHotCandidatePreviewMedia(result.candidates),
   };
+}
+
+async function attachHotCandidatePreviewMedia(candidates: SentimentHotCandidate[]): Promise<SentimentHotCandidate[]> {
+  const rows = Array.isArray(candidates) ? candidates : [];
+  await Promise.all(rows.map(async (candidate) => {
+    const media = Array.isArray(candidate.media) ? candidate.media : [];
+    if (!media.length) return;
+    const downloaded = await downloadCandidateMedia(candidate, Number.POSITIVE_INFINITY, 4, { skipVideos: true }).catch(() => media);
+    if (Array.isArray(downloaded) && downloaded.length) candidate.media = downloaded;
+  }));
+  return rows;
 }
 
 export async function readHotCandidatesCache(input: ReadHotCandidatesCacheInput) {

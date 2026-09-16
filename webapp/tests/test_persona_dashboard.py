@@ -6717,6 +6717,106 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["content-type"], "image/png")
 
+    def test_hot_candidate_preview_uses_runtime_file_without_localpath(self):
+        local = self.tool_runtime_dir / "sentiment-hot-media" / "hot-noid-1.png"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (10, 10), "blue").save(local)
+        cdn = "https://scontent-mxp1-1.cdninstagram.com/v/t51.82787-15/hot-noid.png?oe=dead"
+        candidate = server._normalize_persona_hot_candidate({
+            "id": "hot-noid",
+            "platform": "threads",
+            "content": "已落盘但未回填 localPath",
+            "media": [{"url": cdn, "type": "image"}],
+        })
+        self.assertIsNotNone(candidate)
+        item = candidate["media_items"][0]
+        self.assertTrue(item["preview_url"].startswith("/api/persona_dashboard/hot_preview/"))
+        self.assertFalse(item["unavailable"])
+        response = self.client.get(item["preview_url"])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
+
+    def test_hot_candidate_preview_rewrites_video_thumbnail_through_proxy(self):
+        candidate = server._normalize_persona_hot_candidate({
+            "id": "hot-video-thumb",
+            "platform": "threads",
+            "content": "视频封面也要走代理",
+            "media": [{
+                "url": "https://scontent-mxp1-1.cdninstagram.com/o1/v/t2/f2/m366/video.mp4",
+                "type": "video",
+                "thumbnailUrl": "https://scontent-mxp1-1.cdninstagram.com/v/t51.82787-15/poster.jpg",
+            }],
+        })
+        self.assertIsNotNone(candidate)
+        item = candidate["media_items"][0]
+        self.assertEqual(item["type"], "video")
+        self.assertTrue(item["preview_url"].startswith("/api/persona_dashboard/hot_preview/"))
+        self.assertTrue(str(item.get("thumbnail_url") or "").startswith("/api/persona_dashboard/hot_preview/"))
+        self.assertFalse(item["unavailable"])
+
+    def test_instagram_cdn_fallback_rewrites_regional_hosts(self):
+        original = "https://scontent-mxp1-1.cdninstagram.com/v/t51.82787-15/a.jpg?_nc_ht=scontent-mxp1-1.cdninstagram.com"
+        urls = server._instagram_cdn_fallback_urls(original)
+        self.assertEqual(urls[0], original)
+        self.assertTrue(urls[1].startswith("https://scontent.cdninstagram.com/v/t51.82787-15/a.jpg"))
+        fbcdn = "https://instagram.fssa12-2.fna.fbcdn.net/v/t51.82787-15/b.webp?_nc_cat=1"
+        fb_urls = server._instagram_cdn_fallback_urls(fbcdn)
+        self.assertIn("https://scontent.cdninstagram.com/v/t51.82787-15/b.webp?_nc_cat=1", fb_urls)
+
+    def test_hot_preview_falls_back_to_generic_instagram_cdn_host(self):
+        class Fake403:
+            status_code = 403
+            headers = {"Content-Type": "text/plain"}
+            content = b"URL signature expired"
+
+            def iter_content(self, _size):
+                yield b"URL signature expired"
+
+            def close(self):
+                return None
+
+        class Fake200:
+            status_code = 200
+            headers = {"Content-Type": "image/jpeg", "Content-Length": "4"}
+            content = b"\xff\xd8\xff\xd9"
+
+            def iter_content(self, _size):
+                yield b"\xff\xd8\xff\xd9"
+
+            def close(self):
+                return None
+
+        calls: list[str] = []
+
+        def fake_get(url, **_kwargs):
+            calls.append(url)
+            if "scontent.cdninstagram.com" in url:
+                return Fake200()
+            return Fake403()
+
+        with mock.patch.object(server.requests, "get", side_effect=fake_get):
+            response = server._proxy_remote_persona_media(
+                "https://scontent-mxp1-1.cdninstagram.com/v/t51.82787-15/a.jpg",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertIn("scontent-mxp1-1.cdninstagram.com", calls[0])
+        self.assertIn("scontent.cdninstagram.com", calls[1])
+
+    def test_hot_preview_serves_cached_bytes_after_cdn_expires(self):
+        cdn = "https://scontent-sea5-1.cdninstagram.com/v/t51.82787-15/cached.jpg"
+        token_url = server._hot_preview_url(cdn)
+        cached = self.tool_runtime_dir / "sentiment-hot-media" / "preview-cache" / "cached.jpg"
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 8), "green").save(cached)
+
+        with mock.patch.object(server.requests, "get", side_effect=AssertionError("cdn should not be fetched")):
+            response = self.client.get(token_url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/jpeg")
+
     def test_hot_candidates_api_returns_only_original_unique_post_media(self):
         self._write_archives()
         originals = [

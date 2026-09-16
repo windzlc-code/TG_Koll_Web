@@ -5246,14 +5246,19 @@ function personaHotCandidateMediaItems(candidate) {
     const preview = String(item?.preview_url || item?.previewUrl || "").trim();
     const url = preview || String(item?.url || "").trim();
     if (!url) return null;
-    const type = guessMediaType(url, item?.type || "");
-    const thumbnailUrl = String(item?.thumbnailUrl || item?.thumbnail_url || "").trim();
+    const type = guessMediaType(String(item?.url || "").trim() || url, item?.type || "");
+    const rawThumb = String(item?.thumbnailUrl || item?.thumbnail_url || "").trim();
+    const thumbnailUrl = rawThumb
+      && rawThumb !== url
+      && !/(?:cdninstagram\.com|fbcdn\.net)/i.test(rawThumb)
+      ? rawThumb
+      : "";
     const unavailable = Boolean(item?.unavailable) || !url;
     return {
       previewUrl: url,
       url,
       originalUrl: String(item?.url || url).trim(),
-      thumbnailUrl: thumbnailUrl && thumbnailUrl !== url ? thumbnailUrl : "",
+      thumbnailUrl,
       type,
       label: String(item?.label || mediaKindLabel(type) || "热点媒体").trim() || mediaKindLabel(type),
       unavailable,

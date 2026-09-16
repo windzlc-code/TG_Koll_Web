@@ -12573,24 +12573,75 @@ export async function downloadCandidatePrimaryMedia(candidate: SentimentHotCandi
   }
 }
 
+async function fetchHotMediaBytes(url: string, timeoutMs = 15_000): Promise<{ contentType: string; buffer: Buffer } | null> {
+  const headers = {
+    "user-agent": "Mozilla/5.0",
+    accept: "image/avif,image/webp,image/*,video/*,*/*;q=0.8",
+    referer: "https://www.threads.net/",
+  };
+  const load = async (dispatcher?: any) => {
+    const response = await fetch(url, {
+      signal: buildAbortSignalTimeout(timeoutMs),
+      headers,
+      ...(dispatcher ? { dispatcher } : {}),
+    } as any);
+    if (!response.ok) {
+      await dispatcher?.close?.().catch(() => undefined);
+      return null;
+    }
+    const contentType = response.headers.get("content-type") || "";
+    if (!/^image\/|^video\//i.test(contentType)) {
+      await dispatcher?.close?.().catch(() => undefined);
+      return null;
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    await dispatcher?.close?.().catch(() => undefined);
+    return { contentType, buffer };
+  };
+  try {
+    const direct = await load();
+    if (direct) return direct;
+  } catch {
+    // Fall through to the reader proxy, matching the scrape transport.
+  }
+  const proxy = takeNextAnonymousReaderProxy(readAnonymousReaderProxyPool());
+  if (!proxy?.url) return null;
+  try {
+    return await load(new ProxyAgent(proxy.url));
+  } catch {
+    return null;
+  }
+}
+
 async function downloadOneCandidateMediaItem(
   candidateId: string,
   item: SentimentHotMedia,
   index: number,
+  options?: { skipVideos?: boolean },
 ): Promise<SentimentHotMedia> {
   if (item.localPath && fs.existsSync(item.localPath)) return item;
+  const isVideo = item.type === "video" || /\.(?:mp4|mov|m4v|webm)(?:$|[?#])/i.test(item.url);
+  if (options?.skipVideos && isVideo) {
+    const thumb = String(item.thumbnailUrl || "").trim();
+    if (thumb && /^https?:\/\//i.test(thumb) && thumb !== item.url) {
+      const poster = await downloadOneCandidateMediaItem(
+        candidateId,
+        { type: "image", url: thumb },
+        index,
+      );
+      if (poster.localPath) return { ...item, thumbnailUrl: poster.localPath };
+    }
+    return item;
+  }
   if (!/^https?:\/\//i.test(item.url)) return item;
   try {
-    const response = await fetch(item.url, { signal: buildAbortSignalTimeout(15_000) });
-    if (!response.ok) return item;
-    const contentType = response.headers.get("content-type") || "";
-    if (!/^image\/|^video\//i.test(contentType)) return item;
-    const ext = extensionFromContentType(contentType, item.type);
+    const fetched = await fetchHotMediaBytes(item.url);
+    if (!fetched) return item;
+    const ext = extensionFromContentType(fetched.contentType, item.type);
     const mediaDir = path.dirname(resolveRuntimeFile(`sentiment-hot-media/${candidateId}-${index + 1}${ext}`));
     fs.mkdirSync(mediaDir, { recursive: true });
     const localPath = path.join(mediaDir, `${candidateId}-${index + 1}${ext}`);
-    const buffer = Buffer.from(await response.arrayBuffer());
-    fs.writeFileSync(localPath, buffer);
+    fs.writeFileSync(localPath, fetched.buffer);
     return { ...item, localPath, warning: undefined };
   } catch {
     return item;
@@ -12615,6 +12666,7 @@ export async function downloadCandidateMedia(
   candidate: SentimentHotCandidate,
   limit = Number.POSITIVE_INFINITY,
   concurrency = 1,
+  options?: { skipVideos?: boolean },
 ): Promise<SentimentHotMedia[]> {
   const media = (candidate.media || []).slice(0, limit);
   if (!media.length) return [];
@@ -12622,11 +12674,11 @@ export async function downloadCandidateMedia(
   if (workerLimit <= 1) {
     const downloaded: SentimentHotMedia[] = [];
     for (let index = 0; index < media.length; index += 1) {
-      downloaded.push(await downloadOneCandidateMediaItem(candidate.id, media[index], index));
+      downloaded.push(await downloadOneCandidateMediaItem(candidate.id, media[index], index, options));
     }
     return downloaded;
   }
-  return mapLimit(media, workerLimit, (item, index) => downloadOneCandidateMediaItem(candidate.id, item, index));
+  return mapLimit(media, workerLimit, (item, index) => downloadOneCandidateMediaItem(candidate.id, item, index, options));
 }
 
 function extensionFromContentType(contentType: string, type: string): string {
