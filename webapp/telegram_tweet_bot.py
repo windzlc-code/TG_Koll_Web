@@ -1262,7 +1262,7 @@ class NativeTweetBotController:
             f"👤 {persona.get('name') or '未命名人设'}\n\n"
             f"草稿：{counts.get('posts', 0)} 篇\n"
             f"收藏：{counts.get('favorites', 0)} 篇\n\n"
-            "请先选择功能模块，进入后再按步骤执行。"
+            "请选择模块，进入后再按步骤执行。"
         )
 
     @staticmethod
@@ -1270,13 +1270,10 @@ class NativeTweetBotController:
         button = types.InlineKeyboardButton
         return types.InlineKeyboardMarkup(inline_keyboard=[
             [
-                button(text="📝 创作", callback_data="tt:pmod:create"),
-                button(text="📚 内容", callback_data="tt:pmod:content"),
+                button(text="⚙️ 人设设置", callback_data="tt:pmod:settings"),
+                button(text="✨ 推文生成", callback_data="tt:pmod:generate"),
             ],
-            [
-                button(text="🚀 发布", callback_data="tt:pmod:publish"),
-                button(text="⚙️ 设置", callback_data="tt:pmod:settings"),
-            ],
+            [button(text="🚀 发布", callback_data="tt:pmod:publish")],
             [button(text="返回我的人设", callback_data="tt:personas:0")],
         ])
 
@@ -1298,53 +1295,44 @@ class NativeTweetBotController:
     ) -> tuple[str, Any]:
         button = types.InlineKeyboardButton
         back = self._persona_module_back_row(types, chat_id, persona_id)
-        if module == "create":
-            return (
-                "创作\n请选择要执行的功能，随后按步骤完成。",
-                types.InlineKeyboardMarkup(inline_keyboard=[
-                    [button(text="✍️ 新建推文", callback_data="tt:createmenu")],
-                    [
-                        button(text="🖼 推文配图", callback_data="tt:imageposts:0"),
-                        button(text="🧑‍🎨 生成人设图", callback_data="tt:personaimage"),
-                    ],
-                    back,
-                ]),
-            )
-        if module == "content":
-            return (
-                "内容\n请选择要查看的内容。",
-                types.InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        button(text="📝 查看推文", callback_data="tt:postsmenu"),
-                        button(text="🕘 发布历史", callback_data="tt:persona_history"),
-                    ],
-                    back,
-                ]),
-            )
-        if module == "publish":
-            return (
-                "发布\n请选择发布方式，随后按步骤完成。",
-                types.InlineKeyboardMarkup(inline_keyboard=[
-                    [button(text="🚀 发布推文", callback_data="tt:publish_one")],
-                    back,
-                ]),
-            )
         if module == "settings":
             return (
-                "设置\n请选择要调整的项目。",
+                "人设设置\n请选择要执行的功能，随后按步骤完成。",
                 types.InlineKeyboardMarkup(inline_keyboard=[
+                    [button(text="⚙️ 基础资料", callback_data="tt:profile")],
+                    [button(text="🧑‍🎨 生成人设图", callback_data="tt:personaimage")],
                     [
-                        button(text="⚙️ 人设设置", callback_data="tt:profile"),
                         button(text="🔐 账号状态", callback_data="tt:persona_accounts"),
+                        button(text="🗂 加入分组", callback_data=callback_token(chat_id, "groupassign", {"persona_id": persona_id})),
                     ],
                     [
-                        button(text="🗂 加入分组", callback_data=callback_token(chat_id, "groupassign", {"persona_id": persona_id})),
                         button(text="🔄 刷新数据", callback_data=callback_token(chat_id, "prefresh", {"persona_id": persona_id})),
                     ],
                     [
                         button(text="📄 复制人设", callback_data=callback_token(chat_id, "pduplicate", {"persona_id": persona_id})),
                         button(text="🗑 删除人设", callback_data=callback_token(chat_id, "pdeleteask", {"persona_id": persona_id})),
                     ],
+                    back,
+                ]),
+            )
+        if module == "generate":
+            return (
+                "推文生成\n请选择要执行的功能，随后按步骤完成。",
+                types.InlineKeyboardMarkup(inline_keyboard=[
+                    [button(text="✍️ 新建推文", callback_data="tt:createmenu")],
+                    [
+                        button(text="📝 查看推文", callback_data="tt:postsmenu"),
+                        button(text="🖼 推文配图", callback_data="tt:imageposts:0"),
+                    ],
+                    [button(text="🕘 发布历史", callback_data="tt:persona_history")],
+                    back,
+                ]),
+            )
+        if module == "publish":
+            return (
+                "发布\n请选择要执行的功能，随后按步骤完成。",
+                types.InlineKeyboardMarkup(inline_keyboard=[
+                    [button(text="🚀 发布推文", callback_data="tt:publish_one")],
                     back,
                 ]),
             )
@@ -2029,7 +2017,7 @@ class NativeTweetBotController:
         rows.extend(nav)
         if source == "posts":
             rows.append([types.InlineKeyboardButton(text="➕ 手工新建草稿", callback_data="tt:draft_new")])
-        module = "create" if intent == "image" else ("publish" if intro and source == "posts" and "发布" in intro else "content")
+        module = "publish" if intro and source == "posts" and "发布" in intro else "generate"
         rows.append(self._persona_module_back_row(types, int(query.message.chat.id), persona_id, module))
         list_text = (
             f"{'收藏' if source == 'favorites' else '草稿'}（{len(posts)}，第 {page + 1}/{total_pages} 页）"
@@ -2247,7 +2235,7 @@ class NativeTweetBotController:
                 types.InlineKeyboardButton(text="🚀 直接生成", callback_data=callback_token(chat_id, "personaimmediate", {"persona_id": persona_id})),
                 types.InlineKeyboardButton(text="⬆️ 上传自定义图", callback_data=callback_token(chat_id, "pimgupload", {"persona_id": persona_id})),
             ],
-            self._persona_module_back_row(types, chat_id, persona_id, "create"),
+            self._persona_module_back_row(types, chat_id, persona_id, "generate"),
         ])
         selected_labels: list[str] = []
         for field in PERSONA_IMAGE_OPTION_DEFINITIONS:
@@ -3840,7 +3828,7 @@ class NativeTweetBotController:
                 rows = [[
                     types.InlineKeyboardButton(text="📝 查看草稿", callback_data="tt:drafts:0"),
                     types.InlineKeyboardButton(text="⭐ 查看收藏", callback_data="tt:favorites:0"),
-                ], self._persona_module_back_row(types, chat_id, state["selected_persona_id"], "content")]
+                ], self._persona_module_back_row(types, chat_id, state["selected_persona_id"], "generate")]
                 await query.message.edit_text(
                     "推文内容\n请选择查看草稿、收藏，或手工新建一篇草稿。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -4021,7 +4009,7 @@ class NativeTweetBotController:
                     types.InlineKeyboardButton(text="🔥 热点创作", callback_data="tt:hot"),
                 ], [
                     types.InlineKeyboardButton(text="📝 手工新建草稿", callback_data="tt:draft_new"),
-                ], self._persona_module_back_row(types, chat_id, state["selected_persona_id"], "create")]
+                ], self._persona_module_back_row(types, chat_id, state["selected_persona_id"], "generate")]
                 await query.message.edit_text(
                     "新建推文 · 第 1 步\n请选择 AI 生成、热点创作或手工输入。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),

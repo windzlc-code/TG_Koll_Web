@@ -660,24 +660,25 @@ class TelegramTweetAdminTests(unittest.TestCase):
             if getattr(button, "callback_data", None)
         }
         self.assertEqual(callbacks, {
-            "tt:pmod:create", "tt:pmod:content", "tt:pmod:publish", "tt:pmod:settings", "tt:personas:0",
+            "tt:pmod:settings", "tt:pmod:generate", "tt:pmod:publish", "tt:personas:0",
         })
         self.assertNotIn("tt:postsmenu", callbacks)
         self.assertNotIn("tt:createmenu", callbacks)
-        asyncio.run(controller.handle_callback(_Query("tt:pmod:create", message), _Types))
-        create_module_callbacks = {
+        asyncio.run(controller.handle_callback(_Query("tt:pmod:generate", message), _Types))
+        generate_module_callbacks = {
             button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertIn("tt:createmenu", create_module_callbacks)
-        self.assertIn("tt:imageposts:0", create_module_callbacks)
-        self.assertIn("tt:personaimage", create_module_callbacks)
+        self.assertIn("tt:createmenu", generate_module_callbacks)
+        self.assertIn("tt:postsmenu", generate_module_callbacks)
+        self.assertIn("tt:imageposts:0", generate_module_callbacks)
+        self.assertIn("tt:persona_history", generate_module_callbacks)
         asyncio.run(controller.handle_callback(_Query("tt:createmenu", message), _Types))
         create_callbacks = {
             button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
             if getattr(button, "callback_data", None) and not button.callback_data.startswith("tt:p:")
         }
-        self.assertEqual(create_callbacks, {"tt:generate", "tt:hot", "tt:draft_new", "tt:pmod:create"})
+        self.assertEqual(create_callbacks, {"tt:generate", "tt:hot", "tt:draft_new", "tt:pmod:generate"})
 
     def test_persona_publish_history_is_scoped_to_selected_persona(self):
         def dispatch(_user_id, action, _payload):
