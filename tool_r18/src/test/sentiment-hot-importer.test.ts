@@ -174,10 +174,10 @@ describe("sentiment hot importer", () => {
   });
 
   it("refreshes an expired markdown media URL from the same asset in raw HTML", () => {
-    const freshUrl = "https://scontent.example/path/photo.jpg?fresh=1";
+    const freshUrl = "https://scontent.example/path/photo.jpg?fresh=1&size=large";
     const staleUrl = "https://scontent.example/path/photo.jpg?stale=1";
     const media = parseThreadsDetailMediaMarkdown(
-      "<script>" + freshUrl + "</script>![photo](" + staleUrl + ")",
+      "<script>" + freshUrl.replace("&", "&amp;") + "</script>![photo](" + staleUrl + ")",
     );
 
     expect(media).toHaveLength(1);

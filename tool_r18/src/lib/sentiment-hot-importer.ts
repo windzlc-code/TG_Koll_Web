@@ -10385,6 +10385,13 @@ function isSameMediaAsset(left: string, right: string): boolean {
   return Boolean(leftId && rightId && leftId === rightId);
 }
 
+function normalizeThreadsMediaUrl(value: unknown): string {
+  return cleanText(value)
+    .replace(/&amp;/gi, "&")
+    .replace(/&#(?:x26|38);/gi, "&")
+    .replace(/\\u0026/gi, "&");
+}
+
 function extractThreadsMediaFromMarkdown(text: string, limit = 12): SentimentHotMedia[] {
   const source = String(text || "");
   const media: SentimentHotMedia[] = [];
@@ -10394,7 +10401,7 @@ function extractThreadsMediaFromMarkdown(text: string, limit = 12): SentimentHot
     if (media.length > 0 && /Log in to see more replies|see more replies|more replies|回覆|回复|評論|评论/i.test(between)) break;
     lastIndex = (imageMatch.index || 0) + imageMatch[0].length;
     const alt = imageMatch[1] || "";
-    const url = imageMatch[2];
+    const url = normalizeThreadsMediaUrl(imageMatch[2]);
     if (media.length > 0 && /profile picture/i.test(alt)) break;
     if (isNonPostThreadsMediaUrl(url)) continue;
     const existingIndex = media.findIndex((item) => isSameMediaAsset(item.url, url));
@@ -10423,7 +10430,7 @@ function extractThreadsMediaFromMarkdown(text: string, limit = 12): SentimentHot
 function extractThreadsRawMediaCandidates(text: string, limit = 12): SentimentHotMedia[] {
   const media: SentimentHotMedia[] = [];
   for (const raw of String(text || "").matchAll(/https?:\/\/(?:scontent[^\s)"'<]+|cdninstagram\.com[^\s)"'<]+)/gi)) {
-    const url = cleanText(raw[0]).replace(/[),.;]+$/, "");
+    const url = normalizeThreadsMediaUrl(raw[0]).replace(/[),.;]+$/, "");
     if (!url || isNonPostThreadsMediaUrl(url)) continue;
     const existingIndex = media.findIndex((item) => isSameMediaAsset(item.url, url));
     if (existingIndex >= 0) {
