@@ -186,7 +186,7 @@ describe("persona hot workflow remote worker snapshots", () => {
       recordShown: false,
     });
 
-    expect(result.candidates[0].media).toEqual([]);
+    expect(result.candidates).toHaveLength(0);
   });
 
   it("forwards the requested platform so the collector does not search both networks", async () => {

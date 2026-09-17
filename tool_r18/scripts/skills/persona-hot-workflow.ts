@@ -283,15 +283,19 @@ export async function fetchHotCandidates(input: FetchHotCandidatesInput) {
 
 async function attachHotCandidatePreviewMedia(candidates: SentimentHotCandidate[]): Promise<SentimentHotCandidate[]> {
   const rows = Array.isArray(candidates) ? candidates : [];
-  await Promise.all(rows.map(async (candidate) => {
+  const hydrated = await Promise.all(rows.map(async (candidate) => {
     const media = Array.isArray(candidate.media) ? candidate.media : [];
-    if (!media.length) return;
+    if (!media.length) return candidate;
     // A video without a poster is still a valid hotspot asset. Download it so
     // the console can render a verified local video instead of a missing card.
     const downloaded = await downloadCandidateMedia(candidate, Number.POSITIVE_INFINITY, 4, { skipVideos: false }).catch(() => []);
-    candidate.media = filterHotCandidatePreviewMedia(downloaded);
+    const previewMedia = filterHotCandidatePreviewMedia(downloaded);
+    // Do not return a candidate that declared media but still has an
+    // unverifiable item. Text-only candidates remain eligible as usual.
+    if (previewMedia.length !== media.length) return null;
+    return { ...candidate, media: previewMedia };
   }));
-  return rows;
+  return hydrated.filter((candidate): candidate is SentimentHotCandidate => Boolean(candidate));
 }
 
 /** Only return media that the worker has verified in its shared mount. A
@@ -305,7 +309,7 @@ function filterHotCandidatePreviewMedia(items: SentimentHotMedia[]): SentimentHo
 }
 
 async function attachExistingHotCandidateMedia(candidates: SentimentHotCandidate[]): Promise<SentimentHotCandidate[]> {
-  return Promise.all((Array.isArray(candidates) ? candidates : []).map(async (candidate) => {
+  const hydrated = await Promise.all((Array.isArray(candidates) ? candidates : []).map(async (candidate) => {
     // Cache reads must remain immediate: existingOnly reuses a verified file
     // from the shared mount and never waits on an expired remote URL.
     const media = await downloadCandidateMedia(
@@ -314,8 +318,12 @@ async function attachExistingHotCandidateMedia(candidates: SentimentHotCandidate
       4,
       { skipVideos: true, existingOnly: true },
     ).catch(() => []);
-    return { ...candidate, media: filterHotCandidatePreviewMedia(media) };
+    const previewMedia = filterHotCandidatePreviewMedia(media);
+    const sourceMedia = Array.isArray(candidate.media) ? candidate.media : [];
+    if (sourceMedia.length > 0 && previewMedia.length !== sourceMedia.length) return null;
+    return { ...candidate, media: previewMedia };
   }));
+  return hydrated.filter((candidate): candidate is SentimentHotCandidate => Boolean(candidate));
 }
 
 export async function readHotCandidatesCache(input: ReadHotCandidatesCacheInput) {
