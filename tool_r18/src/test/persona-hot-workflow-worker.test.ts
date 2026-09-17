@@ -153,7 +153,7 @@ describe("persona hot workflow remote worker snapshots", () => {
       recordShown: false,
     });
 
-    expect(mocks.downloadCandidateMedia).toHaveBeenCalledWith(candidate, Number.POSITIVE_INFINITY, 4, { skipVideos: true });
+    expect(mocks.downloadCandidateMedia).toHaveBeenCalledWith(candidate, Number.POSITIVE_INFINITY, 4, { skipVideos: false });
     expect(result.candidates[0].media).toEqual(downloaded);
   });
 

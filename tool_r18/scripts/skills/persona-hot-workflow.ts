@@ -286,7 +286,9 @@ async function attachHotCandidatePreviewMedia(candidates: SentimentHotCandidate[
   await Promise.all(rows.map(async (candidate) => {
     const media = Array.isArray(candidate.media) ? candidate.media : [];
     if (!media.length) return;
-    const downloaded = await downloadCandidateMedia(candidate, Number.POSITIVE_INFINITY, 4, { skipVideos: true }).catch(() => []);
+    // A video without a poster is still a valid hotspot asset. Download it so
+    // the console can render a verified local video instead of a missing card.
+    const downloaded = await downloadCandidateMedia(candidate, Number.POSITIVE_INFINITY, 4, { skipVideos: false }).catch(() => []);
     candidate.media = filterHotCandidatePreviewMedia(downloaded);
   }));
   return rows;
