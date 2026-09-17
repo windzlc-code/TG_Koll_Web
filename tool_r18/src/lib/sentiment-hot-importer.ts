@@ -4753,10 +4753,19 @@ async function fetchThreadsSearchPageCandidates(args: {
       if (!candidateMatchesOperationalFreshness(candidate, freshnessDays)) continue;
       const key = sentimentCandidateDedupeKey(candidate);
       if (getSentimentHotCandidateHistoryKeys(candidate).some((historyKey) => excludedHistoryKeys.has(historyKey))) continue;
-      if (byId.has(candidate.id) || dedupeKeys.has(key)) continue;
+      const existing = byId.get(candidate.id);
+      if (existing) {
+        byId.set(candidate.id, mergeSentimentHotCandidateRecords(existing, candidate));
+        continue;
+      }
+      if (dedupeKeys.has(key)) {
+        const duplicate = [...byId.entries()].find(([, item]) => sentimentCandidateDedupeKey(item) === key);
+        if (duplicate) byId.set(duplicate[0], mergeSentimentHotCandidateRecords(duplicate[1], candidate));
+        continue;
+      }
+      if (byId.size >= args.limit) break;
       byId.set(candidate.id, candidate);
       dedupeKeys.add(key);
-      if (byId.size >= args.limit) break;
     }
   };
 
@@ -5280,7 +5289,12 @@ async function fetchThreadsBrowserSearchCandidates(args: {
   const globalPoolCandidates = new Map<string, SentimentHotCandidate>();
   const collectGlobalPoolCandidates = (items: SentimentHotCandidate[]) => {
     for (const item of items) {
-      if (item?.id) globalPoolCandidates.set(item.id, item);
+      if (!item?.id) continue;
+      const existing = globalPoolCandidates.get(item.id);
+      globalPoolCandidates.set(
+        item.id,
+        existing ? mergeSentimentHotCandidateRecords(existing, item) : item,
+      );
     }
   };
   const detailRescueCandidates = new Map<string, SentimentHotCandidate>();
@@ -6665,27 +6679,18 @@ async function fetchThreadsReaderSearchCandidates(args: {
           parsedById.set(candidate.id, candidate);
           continue;
         }
-        parsedById.set(candidate.id, {
-          ...existing,
-          ...candidate,
-          content: cleanSentimentCandidateContent(existing.content || candidate.content),
-          media: mergeCandidateMedia(existing.media || [], candidate.media || []),
-          engagement: {
-            ...(existing.engagement || {}),
-            ...(candidate.engagement || {}),
-          },
-          metrics: {
-            ...(existing.metrics || {}),
-            ...(candidate.metrics || {}),
-            mediaCount: mergeCandidateMedia(existing.media || [], candidate.media || []).length,
-          },
-        });
+        parsedById.set(candidate.id, mergeSentimentHotCandidateRecords(existing, candidate));
       }
       const parsed = [...parsedById.values()];
-      for (const candidate of parsed) globalPoolCandidates.set(candidate.id, candidate);
+      for (const candidate of parsed) {
+        const existing = globalPoolCandidates.get(candidate.id);
+        globalPoolCandidates.set(
+          candidate.id,
+          existing ? mergeSentimentHotCandidateRecords(existing, candidate) : candidate,
+        );
+      }
       const collectCap = Math.max(args.limit * 3, 30);
       for (const candidate of parsed) {
-        if (all.length >= collectCap) continue;
         if (excluded.has(candidate.id)) continue;
         const normalized = candidateMeetsDisplayQuality(
           candidate,
@@ -6697,7 +6702,19 @@ async function fetchThreadsReaderSearchCandidates(args: {
         );
         if (!normalized) continue;
         const dedupeKey = sentimentCandidateDedupeKey(normalized);
-        if (all.some((item) => item.id === normalized.id) || allKeys.has(dedupeKey)) continue;
+        const existingIndex = all.findIndex((item) => item.id === normalized.id);
+        if (existingIndex >= 0) {
+          all[existingIndex] = mergeSentimentHotCandidateRecords(all[existingIndex], normalized);
+          continue;
+        }
+        if (allKeys.has(dedupeKey)) {
+          const duplicateIndex = all.findIndex((item) => sentimentCandidateDedupeKey(item) === dedupeKey);
+          if (duplicateIndex >= 0) {
+            all[duplicateIndex] = mergeSentimentHotCandidateRecords(all[duplicateIndex], normalized);
+          }
+          continue;
+        }
+        if (all.length >= collectCap) continue;
         allKeys.add(dedupeKey);
         all.push(stampHotCandidateOrigin(normalized, "live_spider"));
       }
@@ -7037,7 +7054,13 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
               query: tag,
               keywords: args.keywords,
             });
-            for (const candidate of parsed) globalPoolCandidates.set(candidate.id, candidate);
+            for (const candidate of parsed) {
+              const existing = globalPoolCandidates.get(candidate.id);
+              globalPoolCandidates.set(
+                candidate.id,
+                existing ? mergeSentimentHotCandidateRecords(existing, candidate) : candidate,
+              );
+            }
             stats.graphql += parsed.length;
             stats.parsed += parsed.length;
             parsed.forEach(considerCandidate);
@@ -7137,7 +7160,13 @@ async function fetchInstagramAuthenticatedSearchCandidates(args: {
           query: response.tag,
           keywords: args.keywords,
         });
-        for (const candidate of parsed) globalPoolCandidates.set(candidate.id, candidate);
+        for (const candidate of parsed) {
+          const existing = globalPoolCandidates.get(candidate.id);
+          globalPoolCandidates.set(
+            candidate.id,
+            existing ? mergeSentimentHotCandidateRecords(existing, candidate) : candidate,
+          );
+        }
         stats.parsed += parsed.length;
         parsed.forEach(considerCandidate);
       }
@@ -10425,6 +10454,63 @@ export function mergeCandidateMedia(base: SentimentHotMedia[], extra: SentimentH
   return out;
 }
 
+/**
+ * Merge repeated observations of one post without allowing a later sparse
+ * observation to erase media, metrics, or a verified local file from an
+ * earlier observation. The incoming observation is first for media so a
+ * newly-issued signed URL wins when it represents the same asset.
+ */
+function mergeSentimentHotCandidateRecords(
+  current: SentimentHotCandidate,
+  incoming: SentimentHotCandidate,
+): SentimentHotCandidate {
+  const currentMedia = Array.isArray(current.media) ? current.media : [];
+  const incomingMedia = Array.isArray(incoming.media) ? incoming.media : [];
+  const mergedMedia = mergeCandidateMedia(incomingMedia, currentMedia).map((item) => {
+    const local = [...incomingMedia, ...currentMedia].find((candidateMedia) => (
+      candidateMedia?.localPath
+      && (
+        isSameMediaAsset(candidateMedia.url, item.url)
+        || Boolean(item.localPath && candidateMedia.localPath === item.localPath)
+      )
+    ));
+    return local?.localPath
+      ? { ...item, localPath: local.localPath, warning: local.warning }
+      : item;
+  });
+  const engagement = mergeEngagementMetrics(current.engagement || {}, incoming.engagement || {});
+  const metrics = {
+    ...(current.metrics || {}),
+    ...(incoming.metrics || {}),
+    mediaCount: mergedMedia.length,
+    ...compactEngagementMetrics(engagement),
+  };
+  const merged: SentimentHotCandidate = {
+    ...current,
+    ...incoming,
+    sourceUrl: cleanText(incoming.sourceUrl) || cleanText(current.sourceUrl),
+    author: cleanText(incoming.author) || cleanText(current.author),
+    content: cleanSentimentCandidateContent(incoming.content) || cleanSentimentCandidateContent(current.content),
+    hotScore: Math.max(Number(current.hotScore || 0), Number(incoming.hotScore || 0)),
+    media: mergedMedia,
+    engagement,
+    metrics,
+    warnings: uniqueSentimentWarnings([...(current.warnings || []), ...(incoming.warnings || [])]),
+    qaPassed: current.qaPassed === true || incoming.qaPassed === true,
+  };
+  const viewCount = viewCountOfCandidate(merged);
+  if (viewCount > 0) {
+    merged.view_count = viewCount;
+    merged.viewCount = viewCount;
+    merged.views = viewCount;
+  } else {
+    delete merged.view_count;
+    delete merged.viewCount;
+    delete merged.views;
+  }
+  return merged;
+}
+
 export function parseThreadsDetailMediaMarkdown(text: string): SentimentHotMedia[] {
   return extractThreadsMediaFromMarkdown(text, 12);
 }
@@ -11279,9 +11365,18 @@ function migrateLegacyThreadsSearchCache(): void {
             const byId = new Map<string, SentimentHotCandidate>();
             const byDedupeKey = new Set<string>();
             for (const candidate of [...(currentRow.candidates || []), ...(legacyRow.candidates || [])]) {
-              if (!candidate?.id || byId.has(candidate.id)) continue;
+              if (!candidate?.id) continue;
+              const existing = byId.get(candidate.id);
+              if (existing) {
+                byId.set(candidate.id, mergeSentimentHotCandidateRecords(existing, candidate));
+                continue;
+              }
               const dedupeKey = sentimentCandidateDedupeKey(candidate);
-              if (byDedupeKey.has(dedupeKey)) continue;
+              if (byDedupeKey.has(dedupeKey)) {
+                const duplicate = [...byId.entries()].find(([, item]) => sentimentCandidateDedupeKey(item) === dedupeKey);
+                if (duplicate) byId.set(duplicate[0], mergeSentimentHotCandidateRecords(duplicate[1], candidate));
+                continue;
+              }
               byId.set(candidate.id, candidate);
               byDedupeKey.add(dedupeKey);
             }
@@ -11365,9 +11460,18 @@ function writeThreadsSearchCandidateCache(archiveId: string, keywords: string[],
       const byId = new Map<string, SentimentHotCandidate>();
       const byDedupeKey = new Set<string>();
       const add = (candidate: SentimentHotCandidate) => {
-        if (!candidate?.id || byId.has(candidate.id)) return;
+        if (!candidate?.id) return;
+        const existing = byId.get(candidate.id);
+        if (existing) {
+          byId.set(candidate.id, mergeSentimentHotCandidateRecords(existing, candidate));
+          return;
+        }
         const dedupeKey = sentimentCandidateDedupeKey(candidate);
-        if (byDedupeKey.has(dedupeKey)) return;
+        if (byDedupeKey.has(dedupeKey)) {
+          const duplicate = [...byId.entries()].find(([, item]) => sentimentCandidateDedupeKey(item) === dedupeKey);
+          if (duplicate) byId.set(duplicate[0], mergeSentimentHotCandidateRecords(duplicate[1], candidate));
+          return;
+        }
         byId.set(candidate.id, candidate);
         byDedupeKey.add(dedupeKey);
       };
@@ -11421,7 +11525,9 @@ function readThreadsSearchCandidateCache(
         warnings: uniqueSentimentWarnings([...(candidate.warnings || []), THREADS_SEARCH_CACHE_WARNING]),
       }, keywords, searchMode, DEFAULT_REFRESH_FRESHNESS_DAYS);
       if (!normalized) continue;
-      byId.set(normalized.id, stampHotCandidateOrigin(normalized, "search_cache"));
+      const stamped = stampHotCandidateOrigin(normalized, "search_cache");
+      const existing = byId.get(stamped.id);
+      byId.set(stamped.id, existing ? mergeSentimentHotCandidateRecords(existing, stamped) : stamped);
     }
   }
   return sortSentimentHotCandidatePool([...byId.values()], keywords, limit, searchMode);
@@ -11449,7 +11555,7 @@ function readArchiveScopedThreadsCandidateBackfill(archiveId: string, keywords: 
     const storedKeyword = threadsSearchStoredKeyword(key, archiveId);
     if (!storedKeyword) continue;
     for (const candidate of row.candidates || []) {
-      if (!candidate?.id || excluded.has(candidate.id) || byId.has(candidate.id) || (candidate.metrics as any)?.globalPersonaBackfill) continue;
+      if (!candidate?.id || excluded.has(candidate.id) || (candidate.metrics as any)?.globalPersonaBackfill) continue;
       const content = cleanThreadsReaderContent(candidate.content || "");
       const normalized = candidateMeetsDisplayQuality({
         ...candidate,
@@ -11463,13 +11569,15 @@ function readArchiveScopedThreadsCandidateBackfill(archiveId: string, keywords: 
         },
       }, keywords, searchMode, DEFAULT_REFRESH_FRESHNESS_DAYS);
       if (!normalized) continue;
-      byId.set(normalized.id, {
+      const stamped = {
         ...normalized,
         warnings: uniqueSentimentWarnings([
           ...(candidate.warnings || []),
           "即時新候選不足，已使用同一人設歷史關鍵詞候選回補。",
         ]),
-      });
+      };
+      const existing = byId.get(stamped.id);
+      byId.set(stamped.id, existing ? mergeSentimentHotCandidateRecords(existing, stamped) : stamped);
       if (byId.size >= limit) break;
     }
     if (byId.size >= limit) break;
@@ -11712,9 +11820,39 @@ function upsertSentimentHotGlobalPoolRows(db: any, candidates: SentimentHotCandi
   const acceptedById = new Map<string, SentimentHotCandidate>();
   for (const candidate of candidates) {
     const normalized = normalizeSentimentHotGlobalPoolCandidate(candidate);
-    if (normalized) acceptedById.set(normalized.id, normalized);
+    if (!normalized) continue;
+    const existing = acceptedById.get(normalized.id);
+    acceptedById.set(
+      normalized.id,
+      existing ? mergeSentimentHotCandidateRecords(existing, normalized) : normalized,
+    );
   }
   if (acceptedById.size === 0) return 0;
+  const ids = [...acceptedById.keys()];
+  const existingRows: Array<{ id?: string; candidate_json?: string }> = [];
+  // Keep the lookup below well under SQLite's variable limit during legacy
+  // pool migration as well as normal small writes.
+  for (let offset = 0; offset < ids.length; offset += 400) {
+    const batch = ids.slice(offset, offset + 400);
+    const placeholders = batch.map(() => "?").join(",");
+    existingRows.push(...db.prepare(`
+      SELECT id, candidate_json
+      FROM sentiment_hot_global_candidates
+      WHERE id IN (${placeholders})
+    `).all(...batch) as Array<{ id?: string; candidate_json?: string }>);
+  }
+  for (const row of existingRows) {
+    const id = cleanText(row?.id);
+    if (!id || !row?.candidate_json) continue;
+    const current = acceptedById.get(id);
+    if (!current) continue;
+    try {
+      const previous = JSON.parse(row.candidate_json) as SentimentHotCandidate;
+      acceptedById.set(id, mergeSentimentHotCandidateRecords(previous, current));
+    } catch {
+      // Keep the normalized incoming row when a legacy JSON row is malformed.
+    }
+  }
   const statement = db.prepare(`
     INSERT INTO sentiment_hot_global_candidates
       (id, candidate_json, search_text, hot_score, content_at_ms, captured_at_ms, updated_at_ms, platform)

@@ -157,6 +157,38 @@ describe("persona hot workflow remote worker snapshots", () => {
     expect(result.candidates[0].media).toEqual(downloaded);
   });
 
+  it("does not return a failed remote media URL as a clickable preview", async () => {
+    const snapshot = archiveSnapshot();
+    const candidate = {
+      id: "hot-media-failed-1",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@tester/post/media-failed-1",
+      author: "tester",
+      content: "candidate with expired media",
+      media: [{ type: "image", url: "https://cdn.example/expired.png" }],
+    } as any;
+    mocks.fetchSentimentHotCandidates.mockResolvedValueOnce({
+      keywords: ["current"],
+      searchMode: "strict",
+      freshnessDays: 7,
+      freshnessPolicy: "legacy",
+      cookieStatuses: [],
+      warnings: [],
+      candidates: [candidate],
+    });
+    mocks.downloadCandidateMedia.mockResolvedValueOnce(candidate.media);
+
+    const result = await fetchHotCandidates({
+      action: "fetch-hot-candidates",
+      archiveId: "persona-1",
+      archiveSnapshot: snapshot,
+      liveOnly: true,
+      recordShown: false,
+    });
+
+    expect(result.candidates[0].media).toEqual([]);
+  });
+
   it("forwards the requested platform so the collector does not search both networks", async () => {
     const snapshot = archiveSnapshot();
     await fetchHotCandidates({

@@ -286,10 +286,20 @@ async function attachHotCandidatePreviewMedia(candidates: SentimentHotCandidate[
   await Promise.all(rows.map(async (candidate) => {
     const media = Array.isArray(candidate.media) ? candidate.media : [];
     if (!media.length) return;
-    const downloaded = await downloadCandidateMedia(candidate, Number.POSITIVE_INFINITY, 4, { skipVideos: true }).catch(() => media);
-    if (Array.isArray(downloaded) && downloaded.length) candidate.media = downloaded;
+    const downloaded = await downloadCandidateMedia(candidate, Number.POSITIVE_INFINITY, 4, { skipVideos: true }).catch(() => []);
+    candidate.media = filterHotCandidatePreviewMedia(downloaded);
   }));
   return rows;
+}
+
+/** Only return media that the worker has verified in its shared mount. A
+ * failed signed CDN URL must never reach the console as a clickable preview. */
+function filterHotCandidatePreviewMedia(items: SentimentHotMedia[]): SentimentHotMedia[] {
+  return (Array.isArray(items) ? items : []).filter((item) => {
+    const localPath = String(item?.localPath || "").trim();
+    const thumbnailPath = String(item?.thumbnailUrl || "").trim();
+    return Boolean(localPath || (thumbnailPath && !/^https?:\/\//i.test(thumbnailPath)));
+  });
 }
 
 export async function readHotCandidatesCache(input: ReadHotCandidatesCacheInput) {
@@ -318,7 +328,10 @@ export async function readHotCandidatesCache(input: ReadHotCandidatesCacheInput)
     cacheSource: result.cacheSource,
     personaCacheCount: result.personaCacheCount,
     globalPoolCount: result.globalPoolCount,
-    candidates: result.candidates,
+    candidates: result.candidates.map((candidate) => ({
+      ...candidate,
+      media: filterHotCandidatePreviewMedia(candidate.media),
+    })),
   };
 }
 
