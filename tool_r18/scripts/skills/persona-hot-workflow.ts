@@ -1,4 +1,5 @@
 import "@/runtime/node/browser-shim";
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { installNodePersonaArchiveBridge } from "@/runtime/node/persona-archive-store";
@@ -13,6 +14,7 @@ import {
   getSentimentHotGlobalPoolStat,
   listSentimentHotCandidatePoolStats,
   sentimentHotCandidatePoolLimits,
+  recoverSentimentHotMedia,
   prepareSentimentHotKeywords,
   readSentimentHotCandidateCache,
   recycleUnusedSentimentHotCandidates,
@@ -133,7 +135,12 @@ type PoolStatsInput = {
   archiveIds?: string[];
 };
 
-type PersonaHotWorkflowInput = FetchHotCandidatesInput | ReadHotCandidatesCacheInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RecycleHotCandidatesInput | FinalizeHotImportInput | RefreshHotPostInput | RefreshProfileMetricsInput | WarmHotStrategyInput | PoolStatsInput;
+type RecoverHotMediaInput = {
+  action: "recover-hot-media";
+  batchSize?: number;
+};
+
+type PersonaHotWorkflowInput = FetchHotCandidatesInput | ReadHotCandidatesCacheInput | PrepareHotKeywordsInput | ImportHotCandidatesInput | RecycleHotCandidatesInput | FinalizeHotImportInput | RefreshHotPostInput | RefreshProfileMetricsInput | WarmHotStrategyInput | PoolStatsInput | RecoverHotMediaInput;
 
 function printJson(value: unknown) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
@@ -304,7 +311,19 @@ function filterHotCandidatePreviewMedia(items: SentimentHotMedia[]): SentimentHo
   return (Array.isArray(items) ? items : []).filter((item) => {
     const localPath = String(item?.localPath || "").trim();
     const thumbnailPath = String(item?.thumbnailUrl || "").trim();
-    return Boolean(localPath || (thumbnailPath && !/^https?:\/\//i.test(thumbnailPath)));
+    const usableLocalPath = (value: string) => {
+      if (!value || /^https?:\/\//i.test(value)) return false;
+      try {
+        const stat = fs.statSync(path.resolve(value));
+        return stat.isFile() && stat.size > 0;
+      } catch {
+        return false;
+      }
+    };
+    const isVideo = item?.type === "video" || /\.(?:mp4|mov|m4v|webm)(?:$|[?#])/i.test(String(item?.url || ""));
+    return isVideo
+      ? usableLocalPath(localPath)
+      : usableLocalPath(localPath) || usableLocalPath(thumbnailPath);
   });
 }
 
@@ -316,7 +335,7 @@ async function attachExistingHotCandidateMedia(candidates: SentimentHotCandidate
       candidate,
       Number.POSITIVE_INFINITY,
       4,
-      { skipVideos: true, existingOnly: true },
+      { skipVideos: false, existingOnly: true },
     ).catch(() => []);
     const previewMedia = filterHotCandidatePreviewMedia(media);
     const sourceMedia = Array.isArray(candidate.media) ? candidate.media : [];
@@ -446,6 +465,12 @@ async function recycleHotCandidates(input: RecycleHotCandidatesInput) {
       searchMode: input.searchMode,
     }),
   };
+}
+
+async function recoverHotMedia(input: RecoverHotMediaInput) {
+  return recoverSentimentHotMedia({
+    batchSize: input.batchSize,
+  });
 }
 
 async function importHotCandidates(input: ImportHotCandidatesInput) {
@@ -680,6 +705,10 @@ async function main() {
     const archives = (await listPersonaArchives()).filter((archive) => requestedIds.size === 0 || requestedIds.has(archive.id));
     const pools = requestedIds.size > 0 && archives.length === 0 ? [] : listSentimentHotCandidatePoolStats(archives);
     await printJsonAndExit({ ok: true, limits: sentimentHotCandidatePoolLimits(), pools, globalPool: getSentimentHotGlobalPoolStat() });
+  }
+  if (input.action === "recover-hot-media") {
+    const result = await recoverHotMedia(input);
+    await printJsonAndExit(result, result.ok ? 0 : 1);
   }
   if (input.action === "import-hot-candidates") {
     await printJsonAndExit(await importHotCandidates(input));

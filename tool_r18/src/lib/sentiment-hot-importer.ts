@@ -146,6 +146,11 @@ const SENTIMENT_HOT_GLOBAL_POOL_FILE = resolveRuntimeFile("sentiment_hot_global_
 const SENTIMENT_HOT_GLOBAL_POOL_DB_FILE = resolveRuntimeFile("sentiment_hot_global_pool.sqlite3");
 const SENTIMENT_HOT_GLOBAL_POOL_LIMIT = 100_000;
 const SENTIMENT_HOT_GLOBAL_POOL_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const SENTIMENT_HOT_MEDIA_RECOVERY_DEFAULT_BATCH_SIZE = 1;
+const SENTIMENT_HOT_MEDIA_RECOVERY_MAX_BATCH_SIZE = 3;
+const SENTIMENT_HOT_MEDIA_RECOVERY_MAX_SCAN_SIZE = 2_000;
+const SENTIMENT_HOT_MEDIA_RECOVERY_BASE_BACKOFF_MS = 30 * 60 * 1000;
+const SENTIMENT_HOT_MEDIA_RECOVERY_MAX_BACKOFF_MS = 7 * 24 * 60 * 60 * 1000;
 const THREADS_SEARCH_GRAPHQL_TEMPLATE_CACHE_FILE = resolveRuntimeFile("threads_search_graphql_template_cache.json");
 const SENTIMENT_HOT_SEARCH_STRATEGY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const SENTIMENT_HOT_SEMANTIC_RELEVANCE_VERSION = 4;
@@ -10515,6 +10520,21 @@ export function parseThreadsDetailMediaMarkdown(text: string): SentimentHotMedia
   return extractThreadsMediaFromMarkdown(text, 12);
 }
 
+function extractThreadsDetailMediaFromRawHtml(html: string, sourceUrl: string): SentimentHotMedia[] {
+  const raw = String(html || "");
+  if (!raw) return [];
+  const normalizedSourceUrl = normalizeThreadsPostUrl(sourceUrl);
+  const hydrated = extractThreadsHydrationCandidatesFromHtml({
+    html: raw,
+    query: "",
+    keywords: [],
+  }).find((candidate) => normalizeThreadsPostUrl(candidate.sourceUrl) === normalizedSourceUrl);
+  return mergeCandidateMedia(
+    parseThreadsDetailMediaMarkdown(raw),
+    hydrated?.media || [],
+  );
+}
+
 async function fetchThreadsDetailData(sourceUrl: string): Promise<{
   engagement: NonNullable<SentimentHotCandidate["engagement"]>;
   media: SentimentHotMedia[];
@@ -10563,7 +10583,10 @@ async function fetchThreadsDetailData(sourceUrl: string): Promise<{
       || "";
     return {
       engagement: applyPublicViewCount(parseThreadsDetailEngagementMarkdown(text), text, rawHtml),
-      media: parseThreadsDetailMediaMarkdown(text),
+      media: mergeCandidateMedia(
+        parseThreadsDetailMediaMarkdown(text),
+        extractThreadsDetailMediaFromRawHtml(rawHtml, normalizedSourceUrl),
+      ),
     };
   } catch {
     return { engagement: {}, media: [] };
@@ -10611,10 +10634,46 @@ async function fetchInstagramDetailData(sourceUrl: string): Promise<{
     );
     return {
       engagement,
-      media: parseThreadsDetailMediaMarkdown(text),
+      media: mergeCandidateMedia(
+        parseThreadsDetailMediaMarkdown(text),
+        parseThreadsDetailMediaMarkdown(rawHtml),
+      ),
     };
   } catch {
     return { engagement: {}, media: [] };
+  }
+}
+
+/**
+ * Recovery-only direct source fallback. The public Spider path may fail on an
+ * anonymous proxy even while the source page itself is reachable from the
+ * worker. Read the current page once to obtain newly signed media URLs; the
+ * caller still downloads those URLs into the shared local media mount before
+ * exposing them to the console.
+ */
+async function fetchDirectHotSourceMedia(sourceUrl: string, platform: string): Promise<SentimentHotMedia[]> {
+  const normalized = platform === "instagram"
+    ? normalizeInstagramPostUrl(sourceUrl)
+    : normalizeThreadsPostUrl(sourceUrl);
+  if (!normalized) return [];
+  try {
+    const response = await fetch(normalized, {
+      signal: buildAbortSignalTimeout(12_000),
+      headers: {
+        "user-agent": "Mozilla/5.0",
+        accept: "text/html,application/xhtml+xml,text/plain,*/*",
+        "cache-control": "no-cache",
+        pragma: "no-cache",
+      },
+    });
+    if (!response.ok) return [];
+    const rawHtml = await response.text();
+    const parsed = parseThreadsDetailMediaMarkdown(rawHtml);
+    return platform === "threads"
+      ? mergeCandidateMedia(parsed, extractThreadsDetailMediaFromRawHtml(rawHtml, normalized))
+      : parsed;
+  } catch {
+    return [];
   }
 }
 
@@ -12022,6 +12081,373 @@ export function writeGlobalSentimentHotCandidatePool(candidates: SentimentHotCan
   }
 }
 
+export type SentimentHotMediaRecoveryResult = {
+  ok: boolean;
+  scanned: number;
+  attempted: number;
+  recoveredCandidates: number;
+  recoveredMedia: number;
+  pending: number;
+  skipped: number;
+  errors: string[];
+};
+
+type SentimentHotMediaRecoveryOptions = {
+  batchSize?: number;
+  now?: number;
+};
+
+function mediaRecoveryState(candidate: SentimentHotCandidate): {
+  attempts: number;
+  nextAttemptAt: number;
+  status: string;
+} {
+  const metrics = (candidate.metrics || {}) as Record<string, unknown>;
+  const attempts = Number(metrics.mediaRecoveryAttempts);
+  const nextAttemptAt = Number(metrics.mediaRecoveryNextAttemptAt);
+  return {
+    attempts: Number.isFinite(attempts) && attempts > 0 ? Math.floor(attempts) : 0,
+    nextAttemptAt: Number.isFinite(nextAttemptAt) && nextAttemptAt > 0 ? nextAttemptAt : 0,
+    status: cleanText(metrics.mediaRecoveryStatus),
+  };
+}
+
+function mediaRecoveryNextAttemptAt(attempt: number, now: number): number {
+  const exponent = Math.max(0, Math.min(8, Math.floor(attempt) - 1));
+  const delay = Math.min(
+    SENTIMENT_HOT_MEDIA_RECOVERY_MAX_BACKOFF_MS,
+    SENTIMENT_HOT_MEDIA_RECOVERY_BASE_BACKOFF_MS * (2 ** exponent),
+  );
+  return now + delay;
+}
+
+function usableLocalMediaPath(value: unknown): string {
+  const raw = cleanText(value);
+  if (!raw) return "";
+  const resolved = path.isAbsolute(raw) ? raw : path.resolve(resolveSentimentHotMediaDir(), raw);
+  try {
+    return fs.statSync(resolved).isFile() && fs.statSync(resolved).size > 0 ? resolved : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeRecoveredMedia(items: SentimentHotMedia[]): SentimentHotMedia[] {
+  return (Array.isArray(items) ? items : []).map((item) => {
+    const localPath = usableLocalMediaPath(item?.localPath);
+    return localPath
+      ? { ...item, localPath, warning: undefined }
+      : item;
+  });
+}
+
+function candidateMediaIsFullyLocal(candidate: SentimentHotCandidate): boolean {
+  const media = Array.isArray(candidate.media) ? candidate.media : [];
+  if (!media.length) return false;
+  return media.every((item, index) => (
+    Boolean(usableLocalMediaPath(item?.localPath))
+    || Boolean(findExistingSentimentHotMediaFile(candidate.id, index))
+  ));
+}
+
+function parseGlobalPoolCandidateRow(row: { id?: string; candidate_json?: string }): SentimentHotCandidate | null {
+  try {
+    const candidate = JSON.parse(String(row?.candidate_json || "")) as SentimentHotCandidate;
+    return candidate?.id && String(candidate.id) === String(row?.id || candidate.id)
+      ? candidate
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function updateGlobalPoolCandidateMedia(args: {
+  db: any;
+  candidateId: string;
+  media: SentimentHotMedia[];
+  recoveryMetrics: Record<string, unknown>;
+  replaceMedia?: boolean;
+  now: number;
+}): boolean {
+  const row = args.db.prepare(`
+    SELECT id, candidate_json
+    FROM sentiment_hot_global_candidates
+    WHERE id = ?
+  `).get(args.candidateId) as { id?: string; candidate_json?: string } | undefined;
+  const current = row ? parseGlobalPoolCandidateRow(row) : null;
+  if (!current) return false;
+  const currentMedia = Array.isArray(current.media) ? current.media : [];
+  const downloaded = normalizeRecoveredMedia(args.media);
+  const media = args.replaceMedia
+    ? downloaded
+    : currentMedia.map((item, index) => {
+      const recovered = downloaded[index];
+      const localPath = usableLocalMediaPath(recovered?.localPath);
+      return localPath
+        ? { ...item, ...recovered, localPath, warning: undefined }
+        : item;
+    });
+  const normalized = normalizeSentimentHotGlobalPoolCandidate({
+    ...current,
+    media,
+    metrics: {
+      ...(current.metrics || {}),
+      ...args.recoveryMetrics,
+      mediaCount: media.length,
+    },
+  });
+  if (!normalized) return false;
+  const result = args.db.prepare(`
+    UPDATE sentiment_hot_global_candidates
+    SET candidate_json = ?,
+        search_text = ?,
+        hot_score = ?,
+        content_at_ms = ?,
+        captured_at_ms = ?,
+        updated_at_ms = ?,
+        platform = ?
+    WHERE id = ?
+  `).run(
+    JSON.stringify(normalized),
+    `${normalized.content || ""} ${normalized.author || ""}`.toLowerCase(),
+    Number(normalized.hotScore || 0),
+    sentimentHotPublishedAtMs(normalized) || args.now,
+    Date.parse(normalized.capturedAt || "") || args.now,
+    args.now,
+    normalizeRequestedHotPlatform(normalized.platform) ?? "threads",
+    normalized.id,
+  );
+  return Number(result?.changes || 0) > 0;
+}
+
+function recoveryMetricsForAttempt(args: {
+  candidate: SentimentHotCandidate;
+  now: number;
+  status: string;
+  reason: string;
+  recoveredMedia?: number;
+}): Record<string, unknown> {
+  const previous = mediaRecoveryState(args.candidate);
+  const attempts = previous.attempts + 1;
+  return {
+    mediaRecoveryStatus: args.status,
+    mediaRecoveryAttempts: attempts,
+    mediaRecoveryAttemptedAt: new Date(args.now).toISOString(),
+    mediaRecoveryNextAttemptAt: mediaRecoveryNextAttemptAt(attempts, args.now),
+    mediaRecoveryReason: cleanText(args.reason).slice(0, 240),
+    ...(typeof args.recoveredMedia === "number" ? { mediaRecoveryRecoveredCount: args.recoveredMedia } : {}),
+  };
+}
+
+async function recoverOneSentimentHotCandidateMedia(
+  db: any,
+  candidate: SentimentHotCandidate,
+  now: number,
+): Promise<{ status: "ready" | "pending" | "skipped"; recoveredMedia: number; reason?: string }> {
+  const originalMediaCount = Array.isArray(candidate.media) ? candidate.media.length : 0;
+  if (!originalMediaCount) return { status: "skipped", recoveredMedia: 0, reason: "no_media" };
+
+  // Promote files that were already downloaded by the foreground display or
+  // an earlier attempt before making another public request.
+  if (candidateMediaIsFullyLocal(candidate)) {
+    const localMedia = normalizeRecoveredMedia(await downloadCandidateMedia(
+      candidate,
+      Number.POSITIVE_INFINITY,
+      1,
+      { existingOnly: true, skipVideos: false },
+    ));
+    const updated = updateGlobalPoolCandidateMedia({
+      db,
+      candidateId: candidate.id,
+      media: localMedia,
+      recoveryMetrics: {
+        mediaRecoveryStatus: "ready",
+        mediaRecoveryReadyAt: new Date(now).toISOString(),
+        mediaRecoveryReason: "shared_media_already_available",
+        mediaRecoveryRecoveredCount: localMedia.length,
+      },
+      replaceMedia: true,
+      now,
+    });
+    return updated
+      ? { status: "ready", recoveredMedia: localMedia.length }
+      : { status: "pending", recoveredMedia: 0, reason: "global_pool_update_failed" };
+  }
+
+  const attemptMetrics = recoveryMetricsForAttempt({
+    candidate,
+    now,
+    status: "pending",
+    reason: "retrying_stored_media_urls",
+  });
+  const direct = normalizeRecoveredMedia(await downloadCandidateMedia(
+    candidate,
+    Number.POSITIVE_INFINITY,
+    1,
+    { skipVideos: false },
+  ).catch(() => []));
+  if (direct.length === originalMediaCount && direct.every((item) => Boolean(usableLocalMediaPath(item.localPath)))) {
+    const updated = updateGlobalPoolCandidateMedia({
+      db,
+      candidateId: candidate.id,
+      media: direct,
+      recoveryMetrics: {
+        ...attemptMetrics,
+        mediaRecoveryStatus: "ready",
+        mediaRecoveryReadyAt: new Date(now).toISOString(),
+        mediaRecoveryReason: "stored_media_url_recovered",
+        mediaRecoveryRecoveredCount: direct.length,
+      },
+      replaceMedia: true,
+      now,
+    });
+    return updated
+      ? { status: "ready", recoveredMedia: direct.length }
+      : { status: "pending", recoveredMedia: 0, reason: "global_pool_update_failed" };
+  }
+
+  const sourceUrl = cleanText(candidate.sourceUrl);
+  let sourceMedia: SentimentHotMedia[] = [];
+  if (sourceUrl) {
+    const detail = candidate.platform === "instagram"
+      ? await fetchInstagramDetailData(sourceUrl)
+      : candidate.platform === "threads"
+        ? await fetchThreadsDetailData(sourceUrl)
+        : { media: [] as SentimentHotMedia[] };
+    sourceMedia = (detail.media || []).filter((item) => /^https?:\/\//i.test(String(item?.url || "")));
+    if (sourceMedia.length < originalMediaCount) {
+      const directSourceMedia = await fetchDirectHotSourceMedia(sourceUrl, candidate.platform);
+      if (directSourceMedia.length > sourceMedia.length) sourceMedia = directSourceMedia;
+    }
+  }
+  if (sourceMedia.length > 0) {
+    const refreshedCandidate = { ...candidate, media: sourceMedia };
+    const refreshed = normalizeRecoveredMedia(await downloadCandidateMedia(
+      refreshedCandidate,
+      Number.POSITIVE_INFINITY,
+      1,
+      { skipVideos: false, forceRemote: true },
+    ).catch(() => []));
+    const fullyRecovered = refreshed.length === sourceMedia.length
+      && refreshed.every((item) => Boolean(usableLocalMediaPath(item.localPath)))
+      && sourceMedia.length >= originalMediaCount;
+    if (fullyRecovered) {
+      const updated = updateGlobalPoolCandidateMedia({
+        db,
+        candidateId: candidate.id,
+        media: refreshed,
+        recoveryMetrics: {
+          ...attemptMetrics,
+          mediaRecoveryStatus: "ready",
+          mediaRecoveryReadyAt: new Date(now).toISOString(),
+          mediaRecoveryReason: "source_post_media_recovered",
+          mediaRecoveryRecoveredCount: refreshed.length,
+        },
+        replaceMedia: true,
+        now,
+      });
+      return updated
+        ? { status: "ready", recoveredMedia: refreshed.length }
+        : { status: "pending", recoveredMedia: 0, reason: "global_pool_update_failed" };
+    }
+  }
+
+  const directRecoveredCount = direct.filter((item) => Boolean(usableLocalMediaPath(item.localPath))).length;
+  const reason = sourceMedia.length > 0
+    ? `source_media_incomplete_${sourceMedia.length}_of_${originalMediaCount}`
+    : sourceUrl
+      ? "source_post_media_unavailable"
+      : "source_url_missing";
+  const failureMetrics = recoveryMetricsForAttempt({
+    candidate,
+    now,
+    status: directRecoveredCount > 0 ? "partial" : "unavailable",
+    reason,
+    recoveredMedia: directRecoveredCount,
+  });
+  const updated = updateGlobalPoolCandidateMedia({
+    db,
+    candidateId: candidate.id,
+    media: direct,
+    recoveryMetrics: failureMetrics,
+    now,
+  });
+  return updated
+    ? { status: "pending", recoveredMedia: directRecoveredCount, reason }
+    : { status: "pending", recoveredMedia: 0, reason: "global_pool_update_failed" };
+}
+
+/**
+ * Slowly repair historical global-pool media without touching the live search
+ * path. A candidate is only marked ready after every media item has a verified
+ * local file; failed requests keep the row and receive exponential backoff.
+ */
+export async function recoverSentimentHotMedia(
+  options: SentimentHotMediaRecoveryOptions = {},
+): Promise<SentimentHotMediaRecoveryResult> {
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const requestedBatch = Number(options.batchSize ?? SENTIMENT_HOT_MEDIA_RECOVERY_DEFAULT_BATCH_SIZE);
+  const batchSize = Math.max(1, Math.min(SENTIMENT_HOT_MEDIA_RECOVERY_MAX_BATCH_SIZE, Math.floor(requestedBatch || 1)));
+  const result: SentimentHotMediaRecoveryResult = {
+    ok: true,
+    scanned: 0,
+    attempted: 0,
+    recoveredCandidates: 0,
+    recoveredMedia: 0,
+    pending: 0,
+    skipped: 0,
+    errors: [],
+  };
+  let db: any = null;
+  try {
+    db = openSentimentHotGlobalPoolDatabase();
+    const cutoff = now - SENTIMENT_HOT_GLOBAL_POOL_RETENTION_MS;
+    const scanLimit = Math.max(batchSize, Math.min(SENTIMENT_HOT_MEDIA_RECOVERY_MAX_SCAN_SIZE, batchSize * 80));
+    const rows = db.prepare(`
+      SELECT id, candidate_json
+      FROM sentiment_hot_global_candidates
+      WHERE content_at_ms >= ?
+      ORDER BY content_at_ms ASC, updated_at_ms ASC, id ASC
+      LIMIT ?
+    `).all(cutoff, scanLimit) as Array<{ id?: string; candidate_json?: string }>;
+    for (const row of rows) {
+      if (result.attempted >= batchSize) break;
+      const candidate = parseGlobalPoolCandidateRow(row);
+      if (!candidate || !Array.isArray(candidate.media) || candidate.media.length === 0) continue;
+      result.scanned += 1;
+      const state = mediaRecoveryState(candidate);
+      const alreadyLocal = candidateMediaIsFullyLocal(candidate);
+      if (!alreadyLocal && state.nextAttemptAt > now) {
+        result.skipped += 1;
+        continue;
+      }
+      result.attempted += 1;
+      try {
+        const recovered = await recoverOneSentimentHotCandidateMedia(db, candidate, now);
+        if (recovered.status === "ready") {
+          result.recoveredCandidates += 1;
+          result.recoveredMedia += recovered.recoveredMedia;
+        } else if (recovered.status === "pending") {
+          result.pending += 1;
+          if (recovered.recoveredMedia > 0) result.recoveredMedia += recovered.recoveredMedia;
+        } else {
+          result.skipped += 1;
+        }
+      } catch (error) {
+        result.pending += 1;
+        result.errors.push(`${candidate.id}: ${error instanceof Error ? error.message : String(error)}`.slice(0, 400));
+      }
+    }
+    return result;
+  } catch (error) {
+    result.ok = false;
+    result.errors.push(error instanceof Error ? error.message : String(error));
+    return result;
+  } finally {
+    db?.close?.();
+  }
+}
+
 export function listSentimentHotCandidatePoolStats(archives: PersonaArchive[] = []): SentimentHotCandidatePoolStat[] {
   const fallbackState = archives.length > 0 ? {} : readThreadsSearchCacheState();
   const archiveById = new Map(archives.map((archive) => [cleanText(archive.id), archive]));
@@ -12791,10 +13217,10 @@ async function downloadOneCandidateMediaItem(
   candidateId: string,
   item: SentimentHotMedia,
   index: number,
-  options?: { skipVideos?: boolean; existingOnly?: boolean },
+  options?: { skipVideos?: boolean; existingOnly?: boolean; forceRemote?: boolean },
 ): Promise<SentimentHotMedia> {
-  if (item.localPath && fs.existsSync(item.localPath)) return item;
-  const existing = findExistingSentimentHotMediaFile(candidateId, index);
+  if (!options?.forceRemote && item.localPath && fs.existsSync(item.localPath)) return item;
+  const existing = options?.forceRemote ? "" : findExistingSentimentHotMediaFile(candidateId, index);
   if (existing) return { ...item, localPath: existing, warning: undefined };
   if (options?.existingOnly) return item;
   const isVideo = item.type === "video" || /\.(?:mp4|mov|m4v|webm)(?:$|[?#])/i.test(item.url);
@@ -12843,7 +13269,7 @@ export async function downloadCandidateMedia(
   candidate: SentimentHotCandidate,
   limit = Number.POSITIVE_INFINITY,
   concurrency = 1,
-  options?: { skipVideos?: boolean; existingOnly?: boolean },
+  options?: { skipVideos?: boolean; existingOnly?: boolean; forceRemote?: boolean },
 ): Promise<SentimentHotMedia[]> {
   const media = (candidate.media || []).slice(0, limit);
   if (!media.length) return [];

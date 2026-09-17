@@ -143,6 +143,36 @@ describe("sentiment hot importer", () => {
     fs.rmSync(mediaDir, { recursive: true, force: true });
   });
 
+  it("can force a newly fetched media URL instead of reusing a stale index file", async () => {
+    const mediaDir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-media-force-"));
+    const localPath = path.join(mediaDir, "candidate-force-1.jpg");
+    fs.writeFileSync(localPath, Buffer.from("old-media"));
+    vi.stubEnv("SENTIMENT_HOT_MEDIA_DIR", mediaDir);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => "image/jpeg" },
+      arrayBuffer: async () => Buffer.from("new-media"),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const media = await downloadCandidateMedia({
+      id: "candidate-force",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@tester/post/force",
+      author: "tester",
+      content: "candidate",
+      media: [{ type: "image", url: "https://cdn.example/new-candidate.jpg" }],
+      hotScore: 1,
+      metrics: {},
+      capturedAt: new Date().toISOString(),
+    }, Number.POSITIVE_INFINITY, 1, { forceRemote: true });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(media[0]).toMatchObject({ localPath });
+    expect(fs.readFileSync(localPath, "utf8")).toBe("new-media");
+    fs.rmSync(mediaDir, { recursive: true, force: true });
+  });
+
   it("uses one fixed 24-request public Reader window", () => {
     expect(SENTIMENT_HOT_READER_CONCURRENCY).toBe(24);
   });
