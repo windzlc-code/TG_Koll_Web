@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from webapp import collector_proxy_admin as admin
@@ -351,6 +352,32 @@ class CollectorProxyOnboardTests(unittest.TestCase):
         self.assertTrue(products[0]["user_set_traffic_role"])
         self.assertEqual(products[0]["traffic_role"], "sticky")
         self.assertFalse(products[0]["public_reader_enabled"])
+
+    def test_public_product_exposes_current_traffic_role(self) -> None:
+        public = admin._public_product({
+            "proxy_id": "2301582",
+            "host": "thehub.proxy-cheap.com",
+            "port": 8080,
+            "protocol": "http",
+            "username": "user",
+            "password": "pass",
+            "traffic_role": "sticky",
+            "public_reader_enabled": False,
+            "state": "ready",
+            "last_check": {},
+        })
+        self.assertEqual(public["traffic_role"], "sticky")
+        self.assertEqual(public["mode"], "sticky")
+
+    def test_admin_ui_marks_selected_traffic_role(self) -> None:
+        root = Path(__file__).resolve().parents[1] / "static" / "assets"
+        js = (root / "admin-collector-proxy.js").read_text(encoding="utf-8")
+        css = (root / "admin-collector-proxy.css").read_text(encoding="utf-8")
+        self.assertIn('class="${trafficRole === "dynamic" ? "is-active" : ""}"', js)
+        self.assertIn('class="${trafficRole === "sticky" ? "is-active" : ""}"', js)
+        self.assertIn('aria-pressed="${trafficRole === "dynamic" ? "true" : "false"}"', js)
+        self.assertIn(".collector-proxy-traffic-role button[aria-pressed=\"true\"]", css)
+        self.assertIn("background: var(--admin-teal-dark, #0a6f70)", css)
 
     def test_failed_detect_does_not_enable_reader(self) -> None:
         config = {}

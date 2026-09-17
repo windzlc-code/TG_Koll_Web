@@ -26,7 +26,14 @@ except ImportError:  # collector worker runtime does not ship webapp.auth
         raise RuntimeError("admin auth is unavailable on the collector worker")
 
 
-CONFIG_PATH = Path(os.getenv("COLLECTOR_PROXY_CONFIG_PATH", "/collector-proxy/config.json"))
+_DEFAULT_COLLECTOR_PROXY_PATHS = (
+    "/collector-proxy/config.json",
+    "/data/collector-proxy/config.json",
+)
+CONFIG_PATH = Path(
+    os.getenv("COLLECTOR_PROXY_CONFIG_PATH")
+    or next((item for item in _DEFAULT_COLLECTOR_PROXY_PATHS if Path(item).exists()), _DEFAULT_COLLECTOR_PROXY_PATHS[0])
+)
 WEBHOOK_SECRET_PATH = Path(os.getenv("PROXYCHEAP_WEBHOOK_SECRET_PATH", str(CONFIG_PATH.with_name("webhook-secret"))))
 WEBHOOK_EVENTS_PATH = Path(os.getenv("PROXYCHEAP_WEBHOOK_EVENTS_PATH", str(CONFIG_PATH.with_name("webhook-events.jsonl"))))
 PROXYCHEAP_API_BASE = "https://api.proxy-cheap.com"
@@ -362,6 +369,9 @@ def _public_product(item: dict[str, Any]) -> dict[str, Any]:
     check = item.get("last_check") if isinstance(item.get("last_check"), dict) else {}
     verified = bool(check.get("ok") and fingerprint and check.get("connection_fingerprint") == fingerprint)
     enabled = bool(item.get("public_reader_enabled") and verified and item.get("state") == "active")
+    role = str(item.get("traffic_role") or "").strip().lower()
+    if role not in {"dynamic", "sticky"}:
+        role = "sticky" if str(item.get("mode") or "").strip().lower() == "sticky" else "dynamic"
     return {
         "proxy_id": str(item.get("proxy_id") or ""),
         "product": item.get("product") if isinstance(item.get("product"), dict) else {},
@@ -370,6 +380,8 @@ def _public_product(item: dict[str, Any]) -> dict[str, Any]:
         "last_check": check,
         "can_enable": verified,
         "public_reader_enabled": enabled,
+        "traffic_role": role,
+        "mode": "sticky" if role == "sticky" else "rotating",
         "state": str(item.get("state") or "needs_connection"),
         "updated_at": int(item.get("updated_at") or 0),
     }
@@ -388,10 +400,19 @@ def _require_admin_console_request(request: Request) -> None:
 
 
 def _credentials(payload: CollectorProxyInspectPayload, existing: dict[str, Any]) -> tuple[str, str]:
+    try:
+        from .db import db
+        from . import proxy_provider_credentials as ppc
+        with db() as conn:
+            loaded = ppc.load_credentials(conn)
+        if loaded and str(loaded[0] or "").strip() and str(loaded[1] or "").strip():
+            return str(loaded[0]).strip(), str(loaded[1]).strip()
+    except Exception:
+        pass
     key = str(payload.api_key or "").strip() or str(existing.get("provider_api_key") or "").strip()
     secret = str(payload.api_secret or "").strip() or str(existing.get("provider_api_secret") or "").strip()
     if not key or not secret:
-        raise HTTPException(status_code=400, detail="API Key 与 API Secret 必须同时填写")
+        raise HTTPException(status_code=400, detail="请先在「第三方代理 IP」中配置并验证 API Key / Secret")
     return key, secret
 
 
