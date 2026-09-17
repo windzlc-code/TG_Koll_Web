@@ -4211,7 +4211,7 @@ Instagram
         code: "CodeOne",
         user: { username: "demo" },
         canonical_url: "https://www.threads.com/@demo/post/CodeOne",
-        text_post_app_info: { view_count: 20 },
+        text_post_app_info: { view_count: 0, views: "6.1K" },
       } }] } }], page_info: { end_cursor: "", has_next_page: false } } }],
     })}</script></html>`;
 
@@ -4220,7 +4220,7 @@ Instagram
     expect(parseThreadsGraphqlProfilePagePayload({ username: "demo", payload: payloads[0] })).toMatchObject({
       hasNextPage: false,
       pageInfoResolved: true,
-      posts: [{ pk: "post-1", viewCount: 20 }],
+      posts: [{ pk: "post-1", viewCount: 6100 }],
     });
   });
 
@@ -4699,6 +4699,11 @@ Thread
     expect(parseThreadsPostViewCountFromText("Thread 0 views")).toBeUndefined();
   });
 
+  it("parses label-first Threads view counts from rendered detail text", () => {
+    expect(parseThreadsPostViewCountFromText("浏览 1,118 · 点赞 80")).toBe(1118);
+    expect(parseThreadsPostViewCountFromText("Views: 6.1K")).toBe(6100);
+  });
+
   it("parses the exact permalink view count from Threads page data", () => {
     expect(parseThreadsPostViewCountFromHtml(`
       ["BarcelonaLoggedOutExpansionGating",[],{"enable_view_counts":false,"view_counts":175},7623]
@@ -4718,6 +4723,9 @@ Thread
     expect(parseThreadsPostViewCountFromHtml(`
       {"text_post_app_info":{"view_count":0}}
     `)).toBeUndefined();
+    expect(parseThreadsPostViewCountFromHtml(`
+      {"view_count":4321,"viewCount":0}
+    `)).toBe(4321);
     expect(parseThreadsPostViewCountFromHtml("<html>no target view count</html>")).toBeUndefined();
   });
 

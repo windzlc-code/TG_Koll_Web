@@ -1572,6 +1572,11 @@ def _hot_media_dir() -> Path:
     return TOOL_R18_RUNTIME_DIR / "sentiment-hot-media"
 
 
+def _hot_shared_media_dir() -> Path:
+    """Media written by the new-host capture worker's shared mount."""
+    return DATA_DIR / "collector-proxy" / "sentiment-hot-media"
+
+
 def _hot_preview_cache_dir() -> Path:
     return _hot_media_dir() / "preview-cache"
 
@@ -1583,7 +1588,12 @@ def _safe_hot_media_stem(value: str) -> str:
 
 def _existing_hot_media_file(path: Path | str) -> str:
     try:
-        resolved = Path(path).expanduser().resolve()
+        raw = str(path or "").strip()
+        # The worker sees the shared host mount as /collector-proxy while the
+        # console sees the same mount below /data/collector-proxy.
+        if raw.startswith("/collector-proxy/"):
+            raw = str(_hot_shared_media_dir().parent / raw[len("/collector-proxy/"):])
+        resolved = Path(raw).expanduser().resolve()
     except Exception:
         return ""
     if resolved.is_file() and _is_allowed_dashboard_media_path(resolved):
@@ -1609,7 +1619,7 @@ def _find_hot_local_media(url: str, *, candidate_id: str = "", index: int = 0, e
         stems.append(f"{cid}-{max(0, int(index)) + 1}")
         if int(index) == 0:
             stems.append(cid)
-    roots = (_hot_preview_cache_dir(), _hot_media_dir())
+    roots = (_hot_preview_cache_dir(), _hot_media_dir(), _hot_shared_media_dir())
     seen: set[str] = set()
     for stem in stems:
         if not stem or stem in seen:
@@ -2866,6 +2876,24 @@ def _number(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return default
+
+
+def _persona_hot_metric_number(value: Any) -> int:
+    if isinstance(value, bool) or value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return max(0, int(round(value))) if math.isfinite(float(value)) else 0
+    text = str(value or "").strip().replace(",", "")
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([kKmM万萬])?", text)
+    if not match:
+        return 0
+    try:
+        number = float(match.group(1))
+    except Exception:
+        return 0
+    unit = match.group(2) or ""
+    multiplier = 1_000 if unit.lower() == "k" else 1_000_000 if unit.lower() == "m" else 10_000 if unit in {"万", "萬"} else 1
+    return max(0, int(round(number * multiplier)))
 
 
 def _sum_numbers(*values: Any) -> int:
@@ -15546,7 +15574,7 @@ def _persona_hot_view_count(
         metrics.get("video_play_count"),
         metrics.get("video_view_count"),
     ):
-        number = _number(value, 0)
+        number = _persona_hot_metric_number(value)
         if number > 0:
             return number
     return 0

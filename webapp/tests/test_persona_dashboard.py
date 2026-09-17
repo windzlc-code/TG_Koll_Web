@@ -6736,6 +6736,44 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["content-type"], "image/png")
 
+    def test_hot_candidate_preview_uses_shared_capture_worker_media_file(self):
+        local = self.data_dir / "collector-proxy" / "sentiment-hot-media" / "hot-shared-1.png"
+        local.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (10, 10), "purple").save(local)
+        cdn = "https://scontent.cdninstagram.com/v/t51.82787-15/hot-shared.png?oe=dead"
+        with mock.patch.object(server, "DATA_DIR", self.data_dir):
+            candidate = server._normalize_persona_hot_candidate({
+                "id": "hot-shared",
+                "platform": "threads",
+                "content": "采集 worker 共享目录里的热点图",
+                "media": [{
+                    "url": cdn,
+                    "type": "image",
+                    "localPath": "/collector-proxy/sentiment-hot-media/hot-shared-1.png",
+                }],
+            })
+
+            self.assertIsNotNone(candidate)
+            item = candidate["media_items"][0]
+            self.assertTrue(item["preview_url"].startswith("/api/persona_dashboard/hot_preview/"))
+            self.assertFalse(item["unavailable"])
+            response = self.client.get(item["preview_url"])
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["content-type"], "image/png")
+
+    def test_hot_candidate_normalization_keeps_compact_view_count_values(self):
+        candidate = server._normalize_persona_hot_candidate({
+            "id": "hot-compact-view",
+            "platform": "threads",
+            "sourceUrl": "https://www.threads.com/@tester/post/compact-view",
+            "content": "带有紧凑浏览量字段的热点",
+            "metrics": {"view_count": "1.1K"},
+        })
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate["view_count"], 1100)
+        self.assertEqual(candidate["metrics"]["view_count"], 1100)
+
     def test_hot_candidate_preview_rewrites_video_thumbnail_through_proxy(self):
         candidate = server._normalize_persona_hot_candidate({
             "id": "hot-video-thumb",

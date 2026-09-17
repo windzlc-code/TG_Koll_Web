@@ -119,6 +119,44 @@ describe("persona hot workflow remote worker snapshots", () => {
     expect(result.archiveName).toBe("Control-plane persona");
   });
 
+  it("pre-caches live candidate media before returning the display batch", async () => {
+    const snapshot = archiveSnapshot();
+    const candidate = {
+      id: "hot-media-1",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@tester/post/media-1",
+      author: "tester",
+      content: "candidate with media",
+      media: [{ type: "image", url: "https://cdn.example/hot.png" }],
+    } as any;
+    const downloaded = [{
+      type: "image",
+      url: "https://cdn.example/hot.png",
+      localPath: "/collector-proxy/sentiment-hot-media/hot-media-1-1.png",
+    }];
+    mocks.fetchSentimentHotCandidates.mockResolvedValueOnce({
+      keywords: ["current"],
+      searchMode: "strict",
+      freshnessDays: 7,
+      freshnessPolicy: "legacy",
+      cookieStatuses: [],
+      warnings: [],
+      candidates: [candidate],
+    });
+    mocks.downloadCandidateMedia.mockResolvedValueOnce(downloaded);
+
+    const result = await fetchHotCandidates({
+      action: "fetch-hot-candidates",
+      archiveId: "persona-1",
+      archiveSnapshot: snapshot,
+      liveOnly: true,
+      recordShown: false,
+    });
+
+    expect(mocks.downloadCandidateMedia).toHaveBeenCalledWith(candidate, Number.POSITIVE_INFINITY, 4, { skipVideos: true });
+    expect(result.candidates[0].media).toEqual(downloaded);
+  });
+
   it("forwards the requested platform so the collector does not search both networks", async () => {
     const snapshot = archiveSnapshot();
     await fetchHotCandidates({

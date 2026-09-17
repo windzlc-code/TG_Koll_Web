@@ -5071,7 +5071,7 @@ export function parseThreadsGraphqlSearchPayload(args: {
         const commentCount = Math.max(0, Number(value?.text_post_app_info?.direct_reply_count) || 0);
         const repostCount = Math.max(0, Number(value?.text_post_app_info?.repost_count) || 0);
         const reshareCount = Math.max(0, Number(value?.text_post_app_info?.reshare_count) || 0);
-        const rawViewCount = [
+        const viewCount = [
           value?.text_post_app_info?.view_count,
           value?.text_post_app_info?.viewCount,
           value?.view_count,
@@ -5079,11 +5079,9 @@ export function parseThreadsGraphqlSearchPayload(args: {
           value?.views,
           value?.play_count,
           value?.playCount,
-        ].find((item) => item !== null && item !== undefined && item !== "");
-        const parsedViewCount = rawViewCount === undefined ? undefined : parseMetricNumberLoose(String(rawViewCount));
-        const viewCount = typeof parsedViewCount === "number" && Number.isFinite(parsedViewCount) && parsedViewCount > 0
-          ? Math.round(parsedViewCount)
-          : undefined;
+        ]
+          .map((item) => parseMetricNumberLoose(item))
+          .find((item): item is number => typeof item === "number" && Number.isFinite(item) && item > 0);
         const sourceUrl = `https://www.threads.com/@${encodeURIComponent(username)}/post/${encodeURIComponent(code)}`;
         const id = buildSentimentCandidateId({ platform: "threads", sourceUrl, content });
         if (!byId.has(id)) {
@@ -7622,14 +7620,20 @@ export function parseThreadsGraphqlProfilePagePayload(args: {
           ?? post?.created_at
           ?? post?.caption?.created_at,
       );
-      const rawViewCount = [
+      const viewCount = [
+        post?.text_post_app_info?.views,
         post?.text_post_app_info?.view_count,
         post?.text_post_app_info?.viewCount,
+        post?.text_post_app_info?.play_count,
+        post?.text_post_app_info?.playCount,
         post?.view_count,
         post?.viewCount,
+        post?.views,
         post?.play_count,
         post?.playCount,
-      ].find((value) => value !== null && value !== undefined && value !== "");
+      ]
+        .map((value) => parseMetricNumberLoose(value))
+        .find((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0);
       if (!pk || !sourceUrl) continue;
       const mediaItems = extractThreadsGraphqlPostMedia(post);
       posts.push({
@@ -7642,7 +7646,7 @@ export function parseThreadsGraphqlProfilePagePayload(args: {
         commentCount: Math.max(0, Number(post?.text_post_app_info?.direct_reply_count) || 0),
         repostCount: Math.max(0, Number(post?.text_post_app_info?.repost_count) || 0),
         shareCount: Math.max(0, Number(post?.text_post_app_info?.reshare_count) || 0),
-        ...(rawViewCount === undefined ? {} : { viewCount: Math.max(0, Number(rawViewCount) || 0) }),
+        ...(viewCount === undefined ? {} : { viewCount }),
         ...(mediaItems.length ? { mediaItems } : {}),
       });
     }
@@ -7964,10 +7968,12 @@ async function extractThreadsVisibleProfilePosts(args: {
 }
 
 export function parseThreadsPostViewCountFromText(text: string): number | undefined {
+  const source = String(text || "");
   const parsed = parseMetricNumberLoose(
-    String(text || "").match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*(?:次瀏覽|次浏览|瀏覽|浏览|次觀看|次观看|觀看|观看|views?)/i)?.[1]
-      || String(text || "").match(/Thread\s+(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s+views/i)?.[1]
-      || String(text || "").match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*views/i)?.[1],
+    source.match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*(?:次瀏覽|次浏览|瀏覽|浏览|次觀看|次观看|觀看|观看|views?)/i)?.[1]
+      || source.match(/Thread\s+(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s+views/i)?.[1]
+      || source.match(/(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)\s*views/i)?.[1]
+      || source.match(/(?:次瀏覽|次浏览|瀏覽量|浏览量|瀏覽|浏览|次觀看|次观看|觀看|观看|views?|view\s*count)\s*[:：|｜·•,，。()\[\]{}<>-]*\s*(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)/i)?.[1],
   );
   return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
 }
@@ -8000,6 +8006,7 @@ export function parseThreadsPostViewCountFromHtml(html: string): number | undefi
     source.match(/"view_counts"\s*:\s*"?(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)"?/i)?.[1],
     source.match(/"text_post_app_info"\s*:\s*\{[\s\S]{0,1600}?"view_count"\s*:\s*"?(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)"?/i)?.[1],
     source.match(/"text_post_app_info"\s*:\s*\{[\s\S]{0,1600}?"viewCount"\s*:\s*"?(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)"?/i)?.[1],
+    source.match(/"(?:view_count|viewCount|views|play_count|playCount)"\s*:\s*"?(\d+(?:[.,]\d+)?\s*(?:[KkMm\u842c\u4e07])?)"?/i)?.[1],
   ];
   for (const match of matches) {
     const parsed = parseMetricNumberLoose(match);
@@ -9722,8 +9729,8 @@ export function viewCountOfCandidate(candidate: Pick<SentimentHotCandidate, "eng
   ];
   for (const item of raw) {
     if (item === null || item === undefined || item === "") continue;
-    const parsed = Number(item);
-    if (Number.isFinite(parsed) && parsed > 0) return Math.round(parsed);
+    const parsed = parseMetricNumberLoose(item);
+    if (typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0) return parsed;
   }
   return 0;
 }
@@ -11695,8 +11702,6 @@ CREATE INDEX IF NOT EXISTS idx_sentiment_hot_global_content_at
   ON sentiment_hot_global_candidates(content_at_ms DESC, hot_score DESC);
 CREATE INDEX IF NOT EXISTS idx_sentiment_hot_global_hot_score
   ON sentiment_hot_global_candidates(hot_score DESC, content_at_ms DESC);
-CREATE INDEX IF NOT EXISTS idx_sentiment_hot_global_platform
-  ON sentiment_hot_global_candidates(platform, content_at_ms DESC, hot_score DESC);
 CREATE TABLE IF NOT EXISTS sentiment_hot_global_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -12551,6 +12556,17 @@ function normalizeMedia(media: { type: "image" | "video"; url: string }): Sentim
   return fs.existsSync(resolved) ? { ...media, localPath: resolved } : { ...media, warning: "媒體本地文件不存在，已保留原連結。" };
 }
 
+function resolveSentimentHotMediaDir(): string {
+  const configured = String(process.env.SENTIMENT_HOT_MEDIA_DIR || "").trim();
+  if (configured) return path.resolve(configured);
+  // The new-host capture worker and console share this existing mount. Keep
+  // the local runtime fallback for direct/local workflow tests and installs.
+  if (process.platform !== "win32" && fs.existsSync("/collector-proxy")) {
+    return path.join("/collector-proxy", "sentiment-hot-media");
+  }
+  return resolveRuntimeFile("sentiment-hot-media");
+}
+
 export async function downloadCandidatePrimaryMedia(candidate: SentimentHotCandidate): Promise<SentimentHotMedia | undefined> {
   const primary = candidate.media[0];
   if (!primary) return undefined;
@@ -12562,7 +12578,7 @@ export async function downloadCandidatePrimaryMedia(candidate: SentimentHotCandi
     const contentType = response.headers.get("content-type") || "";
     if (!/^image\/|^video\//i.test(contentType)) return primary;
     const ext = extensionFromContentType(contentType, primary.type);
-    const mediaDir = path.dirname(resolveRuntimeFile(`sentiment-hot-media/${candidate.id}${ext}`));
+    const mediaDir = resolveSentimentHotMediaDir();
     fs.mkdirSync(mediaDir, { recursive: true });
     const localPath = path.join(mediaDir, `${candidate.id}${ext}`);
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -12638,7 +12654,7 @@ async function downloadOneCandidateMediaItem(
     const fetched = await fetchHotMediaBytes(item.url);
     if (!fetched) return item;
     const ext = extensionFromContentType(fetched.contentType, item.type);
-    const mediaDir = path.dirname(resolveRuntimeFile(`sentiment-hot-media/${candidateId}-${index + 1}${ext}`));
+    const mediaDir = resolveSentimentHotMediaDir();
     fs.mkdirSync(mediaDir, { recursive: true });
     const localPath = path.join(mediaDir, `${candidateId}-${index + 1}${ext}`);
     fs.writeFileSync(localPath, fetched.buffer);
