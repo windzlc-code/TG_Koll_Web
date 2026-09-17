@@ -173,6 +173,17 @@ describe("sentiment hot importer", () => {
     fs.rmSync(mediaDir, { recursive: true, force: true });
   });
 
+  it("refreshes an expired markdown media URL from the same asset in raw HTML", () => {
+    const freshUrl = "https://scontent.example/path/photo.jpg?fresh=1";
+    const staleUrl = "https://scontent.example/path/photo.jpg?stale=1";
+    const media = parseThreadsDetailMediaMarkdown(
+      "<script>" + freshUrl + "</script>![photo](" + staleUrl + ")",
+    );
+
+    expect(media).toHaveLength(1);
+    expect(media[0]?.url).toBe(freshUrl);
+  });
+
   it("uses one fixed 24-request public Reader window", () => {
     expect(SENTIMENT_HOT_READER_CONCURRENCY).toBe(24);
   });

@@ -10408,20 +10408,32 @@ function extractThreadsMediaFromMarkdown(text: string, limit = 12): SentimentHot
     media.push({ type, url });
     if (media.length >= limit) break;
   }
-  if (!media.length) {
-    for (const raw of source.matchAll(/https?:\/\/(?:scontent[^\s)"']+|cdninstagram\.com[^\s)"']+)/gi)) {
-      const url = cleanText(raw[0]).replace(/[),.;]+$/, "");
-      if (!url || isNonPostThreadsMediaUrl(url)) continue;
-      const existingIndex = media.findIndex((item) => isSameMediaAsset(item.url, url));
-      if (existingIndex >= 0) {
-        if (mediaAssetQuality(url) > mediaAssetQuality(media[existingIndex].url)) {
-          media[existingIndex] = { ...media[existingIndex], url };
-        }
-        continue;
-      }
-      media.push({ type: isThreadsVideoMediaUrl(url) ? "video" : "image", url });
-      if (media.length >= limit) break;
+  const rawMedia = extractThreadsRawMediaCandidates(source, limit * 2);
+  if (!media.length) return rawMedia.slice(0, limit);
+  for (const rawItem of rawMedia) {
+    const existingIndex = media.findIndex((item) => isSameMediaAsset(item.url, rawItem.url));
+    if (existingIndex < 0) continue;
+    if (mediaAssetQuality(rawItem.url) >= mediaAssetQuality(media[existingIndex].url)) {
+      media[existingIndex] = { ...media[existingIndex], type: rawItem.type, url: rawItem.url };
     }
+  }
+  return media;
+}
+
+function extractThreadsRawMediaCandidates(text: string, limit = 12): SentimentHotMedia[] {
+  const media: SentimentHotMedia[] = [];
+  for (const raw of String(text || "").matchAll(/https?:\/\/(?:scontent[^\s)"'<]+|cdninstagram\.com[^\s)"'<]+)/gi)) {
+    const url = cleanText(raw[0]).replace(/[),.;]+$/, "");
+    if (!url || isNonPostThreadsMediaUrl(url)) continue;
+    const existingIndex = media.findIndex((item) => isSameMediaAsset(item.url, url));
+    if (existingIndex >= 0) {
+      if (mediaAssetQuality(url) > mediaAssetQuality(media[existingIndex].url)) {
+        media[existingIndex] = { ...media[existingIndex], url };
+      }
+      continue;
+    }
+    media.push({ type: isThreadsVideoMediaUrl(url) ? "video" : "image", url });
+    if (media.length >= limit) break;
   }
   return media;
 }
