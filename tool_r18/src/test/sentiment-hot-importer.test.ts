@@ -87,6 +87,7 @@ import {
   parseThreadsDetailEngagementMarkdown,
   parseThreadsDetailMediaMarkdown,
   mergeCandidateMedia,
+  downloadCandidateMedia,
   personaHotStrategyDisplayName,
   parseThreadsSearchTextCandidates,
   refreshSentimentSourceMetrics,
@@ -117,6 +118,31 @@ afterEach(() => {
 });
 
 describe("sentiment hot importer", () => {
+  it("reuses an existing shared candidate media file before requesting the remote URL", async () => {
+    const mediaDir = fs.mkdtempSync(path.join(os.tmpdir(), "sentiment-hot-media-"));
+    const localPath = path.join(mediaDir, "candidate-1-1.jpg");
+    fs.writeFileSync(localPath, Buffer.alloc(64, 1));
+    vi.stubEnv("SENTIMENT_HOT_MEDIA_DIR", mediaDir);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const media = await downloadCandidateMedia({
+      id: "candidate-1",
+      platform: "threads",
+      sourceUrl: "https://www.threads.net/@tester/post/1",
+      author: "tester",
+      content: "candidate",
+      media: [{ type: "image", url: "https://cdn.example/candidate.jpg" }],
+      hotScore: 1,
+      metrics: {},
+      capturedAt: new Date().toISOString(),
+    });
+
+    expect(media[0]).toMatchObject({ localPath });
+    expect(fetchMock).not.toHaveBeenCalled();
+    fs.rmSync(mediaDir, { recursive: true, force: true });
+  });
+
   it("uses one fixed 24-request public Reader window", () => {
     expect(SENTIMENT_HOT_READER_CONCURRENCY).toBe(24);
   });

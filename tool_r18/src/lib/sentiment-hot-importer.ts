@@ -12705,10 +12705,30 @@ function resolveSentimentHotMediaDir(): string {
   return resolveRuntimeFile("sentiment-hot-media");
 }
 
+function findExistingSentimentHotMediaFile(candidateId: string, index: number): string {
+  const cleanId = String(candidateId || "").trim();
+  if (!cleanId || cleanId === "." || cleanId === ".." || /[\\/]/.test(cleanId)) return "";
+  const mediaDir = path.resolve(resolveSentimentHotMediaDir());
+  const stem = `${cleanId}-${Math.max(0, Math.floor(Number(index) || 0)) + 1}`;
+  const extensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".mp4", ".mov", ".m4v", ".webm", ".bin"];
+  for (const extension of extensions) {
+    const resolved = path.resolve(mediaDir, `${stem}${extension}`);
+    if (!resolved.startsWith(`${mediaDir}${path.sep}`)) continue;
+    try {
+      if (fs.statSync(resolved).isFile() && fs.statSync(resolved).size > 0) return resolved;
+    } catch {
+      // A concurrent pre-cache cleanup/download may remove the file.
+    }
+  }
+  return "";
+}
+
 export async function downloadCandidatePrimaryMedia(candidate: SentimentHotCandidate): Promise<SentimentHotMedia | undefined> {
   const primary = candidate.media[0];
   if (!primary) return undefined;
   if (primary.localPath && fs.existsSync(primary.localPath)) return primary;
+  const existing = findExistingSentimentHotMediaFile(candidate.id, 0);
+  if (existing) return { ...primary, localPath: existing, warning: undefined };
   if (!/^https?:\/\//i.test(primary.url)) return primary;
   try {
     const response = await fetch(primary.url, { signal: buildAbortSignalTimeout(15_000) });
@@ -12771,9 +12791,12 @@ async function downloadOneCandidateMediaItem(
   candidateId: string,
   item: SentimentHotMedia,
   index: number,
-  options?: { skipVideos?: boolean },
+  options?: { skipVideos?: boolean; existingOnly?: boolean },
 ): Promise<SentimentHotMedia> {
   if (item.localPath && fs.existsSync(item.localPath)) return item;
+  const existing = findExistingSentimentHotMediaFile(candidateId, index);
+  if (existing) return { ...item, localPath: existing, warning: undefined };
+  if (options?.existingOnly) return item;
   const isVideo = item.type === "video" || /\.(?:mp4|mov|m4v|webm)(?:$|[?#])/i.test(item.url);
   if (options?.skipVideos && isVideo) {
     const thumb = String(item.thumbnailUrl || "").trim();
@@ -12820,7 +12843,7 @@ export async function downloadCandidateMedia(
   candidate: SentimentHotCandidate,
   limit = Number.POSITIVE_INFINITY,
   concurrency = 1,
-  options?: { skipVideos?: boolean },
+  options?: { skipVideos?: boolean; existingOnly?: boolean },
 ): Promise<SentimentHotMedia[]> {
   const media = (candidate.media || []).slice(0, limit);
   if (!media.length) return [];

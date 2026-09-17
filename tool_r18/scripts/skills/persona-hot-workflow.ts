@@ -302,6 +302,20 @@ function filterHotCandidatePreviewMedia(items: SentimentHotMedia[]): SentimentHo
   });
 }
 
+async function attachExistingHotCandidateMedia(candidates: SentimentHotCandidate[]): Promise<SentimentHotCandidate[]> {
+  return Promise.all((Array.isArray(candidates) ? candidates : []).map(async (candidate) => {
+    // Cache reads must remain immediate: existingOnly reuses a verified file
+    // from the shared mount and never waits on an expired remote URL.
+    const media = await downloadCandidateMedia(
+      candidate,
+      Number.POSITIVE_INFINITY,
+      4,
+      { skipVideos: true, existingOnly: true },
+    ).catch(() => []);
+    return { ...candidate, media: filterHotCandidatePreviewMedia(media) };
+  }));
+}
+
 export async function readHotCandidatesCache(input: ReadHotCandidatesCacheInput) {
   const archiveId = String(input.archiveId || "").trim();
   if (!archiveId) throw new Error("persona archive id is required");
@@ -328,10 +342,7 @@ export async function readHotCandidatesCache(input: ReadHotCandidatesCacheInput)
     cacheSource: result.cacheSource,
     personaCacheCount: result.personaCacheCount,
     globalPoolCount: result.globalPoolCount,
-    candidates: result.candidates.map((candidate) => ({
-      ...candidate,
-      media: filterHotCandidatePreviewMedia(candidate.media),
-    })),
+    candidates: await attachExistingHotCandidateMedia(result.candidates),
   };
 }
 
