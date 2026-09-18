@@ -1196,10 +1196,9 @@ class NativeTweetBotController:
         total_pages = max(1, (len(personas) + PAGE_SIZE - 1) // PAGE_SIZE)
         page = min(page, total_pages - 1)
         start = page * PAGE_SIZE
-        # Keep the selector focused on selecting a persona.  Creation,
-        # grouping and matrix operations are global actions and live behind
-        # the management page so a long persona list never becomes a mixed
-        # action menu.
+        # Keep the selector focused on selecting a persona.  Creation and
+        # other global actions live behind the management page so a long
+        # persona list never becomes a mixed action menu.
         management_callback = (
             "tt:personamanage"
             if page == 0
@@ -1259,24 +1258,22 @@ class NativeTweetBotController:
         *,
         page: int = 0,
     ) -> None:
-        """Render global persona actions separately from persona selection.
+        """Render global persona creation actions separately from selection.
 
-        This mirrors the R18 Telegram flow: the list page is a selector and
-        all operations that do not depend on a selected persona are grouped
-        here.  Keep the grouping entry visible even when the list is empty so
-        users can create their first group before assigning personas.
+        The Telegram surface follows the R18 pattern of a focused selector
+        followed by a compact action page.  Group management is intentionally
+        not exposed here; it is a Web-only organization feature.
         """
         button = types.InlineKeyboardButton
         rows = [
             [button(text="➕ 手工新建人设", callback_data="tt:persona_new")],
             [button(text="✨ AI 生成人设", callback_data="tt:persona_ai_new")],
             [button(text="🔗 复制公开人设", callback_data="tt:persona_copy_new")],
-            [button(text="🗂 人设分组", callback_data="tt:personagroups:0")],
-            [button(text="🚀 矩阵发布", callback_data="tt:matrix")],
             [button(text="返回人设列表", callback_data=f"tt:personas:{max(0, int(page or 0))}")],
         ]
         await query.message.edit_text(
-            "人设管理",
+            "人设管理\n\n"
+            "新建或复制人设资料；选择具体人设后，再进入推文生成、内容管理、发布和设置。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -1334,6 +1331,7 @@ class NativeTweetBotController:
         persona_id: str,
         module: str,
         page: int = 0,
+        persona: dict[str, Any] | None = None,
     ) -> tuple[str, Any]:
         button = types.InlineKeyboardButton
         # `generate` was the original label used by saved Telegram
@@ -1347,20 +1345,35 @@ class NativeTweetBotController:
             "publishmenu": "publish",
         }.get(str(module or "").strip().lower(), str(module or "").strip().lower())
         back = self._persona_module_back_row(types, chat_id, persona_id, page=page)
+        persona_name = str((persona or {}).get("name") or "").strip()
+        persona_context = f"当前人设：{persona_name}\n\n" if persona_name else ""
         if module == "settings":
+            counts = persona.get("counts") if isinstance(persona, dict) and isinstance(persona.get("counts"), dict) else {}
+            platform_accounts = counts.get("platform_accounts") if isinstance(counts.get("platform_accounts"), list) else []
+            settings_context = (
+                f"{persona_context}"
+                f"草稿：{counts.get('posts', 0)} 篇 · 已发布：{counts.get('published', 0)} 篇\n"
+                f"平台账号：{'、'.join(str(item).strip() for item in platform_accounts if str(item).strip()) or '未绑定'}\n\n"
+                if persona_name
+                else ""
+            )
             return (
-                "人设设置",
+                "⚙️ 人设设置\n\n" + settings_context
+                + "资料\n"
+                + "• 基础资料：名称、简介、推文风格、记忆和链接模板。\n"
+                + "• 人设图与图库：查看、上传、替换、删除或生成人设参考图。\n\n"
+                + "账号与数据\n"
+                + "• 平台账号绑定：管理当前人设使用的 Threads/Instagram 等已授权账号。\n"
+                + "• 刷新数据：同步绑定平台的公开资料和热点指标，不覆盖简介或图库。\n\n"
+                + "维护\n"
+                + "• 复制当前人设：创建独立副本；删除人设会移除关联内容且不可恢复。",
                 types.InlineKeyboardMarkup(inline_keyboard=[
-                    [button(text="⚙️ 基础资料", callback_data="tt:profile")],
-                    [button(text="🧑‍🎨 人设图与图库", callback_data="tt:personaimage")],
                     [
-                        button(text="🔗 平台账号绑定", callback_data="tt:persona_accounts"),
-                        button(text="🗂 加入分组", callback_data=callback_token(chat_id, "groupassign", {
-                            "persona_id": persona_id,
-                            "persona_page": max(0, int(page or 0)),
-                        })),
+                        button(text="⚙️ 基础资料", callback_data="tt:profile"),
+                        button(text="🧑‍🎨 人设图与图库", callback_data="tt:personaimage"),
                     ],
                     [
+                        button(text="🔗 平台账号绑定", callback_data="tt:persona_accounts"),
                         button(text="🔄 刷新数据", callback_data=callback_token(chat_id, "prefresh", {
                             "persona_id": persona_id,
                             "persona_page": max(0, int(page or 0)),
@@ -1381,7 +1394,8 @@ class NativeTweetBotController:
             )
         if module == "create":
             return (
-                "新建推文",
+                "✍️ 新建推文\n\n" + persona_context
+                + "为当前人设创建待发布内容：可用 AI 生成、热点创作，或直接手工保存草稿。",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [button(text="✨ AI 生成推文", callback_data="tt:generate")],
                     [button(text="🔥 热点创作", callback_data="tt:hot")],
@@ -1391,7 +1405,8 @@ class NativeTweetBotController:
             )
         if module == "content":
             return (
-                "推文内容",
+                "📝 推文内容\n\n" + persona_context
+                + "管理当前人设的草稿、收藏和推文配图；编辑只影响当前内容，不会覆盖人设资料。",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [
                         button(text="📝 草稿与推文", callback_data="tt:postsmenu"),
@@ -1403,7 +1418,8 @@ class NativeTweetBotController:
             )
         if module == "publish":
             return (
-                "发布管理",
+                "🚀 发布管理\n\n" + persona_context
+                + "选择内容和已授权平台账号，执行立即/定时发布、矩阵发布，并查看发布历史。",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [button(text="🚀 发布推文（立即/定时）", callback_data="tt:publish_one")],
                     [
@@ -1444,7 +1460,22 @@ class NativeTweetBotController:
             await self._persona_list(query, types, member, 0)
             return
         page = max(0, int((state.get("payload") or {}).get("persona_list_page") or 0))
-        text, markup = self._persona_module_payload(types, chat_id, persona_id, module, page=page)
+        persona = None
+        try:
+            personas = await self._call(int(member["web_user_id"]), "personas.list")
+            persona = next(
+                (item for item in (personas if isinstance(personas, list) else [])
+                 if isinstance(item, dict) and str(item.get("id") or "") == persona_id),
+                None,
+            )
+        except Exception:
+            # Module navigation should still work when the summary refresh is
+            # temporarily unavailable; action callbacks perform their own
+            # authoritative checks.
+            persona = None
+        text, markup = self._persona_module_payload(
+            types, chat_id, persona_id, module, page=page, persona=persona,
+        )
         await query.message.edit_text(text, reply_markup=markup)
 
     async def _persona_groups(self, query: Any, types: Any, member: dict[str, Any], page: int = 0) -> None:
@@ -3825,6 +3856,36 @@ class NativeTweetBotController:
                 await self._render_persona_module(query, types, member, "publish")
             elif action == "personas":
                 await self._persona_list(query, types, member, int(parts[2]) if len(parts) > 2 else 0)
+            elif action in {
+                "personagroups",
+                "group",
+                "groupnew",
+                "groupadd",
+                "groupaddselect",
+                "groupremove",
+                "groupassign",
+                "groupassignselect",
+                "grouprename",
+                "groupdeleteask",
+                "groupdelete",
+            }:
+                # Group management remains a Web-only organization feature.
+                # Keep stale Telegram callbacks harmless instead of allowing
+                # old keyboards to reopen a feature removed from this Bot.
+                clear_pending_state(chat_id)
+                state = load_state(chat_id)
+                return_callback = (
+                    "tt:pmod:settings"
+                    if state.get("selected_persona_id")
+                    else "tt:personamanage"
+                )
+                await query.message.edit_text(
+                    "Telegram 版已移除人设分组功能。\n"
+                    "请返回人设设置继续管理资料、图库、平台账号或数据刷新。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="返回", callback_data=return_callback),
+                    ]]),
+                )
             elif action == "personagroups":
                 await self._persona_groups(query, types, member, int(parts[2]) if len(parts) > 2 else 0)
             elif action == "group" and len(parts) > 2:

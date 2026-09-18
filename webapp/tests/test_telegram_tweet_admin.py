@@ -686,8 +686,12 @@ class TelegramTweetAdminTests(unittest.TestCase):
         }
         self.assertEqual(management_callbacks, {
             "tt:persona_new", "tt:persona_ai_new", "tt:persona_copy_new",
-            "tt:personagroups:0", "tt:matrix", "tt:personas:0",
+            "tt:personas:0",
         })
+        self.assertIn("新建或复制人设资料", message.edits[-1][0])
+        self.assertNotIn("人设分组", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:personagroups:0", message), _Types))
+        self.assertIn("已移除人设分组功能", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:personamenu", message), _Types))
         self.assertIn("人设管理", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:pmod:create", message), _Types))
@@ -732,14 +736,24 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:publishmenu", message), _Types))
         self.assertIn("发布管理", message.edits[-1][0])
 
-        # Entry menus stay compact; detailed instructions belong to the
-        # following action-specific steps.
-        self.assertEqual(message.edits[-1][0], "发布管理")
+        self.assertIn("发布管理", message.edits[-1][0])
+        self.assertIn("立即/定时发布", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:pmod:settings", message), _Types))
-        self.assertEqual(message.edits[-1][0], "人设设置")
+        self.assertIn("人设设置", message.edits[-1][0])
+        self.assertIn("基础资料", message.edits[-1][0])
+        self.assertIn("平台账号绑定", message.edits[-1][0])
+        self.assertNotIn("加入分组", message.edits[-1][0])
+        settings_callbacks = {
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertFalse(any("group" in item for item in settings_callbacks))
 
         asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
-        self.assertEqual(message.edits[-1][0], "推文内容")
+        self.assertIn("推文内容", message.edits[-1][0])
+        self.assertIn("草稿、收藏和推文配图", message.edits[-1][0])
 
     def test_persona_management_and_module_back_preserve_list_page(self):
         personas = [
