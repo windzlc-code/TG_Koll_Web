@@ -1352,21 +1352,16 @@ class NativeTweetBotController:
             platform_accounts = counts.get("platform_accounts") if isinstance(counts.get("platform_accounts"), list) else []
             settings_context = (
                 f"{persona_context}"
-                f"草稿：{counts.get('posts', 0)} 篇 · 已发布：{counts.get('published', 0)} 篇\n"
-                f"平台账号：{'、'.join(str(item).strip() for item in platform_accounts if str(item).strip()) or '未绑定'}\n\n"
+                f"平台账号：{'、'.join(str(item).strip() for item in platform_accounts if str(item).strip()) or '未绑定'}\n"
+                f"待发布推文：{counts.get('posts', 0)} 篇\n"
+                f"已发布：{counts.get('published', 0)} 篇\n"
+                f"人设图：{counts.get('images', 0)} 张\n\n"
                 if persona_name
                 else ""
             )
             return (
                 "⚙️ 人设设置\n\n" + settings_context
-                + "资料\n"
-                + "• 基础资料：名称、简介、推文风格、记忆和链接模板。\n"
-                + "• 人设图与图库：查看、上传、替换、删除或生成人设参考图。\n\n"
-                + "账号与数据\n"
-                + "• 平台账号绑定：管理当前人设使用的 Threads/Instagram 等已授权账号。\n"
-                + "• 刷新数据：同步绑定平台的公开资料和热点指标，不覆盖简介或图库。\n\n"
-                + "维护\n"
-                + "• 复制当前人设：创建独立副本；删除人设会移除关联内容且不可恢复。",
+                + "请选择要设置的项目。",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [
                         button(text="⚙️ 基础资料", callback_data="tt:profile"),
@@ -1814,6 +1809,134 @@ class NativeTweetBotController:
                 url=f"{base}/console.html?view=accounts",
             )])
         rows.append([types.InlineKeyboardButton(text="返回", callback_data=return_callback)])
+        return text, types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+    async def _persona_binding_payload(
+        self,
+        types: Any,
+        member: dict[str, Any],
+        persona_id: str,
+        *,
+        page: int = 0,
+    ) -> tuple[str, Any]:
+        """Show accounts detected for the selected persona and bind actions.
+
+        R18 presents the current persona/account state first and then exposes
+        the platform action buttons.  The Web account API is the source of
+        truth here: Telegram does not ask users to type a platform handle and
+        never receives credentials.  Accounts already owned by another
+        persona get an explicit rebind confirmation instead of disappearing
+        from the picker.
+        """
+        chat_id = int(member.get("chat_id") or 0)
+        user_id = int(member["web_user_id"])
+        persona_id = str(persona_id or "").strip()
+        if not persona_id:
+            raise HTTPException(status_code=400, detail="请先选择人设")
+        accounts_raw = await self._call(user_id, "accounts.list")
+        accounts = [item for item in (accounts_raw if isinstance(accounts_raw, list) else []) if isinstance(item, dict)]
+        persona_name = "当前人设"
+        persona_names: dict[str, str] = {}
+        try:
+            personas_raw = await self._call(user_id, "personas.list")
+            personas = [item for item in (personas_raw if isinstance(personas_raw, list) else []) if isinstance(item, dict)]
+            persona_names = {
+                str(item.get("id") or "").strip(): str(item.get("name") or "未命名人设").strip()
+                for item in personas if str(item.get("id") or "").strip()
+            }
+            persona_name = persona_names.get(persona_id, persona_name)
+        except Exception:
+            logger.debug("Failed to load persona names for binding picker", exc_info=True)
+
+        blocked_statuses = {"disabled", "removed", "revoked", "expired", "error", "failed"}
+        current_bindings: dict[str, list[str]] = {}
+        platform_names: set[str] = set()
+        for account in accounts:
+            platform_raw = str(account.get("platform") or "未知平台").strip()
+            platform = {"threads": "Threads", "instagram": "Instagram"}.get(
+                platform_raw.lower(), platform_raw,
+            )
+            platform_names.add(platform)
+            if str(account.get("persona_id") or "").strip() != persona_id:
+                continue
+            username = str(account.get("username") or "未设置账号").strip().lstrip("@")
+            current_bindings.setdefault(platform, []).append(f"@{username}" if username else "未设置账号")
+        platform_lines = []
+        for platform in sorted(platform_names):
+            values = current_bindings.get(platform) or []
+            platform_lines.append(f"{platform}：{'、'.join(values) if values else '未绑定'}")
+        bindable = []
+        for item in accounts:
+            status = str(item.get("status") or "").strip().lower()
+            health = str(item.get("health_status") or "").strip().lower()
+            if status in blocked_statuses or health in blocked_statuses:
+                continue
+            if str(item.get("id") or "").strip():
+                bindable.append(item)
+        page_rows, safe_page, total_pages = _pagination_rows(
+            types,
+            page=page,
+            total_items=len(bindable),
+            callback_for_page=lambda target: callback_token(
+                chat_id, "pabindpage", {"persona_id": persona_id, "page": target},
+            ),
+        )
+        rows: list[list[Any]] = []
+        start = safe_page * PAGE_SIZE
+        for account in bindable[start:start + PAGE_SIZE]:
+            account_id = str(account.get("id") or "").strip()
+            platform_raw = str(account.get("platform") or "未知平台").strip()
+            platform = {"threads": "Threads", "instagram": "Instagram"}.get(
+                platform_raw.lower(), platform_raw,
+            )
+            username = str(account.get("username") or "未设置账号").strip().lstrip("@")
+            bound_persona_id = str(account.get("persona_id") or "").strip()
+            display_name = f"{platform} · @{username}" if username else platform
+            account_reference = callback_token(chat_id, "ac", {
+                "account_id": account_id,
+                "return_callback": "tt:persona_accounts",
+                "persona_filter": persona_id,
+                "operation": "",
+                "page": safe_page,
+            })
+            if bound_persona_id == persona_id:
+                rows.append([types.InlineKeyboardButton(
+                    text=f"✅ {display_name[:42]}（当前）",
+                    callback_data=account_reference,
+                )])
+            elif bound_persona_id:
+                rebind_reference = callback_token(chat_id, "pabind", {
+                    "account_id": account_id,
+                    "persona_id": persona_id,
+                    "page": safe_page,
+                    "bound_persona_name": persona_names.get(bound_persona_id, "其他人设"),
+                })
+                rows.append([types.InlineKeyboardButton(
+                    text=f"🔁 {display_name[:34]}（改绑）",
+                    callback_data=rebind_reference,
+                )])
+            else:
+                bind_reference = callback_token(chat_id, "pabind", {
+                    "account_id": account_id,
+                    "persona_id": persona_id,
+                    "page": safe_page,
+                })
+                rows.append([types.InlineKeyboardButton(
+                    text=f"🔗 {display_name[:38]}（绑定）",
+                    callback_data=bind_reference,
+                )])
+        rows.extend(page_rows)
+        rows.append([types.InlineKeyboardButton(text="📂 查看全部平台账号", callback_data="tt:platformaccounts")])
+        rows.append([types.InlineKeyboardButton(text="上一步", callback_data="tt:pmod:settings")])
+        text = (
+            "🔗 人设账号绑定\n\n"
+            f"人设：{persona_name}\n"
+            + ("\n".join(platform_lines) if platform_lines else "平台账号：未绑定")
+            + f"\n可绑定账号：{len(bindable)} 个\n\n"
+            "请选择要绑定的已授权账号。"
+        )
+        if bindable and total_pages > 1:
+            text += f"\n第 {safe_page + 1}/{total_pages} 页"
         return text, types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _vecto_session_payload(self, types: Any, member: dict[str, Any]) -> tuple[str, Any]:
@@ -3616,6 +3739,100 @@ class NativeTweetBotController:
                     page=int(reference.get("page") or 0),
                 )
                 await query.message.edit_text(page_text, reply_markup=markup)
+            elif action == "persona_accounts":
+                state = load_state(chat_id)
+                persona_id = str(state.get("selected_persona_id") or "").strip()
+                page_text, markup = await self._persona_binding_payload(
+                    types, member, persona_id, page=0,
+                )
+                await query.message.edit_text(page_text, reply_markup=markup)
+            elif action == "pabindpage" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pabindpage", parts[2])
+                page_text, markup = await self._persona_binding_payload(
+                    types,
+                    member,
+                    str(reference.get("persona_id") or ""),
+                    page=int(reference.get("page") or 0),
+                )
+                await query.message.edit_text(page_text, reply_markup=markup)
+            elif action == "pabind" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pabind", parts[2])
+                account_id = str(reference.get("account_id") or "").strip()
+                persona_id = str(reference.get("persona_id") or "").strip()
+                if not account_id or not persona_id:
+                    raise HTTPException(status_code=410, detail="绑定选项已失效，请重新打开人设账号绑定")
+                accounts = await self._call(user_id, "accounts.list")
+                account = next(
+                    (item for item in (accounts if isinstance(accounts, list) else [])
+                     if isinstance(item, dict) and str(item.get("id") or "") == account_id),
+                    None,
+                )
+                if not account:
+                    raise HTTPException(status_code=404, detail="平台账号不存在或已被移除")
+                if (
+                    str(account.get("status") or "").strip().lower() in {"disabled", "removed", "revoked", "expired", "error", "failed"}
+                    or str(account.get("health_status") or "").strip().lower() in {"disabled", "removed", "revoked", "expired", "error", "failed"}
+                ):
+                    raise HTTPException(status_code=409, detail="该平台账号当前不可绑定，请先恢复授权状态")
+                bound_persona_id = str(account.get("persona_id") or "").strip()
+                if bound_persona_id and bound_persona_id != persona_id:
+                    confirm_token = callback_token(chat_id, "pabindconfirm", {
+                        "account_id": account_id,
+                        "persona_id": persona_id,
+                        "page": max(0, int(reference.get("page") or 0)),
+                        "bound_persona_name": str(reference.get("bound_persona_name") or "其他人设"),
+                    })
+                    platform = str(account.get("platform") or "未知平台").strip()
+                    username = str(account.get("username") or "未设置账号").strip().lstrip("@")
+                    await query.message.edit_text(
+                        f"确认改绑账号？\n\n平台：{platform}\n账号：@{username}\n"
+                        f"当前人设：{reference.get('bound_persona_name') or '其他人设'}\n"
+                        "确认后该账号将改为绑定当前人设。",
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
+                            [types.InlineKeyboardButton(text="确认改绑", callback_data=confirm_token)],
+                            [types.InlineKeyboardButton(text="取消", callback_data="tt:persona_accounts")],
+                        ]),
+                    )
+                else:
+                    await self._call(user_id, "accounts.bind_persona", {
+                        "account_id": account_id,
+                        "persona_id": persona_id,
+                        "replace_existing_binding": True,
+                    })
+                    audit_action(chat_id, user_id, "accounts.bind_persona", status="success", resource_type="account", resource_id=account_id)
+                    page_text, markup = await self._persona_binding_payload(
+                        types, member, persona_id, page=int(reference.get("page") or 0),
+                    )
+                    await query.message.edit_text("账号已绑定当前人设。\n\n" + page_text, reply_markup=markup)
+            elif action == "pabindconfirm" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pabindconfirm", parts[2], consume=True)
+                account_id = str(reference.get("account_id") or "").strip()
+                persona_id = str(reference.get("persona_id") or "").strip()
+                if not account_id or not persona_id:
+                    raise HTTPException(status_code=410, detail="绑定确认已失效，请重新打开人设账号绑定")
+                accounts = await self._call(user_id, "accounts.list")
+                account = next(
+                    (item for item in (accounts if isinstance(accounts, list) else [])
+                     if isinstance(item, dict) and str(item.get("id") or "") == account_id),
+                    None,
+                )
+                if not account:
+                    raise HTTPException(status_code=404, detail="平台账号不存在或已被移除")
+                if (
+                    str(account.get("status") or "").strip().lower() in {"disabled", "removed", "revoked", "expired", "error", "failed"}
+                    or str(account.get("health_status") or "").strip().lower() in {"disabled", "removed", "revoked", "expired", "error", "failed"}
+                ):
+                    raise HTTPException(status_code=409, detail="该平台账号当前不可绑定，请先恢复授权状态")
+                await self._call(user_id, "accounts.bind_persona", {
+                    "account_id": account_id,
+                    "persona_id": persona_id,
+                    "replace_existing_binding": True,
+                })
+                audit_action(chat_id, user_id, "accounts.bind_persona", status="success", resource_type="account", resource_id=account_id)
+                page_text, markup = await self._persona_binding_payload(
+                    types, member, persona_id, page=int(reference.get("page") or 0),
+                )
+                await query.message.edit_text("账号已改绑当前人设。\n\n" + page_text, reply_markup=markup)
             elif action == "accounts":
                 # Compatibility for older notifications/bookmarks that still
                 # point at tt:accounts. Platform accounts now have their own
@@ -6333,16 +6550,10 @@ class NativeTweetBotController:
                     "请发送新的 Threads 用户名；只更新当前人设的平台字段。\n"
                     "发送 /unbind 解除绑定，发送 /cancel 取消。"
                 )
-            elif action in {"accounts", "persona_accounts"}:
+            elif action == "accounts":
                 state = load_state(chat_id)
-                return_callback = "tt:menu"
-                if action == "persona_accounts" and state["selected_persona_id"]:
-                    return_callback = callback_token(
-                        chat_id, "p", {"persona_id": state["selected_persona_id"]},
-                    )
                 page_text, markup = await self._accounts_payload(
-                    types, member, return_callback=return_callback,
-                    persona_id=state["selected_persona_id"] if action == "persona_accounts" else "",
+                    types, member, return_callback="tt:menu",
                 )
                 await query.message.edit_text(page_text, reply_markup=markup)
             else:

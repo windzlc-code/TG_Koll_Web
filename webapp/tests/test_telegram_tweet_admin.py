@@ -740,8 +740,10 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("立即/定时发布", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:pmod:settings", message), _Types))
         self.assertIn("人设设置", message.edits[-1][0])
-        self.assertIn("基础资料", message.edits[-1][0])
-        self.assertIn("平台账号绑定", message.edits[-1][0])
+        self.assertIn("待发布推文：2 篇", message.edits[-1][0])
+        self.assertIn("请选择要设置的项目", message.edits[-1][0])
+        self.assertNotIn("基础资料：名称、简介", message.edits[-1][0])
+        self.assertNotIn("平台账号绑定：管理", message.edits[-1][0])
         self.assertNotIn("加入分组", message.edits[-1][0])
         settings_callbacks = {
             button.callback_data
@@ -759,6 +761,68 @@ class TelegramTweetAdminTests(unittest.TestCase):
         stale_group_input = _Message(text="旧分组输入")
         asyncio.run(controller.handle_text(stale_group_input, _Types))
         self.assertIn("已移除人设分组功能", stale_group_input.answers[-1][0])
+
+    def test_persona_binding_page_detects_accounts_and_binds_without_manual_handle(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, dict(payload)))
+            if action == "personas.list":
+                return [
+                    {"id": "persona-a", "name": "科技观察员", "counts": {"posts": 2}},
+                    {"id": "persona-b", "name": "旧人设", "counts": {"posts": 1}},
+                ]
+            if action == "accounts.list":
+                return [
+                    {
+                        "id": "threads-free", "platform": "threads", "username": "alice",
+                        "status": "ready", "health_status": "alive", "persona_id": "",
+                    },
+                    {
+                        "id": "instagram-other", "platform": "instagram", "username": "ig-old",
+                        "status": "ready", "health_status": "alive", "persona_id": "persona-b",
+                    },
+                ]
+            if action == "accounts.bind_persona":
+                return {"id": payload["account_id"], "persona_id": payload["persona_id"]}
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:persona_accounts", message), _Types))
+        text, kwargs = message.edits[-1]
+        self.assertIn("人设：科技观察员", text)
+        self.assertIn("可绑定账号：2 个", text)
+        labels = [
+            button.text
+            for row in kwargs["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "text", "")
+        ]
+        self.assertTrue(any("Threads · @alice" in label and "绑定" in label for label in labels))
+        self.assertTrue(any("Instagram · @ig-old" in label and "改绑" in label for label in labels))
+        bind_callback = next(
+            button.callback_data
+            for row in kwargs["reply_markup"].inline_keyboard
+            for button in row
+            if str(getattr(button, "callback_data", "")).startswith("tt:pabind:")
+            and "Threads" in str(getattr(button, "text", ""))
+        )
+        asyncio.run(controller.handle_callback(_Query(bind_callback, message), _Types))
+        self.assertIn(
+            ("accounts.bind_persona", {
+                "account_id": "threads-free",
+                "persona_id": "persona-a",
+                "replace_existing_binding": True,
+            }),
+            calls,
+        )
+        self.assertIn("账号已绑定当前人设", message.edits[-1][0])
 
     def test_persona_management_and_module_back_preserve_list_page(self):
         personas = [
