@@ -6541,25 +6541,14 @@ class NativeTweetBotController:
                         types.InlineKeyboardButton(text="重新分析", callback_data="tt:persona_copy_new"),
                     ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]),
                 )
-            elif mode == "persona_group_create":
-                result = await self._call(user_id, "persona.group.create", {"name": text[:80]})
-                clear_pending_state(chat_id)
-                group = result.get("group") if isinstance(result, dict) and isinstance(result.get("group"), dict) else {}
-                await message.answer(
-                    f"人设分组已创建：{str(group.get('name') or text[:80])}。",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
-                        text="查看人设分组", callback_data="tt:personagroups:0",
-                    )]]),
-                )
-            elif mode == "persona_group_rename":
-                group_id = str(state["payload"].get("group_id") or "")
-                await self._call(user_id, "persona.group.rename", {"group_id": group_id, "name": text[:80]})
-                groups_page = max(0, int(state["payload"].get("groups_page") or 0))
+            elif mode in {"persona_group_create", "persona_group_rename"}:
+                # A pre-upgrade chat may still have a pending group input
+                # state.  Clear it without calling the Web group API.
                 clear_pending_state(chat_id)
                 await message.answer(
-                    "人设分组已重命名。",
+                    "Telegram 版已移除人设分组功能；本次输入已取消。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
-                        text="查看人设分组", callback_data=f"tt:personagroups:{groups_page}",
+                        text="返回人设", callback_data="tt:personas:0",
                     )]]),
                 )
             elif mode == "generate_prompt":

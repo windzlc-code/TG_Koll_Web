@@ -755,6 +755,11 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("推文内容", message.edits[-1][0])
         self.assertIn("草稿、收藏和推文配图", message.edits[-1][0])
 
+        save_state(101, mode="persona_group_create", payload={})
+        stale_group_input = _Message(text="旧分组输入")
+        asyncio.run(controller.handle_text(stale_group_input, _Types))
+        self.assertIn("已移除人设分组功能", stale_group_input.answers[-1][0])
+
     def test_persona_management_and_module_back_preserve_list_page(self):
         personas = [
             {"id": f"persona-{index}", "name": f"人设 {index}", "counts": {"posts": 0}}
