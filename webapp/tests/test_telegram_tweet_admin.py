@@ -468,6 +468,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
         message = _Message(text="📊 排程状态")
         asyncio.run(controller.handle_text(message, _Types))
         text = message.answers[-1][0]
+        self.assertNotIn("点击下方分类查看详情", text)
+        self.assertNotIn("列表默认加载最近", text)
         self.assertIn("待发布：2", text)
         self.assertIn("定时任务：1", text)
         self.assertIn("立即任务：1", text)
@@ -599,6 +601,9 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         message = _Message(text="🔐 账号管理")
         asyncio.run(controller.handle_text(message, _Types))
+        self.assertIn("VECTO 网页账号：tweet_alice", message.answers[-1][0])
+        self.assertIn("平台授权账号：1", message.answers[-1][0])
+        self.assertNotIn("已将两类账号分开", message.answers[-1][0])
         menu = message.answers[-1][1]["reply_markup"]
         callbacks = {
             button.callback_data
@@ -663,6 +668,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
             if str(getattr(button, "callback_data", "")).startswith("tt:p:")
         )
         asyncio.run(controller.handle_callback(_Query(persona_callback, message), _Types))
+        self.assertNotIn("请选择要进入的模块", message.edits[-1][0])
+        self.assertNotIn("进入模块后会按", message.edits[-1][0])
         callbacks = {
             button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
             if getattr(button, "callback_data", None)
@@ -725,18 +732,14 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:publishmenu", message), _Types))
         self.assertIn("发布管理", message.edits[-1][0])
 
-        # Each visible module explains the next step instead of exposing only
-        # terse callback labels.  Keep the callback contract assertions above
-        # unchanged so copy improvements cannot silently remove actions.
-        self.assertIn("发布推文：选择草稿、平台账号", message.edits[-1][0])
-        self.assertIn("矩阵发布：一次选择多个人设", message.edits[-1][0])
-        self.assertIn("发布历史：分页查看", message.edits[-1][0])
+        # Entry menus stay compact; detailed instructions belong to the
+        # following action-specific steps.
+        self.assertEqual(message.edits[-1][0], "发布管理")
         asyncio.run(controller.handle_callback(_Query("tt:pmod:settings", message), _Types))
-        self.assertIn("基础资料：修改名称、简介、推文风格", message.edits[-1][0])
-        self.assertIn("每项只修改对应资料", message.edits[-1][0])
+        self.assertEqual(message.edits[-1][0], "人设设置")
 
         asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
-        self.assertIn("列表底部提供首页、上一页、下一页和尾页", message.edits[-1][0])
+        self.assertEqual(message.edits[-1][0], "推文内容")
 
     def test_persona_management_and_module_back_preserve_list_page(self):
         personas = [

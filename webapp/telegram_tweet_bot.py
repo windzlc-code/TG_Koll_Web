@@ -1092,8 +1092,7 @@ class NativeTweetBotController:
                 selected = ""
         clear_pending_state(int(message.chat.id))
         await message.answer(
-            f"当前 Telegram 已绑定且网页登录会话有效。{selected}\n"
-            "请使用输入框下方的固定入口；人设相关操作均从“我的人设”逐步进入。",
+            f"当前 Telegram 已绑定且网页登录会话有效。{selected}",
             reply_markup=self._main_keyboard(types),
         )
 
@@ -1238,15 +1237,12 @@ class NativeTweetBotController:
         }.get(resume_action, "")
         if personas:
             text = (
-                f"{resume_text} · 准备步骤\n请选择要使用的人设，选择后会自动继续。"
+                f"{resume_text} · 选择人设\n第 {page + 1}/{total_pages} 页"
                 if resume_text
-                else f"我的人设（{len(personas)}）\n第 {page + 1}/{total_pages} 页\n请选择人设进入详情和设置。\n"
-                     "进入详情后可按模块处理新建推文、内容、发布和人设设置。"
+                else f"我的人设（{len(personas)}）\n第 {page + 1}/{total_pages} 页"
             )
-            if not resume_text:
-                text += "\n新建、分组和矩阵发布请从“人设管理”进入；底部可用首页/上一页/下一页/尾页。"
         else:
-            text = "尚无人设，请先进入“人设管理”。\n可选择手工新建、AI 生成人设或复制公开人设，完成后会自动回到这里。"
+            text = "我的人设\n暂无人设"
         return text, types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _persona_list(self, query: Any, types: Any, member: dict[str, Any], page: int) -> None:
@@ -1280,14 +1276,7 @@ class NativeTweetBotController:
             [button(text="返回人设列表", callback_data=f"tt:personas:{max(0, int(page or 0))}")],
         ]
         await query.message.edit_text(
-            "人设管理\n\n"
-            "这里处理不依赖单个人设的全局操作；已有的人设请返回列表后点击名称进入详情。\n\n"
-            "➕ 手工新建：发送“名称｜简介”，直接建立可编辑草稿。\n"
-            "✨ AI 生成人设：发送“名称｜提示词”，先选择关键词，再确认创建。\n"
-            "🔗 复制公开人设：提交 Threads/Instagram 公开主页，分析后确认复制。\n"
-            "🗂 人设分组：创建分组、添加或移出人设，便于统一管理。\n"
-            "🚀 矩阵发布：依次选择人设、内容来源、平台，最后确认后才入队。\n\n"
-            "每个步骤都会显示当前选择、可执行操作和返回入口，误触可随时取消。",
+            "人设管理",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -1302,13 +1291,7 @@ class NativeTweetBotController:
             f"简介：{content[:260] or '未填写'}\n"
             f"草稿：{counts.get('posts', 0)} 篇\n"
             f"收藏：{counts.get('favorites', 0)} 篇 · 已发布：{counts.get('published', 0)} 篇\n"
-            f"人设图：{counts.get('images', 0)} 张 · 平台账号：{platform_text}\n\n"
-            "请选择要进入的模块：\n"
-            "✍️ 新建推文：AI 生成、热点创作或手工建立草稿。\n"
-            "📝 推文内容：查看草稿/收藏，编辑正文、媒体和配图。\n"
-            "🚀 发布管理：立即发布、定时发布、矩阵发布和历史记录。\n"
-            "⚙️ 人设设置：资料、记忆、链接、人设图、账号绑定和分组。\n"
-            "进入模块后会按“选择 → 确认 → 执行”逐步提示。"
+            f"人设图：{counts.get('images', 0)} 张 · 平台账号：{platform_text}"
         )
 
     @staticmethod
@@ -1366,14 +1349,7 @@ class NativeTweetBotController:
         back = self._persona_module_back_row(types, chat_id, persona_id, page=page)
         if module == "settings":
             return (
-                "人设设置\n\n"
-                "基础资料：修改名称、简介、推文风格、链接模板和人设记忆。\n"
-                "人设图与图库：生成/上传图片，设置当前参考图或头像，并管理历史图片。\n"
-                "平台账号绑定：查看 Threads/Instagram 授权账号，并更换或解绑人设。\n"
-                "加入分组：把当前人设加入已有分组，方便矩阵或批量管理。\n"
-                "刷新数据：重新读取 Web 端的人设、草稿和收藏统计。\n"
-                "复制当前人设：创建一份独立副本；删除人设前会再次确认。\n\n"
-                "请选择下方功能；每项只修改对应资料，不会覆盖其他未定义内容。",
+                "人设设置",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [button(text="⚙️ 基础资料", callback_data="tt:profile")],
                     [button(text="🧑‍🎨 人设图与图库", callback_data="tt:personaimage")],
@@ -1405,11 +1381,7 @@ class NativeTweetBotController:
             )
         if module == "create":
             return (
-                "新建推文\n\n"
-                "✨ AI 生成推文：设置数量、字数、主题、平台、语言、时段、方向和人设记忆，确认后提交。\n"
-                "🔥 热点创作：输入热点主题，等待任务完成后选择候选保存为草稿或改写。\n"
-                "📝 手工新建草稿：直接输入正文，再按需添加图片、视频或文件。\n\n"
-                "生成和热点任务都会先进入确认页，不会在填写过程中提前提交。",
+                "新建推文",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [button(text="✨ AI 生成推文", callback_data="tt:generate")],
                     [button(text="🔥 热点创作", callback_data="tt:hot")],
@@ -1419,11 +1391,7 @@ class NativeTweetBotController:
             )
         if module == "content":
             return (
-                "推文内容\n\n"
-                "📝 草稿与推文：分页查看正文，进入详情后可编辑、加媒体、收藏、删除或发布。\n"
-                "⭐ 收藏：查看已保存的内容，仍可打开详情并发布。\n"
-                "🖼 推文配图：选择草稿后设置数量、比例、构图、风格和补充提示词，再提交配图任务。\n\n"
-                "点击具体条目进入详情；列表底部提供首页、上一页、下一页和尾页。",
+                "推文内容",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [
                         button(text="📝 草稿与推文", callback_data="tt:postsmenu"),
@@ -1435,11 +1403,7 @@ class NativeTweetBotController:
             )
         if module == "publish":
             return (
-                "发布管理\n\n"
-                "🚀 发布推文：选择草稿、平台账号，再选择立即发布或输入北京时间定时发布。\n"
-                "🧩 矩阵发布：一次选择多个人设，统一指定草稿/收藏来源和 Threads/Instagram 平台。\n"
-                "🕘 发布历史：分页查看平台、账号和时间，可重新加入草稿或删除记录。\n\n"
-                "提交前会展示人设、正文、账号、平台和时间；只有确认后才会进入发布队列。",
+                "发布管理",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [button(text="🚀 发布推文（立即/定时）", callback_data="tt:publish_one")],
                     [
@@ -1525,8 +1489,7 @@ class NativeTweetBotController:
         rows.append([types.InlineKeyboardButton(text="返回我的人设", callback_data="tt:personas:0")])
         text = (
             f"人设分组（{len(groups)}）\n第 {safe_page + 1}/{total_pages}\n"
-            "请选择分组查看成员；进入后可添加、移出、重命名或删除分组。"
-            if groups else "暂无人设分组。\n点击“新建分组”后发送名称，再从分组详情添加人设。"
+            if groups else "人设分组\n暂无分组"
         )
         await query.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows))
 
@@ -1855,11 +1818,8 @@ class NativeTweetBotController:
         ]
         return (
             "账号管理\n\n"
-            "已将两类账号分开：\n"
-            "• VECTO 网页账号：Telegram 工作台登录、切换和退出。\n"
-            "• 平台授权账号：Threads、Instagram 等平台授权、登录检测和人设绑定。\n"
-            "平台账号密码、验证码不会通过 Telegram 传输；需要登录时会进入安全浏览器/OAuth流程。\n"
-            "网页账号登录状态只负责确认 VECTO 用户身份，不会替代 Threads/Instagram 的官方授权。",
+            f"VECTO 网页账号：{str(member.get('web_username') or member.get('username') or '已绑定').strip()}\n"
+            f"平台授权账号：{len(accounts)}",
             types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -2114,8 +2074,7 @@ class NativeTweetBotController:
         summary_total = int(summary.get("total") or 0) if isinstance(summary, dict) else 0
         lines.extend([
             "",
-            f"任务总数：{summary_total or len(tasks)}；点击下方分类查看详情。",
-            "列表默认加载最近 1000 条，分类后可分页查看。",
+            f"任务总数：{summary_total or len(tasks)}",
         ])
         button = types.InlineKeyboardButton
         rows = [
@@ -2251,9 +2210,7 @@ class NativeTweetBotController:
         rows.append(self._persona_module_back_row(types, int(query.message.chat.id), persona_id, module))
         list_text = (
             f"{'收藏' if source == 'favorites' else '草稿'}（{len(posts)}，第 {page + 1}/{total_pages} 页）\n"
-            "点击条目查看正文和媒体；详情页可编辑、收藏、生成配图或发布。"
-            if posts else f"当前人设暂无{'收藏' if source == 'favorites' else '草稿'}。\n"
-            + ("可以先从“新建推文”创建草稿。" if source == "posts" else "生成或收藏内容后会显示在这里。")
+            if posts else f"当前人设暂无{'收藏' if source == 'favorites' else '草稿'}。"
         )
         await query.message.edit_text(
             f"{intro}\n\n{list_text}" if intro else list_text,
@@ -2817,9 +2774,8 @@ class NativeTweetBotController:
             filter_suffix += f" · 人设 {persona_filter[:18]}"
         await query.message.edit_text(
             (f"{filter_label}任务{filter_suffix}（{len(tasks)} 条）\n第 {page + 1}/{total_pages} 页\n"
-             "点击任务查看平台、人设、计划时间、当前状态和失败原因；底部可继续翻页或返回排程状态。"
              if tasks else f"暂无{filter_label}任务{filter_suffix}。\n"
-             "可以返回排程状态切换其他分类，或从发布管理新建任务。"),
+             ),
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -2890,10 +2846,9 @@ class NativeTweetBotController:
             empty = "当前没有可筛选的人设。"
         rows.extend(nav)
         if not rows:
-            text = empty + "\n可返回排程状态查看全部任务，或先执行一次发布/生成任务。"
+            text = empty
         else:
-            text = title + f"\n\n第 {page + 1}/{total_pages} 页，请选择一个筛选项。\n"
-            text += "选择后只显示对应平台或人设的任务，任务详情仍可返回原筛选结果。"
+            text = title + f"\n第 {page + 1}/{total_pages} 页"
         rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
         await query.message.edit_text(
             text,
@@ -4311,11 +4266,7 @@ class NativeTweetBotController:
                     types.InlineKeyboardButton(text="⭐ 查看收藏", callback_data="tt:favorites:0"),
                 ], self._persona_module_back_row(types, chat_id, state["selected_persona_id"], "content")]
                 await query.message.edit_text(
-                    "推文内容\n\n"
-                    "查看草稿：打开当前人设待编辑内容，可进入正文、媒体、配图和发布操作。\n"
-                    "查看收藏：打开已保存内容，收藏不会自动发布。\n"
-                    "推文配图：从草稿列表选择目标，再设置比例、构图、风格和补充提示词。\n\n"
-                    "请选择入口；列表和详情页都会保留当前分页及返回路径。",
+                    "推文内容",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
             elif action == "imageposts":
@@ -4604,9 +4555,8 @@ class NativeTweetBotController:
                     ])
                 rows.append(self._persona_module_back_row(types, chat_id, persona_id, "publish"))
                 await query.message.edit_text(
-                    (f"发布历史（{len(history)} 条）\n第 {page + 1}/{total_pages} 页\n"
-                     "点击记录查看平台、账号、时间和正文；可重新加入草稿或删除记录。"
-                     if history else "当前人设暂无发布历史。\n发布成功后记录会同步显示在这里。"),
+                    (f"发布历史（{len(history)} 条）\n第 {page + 1}/{total_pages} 页"
+                     if history else "发布历史\n暂无记录"),
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
             elif action == "phistory" and len(parts) > 2:
