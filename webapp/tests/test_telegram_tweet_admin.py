@@ -725,6 +725,19 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:publishmenu", message), _Types))
         self.assertIn("发布管理", message.edits[-1][0])
 
+        # Each visible module explains the next step instead of exposing only
+        # terse callback labels.  Keep the callback contract assertions above
+        # unchanged so copy improvements cannot silently remove actions.
+        self.assertIn("发布推文：选择草稿、平台账号", message.edits[-1][0])
+        self.assertIn("矩阵发布：一次选择多个人设", message.edits[-1][0])
+        self.assertIn("发布历史：分页查看", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:pmod:settings", message), _Types))
+        self.assertIn("基础资料：修改名称、简介、推文风格", message.edits[-1][0])
+        self.assertIn("每项只修改对应资料", message.edits[-1][0])
+
+        asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
+        self.assertIn("列表底部提供首页、上一页、下一页和尾页", message.edits[-1][0])
+
     def test_persona_management_and_module_back_preserve_list_page(self):
         personas = [
             {"id": f"persona-{index}", "name": f"人设 {index}", "counts": {"posts": 0}}
@@ -901,6 +914,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
         with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
             asyncio.run(controller.handle_callback(_Query(post_button, message), _Types))
         self.assertIn("推文配图设置", message.edits[-1][0])
+        self.assertIn("自动比例会结合正文主体", message.edits[-1][0])
+        self.assertIn("原有风格是默认人设风格", message.edits[-1][0])
         style_button = next(
             button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
             for button in row if "写实摄影" in str(button.text)
@@ -922,6 +937,15 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
             asyncio.run(controller.handle_callback(_Query(generate_button.callback_data, message), _Types))
+        self.assertIn("推文配图任务已提交", message.edits[-1][0])
+        submitted_callbacks = {
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertTrue(any(value.startswith("tt:t:") for value in submitted_callbacks))
+        self.assertTrue(any(value.startswith("tt:d:") for value in submitted_callbacks))
         image_calls = [payload for action, payload in calls if action == "image.generate"]
         self.assertEqual(len(image_calls), 1)
         self.assertEqual(image_calls[0]["post_id"], "post-a")
@@ -952,6 +976,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
         with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
             asyncio.run(controller.handle_callback(_Query("tt:personaimage", message), _Types))
         self.assertIn("人设图与图库", message.edits[-1][0])
+        self.assertIn("默认地区为中国", message.edits[-1][0])
+        self.assertIn("设为当前", message.edits[-1][0])
         image_back = next(
             button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
             for button in row if str(getattr(button, "text", "")) == "上一步"
@@ -973,6 +999,18 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
             asyncio.run(controller.handle_callback(_Query(direct.callback_data, message), _Types))
+        self.assertIn("人设图任务已提交", message.edits[-1][0])
+        self.assertTrue(any(
+            str(button.callback_data).startswith("tt:t:")
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        ))
+        self.assertTrue(any(
+            "返回人设图库" == str(button.text)
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        ))
         image_calls = [payload for action, payload in calls if action == "persona_image.generate"]
         self.assertEqual(image_calls[0]["persona_image_options"]["digital_human_character_region"], "europe_america")
         self.assertIn("persona_image.list", [action for action, _payload in calls])
