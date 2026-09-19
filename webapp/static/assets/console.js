@@ -111,6 +111,7 @@ const DEPLOYMENT_ROLE = String(
   || "",
 ).trim().toLowerCase();
 const COLLECTOR_DEPLOYMENT = DEPLOYMENT_ROLE === "collector";
+const SHOW_FINGERPRINT_BROWSER = COLLECTOR_DEPLOYMENT || ADMIN_CONSOLE_SESSION;
 
 function pointerReorderNeedsLongPress(event) {
   return ["touch", "pen"].includes(String(event?.pointerType || "").toLowerCase());
@@ -1884,7 +1885,7 @@ const modules = [
   { id: "personas", label: "我的人设", callback: "后台自动读取" },
   { id: "tweet_generation", label: COLLECTOR_DEPLOYMENT ? "热点抓取" : "推文生成", callback: "后台自动读取" },
   { id: "publishing", label: "发布", callback: "后台自动排队" },
-  { id: "accounts", label: COLLECTOR_DEPLOYMENT ? "账号与登录" : "账号管理", view: "accounts", panels: COLLECTOR_DEPLOYMENT ? ["accounts", "browsers"] : ["accounts"] },
+  { id: "accounts", label: COLLECTOR_DEPLOYMENT ? "账号与登录" : "账号管理", view: "accounts", panels: SHOW_FINGERPRINT_BROWSER ? ["accounts", "browsers"] : ["accounts"] },
   { id: "browser_list", label: COLLECTOR_DEPLOYMENT ? "登录监控" : "浏览器列表", view: "accounts", panel: "browsers" },
 ];
 
@@ -4156,7 +4157,7 @@ function personaFormState(personaId) {
   const key = String(personaId || "").trim();
   if (!key) {
     return {
-      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, postDirectionsByMode: { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotSearchMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotRewrittenByCandidate: {}, hotRewriteInstructionByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
+      generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, postDirectionsByMode: { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotCustomKeywordText: "", hotSearchMode: "strict", hotKeywordSourceMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotRewrittenByCandidate: {}, hotRewriteInstructionByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
       media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", imageRenderStyle: PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT, resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1", selectedImageId: "" },
@@ -4186,7 +4187,9 @@ function personaFormState(personaId) {
         hotEditingCandidateId: "",
         hotPrompt: "",
         hotKeywordText: "",
+        hotCustomKeywordText: "",
         hotSearchMode: "strict",
+        hotKeywordSourceMode: "strict",
         hotDeletedMediaByCandidate: {},
         hotEditedContentByCandidate: {},
         hotRewrittenByCandidate: {},
@@ -4229,6 +4232,11 @@ function personaFormState(personaId) {
   }
   delete state.personaForms[key].images.referenceImageId;
   delete state.personaForms[key].images.editImageId;
+  if (!("hotCustomKeywordText" in generate)) generate.hotCustomKeywordText = "";
+  const hotKeywordSourceMode = String(generate.hotKeywordSourceMode || "").trim().toLowerCase();
+  generate.hotKeywordSourceMode = ["normal", "strict", "custom"].includes(hotKeywordSourceMode)
+    ? hotKeywordSourceMode
+    : normalizePersonaHotSearchMode(generate.hotSearchMode);
   if (!PERSONA_WRITING_LOCALES.some(([value]) => value === String(generate.writingLocale || ""))) {
     generate.writingLocale = PERSONA_DEFAULT_WRITING_LOCALE;
   }
@@ -5090,17 +5098,29 @@ function normalizePersonaHotSearchMode(value) {
   return String(value || "").trim() === "normal" ? "normal" : "strict";
 }
 
+function normalizePersonaHotQueryMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "custom" ? "custom" : normalizePersonaHotSearchMode(normalized);
+}
+
+function personaHotKeywordSourceMode(form = {}) {
+  return normalizePersonaHotQueryMode(form?.hotKeywordSourceMode || form?.hotSearchMode);
+}
+
 function personaHotResultStateKey(personaId, searchMode) {
-  return `${String(personaId || "").trim()}::${normalizePersonaHotSearchMode(searchMode)}`;
+  return `${String(personaId || "").trim()}::${normalizePersonaHotQueryMode(searchMode)}`;
 }
 
 function personaHotResultState(persona = selectedPersona(), searchMode) {
   const personaId = String(persona?.id || persona || "").trim();
   if (!personaId) return {};
   const form = personaFormState(personaId).generate;
-  const mode = normalizePersonaHotSearchMode(searchMode || form.hotSearchMode);
+  const mode = searchMode
+    ? normalizePersonaHotQueryMode(searchMode)
+    : personaHotKeywordSourceMode(form);
   const scoped = state.personaHotCandidateResults[personaHotResultStateKey(personaId, mode)];
   if (scoped && typeof scoped === "object") return scoped;
+  if (mode === "custom") return {};
   const legacy = state.personaHotCandidateResults[personaId];
   return legacy && normalizePersonaHotSearchMode(legacy.search_mode) === mode ? legacy : {};
 }
@@ -5131,8 +5151,25 @@ function formatPersonaHotKeywordText(keywords) {
     .join(" / ");
 }
 
+function personaHotCustomKeywordError(keywords = []) {
+  const invalid = (Array.isArray(keywords) ? keywords : []).find((item) => {
+    const keyword = String(item || "").trim();
+    return keyword.length < 2
+      || keyword.length > 32
+      || /\s/u.test(keyword)
+      || !/[\u3400-\u9fffA-Za-z]/u.test(keyword);
+  });
+  return invalid
+    ? `自定义关键词“${String(invalid).trim()}”需为 2–32 个字符，且不能包含空格。`
+    : "";
+}
+
 function personaHotKeywordText(form, hotState = {}) {
   const mode = normalizePersonaHotSearchMode(form?.hotSearchMode);
+  if (personaHotKeywordSourceMode(form) === "custom") {
+    const custom = parsePersonaHotKeywordText(form?.hotCustomKeywordText);
+    return custom.length ? formatPersonaHotKeywordText(custom) : "";
+  }
   const existing = normalizePersonaHotSearchMode(form?.hotKeywordMode) === mode
     ? String(form?.hotKeywordText || "").trim()
     : "";
@@ -6254,6 +6291,8 @@ function snapshotPersonaCurrentForm() {
   if ($("personaGenerateCount")) form.generate.count = Math.min(Math.max(Number.parseInt(String($("personaGenerateCount")?.value || ""), 10) || PERSONA_GENERATE_DEFAULT_COUNT, 1), PERSONA_GENERATE_MAX_COUNT);
   if ($("personaGenerateTargetWords")) form.generate.targetWords = Math.min(Math.max(Number.parseInt(String($("personaGenerateTargetWords")?.value || ""), 10) || PERSONA_GENERATE_DEFAULT_TARGET_WORDS, 10), 2000);
   if ($("personaGeneratePrompt")) form.generate.prompt = String($("personaGeneratePrompt")?.value || "");
+  const hotCustomKeywordInput = document.querySelector("[data-persona-hot-custom-keywords]");
+  if (hotCustomKeywordInput) form.generate.hotCustomKeywordText = String(hotCustomKeywordInput.value || "");
   if (document.querySelector("[data-persona-memory-id]")) {
     form.generate.selectedMemoryIds = [...document.querySelectorAll("[data-persona-memory-id]:checked")]
       .map((node) => node.getAttribute("data-persona-memory-id") || "")
@@ -23830,10 +23869,19 @@ function mergePersonaHotCacheCandidates(...groups) {
 async function readPersonaHotCandidatesCache(persona, form, hotState = {}, { recordShown = false, signal = null } = {}) {
   const personaId = String(persona?.id || "").trim();
   const targetPlatform = normalizePersonaContentPlatform(personaContentPlatform(persona));
-  const keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
-  const allKeywords = Array.isArray(hotState?.all_keywords) && hotState.all_keywords.length
+  const keywordSourceMode = personaHotKeywordSourceMode(form);
+  const resultMode = keywordSourceMode === "custom" ? "custom" : form.hotSearchMode;
+  const customKeywords = keywordSourceMode === "custom"
+    ? parsePersonaHotKeywordText(form?.hotCustomKeywordText)
+    : [];
+  const keywords = customKeywords.length
+    ? customKeywords
+    : parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
+  const allKeywords = customKeywords.length
+    ? customKeywords
+    : (Array.isArray(hotState?.all_keywords) && hotState.all_keywords.length
     ? hotState.all_keywords.map((item) => String(item || "").trim()).filter(Boolean)
-    : keywords;
+    : keywords);
   if (!personaId || !keywords.length) return { hasCandidates: false, displayed: false, count: 0, cacheSource: "empty" };
   const response = await apiWithTimeout(
     `/api/persona_dashboard/personas/${encodeURIComponent(personaId)}/hot_candidates/cache`,
@@ -23870,7 +23918,7 @@ async function readPersonaHotCandidatesCache(persona, form, hotState = {}, { rec
     };
   }
 
-  const currentState = personaHotResultState(persona, form.hotSearchMode);
+  const currentState = personaHotResultState(persona, resultMode);
   const currentCandidates = personaHotAllCandidates(persona);
   const visiblePlatformCandidates = currentCandidates.filter((candidate) => (
     normalizePersonaContentPlatform(candidate?.platform || "threads") === targetPlatform
@@ -23879,14 +23927,22 @@ async function readPersonaHotCandidatesCache(persona, form, hotState = {}, { rec
     normalizePersonaContentPlatform(candidate?.platform || "threads") !== targetPlatform
   ));
   const displayImmediately = visiblePlatformCandidates.length === 0;
+  const stateKeywords = customKeywords.length
+    ? (Array.isArray(hotState?.keywords) ? hotState.keywords.map((item) => String(item || "").trim()).filter(Boolean) : [])
+    : (Array.isArray(response?.keywords) && response.keywords.length ? response.keywords : keywords);
+  const stateAllKeywords = customKeywords.length
+    ? (Array.isArray(hotState?.all_keywords) && hotState.all_keywords.length
+      ? hotState.all_keywords.map((item) => String(item || "").trim()).filter(Boolean)
+      : stateKeywords)
+    : allKeywords;
   const unreadCounts = { ...(currentState.unread_counts || {}) };
   accountPoolPlatforms.forEach(([platform]) => {
     if (!(platform in unreadCounts)) unreadCounts[platform] = 0;
   });
   const nextState = {
     ...currentState,
-    keywords: Array.isArray(response?.keywords) && response.keywords.length ? response.keywords : keywords,
-    all_keywords: allKeywords,
+    keywords: stateKeywords,
+    all_keywords: stateAllKeywords,
     search_mode: normalizePersonaHotSearchMode(response?.search_mode || form.hotSearchMode),
     freshness_days: Number(response?.freshness_days || 30),
     fetched_at: new Date().toISOString(),
@@ -23904,12 +23960,12 @@ async function readPersonaHotCandidatesCache(persona, form, hotState = {}, { rec
       platform: targetPlatform,
       candidates: mergePersonaHotCacheCandidates(pendingOther, otherPlatformCandidates, cacheCandidates),
       keywords: nextState.keywords,
-      all_keywords: allKeywords,
+      all_keywords: stateAllKeywords,
       fetched_at: nextState.fetched_at,
     };
     unreadCounts[targetPlatform] = cacheCandidates.length;
   }
-  setPersonaHotResultState(persona.id, form.hotSearchMode, nextState);
+  setPersonaHotResultState(persona.id, resultMode, nextState);
   if (displayImmediately) {
     const candidateIds = cacheCandidates.map((candidate) => String(candidate?.candidate_id || candidate?.id || "").trim()).filter(Boolean);
     form.hotSelectedIds = (form.hotSelectedIds || []).filter((item) => candidateIds.includes(String(item || "").trim()));
@@ -23947,11 +24003,27 @@ async function fetchPersonaHotCandidates(refresh = false) {
   snapshotPersonaCurrentForm();
   const form = personaFormState(persona.id).generate;
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
-  let hotState = personaHotResultState(persona, form.hotSearchMode);
+  const keywordSourceMode = personaHotKeywordSourceMode(form);
+  const customKeywords = keywordSourceMode === "custom"
+    ? parsePersonaHotKeywordText(form.hotCustomKeywordText)
+    : [];
+  const usingCustomKeywords = keywordSourceMode === "custom";
+  const resultMode = usingCustomKeywords ? "custom" : form.hotSearchMode;
+  if (usingCustomKeywords && !customKeywords.length) {
+    showMsg("commandMsg", "请先输入至少一个自定义热点关键词。", false);
+    return;
+  }
+  const customKeywordError = personaHotCustomKeywordError(customKeywords);
+  if (customKeywordError) {
+    showMsg("commandMsg", customKeywordError, false);
+    return;
+  }
+  let hotState = personaHotResultState(persona, resultMode);
   const targetPlatform = normalizePersonaContentPlatform(personaContentPlatform(persona));
   const pendingBatch = personaHotPendingBatch(hotState);
   if (
-    pendingBatch
+    !usingCustomKeywords
+    && pendingBatch
     && (!pendingBatch.platform || normalizePersonaContentPlatform(pendingBatch.platform) === targetPlatform)
   ) {
     const pendingKeywords = Array.isArray(pendingBatch.keywords)
@@ -23976,11 +24048,13 @@ async function fetchPersonaHotCandidates(refresh = false) {
       pending_batch: null,
       unread_counts: pendingUnreadCounts,
     };
-    setPersonaHotResultState(persona.id, form.hotSearchMode, hotState);
+    setPersonaHotResultState(persona.id, resultMode, hotState);
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
   }
   let previousCandidates = personaHotAllCandidates(persona);
-  let keywords = parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
+  let keywords = usingCustomKeywords
+    ? customKeywords
+    : parsePersonaHotKeywordText(personaHotKeywordText(form, hotState));
   const cooldown = await apiWithTimeout(
     `/api/persona_dashboard/personas/${encodeURIComponent(persona.id)}/hot_candidates/cooldown`,
     {},
@@ -23990,15 +24064,17 @@ async function fetchPersonaHotCandidates(refresh = false) {
     ...hotState,
     cooldown: cooldown && typeof cooldown === "object" ? cooldown : {},
   };
-  setPersonaHotResultState(persona.id, form.hotSearchMode, hotState);
+  setPersonaHotResultState(persona.id, resultMode, hotState);
   if (Boolean(cooldown?.active) && Number(cooldown?.remaining_seconds || 0) > 0) {
     showMsg("commandMsg", `热点抓取冷却中，请在 ${Number(cooldown.remaining_seconds)} 秒后重试。`, false);
     renderPersonaDetail();
     return;
   }
   try {
-    const preparedKeywords = await preparePersonaHotKeywords(false);
-    if (preparedKeywords.length) keywords = parsePersonaHotKeywordText(formatPersonaHotKeywordText(preparedKeywords));
+    if (!usingCustomKeywords) {
+      const preparedKeywords = await preparePersonaHotKeywords(false);
+      if (preparedKeywords.length) keywords = parsePersonaHotKeywordText(formatPersonaHotKeywordText(preparedKeywords));
+    }
   } catch (error) {
     if (Number(error?.status || 0) === 499) throw error;
     if (!keywords.length) throw error;
@@ -24008,11 +24084,33 @@ async function fetchPersonaHotCandidates(refresh = false) {
     showMsg("commandMsg", prepareError || "热点抓取准备失败，请稍后重试。", false);
     return;
   }
+  if (usingCustomKeywords) {
+    // A manual query starts a new visible search context. Keep the other
+    // platform's results, but do not leave the previous platform batch in
+    // front of the user's explicitly requested keywords.
+    previousCandidates = previousCandidates.filter((candidate) => (
+      normalizePersonaContentPlatform(candidate?.platform || "threads") !== targetPlatform
+    ));
+    hotState = {
+      ...hotState,
+      candidates: previousCandidates,
+      pending_batch: null,
+      unread_counts: {
+        ...(hotState.unread_counts || {}),
+        [targetPlatform]: 0,
+      },
+    };
+    setPersonaHotResultState(persona.id, resultMode, hotState);
+    form.hotSelectedIds = [];
+    form.hotPreviewId = "";
+  }
   const controller = new AbortController();
   state.personaHotFetchControllers[personaKey]?.abort?.(new DOMException("Request replaced", "AbortError"));
   state.personaHotFetchControllers[personaKey] = controller;
-  form.hotKeywordText = formatPersonaHotKeywordText(keywords);
-  form.hotKeywordMode = form.hotSearchMode;
+  if (!usingCustomKeywords) {
+    form.hotKeywordText = formatPersonaHotKeywordText(keywords);
+    form.hotKeywordMode = form.hotSearchMode;
+  }
   setPersonaGenerateRunState(persona.id, {
     kind: "hot",
     status: "running",
@@ -24026,9 +24124,11 @@ async function fetchPersonaHotCandidates(refresh = false) {
     const visibleBeforeCache = previousCandidates.filter((candidate) => (
       normalizePersonaContentPlatform(candidate?.platform || "threads") === targetPlatform
     ));
-    const taskAllKeywords = Array.isArray(hotState.all_keywords) && hotState.all_keywords.length
+    const taskAllKeywords = usingCustomKeywords
+      ? customKeywords
+      : (Array.isArray(hotState.all_keywords) && hotState.all_keywords.length
       ? hotState.all_keywords.map((item) => String(item || "").trim()).filter(Boolean)
-      : keywords;
+      : keywords);
     // Start the user-triggered live fetch before awaiting the cache read. The
     // cache remains the instant display path, while the live task prepares the
     // next batch in the background.
@@ -24070,7 +24170,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
       // must never suppress the required user-triggered live fetch below.
     }
     previousCandidates = personaHotAllCandidates(persona);
-    hotState = personaHotResultState(persona, form.hotSearchMode);
+    hotState = personaHotResultState(persona, resultMode);
     const allKeywords = taskAllKeywords;
     const task = await liveTaskPromise;
     const taskId = String(task?.id || "").trim();
@@ -24131,19 +24231,28 @@ async function fetchPersonaHotCandidates(refresh = false) {
     ));
     const displayImmediately = visiblePlatformCandidates.length === 0;
     const unreadCounts = {
-      ...(personaHotResultState(persona, form.hotSearchMode)?.unread_counts || {}),
+      ...(personaHotResultState(persona, resultMode)?.unread_counts || {}),
     };
     accountPoolPlatforms.forEach(([platform]) => {
       if (!(platform in unreadCounts)) unreadCounts[platform] = 0;
     });
     unreadCounts[currentPlatform] = displayImmediately ? 0 : platformCandidates.length;
-    const previousHot = personaHotResultState(persona, form.hotSearchMode);
+    const previousHot = personaHotResultState(persona, resultMode);
+    const storedGeneratedKeywords = parsePersonaHotKeywordText(form.hotKeywordText);
+    const generatedKeywords = storedGeneratedKeywords.length
+      ? storedGeneratedKeywords
+      : (Array.isArray(previousHot.keywords) ? previousHot.keywords : []);
+    const generatedAllKeywords = Array.isArray(previousHot.all_keywords) && previousHot.all_keywords.length
+      ? previousHot.all_keywords
+      : generatedKeywords;
     const nextHotState = {
       ...previousHot,
-      keywords,
-      all_keywords: Array.isArray(previousHot.all_keywords) && previousHot.all_keywords.length
-        ? previousHot.all_keywords
-        : (allKeywords.length ? allKeywords : keywords),
+      keywords: usingCustomKeywords ? generatedKeywords : keywords,
+      all_keywords: usingCustomKeywords
+        ? generatedAllKeywords
+        : (Array.isArray(previousHot.all_keywords) && previousHot.all_keywords.length
+          ? previousHot.all_keywords
+          : (allKeywords.length ? allKeywords : keywords)),
       empty_reason: String(result.empty_reason || ""),
       cookie_statuses: Array.isArray(result.cookie_statuses) ? result.cookie_statuses : [],
       warnings: Array.isArray(result.warnings) ? result.warnings : [],
@@ -24171,9 +24280,11 @@ async function fetchPersonaHotCandidates(refresh = false) {
         fetched_at: new Date().toISOString(),
       };
     }
-    setPersonaHotResultState(persona.id, form.hotSearchMode, nextHotState);
-    form.hotKeywordText = formatPersonaHotKeywordText(keywords);
-    form.hotKeywordMode = form.hotSearchMode;
+    setPersonaHotResultState(persona.id, resultMode, nextHotState);
+    if (!usingCustomKeywords) {
+      form.hotKeywordText = formatPersonaHotKeywordText(keywords);
+      form.hotKeywordMode = form.hotSearchMode;
+    }
     const nextCandidates = personaHotAllCandidates(persona);
     if (displayImmediately) {
       reconcilePersonaHotMediaStateAfterRefresh(persona.id, previousCandidates, nextCandidates);
@@ -27005,7 +27116,9 @@ function renderPersonaHotCandidatePreview(candidate) {
 
 function renderPersonaHotCandidatePicker(persona, form) {
   form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode);
-  const hotState = personaHotResultState(persona, form.hotSearchMode);
+  const hotQueryMode = personaHotKeywordSourceMode(form);
+  const resultMode = hotQueryMode === "custom" ? "custom" : form.hotSearchMode;
+  const hotState = personaHotResultState(persona, resultMode);
   const candidates = personaHotCandidates(persona);
   const pendingBatch = personaHotPendingBatch(hotState);
   const pendingCount = pendingBatch
@@ -27015,8 +27128,15 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const allCandidatesSelected = Boolean(candidates.length)
     && candidates.every((candidate) => selectedIds.has(personaHotCandidateKey(candidate)));
   const preview = personaHotPreviewCandidate(persona);
-  const keywords = Array.isArray(hotState.keywords) ? hotState.keywords : [];
-  const allKeywords = Array.isArray(hotState.all_keywords) && hotState.all_keywords.length ? hotState.all_keywords : keywords;
+  const customKeywords = hotQueryMode === "custom"
+    ? parsePersonaHotKeywordText(form.hotCustomKeywordText)
+    : [];
+  const keywords = customKeywords.length
+    ? customKeywords
+    : (Array.isArray(hotState.keywords) ? hotState.keywords : []);
+  const allKeywords = customKeywords.length
+    ? customKeywords
+    : (Array.isArray(hotState.all_keywords) && hotState.all_keywords.length ? hotState.all_keywords : keywords);
   const batchIndex = Math.max(1, Number(hotState.batch_index || 1));
   const batchCount = Math.max(1, Number(hotState.batch_count || 1));
   const batchUses = Math.max(0, Number(hotState.batch_uses || 0));
@@ -27030,9 +27150,9 @@ function renderPersonaHotCandidatePicker(persona, form) {
   const cooldownRemaining = Math.max(0, Math.ceil(cooldownUntil - (Date.now() / 1000)));
   const cooling = !Boolean(cooldown.bypassed) && cooldownRemaining > 0;
   if (cooling) scheduleActionElapsedSync();
-  form.hotSearchMode = normalizePersonaHotSearchMode(form.hotSearchMode || hotState.search_mode);
-  const hotMode = form.hotSearchMode;
+  const hotMode = hotQueryMode;
   const controlsBusy = hotBusy || keywordBusy || cooling;
+  const customKeywordText = hotQueryMode === "custom" ? String(form.hotCustomKeywordText || "") : "";
   const hotRun = personaGenerateRunState(persona?.id);
   const queueAhead = Math.max(0, Number(hotRun?.queueAhead || 0));
   const queuePhase = String(hotRun?.phase || "").trim().toLowerCase();
@@ -27047,9 +27167,13 @@ function renderPersonaHotCandidatePicker(persona, form) {
       : "第一次要等模型写出搜索词，大约 10–20 秒。不想等可随时取消。")
     : (hotBusy
       ? esc(String(hotRun?.message || "").trim() || "正在抓取公开帖。不想等可随时取消。")
-      : (allKeywords.length >= 8
-        ? `词表 ${esc(allKeywords.length)} 个，本轮 ${esc(keywords.length)} 个（第 ${esc(batchIndex)}/${esc(batchCount)} 批，第 ${esc(batchUses + 1)}/${esc(batchMaxUses)} 遍）。每批抓取两遍，第二遍会打乱关键词顺序；两批共四遍后重新生成。`
-        : "此人人设还没有搜索词。第一次会现场生成，大约 10–20 秒；成功后按 10 个一批轮换。"));
+      : (hotQueryMode === "custom"
+        ? (customKeywords.length
+          ? "自定义：本次按输入关键词独立搜索，并同步刷新实时热点。"
+          : "自定义：请输入关键词后点击抓取热点。")
+        : (allKeywords.length >= 8
+          ? `词表 ${esc(allKeywords.length)} 个，本轮 ${esc(keywords.length)} 个（第 ${esc(batchIndex)}/${esc(batchCount)} 批，第 ${esc(batchUses + 1)}/${esc(batchMaxUses)} 遍）。每批抓取两遍，第二遍会打乱关键词顺序；两批共四遍后重新生成。`
+          : "此人人设还没有搜索词。第一次会现场生成，大约 10–20 秒；成功后按 10 个一批轮换。")));
   return `
     <div class="persona-hot-filters">
       <div class="persona-hot-mode-row">
@@ -27057,12 +27181,32 @@ function renderPersonaHotCandidatePicker(persona, form) {
           ${[
             ["normal", "泛垂直"],
             ["strict", "垂直"],
+            ["custom", "自定义关键词"],
           ].map(([value, label]) => `
             <button type="button" data-persona-hot-search-mode="${esc(value)}" class="${hotMode === value ? "is-active" : ""}" ${controlsBusy ? "disabled" : ""}>${esc(label)}</button>
           `).join("")}
         </div>
-        <small>${hotMode === "normal" ? "泛垂直：覆盖同领域宽泛热点" : "垂直：更贴合当前人设关键词"}</small>
+        <small>${hotMode === "normal"
+          ? "泛垂直：覆盖同领域宽泛热点"
+          : (hotMode === "custom" ? "自定义关键词：独立于人设关键词搜索" : "垂直：更贴合当前人设关键词")}</small>
       </div>
+      ${hotQueryMode === "custom" ? `
+        <div class="persona-hot-custom-keywords">
+          <label for="personaHotCustomKeywords">
+            <span>自定义热点关键词</span>
+            <small>多个关键词用逗号、分号或斜杠分隔</small>
+          </label>
+          <input
+            id="personaHotCustomKeywords"
+            type="text"
+            data-persona-hot-custom-keywords
+            value="${esc(customKeywordText)}"
+            placeholder="例如：台股、美股、AI应用"
+            autocomplete="off"
+            ${controlsBusy ? "disabled" : ""}
+          />
+        </div>
+      ` : ""}
       <div class="row-actions persona-hot-fetch-toolbar">
         <button type="button" class="primary persona-hot-fetch-action" data-persona-hot-solo="${hotBusy || keywordBusy ? "false" : "true"}" data-persona-fetch-hot ${cooling ? `data-hot-cooldown-until="${esc(cooldownUntil)}"` : ""} ${controlsBusy ? "disabled" : ""}>${keywordBusy || hotBusy
           ? renderBusyButtonContent(busyLabel, true, keywordBusy ? keywordBusyStartedAt : hotBusyStartedAt)
@@ -27073,7 +27217,7 @@ function renderPersonaHotCandidatePicker(persona, form) {
     </div>
     ${allKeywords.length ? `
       <details class="persona-hot-keyword-disclosure">
-        <summary><span>生成关键词</span><small>本轮 ${esc(keywords.length)} / 词表 ${esc(allKeywords.length)}</small>${renderExpandIcon(false)}</summary>
+        <summary><span>${customKeywords.length ? "本次搜索词" : "生成关键词"}</span><small>本轮 ${esc(keywords.length)} / 词表 ${esc(allKeywords.length)}</small>${renderExpandIcon(false)}</summary>
         <div class="persona-hot-keyword-chips">${personaHotKeywordChips(allKeywords, keywords)}</div>
       </details>
     ` : ""}
@@ -37587,16 +37731,22 @@ function bindEvents() {
     if (hotSearchModeButton) {
       const persona = selectedPersona();
       if (persona) {
-        const mode = normalizePersonaHotSearchMode(hotSearchModeButton.dataset.personaHotSearchMode);
+        const queryMode = normalizePersonaHotQueryMode(hotSearchModeButton.dataset.personaHotSearchMode);
         event.__vectoSegmentSlideHandled = true;
         await slideSegmentedButtonBackground(hotSearchModeButton, {
           commit: () => {
             snapshotPersonaCurrentForm();
             const form = personaFormState(persona.id).generate;
+            const mode = queryMode === "custom"
+              ? normalizePersonaHotSearchMode(form.hotSearchMode)
+              : queryMode;
+            form.hotKeywordSourceMode = queryMode;
             form.hotSearchMode = mode;
-            const modeState = personaHotResultState(persona, mode);
-            form.hotKeywordText = formatPersonaHotKeywordText(modeState.keywords || []);
-            form.hotKeywordMode = mode;
+            if (queryMode !== "custom") {
+              const modeState = personaHotResultState(persona, mode);
+              form.hotKeywordText = formatPersonaHotKeywordText(modeState.keywords || []);
+              form.hotKeywordMode = mode;
+            }
             form.hotSelectedIds = [];
             form.hotPreviewId = "";
             form.hotEditingCandidateId = "";
@@ -37604,7 +37754,7 @@ function bindEvents() {
             renderConfirmSummary();
           },
           resolveButton: () => document.querySelector(
-            `[data-persona-hot-search-mode="${CSS.escape(mode)}"]`
+            `[data-persona-hot-search-mode="${CSS.escape(queryMode)}"]`
           ),
         });
       }
@@ -38865,6 +39015,11 @@ function bindEvents() {
     }
   });
   $("moduleBody").addEventListener("input", (event) => {
+    if (event.target?.matches?.("[data-persona-hot-custom-keywords]")) {
+      const persona = selectedPersona();
+      if (persona) personaFormState(persona.id).generate.hotCustomKeywordText = String(event.target.value || "");
+      return;
+    }
     if (event.target?.matches?.("[data-persona-image-prompt]")) {
       syncPersonaImagePromptState(event.target);
       return;

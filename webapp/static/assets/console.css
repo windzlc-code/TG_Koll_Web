@@ -7074,6 +7074,45 @@ body.persona-touch-dragging .persona-list-card:active {
   gap: 12px;
 }
 
+.persona-hot-custom-keywords {
+  display: grid;
+  gap: 6px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+}
+
+.persona-hot-custom-keywords label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.persona-hot-custom-keywords label small {
+  color: var(--muted);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.persona-hot-custom-keywords input {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 8px;
+  background: var(--panel-solid);
+  color: var(--ink);
+}
+
+.persona-hot-custom-keywords input:focus {
+  border-color: var(--accent);
+  outline: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  outline-offset: 1px;
+}
+
 .persona-hot-mode-row {
   display: grid;
   align-items: center;
@@ -7083,9 +7122,9 @@ body.persona-touch-dragging .persona-list-card:active {
 
 .persona-hot-mode-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  width: min(42%, 220px);
-  min-width: 180px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: min(68%, 330px);
+  min-width: 270px;
   border-radius: 8px;
   overflow: visible;
 }
@@ -7095,6 +7134,7 @@ body.persona-touch-dragging .persona-list-card:active {
   min-height: 28px;
   padding: 3px 8px;
   border-radius: 6px;
+  white-space: nowrap;
 }
 
 .persona-hot-mode-row small {
@@ -26243,10 +26283,10 @@ body.console-page {
   }
 
   .console-page .persona-detail .persona-hot-mode-tabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    width: 42%;
-    min-width: 160px;
-    max-width: 190px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    min-width: 0;
+    max-width: 330px;
     border-radius: 8px;
   }
 

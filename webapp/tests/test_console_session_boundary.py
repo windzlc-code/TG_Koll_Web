@@ -2480,6 +2480,7 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn('class="persona-hot-fetch-action"', self.source)
         self.assertIn('["normal", "泛垂直"]', self.source)
         self.assertIn('["strict", "垂直"]', self.source)
+        self.assertIn('["custom", "自定义关键词"]', self.source)
         self.assertIn('hotSearchMode: "strict"', self.source)
         self.assertNotIn('data-persona-hot-freshness-', self.source)
         self.assertNotIn('热点时限', self.source)
@@ -2492,11 +2493,11 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
             mobile_toolbar,
         )
         self.assertIn(
-            "grid-template-columns: repeat(2, minmax(0, 1fr));",
+            "grid-template-columns: repeat(3, minmax(0, 1fr));",
             mobile_mode_tabs,
         )
-        self.assertIn("width: 42%;", mobile_mode_tabs)
-        self.assertIn("max-width: 190px;", mobile_mode_tabs)
+        self.assertIn("width: 100%;", mobile_mode_tabs)
+        self.assertIn("max-width: 330px;", mobile_mode_tabs)
         self.assertIn("border-radius: 8px;", mobile_mode_tabs)
         self.assertIn("min-height: 42px;", self.styles)
 
@@ -2518,6 +2519,22 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertNotIn('data-persona-fetch-hot-refresh', self.source)
         self.assertNotIn('本次关键词', self.source)
         self.assertNotIn('按关键词抓取', self.source)
+
+    def test_persona_hot_has_switchable_custom_keyword_mode_and_bypasses_auto_prepare(self):
+        fetch_source = self._function_source("fetchPersonaHotCandidates")
+
+        self.assertIn('data-persona-hot-custom-keywords', self.source)
+        self.assertIn('自定义热点关键词', self.source)
+        self.assertIn('hotCustomKeywordText', self.source)
+        self.assertIn('const keywordSourceMode = personaHotKeywordSourceMode(form);', fetch_source)
+        self.assertIn('const usingCustomKeywords = keywordSourceMode === "custom";', fetch_source)
+        self.assertIn('请先输入至少一个自定义热点关键词。', fetch_source)
+        self.assertIn('if (!usingCustomKeywords)', fetch_source)
+        self.assertIn('? customKeywords', fetch_source)
+        self.assertIn('all_keywords: usingCustomKeywords', fetch_source)
+        self.assertIn('form.hotKeywordSourceMode = queryMode;', self.source)
+        self.assertIn('const queryMode = normalizePersonaHotQueryMode', self.source)
+        self.assertIn('.persona-hot-custom-keywords {', self.styles)
 
     def test_persona_hot_workflow_cli_entrypoint_parses(self):
         npx = shutil.which("npx")
