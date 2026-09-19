@@ -9838,6 +9838,9 @@ function renderMediaPreviewButton(item, groupId, index, {
   const loadImmediately = Boolean(eagerLoad && !deferLoad);
   const loadingMode = loadImmediately ? "eager" : "lazy";
   const fetchPriority = loadImmediately ? "high" : lowPriority ? "low" : "auto";
+  const isPublishPreviewFrame = frameClass === "publish-preview-media-frame";
+  const previewFrameClass = `${esc(frameClass)}${isPublishPreviewFrame ? " is-media-loading" : ""}`;
+  const previewLoadHandler = isPublishPreviewFrame ? ' onload="handlePersonaMediaFrameLoad(this)"' : "";
   return `
     <${rootTag}
       ${interactive ? `type="button"${unavailable ? " disabled" : ""}` : ""}
@@ -9847,12 +9850,12 @@ function renderMediaPreviewButton(item, groupId, index, {
       ${unavailable
         ? `<div class="${esc(frameClass)} persona-media-frame--empty"><strong>${type === "video" ? "视频无法预览" : "媒体已失效"}</strong><small>${type === "video" ? "封面或源文件无法加载" : "源文件无法加载"}</small></div>`
         : isVideo && posterSrc
-        ? `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(posterSrc)}"` : `src="${esc(posterSrc)}"`} data-media-source-url="${esc(posterSrc)}" alt="${esc(label || "video")}" loading="${loadingMode}" decoding="async" referrerpolicy="no-referrer" draggable="false" fetchpriority="${fetchPriority}" onerror="handlePersonaMediaFrameError(this)" />`
+        ? `<img class="${previewFrameClass}" ${deferLoad ? `data-deferred-media-src="${esc(posterSrc)}"` : `src="${esc(posterSrc)}"`} data-media-source-url="${esc(posterSrc)}" alt="${esc(label || "video")}" loading="${loadingMode}" decoding="async" referrerpolicy="no-referrer" draggable="false" fetchpriority="${fetchPriority}" onerror="handlePersonaMediaFrameError(this)"${previewLoadHandler} />`
         : isVideo
         ? `<div class="${esc(frameClass)} persona-media-frame--video-poster" data-media-source-url="${esc(videoSrc || previewUrl)}" aria-hidden="true"><strong>视频</strong><small>点击播放</small></div>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
-          : `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="${loadingMode}" decoding="async" referrerpolicy="no-referrer" draggable="false" fetchpriority="${fetchPriority}" onerror="handlePersonaMediaFrameError(this)" />`}
+          : `<img class="${previewFrameClass}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="${loadingMode}" decoding="async" referrerpolicy="no-referrer" draggable="false" fetchpriority="${fetchPriority}" onerror="handlePersonaMediaFrameError(this)"${previewLoadHandler} />`}
       ${canShowZoomHint ? `<span class="persona-image-library-zoom-hint" aria-hidden="true">${renderZoomInIcon()}</span>` : ""}
       ${showCaption ? `<span>${esc(text)}</span>` : ""}
     </${rootTag}>
@@ -10417,6 +10420,24 @@ function handlePersonaMediaFrameError(node) {
   }
 }
 
+function handlePersonaMediaFrameLoad(node) {
+  if (!node) return;
+  const markReady = () => {
+    node.classList.remove("is-media-loading");
+    node.classList.add("is-media-ready");
+  };
+  try {
+    const decoded = typeof node.decode === "function" ? node.decode() : null;
+    if (decoded && typeof decoded.then === "function") {
+      decoded.then(markReady, markReady);
+      return;
+    }
+  } catch (_error) {
+    // The load event already confirms a complete resource; reveal it if decode is unavailable.
+  }
+  markReady();
+}
+
 function handlePersonaMediaLightboxError(node, message) {
   const body = $("personaMediaLightboxBody");
   if (!body) return;
@@ -10424,6 +10445,7 @@ function handlePersonaMediaLightboxError(node, message) {
 }
 
 window.handlePersonaMediaFrameError = handlePersonaMediaFrameError;
+window.handlePersonaMediaFrameLoad = handlePersonaMediaFrameLoad;
 window.handlePersonaMediaLightboxError = handlePersonaMediaLightboxError;
 
 function closePersonaDraftMenus(except = null) {

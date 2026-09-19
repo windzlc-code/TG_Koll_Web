@@ -4348,11 +4348,12 @@ textarea:focus {
 
 .publish-preview-media-single {
   position: relative;
-  display: grid;
+  display: block;
   flex: 1 1 calc((100% - 16px) / 3);
   min-width: calc((100% - 16px) / 3);
   max-width: 100%;
   min-height: 0;
+  aspect-ratio: 1 / 1;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   overflow: hidden;
@@ -4360,11 +4361,13 @@ textarea:focus {
 }
 
 .publish-preview-media-button {
-  position: relative;
+  position: absolute;
+  inset: 0;
   z-index: 1;
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
+  min-height: 0;
   border: 0;
   padding: 0;
   background: transparent;
@@ -4373,12 +4376,22 @@ textarea:focus {
 
 .publish-preview-media-frame {
   width: 100%;
-  height: auto;
+  height: 100%;
+  min-height: 0;
   aspect-ratio: 1 / 1;
   max-height: none;
   object-fit: cover;
   display: block;
   border-radius: calc(var(--radius) - 1px);
+  background: var(--soft);
+}
+
+.publish-preview-media-frame.is-media-loading {
+  opacity: 0;
+}
+
+.publish-preview-media-frame.is-media-ready {
+  opacity: 1;
 }
 
 .publish-preview-media-button > span {
