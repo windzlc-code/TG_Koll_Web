@@ -7081,6 +7081,22 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(response.headers["content-range"], "bytes 0-1023/4096")
         self.assertEqual(response.headers["accept-ranges"], "bytes")
 
+    def test_remote_persona_video_proxy_uses_persisted_cache_for_range(self):
+        cached_path = self.tool_runtime_dir / "sentiment-hot-media" / "preview-cache" / "cached-video.mp4"
+        cached_path.parent.mkdir(parents=True, exist_ok=True)
+        cached_path.write_bytes(b"cached-video")
+
+        with mock.patch.object(server, "_find_hot_local_media", return_value=str(cached_path)) as find_local, mock.patch.object(server.requests, "get") as get:
+            response = server._proxy_remote_persona_media(
+                "https://cdn.example/video.mp4",
+                range_header="bytes=0-5",
+            )
+
+        self.assertIsInstance(response, server.FileResponse)
+        find_local.assert_called_once_with("https://cdn.example/video.mp4")
+        get.assert_not_called()
+        self.assertEqual(response.headers["cache-control"], "public, max-age=31536000, immutable")
+
     def test_import_plain_text_hot_candidate_is_ready_without_waiting_for_media(self):
         self._write_archives()
 

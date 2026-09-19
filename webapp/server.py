@@ -18776,10 +18776,13 @@ def _proxy_remote_persona_media(url: str, *, range_header: str = "") -> Response
     }
     clean_range = str(range_header or "").strip()
     use_range = clean_range.lower().startswith("bytes=") and "\r" not in clean_range and "\n" not in clean_range
-    if not use_range:
-        cached = _find_hot_local_media(clean)
-        if cached:
-            return _serve_persona_media_file(Path(cached))
+    # A browser video element normally asks for a byte range first.  Let the
+    # persisted cache satisfy that request too; FileResponse preserves the
+    # Range semantics while avoiding a fresh CDN round-trip on every gallery
+    # open.  Only uncached media should continue to the remote fallback.
+    cached = _find_hot_local_media(clean)
+    if cached:
+        return _serve_persona_media_file(Path(cached))
     if use_range:
         request_headers["Range"] = clean_range
     last_error: Exception | None = None
