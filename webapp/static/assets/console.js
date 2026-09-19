@@ -9816,6 +9816,7 @@ function renderMediaPreviewButton(item, groupId, index, {
   interactive = true,
   lowPriority = false,
   deferLoad = false,
+  eagerLoad = false,
   zoomHint = false,
 } = {}) {
   const label = mediaPreviewLabel(item?.label, mediaKindLabel(item?.type));
@@ -9834,6 +9835,9 @@ function renderMediaPreviewButton(item, groupId, index, {
   const canInteract = interactive && !unavailable;
   const canShowZoomHint = zoomHint && canInteract && type === "image";
   const rootTag = interactive ? "button" : "div";
+  const loadImmediately = Boolean(eagerLoad && !deferLoad);
+  const loadingMode = loadImmediately ? "eager" : "lazy";
+  const fetchPriority = loadImmediately ? "high" : lowPriority ? "low" : "auto";
   return `
     <${rootTag}
       ${interactive ? `type="button"${unavailable ? " disabled" : ""}` : ""}
@@ -9843,12 +9847,12 @@ function renderMediaPreviewButton(item, groupId, index, {
       ${unavailable
         ? `<div class="${esc(frameClass)} persona-media-frame--empty"><strong>${type === "video" ? "视频无法预览" : "媒体已失效"}</strong><small>${type === "video" ? "封面或源文件无法加载" : "源文件无法加载"}</small></div>`
         : isVideo && posterSrc
-        ? `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(posterSrc)}"` : `src="${esc(posterSrc)}"`} data-media-source-url="${esc(posterSrc)}" alt="${esc(label || "video")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`
+        ? `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(posterSrc)}"` : `src="${esc(posterSrc)}"`} data-media-source-url="${esc(posterSrc)}" alt="${esc(label || "video")}" loading="${loadingMode}" decoding="async" referrerpolicy="no-referrer" draggable="false" fetchpriority="${fetchPriority}" onerror="handlePersonaMediaFrameError(this)" />`
         : isVideo
         ? `<div class="${esc(frameClass)} persona-media-frame--video-poster" data-media-source-url="${esc(videoSrc || previewUrl)}" aria-hidden="true"><strong>视频</strong><small>点击播放</small></div>`
         : type === "audio"
           ? `<div class="${esc(frameClass)} ${esc(frameClass)}--audio"><strong>音频</strong><small>点击站内预览</small></div>`
-          : `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="lazy" decoding="async" referrerpolicy="no-referrer" draggable="false"${lowPriority ? ' fetchpriority="low"' : ""} onerror="handlePersonaMediaFrameError(this)" />`}
+          : `<img class="${esc(frameClass)}" ${deferLoad ? `data-deferred-media-src="${esc(displayUrl)}"` : `src="${esc(displayUrl)}"`} data-media-source-url="${esc(displayUrl)}" alt="${esc(label || "media")}" loading="${loadingMode}" decoding="async" referrerpolicy="no-referrer" draggable="false" fetchpriority="${fetchPriority}" onerror="handlePersonaMediaFrameError(this)" />`}
       ${canShowZoomHint ? `<span class="persona-image-library-zoom-hint" aria-hidden="true">${renderZoomInIcon()}</span>` : ""}
       ${showCaption ? `<span>${esc(text)}</span>` : ""}
     </${rootTag}>
@@ -10180,7 +10184,8 @@ function renderPublishPreviewMedia(items = [], { deferLoad = false } = {}) {
             ${renderMediaPreviewButton(item, groupId, previewIndex, {
               className: "publish-preview-media-button",
               frameClass: "publish-preview-media-frame",
-              lowPriority: true,
+              eagerLoad: !deferLoad,
+              lowPriority: deferLoad,
               deferLoad,
             })}
             <span class="publish-preview-media-badge" aria-label="第 ${esc(index + 1)} 个 · ${esc(mediaKindLabel(item.type))}">${esc(index + 1)}</span>

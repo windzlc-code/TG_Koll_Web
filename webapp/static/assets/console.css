@@ -27418,8 +27418,11 @@ body.console-page {
   }
 
   .module-panel.is-publishing-module .publish-preview-media-single {
-    content-visibility: auto;
-    contain-intrinsic-size: auto 140px;
+    /* The active publish preview is user-visible immediately. Let all of its
+       media paint together; native lazy/content-visibility here caused blank
+       tiles while the cached same-origin media was still being scheduled. */
+    content-visibility: visible;
+    contain-intrinsic-size: auto;
   }
 
   .publish-history-card {
