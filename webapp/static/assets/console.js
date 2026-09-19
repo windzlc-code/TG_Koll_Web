@@ -15761,7 +15761,7 @@ function renderPublishPreviewCard(activePost, sourceRows = [], persona = selecte
     : [];
   const previewContent = publishContentForPost(activePost, persona);
   return `
-    <article class="publish-preview-card">
+    <article class="publish-preview-card" data-publish-preview-post-id="${esc(String(activePost?.id || ""))}">
       <div class="publish-preview-card-head">
         <strong>${esc(activePost ? personaDraftDisplayTitleForPost(activePost, sourceRows) : "待执行内容")}</strong>
         ${renderMediaTypeBadge(activeMediaItems)}
@@ -16820,6 +16820,44 @@ function toggleMatrixGroupId(groupId) {
   state.matrixPublish.initialized = true;
 }
 
+function capturePublishMediaNodes() {
+  const cardMedia = new Map();
+  document.querySelectorAll("[data-publish-post-card]").forEach((card) => {
+    const postId = String(card.dataset.publishPostCard || "").trim();
+    const media = Array.from(card.children || []).find((child) => child.classList?.contains("publish-post-card-media"));
+    if (postId && media) cardMedia.set(postId, media);
+  });
+  const previewCard = document.querySelector(".publish-preview-card");
+  return {
+    cardMedia,
+    previewMedia: previewCard?.querySelector(".publish-preview-media-list") || null,
+    previewPostId: String(previewCard?.dataset.publishPreviewPostId || state.publishPreviewPostId || "").trim(),
+  };
+}
+
+function restorePublishMediaNodes(snapshot = null) {
+  if (!snapshot) return;
+  snapshot.cardMedia?.forEach((media, postId) => {
+    const card = Array.from(document.querySelectorAll("[data-publish-post-card]")).find(
+      (item) => String(item.dataset.publishPostCard || "").trim() === postId,
+    );
+    const next = Array.from(card?.children || []).find((child) => child.classList?.contains("publish-post-card-media"));
+    if (next && next !== media) next.replaceWith(media);
+  });
+  const previewCard = document.querySelector(".publish-preview-card");
+  const currentPreviewPostId = String(previewCard?.dataset.publishPreviewPostId || "").trim();
+  if (snapshot.previewMedia && previewCard && currentPreviewPostId === snapshot.previewPostId) {
+    const next = previewCard.querySelector(".publish-preview-media-list");
+    if (next && next !== snapshot.previewMedia) next.replaceWith(snapshot.previewMedia);
+  }
+}
+
+function renderPublishingPreservingMedia() {
+  const snapshot = capturePublishMediaNodes();
+  renderSimpleFlowModule("publishing");
+  restorePublishMediaNodes(snapshot);
+}
+
 function renderSimpleFlowModule(moduleId) {
   return withConsoleScrollPreserved(() => {
   const reopenPublishPersonaSidebar = Boolean(
@@ -17006,7 +17044,7 @@ function renderSimpleFlowModule(moduleId) {
     const source = normalizePublishContentSource();
     setPublishSelectedPostIds(persona, source, []);
     state.publishMobileSelectionExpanded = false;
-    renderSimpleFlowModule("publishing");
+    renderPublishingPreservingMedia();
   });
   $("cancelPublishMobileSelectionEdit")?.addEventListener("click", () => {
     const dock = $("cancelPublishMobileSelectionEdit")?.closest(".publish-command-actions");
@@ -17339,7 +17377,7 @@ function bindSimpleFlowInputs(moduleId) {
         const rows = publishSourceRows(persona, source);
         const action = String(node.dataset.publishSourceSelect || "");
         setPublishSelectedPostIds(persona, source, action === "all" ? rows.map((post) => String(post.id || "")).filter(Boolean) : []);
-        renderSimpleFlowModule("publishing");
+        renderPublishingPreservingMedia();
         const selectionLimit = publishSelectionLimit(persona);
         if (action === "all" && rows.length > selectionLimit) {
           showMsg("commandMsg", `已按 ${platformLabel(publishSelectionPlatform(persona))} 规则选择前 ${selectionLimit} 篇。`, false);
@@ -17366,7 +17404,7 @@ function bindSimpleFlowInputs(moduleId) {
         const postId = String(node.dataset.publishMobileRemove || "").trim();
         const selected = syncPublishSelectedPostIds(persona, source).filter((id) => id !== postId);
         setPublishSelectedPostIds(persona, source, selected);
-        renderSimpleFlowModule("publishing");
+        renderPublishingPreservingMedia();
       });
     });
     document.querySelectorAll("[data-publish-post-id]").forEach((node) => {
@@ -17388,7 +17426,7 @@ function bindSimpleFlowInputs(moduleId) {
         } else if (node.checked) selected.add(postId);
         else selected.delete(postId);
         setPublishSelectedPostIds(persona, source, Array.from(selected));
-        renderSimpleFlowModule("publishing");
+        renderPublishingPreservingMedia();
       });
     });
     document.querySelectorAll("[data-publish-post-card]").forEach((node) => {
@@ -17411,7 +17449,7 @@ function bindSimpleFlowInputs(moduleId) {
           }
         } else selected.add(postId);
         setPublishSelectedPostIds(persona, source, Array.from(selected));
-        renderSimpleFlowModule("publishing");
+        renderPublishingPreservingMedia();
       });
     });
     document.querySelectorAll("[data-publish-preview-post]").forEach((node) => {
