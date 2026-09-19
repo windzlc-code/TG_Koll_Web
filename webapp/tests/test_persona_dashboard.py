@@ -6855,6 +6855,28 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["content-type"], "image/jpeg")
 
+    def test_remote_persona_media_reads_persisted_cache_before_fetching_cdn(self):
+        class FakeUpstream:
+            status_code = 200
+            headers = {"Content-Type": "image/jpeg"}
+
+            def iter_content(self, _size):
+                yield b"\xff\xd8" + (b"cached-media" * 8) + b"\xff\xd9"
+
+            def close(self):
+                return None
+
+        cdn = "https://scontent-sea5-1.cdninstagram.com/v/t51.82787-15/archive-cache.jpg"
+        with mock.patch.object(server.requests, "get", return_value=FakeUpstream()) as get:
+            first = server._proxy_remote_persona_media(cdn)
+            second = server._proxy_remote_persona_media(cdn)
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(get.call_count, 1)
+        self.assertIn("immutable", first.headers["cache-control"])
+        self.assertIn("immutable", second.headers["cache-control"])
+
     def test_hot_candidates_api_returns_only_original_unique_post_media(self):
         self._write_archives()
         originals = [

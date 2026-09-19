@@ -9757,6 +9757,33 @@ function registerMediaPreviewGroup(items) {
   return id;
 }
 
+const mediaLightboxPrewarmCache = new Map();
+
+function prewarmPersonaMediaLightboxNeighbors(groupId, index = 0) {
+  const items = state.mediaPreviewGroups[String(groupId || "")] || [];
+  const currentIndex = Number(index || 0);
+  const indexes = [...new Set([currentIndex - 1, currentIndex + 1])]
+    .filter((itemIndex) => itemIndex >= 0 && itemIndex < items.length);
+  indexes.forEach((itemIndex) => {
+    const item = items[itemIndex];
+    if (!item || item.type !== "image") return;
+    const sourceUrl = browserMediaUrl(item.previewUrl, item.originalUrl);
+    if (!sourceUrl || mediaLightboxPrewarmCache.has(sourceUrl)) return;
+    const image = new Image();
+    image.decoding = "async";
+    image.fetchPriority = "low";
+    image.loading = "eager";
+    image.onerror = () => mediaLightboxPrewarmCache.delete(sourceUrl);
+    image.src = sourceUrl;
+    mediaLightboxPrewarmCache.set(sourceUrl, image);
+    while (mediaLightboxPrewarmCache.size > 96) {
+      const oldest = mediaLightboxPrewarmCache.keys().next().value;
+      if (!oldest) break;
+      mediaLightboxPrewarmCache.delete(oldest);
+    }
+  });
+}
+
 function renderMediaPreviewButton(item, groupId, index, {
   className = "persona-media-card",
   frameClass = "persona-media-frame",
@@ -10301,7 +10328,7 @@ function renderPersonaMediaLightboxCurrent() {
     ? `<video class="persona-media-lightbox-frame" src="${esc(sourceUrl)}" controls autoplay playsinline preload="metadata" onerror="handlePersonaMediaLightboxError(this, '视频加载失败，原始文件可能已失效。')"></video>`
     : item.type === "audio"
       ? `<audio class="persona-media-lightbox-audio" src="${esc(sourceUrl)}" controls autoplay onerror="handlePersonaMediaLightboxError(this, '音频加载失败，原始文件可能已失效。')"></audio>`
-      : `<img class="persona-media-lightbox-frame is-zoomable" data-media-lightbox-zoomable src="${esc(sourceUrl)}" alt="${esc(item.label || "媒体预览")}" draggable="false" onerror="handlePersonaMediaLightboxError(this, '图片加载失败，原始文件可能已失效。')" />`;
+      : `<img class="persona-media-lightbox-frame is-zoomable" data-media-lightbox-zoomable src="${esc(sourceUrl)}" alt="${esc(item.label || "媒体预览")}" loading="eager" decoding="async" fetchpriority="high" draggable="false" onerror="handlePersonaMediaLightboxError(this, '图片加载失败，原始文件可能已失效。')" />`;
   applyPersonaMediaLightboxTransform();
   syncPersonaMediaLightboxNav(items.length, index);
   node.hidden = false;
@@ -10312,6 +10339,7 @@ function openPersonaMediaLightbox(groupId, index = 0) {
   if (!items.length) return;
   state.mediaLightbox.groupId = String(groupId || "");
   state.mediaLightbox.index = Math.max(0, Math.min(Number(index || 0), items.length - 1));
+  prewarmPersonaMediaLightboxNeighbors(state.mediaLightbox.groupId, state.mediaLightbox.index);
   renderPersonaMediaLightboxCurrent();
 }
 
@@ -10322,6 +10350,7 @@ function movePersonaMediaLightbox(step) {
   const nextIndex = state.mediaLightbox.index + Number(step || 0);
   if (nextIndex < 0 || nextIndex >= items.length) return;
   state.mediaLightbox.index = nextIndex;
+  prewarmPersonaMediaLightboxNeighbors(groupId, nextIndex);
   renderPersonaMediaLightboxCurrent();
 }
 

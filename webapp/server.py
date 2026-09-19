@@ -18776,6 +18776,10 @@ def _proxy_remote_persona_media(url: str, *, range_header: str = "") -> Response
     }
     clean_range = str(range_header or "").strip()
     use_range = clean_range.lower().startswith("bytes=") and "\r" not in clean_range and "\n" not in clean_range
+    if not use_range:
+        cached = _find_hot_local_media(clean)
+        if cached:
+            return _serve_persona_media_file(Path(cached))
     if use_range:
         request_headers["Range"] = clean_range
     last_error: Exception | None = None
@@ -18821,9 +18825,10 @@ def _proxy_remote_persona_media(url: str, *, range_header: str = "") -> Response
             body = b"".join(chunk for chunk in upstream.iter_content(64 * 1024) if chunk)
         finally:
             upstream.close()
+        cached_path = ""
         if str(content_type).lower().startswith(("image/", "video/")):
-            _store_hot_preview_cache(clean, body, content_type)
-        response_headers = {"Cache-Control": "private, max-age=300"}
+            cached_path = _store_hot_preview_cache(clean, body, content_type)
+        response_headers = _immutable_media_headers() if cached_path else {"Cache-Control": "private, max-age=300"}
         if body:
             response_headers["Content-Length"] = str(len(body))
         return Response(content=body, media_type=content_type, status_code=status or 200, headers=response_headers)
