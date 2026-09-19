@@ -53,6 +53,13 @@ class ConsoleSessionBoundaryTests(unittest.TestCase):
         self.assertIn("persona-media-frame--video-poster", preview)
         self.assertNotIn("<video class", preview)
 
+    def test_social_media_previews_use_the_authenticated_hot_cache_proxy(self):
+        self.assertIn("function browserHotPreviewUrl", self.source)
+        self.assertIn("/api/persona_dashboard/hot_preview/\" + token", self.source)
+        self.assertIn("browserHotPreviewUrl(adminWorkspaceUrl(text))", self.source)
+        preview = self._function_source("renderMediaPreviewButton")
+        self.assertIn("browserMediaUrl(posterUrl)", preview)
+
     def test_runninghub_balance_errors_are_localized_instead_of_raw_json(self):
         self.assertIn("balance is insufficient", self.source)
         self.assertIn("当前图片模型余额不足，请充值后再试。", self.source)

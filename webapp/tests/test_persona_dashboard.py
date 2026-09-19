@@ -6877,6 +6877,44 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("immutable", first.headers["cache-control"])
         self.assertIn("immutable", second.headers["cache-control"])
 
+    def test_persona_archive_social_media_uses_hot_preview_cache_proxy(self):
+        from webapp import server
+
+        media = "https://instagram.fssa12-2.fna.fbcdn.net/v/t51.82787-15/archive.jpg"
+        thumbnail = "https://scontent.cdninstagram.com/v/t51.82787-15/archive.jpg?stp=dst-jpg_s320x320"
+
+        rows = server._previewable_persona_media_items(
+            [{"url": media, "thumbnail_url": thumbnail, "type": "image"}],
+            archive_id="persona-1",
+            post_id="post-1",
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["preview_url"].startswith("/api/persona_dashboard/hot_preview/"))
+        self.assertTrue(rows[0]["thumbnail_url"].startswith("/api/persona_dashboard/hot_preview/"))
+        self.assertNotEqual(rows[0]["preview_url"], media)
+        self.assertNotEqual(rows[0]["thumbnail_url"], thumbnail)
+
+    def test_publish_history_remote_media_uses_owner_scoped_proxy_route(self):
+        from webapp import server
+
+        rows = server._previewable_persona_media_items(
+            [{
+                "url": "https://scontent.cdninstagram.com/v/t51.82787-15/history.jpg",
+                "thumbnail_url": "https://scontent.cdninstagram.com/v/t51.82787-15/history.jpg?stp=dst-jpg_s320x320",
+                "type": "image",
+            }],
+            archive_id="persona-1",
+            history_id="history-1",
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0]["preview_url"],
+            "/api/persona_dashboard/personas/persona-1/publish_history/history-1/media/0",
+        )
+        self.assertTrue(rows[0]["thumbnail_url"].startswith("/api/persona_dashboard/hot_preview/"))
+
     def test_hot_candidates_api_returns_only_original_unique_post_media(self):
         self._write_archives()
         originals = [

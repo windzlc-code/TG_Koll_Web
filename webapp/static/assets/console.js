@@ -9620,10 +9620,34 @@ function isBrowserMediaUrl(value) {
   return /^(?:https?:)?\/\/|^\/api\/|^(?:data|blob):/i.test(text);
 }
 
+function browserHotPreviewUrl(value) {
+  const text = String(value || "").trim();
+  if (!/^(?:https?:)?\/\//i.test(text)) return text;
+  const source = /^\/\//.test(text) ? "https:" + text : text;
+  let host = "";
+  try {
+    host = new URL(source, location.origin).hostname.toLowerCase().replace(/^\.+|\.+$/g, "");
+  } catch (_error) {
+    return text;
+  }
+  if (!/(?:^|\.)(?:cdninstagram\.com|fbcdn\.net|instagram\.com|threads\.net|threads\.com)$/.test(host)) {
+    return text;
+  }
+  try {
+    const bytes = new TextEncoder().encode(source);
+    let binary = "";
+    bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+    const token = btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    return adminWorkspaceUrl("/api/persona_dashboard/hot_preview/" + token);
+  } catch (_error) {
+    return text;
+  }
+}
+
 function browserMediaUrl(...values) {
   for (const value of values) {
     const text = String(value || "").trim();
-    if (isBrowserMediaUrl(text)) return adminWorkspaceUrl(text);
+    if (isBrowserMediaUrl(text)) return browserHotPreviewUrl(adminWorkspaceUrl(text));
   }
   return "";
 }
@@ -9801,9 +9825,11 @@ function renderMediaPreviewButton(item, groupId, index, {
   const sourceUrl = String(item?.url || item?.originalUrl || item?.previewUrl || "").trim();
   const previewUrl = String(item?.previewUrl || sourceUrl).trim();
   const isVideo = type === "video" || isVideoMediaUrl(sourceUrl) || isVideoMediaUrl(previewUrl);
-  const posterSrc = posterUrl && !isVideoMediaUrl(posterUrl) ? adminWorkspaceUrl(posterUrl) : "";
-  const videoSrc = isVideo ? adminWorkspaceUrl(previewUrl) : "";
-  const displayUrl = adminWorkspaceUrl(isVideo ? (posterSrc || videoSrc) : (posterSrc || previewUrl || sourceUrl));
+  const posterSrc = posterUrl && !isVideoMediaUrl(posterUrl) ? browserMediaUrl(posterUrl) : "";
+  const videoSrc = isVideo ? browserMediaUrl(previewUrl) : "";
+  const displayUrl = isVideo
+    ? (posterSrc || videoSrc)
+    : browserMediaUrl(posterSrc || previewUrl || sourceUrl);
   const unavailable = Boolean(item?.unavailable || (displayUrl && state.failedMediaPreviewUrls.has(displayUrl)));
   const canInteract = interactive && !unavailable;
   const canShowZoomHint = zoomHint && canInteract && type === "image";

@@ -18977,7 +18977,11 @@ def _serve_persona_archive_post_media_thumbnail(archive_id: str, post_id: str, i
     return _proxy_remote_persona_media(remote_url)
 
 
-def _persona_archive_publish_history_media_path(archive_id: str, history_id: str, index: int) -> Path:
+def _persona_archive_publish_history_media_source(
+    archive_id: str,
+    history_id: str,
+    index: int,
+) -> tuple[Path | None, str]:
     clean_archive_id = str(archive_id or "").strip()
     clean_history_id = str(history_id or "").strip()
     if not clean_archive_id or not clean_history_id:
@@ -19002,14 +19006,37 @@ def _persona_archive_publish_history_media_path(archive_id: str, history_id: str
     raw_url = str((media_items[index] or {}).get("url") or "").strip()
     if not raw_url:
         raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    if re.match(r"^https?://", raw_url, re.I):
+        return None, raw_url
     path = Path(raw_url).expanduser().resolve()
     if not path.is_file() or not _is_allowed_dashboard_media_path(path):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
-    return path
+    return path, ""
 
 
-def _serve_persona_archive_publish_history_media(archive_id: str, history_id: str, index: int) -> FileResponse:
-    return _serve_persona_media_file(_persona_archive_publish_history_media_path(archive_id, history_id, index))
+def _persona_archive_publish_history_media_path(archive_id: str, history_id: str, index: int) -> Path:
+    path, _remote_url = _persona_archive_publish_history_media_source(archive_id, history_id, index)
+    if path:
+        return path
+    raise HTTPException(status_code=404, detail="媒体尚未缓存到本地。")
+
+
+def _serve_persona_archive_publish_history_media(archive_id: str, history_id: str, index: int) -> Response:
+    path, remote_url = _persona_archive_publish_history_media_source(archive_id, history_id, index)
+    if path:
+        return _serve_persona_media_file(path)
+    return _proxy_remote_persona_media(remote_url)
+
+
+def _serve_persona_archive_publish_history_media_thumbnail(
+    archive_id: str,
+    history_id: str,
+    index: int,
+) -> Response:
+    path, remote_url = _persona_archive_publish_history_media_source(archive_id, history_id, index)
+    if path:
+        return _serve_persona_media_thumbnail(path)
+    return _proxy_remote_persona_media(remote_url)
 
 
 def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any]]:
@@ -23899,7 +23926,17 @@ def _previewable_persona_media_items(
         if _is_direct_preview_media_url(url) and (
             allow_external or not re.match(r"^(?:https?:)?//", url, re.I)
         ):
-            preview_url = url
+            # Social CDN assets must use the authenticated cache proxy. Returning
+            # the raw URL here makes draft/history cards bypass the persisted
+            # media cache even though hotspot candidates already use this path.
+            preview_url = _hot_preview_source_url(url) if _is_allowed_hot_preview_url(url) else url
+            incoming_thumb = str((item or {}).get("thumbnail_url") or (item or {}).get("thumbnailUrl") or "").strip()
+            if incoming_thumb and incoming_thumb != url:
+                thumbnail_url = (
+                    _hot_preview_source_url(incoming_thumb)
+                    if _is_allowed_hot_preview_url(incoming_thumb)
+                    else incoming_thumb
+                )
         elif _is_direct_preview_media_url(url):
             reason = "媒体未缓存到本地"
         elif archive_id and post_id:
@@ -23923,13 +23960,23 @@ def _previewable_persona_media_items(
             else:
                 reason = "原始媒体文件不存在"
         elif archive_id and history_id:
-            path = Path(url).expanduser().resolve()
-            if path.is_file():
+            is_remote = bool(re.match(r"^https?://", url, re.I))
+            path = None if is_remote else Path(url).expanduser().resolve()
+            if is_remote or (path is not None and path.is_file()):
                 base_url = f"/api/persona_dashboard/personas/{quote(str(archive_id).strip(), safe='')}/publish_history/{quote(str(history_id).strip(), safe='')}/media/{index}"
-                version = _persona_media_cache_token(path)
-                preview_url = f"{base_url}?v={version}"
-                if path.suffix.lower() in IMAGE_EXTS or path.suffix.lower() in VIDEO_EXTS:
-                    thumbnail_url = f"{base_url}/thumbnail?v={version}"
+                if is_remote:
+                    preview_url = base_url
+                    incoming_thumb = str((item or {}).get("thumbnail_url") or (item or {}).get("thumbnailUrl") or "").strip()
+                    thumbnail_url = f"{base_url}/thumbnail" if not incoming_thumb or incoming_thumb == url else (
+                        _hot_preview_source_url(incoming_thumb)
+                        if _is_allowed_hot_preview_url(incoming_thumb)
+                        else incoming_thumb
+                    )
+                else:
+                    version = _persona_media_cache_token(path)
+                    preview_url = f"{base_url}?v={version}"
+                    if path.suffix.lower() in IMAGE_EXTS or path.suffix.lower() in VIDEO_EXTS:
+                        thumbnail_url = f"{base_url}/thumbnail?v={version}"
             else:
                 reason = "原始媒体文件不存在"
         elif re.match(r"^(?:/|[A-Za-z]:[\\/]|~[\\/])", url):
@@ -31615,7 +31662,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/media/{index}/thumbnail")
     def api_persona_dashboard_persona_publish_history_media_thumbnail(archive_id: str, history_id: str, index: int, _user: dict[str, Any] = Depends(require_persona_owner)):
-        return _serve_persona_media_thumbnail(_persona_archive_publish_history_media_path(archive_id, history_id, index))
+        return _serve_persona_archive_publish_history_media_thumbnail(archive_id, history_id, index)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/requeue")
     def api_persona_dashboard_persona_publish_history_requeue(archive_id: str, history_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
