@@ -12067,20 +12067,23 @@ export function recycleUnusedSentimentHotCandidates(args: {
   archiveId: string;
   candidates: SentimentHotCandidate[];
   searchMode?: SentimentHotSearchMode;
-}): { recycled: number } {
+}): { recycled: number; accepted: number } {
   const archiveId = cleanText(args.archiveId);
   const candidates = (args.candidates || []).filter((item) => item?.id && cleanSentimentCandidateContent(item.content));
-  if (!archiveId || !candidates.length) return { recycled: 0 };
+  if (!archiveId || !candidates.length) return { recycled: 0, accepted: 0 };
   const searchMode = normalizeSentimentHotSearchMode(args.searchMode);
+  const acceptedCandidates = candidates
+    .map((candidate) => normalizeSentimentHotGlobalPoolCandidate(candidate))
+    .filter((candidate): candidate is SentimentHotCandidate => Boolean(candidate));
   const keywords = [...new Set(candidates.flatMap((item) => {
     const query = cleanText((item.metrics as any)?.query);
     const matched = Array.isArray((item.metrics as any)?.matchedKeywords) ? (item.metrics as any).matchedKeywords : [];
     return [query, ...matched.map(cleanText)].filter(Boolean);
   }))];
-  writeGlobalSentimentHotCandidatePool(candidates);
+  const persisted = writeGlobalSentimentHotCandidatePool(candidates);
   if (keywords.length) writeThreadsSearchCandidateCache(archiveId, keywords, candidates, searchMode);
   forgetSentimentHotShown(archiveId, candidates.map((item) => item.id), searchMode);
-  return { recycled: candidates.length };
+  return { recycled: candidates.length, accepted: persisted ? acceptedCandidates.length : 0 };
 }
 
 export function writeGlobalSentimentHotCandidatePool(candidates: SentimentHotCandidate[]): boolean {

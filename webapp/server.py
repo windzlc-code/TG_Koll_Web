@@ -19075,6 +19075,269 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
     return rows
 
 
+def _persona_publish_history_public_media(record: dict[str, Any]) -> list[dict[str, str]]:
+    """Return only public media URLs that are safe to send to the hot worker.
+
+    Publish history also contains console-local paths and proxy URLs used for
+    dashboard previews.  Those paths do not exist in the capture worker's
+    /data mount, so they must never become global-pool media URLs.
+    """
+    published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+    source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
+    published_targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
+    sources: list[dict[str, Any]] = [record, published_meta, source_meta]
+    for target in published_targets:
+        if not isinstance(target, dict):
+            continue
+        sources.append(target)
+        target_meta = target.get("publishedMeta") if isinstance(target.get("publishedMeta"), dict) else {}
+        if target_meta:
+            sources.append(target_meta)
+
+    output: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(value: Any, media_type: Any = "image") -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        try:
+            parsed = urlsplit(text)
+        except ValueError:
+            return
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+            return
+        key = text.split("#", 1)[0].lower()
+        if key in seen:
+            return
+        seen.add(key)
+        normalized_type = str(media_type or "image").strip().lower()
+        output.append({
+            "url": text[:800],
+            "type": normalized_type if normalized_type in {"image", "video", "unknown"} else "image",
+        })
+
+    for source in sources:
+        for key in ("originalMediaUrls", "original_media_urls", "mediaUrls", "media_urls"):
+            values = source.get(key)
+            if isinstance(values, list):
+                for value in values:
+                    add(value)
+        for key in ("mediaItems", "media_items", "media"):
+            values = source.get(key)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if isinstance(item, dict):
+                    add(item.get("url") or item.get("remoteUrl") or item.get("remote_url"), item.get("type"))
+                else:
+                    add(item)
+        for key in ("originalMediaUrl", "original_media_url", "mediaUrl", "media_url", "imageUrl", "image_url", "videoUrl", "video_url"):
+            add(source.get(key), "video" if "video" in key.lower() else "image")
+    return output[:12]
+
+
+def _persona_publish_history_dataset_candidate(
+    archive_id: str,
+    history_id: str,
+) -> dict[str, Any]:
+    """Build a global-pool candidate from any confirmed user publication.
+
+    The candidate represents the user's public post, not the original source
+    post that may have inspired it.  This makes hotspot imports, handwritten
+    posts, and AI-generated posts follow the same station-wide reuse path.
+    """
+    clean_id = str(archive_id or "").strip()
+    clean_history_id = str(history_id or "").strip()
+    if not clean_id or not clean_history_id:
+        raise HTTPException(status_code=400, detail="缺少人设 ID 或发送记录 ID。")
+    _, _, archives = _persona_archive_source_for_write(clean_id)
+    archive = _find_persona_archive(archives, clean_id)
+    if not archive:
+        raise HTTPException(status_code=404, detail="人设不存在。")
+    publish_history = archive.get("publishHistory") if isinstance(archive.get("publishHistory"), list) else []
+    record = next((
+        item for item in publish_history
+        if isinstance(item, dict)
+        and str(item.get("id") or item.get("archivePostId") or item.get("archive_post_id") or "").strip() == clean_history_id
+    ), None)
+    if not record or not _is_persona_publish_history_record(record):
+        raise HTTPException(status_code=404, detail="发送记录不存在或不可用。")
+
+    published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
+    source_meta = record.get("sourceMeta") if isinstance(record.get("sourceMeta"), dict) else {}
+    published_targets = record.get("publishedTargets") if isinstance(record.get("publishedTargets"), list) else []
+    target_sources: list[dict[str, Any]] = []
+    for target in published_targets:
+        if not isinstance(target, dict):
+            continue
+        target_sources.append(target)
+        target_meta = target.get("publishedMeta") if isinstance(target.get("publishedMeta"), dict) else {}
+        if target_meta:
+            target_sources.append(target_meta)
+    metadata_sources = [record, published_meta, source_meta, *target_sources]
+
+    published_url = _confirmed_archive_publish_url(record) or _published_record_url(record)
+    canonical = _try_canonical_profile_permalink(published_url)
+    if not canonical:
+        raise HTTPException(status_code=422, detail="这条发送记录缺少 Threads 或 Instagram 公开帖子链接。")
+    platform, public_url = canonical
+
+    content = next((
+        str(value).strip()
+        for value in (
+            record.get("content"),
+            record.get("text"),
+            record.get("caption"),
+            record.get("replyText"),
+            record.get("reply_text"),
+            published_meta.get("content"),
+            published_meta.get("text"),
+            published_meta.get("caption"),
+            source_meta.get("originalContent"),
+            source_meta.get("original_content"),
+            source_meta.get("content"),
+            source_meta.get("text"),
+            source_meta.get("caption"),
+        )
+        if str(value or "").strip()
+    ), "")
+    if not content:
+        raise HTTPException(status_code=422, detail="这条发送记录没有可加入数据集的正文。")
+
+    published_at = next((
+        str(value).strip()
+        for source in metadata_sources
+        for value in (
+            source.get("publishedAt"),
+            source.get("published_at"),
+            source.get("createdAt"),
+            source.get("created_at"),
+        )
+        if str(value or "").strip()
+    ), "")
+    if not published_at:
+        raise HTTPException(status_code=422, detail="这条发送记录缺少发布时间。")
+    try:
+        published_timestamp = _parse_business_iso_timestamp(published_at)
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(status_code=422, detail="这条发送记录的发布时间无效。")
+    if published_timestamp < time.time() - (30 * 24 * 60 * 60):
+        raise HTTPException(status_code=422, detail="这条帖子已超过 30 天新鲜度，不能加入热点数据集。")
+
+    hot_metrics = _publish_history_hot_metrics(record, archive)
+
+    def metric_max(*keys: str) -> int:
+        values: list[int] = []
+        for source in [hot_metrics, *metadata_sources]:
+            if not isinstance(source, dict):
+                continue
+            values.append(_source_metric(source, *keys))
+            engagement = source.get("engagement") if isinstance(source.get("engagement"), dict) else {}
+            metrics = source.get("metrics") if isinstance(source.get("metrics"), dict) else {}
+            values.extend(_number(container.get(key), 0) for container in (engagement, metrics) for key in keys)
+        return max(values, default=0)
+
+    likes = metric_max("likes", "likeCount", "like_count")
+    comments = metric_max("comments", "commentCount", "comment_count", "replies")
+    shares = metric_max("shares", "shareCount", "share_count", "send_count")
+    reposts = metric_max("reposts", "repostCount", "repost_count")
+    views = metric_max("views", "viewCount", "view_count", "playCount", "play_count")
+    hot_score = max(
+        _number(hot_metrics.get("hot_score"), 0),
+        *(
+            _number(source.get("hotScore") or source.get("hot_score"), 0)
+            for source in metadata_sources
+            if isinstance(source, dict)
+        ),
+        views + likes + comments + shares + reposts,
+    )
+    metrics: dict[str, Any] = {
+        "source": "published_history",
+        "publishedHistoryId": clean_history_id,
+        "like_count": likes,
+        "comment_count": comments,
+        "share_count": shares,
+        "repost_count": reposts,
+    }
+    if views > 0:
+        metrics["view_count"] = views
+    for source in metadata_sources:
+        source_metrics = source.get("metrics") if isinstance(source, dict) and isinstance(source.get("metrics"), dict) else {}
+        if not metrics.get("query") and str(source_metrics.get("query") or "").strip():
+            metrics["query"] = str(source_metrics["query"]).strip()[:300]
+        if not metrics.get("matchedKeywords") and isinstance(source_metrics.get("matchedKeywords"), list):
+            matched = [str(item).strip()[:120] for item in source_metrics["matchedKeywords"] if str(item).strip()]
+            if matched:
+                metrics["matchedKeywords"] = matched[:16]
+    engagement = {
+        key: value for key, value in {
+            "likeCount": likes,
+            "commentCount": comments,
+            "shareCount": shares,
+            "repostCount": reposts,
+            "viewCount": views,
+        }.items() if value > 0
+    }
+    author = next((
+        str(source.get(key)).strip().lstrip("@")
+        for source in metadata_sources
+        for key in ("username", "author", "accountUsername", "account_username")
+        if isinstance(source, dict) and str(source.get(key) or "").strip()
+    ), "")
+    candidate_seed = f"{platform}|{_normalized_dashboard_post_url(public_url) or public_url.lower()}"
+    candidate_id = f"published-history-{hashlib.sha256(candidate_seed.encode('utf-8')).hexdigest()[:32]}"
+    captured_at = next((
+        str(value).strip()
+        for source in metadata_sources
+        for value in (source.get("capturedAt"), source.get("captured_at"), source.get("updatedAt"), source.get("updated_at"))
+        if isinstance(source, dict) and str(value or "").strip()
+    ), "") or _persona_dashboard_iso_now()
+    return {
+        "id": candidate_id,
+        "platform": platform,
+        "sourceUrl": public_url,
+        "author": author,
+        "content": content,
+        "hotScore": hot_score,
+        "metrics": metrics,
+        "engagement": engagement,
+        "publishedAt": published_at,
+        "capturedAt": captured_at,
+        "media": _persona_publish_history_public_media(record),
+        "warnings": ["站内已发布记录"],
+    }
+
+
+def _recycle_persona_publish_history_record(archive_id: str, history_id: str) -> dict[str, Any]:
+    candidate = _persona_publish_history_dataset_candidate(archive_id, history_id)
+    result = _run_persona_hot_workflow_cli(
+        {
+            "action": "recycle-hot-candidates",
+            "archiveId": str(archive_id or "").strip(),
+            "searchMode": "normal",
+            "candidates": [candidate],
+        },
+        timeout_seconds=60,
+    )
+    recycled = result.get("recycled") if isinstance(result, dict) else None
+    accepted = result.get("accepted") if isinstance(result, dict) else None
+    if not isinstance(recycled, (int, float)) and isinstance(result, dict) and isinstance(result.get("recycle"), dict):
+        recycled = result["recycle"].get("recycled")
+    if not isinstance(accepted, (int, float)) and isinstance(result, dict) and isinstance(result.get("recycle"), dict):
+        accepted = result["recycle"].get("accepted")
+    return {
+        "ok": True,
+        "archive_id": str(archive_id or "").strip(),
+        "history_id": str(history_id or "").strip(),
+        "candidate_id": candidate["id"],
+        "platform": candidate["platform"],
+        "attempted": int(recycled) if isinstance(recycled, (int, float)) else 0,
+        "accepted": int(accepted) if isinstance(accepted, (int, float)) else None,
+        "idempotent": True,
+    }
+
+
 @_persona_archive_write_locked
 def _requeue_persona_publish_record(archive_id: str, history_id: str) -> dict[str, Any]:
     clean_id = str(archive_id or "").strip()
@@ -31671,6 +31934,10 @@ def create_app() -> FastAPI:
     def api_persona_dashboard_persona_publish_history_requeue(archive_id: str, history_id: str, user: dict[str, Any] = Depends(require_persona_owner)):
         result = _requeue_persona_publish_record(archive_id, history_id)
         return _apply_persona_post_retention(result, user)
+
+    @app.post("/api/persona_dashboard/personas/{archive_id}/publish_history/{history_id}/recycle")
+    def api_persona_dashboard_persona_publish_history_recycle(archive_id: str, history_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
+        return _recycle_persona_publish_history_record(archive_id, history_id)
 
     @app.post("/api/persona_dashboard/personas/{archive_id}/publish_history/recognize")
     def api_persona_dashboard_persona_publish_history_recognize(

@@ -4773,6 +4773,105 @@ class PersonaDashboardApiTests(unittest.TestCase):
         refreshed_post = next(item for item in refreshed.json()["posts"] if item["id"] == requeued["id"])
         self.assertEqual([item["url"] for item in refreshed_post["media_items"]], requeued_media_urls)
 
+    def test_publish_history_recycle_accepts_hot_manual_and_ai_posts(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        recent = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        content = "这是用户已发布的中文内容，用于验证站内候选回流和统一筛选。"
+        records = [
+            {
+                "id": "pub-hot",
+                "title": "热点导入",
+                "content": content,
+                "publishedAt": recent,
+                "publishedUrl": "https://www.threads.net/@history/post/hot-1",
+                "platform": "threads",
+                "sourceMeta": {
+                    "source": "sentiment_hot_import",
+                    "sourceUrl": "https://www.threads.net/@source/post/original-1",
+                    "originalContent": "原始热点内容不应替代用户已发布正文。",
+                    "hotScore": 1300,
+                    "mediaItems": [
+                        {"url": str(self.draft_media_path), "type": "image"},
+                        {"url": "https://cdn.example.com/hot.jpg", "type": "image"},
+                    ],
+                },
+                "publishedMeta": {
+                    "platform": "threads",
+                    "capturedAt": recent,
+                    "engagement": {"likeCount": 250, "commentCount": 20, "viewCount": 1200},
+                },
+            },
+            {
+                "id": "pub-manual",
+                "title": "手写",
+                "content": content,
+                "publishedAt": recent,
+                "publishedUrl": "https://www.threads.net/@history/post/manual-1",
+                "platform": "threads",
+                "publishedMeta": {
+                    "platform": "threads",
+                    "engagement": {"likeCount": 210, "commentCount": 12},
+                },
+            },
+            {
+                "id": "pub-ai",
+                "title": "AI 生成",
+                "content": content,
+                "publishedAt": recent,
+                "publishedUrl": "https://www.instagram.com/p/ai-1/",
+                "platform": "instagram",
+                "publishedMeta": {
+                    "platform": "instagram",
+                    "engagement": {"likeCount": 110, "commentCount": 10},
+                    "mediaItems": [{"url": "https://cdn.example.com/ai.mp4", "type": "video"}],
+                },
+            },
+        ]
+        archives[0]["publishHistory"] = records
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        calls = []
+
+        def fake_recycle(payload, **_kwargs):
+            calls.append(payload)
+            return {"ok": True, "recycled": 1, "accepted": 1}
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=fake_recycle):
+            responses = [
+                self.client.post(f"/api/persona_dashboard/personas/persona-1/publish_history/{record['id']}/recycle")
+                for record in records
+            ]
+
+        self.assertEqual([response.status_code for response in responses], [200, 200, 200])
+        self.assertEqual([call["action"] for call in calls], ["recycle-hot-candidates"] * 3)
+        candidates = [call["candidates"][0] for call in calls]
+        self.assertEqual(candidates[0]["content"], content)
+        self.assertNotEqual(candidates[0]["content"], records[0]["sourceMeta"]["originalContent"])
+        self.assertEqual(candidates[0]["sourceUrl"], "https://www.threads.net/@history/post/hot-1")
+        self.assertEqual(candidates[2]["platform"], "instagram")
+        self.assertEqual(candidates[0]["media"], [{"url": "https://cdn.example.com/hot.jpg", "type": "image"}])
+        self.assertEqual(candidates[2]["media"], [{"url": "https://cdn.example.com/ai.mp4", "type": "video"}])
+        self.assertTrue(all(not str(item["url"]).startswith("/") for candidate in candidates for item in candidate["media"]))
+        self.assertEqual(candidates[0]["id"], server._persona_publish_history_dataset_candidate("persona-1", "pub-hot")["id"])
+
+    def test_publish_history_recycle_rejects_stale_record_before_worker(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        archives[0]["publishHistory"][0]["publishedAt"] = "2026-01-01T00:00:00Z"
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli") as recycle:
+            response = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/publish_history/pub-1/recycle"
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("30 天", response.json()["detail"])
+        recycle.assert_not_called()
+
     def test_missing_media_is_retained_as_unavailable_item(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"

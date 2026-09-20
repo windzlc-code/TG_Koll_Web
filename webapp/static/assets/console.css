@@ -9478,6 +9478,7 @@ body.persona-touch-dragging .persona-list-card:active {
 .publish-history-card-action .ui-more-icon,
 .publish-history-source-link .ui-source-link-icon,
 .publish-history-requeue-button .ui-requeue-icon,
+.publish-history-requeue-button .ui-recycle-icon,
 .persona-history-delete-selected .ui-trash-icon,
 .console-modal-actions .ui-requeue-icon {
   width: 17px;

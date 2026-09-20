@@ -523,6 +523,20 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("safeExternalHttpUrl", preview)
         self.assertNotIn('String(activeRecord?.source_url', preview)
 
+    def test_publish_history_can_recycle_site_posts_into_global_pool(self):
+        selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
+        preview = function_source("renderPublishHistoryPreview", "renderPublishHistoryPanel")
+        detail = function_source("openPublishHistoryRecordModal", "requeuePublishHistoryRecord")
+        recycle = function_source("recyclePublishHistoryRecord", "selectedPublishHistoryIds")
+
+        self.assertIn("renderPublishHistoryCardEditMenu(recordId)", selection)
+        self.assertIn("data-publish-history-recycle", function_source("renderPublishHistoryCardEditMenu", "renderPersonaHistoryFilters"))
+        self.assertIn("data-publish-history-recycle", preview)
+        self.assertIn("加入全局数据集", detail)
+        self.assertIn("/publish_history/${encodeURIComponent(cleanHistoryId)}/recycle", recycle)
+        self.assertIn("result?.accepted", recycle)
+        self.assertIn("loadPersonaPublishHistory", recycle)
+
     def test_custom_proxy_idempotency_fingerprint_is_not_written_to_dom(self):
         self.assertIn("const accountProxyCustomRequestState = new WeakMap()", CONSOLE_JS)
         self.assertNotIn("dataset.proxyCustomRequestFingerprint", CONSOLE_JS)

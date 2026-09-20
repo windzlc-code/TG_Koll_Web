@@ -12002,6 +12002,7 @@ function renderPublishHistoryCardEditMenu(recordId = "") {
   return `<details class="publish-history-edit-menu publish-history-card-edit-menu" data-console-dropdown data-publish-history-card-edit>
     <summary class="publish-history-card-action" title="更多操作" aria-label="更多操作">${renderMoreIcon()}</summary>
     <div class="publish-history-edit-popover">
+      <button type="button" class="publish-history-card-recycle" data-publish-history-recycle="${esc(recordId)}">${renderRecycleIcon()}<span>加入全局数据集</span></button>
       <button type="button" class="publish-history-card-requeue" data-publish-history-requeue="${esc(recordId)}">${renderRequeueIcon()}<span>重回草稿</span></button>
       <button type="button" class="danger publish-history-card-delete" data-publish-history-delete="${esc(recordId)}">${renderTrashIcon()}<span>从列表删除</span></button>
     </div>
@@ -13126,6 +13127,14 @@ function renderRequeueIcon() {
     <path d="M19 5v4h-4"></path>
     <path d="M19 12a7 7 0 0 1-11.9 4.95L5 15"></path>
     <path d="M5 19v-4h4"></path>
+  </svg>`;
+}
+
+function renderRecycleIcon() {
+  return `<svg class="ui-action-icon ui-recycle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M7 7h9l-2.5-2.5"></path>
+    <path d="M16 7a7 7 0 1 1-5.95 10.68"></path>
+    <path d="M7 7v4"></path>
   </svg>`;
 }
 
@@ -16216,6 +16225,7 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
             <div class="publish-history-hot-status ${hotMetrics.complete ? "is-complete" : "is-stale"}">${esc(hotStatus)}</div>
             <div class="row-actions publish-history-actions">
               ${renderPublishHistorySourceLink(publishedUrl, { compact: true, accountId: activeRecord?.account_id || "" })}
+              <button type="button" class="publish-history-requeue-button publish-history-recycle-button" data-publish-history-recycle="${esc(String(activeRecord?.id || ""))}">${renderRecycleIcon()}<span>加入全局数据集</span></button>
               <button type="button" class="publish-history-requeue-button" data-publish-history-requeue="${esc(String(activeRecord?.id || ""))}">${renderRequeueIcon()}<span>重回草稿</span></button>
             </div>
             ${renderPublishPreviewMedia(activeMediaItems)}
@@ -16310,9 +16320,13 @@ async function openPublishHistoryRecordModal(historyId = "", persona = selectedP
       </article>`,
     cancelText: "关闭",
     showConfirm: false,
-    extraActions: [{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }],
+    extraActions: [
+      { value: "recycle", text: "加入全局数据集", iconHtml: renderRecycleIcon() },
+      { value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() },
+    ],
     modalKey: "publish-history-detail",
   });
+  if (action === "recycle") await recyclePublishHistoryRecord(cleanHistoryId, persona);
   if (action === "requeue") await requeuePublishHistoryRecord(cleanHistoryId, persona);
 }
 
@@ -16345,6 +16359,43 @@ async function requeuePublishHistoryRecord(historyId = "", persona = selectedPer
     if (isPersonaWorkspaceModule()) renderPersonaDetail();
   } catch (error) {
     showMsg("commandMsg", error.detail || error.message || "重回草稿失败", false);
+  } finally {
+    setActionLocked(lockParts, false);
+  }
+}
+
+async function recyclePublishHistoryRecord(historyId = "", persona = selectedPersona()) {
+  const cleanPersonaId = String(persona?.id || "").trim();
+  const cleanHistoryId = String(historyId || state.publishHistoryPreviewId || "").trim();
+  if (!cleanPersonaId || !cleanHistoryId) {
+    showMsg("commandMsg", "请先选择一条任务历史。", false);
+    return;
+  }
+  const lockParts = ["publish_history_recycle", cleanPersonaId, cleanHistoryId];
+  if (isActionLocked(...lockParts)) {
+    showMsg("commandMsg", "该任务历史正在加入全局数据集，请等待当前操作完成。", false);
+    return;
+  }
+  setActionLocked(lockParts, true);
+  try {
+    showMsg("commandMsg", "正在检查并加入全局数据集...", true);
+    const result = await api(`/api/persona_dashboard/personas/${encodeURIComponent(cleanPersonaId)}/publish_history/${encodeURIComponent(cleanHistoryId)}/recycle`, {
+      method: "POST",
+    });
+    await Promise.all([
+      loadPersonaPublishHistory(cleanPersonaId, { force: true }).catch(() => []),
+      loadPersonas().catch(() => {}),
+    ]);
+    const accepted = Number(result?.accepted);
+    if (result?.accepted !== null && result?.accepted !== undefined && Number.isFinite(accepted) && accepted <= 0) {
+      showMsg("commandMsg", "已检查，但这条帖子未达到全局热点数据集的质量或热度要求。", false);
+    } else {
+      showMsg("commandMsg", "已加入全局数据集，后续人设可按关键词筛选复用。", true);
+    }
+    if (state.activeModule === "publishing") renderSimpleFlowModule("publishing");
+    if (isPersonaWorkspaceModule()) renderPersonaDetail();
+  } catch (error) {
+    showMsg("commandMsg", error.detail || error.message || "加入全局数据集失败", false);
   } finally {
     setActionLocked(lockParts, false);
   }
@@ -17472,7 +17523,7 @@ function bindSimpleFlowInputs(moduleId) {
     });
     document.querySelectorAll("[data-publish-history-card]").forEach((node) => {
       node.addEventListener("click", (event) => {
-        if (event.target.closest("[data-publish-history-view], [data-publish-history-requeue], [data-publish-history-delete], [data-publish-history-bulk-toggle], [data-console-dropdown], a")) return;
+        if (event.target.closest("[data-publish-history-view], [data-publish-history-recycle], [data-publish-history-requeue], [data-publish-history-delete], [data-publish-history-bulk-toggle], [data-console-dropdown], a")) return;
         event.stopPropagation();
         state.publishHistoryPreviewId = String(node.dataset.publishHistoryCard || "").trim();
         if (!syncPublishHistorySelectionDom()) renderSimpleFlowModule("publishing");
@@ -17489,6 +17540,13 @@ function bindSimpleFlowInputs(moduleId) {
         event.stopPropagation();
         closeConsoleDropdowns();
         requeuePublishHistoryRecord(node.dataset.publishHistoryRequeue || "").catch(() => {});
+      });
+    });
+    document.querySelectorAll("[data-publish-history-recycle]").forEach((node) => {
+      node.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeConsoleDropdowns();
+        recyclePublishHistoryRecord(node.dataset.publishHistoryRecycle || "").catch(() => {});
       });
     });
     document.querySelectorAll("[data-publish-history-delete]").forEach((node) => {
@@ -37432,7 +37490,7 @@ function bindEvents() {
         return;
       }
       const historyCard = event.target.closest("[data-publish-history-card]");
-      if (historyCard && !event.target.closest("[data-publish-history-view], [data-publish-history-requeue], [data-publish-history-delete], [data-publish-history-bulk-toggle], [data-console-dropdown], a")) {
+      if (historyCard && !event.target.closest("[data-publish-history-view], [data-publish-history-recycle], [data-publish-history-requeue], [data-publish-history-delete], [data-publish-history-bulk-toggle], [data-console-dropdown], a")) {
         state.publishHistoryPreviewId = String(historyCard.dataset.publishHistoryCard || "").trim();
         if (!syncPublishHistorySelectionDom()) renderPersonaDetail();
         return;
@@ -37448,6 +37506,13 @@ function bindEvents() {
         event.stopPropagation();
         closeConsoleDropdowns();
         requeuePublishHistoryRecord(historyRequeue.dataset.publishHistoryRequeue || "").catch(() => {});
+        return;
+      }
+      const historyRecycle = event.target.closest("[data-publish-history-recycle]");
+      if (historyRecycle) {
+        event.stopPropagation();
+        closeConsoleDropdowns();
+        recyclePublishHistoryRecord(historyRecycle.dataset.publishHistoryRecycle || "").catch(() => {});
         return;
       }
       const historyDelete = event.target.closest("[data-publish-history-delete]");
