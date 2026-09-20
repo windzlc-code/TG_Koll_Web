@@ -19177,7 +19177,9 @@ def _persona_publish_history_dataset_candidate(
             target_sources.append(target_meta)
     metadata_sources = [record, published_meta, source_meta, *target_sources]
 
-    published_url = _confirmed_archive_publish_url(record) or _published_record_url(record)
+    # A generic `url` can be the original hotspot permalink.  Only explicit
+    # publish-result fields prove that this persona sent the post.
+    published_url = _confirmed_archive_publish_url(record)
     canonical = _try_canonical_profile_permalink(published_url)
     if not canonical:
         raise HTTPException(status_code=422, detail="这条发送记录缺少 Threads 或 Instagram 公开帖子链接。")
@@ -19226,10 +19228,18 @@ def _persona_publish_history_dataset_candidate(
         raise HTTPException(status_code=422, detail="这条帖子已超过 30 天新鲜度，不能加入热点数据集。")
 
     hot_metrics = _publish_history_hot_metrics(record, archive)
+    # The original hotspot metadata describes the source post, not the post
+    # that this persona actually published.  It may contain a large source
+    # hotScore/engagement and must not let a newly published row bypass the
+    # published-post quality gate.  Keep source_meta below for provenance and
+    # keyword/media carry-over only; qualification metrics come from the
+    # published record, its published targets, or an exact published metrics
+    # snapshot.
+    published_metric_sources = [hot_metrics, record, published_meta, *target_sources]
 
     def metric_max(*keys: str) -> int:
         values: list[int] = []
-        for source in [hot_metrics, *metadata_sources]:
+        for source in published_metric_sources:
             if not isinstance(source, dict):
                 continue
             values.append(_source_metric(source, *keys))
@@ -19247,7 +19257,7 @@ def _persona_publish_history_dataset_candidate(
         _number(hot_metrics.get("hot_score"), 0),
         *(
             _number(source.get("hotScore") or source.get("hot_score"), 0)
-            for source in metadata_sources
+            for source in published_metric_sources
             if isinstance(source, dict)
         ),
         views + likes + comments + shares + reposts,

@@ -4872,6 +4872,73 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("30 天", response.json()["detail"])
         recycle.assert_not_called()
 
+    def test_publish_history_recycle_does_not_use_source_hot_score_as_published_heat(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        recent = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        archives[0]["publishHistory"] = [{
+            "id": "pub-source-only-heat",
+            "content": "这是一条已发布的中文正文，用于验证来源热点分数不能替代自己的发布热度。",
+            "publishedAt": recent,
+            "publishedUrl": "https://www.threads.net/@history/post/source-only-heat",
+            "platform": "threads",
+            "sourceMeta": {
+                "source": "sentiment_hot_import",
+                "sourceUrl": "https://www.threads.net/@source/post/original-hot",
+                "hotScore": 1300,
+            },
+            "publishedMeta": {
+                "platform": "threads",
+                "engagement": {},
+            },
+        }]
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        calls = []
+
+        def fake_recycle(payload, **_kwargs):
+            calls.append(payload)
+            return {"ok": True, "recycled": 1, "accepted": 0}
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", side_effect=fake_recycle):
+            response = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/publish_history/pub-source-only-heat/recycle"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        candidate = calls[0]["candidates"][0]
+        self.assertEqual(candidate["hotScore"], 0)
+        self.assertEqual(candidate["engagement"], {})
+        self.assertEqual(response.json()["accepted"], 0)
+
+    def test_publish_history_recycle_requires_explicit_published_permalink(self):
+        self._write_archives()
+        path = self.tool_runtime_dir / "persona_archives.json"
+        archives = json.loads(path.read_text(encoding="utf-8"))
+        recent = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        archives[0]["publishHistory"] = [{
+            "id": "pub-source-url-only",
+            "content": "这是一条正文完整的中文帖子，但没有已确认的公开发布结果。",
+            "publishedAt": recent,
+            "url": "https://www.threads.net/@source/post/original-only",
+            "platform": "threads",
+            "sourceMeta": {
+                "source": "sentiment_hot_import",
+                "sourceUrl": "https://www.threads.net/@source/post/original-only",
+            },
+        }]
+        path.write_text(json.dumps(archives, ensure_ascii=False), encoding="utf-8")
+
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli") as recycle:
+            response = self.client.post(
+                "/api/persona_dashboard/personas/persona-1/publish_history/pub-source-url-only/recycle"
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("公开帖子链接", response.json()["detail"])
+        recycle.assert_not_called()
+
     def test_missing_media_is_retained_as_unavailable_item(self):
         self._write_archives()
         archives_path = self.tool_runtime_dir / "persona_archives.json"
