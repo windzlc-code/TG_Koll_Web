@@ -56,6 +56,17 @@ class HomePerformanceContractTests(unittest.TestCase):
         self.assertIn('document.addEventListener("DOMContentLoaded", initializeNavigation, { once: true })', site_nav)
         self.assertIn('document.addEventListener("DOMContentLoaded", initializeCaseStudies, { once: true })', case_script)
 
+    def test_public_pages_declare_light_theme_before_async_navigation_loads(self):
+        expected_roots = {
+            "index.html": '<html lang="zh-Hant" data-theme="light">',
+            "about-vecto.html": '<html lang="zh-Hant" data-theme="light">',
+            "case-studies.html": '<html lang="zh-Hant" data-theme="light">',
+            "product-login.html": '<html lang="zh-CN" data-theme="light">',
+        }
+        for name, root in expected_roots.items():
+            markup = (ROOT / "webapp" / "static" / name).read_text(encoding="utf-8")
+            self.assertIn(root, markup)
+
 
 if __name__ == "__main__":
     unittest.main()
