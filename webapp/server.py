@@ -6226,14 +6226,15 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
             f"  {fixed_theme_stylesheet}\n  {fixed_theme_bootstrap}\n</head>",
             1,
         )
-    return HTMLResponse(
-        content=html,
-        headers={
+    if filename in {"index.html", "pricing.html", "about-vecto.html", "case-studies.html", "product-login.html"}:
+        headers = {"Cache-Control": "private, max-age=300, stale-while-revalidate=300"}
+    else:
+        headers = {
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0",
-        },
-    )
+        }
+    return HTMLResponse(content=html, headers=headers)
 
 
 _PRODUCT_LOGIN_SPECS = {

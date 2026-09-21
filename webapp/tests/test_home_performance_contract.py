@@ -11,16 +11,17 @@ CASE_SCRIPT = ROOT / "webapp" / "static" / "assets" / "opc" / "case-studies.js"
 
 
 class HomePerformanceContractTests(unittest.TestCase):
-    def test_only_primary_hero_image_is_eager(self):
+    def test_hero_media_is_discoverable_without_waiting_for_home_script(self):
         html = INDEX_HTML.read_text(encoding="utf-8")
 
         self.assertRegex(
             html,
             r'<img class="home-hero-media" src="/assets/opc/home/hero-ai-control\.jpg"[^>]+fetchpriority="high"',
         )
-        self.assertGreaterEqual(html.count('class="home-hero-media" data-src='), 5)
-        self.assertEqual(html.count('data-poster="/assets/opc/home/'), 2)
-        self.assertNotRegex(html, r'<img(?=[^>]+\ssrc="[^"]+")[^>]+loading="lazy"')
+        self.assertNotIn('class="home-hero-media" data-src=', html)
+        self.assertNotIn('data-poster="/assets/opc/home/', html)
+        self.assertEqual(html.count('poster="/assets/opc/home/'), 2)
+        self.assertGreaterEqual(html.count('<img data-src="/assets/opc/home/'), 10)
 
     def test_noncritical_scripts_do_not_block_html_parsing(self):
         html = INDEX_HTML.read_text(encoding="utf-8")

@@ -755,12 +755,15 @@ class PublicLoginUiSourceTests(unittest.TestCase):
         self.assertIn(': String(loginForm.mfa_code?.value || "").trim()', self.script)
         self.assertIn('detail.code === "mfa_code_invalid"', self.script)
 
-    def test_public_pages_use_runtime_asset_versions_and_disable_html_cache(self):
+    def test_public_pages_use_runtime_asset_versions_and_short_private_cache(self):
         client = TestClient(server.create_app())
         for path in ("/", "/index.html", "/pricing.html"):
             response = client.get(path)
             self.assertEqual(response.status_code, 200, response.text)
-            self.assertIn("no-store", response.headers.get("cache-control", ""))
+            cache_control = response.headers.get("cache-control", "")
+            self.assertNotIn("no-store", cache_control)
+            self.assertIn("private", cache_control)
+            self.assertIn("max-age=300", cache_control)
             self.assertNotIn("__OPC_SCRIPT_VERSION__", response.text)
             self.assertRegex(response.text, r'/assets/opc/script\.js\?v=\d+-\d+')
 
