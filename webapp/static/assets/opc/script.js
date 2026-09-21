@@ -1515,6 +1515,18 @@ function initHomeExperience() {
   if (!document.body.classList.contains("home-canvas")) return;
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const loadDeferredImage = (image) => {
+    const source = image?.dataset?.src;
+    if (!source) return;
+    image.src = source;
+    image.removeAttribute("data-src");
+  };
+  const loadDeferredVideoPoster = (video) => {
+    const poster = video?.dataset?.poster;
+    if (!poster) return;
+    video.poster = poster;
+    video.removeAttribute("data-poster");
+  };
   const revealItems = [...document.querySelectorAll("[data-home-reveal]")];
   if (reducedMotion || !("IntersectionObserver" in window)) {
     revealItems.forEach((item) => item.classList.add("is-visible"));
@@ -1592,8 +1604,10 @@ function initHomeExperience() {
         scene.inert = isClone;
         const cardLink = scene.querySelector(".home-hero-card-shell");
         if (cardLink) cardLink.tabIndex = isActive && !isClone ? 0 : -1;
+        if (isActive) scene.querySelectorAll("img[data-src]").forEach(loadDeferredImage);
         const video = scene.querySelector("[data-home-hero-video]");
         if (!video) return;
+        if (isActive) loadDeferredVideoPoster(video);
         const source = video.querySelector("source[data-src]");
         if (isActive && !isClone && source && !reducedMotion) {
           source.src = source.dataset.src;
@@ -1769,6 +1783,21 @@ function initHomeExperience() {
       window.clearTimeout(railResetTimer);
       railResetTimer = window.setTimeout(normalizeRail, 900);
     }, 5200);
+  }
+
+  const deferredImages = [...document.querySelectorAll("img[data-src]")]
+    .filter((image) => !image.closest("[data-home-hero-scene]"));
+  if (!("IntersectionObserver" in window)) {
+    deferredImages.forEach(loadDeferredImage);
+  } else {
+    const imageObserver = new IntersectionObserver((entries, observer) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        loadDeferredImage(entry.target);
+        observer.unobserve(entry.target);
+      });
+    }, { threshold: 0.01, rootMargin: "0px" });
+    deferredImages.forEach((image) => imageObserver.observe(image));
   }
 }
 
