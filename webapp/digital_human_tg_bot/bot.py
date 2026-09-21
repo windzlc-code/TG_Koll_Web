@@ -3576,6 +3576,16 @@ def build_dispatcher(
 
     @router.message(F.text == VIDEO_LOGOUT_BUTTON)
     async def video_account_logout(message: Message, state: FSMContext) -> None:
+        chat = getattr(message, "chat", None)
+        actor = getattr(message, "from_user", None)
+        if (
+            chat is None
+            or str(getattr(chat, "type", "") or "") != "private"
+            or actor is None
+            or int(getattr(actor, "id", 0) or 0) != int(getattr(chat, "id", 0) or 0)
+        ):
+            await message.answer("账号退出只支持与视频 Bot 私聊使用。")
+            return
         chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
         await state.clear()
         if logout_member is None:
