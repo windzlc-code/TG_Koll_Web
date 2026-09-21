@@ -43,6 +43,22 @@ class _VideoState:
         return None
 
 
+class _VideoFlowState(_VideoState):
+    def __init__(self) -> None:
+        self.current = ""
+        self.cleared = False
+
+    async def clear(self) -> None:
+        self.current = ""
+        self.cleared = True
+
+    async def set_state(self, state: object) -> None:
+        self.current = str(state)
+
+    async def get_state(self) -> str:
+        return self.current
+
+
 class _AuthorizedVideoService:
     def is_chat_authorized(self, _chat_id: int) -> bool:
         return True
@@ -207,6 +223,38 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertIn("VECTO 用户名或邮箱", login_message.answers[-1][0])
         self.assertIn("密码", login_message.answers[-1][0])
         self.assertIn("私聊", login_message.answers[-1][0])
+        login_markup = login_message.answers[-1][1]["reply_markup"]
+        login_labels = {
+            str(getattr(button, "text", ""))
+            for row in login_markup.keyboard
+            for button in row
+        }
+        self.assertIn(tg_bot.VIDEO_LOGIN_CANCEL_BUTTON, login_labels)
+        self.assertIn(tg_bot.VIDEO_ACCOUNT_BACK_BUTTON, login_labels)
+        self.assertTrue(hasattr(login_markup, "keyboard"))
+
+    def test_video_login_cancel_button_clears_pending_flow(self):
+        dispatcher = tg_bot.build_dispatcher(
+            SimpleNamespace(),
+            _AuthorizedVideoService(),
+            chat_login=lambda *_args, **_kwargs: {"ok": True},
+        )
+        callback = _video_route_callback(dispatcher, "video_account_login_cancel")
+        state = _VideoFlowState()
+        message = _VideoReplyMessage(text=tg_bot.VIDEO_LOGIN_CANCEL_BUTTON)
+
+        asyncio.run(callback(message, state))
+
+        self.assertTrue(state.cleared)
+        self.assertIn("已取消视频工作台登录", message.answers[-1][0])
+        markup = message.answers[-1][1]["reply_markup"]
+        labels = {
+            str(getattr(button, "text", ""))
+            for row in markup.keyboard
+            for button in row
+        }
+        self.assertIn(tg_bot.VIDEO_LOGIN_BUTTON, labels)
+        self.assertIn(tg_bot.VIDEO_ACCOUNT_BACK_BUTTON, labels)
 
     def test_account_and_main_menu_return_are_available_before_login(self):
         dispatcher = tg_bot.build_dispatcher(

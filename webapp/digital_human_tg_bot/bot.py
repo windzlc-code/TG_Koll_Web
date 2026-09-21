@@ -25,7 +25,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, CallbackQuery, FSInputFile, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaAudio, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import BotCommand, CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaAudio, KeyboardButton, Message, ReplyKeyboardMarkup
 
 import voice_presets
 from .config import AppConfig
@@ -231,6 +231,7 @@ STATUS_TEXTS = frozenset(
 VIDEO_LOGIN_BUTTON = "🔐 登录 VECTO 账号"
 VIDEO_SWITCH_BUTTON = "🔄 切换 VECTO 账号"
 VIDEO_LOGOUT_BUTTON = "🚪 退出 VECTO 账号"
+VIDEO_LOGIN_CANCEL_BUTTON = "❌ 取消登录"
 ACCOUNT_BACK_BUTTON = "返回工作台"
 VIDEO_ACCOUNT_SESSION_BUTTON = "🔐 VECTO 网页账号（登录/退出）"
 VIDEO_ACCOUNT_BACK_BUTTON = "返回账号管理"
@@ -2116,8 +2117,22 @@ def build_dispatcher(
             input_field_placeholder="请输入账号操作",
         )
 
-    def _login_force_reply(placeholder: str) -> ForceReply:
-        return ForceReply(input_field_placeholder=placeholder, selective=True)
+    def _video_login_keyboard(placeholder: str) -> ReplyKeyboardMarkup:
+        """Keep a visible cancel/back control while credentials are entered.
+
+        ForceReply makes Telegram replace the persistent workbench keyboard with
+        a client-side reply preview.  A normal reply keyboard keeps the login
+        FSM active while allowing the user to cancel without typing a command.
+        """
+        return ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text=VIDEO_LOGIN_CANCEL_BUTTON)],
+                [KeyboardButton(text=VIDEO_ACCOUNT_BACK_BUTTON)],
+            ],
+            resize_keyboard=True,
+            is_persistent=True,
+            input_field_placeholder=placeholder,
+        )
 
     def _clear_video_login(chat_id: int) -> None:
         video_login_pending.pop(int(chat_id), None)
@@ -3417,18 +3432,21 @@ def build_dispatcher(
         await message.answer(
             "🔐 视频工作台账号登录\n"
             "请在私聊中发送 VECTO 用户名或邮箱。收到后再输入密码；密码只用于本次验证，Bot 不保存密码。\n"
-            "发送 /cancel 可取消。",
-            reply_markup=_login_force_reply("VECTO 用户名或邮箱"),
+            "如需退出，直接点击下方“❌ 取消登录”按钮。",
+            reply_markup=_video_login_keyboard("VECTO 用户名或邮箱"),
         )
 
     async def _handle_video_account_login_input(message: Message, state: FSMContext) -> None:
         raw_text = str(getattr(message, "text", "") or "")
         clean_text = raw_text.strip()
         chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
-        if clean_text == VIDEO_ACCOUNT_BACK_BUTTON:
+        if clean_text in {VIDEO_LOGIN_CANCEL_BUTTON, VIDEO_ACCOUNT_BACK_BUTTON}:
             _clear_video_login(chat_id)
             await state.clear()
-            await _send_account_status(message)
+            if clean_text == VIDEO_LOGIN_CANCEL_BUTTON:
+                await message.answer("已取消视频工作台登录。", reply_markup=_account_keyboard())
+            else:
+                await _send_account_status(message)
             return
         if clean_text == "/cancel":
             _clear_video_login(chat_id)
@@ -3436,7 +3454,7 @@ def build_dispatcher(
             await message.answer("已取消视频工作台登录。", reply_markup=_account_keyboard())
             return
         if not clean_text:
-            await message.answer("输入不能为空，请重新发送；发送 /cancel 可取消。")
+            await message.answer("输入不能为空，请重新发送，或点击“❌ 取消登录”退出。")
             return
         current_state = str(await state.get_state() or "")
         if current_state.endswith("waiting_for_username"):
@@ -3467,8 +3485,8 @@ def build_dispatcher(
             await _delete_login_message(message)
             await message.answer(
                 "账号已收到，请单独发送 VECTO 登录密码。验证后会立即尝试删除该消息。\n"
-                "发送 /cancel 可取消。",
-                reply_markup=_login_force_reply("VECTO 登录密码"),
+                "如需退出，直接点击下方“❌ 取消登录”按钮。",
+                reply_markup=_video_login_keyboard("VECTO 登录密码"),
             )
             return
         pending = dict(video_login_pending.get(chat_id) or {})
@@ -3487,7 +3505,10 @@ def build_dispatcher(
         if current_state.endswith("waiting_for_password"):
             if len(raw_text) > 256:
                 await _delete_login_message(message)
-                await message.answer("密码长度无效，请重新发送或发送 /cancel 取消。")
+                await message.answer(
+                    "密码长度无效，请重新发送，或点击“❌ 取消登录”退出。",
+                    reply_markup=_video_login_keyboard("VECTO 登录密码"),
+                )
                 return
             password = raw_text
             pending["password"] = password
@@ -3525,8 +3546,9 @@ def build_dispatcher(
                 await state.set_state(VideoAccountLoginForm.waiting_for_verification)
                 label = "邮箱验证码" if method == "email" else "动态验证码或恢复码"
                 await message.answer(
-                    f"账号密码已通过第一步校验，请发送{label}完成登录绑定。发送 /cancel 可取消。",
-                    reply_markup=_login_force_reply(label),
+                    f"账号密码已通过第一步校验，请发送{label}完成登录绑定。\n"
+                    "如需退出，直接点击下方“❌ 取消登录”按钮。",
+                    reply_markup=_video_login_keyboard(label),
                 )
                 return
             attempts = int(pending.get("attempts") or 0)
@@ -3540,7 +3562,7 @@ def build_dispatcher(
                 await state.set_state(VideoAccountLoginForm.waiting_for_password)
                 await message.answer(
                     detail_message or "登录失败，请检查账号或密码后重新发送。",
-                    reply_markup=_login_force_reply("VECTO 登录密码"),
+                    reply_markup=_video_login_keyboard("VECTO 登录密码"),
                 )
             return
         finally:
@@ -3589,6 +3611,12 @@ def build_dispatcher(
     @router.message(F.text.in_({VIDEO_LOGIN_BUTTON, VIDEO_SWITCH_BUTTON}))
     async def video_account_login_start(message: Message, state: FSMContext) -> None:
         await _start_video_account_login(message, state)
+
+    @router.message(F.text == VIDEO_LOGIN_CANCEL_BUTTON)
+    async def video_account_login_cancel(message: Message, state: FSMContext) -> None:
+        _clear_video_login(int(getattr(getattr(message, "chat", None), "id", 0) or 0))
+        await state.clear()
+        await message.answer("已取消视频工作台登录。", reply_markup=_account_keyboard())
 
     @router.message(Command("login"))
     async def video_account_login_command(message: Message, state: FSMContext) -> None:
