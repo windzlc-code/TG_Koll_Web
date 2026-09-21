@@ -25,7 +25,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaAudio, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import CallbackQuery, FSInputFile, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaAudio, KeyboardButton, Message, ReplyKeyboardMarkup
 
 import voice_presets
 from .config import AppConfig
@@ -197,7 +197,6 @@ REPLACE_UNION_WORKFLOW_BUTTON = "聯合替換工作流"
 
 LEGACY_UPLOAD_BUTTON = "上傳素材建立任務"
 STATUS_BUTTON = "查看工作台狀態"
-STATUS_TEXTS = {STATUS_BUTTON, "查看工作台状态", "/status", "工作台状态", "工作台狀態"}
 WORKBENCH_BUTTON = "工作台網址"
 SET_SCRIPT_BUTTON = "設定預設文案"
 RERUN_BUTTON = "重跑最近任務"
@@ -207,6 +206,28 @@ VIDEO_LOGIN_BUTTON = "🔐 登录 VECTO 账号"
 VIDEO_SWITCH_BUTTON = "🔄 切换 VECTO 账号"
 VIDEO_LOGOUT_BUTTON = "🚪 退出 VECTO 账号"
 ACCOUNT_BACK_BUTTON = "返回工作台"
+VIDEO_ACCOUNT_SESSION_BUTTON = "🔐 VECTO 网页账号（登录/退出）"
+VIDEO_ACCOUNT_BACK_BUTTON = "返回账号管理"
+
+# Keep the original text values as compatibility aliases while presenting the
+# same compact icon-first controls used by the Tweet workbench.  Telegram
+# clients can still send an older keyboard value during a rolling update.
+DIGITAL_HUMAN_VIDEO_MENU_BUTTON = "🎬 数字人视频生成"
+ECOMMERCE_SHORT_VIDEO_MENU_BUTTON = "📣 广告短视频"
+VIDEO_EDIT_MENU_BUTTON = "✂️ 视频编辑"
+IMAGE_GENERATION_MENU_BUTTON_DISPLAY = "🖼️ 图片生成"
+RERUN_MENU_BUTTON = "🔄 重跑最近任务"
+STATUS_MENU_BUTTON = "📊 查看工作台状态"
+STOP_MENU_BUTTON = "🛑 强制停止当前任务"
+DIGITAL_HUMAN_VIDEO_TEXTS = frozenset({DIGITAL_HUMAN_VIDEO_BUTTON, "数字人视频生成", DIGITAL_HUMAN_VIDEO_MENU_BUTTON})
+ECOMMERCE_SHORT_VIDEO_TEXTS = frozenset({ECOMMERCE_SHORT_VIDEO_BUTTON, "广告短视频", ECOMMERCE_SHORT_VIDEO_MENU_BUTTON})
+VIDEO_EDIT_TEXTS = frozenset({VIDEO_EDIT_BUTTON, "视频编辑", VIDEO_EDIT_MENU_BUTTON})
+IMAGE_GENERATION_MENU_TEXTS = frozenset({IMAGE_GENERATION_MENU_BUTTON, "图片生成", IMAGE_GENERATION_MENU_BUTTON_DISPLAY})
+RERUN_TEXTS = frozenset({RERUN_BUTTON, "重跑最近任务", RERUN_MENU_BUTTON})
+STOP_TEXTS = frozenset({STOP_BUTTON, "强制停止当前任务", STOP_MENU_BUTTON})
+STATUS_TEXTS = frozenset({STATUS_BUTTON, "查看工作台状态", STATUS_MENU_BUTTON, "/status", "工作台状态", "工作台狀態"})
+VIDEO_CHAT_LOGIN_TTL_SECONDS = 180
+VIDEO_CHAT_LOGIN_MAX_ATTEMPTS = 3
 
 WORKFLOW_REFERENCE_BUTTONS = {
     WORKFLOW_CONFIG_BUTTON,
@@ -926,12 +947,14 @@ def _build_bot(config: AppConfig) -> Bot:
 def _menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=DIGITAL_HUMAN_VIDEO_BUTTON), KeyboardButton(text=ECOMMERCE_SHORT_VIDEO_BUTTON)],
-            [KeyboardButton(text=VIDEO_EDIT_BUTTON), KeyboardButton(text=IMAGE_GENERATION_MENU_BUTTON)],
+            [KeyboardButton(text=DIGITAL_HUMAN_VIDEO_MENU_BUTTON), KeyboardButton(text=ECOMMERCE_SHORT_VIDEO_MENU_BUTTON)],
+            [KeyboardButton(text=VIDEO_EDIT_MENU_BUTTON), KeyboardButton(text=IMAGE_GENERATION_MENU_BUTTON_DISPLAY)],
             [KeyboardButton(text=ACCOUNT_MANAGEMENT_BUTTON)],
-            [KeyboardButton(text=RERUN_BUTTON), *_task_control_keyboard_row()],
+            [KeyboardButton(text=RERUN_MENU_BUTTON), *_task_control_keyboard_row()],
         ],
         resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="请选择视频工作台功能",
     )
 
 
@@ -944,7 +967,7 @@ def _navigation_keyboard_row(*, include_back: bool = False) -> list[KeyboardButt
 
 
 def _task_control_keyboard_row() -> list[KeyboardButton]:
-    return [KeyboardButton(text=STATUS_BUTTON), KeyboardButton(text=STOP_BUTTON)]
+    return [KeyboardButton(text=STATUS_MENU_BUTTON), KeyboardButton(text=STOP_MENU_BUTTON)]
 
 
 def _image_generation_keyboard() -> ReplyKeyboardMarkup:
@@ -1584,13 +1607,13 @@ def _quick_start_text(service: WorkspaceService) -> str:
             f"🌟 {service.get_app_title()} 已啟動",
             "",
             "🌟 可用工作流",
-            f"1. {DIGITAL_HUMAN_VIDEO_BUTTON}",
+            f"1. {DIGITAL_HUMAN_VIDEO_MENU_BUTTON}",
             "   依序上傳人像圖、克隆參考音頻，再輸入口播文稿（必填）。",
-            f"2. {ECOMMERCE_SHORT_VIDEO_BUTTON}",
+            f"2. {ECOMMERCE_SHORT_VIDEO_MENU_BUTTON}",
             "   先上傳產品/場景圖，再可選上傳講解人圖與音色；AI 會生成廣告片分鏡與台詞。",
-            f"3. {IMAGE_GENERATION_MENU_BUTTON}",
+            f"3. {IMAGE_GENERATION_MENU_BUTTON_DISPLAY}",
             "   進入子菜單後，可選電商廣告圖生產或三視圖生成。",
-            f"4. {VIDEO_EDIT_BUTTON}",
+            f"4. {VIDEO_EDIT_MENU_BUTTON}",
             "   進入子菜單後，可選視頻商品替換、視頻模特替換、聯合替換。",
             "",
             "🌟 直接對話",
@@ -1598,9 +1621,9 @@ def _quick_start_text(service: WorkspaceService) -> str:
             "Bot 會先用後台文字模型理解需求，再引導或建立對應工作流。",
             "",
             "🌟 常用操作",
-            f"- {RERUN_BUTTON}：重跑最近一次任務。",
-            f"- {STATUS_BUTTON}：查看任務進度。",
-            f"- {STOP_BUTTON} 或 /stop：強制停止目前任務。",
+            f"- {RERUN_MENU_BUTTON}：重跑最近一次任務。",
+            f"- {STATUS_MENU_BUTTON}：查看任務進度。",
+            f"- {STOP_MENU_BUTTON} 或 /stop：強制停止目前任務。",
             "",
             "✨ 詳細執行紀錄請到工作台任務詳情查看。",
         ]
@@ -2018,7 +2041,7 @@ def build_dispatcher(
     digital_human_product_album_buffers: dict[str, dict[str, Any]] = {}
     digital_human_scene_album_buffers: dict[str, dict[str, Any]] = {}
     digital_human_internal_steps: dict[int, dict[str, Any]] = {}
-    account_login_attempts: dict[int, int] = {}
+    video_login_pending: dict[int, dict[str, Any]] = {}
 
     def _load_bound_member(chat_id: int) -> Any | None:
         if load_member is None:
@@ -2042,14 +2065,41 @@ def build_dispatcher(
             except Exception:
                 return default
 
-    def _account_keyboard(*, include_login: bool = True, include_logout: bool = False) -> ReplyKeyboardMarkup:
+    def _account_management_keyboard() -> ReplyKeyboardMarkup:
+        return ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text=VIDEO_ACCOUNT_SESSION_BUTTON)],
+                [KeyboardButton(text=ACCOUNT_BACK_BUTTON)],
+            ],
+            resize_keyboard=True,
+            is_persistent=True,
+            input_field_placeholder="请选择账号管理模块",
+        )
+
+    def _account_keyboard(
+        *,
+        include_login: bool = True,
+        include_logout: bool = False,
+        back_text: str = VIDEO_ACCOUNT_BACK_BUTTON,
+    ) -> ReplyKeyboardMarkup:
         rows: list[list[KeyboardButton]] = []
         if include_login:
             rows.append([KeyboardButton(text=VIDEO_LOGIN_BUTTON), KeyboardButton(text=VIDEO_SWITCH_BUTTON)])
         if include_logout:
             rows.append([KeyboardButton(text=VIDEO_LOGOUT_BUTTON)])
-        rows.append([KeyboardButton(text=ACCOUNT_BACK_BUTTON)])
-        return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+        rows.append([KeyboardButton(text=back_text)])
+        return ReplyKeyboardMarkup(
+            keyboard=rows,
+            resize_keyboard=True,
+            is_persistent=True,
+            input_field_placeholder="请输入账号操作",
+        )
+
+    def _login_force_reply(placeholder: str) -> ForceReply:
+        return ForceReply(input_field_placeholder=placeholder, selective=True)
+
+    def _clear_video_login(chat_id: int) -> None:
+        video_login_pending.pop(int(chat_id), None)
 
     async def _delete_login_message(message: Message) -> None:
         delete = getattr(message, "delete", None)
@@ -2081,27 +2131,37 @@ def build_dispatcher(
         except Exception:
             logger.exception("Failed to remember Telegram member profile")
         chat_id = int(message.chat.id)
-        if service.is_chat_authorized(chat_id):
-            bound_member = _load_bound_member(chat_id)
-            web_user_id = int(_member_value(bound_member, "web_user_id", 0) or 0)
-            if web_user_id and has_active_web_session is not None:
-                try:
-                    active = bool(has_active_web_session(bound_member))
-                except Exception:
-                    logger.exception("Failed to validate video Bot web session")
-                    active = False
-                if not active:
-                    await message.answer(
-                        "VECTO 网页登录会话已失效，请先在“账号管理”中重新登录。",
-                        reply_markup=_account_keyboard(include_login=True, include_logout=False),
-                    )
-                    return False
-            return True
-        await message.answer(
-            "当前 Telegram 账号尚未绑定 VECTO 视频工作台，请在“账号管理”中输入 VECTO 账号和密码完成绑定。",
-            reply_markup=_account_keyboard(include_login=True, include_logout=False),
-        )
-        return False
+        bound_member = _load_bound_member(chat_id)
+        web_user_id = int(_member_value(bound_member, "web_user_id", 0) or 0)
+        # The old Telegram whitelist remains visible for migration/admin
+        # compatibility, but it must never unlock video workbench actions.
+        # Both Bot variants now require a real VECTO user binding plus an
+        # active web session before any generation/status/control action.
+        if not service.is_chat_authorized(chat_id) or web_user_id <= 0:
+            await message.answer(
+                "当前 Telegram 账号尚未登录 VECTO 视频工作台。请先进入“账号管理”→“VECTO 网页账号”，"
+                "在私聊中完成登录绑定；后台白名单不会直接解锁工作台。",
+                reply_markup=_account_management_keyboard(),
+            )
+            return False
+        if has_active_web_session is None:
+            await message.answer(
+                "视频工作台登录服务尚未就绪，请稍后从“账号管理”重试。",
+                reply_markup=_account_management_keyboard(),
+            )
+            return False
+        try:
+            active = bool(has_active_web_session(bound_member))
+        except Exception:
+            logger.exception("Failed to validate video Bot web session")
+            active = False
+        if not active:
+            await message.answer(
+                "VECTO 网页登录会话已失效，请先在“账号管理”→“VECTO 网页账号”中重新登录。",
+                reply_markup=_account_management_keyboard(),
+            )
+            return False
+        return True
 
     async def start_upload_flow(message: Message, state: FSMContext) -> None:
         work_dir = service.create_job_dir(prefix="tg")
@@ -2172,7 +2232,7 @@ def build_dispatcher(
 
     async def handle_stop_request(message: Message, state: FSMContext) -> bool:
         text = _message_text(message)
-        if text != STOP_BUTTON and not text.startswith("/stop"):
+        if text not in STOP_TEXTS and not text.startswith("/stop"):
             return False
         if not await ensure_authorized(message):
             return True
@@ -3258,35 +3318,62 @@ def build_dispatcher(
         chat_id = int(chat.id)
         member = _load_bound_member(chat_id)
         web_user_id = int(_member_value(member, "web_user_id", 0) or 0)
+        username = str(_member_value(member, "web_username", "") or "").strip()
+        if not username:
+            username = str(_member_value(member, "label", "") or "").strip()
+        status = "未登录"
         if web_user_id:
-            username = str(_member_value(member, "web_username", "") or "").strip()
-            if not username:
-                username = str(_member_value(member, "label", "") or f"TG-{chat_id}").strip()
             active = True
             if has_active_web_session is not None:
                 try:
                     active = bool(has_active_web_session(member))
                 except Exception:
                     active = False
-            if active and service.is_chat_authorized(chat_id):
-                await message.answer(
-                    f"🔐 视频工作台账号\n当前账号：{username}\n状态：已登录并绑定\n\n可切换账号或退出当前账号。",
-                    reply_markup=_account_keyboard(include_login=True, include_logout=True),
-                )
-                return
-            await message.answer(
-                "🔐 视频工作台账号\n当前绑定的网页会话已失效，请重新登录后继续使用。",
-                reply_markup=_account_keyboard(include_login=True, include_logout=False),
-            )
+            status = "已登录并绑定" if active and service.is_chat_authorized(chat_id) else "网页会话已失效"
+        elif service.is_chat_authorized(chat_id):
+            # Make the migration-only whitelist explicit without treating it
+            # as a usable login.
+            status = "后台兼容记录，需重新登录"
+        await message.answer(
+            "账号管理\n\n"
+            f"VECTO 网页账号：{username or '未登录'}\n"
+            f"状态：{status}\n\n"
+            "请选择账号模块；登录、切换和退出流程与推文工作台保持一致。",
+            reply_markup=_account_management_keyboard(),
+        )
+
+    async def _send_video_account_session_status(message: Message) -> None:
+        chat = getattr(message, "chat", None)
+        actor = getattr(message, "from_user", None)
+        if chat is None or str(getattr(chat, "type", "") or "") != "private" or actor is None:
+            await message.answer("视频工作台账号管理只支持与 Bot 私聊使用。")
             return
-        if service.is_chat_authorized(chat_id):
+        chat_id = int(chat.id)
+        member = _load_bound_member(chat_id)
+        web_user_id = int(_member_value(member, "web_user_id", 0) or 0)
+        username = str(_member_value(member, "web_username", "") or "").strip()
+        if not username:
+            username = str(_member_value(member, "label", "") or f"TG-{chat_id}").strip()
+        active = bool(web_user_id and service.is_chat_authorized(chat_id))
+        if active and has_active_web_session is not None:
+            try:
+                active = bool(has_active_web_session(member))
+            except Exception:
+                active = False
+        if active:
             await message.answer(
-                "🔐 视频工作台账号\n当前状态：管理员授权账号（兼容模式）\n\n可绑定 VECTO 账号，绑定后会自动同步网页登录状态。",
-                reply_markup=_account_keyboard(include_login=True, include_logout=False),
+                "VECTO 网页账号\n\n"
+                f"当前账号：{username}\n"
+                "状态：已登录并绑定\n\n"
+                "网页端退出会撤销该 VECTO 账号的活动会话，Telegram 将要求重新登录；这里仅管理 VECTO 网页账号。",
+                reply_markup=_account_keyboard(include_login=True, include_logout=True),
             )
             return
         await message.answer(
-            "🔐 视频工作台账号\n当前状态：未登录\n\n请点击“登录 VECTO 账号”，在聊天中输入账号和密码完成绑定。",
+            "VECTO 网页账号\n\n"
+            f"当前账号：{username if web_user_id else '未登录'}\n"
+            "状态：未登录或会话已失效\n\n"
+            "请点击“登录 VECTO 账号”在私聊中完成绑定；后台白名单不会直接解锁视频工作台。",
             reply_markup=_account_keyboard(include_login=True, include_logout=False),
         )
 
@@ -3305,22 +3392,27 @@ def build_dispatcher(
         if chat_login is None:
             await message.answer("视频 Bot 的登录服务尚未就绪，请稍后再试。", reply_markup=_account_keyboard())
             return
-        account_login_attempts.pop(chat_id, None)
+        _clear_video_login(chat_id)
         await state.clear()
         await state.set_state(VideoAccountLoginForm.waiting_for_username)
         await message.answer(
             "🔐 视频工作台账号登录\n"
-            "请发送 VECTO 用户名或邮箱。收到后再输入密码；密码只用于本次验证，Bot 不保存密码。\n"
+            "请在私聊中发送 VECTO 用户名或邮箱。收到后再输入密码；密码只用于本次验证，Bot 不保存密码。\n"
             "发送 /cancel 可取消。",
-            reply_markup=_account_keyboard(include_login=False),
+            reply_markup=_login_force_reply("VECTO 用户名或邮箱"),
         )
 
     async def _handle_video_account_login_input(message: Message, state: FSMContext) -> None:
         raw_text = str(getattr(message, "text", "") or "")
         clean_text = raw_text.strip()
         chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
+        if clean_text == VIDEO_ACCOUNT_BACK_BUTTON:
+            _clear_video_login(chat_id)
+            await state.clear()
+            await _send_account_status(message)
+            return
         if clean_text == "/cancel":
-            account_login_attempts.pop(chat_id, None)
+            _clear_video_login(chat_id)
             await state.clear()
             await message.answer("已取消视频工作台登录。", reply_markup=_account_keyboard())
             return
@@ -3345,16 +3437,32 @@ def build_dispatcher(
                     if part
                 ).strip(),
             }
-            await state.update_data(username=clean_text, profile=profile, password="", attempts=0)
+            video_login_pending[chat_id] = {
+                "username": clean_text,
+                "profile": profile,
+                "password": "",
+                "attempts": 0,
+                "started_at": time.time(),
+            }
             await state.set_state(VideoAccountLoginForm.waiting_for_password)
             await _delete_login_message(message)
-            await message.answer("账号已收到，请单独发送 VECTO 登录密码。验证后会立即尝试删除该消息。")
+            await message.answer(
+                "账号已收到，请单独发送 VECTO 登录密码。验证后会立即尝试删除该消息。\n"
+                "发送 /cancel 可取消。",
+                reply_markup=_login_force_reply("VECTO 登录密码"),
+            )
             return
-        data = await state.get_data()
-        username = str(data.get("username") or "").strip()
+        pending = dict(video_login_pending.get(chat_id) or {})
+        username = str(pending.get("username") or "").strip()
         if not username or chat_login is None:
+            _clear_video_login(chat_id)
             await state.clear()
             await message.answer("登录状态已失效，请重新点击“账号管理”后开始登录。", reply_markup=_account_keyboard())
+            return
+        if time.time() - float(pending.get("started_at") or 0) > VIDEO_CHAT_LOGIN_TTL_SECONDS:
+            _clear_video_login(chat_id)
+            await state.clear()
+            await message.answer("登录绑定已超时，请重新从“账号管理”开始。", reply_markup=_account_keyboard())
             return
         verification: dict[str, Any] | None = None
         if current_state.endswith("waiting_for_password"):
@@ -3363,12 +3471,14 @@ def build_dispatcher(
                 await message.answer("密码长度无效，请重新发送或发送 /cancel 取消。")
                 return
             password = raw_text
-            await state.update_data(password=password, attempts=int(data.get("attempts") or 0) + 1)
+            pending["password"] = password
+            pending["attempts"] = int(pending.get("attempts") or 0) + 1
+            video_login_pending[chat_id] = pending
         else:
-            password = str(data.get("password") or "")
+            password = str(pending.get("password") or "")
             verification = {
-                "security_verification_method": str(data.get("verification_method") or "").strip(),
-                "security_challenge_id": str(data.get("security_challenge_id") or "").strip(),
+                "security_verification_method": str(pending.get("verification_method") or "").strip(),
+                "security_challenge_id": str(pending.get("security_challenge_id") or "").strip(),
                 "security_verification_code": clean_text,
             }
         await _delete_login_message(message)
@@ -3378,7 +3488,7 @@ def build_dispatcher(
                 chat_id,
                 username,
                 password,
-                dict(data.get("profile") or {}),
+                dict(pending.get("profile") or {}),
                 verification,
             )
         except Exception as exc:
@@ -3390,33 +3500,36 @@ def build_dispatcher(
                 ).strip().lower()
                 if method not in {"email", "mfa"}:
                     method = "mfa"
-                await state.update_data(
-                    verification_method=method,
-                    security_challenge_id=str(verification_detail.get("challenge_id") or ""),
-                )
+                pending["verification_method"] = method
+                pending["security_challenge_id"] = str(verification_detail.get("challenge_id") or "")
+                video_login_pending[chat_id] = pending
                 await state.set_state(VideoAccountLoginForm.waiting_for_verification)
                 label = "邮箱验证码" if method == "email" else "动态验证码或恢复码"
-                await message.answer(f"账号密码已通过第一步校验，请发送{label}完成登录绑定。发送 /cancel 可取消。")
+                await message.answer(
+                    f"账号密码已通过第一步校验，请发送{label}完成登录绑定。发送 /cancel 可取消。",
+                    reply_markup=_login_force_reply(label),
+                )
                 return
-            attempts = int((await state.get_data()).get("attempts") or 0)
-            if attempts >= 3 or current_state.endswith("waiting_for_verification"):
-                account_login_attempts.pop(chat_id, None)
+            attempts = int(pending.get("attempts") or 0)
+            if attempts >= VIDEO_CHAT_LOGIN_MAX_ATTEMPTS or current_state.endswith("waiting_for_verification"):
+                _clear_video_login(chat_id)
                 await state.clear()
                 await message.answer("登录失败次数过多或验证码无效，已结束本次登录，请稍后重新开始。", reply_markup=_account_keyboard())
             else:
-                await state.update_data(password="")
+                pending["password"] = ""
+                video_login_pending[chat_id] = pending
                 await state.set_state(VideoAccountLoginForm.waiting_for_password)
                 await message.answer(
                     detail_message or "登录失败，请检查账号或密码后重新发送。",
-                    reply_markup=_account_keyboard(include_login=False),
+                    reply_markup=_login_force_reply("VECTO 登录密码"),
                 )
             return
         finally:
             password = ""
-        account_login_attempts.pop(chat_id, None)
+        _clear_video_login(chat_id)
         await state.clear()
         member = service.get_member(chat_id)
-        profile = dict(data.get("profile") or {})
+        profile = dict(pending.get("profile") or {})
         label = str((result or {}).get("username") or profile.get("display_name") or f"TG-{chat_id}").strip()
         service.upsert_member(
             chat_id=chat_id,
@@ -3434,6 +3547,16 @@ def build_dispatcher(
     @router.message(F.text == ACCOUNT_MANAGEMENT_BUTTON)
     @router.message(F.text == "/account")
     async def video_account_management(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await _send_account_status(message)
+
+    @router.message(F.text == VIDEO_ACCOUNT_SESSION_BUTTON)
+    async def video_account_session(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await _send_video_account_session_status(message)
+
+    @router.message(F.text == VIDEO_ACCOUNT_BACK_BUTTON)
+    async def video_account_session_back(message: Message, state: FSMContext) -> None:
         await state.clear()
         await _send_account_status(message)
 
@@ -3465,16 +3588,21 @@ def build_dispatcher(
             await message.answer("退出账号失败，请稍后重试。", reply_markup=_account_keyboard())
             return
         if isinstance(result, dict) and result.get("legacy_authorized"):
-            await message.answer("当前是管理员授权账号，不能由用户直接退出白名单；可先绑定 VECTO 账号。", reply_markup=_account_keyboard())
+            await message.answer("当前是后台兼容记录，不能直接退出白名单；请先登录 VECTO 账号后再管理会话。", reply_markup=_account_keyboard())
             return
         service.upsert_member(
             chat_id=chat_id,
             label=f"TG-{chat_id}",
-            enabled=False,
+            enabled=True,
             notify_busy=True,
             notify_available=True,
         )
-        await message.answer("✅ 已退出 VECTO 账号并解除视频工作台绑定。", reply_markup=_account_keyboard())
+        _clear_video_login(chat_id)
+        await message.answer(
+            "✅ 已退出 VECTO 账号；网页会话已撤销，视频工作台已锁定。\n"
+            "如需继续，请从“VECTO 网页账号”重新登录。",
+            reply_markup=_account_keyboard(),
+        )
 
     @router.message(Command("logout"))
     async def video_account_logout_command(message: Message, state: FSMContext) -> None:
@@ -5727,7 +5855,7 @@ def build_dispatcher(
         except Exception as exc:
             await message.answer(f"聯合替換任務提交失敗：{exc}", reply_markup=_menu_keyboard())
 
-    @router.message(F.text == DIGITAL_HUMAN_VIDEO_BUTTON)
+    @router.message(F.text.in_(DIGITAL_HUMAN_VIDEO_TEXTS))
     @router.message(F.text == LEGACY_ORAL_UPLOAD_BUTTON)
     @router.message(F.text == LEGACY_UPLOAD_BUTTON)
     async def on_upload_task_button(message: Message, state: FSMContext) -> None:
@@ -5735,7 +5863,7 @@ def build_dispatcher(
             return
         await start_upload_flow(message, state)
 
-    @router.message(F.text == IMAGE_GENERATION_MENU_BUTTON)
+    @router.message(F.text.in_(IMAGE_GENERATION_MENU_TEXTS))
     @router.message(F.text == LEGACY_IMAGE_GENERATE_WORKFLOW_BUTTON)
     async def on_image_generation_menu_button(message: Message, state: FSMContext) -> None:
         if not await ensure_authorized(message):
@@ -5773,13 +5901,13 @@ def build_dispatcher(
             return
         await start_subject_replace_image_flow(message, state)
 
-    @router.message(F.text == ECOMMERCE_SHORT_VIDEO_BUTTON)
+    @router.message(F.text.in_(ECOMMERCE_SHORT_VIDEO_TEXTS))
     async def on_ecommerce_short_video_button(message: Message, state: FSMContext) -> None:
         if not await ensure_authorized(message):
             return
         await start_ecommerce_short_video_flow(message, state)
 
-    @router.message(F.text == VIDEO_EDIT_BUTTON)
+    @router.message(F.text.in_(VIDEO_EDIT_TEXTS))
     async def on_video_edit_button(message: Message, state: FSMContext) -> None:
         if not await ensure_authorized(message):
             return
@@ -5822,7 +5950,7 @@ def build_dispatcher(
             return
         await message.answer(_workflow_config_text(service, selected_button=_message_text(message)), reply_markup=_menu_keyboard())
 
-    @router.message(F.text == STATUS_BUTTON)
+    @router.message(F.text.in_(STATUS_TEXTS))
     async def on_status_button(message: Message) -> None:
         if not await ensure_authorized(message):
             return
@@ -5890,11 +6018,11 @@ def build_dispatcher(
     async def on_image_regenerate_button(message: Message) -> None:
         await rerun_latest_webapp_or_local_task(message)
 
-    @router.message(F.text == RERUN_BUTTON)
+    @router.message(F.text.in_(RERUN_TEXTS))
     async def on_rerun_button(message: Message) -> None:
         await rerun_latest_webapp_or_local_task(message)
 
-    @router.message(F.text == STOP_BUTTON)
+    @router.message(F.text.in_(STOP_TEXTS))
     async def on_stop_button(message: Message, state: FSMContext) -> None:
         if await handle_stop_request(message, state):
             return
@@ -6045,11 +6173,11 @@ class TelegramWorkbenchBot:
                         "\n".join(
                             [
                                 f"{self.service.get_app_title()} 已上線。",
-                                f"首次使用可按「{DIGITAL_HUMAN_VIDEO_BUTTON}」，再依序傳人像圖、克隆音頻和口播文稿（必填）。",
-                                f"廣告短視頻按「{ECOMMERCE_SHORT_VIDEO_BUTTON}」；圖片任務按「{IMAGE_GENERATION_MENU_BUTTON}」後選擇子工作流；視頻替換任務按「{VIDEO_EDIT_BUTTON}」。",
+                                f"首次使用可按「{DIGITAL_HUMAN_VIDEO_MENU_BUTTON}」，再依序傳人像圖、克隆音頻和口播文稿（必填）。",
+                                f"廣告短視頻按「{ECOMMERCE_SHORT_VIDEO_MENU_BUTTON}」；圖片任務按「{IMAGE_GENERATION_MENU_BUTTON_DISPLAY}」後選擇子工作流；視頻替換任務按「{VIDEO_EDIT_MENU_BUTTON}」。",
                                 f"首次使用或切换账号可按「{ACCOUNT_MANAGEMENT_BUTTON}」，直接在聊天中登录/退出 VECTO。",
                                 "也可以直接描述任務並附上素材，Bot 會用後台文字模型理解需求並生成提示詞。",
-                                "提交後任務會進入後台隊列；可按「查看工作台狀態」，並在 Web 任務詳情查看進度與成品。",
+                                f"提交後任務會進入後台隊列；可按「{STATUS_MENU_BUTTON}」，並在 Web 任務詳情查看進度與成品。",
                             ]
                         ),
                         reply_markup=_menu_keyboard(),

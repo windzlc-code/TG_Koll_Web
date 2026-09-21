@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from fastapi import FastAPI
@@ -15,7 +17,159 @@ from webapp.digital_human_tg_bot import bot as tg_bot
 from webapp.telegram_internal import inject_telegram_internal_routes
 
 
+class _VideoReplyMessage:
+    """Small aiogram-like message double for the video Bot route contracts."""
+
+    def __init__(self, chat_id: int = 6258005891, text: str = "") -> None:
+        self.chat = SimpleNamespace(id=chat_id, type="private")
+        self.from_user = SimpleNamespace(
+            id=chat_id,
+            username="video_user",
+            first_name="Video",
+            last_name="User",
+        )
+        self.text = text
+        self.answers: list[tuple[str, dict[str, object]]] = []
+
+    async def answer(self, text: str, **kwargs: object) -> None:
+        self.answers.append((str(text), dict(kwargs)))
+
+
+class _VideoState:
+    async def clear(self) -> None:
+        return None
+
+    async def set_state(self, _state: object) -> None:
+        return None
+
+
+class _AuthorizedVideoService:
+    def is_chat_authorized(self, _chat_id: int) -> bool:
+        return True
+
+
+def _video_route_callback(dispatcher, name: str):
+    router = dispatcher.sub_routers[0]
+    return next(
+        handler.callback
+        for handler in router.message.handlers
+        if getattr(handler.callback, "__name__", "") == name
+    )
+
+
 class TelegramClosedLoopTests(unittest.TestCase):
+    def test_video_main_menu_has_control_icons_and_retains_legacy_workflow_texts(self):
+        """The visible video controls use the same visual language as R18.
+
+        Old, text-only workflow labels remain source-level compatibility
+        aliases so a user with an already-open Telegram keyboard does not get
+        stuck after the icon refresh.
+        """
+        markup = tg_bot._menu_keyboard()
+        labels = [
+            [str(getattr(button, "text", "")) for button in row]
+            for row in markup.keyboard
+        ]
+        self.assertEqual(
+            labels,
+            [
+                ["🎬 数字人视频生成", "📣 广告短视频"],
+                ["✂️ 视频编辑", "🖼️ 图片生成"],
+                ["🔐 账号管理"],
+                ["🔄 重跑最近任务", "📊 查看工作台状态", "🛑 强制停止当前任务"],
+            ],
+        )
+
+        source = Path(tg_bot.__file__).read_text(encoding="utf-8")
+        # These aliases are intentionally kept for old reply keyboards and
+        # previously sent instructions.  They must not be silently replaced
+        # by the icon labels.
+        for marker in (
+            "LEGACY_ORAL_UPLOAD_BUTTON",
+            "LEGACY_UPLOAD_BUTTON",
+            "LEGACY_IMAGE_WORKFLOW_BUTTON",
+            "LEGACY_IMAGE_GENERATE_WORKFLOW_BUTTON",
+            "LEGACY_REPLACE_MODEL_WORKFLOW_BUTTON",
+            "LEGACY_REPLACE_PRODUCT_WORKFLOW_BUTTON",
+        ):
+            self.assertIn(marker, source)
+        for old_label in (
+            "數字人視頻生成",
+            "廣告短視頻",
+            "視頻編輯",
+            "圖片生成",
+            "重跑最近任務",
+            "查看工作台狀態",
+            "強制停止目前任務",
+        ):
+            self.assertIn(old_label, source)
+
+    def test_video_workbench_rejects_legacy_whitelist_without_web_login(self):
+        """An admin-seeded Chat ID is not enough for the new self-service gate."""
+        from types import SimpleNamespace
+
+        dispatcher = tg_bot.build_dispatcher(
+            SimpleNamespace(),
+            _AuthorizedVideoService(),
+            load_member=lambda _chat_id: {
+                "chat_id": 6258005891,
+                "web_user_id": 0,
+                "enabled": 1,
+            },
+            has_active_web_session=lambda _member: True,
+            chat_login=lambda *_args, **_kwargs: {"ok": True},
+        )
+        callback = _video_route_callback(dispatcher, "cmd_status")
+        message = _VideoReplyMessage()
+        with mock.patch("webapp.telegram_admin.remember_trusted_user_profile"):
+            asyncio.run(callback(message))
+
+        self.assertTrue(message.answers)
+        response_texts = [text for text, _kwargs in message.answers]
+        self.assertTrue(any("登录" in text or "绑定" in text for text in response_texts))
+        self.assertFalse(any("正在读取工作台状态" in text for text in response_texts))
+
+    def test_video_account_status_and_login_prompt_are_two_level_flow(self):
+        """Account status opens first, then the same private-chat login flow as Tweet Bot."""
+        from types import SimpleNamespace
+
+        dispatcher = tg_bot.build_dispatcher(
+            SimpleNamespace(),
+            _AuthorizedVideoService(),
+            load_member=lambda _chat_id: {
+                "chat_id": 6258005891,
+                "web_user_id": 42,
+                "web_username": "alice",
+                "enabled": 1,
+            },
+            has_active_web_session=lambda _member: True,
+            chat_login=lambda *_args, **_kwargs: {"ok": True},
+            logout_member=lambda _chat_id: {"ok": True, "bound": True},
+        )
+        state = _VideoState()
+
+        status_callback = _video_route_callback(dispatcher, "video_account_management")
+        status_message = _VideoReplyMessage()
+        with mock.patch("webapp.telegram_admin.remember_trusted_user_profile"):
+            asyncio.run(status_callback(status_message, state))
+        self.assertIn("已登录", status_message.answers[-1][0])
+        status_markup = status_message.answers[-1][1]["reply_markup"]
+        status_labels = {
+            str(getattr(button, "text", ""))
+            for row in status_markup.keyboard
+            for button in row
+        }
+        self.assertTrue(any("登录" in label or "切换" in label for label in status_labels))
+        self.assertTrue(any("退出" in label for label in status_labels))
+        self.assertTrue(any("返回" in label for label in status_labels))
+
+        login_callback = _video_route_callback(dispatcher, "video_account_login_start")
+        login_message = _VideoReplyMessage()
+        asyncio.run(login_callback(login_message, state))
+        self.assertIn("VECTO 用户名或邮箱", login_message.answers[-1][0])
+        self.assertIn("密码", login_message.answers[-1][0])
+        self.assertIn("私聊", login_message.answers[-1][0])
+
     def test_original_bot_keyboards_are_copied(self):
         source = Path(tg_bot.__file__).read_text(encoding="utf-8")
         for label in (

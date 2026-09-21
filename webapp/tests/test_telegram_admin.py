@@ -107,7 +107,12 @@ class TelegramAdminTests(unittest.TestCase):
         result = telegram_admin.logout_video_member(6258005891)
         self.assertTrue(result["ok"])
         self.assertTrue(result["bound"])
-        self.assertEqual(telegram_admin._list_members(), [])
+        row = telegram_admin._list_members()[0]
+        self.assertEqual(row["web_user_id"], 42)
+        self.assertFalse(row["has_linked_session"])
+        member = telegram_admin.load_video_member(6258005891)
+        self.assertIsNotNone(member)
+        self.assertFalse(telegram_admin.video_member_has_active_web_session(member))
 
     def test_video_ticket_requires_matching_signed_telegram_identity(self):
         token = telegram_admin.create_video_link_ticket(731)

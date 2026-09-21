@@ -800,7 +800,9 @@ def video_member_has_active_web_session(member: Any) -> bool:
     except (KeyError, TypeError, ValueError):
         return False
     if user_id <= 0:
-        return True
+        # Legacy administrator whitelist rows are migration metadata only; a
+        # real VECTO web user/session is required to unlock the video Bot.
+        return False
     linked_hash = str(member["linked_session_token_hash"] or "").strip()
     now = int(time.time())
     with db() as conn:
@@ -832,25 +834,26 @@ def logout_video_member(chat_id: int) -> dict[str, Any]:
         if row is None:
             return {"ok": True, "bound": False}
         web_user_id = int(row["web_user_id"] or 0)
-        linked_hash = str(row["linked_session_token_hash"] or "").strip()
         if web_user_id <= 0:
             return {"ok": True, "bound": False, "legacy_authorized": bool(int(row["enabled"] or 0))}
-        if linked_hash:
-            conn.execute(
-                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'telegram_video_logout' "
-                "WHERE token = ? AND revoked_at = 0",
-                (int(now), linked_hash),
-            )
+        # Match the Tweet workbench: leaving the VECTO account revokes all
+        # active sessions for that user, so browser and Telegram state cannot
+        # drift apart.  The Telegram member row stays as a re-login marker.
+        conn.execute(
+            "UPDATE sessions SET revoked_at = ?, revoke_reason = 'telegram_video_logout' "
+            "WHERE user_id = ? AND revoked_at = 0",
+            (int(now), web_user_id),
+        )
         conn.execute(
             "UPDATE telegram_video_link_tickets SET used_at = ? WHERE chat_id = ? AND used_at = 0",
             (now, member_id),
         )
-        # Remove the self-service binding rather than leaving a disabled row
-        # that would make the next Telegram login look like an administrator
-        # blacklist.  A future login creates a fresh member record; legacy
-        # administrator rows are never removed because they have no linked web
-        # session and return through the branch above.
-        conn.execute("DELETE FROM telegram_trusted_users WHERE chat_id = ?", (member_id,))
+        conn.execute(
+            "UPDATE telegram_trusted_users "
+            "SET linked_session_token_hash = '', linked_at = 0, updated_at = ? "
+            "WHERE chat_id = ?",
+            (now, member_id),
+        )
     return {"ok": True, "bound": True, "web_user_id": web_user_id}
 
 
