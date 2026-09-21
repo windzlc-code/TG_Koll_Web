@@ -197,12 +197,37 @@ REPLACE_UNION_WORKFLOW_BUTTON = "聯合替換工作流"
 
 LEGACY_UPLOAD_BUTTON = "上傳素材建立任務"
 STATUS_BUTTON = "查看工作台狀態"
-STATUS_TEXTS = {STATUS_BUTTON, "查看工作台状态", "/status", "工作台状态", "工作台狀態"}
 WORKBENCH_BUTTON = "工作台網址"
 SET_SCRIPT_BUTTON = "設定預設文案"
 RERUN_BUTTON = "重跑最近任務"
 STOP_BUTTON = "強制停止目前任務"
 ACCOUNT_MANAGEMENT_BUTTON = "🔐 账号管理"
+
+# The visible menu uses concise visual cues, while the plain/traditional
+# labels remain accepted so keyboards sent before this update keep working.
+DIGITAL_HUMAN_VIDEO_MENU_BUTTON = "🎬 数字人视频生成"
+ECOMMERCE_SHORT_VIDEO_MENU_BUTTON = "📣 广告短视频"
+VIDEO_EDIT_MENU_BUTTON = "✂️ 视频编辑"
+IMAGE_GENERATION_MENU_BUTTON_DISPLAY = "🖼️ 图片生成"
+RERUN_MENU_BUTTON = "🔄 重跑最近任务"
+STATUS_MENU_BUTTON = "📊 查看工作台状态"
+STOP_MENU_BUTTON = "🛑 强制停止当前任务"
+
+DIGITAL_HUMAN_VIDEO_TEXTS = frozenset(
+    {DIGITAL_HUMAN_VIDEO_BUTTON, "数字人视频生成", DIGITAL_HUMAN_VIDEO_MENU_BUTTON}
+)
+ECOMMERCE_SHORT_VIDEO_TEXTS = frozenset(
+    {ECOMMERCE_SHORT_VIDEO_BUTTON, "广告短视频", ECOMMERCE_SHORT_VIDEO_MENU_BUTTON}
+)
+VIDEO_EDIT_TEXTS = frozenset({VIDEO_EDIT_BUTTON, "视频编辑", VIDEO_EDIT_MENU_BUTTON})
+IMAGE_GENERATION_MENU_TEXTS = frozenset(
+    {IMAGE_GENERATION_MENU_BUTTON, "图片生成", IMAGE_GENERATION_MENU_BUTTON_DISPLAY}
+)
+RERUN_TEXTS = frozenset({RERUN_BUTTON, "重跑最近任务", RERUN_MENU_BUTTON})
+STOP_TEXTS = frozenset({STOP_BUTTON, "强制停止当前任务", STOP_MENU_BUTTON})
+STATUS_TEXTS = frozenset(
+    {STATUS_BUTTON, "查看工作台状态", STATUS_MENU_BUTTON, "/status", "工作台状态", "工作台狀態"}
+)
 VIDEO_LOGIN_BUTTON = "🔐 登录 VECTO 账号"
 VIDEO_SWITCH_BUTTON = "🔄 切换 VECTO 账号"
 VIDEO_LOGOUT_BUTTON = "🚪 退出 VECTO 账号"
@@ -930,10 +955,10 @@ def _build_bot(config: AppConfig) -> Bot:
 def _menu_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=DIGITAL_HUMAN_VIDEO_BUTTON), KeyboardButton(text=ECOMMERCE_SHORT_VIDEO_BUTTON)],
-            [KeyboardButton(text=VIDEO_EDIT_BUTTON), KeyboardButton(text=IMAGE_GENERATION_MENU_BUTTON)],
+            [KeyboardButton(text=DIGITAL_HUMAN_VIDEO_MENU_BUTTON), KeyboardButton(text=ECOMMERCE_SHORT_VIDEO_MENU_BUTTON)],
+            [KeyboardButton(text=VIDEO_EDIT_MENU_BUTTON), KeyboardButton(text=IMAGE_GENERATION_MENU_BUTTON_DISPLAY)],
             [KeyboardButton(text=ACCOUNT_MANAGEMENT_BUTTON)],
-            [KeyboardButton(text=RERUN_BUTTON), *_task_control_keyboard_row()],
+            [KeyboardButton(text=RERUN_MENU_BUTTON), *_task_control_keyboard_row()],
         ],
         resize_keyboard=True,
     )
@@ -948,7 +973,7 @@ def _navigation_keyboard_row(*, include_back: bool = False) -> list[KeyboardButt
 
 
 def _task_control_keyboard_row() -> list[KeyboardButton]:
-    return [KeyboardButton(text=STATUS_BUTTON), KeyboardButton(text=STOP_BUTTON)]
+    return [KeyboardButton(text=STATUS_MENU_BUTTON), KeyboardButton(text=STOP_MENU_BUTTON)]
 
 
 def _video_bot_commands() -> list[BotCommand]:
@@ -1603,13 +1628,13 @@ def _quick_start_text(service: WorkspaceService) -> str:
             f"🌟 {service.get_app_title()} 已啟動",
             "",
             "🌟 可用工作流",
-            f"1. {DIGITAL_HUMAN_VIDEO_BUTTON}",
+            f"1. {DIGITAL_HUMAN_VIDEO_MENU_BUTTON}",
             "   依序上傳人像圖、克隆參考音頻，再輸入口播文稿（必填）。",
-            f"2. {ECOMMERCE_SHORT_VIDEO_BUTTON}",
+            f"2. {ECOMMERCE_SHORT_VIDEO_MENU_BUTTON}",
             "   先上傳產品/場景圖，再可選上傳講解人圖與音色；AI 會生成廣告片分鏡與台詞。",
-            f"3. {IMAGE_GENERATION_MENU_BUTTON}",
+            f"3. {IMAGE_GENERATION_MENU_BUTTON_DISPLAY}",
             "   進入子菜單後，可選電商廣告圖生產或三視圖生成。",
-            f"4. {VIDEO_EDIT_BUTTON}",
+            f"4. {VIDEO_EDIT_MENU_BUTTON}",
             "   進入子菜單後，可選視頻商品替換、視頻模特替換、聯合替換。",
             "",
             "🌟 直接對話",
@@ -1617,9 +1642,9 @@ def _quick_start_text(service: WorkspaceService) -> str:
             "Bot 會先用後台文字模型理解需求，再引導或建立對應工作流。",
             "",
             "🌟 常用操作",
-            f"- {RERUN_BUTTON}：重跑最近一次任務。",
-            f"- {STATUS_BUTTON}：查看任務進度。",
-            f"- {STOP_BUTTON} 或 /stop：強制停止目前任務。",
+            f"- {RERUN_MENU_BUTTON}：重跑最近一次任務。",
+            f"- {STATUS_MENU_BUTTON}：查看任務進度。",
+            f"- {STOP_MENU_BUTTON} 或 /stop：強制停止目前任務。",
             "",
             "✨ 詳細執行紀錄請到工作台任務詳情查看。",
         ]
@@ -2226,7 +2251,7 @@ def build_dispatcher(
 
     async def handle_stop_request(message: Message, state: FSMContext) -> bool:
         text = _message_text(message)
-        if text != STOP_BUTTON and not text.startswith("/stop"):
+        if text not in STOP_TEXTS and not text.startswith("/stop"):
             return False
         if not await ensure_authorized(message):
             return True
@@ -5861,7 +5886,7 @@ def build_dispatcher(
         except Exception as exc:
             await message.answer(f"聯合替換任務提交失敗：{exc}", reply_markup=_menu_keyboard())
 
-    @router.message(F.text == DIGITAL_HUMAN_VIDEO_BUTTON)
+    @router.message(F.text.in_(DIGITAL_HUMAN_VIDEO_TEXTS))
     @router.message(F.text == LEGACY_ORAL_UPLOAD_BUTTON)
     @router.message(F.text == LEGACY_UPLOAD_BUTTON)
     async def on_upload_task_button(message: Message, state: FSMContext) -> None:
@@ -5869,7 +5894,7 @@ def build_dispatcher(
             return
         await start_upload_flow(message, state)
 
-    @router.message(F.text == IMAGE_GENERATION_MENU_BUTTON)
+    @router.message(F.text.in_(IMAGE_GENERATION_MENU_TEXTS))
     @router.message(F.text == LEGACY_IMAGE_GENERATE_WORKFLOW_BUTTON)
     async def on_image_generation_menu_button(message: Message, state: FSMContext) -> None:
         if not await ensure_authorized(message):
@@ -5907,13 +5932,13 @@ def build_dispatcher(
             return
         await start_subject_replace_image_flow(message, state)
 
-    @router.message(F.text == ECOMMERCE_SHORT_VIDEO_BUTTON)
+    @router.message(F.text.in_(ECOMMERCE_SHORT_VIDEO_TEXTS))
     async def on_ecommerce_short_video_button(message: Message, state: FSMContext) -> None:
         if not await ensure_authorized(message):
             return
         await start_ecommerce_short_video_flow(message, state)
 
-    @router.message(F.text == VIDEO_EDIT_BUTTON)
+    @router.message(F.text.in_(VIDEO_EDIT_TEXTS))
     async def on_video_edit_button(message: Message, state: FSMContext) -> None:
         if not await ensure_authorized(message):
             return
@@ -5954,7 +5979,7 @@ def build_dispatcher(
             return
         await message.answer(_workflow_config_text(service, selected_button=_message_text(message)), reply_markup=_menu_keyboard())
 
-    @router.message(F.text == STATUS_BUTTON)
+    @router.message(F.text.in_(STATUS_TEXTS))
     async def on_status_button(message: Message) -> None:
         if not await ensure_authorized(message):
             return
@@ -6022,11 +6047,11 @@ def build_dispatcher(
     async def on_image_regenerate_button(message: Message) -> None:
         await rerun_latest_webapp_or_local_task(message)
 
-    @router.message(F.text == RERUN_BUTTON)
+    @router.message(F.text.in_(RERUN_TEXTS))
     async def on_rerun_button(message: Message) -> None:
         await rerun_latest_webapp_or_local_task(message)
 
-    @router.message(F.text == STOP_BUTTON)
+    @router.message(F.text.in_(STOP_TEXTS))
     async def on_stop_button(message: Message, state: FSMContext) -> None:
         if await handle_stop_request(message, state):
             return
@@ -6183,11 +6208,11 @@ class TelegramWorkbenchBot:
                         "\n".join(
                             [
                                 f"{self.service.get_app_title()} 已上線。",
-                                f"首次使用可按「{DIGITAL_HUMAN_VIDEO_BUTTON}」，再依序傳人像圖、克隆音頻和口播文稿（必填）。",
-                                f"廣告短視頻按「{ECOMMERCE_SHORT_VIDEO_BUTTON}」；圖片任務按「{IMAGE_GENERATION_MENU_BUTTON}」後選擇子工作流；視頻替換任務按「{VIDEO_EDIT_BUTTON}」。",
+                                f"首次使用可按「{DIGITAL_HUMAN_VIDEO_MENU_BUTTON}」，再依序傳人像圖、克隆音頻和口播文稿（必填）。",
+                                f"廣告短視頻按「{ECOMMERCE_SHORT_VIDEO_MENU_BUTTON}」；圖片任務按「{IMAGE_GENERATION_MENU_BUTTON_DISPLAY}」後選擇子工作流；視頻替換任務按「{VIDEO_EDIT_MENU_BUTTON}」。",
                                 f"首次使用或切换账号可按「{ACCOUNT_MANAGEMENT_BUTTON}」，直接在聊天中登录/退出 VECTO。",
                                 "也可以直接描述任務並附上素材，Bot 會用後台文字模型理解需求並生成提示詞。",
-                                f"提交後任務會進入後台隊列；可按「{STATUS_BUTTON}」，並在 Web 任務詳情查看進度與成品。",
+                                f"提交後任務會進入後台隊列；可按「{STATUS_MENU_BUTTON}」，並在 Web 任務詳情查看進度與成品。",
                             ]
                         ),
                         reply_markup=_menu_keyboard(),

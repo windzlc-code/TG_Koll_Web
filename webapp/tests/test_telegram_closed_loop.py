@@ -59,7 +59,7 @@ def _video_route_callback(dispatcher, name: str):
 
 class TelegramClosedLoopTests(unittest.TestCase):
     def test_video_main_menu_keeps_original_controls_and_adds_account_entry(self):
-        """Only the account-management entry is added; existing controls stay unchanged."""
+        """Controls gain visual icons while legacy labels remain accepted."""
         markup = tg_bot._menu_keyboard()
         labels = [
             [str(getattr(button, "text", "")) for button in row]
@@ -68,12 +68,23 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertEqual(
             labels,
             [
-                [tg_bot.DIGITAL_HUMAN_VIDEO_BUTTON, tg_bot.ECOMMERCE_SHORT_VIDEO_BUTTON],
-                [tg_bot.VIDEO_EDIT_BUTTON, tg_bot.IMAGE_GENERATION_MENU_BUTTON],
+                [tg_bot.DIGITAL_HUMAN_VIDEO_MENU_BUTTON, tg_bot.ECOMMERCE_SHORT_VIDEO_MENU_BUTTON],
+                [tg_bot.VIDEO_EDIT_MENU_BUTTON, tg_bot.IMAGE_GENERATION_MENU_BUTTON_DISPLAY],
                 ["🔐 账号管理"],
-                [tg_bot.RERUN_BUTTON, tg_bot.STATUS_BUTTON, tg_bot.STOP_BUTTON],
+                [tg_bot.RERUN_MENU_BUTTON, tg_bot.STATUS_MENU_BUTTON, tg_bot.STOP_MENU_BUTTON],
             ],
         )
+
+        for legacy_label, accepted_labels in (
+            (tg_bot.DIGITAL_HUMAN_VIDEO_BUTTON, tg_bot.DIGITAL_HUMAN_VIDEO_TEXTS),
+            (tg_bot.ECOMMERCE_SHORT_VIDEO_BUTTON, tg_bot.ECOMMERCE_SHORT_VIDEO_TEXTS),
+            (tg_bot.VIDEO_EDIT_BUTTON, tg_bot.VIDEO_EDIT_TEXTS),
+            (tg_bot.IMAGE_GENERATION_MENU_BUTTON, tg_bot.IMAGE_GENERATION_MENU_TEXTS),
+            (tg_bot.RERUN_BUTTON, tg_bot.RERUN_TEXTS),
+            (tg_bot.STATUS_BUTTON, tg_bot.STATUS_TEXTS),
+            (tg_bot.STOP_BUTTON, tg_bot.STOP_TEXTS),
+        ):
+            self.assertIn(legacy_label, accepted_labels)
 
         source = Path(tg_bot.__file__).read_text(encoding="utf-8")
         # Existing labels remain the source-level contract for old keyboards
@@ -112,7 +123,7 @@ class TelegramClosedLoopTests(unittest.TestCase):
         markup = message.answers[0][1]["reply_markup"]
         labels = [[str(getattr(button, "text", "")) for button in row] for row in markup.keyboard]
         self.assertEqual(labels[2], ["🔐 账号管理"])
-        self.assertEqual(labels[3], [tg_bot.RERUN_BUTTON, tg_bot.STATUS_BUTTON, tg_bot.STOP_BUTTON])
+        self.assertEqual(labels[3], [tg_bot.RERUN_MENU_BUTTON, tg_bot.STATUS_MENU_BUTTON, tg_bot.STOP_MENU_BUTTON])
 
     def test_video_bot_command_menu_covers_supported_commands(self):
         commands = tg_bot._video_bot_commands()
