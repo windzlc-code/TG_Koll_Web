@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
+import secrets
 import threading
 import time
 import urllib.error
@@ -34,6 +37,9 @@ _BOT_STATUS: dict[str, Any] = {
 
 GetRuntime = Callable[[], dict[str, Any]]
 SaveRuntime = Callable[[dict[str, Any]], None]
+VideoChatLoginHandler = Callable[[int, str, str, dict[str, Any], dict[str, Any] | None], Any]
+
+_VIDEO_CHAT_LOGIN: VideoChatLoginHandler | None = None
 
 
 class TgEnvPayload(BaseModel):
@@ -60,12 +66,15 @@ def ensure_telegram_schema(conn) -> None:
         """
         CREATE TABLE IF NOT EXISTS telegram_trusted_users (
           chat_id INTEGER PRIMARY KEY,
+          web_user_id INTEGER NOT NULL DEFAULT 0,
           label TEXT NOT NULL DEFAULT '',
           tg_username TEXT NOT NULL DEFAULT '',
           tg_display_name TEXT NOT NULL DEFAULT '',
           enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
           notify_busy INTEGER NOT NULL DEFAULT 1 CHECK(notify_busy IN (0, 1)),
           notify_available INTEGER NOT NULL DEFAULT 1 CHECK(notify_available IN (0, 1)),
+          linked_session_token_hash TEXT NOT NULL DEFAULT '',
+          linked_at REAL NOT NULL DEFAULT 0,
           created_at REAL NOT NULL DEFAULT 0,
           updated_at REAL NOT NULL DEFAULT 0
         )
@@ -76,6 +85,32 @@ def ensure_telegram_schema(conn) -> None:
         conn.execute("ALTER TABLE telegram_trusted_users ADD COLUMN tg_username TEXT NOT NULL DEFAULT ''")
     if "tg_display_name" not in columns:
         conn.execute("ALTER TABLE telegram_trusted_users ADD COLUMN tg_display_name TEXT NOT NULL DEFAULT ''")
+    if "web_user_id" not in columns:
+        conn.execute("ALTER TABLE telegram_trusted_users ADD COLUMN web_user_id INTEGER NOT NULL DEFAULT 0")
+    if "linked_session_token_hash" not in columns:
+        conn.execute(
+            "ALTER TABLE telegram_trusted_users ADD COLUMN linked_session_token_hash TEXT NOT NULL DEFAULT ''"
+        )
+    if "linked_at" not in columns:
+        conn.execute("ALTER TABLE telegram_trusted_users ADD COLUMN linked_at REAL NOT NULL DEFAULT 0")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS telegram_video_link_tickets (
+          token_hash TEXT PRIMARY KEY,
+          chat_id INTEGER NOT NULL,
+          route_key TEXT NOT NULL DEFAULT 'home',
+          expires_at REAL NOT NULL,
+          used_at REAL NOT NULL DEFAULT 0,
+          linked_web_user_id INTEGER NOT NULL DEFAULT 0,
+          session_token_hash TEXT NOT NULL DEFAULT '',
+          created_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_telegram_video_link_tickets_expiry "
+        "ON telegram_video_link_tickets(expires_at, used_at)"
+    )
 
 
 def _parse_chat_ids(text: str) -> list[int]:
@@ -233,12 +268,15 @@ def remember_trusted_user_profile(chat_id: int, *, username: str = "", display_n
 def _member_payload(row) -> dict[str, Any]:
     return {
         "chat_id": int(row["chat_id"]),
+        "web_user_id": int(row["web_user_id"] or 0),
         "label": str(row["label"] or ""),
         "tg_username": str(row["tg_username"] or "").strip().lstrip("@"),
         "tg_display_name": str(row["tg_display_name"] or "").strip(),
         "enabled": bool(int(row["enabled"] or 0)),
         "notify_busy": bool(int(row["notify_busy"] or 0)),
         "notify_available": bool(int(row["notify_available"] or 0)),
+        "has_linked_session": bool(str(row["linked_session_token_hash"] or "").strip()),
+        "linked_at": float(row["linked_at"] or 0),
         "created_at": float(row["created_at"] or 0),
         "updated_at": float(row["updated_at"] or 0),
     }
@@ -249,7 +287,9 @@ def _list_members() -> list[dict[str, Any]]:
         ensure_telegram_schema(conn)
         rows = conn.execute(
             """
-            SELECT chat_id, label, tg_username, tg_display_name, enabled, notify_busy, notify_available, created_at, updated_at
+            SELECT chat_id, web_user_id, label, tg_username, tg_display_name, enabled,
+                   notify_busy, notify_available, linked_session_token_hash, linked_at,
+                   created_at, updated_at
             FROM telegram_trusted_users
             ORDER BY enabled DESC, chat_id ASC
             """
@@ -459,6 +499,361 @@ def _authorized_chat_ids(runtime: dict[str, Any]) -> set[int]:
     return allowed
 
 
+VIDEO_LINK_TTL_SECONDS = 180
+
+
+def configure_video_chat_login(handler: VideoChatLoginHandler | None) -> None:
+    """Install the server's normal password-login adapter for the video Bot.
+
+    The video worker lives in its own thread and must not duplicate the web
+    authentication policy.  The server registers this callback after its
+    ``_login_response`` closure is ready; until then the Bot fails closed.
+    """
+    global _VIDEO_CHAT_LOGIN
+    _VIDEO_CHAT_LOGIN = handler
+
+
+def get_video_chat_login() -> VideoChatLoginHandler | None:
+    return _VIDEO_CHAT_LOGIN
+
+
+def _video_chat_login_proxy(
+    chat_id: int,
+    username: str,
+    password: str,
+    profile: dict[str, Any],
+    verification: dict[str, Any] | None = None,
+) -> Any:
+    handler = get_video_chat_login()
+    if handler is None:
+        raise RuntimeError("视频 Bot 登录服务尚未就绪，请稍后重试")
+    return handler(chat_id, username, password, profile, verification)
+
+
+def _video_ticket_digest(token: str) -> str:
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def create_video_link_ticket(chat_id: int) -> str:
+    member_id = int(chat_id or 0)
+    if member_id <= 0:
+        raise RuntimeError("Telegram Chat ID 无效")
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        ensure_telegram_schema(conn)
+        conn.execute(
+            "UPDATE telegram_video_link_tickets SET used_at = ? "
+            "WHERE chat_id = ? AND used_at = 0",
+            (now, member_id),
+        )
+        conn.execute(
+            "DELETE FROM telegram_video_link_tickets WHERE used_at > 0 OR expires_at < ?",
+            (now - 3600,),
+        )
+        conn.execute(
+            """
+            INSERT INTO telegram_video_link_tickets(
+              token_hash, chat_id, route_key, expires_at, used_at,
+              linked_web_user_id, session_token_hash, created_at
+            ) VALUES (?, ?, 'home', ?, 0, 0, '', ?)
+            """,
+            (_video_ticket_digest(token), member_id, now + VIDEO_LINK_TTL_SECONDS, now),
+        )
+    return token
+
+
+def _video_ticket_chat_id(token: str, *, conn=None) -> int:
+    clean = str(token or "").strip()
+    if not clean or len(clean) > 256:
+        raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
+    digest = _video_ticket_digest(clean)
+    if conn is None:
+        with db() as owned:
+            ensure_telegram_schema(owned)
+            row = owned.execute(
+                "SELECT chat_id, expires_at, used_at FROM telegram_video_link_tickets WHERE token_hash = ?",
+                (digest,),
+            ).fetchone()
+    else:
+        ensure_telegram_schema(conn)
+        row = conn.execute(
+            "SELECT chat_id, expires_at, used_at FROM telegram_video_link_tickets WHERE token_hash = ?",
+            (digest,),
+        ).fetchone()
+    if (
+        row is None
+        or float(row["used_at"] or 0) > 0
+        or float(row["expires_at"] or 0) < time.time()
+    ):
+        raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
+    return int(row["chat_id"] or 0)
+
+
+def _validate_video_init_data(init_data: str, bot_token: str, expected_chat_id: int) -> dict[str, Any]:
+    raw = str(init_data or "")
+    if len(raw) > 8192:
+        raise HTTPException(status_code=401, detail="Telegram 身份数据格式无效")
+    try:
+        pairs = urllib.parse.parse_qsl(raw, keep_blank_values=True, strict_parsing=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Telegram 身份数据格式无效") from exc
+    if not pairs or len({key for key, _value in pairs}) != len(pairs):
+        raise HTTPException(status_code=401, detail="Telegram 身份数据格式无效")
+    values = dict(pairs)
+    received_hash = str(values.pop("hash", "") or "").strip().lower()
+    if len(received_hash) != 64 or any(char not in "0123456789abcdef" for char in received_hash):
+        raise HTTPException(status_code=401, detail="缺少 Telegram 身份签名")
+    data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+    secret_key = hmac.new(str(bot_token).encode("utf-8"), b"WebAppData", hashlib.sha256).digest()
+    calculated = hmac.new(secret_key, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(calculated, received_hash):
+        raise HTTPException(status_code=401, detail="Telegram 身份签名无效")
+    try:
+        auth_date = int(values.get("auth_date") or 0)
+        tg_user = json.loads(values.get("user") or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError, OverflowError) as exc:
+        raise HTTPException(status_code=401, detail="Telegram 用户身份无效") from exc
+    if not isinstance(tg_user, dict):
+        raise HTTPException(status_code=401, detail="Telegram 用户身份无效")
+    try:
+        user_id = int(tg_user.get("id") or 0)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise HTTPException(status_code=401, detail="Telegram 用户身份无效") from exc
+    now = int(time.time())
+    if user_id <= 0 or user_id != int(expected_chat_id):
+        raise HTTPException(status_code=403, detail="Telegram 用户与绑定入口不一致")
+    if auth_date <= 0 or auth_date > now + 60 or now - auth_date > 600:
+        raise HTTPException(status_code=401, detail="Telegram 身份数据已过期")
+    return {
+        "id": user_id,
+        "username": str(tg_user.get("username") or "").strip().lstrip("@"),
+        "display_name": " ".join(
+            part
+            for part in (
+                str(tg_user.get("first_name") or "").strip(),
+                str(tg_user.get("last_name") or "").strip(),
+            )
+            if part
+        ).strip(),
+    }
+
+
+def validate_video_webapp_login_context(
+    ticket: str,
+    init_data: str,
+    runtime: dict[str, Any] | None = None,
+    *,
+    conn=None,
+) -> int:
+    config = runtime if isinstance(runtime, dict) else {}
+    bot_token = str(config.get("telegram_bot_token") or "").strip()
+    if not bool(config.get("telegram_bot_enabled")) or not bot_token:
+        raise HTTPException(status_code=403, detail="视频工作台 Bot 当前未启用")
+    expected_chat_id = _video_ticket_chat_id(ticket, conn=conn)
+    _validate_video_init_data(str(init_data or ""), bot_token, expected_chat_id)
+    return expected_chat_id
+
+
+def invalidate_video_link_ticket(token: str) -> None:
+    digest = _video_ticket_digest(token)
+    if not digest:
+        return
+    with db() as conn:
+        ensure_telegram_schema(conn)
+        conn.execute(
+            "UPDATE telegram_video_link_tickets SET used_at = ? WHERE token_hash = ? AND used_at = 0",
+            (time.time(), digest),
+        )
+
+
+def consume_video_link_ticket(
+    token: str,
+    tg_profile: dict[str, Any],
+    web_user: dict[str, Any],
+    session_hash: str,
+) -> None:
+    clean = str(token or "").strip()
+    digest = _video_ticket_digest(clean)
+    chat_id = int(tg_profile.get("id") or 0)
+    web_user_id = int(web_user.get("id") or 0)
+    if not clean or len(clean) > 256 or chat_id <= 0 or web_user_id <= 0 or not session_hash:
+        raise HTTPException(status_code=400, detail="Telegram 视频绑定参数无效")
+    username = str(tg_profile.get("username") or "").strip().lstrip("@")
+    display_name = str(tg_profile.get("display_name") or "").strip()
+    now = time.time()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        ensure_telegram_schema(conn)
+        ticket = conn.execute(
+            "SELECT chat_id, expires_at, used_at FROM telegram_video_link_tickets WHERE token_hash = ?",
+            (digest,),
+        ).fetchone()
+        if (
+            ticket is None
+            or int(ticket["chat_id"] or 0) != chat_id
+            or float(ticket["used_at"] or 0) > 0
+            or float(ticket["expires_at"] or 0) < now
+        ):
+            raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
+        existing = conn.execute(
+            "SELECT * FROM telegram_trusted_users WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+        if existing and not int(existing["enabled"] or 0):
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "telegram_binding_disabled", "message": "该 Telegram 绑定已被管理员停用，请联系管理员处理。"},
+            )
+        old_user_id = int(existing["web_user_id"] or 0) if existing else 0
+        if existing and old_user_id and old_user_id != web_user_id:
+            linked_hash = str(existing["linked_session_token_hash"] or "").strip()
+            active_old = conn.execute(
+                "SELECT 1 FROM sessions WHERE token = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
+                (linked_hash, int(now)),
+            ).fetchone() if linked_hash else conn.execute(
+                "SELECT 1 FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
+                (old_user_id, int(now)),
+            ).fetchone()
+            if active_old is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "telegram_already_bound",
+                        "message": "该 Telegram 账号已绑定其他 VECTO 账号，请先退出原账号后再切换。",
+                    },
+                )
+            if linked_hash:
+                conn.execute(
+                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'telegram_video_member_rebound' "
+                    "WHERE token = ? AND revoked_at = 0",
+                    (int(now), linked_hash),
+                )
+        conn.execute(
+            "UPDATE telegram_video_link_tickets SET used_at = ? WHERE chat_id = ? AND used_at = 0 AND token_hash != ?",
+            (now, chat_id, digest),
+        )
+        current_label = str(existing["label"] or "").strip() if existing else ""
+        current_username = str(existing["tg_username"] or "").strip().lstrip("@") if existing else ""
+        current_display = str(existing["tg_display_name"] or "").strip() if existing else ""
+        label = current_label or display_name or (f"@{username}" if username else f"TG-{chat_id}")
+        next_username = username or current_username
+        next_display = display_name or current_display
+        if existing:
+            conn.execute(
+                """
+                UPDATE telegram_trusted_users
+                SET web_user_id = ?, label = ?, tg_username = ?, tg_display_name = ?,
+                    enabled = 1, linked_session_token_hash = ?, linked_at = ?, updated_at = ?
+                WHERE chat_id = ?
+                """,
+                (web_user_id, label, next_username, next_display, session_hash, now, now, chat_id),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO telegram_trusted_users(
+                  chat_id, web_user_id, label, tg_username, tg_display_name, enabled,
+                  linked_session_token_hash, linked_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                """,
+                (chat_id, web_user_id, label, next_username, next_display, session_hash, now, now, now),
+            )
+        updated = conn.execute(
+            "UPDATE telegram_video_link_tickets SET used_at = ?, linked_web_user_id = ?, session_token_hash = ? "
+            "WHERE token_hash = ? AND used_at = 0",
+            (now, web_user_id, session_hash, digest),
+        )
+        if int(updated.rowcount or 0) != 1:
+            raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已使用")
+
+
+def load_video_member(chat_id: int):
+    with db() as conn:
+        ensure_telegram_schema(conn)
+        row = conn.execute(
+            """
+            SELECT m.*, u.username AS web_username, u.is_admin, u.is_disabled,
+                   u.approval_status, u.lifecycle_status, u.deleted_at
+            FROM telegram_trusted_users AS m
+            LEFT JOIN users AS u ON u.id = m.web_user_id
+            WHERE m.chat_id = ? AND m.enabled = 1
+            """,
+            (int(chat_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    if int(row["web_user_id"] or 0) and row["web_username"] is not None:
+        if int(row["is_disabled"] or 0) or int(row["deleted_at"] or 0):
+            return None
+        if str(row["lifecycle_status"] or "active") != "active":
+            return None
+        if not int(row["is_admin"] or 0) and str(row["approval_status"] or "") != "approved":
+            return None
+    return row
+
+
+def video_member_has_active_web_session(member: Any) -> bool:
+    try:
+        user_id = int(member["web_user_id"] or 0)
+    except (KeyError, TypeError, ValueError):
+        return False
+    if user_id <= 0:
+        return True
+    linked_hash = str(member["linked_session_token_hash"] or "").strip()
+    now = int(time.time())
+    with db() as conn:
+        if linked_hash:
+            row = conn.execute(
+                "SELECT 1 FROM sessions WHERE token = ? AND user_id = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
+                (linked_hash, user_id, now),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT 1 FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
+                (user_id, now),
+            ).fetchone()
+    return row is not None
+
+
+def logout_video_member(chat_id: int) -> dict[str, Any]:
+    member_id = int(chat_id or 0)
+    if member_id <= 0:
+        return {"ok": False, "message": "Telegram Chat ID 无效"}
+    now = time.time()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        ensure_telegram_schema(conn)
+        row = conn.execute(
+            "SELECT web_user_id, linked_session_token_hash, enabled FROM telegram_trusted_users WHERE chat_id = ?",
+            (member_id,),
+        ).fetchone()
+        if row is None:
+            return {"ok": True, "bound": False}
+        web_user_id = int(row["web_user_id"] or 0)
+        linked_hash = str(row["linked_session_token_hash"] or "").strip()
+        if web_user_id <= 0:
+            return {"ok": True, "bound": False, "legacy_authorized": bool(int(row["enabled"] or 0))}
+        if linked_hash:
+            conn.execute(
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'telegram_video_logout' "
+                "WHERE token = ? AND revoked_at = 0",
+                (int(now), linked_hash),
+            )
+        conn.execute(
+            "UPDATE telegram_video_link_tickets SET used_at = ? WHERE chat_id = ? AND used_at = 0",
+            (now, member_id),
+        )
+        # Remove the self-service binding rather than leaving a disabled row
+        # that would make the next Telegram login look like an administrator
+        # blacklist.  A future login creates a fresh member record; legacy
+        # administrator rows are never removed because they have no linked web
+        # session and return through the branch above.
+        conn.execute("DELETE FROM telegram_trusted_users WHERE chat_id = ?", (member_id,))
+    return {"ok": True, "bound": True, "web_user_id": web_user_id}
+
+
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
@@ -564,7 +959,14 @@ async def _run_original_bot(get_runtime: GetRuntime) -> None:
             store = WorkspaceStore(config.database_path)
             service = WorkspaceService(config, store)
             _sync_store_members(service, runtime)
-            bot = TelegramWorkbenchBot(config, service)
+            bot = TelegramWorkbenchBot(
+                config,
+                service,
+                load_member=load_video_member,
+                has_active_web_session=video_member_has_active_web_session,
+                chat_login=_video_chat_login_proxy,
+                logout_member=logout_video_member,
+            )
             await bot.start()
             current = bot
             with _BOT_LOCK:

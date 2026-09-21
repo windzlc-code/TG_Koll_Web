@@ -168,7 +168,15 @@ from .remote_fetch_client import (
     configured_client as configured_remote_fetch_client,
     configured_mode as configured_remote_fetch_mode,
 )
-from .telegram_admin import inject_telegram_admin, stop_telegram_bot_worker
+from .telegram_admin import (
+    configure_video_chat_login,
+    consume_video_link_ticket,
+    create_video_link_ticket,
+    inject_telegram_admin,
+    invalidate_video_link_ticket,
+    stop_telegram_bot_worker,
+    validate_video_webapp_login_context,
+)
 from .telegram_tweet_admin import (
     _consume_link_ticket,
     _create_link_ticket,
@@ -13628,6 +13636,10 @@ class LoginPayload(BaseModel):
     # ticket before it permits an additional WebView session.
     telegram_tweet_ticket: str = Field(default="", max_length=256)
     telegram_init_data: str = Field(default="", max_length=8192)
+    # Video Bot uses the same normal login policy, but keeps its Bot token and
+    # one-time binding tickets isolated from the Tweet Bot.
+    telegram_video_ticket: str = Field(default="", max_length=256)
+    telegram_video_init_data: str = Field(default="", max_length=8192)
 
 
 class ChangePasswordPayload(BaseModel):
@@ -28914,6 +28926,121 @@ def create_app() -> FastAPI:
             # reference and deletes the incoming Telegram message best-effort.
             raw_password = ""
 
+    def _video_bot_signed_init_data(chat_id: int, profile: dict[str, Any], bot_token: str) -> str:
+        tg_user = {
+            "id": int(chat_id),
+            "first_name": str(profile.get("display_name") or "Telegram")[:64],
+            "username": str(profile.get("username") or "")[:64],
+        }
+        values = {
+            "auth_date": str(int(time.time())),
+            "user": json.dumps(tg_user, ensure_ascii=False, separators=(",", ":")),
+        }
+        data_check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+        secret_key = hmac.new(str(bot_token).encode("utf-8"), b"WebAppData", hashlib.sha256).digest()
+        values["hash"] = hmac.new(secret_key, data_check.encode("utf-8"), hashlib.sha256).hexdigest()
+        return urlencode(values)
+
+    def _video_bot_login_request() -> Request:
+        return Request({
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/api/auth/user-login",
+            "raw_path": b"/api/auth/user-login",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"telegram-video-bot.internal"),
+                (b"user-agent", b"Vecto-Telegram-Video-Bot/1"),
+                (b"x-forwarded-proto", b"https"),
+            ],
+            "client": ("127.0.0.1", 0),
+            "server": ("telegram-video-bot.internal", 443),
+            "root_path": "",
+            "extensions": {},
+        })
+
+    def _video_bot_chat_login(
+        chat_id: int,
+        username: str,
+        password: str,
+        profile: dict[str, Any],
+        verification: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Authenticate through the normal web policy and bind the video Bot chat.
+
+        The ticket and signed Telegram identity are video-Bot specific.  The
+        password still goes through ``_login_response`` so rate limits,
+        account state checks, MFA/email verification and session governance are
+        shared with browser login without exposing credentials to an admin.
+        """
+        clean_chat_id = int(chat_id or 0)
+        clean_username = str(username or "").strip()
+        raw_password = str(password or "")
+        if clean_chat_id <= 0 or not clean_username or not raw_password:
+            raise HTTPException(status_code=400, detail="请完整输入账号和密码")
+        runtime = _telegram_runtime_snapshot() or {}
+        bot_token = str(runtime.get("telegram_bot_token") or "").strip()
+        if not bool(runtime.get("telegram_bot_enabled")) or not bot_token:
+            raise HTTPException(status_code=503, detail="视频工作台 Bot 当前未启用")
+        tg_profile = {
+            "id": clean_chat_id,
+            "username": str((profile or {}).get("username") or "").strip().lstrip("@"),
+            "display_name": str((profile or {}).get("display_name") or "").strip(),
+        }
+        ticket = create_video_link_ticket(clean_chat_id)
+        raw_session_token = ""
+        try:
+            extra = dict(verification or {})
+            payload = LoginPayload(
+                username=clean_username,
+                password=raw_password,
+                remember_me=True,
+                device_id=f"telegram-video:{clean_chat_id}",
+                security_verification_method=str(extra.get("security_verification_method") or "").strip(),
+                security_challenge_id=str(extra.get("security_challenge_id") or "").strip(),
+                security_verification_code=str(extra.get("security_verification_code") or "").strip(),
+                telegram_video_ticket=ticket,
+                telegram_video_init_data=_video_bot_signed_init_data(clean_chat_id, tg_profile, bot_token),
+            )
+            response = _login_response(payload, _video_bot_login_request(), expected_admin=False)
+            for header_name, header_value in getattr(response, "raw_headers", ()):
+                if header_name not in {b"set-cookie", "set-cookie"}:
+                    continue
+                cookie = SimpleCookie()
+                cookie.load(bytes(header_value).decode("latin-1"))
+                morsel = cookie.get(SESSION_COOKIE)
+                if morsel is not None:
+                    raw_session_token = str(morsel.value or "").strip()
+                    break
+            if not raw_session_token:
+                raise HTTPException(status_code=502, detail="登录未返回有效会话")
+            body = json.loads(bytes(getattr(response, "body", b"{}")).decode("utf-8"))
+            web_user = {
+                "id": int(body.get("id") or 0),
+                "username": str(body.get("username") or ""),
+            }
+            if int(web_user["id"]) <= 0:
+                raise HTTPException(status_code=502, detail="登录未返回有效用户")
+            consume_video_link_ticket(
+                ticket,
+                tg_profile,
+                web_user,
+                session_storage_token(raw_session_token),
+            )
+            return {"ok": True, "user_id": int(web_user["id"]), "username": web_user["username"]}
+        except Exception:
+            invalidate_video_link_ticket(ticket)
+            if raw_session_token:
+                with contextlib.suppress(Exception):
+                    with db() as conn:
+                        delete_session(conn, raw_session_token, reason="telegram_video_chat_login_bind_failed")
+            raise
+        finally:
+            raw_password = ""
+
+    configure_video_chat_login(_video_bot_chat_login)
+
     tweet_workbench_ops = TweetWorkbenchOps(
         dispatch=_tweet_bot_dispatch,
         dispatch_async=_tweet_bot_dispatch_async,
@@ -30492,6 +30619,8 @@ def create_app() -> FastAPI:
 
             telegram_ticket = str(payload.telegram_tweet_ticket or "").strip()
             telegram_init_data = str(payload.telegram_init_data or "").strip()
+            telegram_video_ticket = str(payload.telegram_video_ticket or "").strip()
+            telegram_video_init_data = str(payload.telegram_video_init_data or "").strip()
             if telegram_ticket or telegram_init_data:
                 if not telegram_ticket or not telegram_init_data:
                     raise HTTPException(status_code=400, detail="Telegram 登录上下文不完整，请回到 Bot 重新打开绑定入口")
@@ -30504,6 +30633,16 @@ def create_app() -> FastAPI:
                 # Administrators retain the stricter single-session boundary;
                 # customer accounts may add the authenticated Telegram WebView
                 # without revoking an existing browser session.
+                telegram_parallel_session = not is_admin
+            elif telegram_video_ticket or telegram_video_init_data:
+                if not telegram_video_ticket or not telegram_video_init_data:
+                    raise HTTPException(status_code=400, detail="Telegram 视频登录上下文不完整，请回到 Bot 重新开始")
+                validate_video_webapp_login_context(
+                    telegram_video_ticket,
+                    telegram_video_init_data,
+                    runtime,
+                    conn=conn,
+                )
                 telegram_parallel_session = not is_admin
 
             email_2fa_required = bool(email_2fa_enabled and not mfa_enabled)

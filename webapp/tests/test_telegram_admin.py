@@ -1,7 +1,11 @@
 import os
+import hashlib
+import hmac
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import urlencode
 from unittest import mock
 
 from webapp import telegram_admin
@@ -82,6 +86,47 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertEqual(row["tg_username"], "daodi")
         self.assertEqual(row["tg_display_name"], "到底")
         self.assertEqual(row["label"], "客户A")
+
+    def test_video_self_service_ticket_binds_and_logout_clears_session_link(self):
+        token = telegram_admin.create_video_link_ticket(6258005891)
+        telegram_admin.consume_video_link_ticket(
+            token,
+            {"id": 6258005891, "username": "video_user", "display_name": "视频用户"},
+            {"id": 42, "username": "vecto_user"},
+            "session-digest",
+        )
+        row = telegram_admin._list_members()[0]
+        self.assertEqual(row["chat_id"], 6258005891)
+        self.assertEqual(row["web_user_id"], 42)
+        self.assertTrue(row["enabled"])
+        self.assertTrue(row["has_linked_session"])
+        member = telegram_admin.load_video_member(6258005891)
+        self.assertIsNotNone(member)
+        self.assertEqual(int(member["web_user_id"]), 42)
+
+        result = telegram_admin.logout_video_member(6258005891)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["bound"])
+        self.assertEqual(telegram_admin._list_members(), [])
+
+    def test_video_ticket_requires_matching_signed_telegram_identity(self):
+        token = telegram_admin.create_video_link_ticket(731)
+        values = {
+            "auth_date": str(int(__import__("time").time())),
+            "user": json.dumps({"id": 731, "username": "video_user"}, separators=(",", ":")),
+        }
+        check = "\n".join(f"{key}={values[key]}" for key in sorted(values))
+        secret = hmac.new(b"123456:video", b"WebAppData", hashlib.sha256).digest()
+        values["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+        init_data = urlencode(values)
+        self.assertEqual(
+            telegram_admin.validate_video_webapp_login_context(
+                token,
+                init_data,
+                {"telegram_bot_enabled": True, "telegram_bot_token": "123456:video"},
+            ),
+            731,
+        )
 
     def test_load_settings_backfills_missing_user_name(self):
         telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=6258005891, label="客户A"))
