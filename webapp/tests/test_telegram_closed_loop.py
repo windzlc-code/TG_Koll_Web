@@ -98,6 +98,39 @@ class TelegramClosedLoopTests(unittest.TestCase):
         ):
             self.assertIn(old_label, source)
 
+    def test_video_start_shows_main_menu_before_web_login(self):
+        """The account entry must be reachable from /start before authentication."""
+        service = SimpleNamespace(get_app_title=lambda: "视频工作台")
+        dispatcher = tg_bot.build_dispatcher(SimpleNamespace(), service)
+        callback = _video_route_callback(dispatcher, "cmd_start")
+        message = _VideoReplyMessage(text="/start")
+
+        asyncio.run(callback(message))
+
+        self.assertEqual(len(message.answers), 1)
+        self.assertIn("可用工作流", message.answers[0][0])
+        markup = message.answers[0][1]["reply_markup"]
+        labels = [[str(getattr(button, "text", "")) for button in row] for row in markup.keyboard]
+        self.assertEqual(labels[2], ["🔐 账号管理"])
+        self.assertEqual(labels[3], [tg_bot.RERUN_BUTTON, tg_bot.STATUS_BUTTON, tg_bot.STOP_BUTTON])
+
+    def test_video_bot_command_menu_covers_supported_commands(self):
+        commands = tg_bot._video_bot_commands()
+        self.assertEqual(
+            [command.command for command in commands],
+            [
+                "start",
+                "account",
+                "login",
+                "logout",
+                "status",
+                "workflow",
+                "stop",
+                "rerun",
+                "cancel",
+            ],
+        )
+
     def test_video_workbench_rejects_legacy_whitelist_without_web_login(self):
         """An admin-seeded Chat ID is not enough for the new self-service gate."""
         from types import SimpleNamespace

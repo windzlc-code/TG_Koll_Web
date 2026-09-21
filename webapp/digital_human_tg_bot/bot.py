@@ -25,7 +25,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, FSInputFile, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaAudio, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import BotCommand, CallbackQuery, FSInputFile, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaAudio, KeyboardButton, Message, ReplyKeyboardMarkup
 
 import voice_presets
 from .config import AppConfig
@@ -949,6 +949,21 @@ def _navigation_keyboard_row(*, include_back: bool = False) -> list[KeyboardButt
 
 def _task_control_keyboard_row() -> list[KeyboardButton]:
     return [KeyboardButton(text=STATUS_BUTTON), KeyboardButton(text=STOP_BUTTON)]
+
+
+def _video_bot_commands() -> list[BotCommand]:
+    """Commands shown when a user types `/` in the video Bot chat."""
+    return [
+        BotCommand(command="start", description="打开视频工作台"),
+        BotCommand(command="account", description="管理 VECTO 账号"),
+        BotCommand(command="login", description="登录 VECTO 账号"),
+        BotCommand(command="logout", description="退出 VECTO 账号"),
+        BotCommand(command="status", description="查看工作台状态"),
+        BotCommand(command="workflow", description="查看工作流配置"),
+        BotCommand(command="stop", description="停止当前任务"),
+        BotCommand(command="rerun", description="重跑最近任务"),
+        BotCommand(command="cancel", description="取消当前操作"),
+    ]
 
 
 def _image_generation_keyboard() -> ReplyKeyboardMarkup:
@@ -3606,8 +3621,9 @@ def build_dispatcher(
 
     @router.message(CommandStart())
     async def cmd_start(message: Message) -> None:
-        if not await ensure_authorized(message):
-            return
+        # `/start` must expose the account entry point before login.  Individual
+        # workbench actions still call ensure_authorized and remain locked until
+        # the VECTO web session is bound to this Telegram chat.
         await message.answer(_quick_start_text(service), reply_markup=_menu_keyboard())
 
     @router.message(F.text == "多智能體數字人")
@@ -6146,6 +6162,12 @@ class TelegramWorkbenchBot:
 
     async def start(self) -> None:
         self.service.attach_bot(self.bot)
+        try:
+            await self.bot.set_my_commands(_video_bot_commands())
+        except Exception:
+            # Command suggestions are helpful but must not prevent polling from
+            # starting when Telegram's command API is temporarily unavailable.
+            logger.exception("Failed to register video Bot command menu")
         await self.bot.delete_webhook(drop_pending_updates=False)
         logger.info(
             "Telegram bot startup complete; members=%s enabled=%s",
