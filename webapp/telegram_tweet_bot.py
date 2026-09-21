@@ -223,6 +223,8 @@ CHAT_LOGIN_PASSWORD_MODE = "chat_login_password"
 CHAT_LOGIN_VERIFICATION_MODE = "chat_login_verification"
 CHAT_LOGIN_TTL_SECONDS = 180
 CHAT_LOGIN_MAX_ATTEMPTS = 3
+CHAT_LOGIN_CANCEL_BUTTON = "❌ 取消登录"
+CHAT_LOGIN_BACK_BUTTON = "返回账号管理"
 
 
 @dataclass(frozen=True)
@@ -717,14 +719,55 @@ class NativeTweetBotController:
         return self._webapp_markup(types, chat_id)
 
     @staticmethod
-    def _force_reply(types: Any, placeholder: str) -> Any | None:
-        force_reply = getattr(types, "ForceReply", None)
-        if force_reply is None:
-            return None
-        return force_reply(
-            force_reply=True,
-            selective=True,
+    def _chat_login_keyboard(types: Any, placeholder: str) -> Any:
+        """Keep login actions visible while credentials are entered.
+
+        ``ForceReply`` replaces the persistent Telegram keyboard with a client
+        side reply bar.  That made the login flow look stuck and hid the only
+        way to leave it without typing a command.  A normal reply keyboard
+        keeps the FSM active while exposing explicit cancel/back controls.
+        """
+        button = types.KeyboardButton
+        return types.ReplyKeyboardMarkup(
+            keyboard=[
+                [button(text=CHAT_LOGIN_CANCEL_BUTTON)],
+                [button(text=CHAT_LOGIN_BACK_BUTTON)],
+            ],
+            resize_keyboard=True,
+            is_persistent=True,
             input_field_placeholder=str(placeholder or "")[:64],
+        )
+
+    async def _finish_chat_login_cancel(
+        self,
+        message: Any,
+        types: Any,
+        *,
+        return_to_account: bool = False,
+    ) -> None:
+        """Close the credential FSM and render the correct next surface.
+
+        The action is intentionally button-driven.  If a member is already
+        bound, return to the account-management page; for a first-time login,
+        keep the self-service binding button available.  A transient backend
+        failure must never leave the login keyboard/state hanging.
+        """
+        chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
+        self._clear_chat_login(chat_id)
+        member = self._member(chat_id)
+        if member:
+            try:
+                page_text, markup = await self._account_management_payload(types, member)
+                prefix = "已返回账号管理。" if return_to_account else "已取消推文工作台登录。"
+                await message.answer(f"{prefix}\n\n{page_text}", reply_markup=markup)
+                return
+            except Exception:
+                logger.debug("Unable to render tweet account menu after login cancel", exc_info=True)
+        markup = self._binding_markup(types, chat_id)
+        prefix = "已返回账号管理。" if return_to_account else "已取消推文工作台登录。"
+        await message.answer(
+            f"{prefix}\n如需继续，请点击下方按钮重新开始。",
+            **({"reply_markup": markup} if markup is not None else {}),
         )
 
     def _clear_chat_login(self, chat_id: int) -> None:
@@ -785,14 +828,12 @@ class NativeTweetBotController:
         self._clear_chat_login(chat_id)
         started_at = time.time()
         save_state(chat_id, mode=CHAT_LOGIN_USERNAME_MODE, payload={"started_at": started_at})
-        reply_markup = self._force_reply(types, "VECTO 用户名或邮箱")
-        kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
         await message.answer(
             "🔐 聊天内登录绑定\n"
             "请发送 VECTO 用户名或邮箱（仅限私聊）。收到后再输入密码；"
             "密码仅短暂用于验证，Bot 不保存密码。\n"
-            "发送 /cancel 可取消。",
-            **kwargs,
+            "如需退出，请点击下方“❌ 取消登录”或“返回账号管理”。",
+            reply_markup=self._chat_login_keyboard(types, "VECTO 用户名或邮箱"),
         )
 
     async def _handle_chat_login_text(self, message: Any, types: Any) -> bool:
@@ -818,20 +859,37 @@ class NativeTweetBotController:
             return False
         raw_text = str(getattr(message, "text", "") or "")
         clean_text = raw_text.strip()
-        if clean_text == "/cancel":
-            self._clear_chat_login(chat_id)
-            await message.answer("已取消聊天内登录绑定。")
+        if clean_text in {CHAT_LOGIN_CANCEL_BUTTON, "/cancel"}:
+            await self._finish_chat_login_cancel(message, types)
+            return True
+        if clean_text in {
+            CHAT_LOGIN_BACK_BUTTON,
+            ACCOUNT_CONTROL_BUTTON,
+            LEGACY_ACCOUNT_CONTROL_BUTTON,
+        }:
+            await self._finish_chat_login_cancel(message, types, return_to_account=True)
             return True
         if not clean_text:
-            await message.answer("输入不能为空，请重新发送；发送 /cancel 可取消。")
+            await message.answer(
+                "输入不能为空，请重新发送，或点击下方“❌ 取消登录”退出。",
+                reply_markup=self._chat_login_keyboard(types, "VECTO 用户名或邮箱"),
+            )
             return True
         if time.time() - float(state.get("updated_at") or 0) > CHAT_LOGIN_TTL_SECONDS:
             self._clear_chat_login(chat_id)
-            await message.answer("登录绑定已超时，请重新点击“在聊天中登录并绑定”。")
+            markup = self._binding_markup(types, chat_id)
+            await message.answer(
+                "登录绑定已超时，请重新点击“在聊天中登录并绑定”。",
+                **({"reply_markup": markup} if markup is not None else {}),
+            )
             return True
         if mode == CHAT_LOGIN_USERNAME_MODE:
             if clean_text.startswith("/") or len(clean_text) > 254:
-                await message.answer("请输入有效的 VECTO 用户名或邮箱，不要发送命令。")
+                await message.answer(
+                    "请输入有效的 VECTO 用户名或邮箱，不要发送命令。\n"
+                    "如需退出，请点击下方“❌ 取消登录”。",
+                    reply_markup=self._chat_login_keyboard(types, "VECTO 用户名或邮箱"),
+                )
                 return True
             started_at = float(state["payload"].get("started_at") or time.time())
             with self._chat_login_lock:
@@ -856,12 +914,10 @@ class NativeTweetBotController:
                 "started_at": started_at,
             })
             await self._delete_sensitive_message(message)
-            reply_markup = self._force_reply(types, "VECTO 登录密码")
-            kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
             await message.answer(
                 "账号已收到。请发送密码（单独一条消息）；验证后会立即尝试删除该消息。\n"
-                "发送 /cancel 可取消。",
-                **kwargs,
+                "如需退出，请点击下方“❌ 取消登录”或“返回账号管理”。",
+                reply_markup=self._chat_login_keyboard(types, "VECTO 登录密码"),
             )
             return True
 
@@ -869,14 +925,21 @@ class NativeTweetBotController:
             pending = dict(self._chat_login_pending.get(chat_id) or {})
         if not pending or not str(pending.get("username") or "").strip():
             self._clear_chat_login(chat_id)
-            await message.answer("登录状态已丢失，请重新点击“在聊天中登录并绑定”。")
+            markup = self._binding_markup(types, chat_id)
+            await message.answer(
+                "登录状态已丢失，请重新点击“在聊天中登录并绑定”。",
+                **({"reply_markup": markup} if markup is not None else {}),
+            )
             return True
         password = raw_text if mode == CHAT_LOGIN_PASSWORD_MODE else str(pending.get("password") or "")
         verification: dict[str, Any] | None = None
         if mode == CHAT_LOGIN_PASSWORD_MODE:
             if len(password) > 256:
                 await self._delete_sensitive_message(message)
-                await message.answer("密码长度无效，请重新发送或发送 /cancel 取消。")
+                await message.answer(
+                    "密码长度无效，请重新发送，或点击下方“❌ 取消登录”退出。",
+                    reply_markup=self._chat_login_keyboard(types, "VECTO 登录密码"),
+                )
                 return True
             pending["password"] = password
             pending["attempts"] = int(pending.get("attempts") or 0) + 1
@@ -916,11 +979,10 @@ class NativeTweetBotController:
                     "verification_method": method,
                 })
                 label = "邮箱验证码" if method == "email" else "动态验证码或恢复码"
-                reply_markup = self._force_reply(types, label)
-                kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
                 await message.answer(
-                    f"账号密码已通过第一步校验，请发送{label}完成绑定。发送 /cancel 可取消。",
-                    **kwargs,
+                    f"账号密码已通过第一步校验，请发送{label}完成绑定。\n"
+                    "如需退出，请点击下方“❌ 取消登录”或“返回账号管理”。",
+                    reply_markup=self._chat_login_keyboard(types, label),
                 )
                 return True
             attempts = int(pending.get("attempts") or 0)
@@ -928,7 +990,11 @@ class NativeTweetBotController:
                 self._chat_login_pending.pop(chat_id, None)
             if attempts >= CHAT_LOGIN_MAX_ATTEMPTS or mode == CHAT_LOGIN_VERIFICATION_MODE:
                 self._clear_chat_login(chat_id)
-                await message.answer("登录失败次数过多或验证码无效，已结束本次绑定，请稍后重新开始。")
+                markup = self._binding_markup(types, chat_id)
+                await message.answer(
+                    "登录失败次数过多或验证码无效，已结束本次绑定，请稍后重新开始。",
+                    **({"reply_markup": markup} if markup is not None else {}),
+                )
             else:
                 with self._chat_login_lock:
                     pending["password"] = ""
@@ -937,11 +1003,10 @@ class NativeTweetBotController:
                     "username": str(pending["username"]),
                     "started_at": float(pending.get("started_at") or time.time()),
                 })
-                reply_markup = self._force_reply(types, "VECTO 登录密码")
-                kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
                 await message.answer(
-                    "登录失败，请检查账号或密码后重新发送；发送 /cancel 可取消。",
-                    **kwargs,
+                    "登录失败，请检查账号或密码后重新发送。\n"
+                    "如需退出，请点击下方“❌ 取消登录”或“返回账号管理”。",
+                    reply_markup=self._chat_login_keyboard(types, "VECTO 登录密码"),
                 )
             return True
         finally:

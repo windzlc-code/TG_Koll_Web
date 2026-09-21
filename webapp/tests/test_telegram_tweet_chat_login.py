@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 from webapp.db import db, init_db
 from webapp.telegram_tweet_bot import (
+    CHAT_LOGIN_BACK_BUTTON,
+    CHAT_LOGIN_CANCEL_BUTTON,
     NativeTweetBotController,
     TweetWorkbenchOps,
     load_state,
@@ -27,11 +29,6 @@ class _Markup:
         self.inline_keyboard = inline_keyboard
 
 
-class _ForceReply:
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
-
-
 class _ReplyMarkup:
     def __init__(self, *, keyboard, **kwargs):
         self.keyboard = keyboard
@@ -41,7 +38,6 @@ class _ReplyMarkup:
 class _Types:
     InlineKeyboardButton = _Button
     InlineKeyboardMarkup = _Markup
-    ForceReply = _ForceReply
     KeyboardButton = _Button
     ReplyKeyboardMarkup = _ReplyMarkup
 
@@ -99,7 +95,15 @@ class TelegramTweetChatLoginTests(unittest.TestCase):
         start = _Message()
         asyncio.run(controller.send_web_login_link(start, _Types))
         self.assertIn("聊天内登录绑定", start.answers[-1][0])
-        self.assertIsInstance(start.answers[-1][1]["reply_markup"], _ForceReply)
+        login_markup = start.answers[-1][1]["reply_markup"]
+        self.assertIsInstance(login_markup, _ReplyMarkup)
+        labels = {
+            button.text
+            for row in login_markup.keyboard
+            for button in row
+        }
+        self.assertIn(CHAT_LOGIN_CANCEL_BUTTON, labels)
+        self.assertIn(CHAT_LOGIN_BACK_BUTTON, labels)
 
         username = _Message(text="alice@example.com", message_id=2)
         asyncio.run(controller.handle_text(username, _Types))
@@ -117,6 +121,26 @@ class TelegramTweetChatLoginTests(unittest.TestCase):
                 (731,),
             ).fetchone()
         self.assertNotIn("secret-not-persisted", str(row["payload_json"] if row else ""))
+
+    def test_cancel_button_closes_login_and_restores_binding_action(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(
+                dispatch=lambda _uid, _action, _payload: {},
+                dispatch_async=_unused_async_dispatch,
+            ),
+            get_runtime=lambda: {},
+            load_member=lambda _chat_id: None,
+            chat_login=self._login,
+        )
+        start = _Message()
+        asyncio.run(controller.send_web_login_link(start, _Types))
+        cancel = _Message(text=CHAT_LOGIN_CANCEL_BUTTON, message_id=2)
+        asyncio.run(controller.handle_text(cancel, _Types))
+
+        self.assertEqual(load_state(731)["mode"], "")
+        self.assertIn("已取消推文工作台登录", cancel.answers[-1][0])
+        binding_markup = cancel.answers[-1][1]["reply_markup"]
+        self.assertEqual(binding_markup.inline_keyboard[0][0].callback_data, "tt:chatlogin")
 
     def test_production_binding_action_stays_in_chat(self):
         controller = NativeTweetBotController(
