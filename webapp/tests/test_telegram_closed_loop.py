@@ -58,13 +58,8 @@ def _video_route_callback(dispatcher, name: str):
 
 
 class TelegramClosedLoopTests(unittest.TestCase):
-    def test_video_main_menu_has_control_icons_and_retains_legacy_workflow_texts(self):
-        """The visible video controls use the same visual language as R18.
-
-        Old, text-only workflow labels remain source-level compatibility
-        aliases so a user with an already-open Telegram keyboard does not get
-        stuck after the icon refresh.
-        """
+    def test_video_main_menu_keeps_original_controls_and_adds_account_entry(self):
+        """Only the account-management entry is added; existing controls stay unchanged."""
         markup = tg_bot._menu_keyboard()
         labels = [
             [str(getattr(button, "text", "")) for button in row]
@@ -73,17 +68,16 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertEqual(
             labels,
             [
-                ["🎬 数字人视频生成", "📣 广告短视频"],
-                ["✂️ 视频编辑", "🖼️ 图片生成"],
+                [tg_bot.DIGITAL_HUMAN_VIDEO_BUTTON, tg_bot.ECOMMERCE_SHORT_VIDEO_BUTTON],
+                [tg_bot.VIDEO_EDIT_BUTTON, tg_bot.IMAGE_GENERATION_MENU_BUTTON],
                 ["🔐 账号管理"],
-                ["🔄 重跑最近任务", "📊 查看工作台状态", "🛑 强制停止当前任务"],
+                [tg_bot.RERUN_BUTTON, tg_bot.STATUS_BUTTON, tg_bot.STOP_BUTTON],
             ],
         )
 
         source = Path(tg_bot.__file__).read_text(encoding="utf-8")
-        # These aliases are intentionally kept for old reply keyboards and
-        # previously sent instructions.  They must not be silently replaced
-        # by the icon labels.
+        # Existing labels remain the source-level contract for old keyboards
+        # and previously sent workflow instructions.
         for marker in (
             "LEGACY_ORAL_UPLOAD_BUTTON",
             "LEGACY_UPLOAD_BUTTON",
@@ -169,6 +163,26 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertIn("VECTO 用户名或邮箱", login_message.answers[-1][0])
         self.assertIn("密码", login_message.answers[-1][0])
         self.assertIn("私聊", login_message.answers[-1][0])
+
+    def test_account_and_main_menu_return_are_available_before_login(self):
+        dispatcher = tg_bot.build_dispatcher(
+            SimpleNamespace(),
+            _AuthorizedVideoService(),
+            load_member=lambda _chat_id: {"web_user_id": 0, "enabled": 1},
+            has_active_web_session=lambda _member: False,
+        )
+        state = _VideoState()
+
+        account_back = _video_route_callback(dispatcher, "video_account_back")
+        account_message = _VideoReplyMessage(text="返回工作台")
+        asyncio.run(account_back(account_message, state))
+        self.assertIn("已返回视频工作台主菜单", account_message.answers[-1][0])
+        self.assertNotIn("尚未登录", account_message.answers[-1][0])
+
+        main_back = _video_route_callback(dispatcher, "on_main_menu_button")
+        main_message = _VideoReplyMessage(text="返回主菜单")
+        asyncio.run(main_back(main_message, state))
+        self.assertIn("已返回主菜單", main_message.answers[-1][0])
 
     def test_original_bot_keyboards_are_copied(self):
         source = Path(tg_bot.__file__).read_text(encoding="utf-8")
