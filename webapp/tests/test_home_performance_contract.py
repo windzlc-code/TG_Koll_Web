@@ -6,6 +6,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 INDEX_HTML = ROOT / "webapp" / "static" / "index.html"
 HOME_SCRIPT = ROOT / "webapp" / "static" / "assets" / "opc" / "script.js"
+SITE_NAV_SCRIPT = ROOT / "webapp" / "static" / "assets" / "opc" / "site-navigation.js"
+CASE_SCRIPT = ROOT / "webapp" / "static" / "assets" / "opc" / "case-studies.js"
 
 
 class HomePerformanceContractTests(unittest.TestCase):
@@ -23,13 +25,15 @@ class HomePerformanceContractTests(unittest.TestCase):
     def test_noncritical_scripts_do_not_block_html_parsing(self):
         html = INDEX_HTML.read_text(encoding="utf-8")
 
-        for source in (
-            "/assets/vendor/opencc-js/st-characters.js?v=1.4.1",
-            "/assets/vendor/opencc-js/ts-characters.js?v=1.4.1",
-            "/assets/vendor/opencc-js/ts-phrases.js?v=1.4.1",
-            "/assets/opc/script.js?v=__OPC_SCRIPT_VERSION__",
-        ):
-            self.assertIn(f'<script defer src="{source}"></script>', html)
+        self.assertIn(
+            '<script async src="/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__"></script>',
+            html,
+        )
+        self.assertIn(
+            '<script async src="/assets/opc/script.js?v=__OPC_SCRIPT_VERSION__"></script>',
+            html,
+        )
+        self.assertNotIn('<script src="/assets/vendor/opencc-js/', html)
 
     def test_deferred_media_has_runtime_activation(self):
         script = HOME_SCRIPT.read_text(encoding="utf-8")
@@ -39,6 +43,18 @@ class HomePerformanceContractTests(unittest.TestCase):
         self.assertIn('scene.querySelectorAll("img[data-src]").forEach(loadDeferredImage)', script)
         self.assertIn('new IntersectionObserver((entries, observer) =>', script)
         self.assertIn('rootMargin: "0px"', script)
+        self.assertIn("function schedulePublicLanguageDictionaries()", script)
+        self.assertIn("resetPublicLanguageDictionaries();", script)
+
+    def test_public_navigation_scripts_are_async_safe(self):
+        for name in ("index.html", "about-vecto.html", "case-studies.html", "product-login.html"):
+            markup = (ROOT / "webapp" / "static" / name).read_text(encoding="utf-8")
+            self.assertIn('<script async src="/assets/opc/site-navigation.js', markup)
+
+        site_nav = SITE_NAV_SCRIPT.read_text(encoding="utf-8")
+        case_script = CASE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('document.addEventListener("DOMContentLoaded", initializeNavigation, { once: true })', site_nav)
+        self.assertIn('document.addEventListener("DOMContentLoaded", initializeCaseStudies, { once: true })', case_script)
 
 
 if __name__ == "__main__":

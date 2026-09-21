@@ -186,6 +186,7 @@ let traditionalToSimplifiedCharacters = null;
 let traditionalToSimplifiedPhrases = null;
 let simplifiedToTraditionalCharacters = null;
 let simplifiedToTraditionalPhrases = null;
+let publicOpenCcLoadPromise = null;
 
 const PUBLIC_I18N_MARKER = "data-i18n-ui";
 const PUBLIC_I18N_DYNAMIC_MARKER = "data-i18n-dynamic";
@@ -458,6 +459,50 @@ function translatePublicLanguage(root = document.body, language = window.VectoSi
 function applyPublicLanguage(language) {
   const nextLanguage = language === "zh-Hant" ? "zh-Hant" : "zh-Hans";
   translatePublicLanguage(document.body, nextLanguage);
+}
+
+const PUBLIC_OPENCC_SOURCES = [
+  "/assets/vendor/opencc-js/st-characters.js?v=1.4.1",
+  "/assets/vendor/opencc-js/ts-characters.js?v=1.4.1",
+  "/assets/vendor/opencc-js/ts-phrases.js?v=1.4.1",
+];
+
+function resetPublicLanguageDictionaries() {
+  traditionalToSimplifiedCharacters = null;
+  traditionalToSimplifiedPhrases = null;
+  simplifiedToTraditionalCharacters = null;
+  simplifiedToTraditionalPhrases = null;
+}
+
+function loadPublicLanguageDictionaries() {
+  if (publicOpenCcLoadPromise) return publicOpenCcLoadPromise;
+  if (window.VectoOpenCcStCharacters && window.VectoOpenCcTsCharacters && window.VectoOpenCcTsPhrases) {
+    resetPublicLanguageDictionaries();
+    applyPublicLanguage(window.VectoSiteNavigation?.currentLanguage() || "zh-Hant");
+    return Promise.resolve();
+  }
+  publicOpenCcLoadPromise = Promise.all(PUBLIC_OPENCC_SOURCES.map((source) => new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.async = true;
+    script.src = source;
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.append(script);
+  })))
+    .then(() => {
+      resetPublicLanguageDictionaries();
+      applyPublicLanguage(window.VectoSiteNavigation?.currentLanguage() || "zh-Hant");
+    })
+    .catch(() => {
+      publicOpenCcLoadPromise = null;
+    });
+  return publicOpenCcLoadPromise;
+}
+
+function schedulePublicLanguageDictionaries() {
+  const load = () => { void loadPublicLanguageDictionaries(); };
+  if ("requestIdleCallback" in window) window.requestIdleCallback(load, { timeout: 1200 });
+  else window.setTimeout(load, 600);
 }
 
 function startPublicLanguageObserver() {
@@ -1812,3 +1857,4 @@ startPublicLanguageObserver();
 loadLoginPolicy();
 setHeaderState();
 initHomeExperience();
+schedulePublicLanguageDictionaries();

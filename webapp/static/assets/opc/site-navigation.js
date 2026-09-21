@@ -2586,11 +2586,6 @@
     window.location.assign(`${fallback}?return_url=${encodeURIComponent(redirect)}`);
   });
 
-  syncAdminWorkspaceContext();
-  document.querySelectorAll("[data-site-header]").forEach(mount);
-  setTheme("light", { persist: false });
-  setLanguage(storedValue(LANGUAGE_STORAGE_KEY, DEFAULT_LANGUAGE), { persist: false });
-
   window.VectoSiteNavigation = {
     mount,
     mountAccountMenu,
@@ -2612,5 +2607,17 @@
     announceAuthSessionChange,
     refreshNotifications: () => loadNotifications({ force: true }),
   };
-  window.dispatchEvent(new CustomEvent("vecto:navigation-ready"));
+
+  const initializeNavigation = () => {
+    syncAdminWorkspaceContext();
+    document.querySelectorAll("[data-site-header]").forEach(mount);
+    setTheme("light", { persist: false });
+    setLanguage(storedValue(LANGUAGE_STORAGE_KEY, DEFAULT_LANGUAGE), { persist: false });
+    window.dispatchEvent(new CustomEvent("vecto:navigation-ready"));
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initializeNavigation, { once: true });
+  } else {
+    initializeNavigation();
+  }
 })();

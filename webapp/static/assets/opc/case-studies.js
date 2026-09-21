@@ -1,4 +1,5 @@
 (() => {
+  const initializeCaseStudies = () => {
   const root = document.querySelector("[data-case-studies-root]");
   if (!root) return;
 
@@ -895,4 +896,10 @@
   window.addEventListener("pagehide", () => document.body.classList.remove("case-report-modal-open"));
   render();
   loadCaseReports();
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initializeCaseStudies, { once: true });
+  } else {
+    initializeCaseStudies();
+  }
 })();
