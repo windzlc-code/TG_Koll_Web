@@ -50,6 +50,33 @@ describe("persona archive hot metric store", () => {
     expect(archive.setup.hotMetrics["instagram:demo.user"].accountId).toBe("ig-1");
   });
 
+  it("reclaims a stale millisecond archive lock before writing", () => {
+    const dir = useArchiveStore([{
+      id: "persona-1",
+      name: "理发师",
+      content: "",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+      setup: {},
+      posts: [],
+    }]);
+    fs.writeFileSync(
+      path.join(dir, "persona_archives.lock"),
+      `${process.pid} ${Date.now() - 3_600_000}\n`,
+      "utf-8",
+    );
+
+    const result = updatePersonaArchivePlatformHotMetrics({
+      archiveId: "persona-1",
+      metricKey: "instagram:demo.user",
+      metric: { platform: "instagram", username: "demo.user", followers: 1 },
+      updatedAt: "2026-08-08T08:00:00.000Z",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(fs.existsSync(path.join(dir, "persona_archives.lock"))).toBe(false);
+  });
+
   it("bootstraps the legacy Threads binding when only the account pool binding is known", () => {
     const dir = useArchiveStore([{
       id: "persona-1",

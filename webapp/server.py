@@ -14289,11 +14289,30 @@ PERSONA_DASHBOARD_MONITOR_STATE: dict[str, Any] = {
 }
 
 
+def _lock_timestamp_seconds(value: Any, fallback: float) -> float:
+    """Normalize archive-lock timestamps written by Python and Node.
+
+    Python writes Unix seconds while the R18 Node bridge writes ``Date.now()``
+    milliseconds.  Treating the latter as seconds makes an old lock look like
+    it was created in the future and blocks every fresh app import.
+    """
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        return fallback
+    while timestamp > 100_000_000_000:
+        timestamp /= 1000.0
+    return timestamp
+
+
 def _remove_stale_lock_file(lock_path: Path, *, max_age_seconds: int = 300) -> bool:
     try:
         raw = lock_path.read_text(encoding="utf-8").strip().split()
         pid = int(raw[0]) if raw else 0
-        created_at = float(raw[1]) if len(raw) > 1 else float(lock_path.stat().st_mtime)
+        fallback = float(lock_path.stat().st_mtime)
+        created_at = _lock_timestamp_seconds(raw[1] if len(raw) > 1 else fallback, fallback)
     except Exception:
         pid = 0
         try:
@@ -26755,8 +26774,10 @@ def create_app() -> FastAPI:
     _ensure_admin_seed()
     _sync_password_vault_key_status()
     _resume_pending_tasks()
-    with contextlib.suppress(Exception):
-        _cleanup_stale_persona_generation_candidates()
+    # Candidate cleanup is non-critical maintenance and already runs from the
+    # background cleanup worker.  Never hold app import on a cross-process
+    # persona archive lock, otherwise a stale lock makes every page refresh
+    # appear frozen until the 30-second lock timeout expires.
     _start_task_workers()
     _start_cleanup_worker()
 

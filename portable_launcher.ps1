@@ -150,7 +150,25 @@ function Write-Utf8NoBomFile {
   param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Content)
   $parent = Split-Path -Parent $Path
   if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
-  [System.IO.File]::WriteAllText($Path, $Content, $Utf8NoBom)
+  if (-not $parent) { $parent = (Get-Location).Path }
+  $leaf = Split-Path -Leaf $Path
+  $tempPath = Join-Path $parent (".$leaf.$PID." + [guid]::NewGuid().ToString("N") + ".tmp")
+  try {
+    [System.IO.File]::WriteAllText($tempPath, $Content, $Utf8NoBom)
+    if (Test-Path -LiteralPath $Path) {
+      try {
+        [System.IO.File]::Replace($tempPath, $Path, $null)
+      } catch {
+        [System.IO.File]::Move($tempPath, $Path, $true)
+      }
+    } else {
+      [System.IO.File]::Move($tempPath, $Path)
+    }
+  } finally {
+    if (Test-Path -LiteralPath $tempPath) {
+      Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
+  }
 }
 
 function Read-JsonObject {

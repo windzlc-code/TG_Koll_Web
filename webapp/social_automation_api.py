@@ -7,6 +7,7 @@ import gc
 import hashlib
 import hmac
 import json
+import math
 import os
 import asyncio
 import ipaddress
@@ -12877,11 +12878,25 @@ def _archive_file_lock(timeout_seconds: int = _ARCHIVE_LOCK_TIMEOUT_SECONDS):
             lock_path.unlink()
 
 
+def _archive_lock_timestamp_seconds(value: Any, fallback: float) -> float:
+    """Accept both Python Unix seconds and Node ``Date.now()`` milliseconds."""
+    try:
+        timestamp = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        return fallback
+    while timestamp > 100_000_000_000:
+        timestamp /= 1000.0
+    return timestamp
+
+
 def _remove_stale_archive_lock(lock_path: Path, *, max_age_seconds: int = 300) -> bool:
     try:
         raw = lock_path.read_text(encoding="utf-8").strip().split()
         pid = int(raw[0]) if raw else 0
-        created_at = float(raw[1]) if len(raw) > 1 else float(lock_path.stat().st_mtime)
+        fallback = float(lock_path.stat().st_mtime)
+        created_at = _archive_lock_timestamp_seconds(raw[1] if len(raw) > 1 else fallback, fallback)
     except Exception:
         pid = 0
         try:

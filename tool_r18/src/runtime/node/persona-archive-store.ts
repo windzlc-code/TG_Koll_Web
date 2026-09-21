@@ -38,6 +38,38 @@ function sleepSync(ms: number) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function removeStaleArchiveLock(lockPath: string, maxAgeMs = 300_000) {
+  let parts: string[] = [];
+  let createdAtMs = 0;
+  try {
+    parts = fs.readFileSync(lockPath, "utf-8").trim().split(/\s+/);
+    const rawTimestamp = Number(parts[1]);
+    if (Number.isFinite(rawTimestamp) && rawTimestamp > 0) {
+      createdAtMs = rawTimestamp < 100_000_000_000 ? rawTimestamp * 1000 : rawTimestamp;
+      while (createdAtMs > 100_000_000_000) createdAtMs /= 1000;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return true;
+    return false;
+  }
+  let stale = !createdAtMs || Date.now() - createdAtMs > maxAgeMs;
+  const pid = Number(parts[0]);
+  if (!stale && process.platform !== "win32" && Number.isInteger(pid) && pid > 0) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ESRCH") stale = true;
+    }
+  }
+  if (!stale) return false;
+  try {
+    fs.unlinkSync(lockPath);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === "ENOENT";
+  }
+}
+
 function withArchiveFileLock<T>(fn: () => T): T {
   const lockPath = getLockPath();
   ensureParentDir(lockPath);
@@ -50,6 +82,7 @@ function withArchiveFileLock<T>(fn: () => T): T {
     } catch (error) {
       const code = (error as NodeJS.ErrnoException)?.code;
       if (code !== "EEXIST") throw error;
+      if (removeStaleArchiveLock(lockPath)) continue;
       if (Date.now() - started > ARCHIVE_LOCK_TIMEOUT_MS) {
         throw new Error("persona archive write lock timeout");
       }
