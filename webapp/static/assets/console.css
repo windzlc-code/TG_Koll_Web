@@ -31219,7 +31219,7 @@ body.console-page {
 /* Match composition options to the generation-style cards. Keep the list
    short enough to scroll instead of squeezing or clipping its labels. */
 .persona-picker-list {
-  max-height: 220px;
+  max-height: 214px;
   gap: 6px;
   padding: 2px;
   overflow-y: auto;
@@ -31270,7 +31270,7 @@ body.console-page {
 
 @media (max-width: 760px) {
   .persona-picker-list {
-    max-height: 220px;
+    max-height: 198px;
   }
 
   .persona-picker-option {
@@ -31287,6 +31287,6 @@ body.console-page {
 
 @media (max-width: 360px) {
   .persona-picker-list {
-    max-height: 200px;
+    max-height: 198px;
   }
 }

@@ -368,7 +368,7 @@ def test_composition_picker_spacing_and_nested_scroll_are_preserved_on_rerender(
         assert result["paddingTop"] >= 6
         assert result["paddingLeft"] >= 8
         assert result["listOverflow"] == "auto"
-        assert result["listMaxHeight"] == 220
+        assert result["listMaxHeight"] == 214
         assert result["previewAlignSelf"] == "start"
         assert float(result["previewHeight"].replace("px", "")) > 0
         assert result["previewImageAspectRatio"] in {"4 / 3", "1.33333 / 1"}
@@ -418,7 +418,7 @@ def test_composition_picker_cards_match_style_cards_on_mobile_and_scroll_after_f
         assert abs(result["compositionCardHeight"] - result["styleCardHeight"]) <= 1
         assert result["paddingTop"] >= 5
         assert result["paddingLeft"] >= 6
-        assert result["listMaxHeight"] == 220
+        assert result["listMaxHeight"] == 198
         assert result["listOverflow"] == "auto"
         assert result["scrollHeight"] > result["clientHeight"]
         browser.close()
