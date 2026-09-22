@@ -973,6 +973,32 @@ def _navigation_keyboard_row(*, include_back: bool = False) -> list[KeyboardButt
     return row
 
 
+def _step_callback_markup(*, include_status: bool = True) -> InlineKeyboardMarkup:
+    """Inline escape hatch shown alongside text/media wizard prompts.
+
+    The video Bot keeps ReplyKeyboard options for the actual workflow choices,
+    but those keyboards are not tied to a particular prompt and can disappear
+    on mobile clients.  A small inline row makes cancellation and return
+    discoverable at every input step without changing the existing choice
+    handlers.
+    """
+    rows: list[list[InlineKeyboardButton]] = [[
+        InlineKeyboardButton(text="↩ 返回工作台", callback_data="tv:step_menu"),
+        InlineKeyboardButton(text="✖ 取消当前步骤", callback_data="tv:step_cancel"),
+    ]]
+    if include_status:
+        rows.append([InlineKeyboardButton(text="📊 查看当前步骤", callback_data="tv:step_status")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _send_step_callback_prompt(message: Message, *, include_status: bool = True) -> None:
+    """Attach callback navigation without replacing an existing ReplyKeyboard."""
+    await message.answer(
+        "步骤导航：可随时返回工作台或取消当前输入。",
+        reply_markup=_step_callback_markup(include_status=include_status),
+    )
+
+
 def _task_control_keyboard_row() -> list[KeyboardButton]:
     return [KeyboardButton(text=STATUS_MENU_BUTTON), KeyboardButton(text=STOP_MENU_BUTTON)]
 
@@ -2228,6 +2254,7 @@ def build_dispatcher(
             ),
             reply_markup=_digital_human_structure_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     async def handle_entry_keyword(message: Message, state: FSMContext) -> bool:
         text = _message_text(message)
@@ -2334,6 +2361,7 @@ def build_dispatcher(
                 await state.update_data(**updates)
             await state.set_state(target)
             await message.answer(text, reply_markup=markup)
+            await _send_step_callback_prompt(message)
             return True
 
         if current_state.endswith("ecommerce_waiting_for_model_version"):
@@ -2496,6 +2524,7 @@ def build_dispatcher(
                 await state.update_data(**updates)
             await state.set_state(target)
             await message.answer(text, reply_markup=markup)
+            await _send_step_callback_prompt(message)
             return True
 
         if current_state.endswith("waiting_for_video_structure"):
@@ -2689,6 +2718,7 @@ def build_dispatcher(
             await message.answer(f"任務計劃已失效，請重新點擊「{DIGITAL_HUMAN_VIDEO_BUTTON}」建立任務。", reply_markup=_menu_keyboard())
             return None
         await message.answer(running_text, reply_markup=_digital_human_step_keyboard())
+        await _send_step_callback_prompt(message)
         chat_id = int(message.chat.id)
         digital_human_internal_steps[chat_id] = {
             "workflow": DIGITAL_HUMAN_VIDEO_BUTTON,
@@ -2700,6 +2730,7 @@ def build_dispatcher(
             result = await _run_internal_digital_human_step(chat_id=chat_id, step=step, params=params)
         except Exception as exc:
             await message.answer(f"這一步生成失敗：{exc}\n可點「重新生成」再試，或返回主菜單重新建立任務。", reply_markup=_digital_human_step_keyboard())
+            await _send_step_callback_prompt(message)
             return None
         finally:
             current = digital_human_internal_steps.get(chat_id)
@@ -2742,6 +2773,7 @@ def build_dispatcher(
             ),
             reply_markup=_digital_human_step_keyboard(include_guided_revision=True),
         )
+        await _send_step_callback_prompt(message)
 
     async def show_digital_human_main_image_step(message: Message, state: FSMContext, *, regenerate: bool = False) -> None:
         result = await run_digital_human_step_and_update(
@@ -2762,6 +2794,7 @@ def build_dispatcher(
             )
         else:
             await message.answer("融合主圖已生成，但本地文件不可讀。請點「重新生成」再試。", reply_markup=_digital_human_step_keyboard())
+        await _send_step_callback_prompt(message)
 
     async def show_digital_human_view_images_step(message: Message, state: FSMContext, *, regenerate: bool = False) -> None:
         data = await state.get_data()
@@ -2773,6 +2806,7 @@ def build_dispatcher(
                 "🌟 步驟 3/5：單段模式無需額外視角圖。\n確認後將提交最終口播視頻生成。",
                 reply_markup=_digital_human_step_keyboard(final=True),
             )
+            await _send_step_callback_prompt(message)
             return
         await state.set_state(UploadFlowForm.waiting_for_digital_human_view_images_confirm)
         result = await run_digital_human_step_and_update(
@@ -2797,6 +2831,7 @@ def build_dispatcher(
                     reply_markup=_digital_human_single_view_regenerate_keyboard(idx),
                 )
         await message.answer("請確認這組視角圖是否可用；如某張不滿意，請點該圖下方的「重新生成視角圖」。", reply_markup=_digital_human_step_keyboard())
+        await _send_step_callback_prompt(message)
 
     async def show_digital_human_final_step(message: Message, state: FSMContext) -> None:
         data = await state.get_data()
@@ -2816,6 +2851,7 @@ def build_dispatcher(
             ),
             reply_markup=_digital_human_step_keyboard(final=True),
         )
+        await _send_step_callback_prompt(message)
 
     def _build_ecommerce_tg_user_instruction(data: dict[str, Any], *, duration: int, structure_label: str) -> str:
         parts = [
@@ -2977,6 +3013,7 @@ def build_dispatcher(
             ]
         )
         await message.answer("\n".join(lines), reply_markup=_ecommerce_subtitle_keyboard())
+        await _send_step_callback_prompt(message)
 
     async def _start_ecommerce_prompt_guided_revision(
         message: Message,
@@ -2994,6 +3031,7 @@ def build_dispatcher(
             "請輸入你希望如何修改广告短视频提示词，例如：开场更抓人、突出材质和使用场景、删除价格信息。",
             reply_markup=_ecommerce_step_keyboard(),
         )
+        await _send_step_callback_prompt(message)
     async def _consume_ecommerce_product_album_buffer(key: str, *, delay_seconds: float = 0.0) -> bool:
         if delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
@@ -3025,6 +3063,7 @@ def build_dispatcher(
                 f"{count_text}已收到。步驟 5/13：請上傳產品介紹相關圖片，例如包裝圖、賣點圖、細節圖、安裝/使用場景圖或參數資料圖。上傳完後點「完成上传，下一步」。",
                 reply_markup=_ecommerce_product_upload_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return True
         if phase == "image_generate_product":
             existing_paths = [
@@ -3041,6 +3080,7 @@ def build_dispatcher(
                 f"已收到 {len(merged_paths)} 張產品圖。可繼續上傳，或點「完成上传，下一步」。",
                 reply_markup=_ecommerce_product_upload_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return True
         three_view_paths = [
             str(item or "").strip()
@@ -3064,6 +3104,7 @@ def build_dispatcher(
             f"已收到 {len(merged_info_paths)} 張產品介紹相關圖片。後續會優先使用產品三視圖，再從介紹圖中提取賣點信息。步驟 6/13：請上傳講解人/模特或背景圖；如果不需要模特/背景參考，請輸入「跳過」。",
             reply_markup=_menu_keyboard(),
         )
+        await _send_step_callback_prompt(message)
         return True
 
     async def _finalize_ecommerce_product_album(key: str) -> None:
@@ -3205,6 +3246,7 @@ def build_dispatcher(
                 ),
                 reply_markup=_ecommerce_animation_redraw_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return
         await _ask_ecommerce_subtitle_choice(message, state, prefix_text=preview_text)
     async def generate_and_show_ecommerce_preview(message: Message, state: FSMContext, *, regenerate: bool = False) -> None:
@@ -3213,6 +3255,7 @@ def build_dispatcher(
         if regenerate:
             params["tg_user_instruction"] = f"{params['tg_user_instruction']} 请换一个表达方式重新生成。"
         await message.answer("正在根据图片内容生成带台词的提示词，请稍等。", reply_markup=_menu_keyboard())
+        await _send_step_callback_prompt(message)
         preview = await _preview_internal_ecommerce_prompt(chat_id=int(message.chat.id), params=params)
         generated = dict(preview.get("params") or {})
         await _show_ecommerce_generated_preview(message, state, generated)
@@ -3234,6 +3277,7 @@ def build_dispatcher(
             ),
             reply_markup=_ecommerce_product_upload_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     async def start_image_generation_menu(message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -3258,6 +3302,7 @@ def build_dispatcher(
             ),
             reply_markup=_image_generation_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     async def start_digital_human_character_flow(message: Message, state: FSMContext) -> None:
         work_dir = service.create_job_dir(prefix="tg_digital_human_character")
@@ -3275,6 +3320,7 @@ def build_dispatcher(
             ),
             reply_markup=_digital_human_character_region_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     async def start_subject_replace_image_flow(message: Message, state: FSMContext) -> None:
         work_dir = service.create_job_dir(prefix="tg_subject_replace")
@@ -3292,6 +3338,7 @@ def build_dispatcher(
             ),
             reply_markup=_image_generation_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     async def start_poster_translate_flow(message: Message, state: FSMContext) -> None:
         work_dir = service.create_job_dir(prefix="tg_poster_translate")
@@ -3309,6 +3356,7 @@ def build_dispatcher(
             ),
             reply_markup=_image_generation_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     async def start_ecommerce_short_video_flow(message: Message, state: FSMContext) -> None:
         work_dir = service.create_job_dir(prefix="tg_ecommerce_short_video")
@@ -3328,6 +3376,7 @@ def build_dispatcher(
             ),
             reply_markup=_ecommerce_model_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     async def start_replace_model_flow(message: Message, state: FSMContext) -> None:
         work_dir = service.create_job_dir(prefix="tg_replace_model")
@@ -3340,6 +3389,7 @@ def build_dispatcher(
             "✨ 建議使用無水印原視頻，源視頻已有水印通常會被保留。",
             reply_markup=_menu_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     async def start_replace_product_flow(message: Message, state: FSMContext) -> None:
         work_dir = service.create_job_dir(prefix="tg_replace_product")
@@ -3347,6 +3397,7 @@ def build_dispatcher(
         await state.set_state(ProductionWorkflowForm.replace_product_waiting_for_video)
         await state.update_data(work_dir=str(work_dir))
         await message.answer("🌟 視頻商品替換\n步驟 1/4：請上傳原視頻。", reply_markup=_menu_keyboard())
+        await _send_step_callback_prompt(message)
 
     async def start_union_flow(message: Message, state: FSMContext) -> None:
         work_dir = service.create_job_dir(prefix="tg_union")
@@ -3354,6 +3405,7 @@ def build_dispatcher(
         await state.set_state(ProductionWorkflowForm.union_waiting_for_video)
         await state.update_data(work_dir=str(work_dir))
         await message.answer("🌟 聯合替換工作流\n步驟 1/5：請上傳原視頻。", reply_markup=_menu_keyboard())
+        await _send_step_callback_prompt(message)
 
     async def _account_status_payload(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
         member = _load_bound_member(chat_id)
@@ -3669,6 +3721,45 @@ def build_dispatcher(
                 await state.clear()
                 await message.edit_text("已返回视频工作台主菜单。")
                 await message.answer("请选择总控功能。", reply_markup=_menu_keyboard())
+            elif action in {"step_menu", "step_cancel"}:
+                # These controls are deliberately available even when the
+                # current VECTO session has expired: they only clear the
+                # local wizard and never cancel an already submitted task.
+                _clear_video_login(chat_id)
+                await state.clear()
+                notice = "已取消当前步骤。" if action == "step_cancel" else "已返回视频工作台主菜单。"
+                await message.edit_text(notice)
+                await message.answer("请选择总控功能。", reply_markup=_menu_keyboard())
+            elif action == "step_status":
+                # CallbackQuery.message is authored by the Bot, so its
+                # ``from_user`` is not the Telegram actor.  Calling
+                # ensure_authorized(message) here would therefore remember
+                # the Bot profile and reject an otherwise valid user.  Read
+                # the bound member directly, just like the account payload.
+                bound_member = _load_bound_member(chat_id)
+                web_user_id = int(_member_value(bound_member, "web_user_id", 0) or 0)
+                active = bool(web_user_id and service.is_chat_authorized(chat_id))
+                if active and has_active_web_session is not None:
+                    try:
+                        active = bool(has_active_web_session(bound_member))
+                    except Exception:
+                        active = False
+                if not active:
+                    await message.edit_text(
+                        "请先在“账号管理”中登录 VECTO 网页账号，登录后才能查看视频工作台状态。",
+                        reply_markup=_account_management_keyboard(),
+                    )
+                    return
+                current_fsm_state = str(await state.get_state() or "").strip()
+                step_suffix = current_fsm_state.rsplit(".", 1)[-1] if current_fsm_state else "未进入输入步骤"
+                await message.edit_text(
+                    _webapp_status_text(
+                        service,
+                        chat_id=chat_id,
+                        internal_step=digital_human_internal_steps.get(chat_id),
+                    ) + f"\n\n当前 Telegram 步骤：{step_suffix}",
+                    reply_markup=_step_callback_markup(include_status=False),
+                )
             elif action == "accountmenu":
                 _clear_video_login(chat_id)
                 await state.clear()
@@ -3826,6 +3917,7 @@ def build_dispatcher(
         await state.clear()
         await state.set_state(ScriptForm.waiting_for_script)
         await message.answer("請直接貼上你想作為預設的文案內容。", reply_markup=_menu_keyboard())
+        await _send_step_callback_prompt(message)
 
     @router.message(Command("cancel"))
     async def cmd_cancel(message: Message, state: FSMContext) -> None:
@@ -3898,6 +3990,7 @@ def build_dispatcher(
             else "已選擇多分鏡口播視頻。步驟 2/8：請上傳 1-4 張產品圖；系統會自動識別主圖和副圖。上傳完後點「完成上传，下一步」。",
             reply_markup=_digital_human_product_upload_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(UploadFlowForm.waiting_for_product_image)
     async def on_upload_product_image(message: Message, state: FSMContext) -> None:
@@ -3934,6 +4027,7 @@ def build_dispatcher(
                 f"已完成產品圖上傳，共 {len(product_paths)} 張。{suffix}步驟 3/8：請上傳模特圖 / 數字人形象圖。",
                 reply_markup=_digital_human_nav_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return
         suffix = _image_ext_from_message(message)
         if suffix is None:
@@ -3989,6 +4083,7 @@ def build_dispatcher(
         suffix = _image_ext_from_message(message)
         if suffix is None:
             await message.answer("請上傳模特圖 / 數字人形象圖，或把圖片當成 document 傳送。", reply_markup=_digital_human_nav_keyboard())
+            await _send_step_callback_prompt(message)
             return
         data = await state.get_data()
         work_dir = Path(str(data["work_dir"]))
@@ -4006,6 +4101,7 @@ def build_dispatcher(
             ),
             reply_markup=_digital_human_scene_upload_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(UploadFlowForm.waiting_for_scene_images)
     async def on_upload_scene_images(message: Message, state: FSMContext) -> None:
@@ -4035,6 +4131,7 @@ def build_dispatcher(
                     "已跳過場景圖。步驟 5/8：請選擇目標地區語言。",
                     reply_markup=_target_language_keyboard(),
                 )
+            await _send_step_callback_prompt(message)
             return
         if len(scene_paths) >= 3:
             await message.answer("最多只能上傳 3 張場景圖。請點「完成上传，下一步」繼續。", reply_markup=_digital_human_scene_upload_keyboard())
@@ -4100,6 +4197,7 @@ def build_dispatcher(
             f"已選擇目標語言：{language_label}。步驟 6/8：請選擇口播文稿來源。",
             reply_markup=_digital_human_script_mode_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(UploadFlowForm.waiting_for_script_mode)
     async def on_upload_script_mode(message: Message, state: FSMContext) -> None:
@@ -4119,6 +4217,7 @@ def build_dispatcher(
                 "已選擇 AI 根據圖片生成口播文稿。步驟 7/8：請選擇圖像比例，圖像按 2K 質感生成。",
                 reply_markup=_ecommerce_ratio_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return
         if text != DIGITAL_HUMAN_MANUAL_SCRIPT_BUTTON:
             await message.answer("請直接點擊文稿來源按鈕。", reply_markup=_digital_human_script_mode_keyboard())
@@ -4126,6 +4225,7 @@ def build_dispatcher(
         await state.update_data(use_ai_script=False)
         await state.set_state(UploadFlowForm.waiting_for_script)
         await message.answer("請貼上這次的口播文稿。", reply_markup=_digital_human_nav_keyboard())
+        await _send_step_callback_prompt(message)
 
     @router.message(UploadFlowForm.waiting_for_script)
     async def on_upload_script(message: Message, state: FSMContext) -> None:
@@ -4149,6 +4249,7 @@ def build_dispatcher(
             "口播文稿已收到。步驟 7/8：請選擇圖像比例，圖像按 2K 質感生成。",
             reply_markup=_ecommerce_ratio_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(UploadFlowForm.waiting_for_ratio)
     async def on_upload_ratio(message: Message, state: FSMContext) -> None:
@@ -4179,6 +4280,7 @@ def build_dispatcher(
             f"已選擇 {ratio_value}，圖像按 2K 質感生成。步驟 8/8：請上傳需要克隆的參考音頻，或選擇預設音色。",
             reply_markup=_preset_dry_voice_keyboard(target_language=target_language),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(UploadFlowForm.waiting_for_audio)
     async def on_upload_audio(message: Message, state: FSMContext) -> None:
@@ -4349,6 +4451,7 @@ def build_dispatcher(
                 "請輸入你希望如何修改文稿，例如：更口語、突出材質與使用場景、控制在 30 秒內。",
                 reply_markup=_digital_human_nav_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return
         if text == DIGITAL_HUMAN_REGENERATE_BUTTON:
             data = await state.get_data()
@@ -4358,6 +4461,7 @@ def build_dispatcher(
             else:
                 await state.set_state(UploadFlowForm.waiting_for_digital_human_script_revision)
                 await message.answer("請重新貼上口播文稿。", reply_markup=_digital_human_nav_keyboard())
+                await _send_step_callback_prompt(message)
             return
         if text != DIGITAL_HUMAN_NEXT_BUTTON:
             await message.answer("請點「確認下一步」或「重新生成」。", reply_markup=_digital_human_step_keyboard(include_guided_revision=True))
@@ -4388,6 +4492,7 @@ def build_dispatcher(
             "\n".join(["🌟 步驟 1/5：口播文稿已更新", "", script, "", "確認後才會進入圖像融合。"]),
             reply_markup=_digital_human_step_keyboard(include_guided_revision=True),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(UploadFlowForm.waiting_for_digital_human_script_guided_revision)
     async def on_digital_human_script_guided_revision(message: Message, state: FSMContext) -> None:
@@ -4429,6 +4534,7 @@ def build_dispatcher(
             "正在根據你的要求修改口播文稿，請稍候。",
             reply_markup=_digital_human_nav_keyboard(),
         )
+        await _send_step_callback_prompt(message)
         try:
             result = await _run_internal_digital_human_step(
                 chat_id=int(message.chat.id),
@@ -4474,6 +4580,7 @@ def build_dispatcher(
             ),
             reply_markup=_digital_human_step_keyboard(include_guided_revision=True),
         )
+        await _send_step_callback_prompt(message)
     @router.message(UploadFlowForm.waiting_for_digital_human_main_image_confirm)
     async def on_digital_human_main_image_confirm(message: Message, state: FSMContext) -> None:
         if await handle_entry_keyword(message, state):
@@ -4643,6 +4750,7 @@ def build_dispatcher(
             ),
             reply_markup=_ecommerce_ad_style_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_ad_style)
     async def on_ecommerce_ad_style(message: Message, state: FSMContext) -> None:
@@ -4674,6 +4782,7 @@ def build_dispatcher(
             ),
             reply_markup=_target_language_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_target_language)
     async def on_ecommerce_target_language(message: Message, state: FSMContext) -> None:
@@ -4704,6 +4813,7 @@ def build_dispatcher(
             ),
             reply_markup=_ecommerce_product_upload_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_product_three_view_image)
     async def on_ecommerce_product_three_view_image(message: Message, state: FSMContext) -> None:
@@ -4738,6 +4848,7 @@ def build_dispatcher(
                 f"已收到 {len(existing_paths)} 張產品三視圖/主體圖。步驟 5/13：請上傳產品介紹相關圖片，例如包裝圖、賣點圖、細節圖、安裝/使用場景圖或參數資料圖；如果沒有介紹圖，可輸入「跳過」。",
                 reply_markup=_ecommerce_product_upload_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return
         suffix = _image_ext_from_message(message)
         if suffix is None:
@@ -4773,6 +4884,7 @@ def build_dispatcher(
             f"產品主圖已收到。步驟 5/13：請上傳產品介紹相關圖片，例如包裝圖、賣點圖、細節圖、安裝/使用場景圖或參數資料圖；如果沒有介紹圖，可輸入「跳過」。",
             reply_markup=_ecommerce_product_upload_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_product_info_image)
     async def on_ecommerce_product_info_image(message: Message, state: FSMContext) -> None:
@@ -4816,6 +4928,7 @@ def build_dispatcher(
                 f"{info_text} 後續會優先使用產品三視圖，再從介紹圖中提取賣點信息。步驟 6/13：請上傳講解人/模特或背景圖；如果不需要模特/背景參考，請輸入「跳過」。",
                 reply_markup=_ecommerce_step_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return
         suffix = _image_ext_from_message(message)
         if suffix is None:
@@ -4909,6 +5022,7 @@ def build_dispatcher(
             ),
             reply_markup=_preset_dry_voice_keyboard(include_skip=True, target_language=target_language),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_voice_audio)
     async def on_ecommerce_voice_audio(message: Message, state: FSMContext) -> None:
@@ -4946,6 +5060,7 @@ def build_dispatcher(
                 ),
                 reply_markup=_ecommerce_structure_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return
         preset = _elevenlabs_voice_preset_by_button(text, target_language)
         if preset:
@@ -4983,6 +5098,7 @@ def build_dispatcher(
                 ),
                 reply_markup=_ecommerce_structure_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return
         suffix = _audio_ext_from_message(message)
         if suffix is None:
@@ -5011,6 +5127,7 @@ def build_dispatcher(
             ),
             reply_markup=_ecommerce_structure_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_video_structure)
     async def on_ecommerce_video_structure(message: Message, state: FSMContext) -> None:
@@ -5041,6 +5158,7 @@ def build_dispatcher(
             f"已選擇：{label}。\n步驟 9/13：請選擇視頻比例。",
             reply_markup=_ecommerce_ratio_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_ratio)
     async def on_ecommerce_ratio(message: Message, state: FSMContext) -> None:
@@ -5063,6 +5181,7 @@ def build_dispatcher(
             f"已選擇比例：{text}。\n步驟 10/13：請選擇分辨率。",
             reply_markup=_ecommerce_resolution_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_resolution)
     async def on_ecommerce_resolution(message: Message, state: FSMContext) -> None:
@@ -5085,6 +5204,7 @@ def build_dispatcher(
             f"已選擇分辨率：{resolution}。\n步驟 11/13：請輸入視頻總時長，只能輸入 4 到 120 之間的數字；超過 15 秒會自動分段生成並拼接。",
             reply_markup=_ecommerce_step_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_duration)
     async def on_ecommerce_duration(message: Message, state: FSMContext) -> None:
@@ -5108,6 +5228,7 @@ def build_dispatcher(
             "步驟 12/13：可以輸入一段提示詞或文案，AI 會在此基礎上優化。\n如果不想輸入，請點擊或輸入「跳過」，由 AI 根據圖片自動生成。",
             reply_markup=_ecommerce_step_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_user_prompt)
     async def on_ecommerce_user_prompt(message: Message, state: FSMContext) -> None:
@@ -5172,6 +5293,7 @@ def build_dispatcher(
             "正在根據你的要求修改廣告短視頻提示詞，請稍候。",
             reply_markup=_ecommerce_step_keyboard(),
         )
+        await _send_step_callback_prompt(message)
         try:
             preview = await _preview_internal_ecommerce_prompt(
                 chat_id=int(message.chat.id),
@@ -5242,6 +5364,7 @@ def build_dispatcher(
             await message.answer("請點擊「确认转绘」或「不转绘继续」。", reply_markup=_ecommerce_animation_redraw_keyboard())
             return
         await message.answer("正在转绘动画广告参考图，请稍候。", reply_markup=_ecommerce_animation_redraw_keyboard())
+        await _send_step_callback_prompt(message)
         try:
             result = await _run_internal_ecommerce_animation_redraw(chat_id=int(message.chat.id), params=params)
         except Exception as exc:
@@ -5301,6 +5424,7 @@ def build_dispatcher(
             f"字幕设置：{'添加字幕' if add_subtitles else '不添加字幕'}。\n确认无误后点击「确认生成」。如不满意，可点击「重新生成提示词」。",
             reply_markup=_ecommerce_confirm_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.ecommerce_waiting_for_confirm)
     async def on_ecommerce_confirm(message: Message, state: FSMContext) -> None:
@@ -5372,6 +5496,7 @@ def build_dispatcher(
                 f"已收到 {len(existing_paths)} 張產品圖。步驟 2/4：請上傳模特圖、背景圖或品牌參考圖；不需要可點「跳过」。",
                 reply_markup=_image_generate_model_upload_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return
         suffix = _image_ext_from_message(message)
         if suffix is None:
@@ -5402,6 +5527,7 @@ def build_dispatcher(
             f"已收到第 {len(product_paths)} 張產品圖。可繼續上傳，或點「完成上传，下一步」。",
             reply_markup=_ecommerce_product_upload_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.image_waiting_for_model_image)
     async def on_image_generate_model_image(message: Message, state: FSMContext) -> None:
@@ -5419,6 +5545,7 @@ def build_dispatcher(
                 "已跳過模特/背景參考圖。步驟 3/4：請選擇圖片比例（16:9 / 4:3 / 1:1 / 3:4 / 9:16）。",
                 reply_markup=_image_edit_size_keyboard(),
             )
+            await _send_step_callback_prompt(message)
             return
         suffix = _image_ext_from_message(message)
         if suffix is None:
@@ -5434,6 +5561,7 @@ def build_dispatcher(
             "模特圖/背景圖已收到。步驟 3/4：請選擇圖片比例（16:9 / 4:3 / 1:1 / 3:4 / 9:16）。",
             reply_markup=_image_edit_size_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.image_waiting_for_size)
     async def on_image_generate_size(message: Message, state: FSMContext) -> None:
@@ -5457,6 +5585,7 @@ def build_dispatcher(
             f"已選擇圖片比例：{image_size}。\n步驟 4/4：請輸入電商海報提示詞；如果需要 AI 自動生成海報文案和版式，請輸入「跳過」。",
             reply_markup=_menu_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.image_waiting_for_prompt)
     async def on_image_generate_prompt(message: Message, state: FSMContext) -> None:
@@ -5526,6 +5655,7 @@ def build_dispatcher(
             "海报图已收到。步骤 2/2：请选择目标市场语言。",
             reply_markup=_target_language_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.poster_translate_waiting_for_target_language)
     async def on_poster_translate_target_language(message: Message, state: FSMContext) -> None:
@@ -5628,6 +5758,8 @@ def build_dispatcher(
             reply_markup=_image_generation_keyboard(),
         )
 
+        await _send_step_callback_prompt(message)
+
     @router.message(ProductionWorkflowForm.digital_human_character_waiting_for_prompt)
     async def on_digital_human_character_prompt(message: Message, state: FSMContext) -> None:
         if await handle_entry_keyword(message, state):
@@ -5690,6 +5822,7 @@ def build_dispatcher(
             "原圖已收到。步驟 2/2：請上傳用來替換的圖片，可以是商品，也可以是模特/人物。",
             reply_markup=_image_generation_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.subject_replace_waiting_for_replacement_image)
     async def on_subject_replace_replacement_image(message: Message, state: FSMContext) -> None:
@@ -5753,6 +5886,7 @@ def build_dispatcher(
             "步驟 2/3：原視頻已收到。\n請上傳人像/模特圖片，系統會把視頻中的人物替換成這張圖的人物。",
             reply_markup=_menu_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.replace_model_waiting_for_image)
     async def on_replace_model_image(message: Message, state: FSMContext) -> None:
@@ -5835,6 +5969,7 @@ def build_dispatcher(
             "步驟 2/4：原視頻已收到。\n請上傳商品圖片，系統會把視頻中的商品替換成這張圖的商品。",
             reply_markup=_menu_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.replace_product_waiting_for_image)
     async def on_replace_product_image(message: Message, state: FSMContext) -> None:
@@ -5855,6 +5990,7 @@ def build_dispatcher(
         await state.update_data(image_local_path=str(image_path))
         await state.set_state(ProductionWorkflowForm.replace_product_waiting_for_name)
         await message.answer("步驟 3/4：商品圖已收到。請輸入商品名稱；若使用默認名稱，輸入「跳過」。", reply_markup=_menu_keyboard())
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.replace_product_waiting_for_name)
     async def on_replace_product_name(message: Message, state: FSMContext) -> None:
@@ -5873,6 +6009,7 @@ def build_dispatcher(
             "步驟 4/4：商品名稱已收到。提示詞將由後台文字模型自動生成，請輸入視頻秒數；若使用默認 15 秒，輸入「跳過」。",
             reply_markup=_menu_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.replace_product_waiting_for_duration)
     async def on_replace_product_duration(message: Message, state: FSMContext) -> None:
@@ -5931,6 +6068,7 @@ def build_dispatcher(
             "步驟 2/5：原視頻已收到。\n請先上傳人像/模特圖片，系統會先替換視頻中的人物。",
             reply_markup=_menu_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.union_waiting_for_model_image)
     async def on_union_model_image(message: Message, state: FSMContext) -> None:
@@ -5954,6 +6092,7 @@ def build_dispatcher(
             "步驟 3/5：人像/模特圖已收到。\n請上傳商品圖片，系統會再替換視頻中的商品。",
             reply_markup=_menu_keyboard(),
         )
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.union_waiting_for_product_image)
     async def on_union_product_image(message: Message, state: FSMContext) -> None:
@@ -5974,6 +6113,7 @@ def build_dispatcher(
         await state.update_data(product_image_local_path=str(image_path))
         await state.set_state(ProductionWorkflowForm.union_waiting_for_name)
         await message.answer("步驟 4/5：商品圖已收到。請輸入商品名稱；若使用默認名稱，輸入「跳過」。", reply_markup=_menu_keyboard())
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.union_waiting_for_name)
     async def on_union_name(message: Message, state: FSMContext) -> None:
@@ -5989,6 +6129,7 @@ def build_dispatcher(
         await state.update_data(product_name=name or "商品")
         await state.set_state(ProductionWorkflowForm.union_waiting_for_duration)
         await message.answer("步驟 5/5：請輸入視頻秒數；若使用默認 15 秒，輸入「跳過」。", reply_markup=_menu_keyboard())
+        await _send_step_callback_prompt(message)
 
     @router.message(ProductionWorkflowForm.union_waiting_for_duration)
     async def on_union_duration(message: Message, state: FSMContext) -> None:

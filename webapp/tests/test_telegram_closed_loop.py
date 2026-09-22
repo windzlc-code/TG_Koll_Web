@@ -328,6 +328,39 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertIn("已取消视频工作台登录", message.edits[-1][0])
         self.assertIn("账号管理", message.edits[-1][0])
 
+    def test_video_input_step_has_inline_escape_hatch_and_status(self):
+        service = SimpleNamespace(
+            is_chat_authorized=lambda _chat_id: True,
+            get_status_text=lambda **_kwargs: "当前没有后台任务。",
+        )
+        dispatcher = tg_bot.build_dispatcher(
+            SimpleNamespace(),
+            service,
+            load_member=lambda _chat_id: {
+                "chat_id": 6258005891,
+                "web_user_id": 42,
+                "web_username": "alice",
+                "enabled": 1,
+            },
+            has_active_web_session=lambda _member: True,
+        )
+        callback = _video_callback_route(dispatcher, "video_account_callback")
+        state = _VideoFlowState()
+        message = _VideoReplyMessage()
+        asyncio.run(callback(_VideoCallbackQuery(message, "tv:step_status"), state))
+        self.assertIn("当前 Telegram 步骤", message.edits[-1][0])
+        status_markup = message.edits[-1][1]["reply_markup"]
+        self.assertIn(
+            "tv:step_menu",
+            {
+                str(button.callback_data)
+                for row in status_markup.inline_keyboard
+                for button in row
+            },
+        )
+        asyncio.run(callback(_VideoCallbackQuery(message, "tv:step_cancel"), state))
+        self.assertIn("已取消当前步骤", message.edits[-1][0])
+
     def test_account_and_main_menu_return_are_available_before_login(self):
         dispatcher = tg_bot.build_dispatcher(
             SimpleNamespace(),

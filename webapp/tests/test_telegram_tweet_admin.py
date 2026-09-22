@@ -1856,6 +1856,26 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(created[0]["copy_source"]["platform"], "threads")
         self.assertEqual(created[0]["setup"]["personaGender"], "female")
 
+    def test_text_input_steps_expose_inline_cancel_and_cancel_without_reauth(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:persona_ai_new", message), _Types))
+        prompt_markup = message.edits[-1][1]["reply_markup"]
+        prompt_callbacks = {
+            str(button.callback_data)
+            for row in prompt_markup.inline_keyboard
+            for button in row
+        }
+        self.assertIn("tt:personamanage", prompt_callbacks)
+        self.assertIn("tt:stepcancel", prompt_callbacks)
+        asyncio.run(controller.handle_callback(_Query("tt:stepcancel", message), _Types))
+        self.assertIn("已取消当前步骤", message.edits[-1][0])
+        self.assertEqual(load_state(101)["mode"], "")
+
     def test_persona_ai_keyword_selection_matches_web_limits_and_creates(self):
         calls = []
 
