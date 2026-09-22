@@ -3739,7 +3739,7 @@ class NativeTweetBotController:
                     text="进入人设图设置",
                     callback_data=callback_token(chat_id, "personaimage", {"persona_id": new_id, "page": 0}),
                 ),
-                types.InlineKeyboardButton(text="基础资料", callback_data=callback_token(chat_id, "p", {"persona_id": new_id})),
+                types.InlineKeyboardButton(text="基础资料", callback_data="tt:profile"),
             ]]),
         )
         return new_id
@@ -7487,6 +7487,56 @@ class NativeTweetBotController:
         if state["mode"] not in {"media_upload", "media_replace", "persona_image_upload"}:
             await message.answer("请先从草稿详情或人设图设置选择上传入口。", reply_markup=self._main_keyboard(types))
             return
+        state_payload = state["payload"] if isinstance(state.get("payload"), dict) else {}
+
+        def media_input_navigation_markup() -> Any:
+            """Keep invalid media replies inside the current wizard.
+
+            Telegram users may send an unsupported or oversized file before we
+            can download it.  The pending state is intentionally retained so
+            they can retry, but the error message must still expose the same
+            detail/menu/cancel exits as a successful upload step.
+            """
+            button = types.InlineKeyboardButton
+            rows: list[list[Any]] = []
+            if state["mode"] == "persona_image_upload":
+                persona_id = str(state.get("selected_persona_id") or "").strip()
+                if persona_id:
+                    try:
+                        page = max(0, int(state_payload.get("page") or 0))
+                    except (TypeError, ValueError):
+                        page = 0
+                    rows.append([button(
+                        text="返回人设图设置",
+                        callback_data=callback_token(chat_id, "personaimage", {
+                            "persona_id": persona_id,
+                            "page": page,
+                        }),
+                    )])
+            else:
+                source = "favorites" if str(state_payload.get("source")) == "favorites" else "posts"
+                post_id = str(state_payload.get("post_id") or "").strip()
+                if post_id:
+                    try:
+                        page = max(0, int(state_payload.get("page") or 0))
+                    except (TypeError, ValueError):
+                        page = 0
+                    rows.append([button(
+                        text="返回推文详情",
+                        callback_data=callback_token(chat_id, "f" if source == "favorites" else "d", {
+                            "persona_id": str(state.get("selected_persona_id") or ""),
+                            "post_id": post_id,
+                            "source": source,
+                            "page": page,
+                            "intent": str(state_payload.get("intent") or ""),
+                        }),
+                    )])
+            rows.append([
+                button(text="返回总控菜单", callback_data="tt:menu"),
+                button(text="取消当前步骤", callback_data="tt:stepcancel"),
+            ])
+            return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
         media = None
         filename = "telegram-media"
         mime_type = "application/octet-stream"
@@ -7503,24 +7553,36 @@ class NativeTweetBotController:
             filename = str(message.document.file_name or f"telegram-{message.document.file_unique_id}")
             mime_type = str(message.document.mime_type or mime_type)
         if media is None:
-            await message.answer("未识别到支持的媒体。")
+            await message.answer(
+                "未识别到支持的媒体，请重新发送文件，或选择下方操作。",
+                reply_markup=media_input_navigation_markup(),
+            )
             return
         if int(getattr(media, "file_size", 0) or 0) > MAX_TELEGRAM_MEDIA_BYTES:
-            await message.answer("文件超过 Telegram Bot 20MB 下载限制。")
+            await message.answer(
+                "文件超过 Telegram Bot 20MB 下载限制，请压缩后重试，或选择下方操作。",
+                reply_markup=media_input_navigation_markup(),
+            )
             return
         canonical_suffix = SUPPORTED_MEDIA_MIME_SUFFIXES.get(mime_type.lower())
         if not canonical_suffix:
-            await message.answer("仅支持 JPG、PNG、WebP、GIF、MP4、MOV 或 WebM 媒体。")
+            await message.answer(
+                "仅支持 JPG、PNG、WebP、GIF、MP4、MOV 或 WebM 媒体，请重新发送，或选择下方操作。",
+                reply_markup=media_input_navigation_markup(),
+            )
             return
         filename = f"{filename.rsplit('.', 1)[0]}{canonical_suffix}"
         try:
             target = BytesIO()
             await message.bot.download(media, destination=target)
             content = target.getvalue()
-            payload = state["payload"]
+            payload = state_payload
             if state["mode"] == "persona_image_upload":
                 if not mime_type.lower().startswith("image/"):
-                    await message.answer("人设图只支持 JPG、PNG、WebP 或 GIF 图片。")
+                    await message.answer(
+                        "人设图只支持 JPG、PNG、WebP 或 GIF 图片，请重新发送，或选择下方操作。",
+                        reply_markup=media_input_navigation_markup(),
+                    )
                     return
                 result = await self._call_async(user_id, "persona_image.upload", {
                     "persona_id": state["selected_persona_id"],

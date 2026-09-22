@@ -386,6 +386,12 @@ def _load_webapp_tg_status(chat_id: int) -> dict[str, Any] | None:
                     }
                 )
         return {"tasks": tasks, "counts": counts, "latest": latest, "active": active, "events": events}
+    except sqlite3.Error:
+        # A local/legacy data directory may exist without the current task
+        # schema.  Status is informational; let the caller fall back to the
+        # service status text instead of breaking the callback flow.
+        logger.warning("Unable to read Telegram task status database", exc_info=True)
+        return None
     finally:
         conn.close()
 
@@ -1437,7 +1443,7 @@ def _image_edit_size_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="16:9"), KeyboardButton(text="4:3"), KeyboardButton(text="1:1")],
             [KeyboardButton(text="3:4"), KeyboardButton(text="9:16")],
-            _navigation_keyboard_row(),
+            _navigation_keyboard_row(include_back=True),
             _task_control_keyboard_row(),
         ],
         resize_keyboard=True,
@@ -2654,6 +2660,177 @@ def build_dispatcher(
             )
 
         await message.answer("當前步驟暫不支持返回上一步。", reply_markup=_menu_keyboard())
+        return True
+
+    async def handle_image_generation_back_request(message: Message, state: FSMContext) -> bool:
+        """Handle the text back button for image/replacement workflows.
+
+        These workflows historically reused the image/menu keyboards but did
+        not have a state-aware back dispatcher.  Consequently a visible
+        ``返回上一步`` button was treated as an invalid upload or prompt.  Keep
+        the existing reply keyboards and only add the missing state transitions
+        here; the inline step navigation remains available as a separate
+        escape hatch.
+        """
+        if _message_text(message) != BACK_STEP_BUTTON:
+            return False
+        current_state = str(await state.get_state() or "")
+
+        async def go(
+            target: State,
+            text: str,
+            markup: ReplyKeyboardMarkup,
+            updates: dict[str, Any] | None = None,
+        ) -> bool:
+            if updates:
+                await state.update_data(**updates)
+            await state.set_state(target)
+            await message.answer(text, reply_markup=markup)
+            await _send_step_callback_prompt(message)
+            return True
+
+        if current_state.endswith("image_waiting_for_product_image"):
+            await state.clear()
+            await message.answer("已返回图片生成菜单。", reply_markup=_image_generation_keyboard())
+            return True
+        if current_state.endswith("image_waiting_for_model_image"):
+            return await go(
+                ProductionWorkflowForm.image_waiting_for_product_image,
+                "已返回上一步。步驟 1/4：请重新上传商品图；上传完后点击「完成上传，下一步」。",
+                _ecommerce_product_upload_keyboard(),
+                {
+                    "model_image_local_path": "",
+                    "ecommerce_model_reference_skipped": False,
+                },
+            )
+        if current_state.endswith("image_waiting_for_size"):
+            return await go(
+                ProductionWorkflowForm.image_waiting_for_model_image,
+                "已返回上一步。步驟 2/4：请重新上传模特图、背景图或品牌参考图；不需要可点击「跳过」。",
+                _image_generate_model_upload_keyboard(),
+                {"image_size": ""},
+            )
+        if current_state.endswith("image_waiting_for_prompt"):
+            return await go(
+                ProductionWorkflowForm.image_waiting_for_size,
+                "已返回上一步。步驟 3/4：请选择图片比例（16:9 / 4:3 / 1:1 / 3:4 / 9:16）。",
+                _image_edit_size_keyboard(),
+                {"image_size": ""},
+            )
+        if current_state.endswith("poster_translate_waiting_for_image"):
+            await state.clear()
+            await message.answer("已返回图片生成菜单。", reply_markup=_image_generation_keyboard())
+            return True
+        if current_state.endswith("poster_translate_waiting_for_target_language"):
+            return await go(
+                ProductionWorkflowForm.poster_translate_waiting_for_image,
+                "已返回上一步。步骤 1/2：请上传原始电商海报图。",
+                _image_generation_keyboard(),
+                {"poster_translate_image_local_path": "", "target_language": "", "language": ""},
+            )
+        if current_state.endswith("image_three_view_waiting_for_image"):
+            await state.clear()
+            await message.answer("已返回图片生成菜单。", reply_markup=_image_generation_keyboard())
+            return True
+        if current_state.endswith("digital_human_character_waiting_for_region"):
+            await state.clear()
+            await message.answer("已返回图片生成菜单。", reply_markup=_image_generation_keyboard())
+            return True
+        if current_state.endswith("digital_human_character_waiting_for_prompt"):
+            return await go(
+                ProductionWorkflowForm.digital_human_character_waiting_for_region,
+                "已返回上一步。步骤 1/2：请选择人设地区特征。",
+                _digital_human_character_region_keyboard(),
+                {"digital_human_character_prompt": ""},
+            )
+        if current_state.endswith("subject_replace_waiting_for_source_image"):
+            await state.clear()
+            await message.answer("已返回图片生成菜单。", reply_markup=_image_generation_keyboard())
+            return True
+        if current_state.endswith("subject_replace_waiting_for_replacement_image"):
+            return await go(
+                ProductionWorkflowForm.subject_replace_waiting_for_source_image,
+                "已返回上一步。步骤 1/2：请重新上传需要被替换的原图。",
+                _image_generation_keyboard(),
+                {"subject_replace_source_image_local_path": ""},
+            )
+        if current_state.endswith("replace_model_waiting_for_video"):
+            await state.clear()
+            await message.answer("已返回视频编辑菜单。", reply_markup=_video_edit_keyboard())
+            return True
+        if current_state.endswith("replace_model_waiting_for_image"):
+            return await go(
+                ProductionWorkflowForm.replace_model_waiting_for_video,
+                "已返回上一步。步骤 1/3：请重新上传原视频。",
+                _menu_keyboard(),
+                {"video_local_path": "", "image_local_path": ""},
+            )
+        if current_state.endswith("replace_model_waiting_for_duration"):
+            # This state is retained only as a migration guard for an old
+            # in-memory wizard.  The current flow submits immediately after
+            # the model image and never enters it.
+            await state.clear()
+            await message.answer("旧版模特替换步骤已结束，请从视频编辑重新开始。", reply_markup=_video_edit_keyboard())
+            return True
+        if current_state.endswith("replace_product_waiting_for_video"):
+            await state.clear()
+            await message.answer("已返回视频编辑菜单。", reply_markup=_video_edit_keyboard())
+            return True
+        if current_state.endswith("replace_product_waiting_for_image"):
+            return await go(
+                ProductionWorkflowForm.replace_product_waiting_for_video,
+                "已返回上一步。步骤 1/4：请重新上传原视频。",
+                _menu_keyboard(),
+                {"video_local_path": "", "image_local_path": ""},
+            )
+        if current_state.endswith("replace_product_waiting_for_name"):
+            return await go(
+                ProductionWorkflowForm.replace_product_waiting_for_image,
+                "已返回上一步。步骤 2/4：请重新上传商品图片。",
+                _menu_keyboard(),
+                {"image_local_path": "", "product_name": "", "prompt_text": ""},
+            )
+        if current_state.endswith("replace_product_waiting_for_duration"):
+            return await go(
+                ProductionWorkflowForm.replace_product_waiting_for_name,
+                "已返回上一步。步骤 3/4：请输入商品名称；使用默认名称可输入「跳过」。",
+                _menu_keyboard(),
+                {"product_name": "", "prompt_text": ""},
+            )
+        if current_state.endswith("union_waiting_for_video"):
+            await state.clear()
+            await message.answer("已返回视频编辑菜单。", reply_markup=_video_edit_keyboard())
+            return True
+        if current_state.endswith("union_waiting_for_model_image"):
+            return await go(
+                ProductionWorkflowForm.union_waiting_for_video,
+                "已返回上一步。步骤 1/5：请重新上传原视频。",
+                _menu_keyboard(),
+                {"video_local_path": "", "model_image_local_path": ""},
+            )
+        if current_state.endswith("union_waiting_for_product_image"):
+            return await go(
+                ProductionWorkflowForm.union_waiting_for_model_image,
+                "已返回上一步。步骤 2/5：请重新上传人像/模特图片。",
+                _menu_keyboard(),
+                {"model_image_local_path": "", "product_image_local_path": ""},
+            )
+        if current_state.endswith("union_waiting_for_name"):
+            return await go(
+                ProductionWorkflowForm.union_waiting_for_product_image,
+                "已返回上一步。步骤 3/5：请重新上传商品图片。",
+                _menu_keyboard(),
+                {"product_image_local_path": "", "product_name": ""},
+            )
+        if current_state.endswith("union_waiting_for_duration"):
+            return await go(
+                ProductionWorkflowForm.union_waiting_for_name,
+                "已返回上一步。步骤 4/5：请输入商品名称；使用默认名称可输入「跳过」。",
+                _menu_keyboard(),
+                {"product_name": ""},
+            )
+
+        await message.answer("当前步骤暂不支持返回上一步。", reply_markup=_menu_keyboard())
         return True
 
     async def enqueue_request(
@@ -5470,6 +5647,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         data = await state.get_data()
@@ -5535,6 +5714,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         text = _message_text(message)
@@ -5569,6 +5750,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         size_text = _message_text(message)
@@ -5583,7 +5766,7 @@ def build_dispatcher(
         await state.set_state(ProductionWorkflowForm.image_waiting_for_prompt)
         await message.answer(
             f"已選擇圖片比例：{image_size}。\n步驟 4/4：請輸入電商海報提示詞；如果需要 AI 自動生成海報文案和版式，請輸入「跳過」。",
-            reply_markup=_menu_keyboard(),
+            reply_markup=_ecommerce_step_keyboard(),
         )
         await _send_step_callback_prompt(message)
 
@@ -5592,6 +5775,8 @@ def build_dispatcher(
         if await handle_entry_keyword(message, state):
             return
         if await handle_stop_request(message, state):
+            return
+        if await handle_image_generation_back_request(message, state):
             return
         if not await ensure_authorized(message):
             return
@@ -5639,6 +5824,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         suffix = _image_ext_from_message(message)
@@ -5662,6 +5849,8 @@ def build_dispatcher(
         if await handle_entry_keyword(message, state):
             return
         if await handle_stop_request(message, state):
+            return
+        if await handle_image_generation_back_request(message, state):
             return
         if not await ensure_authorized(message):
             return
@@ -5704,6 +5893,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         suffix = _image_ext_from_message(message)
@@ -5738,6 +5929,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         text = _message_text(message)
@@ -5765,6 +5958,8 @@ def build_dispatcher(
         if await handle_entry_keyword(message, state):
             return
         if await handle_stop_request(message, state):
+            return
+        if await handle_image_generation_back_request(message, state):
             return
         if not await ensure_authorized(message):
             return
@@ -5806,6 +6001,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         suffix = _image_ext_from_message(message)
@@ -5829,6 +6026,8 @@ def build_dispatcher(
         if await handle_entry_keyword(message, state):
             return
         if await handle_stop_request(message, state):
+            return
+        if await handle_image_generation_back_request(message, state):
             return
         if not await ensure_authorized(message):
             return
@@ -5870,6 +6069,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         suffix = _video_ext_from_message(message)
@@ -5893,6 +6094,8 @@ def build_dispatcher(
         if await handle_entry_keyword(message, state):
             return
         if await handle_stop_request(message, state):
+            return
+        if await handle_image_generation_back_request(message, state):
             return
         if not await ensure_authorized(message):
             return
@@ -5926,32 +6129,21 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
-        if not await ensure_authorized(message):
+        if await handle_image_generation_back_request(message, state):
             return
-        data = await state.get_data()
-        params = {
-            "video_local_path": str(data["video_local_path"]),
-            "image_local_path": str(data["image_local_path"]),
-            "prompt": str(data.get("prompt") or ""),
-            "mode": "original",
-            "tg_use_llm_prompt": True,
-            "tg_user_instruction": str(
-                data.get("prompt")
-                or "只替换人物身份和外观，保留原视频动作、姿态、构图、镜头运动、背景光线和视频比例，人物比例匹配原视频。"
-            ),
-        }
+        # The current replacement flow submits immediately after receiving the
+        # model image.  Keep this handler only as a guard for an old in-memory
+        # state; never submit a task from an obsolete step with arbitrary text.
         await state.clear()
-        await message.answer("已收到，正在按原視頻時長提交視頻模特替換任務。", reply_markup=_menu_keyboard())
-        try:
-            await submit_webapp_task_and_reply(message, "replace_model", params)
-        except Exception as exc:
-            await message.answer(f"視頻模特替換任務提交失敗：{exc}", reply_markup=_menu_keyboard())
+        await message.answer("旧版模特替换步骤已结束，请从视频编辑重新开始。", reply_markup=_video_edit_keyboard())
 
     @router.message(ProductionWorkflowForm.replace_product_waiting_for_video)
     async def on_replace_product_video(message: Message, state: FSMContext) -> None:
         if await handle_entry_keyword(message, state):
             return
         if await handle_stop_request(message, state):
+            return
+        if await handle_image_generation_back_request(message, state):
             return
         if not await ensure_authorized(message):
             return
@@ -5977,6 +6169,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         suffix = _image_ext_from_message(message)
@@ -5998,6 +6192,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         name = _message_text(message)
@@ -6017,13 +6213,15 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         text = _message_text(message)
         try:
             duration = 15 if text in AUTO_DURATION_TEXTS else _parse_duration_seconds(text)
         except ValueError as exc:
-            await message.answer(f"秒數格式不正確: {exc}", reply_markup=_menu_keyboard())
+            await message.answer(f"秒數格式不正確: {exc}", reply_markup=_ecommerce_step_keyboard())
             return
         data = await state.get_data()
         params = {
@@ -6052,6 +6250,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         suffix = _video_ext_from_message(message)
@@ -6075,6 +6275,8 @@ def build_dispatcher(
         if await handle_entry_keyword(message, state):
             return
         if await handle_stop_request(message, state):
+            return
+        if await handle_image_generation_back_request(message, state):
             return
         if not await ensure_authorized(message):
             return
@@ -6100,6 +6302,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         suffix = _image_ext_from_message(message)
@@ -6121,6 +6325,8 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         name = _message_text(message)
@@ -6137,13 +6343,15 @@ def build_dispatcher(
             return
         if await handle_stop_request(message, state):
             return
+        if await handle_image_generation_back_request(message, state):
+            return
         if not await ensure_authorized(message):
             return
         text = _message_text(message)
         try:
             duration = 15 if text in AUTO_DURATION_TEXTS else _parse_duration_seconds(text)
         except ValueError as exc:
-            await message.answer(f"秒數格式不正確: {exc}", reply_markup=_menu_keyboard())
+            await message.answer(f"秒數格式不正確: {exc}", reply_markup=_ecommerce_step_keyboard())
             return
         data = await state.get_data()
         params = {

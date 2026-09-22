@@ -1843,9 +1843,17 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         message = _Message()
         asyncio.run(controller.handle_callback(_Query("tt:persona_ai_new", message), _Types))
-        asyncio.run(controller.handle_text(_Message(text="AI观察员｜关注科技趋势并保持克制专业"), _Types))
+        ai_input = _Message(text="AI观察员｜关注科技趋势并保持克制专业")
+        asyncio.run(controller.handle_text(ai_input, _Types))
         self.assertEqual(load_state(101)["selected_persona_id"], "persona-ai")
         self.assertTrue(any(action == "personas.ai_create" for action, _payload in calls))
+        profile_button = next(
+            button
+            for row in ai_input.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if button.text == "基础资料"
+        )
+        self.assertEqual(profile_button.callback_data, "tt:profile")
 
         asyncio.run(controller.handle_callback(_Query("tt:persona_copy_new", message), _Types))
         asyncio.run(controller.handle_text(_Message(text="复制观察员｜https://www.threads.net/@public"), _Types))
@@ -1875,6 +1883,77 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:stepcancel", message), _Types))
         self.assertIn("已取消当前步骤", message.edits[-1][0])
         self.assertEqual(load_state(101)["mode"], "")
+
+    def test_invalid_media_replies_keep_detail_menu_and_cancel_actions(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        cases = [
+            (
+                "application/pdf",
+                1024,
+                "仅支持 JPG、PNG、WebP、GIF、MP4、MOV 或 WebM 媒体",
+            ),
+            (
+                "video/mp4",
+                20 * 1024 * 1024 + 1,
+                "文件超过 Telegram Bot 20MB 下载限制",
+            ),
+        ]
+        for index, (mime_type, file_size, expected_text) in enumerate(cases):
+            save_state(101, selected_persona_id="persona-a", mode="media_upload", payload={
+                "source": "posts",
+                "post_id": "post-a",
+                "page": 1,
+                "intent": "image",
+            })
+            message = _Message(message_id=index + 1)
+            message.document = SimpleNamespace(
+                file_unique_id=f"document-{index}",
+                file_name="upload.bin",
+                mime_type=mime_type,
+                file_size=file_size,
+            )
+            asyncio.run(controller.handle_media(message, _Types))
+            text, kwargs = message.answers[-1]
+            self.assertIn(expected_text, text)
+            callbacks = [
+                str(button.callback_data)
+                for row in kwargs["reply_markup"].inline_keyboard
+                for button in row
+                if getattr(button, "callback_data", None)
+            ]
+            self.assertIn("tt:menu", callbacks)
+            self.assertIn("tt:stepcancel", callbacks)
+            self.assertTrue(any(value.startswith("tt:d:") for value in callbacks))
+            self.assertEqual(load_state(101)["mode"], "media_upload")
+
+        save_state(101, selected_persona_id="persona-a", mode="persona_image_upload", payload={"page": 2})
+        persona_image_message = _Message(message_id=3)
+        persona_image_message.document = SimpleNamespace(
+            file_unique_id="video-document",
+            file_name="upload.mp4",
+            mime_type="video/mp4",
+            file_size=1024,
+        )
+
+        async def download_media(_media, *, destination):
+            destination.write(b"not-an-image")
+
+        persona_image_message.bot.download = download_media
+        asyncio.run(controller.handle_media(persona_image_message, _Types))
+        _text, kwargs = persona_image_message.answers[-1]
+        callbacks = [
+            str(button.callback_data)
+            for row in kwargs["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        ]
+        self.assertIn("tt:menu", callbacks)
+        self.assertIn("tt:stepcancel", callbacks)
+        self.assertTrue(any(value.startswith("tt:personaimage:") for value in callbacks))
 
     def test_persona_ai_keyword_selection_matches_web_limits_and_creates(self):
         calls = []

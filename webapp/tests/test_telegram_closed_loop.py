@@ -62,16 +62,23 @@ class _VideoFlowState(_VideoState):
     def __init__(self) -> None:
         self.current = ""
         self.cleared = False
+        self.data: dict[str, object] = {}
 
     async def clear(self) -> None:
         self.current = ""
         self.cleared = True
 
     async def set_state(self, state: object) -> None:
-        self.current = str(state)
+        self.current = str(getattr(state, "state", state))
 
     async def get_state(self) -> str:
         return self.current
+
+    async def get_data(self) -> dict[str, object]:
+        return dict(self.data)
+
+    async def update_data(self, **kwargs: object) -> None:
+        self.data.update(kwargs)
 
 
 class _AuthorizedVideoService:
@@ -380,6 +387,100 @@ class TelegramClosedLoopTests(unittest.TestCase):
         main_message = _VideoReplyMessage(text="返回主菜单")
         asyncio.run(main_back(main_message, state))
         self.assertIn("已返回主菜單", main_message.answers[-1][0])
+
+    def test_video_image_steps_honor_visible_back_button(self):
+        """Image workflow keyboards must not expose a dead 返回上一步 action."""
+        dispatcher = tg_bot.build_dispatcher(
+            SimpleNamespace(),
+            _AuthorizedVideoService(),
+            load_member=lambda _chat_id: {"web_user_id": 42, "enabled": 1},
+            has_active_web_session=lambda _member: True,
+        )
+        cases = (
+            (
+                "on_image_generate_model_image",
+                tg_bot.ProductionWorkflowForm.image_waiting_for_model_image,
+                tg_bot.ProductionWorkflowForm.image_waiting_for_product_image,
+                "商品图",
+            ),
+            (
+                "on_image_generate_size",
+                tg_bot.ProductionWorkflowForm.image_waiting_for_size,
+                tg_bot.ProductionWorkflowForm.image_waiting_for_model_image,
+                "模特图",
+            ),
+            (
+                "on_image_generate_prompt",
+                tg_bot.ProductionWorkflowForm.image_waiting_for_prompt,
+                tg_bot.ProductionWorkflowForm.image_waiting_for_size,
+                "图片比例",
+            ),
+        )
+        for handler_name, current_state, expected_state, expected_marker in cases:
+            with self.subTest(handler_name=handler_name):
+                callback = _video_route_callback(dispatcher, handler_name)
+                state = _VideoFlowState()
+                state.current = current_state.state
+                message = _VideoReplyMessage(text=tg_bot.BACK_STEP_BUTTON)
+
+                asyncio.run(callback(message, state))
+
+                self.assertIn(expected_marker, message.answers[-2][0])
+                self.assertEqual(state.current, expected_state.state)
+                self.assertTrue(
+                    any(
+                        str(getattr(button, "text", "")) == tg_bot.BACK_STEP_BUTTON
+                        for row in message.answers[-2][1]["reply_markup"].keyboard
+                        for button in row
+                    )
+                )
+
+    def test_video_duration_validation_keeps_step_navigation(self):
+        dispatcher = tg_bot.build_dispatcher(
+            SimpleNamespace(),
+            _AuthorizedVideoService(),
+            load_member=lambda _chat_id: {"web_user_id": 42, "enabled": 1},
+            has_active_web_session=lambda _member: True,
+        )
+        for handler_name, state_name in (
+            (
+                "on_replace_product_duration",
+                tg_bot.ProductionWorkflowForm.replace_product_waiting_for_duration,
+            ),
+            (
+                "on_union_duration",
+                tg_bot.ProductionWorkflowForm.union_waiting_for_duration,
+            ),
+        ):
+            with self.subTest(handler_name=handler_name):
+                callback = _video_route_callback(dispatcher, handler_name)
+                state = _VideoFlowState()
+                state.current = state_name.state
+                message = _VideoReplyMessage(text="not-a-duration")
+
+                asyncio.run(callback(message, state))
+
+                self.assertIn("格式不正確", message.answers[-1][0])
+                markup = message.answers[-1][1]["reply_markup"]
+                labels = {
+                    str(getattr(button, "text", ""))
+                    for row in markup.keyboard
+                    for button in row
+                }
+                self.assertIn(tg_bot.BACK_STEP_BUTTON, labels)
+                self.assertEqual(state.current, state_name.state)
+
+    def test_legacy_model_duration_state_cannot_submit_a_task(self):
+        dispatcher = tg_bot.build_dispatcher(SimpleNamespace(), _AuthorizedVideoService())
+        callback = _video_route_callback(dispatcher, "on_replace_model_duration")
+        state = _VideoFlowState()
+        state.current = tg_bot.ProductionWorkflowForm.replace_model_waiting_for_duration.state
+        message = _VideoReplyMessage(text="30")
+
+        asyncio.run(callback(message, state))
+
+        self.assertTrue(state.cleared)
+        self.assertIn("旧版模特替换步骤已结束", message.answers[-1][0])
 
     def test_original_bot_keyboards_are_copied(self):
         source = Path(tg_bot.__file__).read_text(encoding="utf-8")
