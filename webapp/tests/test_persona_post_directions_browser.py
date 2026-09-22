@@ -310,7 +310,7 @@ def test_composition_picker_spacing_and_nested_scroll_are_preserved_on_rerender(
         page.set_content(
             '''<!doctype html><html><body class="console-page">
               <main id="moduleBody"><section data-persona-image-composition-post="post-1">
-                <div class="persona-picker-list" style="height:140px">
+                <div class="persona-picker-list" style="height:100px">
                   <button class="persona-picker-option"><strong>群像</strong><small>群像互动</small></button>
                   <button class="persona-picker-option"><strong>场景</strong><small>环境场景</small></button>
                   <button class="persona-picker-option"><strong>物件</strong><small>物件特写</small></button>
@@ -330,7 +330,7 @@ def test_composition_picker_spacing_and_nested_scroll_are_preserved_on_rerender(
               list.scrollTop = 37;
               const snapshot = snapshotConsoleScrollState();
               document.querySelector('#moduleBody').innerHTML = `<section data-persona-image-composition-post="post-1">
-                <div class="persona-picker-list" style="height:140px">
+                <div class="persona-picker-list" style="height:100px">
                   <button class="persona-picker-option"><strong>群像</strong><small>群像互动</small></button>
                   <button class="persona-picker-option"><strong>场景</strong><small>环境场景</small></button>
                   <button class="persona-picker-option"><strong>物件</strong><small>物件特写</small></button>
@@ -364,15 +364,63 @@ def test_composition_picker_spacing_and_nested_scroll_are_preserved_on_rerender(
             }"""
         )
         assert result["scrollTop"] == 37
-        assert result["minHeight"] >= 64
-        assert result["paddingTop"] >= 10
-        assert result["paddingLeft"] >= 12
+        assert result["minHeight"] >= 48
+        assert result["paddingTop"] >= 6
+        assert result["paddingLeft"] >= 8
         assert result["listOverflow"] == "auto"
-        assert result["listMaxHeight"] == 260
+        assert result["listMaxHeight"] == 220
         assert result["previewAlignSelf"] == "start"
         assert float(result["previewHeight"].replace("px", "")) > 0
         assert result["previewImageAspectRatio"] in {"4 / 3", "1.33333 / 1"}
         assert result["previewImageObjectFit"] == "contain"
+        browser.close()
+
+
+def test_composition_picker_cards_match_style_cards_on_mobile_and_scroll_after_four_rows():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.set_content(
+            '''<!doctype html><html><body class="console-page"><main class="persona-detail">
+              <button class="persona-post-image-render-style"><span class="persona-post-image-render-style-swatch"></span><span class="persona-post-image-render-style-copy"><strong>原有风格</strong><small>写实默认</small></span></button>
+              <div class="persona-picker-list">
+                <button class="persona-picker-option"><strong>人物</strong><small>人物自拍</small></button>
+                <button class="persona-picker-option"><strong>群像</strong><small>群像互动</small></button>
+                <button class="persona-picker-option"><strong>第三人称</strong><small>第三人称纪实</small></button>
+                <button class="persona-picker-option"><strong>第一人称</strong><small>第一人称视角</small></button>
+                <button class="persona-picker-option"><strong>场景</strong><small>环境场景</small></button>
+                <button class="persona-picker-option"><strong>物件</strong><small>物件特写</small></button>
+              </div>
+            </main></body></html>'''
+        )
+        page.add_style_tag(path=str(CONSOLE_CSS))
+        result = page.evaluate(
+            """() => {
+              const list = document.querySelector('.persona-picker-list');
+              const option = document.querySelector('.persona-picker-option');
+              const styleCard = document.querySelector('.persona-post-image-render-style');
+              const style = getComputedStyle(option);
+              return {
+                minHeight: parseFloat(style.minHeight),
+                styleCardHeight: styleCard.getBoundingClientRect().height,
+                compositionCardHeight: option.getBoundingClientRect().height,
+                paddingTop: parseFloat(style.paddingTop),
+                paddingLeft: parseFloat(style.paddingLeft),
+                listMaxHeight: parseFloat(getComputedStyle(list).maxHeight),
+                listOverflow: getComputedStyle(list).overflowY,
+                clientHeight: list.clientHeight,
+                scrollHeight: list.scrollHeight,
+              };
+            }"""
+        )
+        assert result["minHeight"] >= 44
+        assert abs(result["compositionCardHeight"] - result["styleCardHeight"]) <= 1
+        assert result["paddingTop"] >= 5
+        assert result["paddingLeft"] >= 6
+        assert result["listMaxHeight"] == 220
+        assert result["listOverflow"] == "auto"
+        assert result["scrollHeight"] > result["clientHeight"]
         browser.close()
 
 

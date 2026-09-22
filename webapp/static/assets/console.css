@@ -31215,3 +31215,78 @@ body.console-page {
     max-height: 220px;
   }
 }
+
+/* Match composition options to the generation-style cards. Keep the list
+   short enough to scroll instead of squeezing or clipping its labels. */
+.persona-picker-list {
+  max-height: 220px;
+  gap: 6px;
+  padding: 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.persona-picker-option {
+  position: relative;
+  min-height: 48px !important;
+  padding: 6px 8px !important;
+  gap: 2px;
+  align-content: center;
+  line-height: 1.3;
+  overflow: visible;
+}
+
+/* The two pickers use one control rhythm so labels never get a smaller
+   composition card than the style cards above it. */
+.console-page .persona-detail .persona-post-image-render-style,
+.console-page .persona-detail .persona-picker-option {
+  min-height: 48px !important;
+  padding: 6px 8px !important;
+}
+
+.persona-picker-option strong,
+.persona-picker-option small {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.3;
+}
+
+.persona-picker-option strong {
+  padding-right: 54px;
+}
+
+.persona-picker-option-default {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  min-height: 16px;
+  padding: 1px 5px;
+  font-size: 10px;
+}
+
+@media (max-width: 760px) {
+  .persona-picker-list {
+    max-height: 220px;
+  }
+
+  .persona-picker-option {
+    min-height: 44px !important;
+    padding: 5px 6px !important;
+  }
+
+  .console-page .persona-detail .persona-post-image-render-style,
+  .console-page .persona-detail .persona-picker-option {
+    min-height: 44px !important;
+    padding: 5px 6px !important;
+  }
+}
+
+@media (max-width: 360px) {
+  .persona-picker-list {
+    max-height: 200px;
+  }
+}
