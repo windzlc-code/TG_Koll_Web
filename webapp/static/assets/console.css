@@ -12806,19 +12806,47 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
 }
 
 .persona-image-composition-tag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 2px;
   width: 100%;
   min-width: 0;
-  min-height: 32px;
-  padding: 5px 8px;
-  overflow: hidden;
+  /* The shared mobile button rule has a deliberately high specificity;
+     keep these two-line cards tall enough to show both labels. */
+  min-height: 54px !important;
+  padding: 7px 10px;
+  overflow: visible;
+  text-align: left;
+  white-space: normal;
+  text-overflow: clip;
+}
+
+.persona-image-composition-tag-kind,
+.persona-image-composition-tag-label {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.persona-image-composition-tag-kind {
+  color: inherit;
   font-size: 12px;
+  font-weight: 800;
   line-height: 1.25;
-  text-align: center;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+}
+
+.persona-image-composition-tag-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.persona-image-composition-tag.is-selected .persona-image-composition-tag-label {
+  color: currentColor;
+  opacity: 0.86;
 }
 
 .persona-generate-ai-action {
@@ -17722,7 +17750,7 @@ body.persona-media-sorting {
 
 @media (max-width: 760px) {
   .console-page #personaDetail:has(.persona-draft-global-save-dock) {
-    padding-bottom: 64px;
+    padding-bottom: calc(var(--mobile-task-dock-height, 64px) + 66px + env(safe-area-inset-bottom));
   }
 
   .console-page #personaDetail:has(.persona-hot-import-dock) {
@@ -25900,9 +25928,8 @@ body.console-page {
   }
 
   .console-page .persona-image-composition-tag {
-    min-height: 30px;
-    padding: 4px 7px;
-    font-size: 12px;
+    min-height: 54px;
+    padding: 7px 8px;
   }
 
   .console-page .persona-writing-locale {

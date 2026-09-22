@@ -4815,7 +4815,10 @@ function renderPersonaImageCompositionPicker(persona, post, disabled = false) {
       ${styles.map((style, index) => {
         const key = personaImageStyleKey(style);
         const active = key === selectedKey;
-        return `<button type="button" class="persona-post-direction-tag persona-image-composition-tag ${active ? "is-selected" : ""}" data-persona-image-composition-index="${esc(index)}" data-persona-image-composition-post="${esc(postId)}" data-persona-image-composition-kind="${esc(style.kind)}" data-persona-image-composition-label="${esc(style.label)}" aria-pressed="${active ? "true" : "false"}" ${stylesLocked ? "disabled" : ""}>${esc(personaImageStyleCaption(style))}</button>`;
+        const kindLabel = String(style.kind_label || personaImageStyleKindLabel(style.kind) || "").trim();
+        const styleLabel = String(style.label || "").trim();
+        const caption = personaImageStyleCaption(style);
+        return `<button type="button" class="persona-post-direction-tag persona-image-composition-tag ${active ? "is-selected" : ""}" data-persona-image-composition-index="${esc(index)}" data-persona-image-composition-post="${esc(postId)}" data-persona-image-composition-kind="${esc(style.kind)}" data-persona-image-composition-label="${esc(style.label)}" aria-label="${esc(caption)}" title="${esc(caption)}" aria-pressed="${active ? "true" : "false"}" ${stylesLocked ? "disabled" : ""}><span class="persona-image-composition-tag-kind">${esc(kindLabel)}</span><span class="persona-image-composition-tag-label">${esc(styleLabel)}</span></button>`;
       }).join("")}
     </div>` : `<p class="persona-image-composition-empty">点击“生成构图方向”可按当前正文推荐人物、场景或物件构图；不选择则沿用原有人物配图逻辑。</p>`}
   </section>`;
@@ -28052,6 +28055,7 @@ function renderPersonaTaskMediaPreview(taskState, items = personaTaskMediaItems(
               frameClass: "persona-media-frame",
               showCaption: false,
               interactive: false,
+              eagerLoad: true,
             })}
           </div>
           ${renderPersonaPublicMediaFooter(index, `
@@ -37858,8 +37862,13 @@ function bindEvents() {
     }
     const imageCompositionButton = event.target.closest("[data-persona-image-composition-index]");
     if (imageCompositionButton) {
+      // This button only changes local selection. Prevent the browser from
+      // focusing a node that is about to be replaced by renderPersonaDetail;
+      // otherwise mobile browsers may scroll the page to the removed button.
+      event.preventDefault();
       const persona = selectedPersona();
       if (!persona) return;
+      imageCompositionButton.blur?.();
       snapshotPersonaCurrentForm();
       const postId = String(imageCompositionButton.dataset.personaImageCompositionPost || personaMediaTargetPost(persona).post?.id || "").trim();
       if (!postId) return;
@@ -37870,7 +37879,7 @@ function bindEvents() {
       if (!styleKey) return;
       const styleState = personaImageStyleState(persona.id, postId);
       styleState.selectedKey = styleState.selectedKey === styleKey ? "" : styleKey;
-      renderPersonaDetail();
+      withConsoleScrollPreserved(() => renderPersonaDetail());
       return;
     }
     if (event.target.closest("[data-persona-writing-locale-open]")) {

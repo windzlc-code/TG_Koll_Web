@@ -252,6 +252,56 @@ def test_stale_composition_direction_is_cleared_when_post_content_changes():
         browser.close()
 
 
+def test_mobile_composition_cards_keep_kind_and_description_visible_and_task_preview_is_eager():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.set_content('<!doctype html><html><body class="console-page"><div id="host"></div></body></html>')
+        page.add_script_tag(path=str(CONSOLE_JS))
+        page.add_style_tag(path=str(CONSOLE_CSS))
+        result = page.evaluate(
+            """() => {
+              const form = { media: { imageStylesByPost: {} } };
+              personaFormState = () => form;
+              currentLanguage = () => "zh-Hans";
+              isActionLocked = () => false;
+              const post = { id: "post-1", title: "健身", content: "记录训练动作" };
+              const styleState = personaImageStyleState("persona-1", post.id);
+              styleState.styles = [
+                { kind: "person", label: "人物自拍", kind_label: "人物" },
+                { kind: "third_person", label: "群像互动", kind_label: "群像" },
+                { kind: "third_person", label: "第三人称纪实", kind_label: "第三人称" },
+                { kind: "pov", label: "第一人称视角", kind_label: "第一人称" },
+                { kind: "scene", label: "环境场景", kind_label: "场景" },
+                { kind: "object", label: "物件特写", kind_label: "事物" },
+              ];
+              styleState.sourceFingerprint = personaImageStyleSourceFingerprint(post);
+              const host = document.querySelector("#host");
+              host.innerHTML = renderPersonaImageCompositionPicker({ id: "persona-1" }, post);
+              const cards = Array.from(host.querySelectorAll(".persona-image-composition-tag"));
+              return {
+                count: cards.length,
+                kind: cards[2].querySelector(".persona-image-composition-tag-kind")?.textContent.trim(),
+                label: cards[2].querySelector(".persona-image-composition-tag-label")?.textContent.trim(),
+                whiteSpace: getComputedStyle(cards[2]).whiteSpace,
+                overflow: getComputedStyle(cards[2]).overflow,
+                minHeight: parseFloat(getComputedStyle(cards[2]).minHeight),
+                clientHeight: cards[2].clientHeight,
+                scrollHeight: cards[2].scrollHeight,
+              };
+            }"""
+        )
+        assert result["count"] == 6
+        assert result["kind"] == "第三人称"
+        assert result["label"] == "第三人称纪实"
+        assert result["whiteSpace"] == "normal"
+        assert result["overflow"] == "visible"
+        assert result["minHeight"] >= 50
+        assert result["scrollHeight"] <= result["clientHeight"] + 1
+        browser.close()
+
+
 def test_post_image_render_style_selection_is_locked_immediately_during_submission():
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as playwright:

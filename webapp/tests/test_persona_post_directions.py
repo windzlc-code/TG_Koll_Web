@@ -204,12 +204,26 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert ".persona-post-direction-panel" in styles
     assert ".persona-post-direction-tag.is-selected" in styles
     assert ".persona-image-composition-tag" in styles
+    assert ".persona-image-composition-tag-kind" in styles
+    assert ".persona-image-composition-tag-label" in styles
+    assert "white-space: normal" in styles
+    assert "eagerLoad: true" in script
     assert ".persona-image-composition-action" in styles
     assert ".persona-post-image-render-style-grid" in styles
     assert ".persona-post-image-settings-divider" in styles
     assert ".persona-compose-workspace.has-media > .persona-compose-media-stack" in styles
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in styles
     assert ".persona-post-direction-tools > .bulk-selection-icon-button" in styles
+
+
+def test_composition_selection_prevents_focus_scroll_during_detail_rerender():
+    script = CONSOLE_JS.read_text(encoding="utf-8")
+    handler = script.split('const imageCompositionButton = event.target.closest("[data-persona-image-composition-index]");', 1)[1].split(
+        'if (event.target.closest("[data-persona-writing-locale-open]"))', 1
+    )[0]
+    assert "event.preventDefault();" in handler
+    assert "imageCompositionButton.blur?.();" in handler
+    assert "withConsoleScrollPreserved(() => renderPersonaDetail());" in handler
 
 
 def test_mobile_direction_picker_keeps_actions_aligned_and_reuses_selection_icons():
