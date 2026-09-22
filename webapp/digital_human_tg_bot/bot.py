@@ -2087,52 +2087,64 @@ def build_dispatcher(
             except Exception:
                 return default
 
-    def _account_management_keyboard() -> ReplyKeyboardMarkup:
-        return ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text=VIDEO_ACCOUNT_SESSION_BUTTON)],
-                [KeyboardButton(text=ACCOUNT_BACK_BUTTON)],
-            ],
-            resize_keyboard=True,
-            is_persistent=True,
-            input_field_placeholder="请选择账号管理模块",
-        )
+    def _account_management_keyboard() -> InlineKeyboardMarkup:
+        """Render the account root as a callback page, like the Tweet Bot.
+
+        The workbench ReplyKeyboard remains the single persistent entry point;
+        account sub-pages must not replace it with another text-routed menu.
+        Keeping the callbacks scoped to ``tv:`` also prevents a stale button
+        from one Bot from being accepted by the other Bot.
+        """
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=VIDEO_ACCOUNT_SESSION_BUTTON,
+                callback_data="tv:vectosession",
+            )],
+            [InlineKeyboardButton(text="返回总控菜单", callback_data="tv:menu")],
+        ])
 
     def _account_keyboard(
         *,
         include_login: bool = True,
         include_logout: bool = False,
         back_text: str = VIDEO_ACCOUNT_BACK_BUTTON,
-    ) -> ReplyKeyboardMarkup:
-        rows: list[list[KeyboardButton]] = []
+    ) -> InlineKeyboardMarkup:
+        rows: list[list[InlineKeyboardButton]] = []
         if include_login:
-            rows.append([KeyboardButton(text=VIDEO_LOGIN_BUTTON), KeyboardButton(text=VIDEO_SWITCH_BUTTON)])
+            rows.append([InlineKeyboardButton(
+                text="🔁 登录/切换 VECTO 账号",
+                callback_data="tv:chatlogin",
+            )])
         if include_logout:
-            rows.append([KeyboardButton(text=VIDEO_LOGOUT_BUTTON)])
-        rows.append([KeyboardButton(text=back_text)])
-        return ReplyKeyboardMarkup(
-            keyboard=rows,
-            resize_keyboard=True,
-            is_persistent=True,
-            input_field_placeholder="请输入账号操作",
-        )
+            rows.append([InlineKeyboardButton(
+                text=VIDEO_LOGOUT_BUTTON,
+                callback_data="tv:aclogout",
+            )])
+        rows.append([InlineKeyboardButton(
+            text="返回账号管理",
+            callback_data="tv:accountmenu",
+        )])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    def _video_login_keyboard(placeholder: str) -> ReplyKeyboardMarkup:
-        """Keep a visible cancel/back control while credentials are entered.
+    def _video_login_keyboard(placeholder: str) -> InlineKeyboardMarkup:
+        """Keep cancel/back controls on the same callback login page.
 
-        ForceReply makes Telegram replace the persistent workbench keyboard with
-        a client-side reply preview.  A normal reply keyboard keeps the login
-        FSM active while allowing the user to cancel without typing a command.
+        ``placeholder`` is retained for callers/documentation; Telegram's
+        inline buttons do not alter the private-chat input field.  Credentials
+        still arrive as ordinary private messages and are never put in a
+        callback payload.
         """
-        return ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text=VIDEO_LOGIN_CANCEL_BUTTON)],
-                [KeyboardButton(text=VIDEO_ACCOUNT_BACK_BUTTON)],
-            ],
-            resize_keyboard=True,
-            is_persistent=True,
-            input_field_placeholder=placeholder,
-        )
+        _ = placeholder
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text=VIDEO_LOGIN_CANCEL_BUTTON,
+                callback_data="tv:login_cancel",
+            )],
+            [InlineKeyboardButton(
+                text=VIDEO_ACCOUNT_BACK_BUTTON,
+                callback_data="tv:accountmenu",
+            )],
+        ])
 
     def _clear_video_login(chat_id: int) -> None:
         video_login_pending.pop(int(chat_id), None)
@@ -3343,13 +3355,7 @@ def build_dispatcher(
         await state.update_data(work_dir=str(work_dir))
         await message.answer("🌟 聯合替換工作流\n步驟 1/5：請上傳原視頻。", reply_markup=_menu_keyboard())
 
-    async def _send_account_status(message: Message) -> None:
-        chat = getattr(message, "chat", None)
-        actor = getattr(message, "from_user", None)
-        if chat is None or str(getattr(chat, "type", "") or "") != "private" or actor is None:
-            await message.answer("视频工作台账号管理只支持与 Bot 私聊使用。")
-            return
-        chat_id = int(chat.id)
+    async def _account_status_payload(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
         member = _load_bound_member(chat_id)
         web_user_id = int(_member_value(member, "web_user_id", 0) or 0)
         username = str(_member_value(member, "web_username", "") or "").strip()
@@ -3368,21 +3374,24 @@ def build_dispatcher(
             # Make the migration-only whitelist explicit without treating it
             # as a usable login.
             status = "后台兼容记录，需重新登录"
-        await message.answer(
+        return (
             "账号管理\n\n"
             f"VECTO 网页账号：{username or '未登录'}\n"
             f"状态：{status}\n\n"
             "请选择账号模块；登录、切换和退出流程与推文工作台保持一致。",
-            reply_markup=_account_management_keyboard(),
+            _account_management_keyboard(),
         )
 
-    async def _send_video_account_session_status(message: Message) -> None:
+    async def _send_account_status(message: Message) -> None:
         chat = getattr(message, "chat", None)
         actor = getattr(message, "from_user", None)
         if chat is None or str(getattr(chat, "type", "") or "") != "private" or actor is None:
             await message.answer("视频工作台账号管理只支持与 Bot 私聊使用。")
             return
-        chat_id = int(chat.id)
+        page_text, markup = await _account_status_payload(int(chat.id))
+        await message.answer(page_text, reply_markup=markup)
+
+    async def _video_account_session_payload(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
         member = _load_bound_member(chat_id)
         web_user_id = int(_member_value(member, "web_user_id", 0) or 0)
         username = str(_member_value(member, "web_username", "") or "").strip()
@@ -3395,44 +3404,68 @@ def build_dispatcher(
             except Exception:
                 active = False
         if active:
-            await message.answer(
+            return (
                 "VECTO 网页账号\n\n"
                 f"当前账号：{username}\n"
+                "当前 Telegram 视频工作台使用的是这次绑定的 VECTO 网页会话。\n"
                 "状态：已登录并绑定\n\n"
-                "网页端退出会撤销该 VECTO 账号的活动会话，Telegram 将要求重新登录；这里仅管理 VECTO 网页账号。",
-                reply_markup=_account_keyboard(include_login=True, include_logout=True),
+                "网页端退出会撤销该会话，Telegram 将立即要求重新登录；Telegram 不会独立保持一份永久登录。\n"
+                "退出网页或 Telegram 会撤销该 VECTO 账号的活动会话（包括其他设备）。\n"
+                "这里的登录/退出只管理 VECTO 账号，不会登录或退出其他平台账号。",
+                _account_keyboard(include_login=True, include_logout=True),
             )
-            return
-        await message.answer(
+        return (
             "VECTO 网页账号\n\n"
             f"当前账号：{username if web_user_id else '未登录'}\n"
             "状态：未登录或会话已失效\n\n"
-            "请点击“登录 VECTO 账号”在私聊中完成绑定；后台白名单不会直接解锁视频工作台。",
-            reply_markup=_account_keyboard(include_login=True, include_logout=False),
+            "请点击“登录/切换 VECTO 账号”在私聊中完成绑定；后台白名单不会直接解锁视频工作台。",
+            _account_keyboard(include_login=True, include_logout=False),
         )
 
-    async def _start_video_account_login(message: Message, state: FSMContext) -> None:
+    async def _send_video_account_session_status(message: Message) -> None:
         chat = getattr(message, "chat", None)
         actor = getattr(message, "from_user", None)
+        if chat is None or str(getattr(chat, "type", "") or "") != "private" or actor is None:
+            await message.answer("视频工作台账号管理只支持与 Bot 私聊使用。")
+            return
+        page_text, markup = await _video_account_session_payload(int(chat.id))
+        await message.answer(page_text, reply_markup=markup)
+
+    async def _start_video_account_login(
+        message: Message,
+        state: FSMContext,
+        *,
+        from_user: Any | None = None,
+        edit_message: bool = False,
+    ) -> None:
+        chat = getattr(message, "chat", None)
+        actor = from_user or getattr(message, "from_user", None)
         chat_id = int(getattr(chat, "id", 0) or 0)
+
+        async def respond(text: str, **kwargs: Any) -> None:
+            if edit_message and getattr(message, "edit_text", None) is not None:
+                await message.edit_text(text, **kwargs)
+            else:
+                await message.answer(text, **kwargs)
+
         if (
             chat is None
             or str(getattr(chat, "type", "") or "") != "private"
             or actor is None
             or int(getattr(actor, "id", 0) or 0) != chat_id
         ):
-            await message.answer("聊天内登录只支持与视频 Bot 私聊使用。")
+            await respond("聊天内登录只支持与视频 Bot 私聊使用。")
             return
         if chat_login is None:
-            await message.answer("视频 Bot 的登录服务尚未就绪，请稍后再试。", reply_markup=_account_keyboard())
+            await respond("视频 Bot 的登录服务尚未就绪，请稍后再试。", reply_markup=_account_keyboard())
             return
         _clear_video_login(chat_id)
         await state.clear()
         await state.set_state(VideoAccountLoginForm.waiting_for_username)
-        await message.answer(
-            "🔐 视频工作台账号登录\n"
+        await respond(
+            "🔐 聊天内登录绑定\n"
             "请在私聊中发送 VECTO 用户名或邮箱。收到后再输入密码；密码只用于本次验证，Bot 不保存密码。\n"
-            "如需退出，直接点击下方“❌ 取消登录”按钮。",
+            "如需退出，请点击下方“❌ 取消登录”或“返回账号管理”。",
             reply_markup=_video_login_keyboard("VECTO 用户名或邮箱"),
         )
 
@@ -3585,6 +3618,103 @@ def build_dispatcher(
             reply_markup=_menu_keyboard(),
         )
 
+    async def _perform_video_account_logout(chat_id: int) -> tuple[str, bool]:
+        """Revoke the shared VECTO web session without changing Bot menus."""
+        if logout_member is None:
+            return "退出服务尚未就绪，请稍后重试。", False
+        try:
+            result = await asyncio.to_thread(logout_member, int(chat_id))
+        except Exception:
+            logger.exception("Failed to log out video Bot account")
+            return "退出账号失败，请稍后重试。", False
+        if isinstance(result, dict) and result.get("legacy_authorized"):
+            return "当前是后台兼容记录，不能直接退出白名单；请先登录 VECTO 账号后再管理会话。", False
+        service.upsert_member(
+            chat_id=int(chat_id),
+            label=f"TG-{int(chat_id)}",
+            enabled=True,
+            notify_busy=True,
+            notify_available=True,
+        )
+        _clear_video_login(int(chat_id))
+        return (
+            "✅ 已退出 VECTO 账号；网页会话已撤销，视频工作台已锁定。\n"
+            "如需继续，请从“VECTO 网页账号”重新登录。",
+            True,
+        )
+
+    @router.callback_query(F.data.startswith("tv:"))
+    async def video_account_callback(query: CallbackQuery, state: FSMContext) -> None:
+        """Keep every video account sub-step in one editable callback page."""
+        message = query.message
+        if message is None:
+            await query.answer("消息已失效", show_alert=True)
+            return
+        await query.answer()
+        chat = getattr(message, "chat", None)
+        actor = getattr(query, "from_user", None)
+        chat_id = int(getattr(chat, "id", 0) or 0)
+        if (
+            chat is None
+            or str(getattr(chat, "type", "") or "") != "private"
+            or actor is None
+            or int(getattr(actor, "id", 0) or 0) != chat_id
+        ):
+            await message.edit_text("视频工作台账号管理只支持与 Bot 私聊使用。")
+            return
+        action = str(query.data or "").split(":", 1)[1]
+        try:
+            if action == "menu":
+                _clear_video_login(chat_id)
+                await state.clear()
+                await message.edit_text("已返回视频工作台主菜单。")
+                await message.answer("请选择总控功能。", reply_markup=_menu_keyboard())
+            elif action == "accountmenu":
+                _clear_video_login(chat_id)
+                await state.clear()
+                page_text, markup = await _account_status_payload(chat_id)
+                await message.edit_text(page_text, reply_markup=markup)
+            elif action == "vectosession":
+                _clear_video_login(chat_id)
+                await state.clear()
+                page_text, markup = await _video_account_session_payload(chat_id)
+                await message.edit_text(page_text, reply_markup=markup)
+            elif action == "chatlogin":
+                await _start_video_account_login(
+                    message,
+                    state,
+                    from_user=actor,
+                    edit_message=True,
+                )
+            elif action == "login_cancel":
+                _clear_video_login(chat_id)
+                await state.clear()
+                page_text, markup = await _account_status_payload(chat_id)
+                await message.edit_text(
+                    "已取消视频工作台登录。\n\n" + page_text,
+                    reply_markup=markup,
+                )
+            elif action == "aclogout":
+                _clear_video_login(chat_id)
+                await state.clear()
+                result_text, _ = await _perform_video_account_logout(chat_id)
+                page_text, markup = await _video_account_session_payload(chat_id)
+                await message.edit_text(
+                    result_text + "\n\n" + page_text,
+                    reply_markup=markup,
+                )
+            else:
+                await message.edit_text(
+                    "账号操作已失效，请从账号管理重新进入。",
+                    reply_markup=_account_management_keyboard(),
+                )
+        except Exception:
+            logger.exception("Video account callback failed: %s", action)
+            await message.edit_text(
+                "账号操作暂时失败，请稍后重试。",
+                reply_markup=_account_management_keyboard(),
+            )
+
     @router.message(F.text == ACCOUNT_MANAGEMENT_BUTTON)
     @router.message(F.text == "/account")
     async def video_account_management(message: Message, state: FSMContext) -> None:
@@ -3636,31 +3766,8 @@ def build_dispatcher(
             return
         chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
         await state.clear()
-        if logout_member is None:
-            await message.answer("退出服务尚未就绪，请稍后重试。", reply_markup=_account_keyboard())
-            return
-        try:
-            result = await asyncio.to_thread(logout_member, chat_id)
-        except Exception:
-            logger.exception("Failed to log out video Bot account")
-            await message.answer("退出账号失败，请稍后重试。", reply_markup=_account_keyboard())
-            return
-        if isinstance(result, dict) and result.get("legacy_authorized"):
-            await message.answer("当前是后台兼容记录，不能直接退出白名单；请先登录 VECTO 账号后再管理会话。", reply_markup=_account_keyboard())
-            return
-        service.upsert_member(
-            chat_id=chat_id,
-            label=f"TG-{chat_id}",
-            enabled=True,
-            notify_busy=True,
-            notify_available=True,
-        )
-        _clear_video_login(chat_id)
-        await message.answer(
-            "✅ 已退出 VECTO 账号；网页会话已撤销，视频工作台已锁定。\n"
-            "如需继续，请从“VECTO 网页账号”重新登录。",
-            reply_markup=_account_keyboard(),
-        )
+        result_text, _ = await _perform_video_account_logout(chat_id)
+        await message.answer(result_text, reply_markup=_account_keyboard())
 
     @router.message(Command("logout"))
     async def video_account_logout_command(message: Message, state: FSMContext) -> None:

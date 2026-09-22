@@ -30,9 +30,24 @@ class _VideoReplyMessage:
         )
         self.text = text
         self.answers: list[tuple[str, dict[str, object]]] = []
+        self.edits: list[tuple[str, dict[str, object]]] = []
 
     async def answer(self, text: str, **kwargs: object) -> None:
         self.answers.append((str(text), dict(kwargs)))
+
+    async def edit_text(self, text: str, **kwargs: object) -> None:
+        self.edits.append((str(text), dict(kwargs)))
+
+
+class _VideoCallbackQuery:
+    def __init__(self, message: _VideoReplyMessage, data: str) -> None:
+        self.message = message
+        self.data = data
+        self.from_user = message.from_user
+        self.answers: list[tuple[object, dict[str, object]]] = []
+
+    async def answer(self, text: object = None, **kwargs: object) -> None:
+        self.answers.append((text, dict(kwargs)))
 
 
 class _VideoState:
@@ -69,6 +84,15 @@ def _video_route_callback(dispatcher, name: str):
     return next(
         handler.callback
         for handler in router.message.handlers
+        if getattr(handler.callback, "__name__", "") == name
+    )
+
+
+def _video_callback_route(dispatcher, name: str):
+    router = dispatcher.sub_routers[0]
+    return next(
+        handler.callback
+        for handler in router.callback_query.handlers
         if getattr(handler.callback, "__name__", "") == name
     )
 
@@ -210,7 +234,7 @@ class TelegramClosedLoopTests(unittest.TestCase):
         status_markup = status_message.answers[-1][1]["reply_markup"]
         status_labels = {
             str(getattr(button, "text", ""))
-            for row in status_markup.keyboard
+            for row in status_markup.inline_keyboard
             for button in row
         }
         self.assertTrue(any("登录" in label or "切换" in label for label in status_labels))
@@ -226,12 +250,17 @@ class TelegramClosedLoopTests(unittest.TestCase):
         login_markup = login_message.answers[-1][1]["reply_markup"]
         login_labels = {
             str(getattr(button, "text", ""))
-            for row in login_markup.keyboard
+            for row in login_markup.inline_keyboard
             for button in row
         }
         self.assertIn(tg_bot.VIDEO_LOGIN_CANCEL_BUTTON, login_labels)
         self.assertIn(tg_bot.VIDEO_ACCOUNT_BACK_BUTTON, login_labels)
-        self.assertTrue(hasattr(login_markup, "keyboard"))
+        callbacks = {
+            str(getattr(button, "callback_data", ""))
+            for row in login_markup.inline_keyboard
+            for button in row
+        }
+        self.assertEqual(callbacks, {"tv:login_cancel", "tv:accountmenu"})
 
     def test_video_login_cancel_button_clears_pending_flow(self):
         dispatcher = tg_bot.build_dispatcher(
@@ -250,11 +279,54 @@ class TelegramClosedLoopTests(unittest.TestCase):
         markup = message.answers[-1][1]["reply_markup"]
         labels = {
             str(getattr(button, "text", ""))
-            for row in markup.keyboard
+            for row in markup.inline_keyboard
             for button in row
         }
-        self.assertIn(tg_bot.VIDEO_LOGIN_BUTTON, labels)
-        self.assertIn(tg_bot.VIDEO_ACCOUNT_BACK_BUTTON, labels)
+        self.assertIn("🔁 登录/切换 VECTO 账号", labels)
+        self.assertIn("返回账号管理", labels)
+
+    def test_video_account_subpages_use_callback_edit_flow(self):
+        dispatcher = tg_bot.build_dispatcher(
+            SimpleNamespace(),
+            _AuthorizedVideoService(),
+            load_member=lambda _chat_id: {
+                "chat_id": 6258005891,
+                "web_user_id": 42,
+                "web_username": "alice",
+                "enabled": 1,
+            },
+            has_active_web_session=lambda _member: True,
+            chat_login=lambda *_args, **_kwargs: {"ok": True},
+        )
+        callback = _video_callback_route(dispatcher, "video_account_callback")
+        state = _VideoState()
+        message = _VideoReplyMessage()
+
+        asyncio.run(callback(_VideoCallbackQuery(message, "tv:vectosession"), state))
+        self.assertTrue(message.edits)
+        session_markup = message.edits[-1][1]["reply_markup"]
+        callbacks = {
+            str(getattr(button, "callback_data", ""))
+            for row in session_markup.inline_keyboard
+            for button in row
+        }
+        self.assertEqual(callbacks, {"tv:chatlogin", "tv:aclogout", "tv:accountmenu"})
+
+        asyncio.run(callback(_VideoCallbackQuery(message, "tv:chatlogin"), state))
+        self.assertIn("聊天内登录绑定", message.edits[-1][0])
+        login_markup = message.edits[-1][1]["reply_markup"]
+        self.assertEqual(
+            {
+                str(getattr(button, "callback_data", ""))
+                for row in login_markup.inline_keyboard
+                for button in row
+            },
+            {"tv:login_cancel", "tv:accountmenu"},
+        )
+
+        asyncio.run(callback(_VideoCallbackQuery(message, "tv:login_cancel"), state))
+        self.assertIn("已取消视频工作台登录", message.edits[-1][0])
+        self.assertIn("账号管理", message.edits[-1][0])
 
     def test_account_and_main_menu_return_are_available_before_login(self):
         dispatcher = tg_bot.build_dispatcher(

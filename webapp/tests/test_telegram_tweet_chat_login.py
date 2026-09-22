@@ -51,6 +51,7 @@ class _Message:
         self.text = text
         self.message_id = message_id
         self.answers = []
+        self.edits = []
         self.deleted = False
 
     async def answer(self, text, **kwargs):
@@ -58,6 +59,20 @@ class _Message:
 
     async def delete(self):
         self.deleted = True
+
+    async def edit_text(self, text, **kwargs):
+        self.edits.append((text, kwargs))
+
+
+class _CallbackQuery:
+    def __init__(self, message, data):
+        self.message = message
+        self.data = data
+        self.from_user = message.from_user
+        self.answers = []
+
+    async def answer(self, text=None, **kwargs):
+        self.answers.append((text, kwargs))
 
 
 class TelegramTweetChatLoginTests(unittest.TestCase):
@@ -96,14 +111,20 @@ class TelegramTweetChatLoginTests(unittest.TestCase):
         asyncio.run(controller.send_web_login_link(start, _Types))
         self.assertIn("聊天内登录绑定", start.answers[-1][0])
         login_markup = start.answers[-1][1]["reply_markup"]
-        self.assertIsInstance(login_markup, _ReplyMarkup)
+        self.assertIsInstance(login_markup, _Markup)
         labels = {
             button.text
-            for row in login_markup.keyboard
+            for row in login_markup.inline_keyboard
             for button in row
         }
         self.assertIn(CHAT_LOGIN_CANCEL_BUTTON, labels)
         self.assertIn(CHAT_LOGIN_BACK_BUTTON, labels)
+        callbacks = {
+            button.callback_data
+            for row in login_markup.inline_keyboard
+            for button in row
+        }
+        self.assertEqual(callbacks, {"tt:login_cancel", "tt:accountmenu"})
 
         username = _Message(text="alice@example.com", message_id=2)
         asyncio.run(controller.handle_text(username, _Types))
@@ -141,6 +162,31 @@ class TelegramTweetChatLoginTests(unittest.TestCase):
         self.assertIn("已取消推文工作台登录", cancel.answers[-1][0])
         binding_markup = cancel.answers[-1][1]["reply_markup"]
         self.assertEqual(binding_markup.inline_keyboard[0][0].callback_data, "tt:chatlogin")
+
+    def test_inline_cancel_returns_unbound_user_to_binding_page(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(
+                dispatch=lambda _uid, _action, _payload: {},
+                dispatch_async=_unused_async_dispatch,
+            ),
+            get_runtime=lambda: {},
+            load_member=lambda _chat_id: None,
+            chat_login=self._login,
+        )
+        message = _Message()
+        asyncio.run(controller.send_web_login_link(message, _Types))
+        self.assertEqual(load_state(731)["mode"], "chat_login_username")
+
+        query = _CallbackQuery(message, "tt:login_cancel")
+        asyncio.run(controller.handle_callback(query, _Types))
+
+        self.assertEqual(load_state(731)["mode"], "")
+        self.assertTrue(message.edits)
+        self.assertIn("已取消推文工作台登录", message.edits[-1][0])
+        self.assertEqual(
+            message.edits[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data,
+            "tt:chatlogin",
+        )
 
     def test_production_binding_action_stays_in_chat(self):
         controller = NativeTweetBotController(

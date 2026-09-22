@@ -720,23 +720,24 @@ class NativeTweetBotController:
 
     @staticmethod
     def _chat_login_keyboard(types: Any, placeholder: str) -> Any:
-        """Keep login actions visible while credentials are entered.
+        """Keep login actions on the same inline callback page as Video Bot.
 
-        ``ForceReply`` replaces the persistent Telegram keyboard with a client
-        side reply bar.  That made the login flow look stuck and hid the only
-        way to leave it without typing a command.  A normal reply keyboard
-        keeps the FSM active while exposing explicit cancel/back controls.
+        ``placeholder`` is retained for API compatibility and documentation;
+        credentials still arrive as private-chat messages and never travel in
+        callback data.  The persistent four-button workbench keyboard remains
+        the only total-control keyboard.
         """
-        button = types.KeyboardButton
-        return types.ReplyKeyboardMarkup(
-            keyboard=[
-                [button(text=CHAT_LOGIN_CANCEL_BUTTON)],
-                [button(text=CHAT_LOGIN_BACK_BUTTON)],
-            ],
-            resize_keyboard=True,
-            is_persistent=True,
-            input_field_placeholder=str(placeholder or "")[:64],
-        )
+        _ = placeholder
+        return types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(
+                text=CHAT_LOGIN_CANCEL_BUTTON,
+                callback_data="tt:login_cancel",
+            )],
+            [types.InlineKeyboardButton(
+                text=CHAT_LOGIN_BACK_BUTTON,
+                callback_data="tt:accountmenu",
+            )],
+        ])
 
     async def _finish_chat_login_cancel(
         self,
@@ -3718,6 +3719,40 @@ class NativeTweetBotController:
             await query.answer("消息已失效", show_alert=True)
             return
         data = str(query.data or "")
+        chat_id = int(getattr(getattr(query.message, "chat", None), "id", 0) or 0)
+        login_modes = {
+            CHAT_LOGIN_USERNAME_MODE,
+            CHAT_LOGIN_PASSWORD_MODE,
+            CHAT_LOGIN_VERIFICATION_MODE,
+        }
+        if data in {"tt:login_cancel", "tt:accountmenu"}:
+            # Login controls must remain usable before a member exists.  The
+            # normal account page is protected by _authorized(), while this
+            # short branch only clears the private-chat login FSM and renders
+            # either the bound account page or the self-service entry point.
+            login_active = data == "tt:login_cancel" or load_state(chat_id)["mode"] in login_modes
+            if login_active:
+                await query.answer()
+                self._clear_chat_login(chat_id)
+                member = self._member(chat_id)
+                if member is not None:
+                    try:
+                        page_text, markup = await self._account_management_payload(types, member)
+                        prefix = "已返回账号管理。" if data == "tt:accountmenu" else "已取消推文工作台登录。"
+                        await query.message.edit_text(prefix + "\n\n" + page_text, reply_markup=markup)
+                    except Exception:
+                        logger.debug("Unable to render tweet account menu after login callback", exc_info=True)
+                        await query.message.edit_text(
+                            "已返回账号管理。\n如需继续，请点击下方按钮重新开始。",
+                            reply_markup=self._binding_markup(types, chat_id),
+                        )
+                else:
+                    prefix = "已返回账号管理。" if data == "tt:accountmenu" else "已取消推文工作台登录。"
+                    await query.message.edit_text(
+                        prefix + "\n当前 Telegram 尚未绑定 VECTO 用户，请点击下方按钮在聊天中登录。",
+                        reply_markup=self._binding_markup(types, chat_id),
+                    )
+                return
         if data == "tt:chatlogin":
             # This action is intentionally available before _authorized(): the
             # whole point is to establish the first binding from a Telegram
