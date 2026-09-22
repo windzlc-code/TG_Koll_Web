@@ -31123,3 +31123,42 @@ body.console-page {
   object-position: center;
   transform: none;
 }
+
+/* Keep the composition picker readable when the server-side picker is present.
+   The list must not clip the two-line option labels or steal the page scroll. */
+.persona-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-height: 520px;
+  padding: 2px 2px 4px;
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+.persona-picker-option {
+  display: grid;
+  min-height: 64px;
+  padding: 10px 12px;
+  gap: 4px;
+  line-height: 1.4;
+  box-sizing: border-box;
+}
+
+.persona-picker-option strong,
+.persona-picker-option small {
+  line-height: 1.4;
+}
+
+@media (max-width: 600px) {
+  .persona-picker-list {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .persona-picker-option {
+    min-height: 64px;
+    padding: 10px 12px;
+  }
+}

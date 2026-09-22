@@ -302,6 +302,56 @@ def test_mobile_composition_cards_keep_kind_and_description_visible_and_task_pre
         browser.close()
 
 
+def test_composition_picker_spacing_and_nested_scroll_are_preserved_on_rerender():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 1024, "height": 844})
+        page.set_content(
+            '''<!doctype html><html><body class="console-page">
+              <main id="moduleBody"><section data-persona-image-composition-post="post-1">
+                <div class="persona-picker-list" style="height:140px">
+                  <button class="persona-picker-option"><strong>群像</strong><small>群像互动</small></button>
+                  <button class="persona-picker-option"><strong>场景</strong><small>环境场景</small></button>
+                  <button class="persona-picker-option"><strong>物件</strong><small>物件特写</small></button>
+                </div>
+              </section></main>
+            </body></html>'''
+        )
+        page.add_style_tag(path=str(CONSOLE_CSS))
+        page.add_script_tag(path=str(CONSOLE_JS))
+        result = page.evaluate(
+            """async () => {
+              const list = document.querySelector('.persona-picker-list');
+              list.scrollTop = 37;
+              const snapshot = snapshotConsoleScrollState();
+              document.querySelector('#moduleBody').innerHTML = `<section data-persona-image-composition-post="post-1">
+                <div class="persona-picker-list" style="height:140px">
+                  <button class="persona-picker-option"><strong>群像</strong><small>群像互动</small></button>
+                  <button class="persona-picker-option"><strong>场景</strong><small>环境场景</small></button>
+                  <button class="persona-picker-option"><strong>物件</strong><small>物件特写</small></button>
+                </div>
+              </section>`;
+              restoreConsoleScrollState(snapshot);
+              await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+              const next = document.querySelector('.persona-picker-list');
+              const option = document.querySelector('.persona-picker-option');
+              const style = getComputedStyle(option);
+              return {
+                scrollTop: next.scrollTop,
+                minHeight: parseFloat(style.minHeight),
+                paddingTop: parseFloat(style.paddingTop),
+                paddingLeft: parseFloat(style.paddingLeft),
+              };
+            }"""
+        )
+        assert result["scrollTop"] == 37
+        assert result["minHeight"] >= 64
+        assert result["paddingTop"] >= 10
+        assert result["paddingLeft"] >= 12
+        browser.close()
+
+
 def test_post_image_render_style_selection_is_locked_immediately_during_submission():
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as playwright:

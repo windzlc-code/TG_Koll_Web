@@ -8942,6 +8942,21 @@ function snapshotPersonaListScrolls() {
   }));
 }
 
+function personaPickerScrollSnapshotKey(node, index) {
+  const host = node?.closest?.("[data-persona-image-composition-post], .persona-post-image-render-style-panel");
+  const postId = String(host?.dataset?.personaImageCompositionPost || "").trim();
+  const role = String(node?.getAttribute?.("role") || "").trim();
+  return `${postId || role || "picker"}:${index}`;
+}
+
+function snapshotPersonaPickerScrolls() {
+  return Array.from(document.querySelectorAll(".persona-picker-list")).map((node, index) => ({
+    index,
+    key: personaPickerScrollSnapshotKey(node, index),
+    top: node.scrollTop || 0,
+  }));
+}
+
 function snapshotConsoleScrollState() {
   const moduleBody = $("moduleBody");
   const main = document.querySelector(".console-main");
@@ -8966,6 +8981,7 @@ function snapshotConsoleScrollState() {
     personaHotPreviewKey: String(personaHotPreview?.dataset?.personaHotPreviewKey || ""),
     personaHotLayoutTop: personaHotLayout ? personaHotLayout.getBoundingClientRect().top : null,
     personaListScrolls: snapshotPersonaListScrolls(),
+    personaPickerScrolls: snapshotPersonaPickerScrolls(),
   };
 }
 
@@ -9029,6 +9045,12 @@ function restoreConsoleScrollState(snapshot) {
     (snapshot.personaListScrolls || []).forEach((item) => {
       const target = currentPersonaScrolls.find((node, index) => personaListScrollSnapshotKey(node, index) === item.key)
         || currentPersonaScrolls[item.index];
+      if (target) target.scrollTop = item.top || 0;
+    });
+    const currentPersonaPickerScrolls = Array.from(document.querySelectorAll(".persona-picker-list"));
+    (snapshot.personaPickerScrolls || []).forEach((item) => {
+      const target = currentPersonaPickerScrolls.find((node, index) => personaPickerScrollSnapshotKey(node, index) === item.key)
+        || currentPersonaPickerScrolls[item.index];
       if (target) target.scrollTop = item.top || 0;
     });
     if (personaHotLayout && Number.isFinite(snapshot.personaHotLayoutTop)) {
