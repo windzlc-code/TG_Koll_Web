@@ -157,6 +157,7 @@ from .proxy_ip_admin import (
     register_proxy_ip_admin_routes,
     stop_proxy_market_health_monitor,
 )
+from .collector_proxy_admin import register_collector_proxy_admin_routes
 from .proxy_purchase_api import (
     register_proxy_purchase_routes,
     start_proxy_purchase_worker,
@@ -27714,6 +27715,7 @@ def create_app() -> FastAPI:
         collector_live_search=_crm_collector_live_search_enabled(),
     )
     register_proxy_ip_admin_routes(app)
+    register_collector_proxy_admin_routes(app)
     register_proxy_purchase_routes(
         app,
         current_user_dependency=get_current_user,

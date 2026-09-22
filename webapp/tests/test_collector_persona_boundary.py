@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 STATIC_ROOT = Path(__file__).resolve().parents[1] / "static"
+SERVER = Path(__file__).resolve().parents[1] / "server.py"
 
 
 def read_static(relative: str) -> str:
@@ -58,6 +59,12 @@ def test_admin_js_renders_grouped_collector_proxy_traffic() -> None:
     assert "btnRefreshCollectorProxyTraffic" in script
     assert "COLLECTOR_PROXY_TRAFFIC_POLL_INTERVAL_MS" in script
     assert 'el("collectorProxyTrafficCard")' in script
+
+
+def test_console_registers_collector_proxy_admin_routes() -> None:
+    server = SERVER.read_text(encoding="utf-8")
+    assert "from .collector_proxy_admin import register_collector_proxy_admin_routes" in server
+    assert "register_collector_proxy_admin_routes(app)" in server
 
 
 def test_collector_session_boundary_does_not_bounce_through_admin() -> None:

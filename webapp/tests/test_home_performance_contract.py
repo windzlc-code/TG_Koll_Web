@@ -21,6 +21,7 @@ class HomePerformanceContractTests(unittest.TestCase):
         self.assertNotIn('class="home-hero-media" data-src=', html)
         self.assertNotIn('data-poster="/assets/opc/home/', html)
         self.assertEqual(html.count('poster="/assets/opc/home/'), 2)
+        self.assertEqual(html.count('<video class="home-hero-media is-ready"'), 2)
         self.assertGreaterEqual(html.count('<img data-src="/assets/opc/home/'), 10)
 
     def test_noncritical_scripts_do_not_block_html_parsing(self):
