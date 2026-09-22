@@ -315,6 +315,10 @@ def test_composition_picker_spacing_and_nested_scroll_are_preserved_on_rerender(
                   <button class="persona-picker-option"><strong>场景</strong><small>环境场景</small></button>
                   <button class="persona-picker-option"><strong>物件</strong><small>物件特写</small></button>
                 </div>
+                <figure class="persona-picker-preview">
+                  <img width="640" height="480" alt="人物自拍预览" />
+                  <figcaption>人物自拍</figcaption>
+                </figure>
               </section></main>
             </body></html>'''
         )
@@ -331,17 +335,31 @@ def test_composition_picker_spacing_and_nested_scroll_are_preserved_on_rerender(
                   <button class="persona-picker-option"><strong>场景</strong><small>环境场景</small></button>
                   <button class="persona-picker-option"><strong>物件</strong><small>物件特写</small></button>
                 </div>
+                <figure class="persona-picker-preview">
+                  <img width="640" height="480" alt="人物自拍预览" />
+                  <figcaption>人物自拍</figcaption>
+                </figure>
               </section>`;
               restoreConsoleScrollState(snapshot);
               await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
               const next = document.querySelector('.persona-picker-list');
               const option = document.querySelector('.persona-picker-option');
+              const preview = document.querySelector('.persona-picker-preview');
+              const previewImage = document.querySelector('.persona-picker-preview img');
               const style = getComputedStyle(option);
+              const previewStyle = getComputedStyle(preview);
+              const previewImageStyle = getComputedStyle(previewImage);
               return {
                 scrollTop: next.scrollTop,
                 minHeight: parseFloat(style.minHeight),
                 paddingTop: parseFloat(style.paddingTop),
                 paddingLeft: parseFloat(style.paddingLeft),
+                listOverflow: getComputedStyle(next).overflowY,
+                listMaxHeight: parseFloat(getComputedStyle(next).maxHeight),
+                previewAlignSelf: previewStyle.alignSelf,
+                previewHeight: previewStyle.height,
+                previewImageAspectRatio: previewImageStyle.aspectRatio,
+                previewImageObjectFit: previewImageStyle.objectFit,
               };
             }"""
         )
@@ -349,6 +367,12 @@ def test_composition_picker_spacing_and_nested_scroll_are_preserved_on_rerender(
         assert result["minHeight"] >= 64
         assert result["paddingTop"] >= 10
         assert result["paddingLeft"] >= 12
+        assert result["listOverflow"] == "auto"
+        assert result["listMaxHeight"] == 260
+        assert result["previewAlignSelf"] == "start"
+        assert float(result["previewHeight"].replace("px", "")) > 0
+        assert result["previewImageAspectRatio"] in {"4 / 3", "1.33333 / 1"}
+        assert result["previewImageObjectFit"] == "contain"
         browser.close()
 
 

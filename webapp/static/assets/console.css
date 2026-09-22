@@ -31131,7 +31131,7 @@ body.console-page {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
-  max-height: 520px;
+  max-height: 260px;
   padding: 2px 2px 4px;
   overflow: auto;
   box-sizing: border-box;
@@ -31151,14 +31151,67 @@ body.console-page {
   line-height: 1.4;
 }
 
+.persona-picker-option strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.persona-picker-option-default {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 1px 6px;
+  border: 1px solid rgba(46, 112, 128, 0.28);
+  border-radius: 999px;
+  color: #2e7080;
+  background: rgba(46, 112, 128, 0.08);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* The preview keeps the source composition ratio instead of stretching to
+   match the independently scrollable option list. */
+.persona-picker-preview {
+  display: flex;
+  flex-direction: column;
+  align-self: start;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  overflow: hidden;
+}
+
+.persona-picker-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  object-fit: contain;
+  object-position: center;
+  background: #fff;
+}
+
+.persona-picker-preview figcaption {
+  flex: 0 0 auto;
+}
+
 @media (max-width: 600px) {
   .persona-picker-list {
-    max-height: none;
-    overflow: visible;
+    max-height: 260px;
+    overflow: auto;
   }
 
   .persona-picker-option {
     min-height: 64px;
     padding: 10px 12px;
+  }
+}
+
+@media (max-width: 360px) {
+  .persona-picker-list {
+    max-height: 220px;
   }
 }
