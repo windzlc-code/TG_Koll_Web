@@ -37431,6 +37431,13 @@ function bindEvents() {
   $("moduleBody").addEventListener("dragstart", (event) => {
     if (event.target.closest?.("[data-persona-drag-persona]")) event.preventDefault();
   });
+  // Keep composition selection from scrolling a focused button into view
+  // before the delegated click handler rerenders the detail panel.
+  $("moduleBody").addEventListener("pointerdown", (event) => {
+    const compositionButton = event.target.closest?.("[data-persona-image-composition-index], [data-persona-image-composition-kind]");
+    if (!compositionButton || compositionButton.disabled) return;
+    compositionButton.focus?.({ preventScroll: true });
+  }, true);
   $("moduleBody").addEventListener("pointerdown", handlePersonaPointerDown);
   $("moduleBody").addEventListener("pointerdown", handlePersonaMediaPointerDown);
   $("moduleBody").addEventListener("keydown", handlePersonaMediaSortKeydown);

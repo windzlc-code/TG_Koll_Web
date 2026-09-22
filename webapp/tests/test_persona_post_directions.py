@@ -224,6 +224,7 @@ def test_composition_selection_prevents_focus_scroll_during_detail_rerender():
     assert "event.preventDefault();" in handler
     assert "imageCompositionButton.blur?.();" in handler
     assert "withConsoleScrollPreserved(() => renderPersonaDetail());" in handler
+    assert 'focus?.({ preventScroll: true })' in script
 
 
 def test_mobile_direction_picker_keeps_actions_aligned_and_reuses_selection_icons():
