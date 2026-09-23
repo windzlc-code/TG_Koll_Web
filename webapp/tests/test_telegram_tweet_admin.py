@@ -1319,6 +1319,64 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query(text_back, text), _Types))
         self.assertEqual(load_state(101)["mode"], "generate_count")
 
+    def test_invalid_count_input_returns_to_count_picker_instead_of_mode_picker(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a", mode="generate_count_input", payload={
+            "generation_mode": "text",
+            "generation_back": "tt:genmodes",
+            "r18_flow": True,
+        })
+        message = _Message(text="not-a-number")
+        asyncio.run(controller.handle_text(message, _Types))
+        buttons = [
+            button
+            for row in message.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        back = next(button for button in buttons if button.text == "返回生成数量")
+        self.assertEqual(back.callback_data, "tt:gcount:back")
+        asyncio.run(controller.handle_callback(_Query(back.callback_data, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_count")
+        self.assertIn("请选择或输入本次生成数量", message.edits[-1][0])
+
+    def test_invalid_schedule_input_keeps_post_detail_return(self):
+        def dispatch(_uid, action, _payload):
+            if action == "posts.list":
+                return [{"id": "post-a", "content": "待发布正文", "media_items": []}]
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a", mode="schedule_time", payload={
+            "persona_id": "persona-a",
+            "source": "posts",
+            "post_id": "post-a",
+            "page": 2,
+            "intent": "publish",
+        })
+        message = _Message(text="not-a-date")
+        asyncio.run(controller.handle_text(message, _Types))
+        buttons = [
+            button
+            for row in message.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        back = next(button for button in buttons if button.text == "返回推文详情")
+        asyncio.run(controller.handle_callback(_Query(back.callback_data, message), _Types))
+        self.assertIn("待发布正文", message.edits[-1][0])
+        self.assertIn("返回列表", {
+            button.text
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        })
+
     def test_r18_free_generation_modes_keep_stepwise_callbacks(self):
         calls = []
 

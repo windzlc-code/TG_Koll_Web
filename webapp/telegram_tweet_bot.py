@@ -1150,6 +1150,134 @@ class NativeTweetBotController:
         return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     @staticmethod
+    def _text_error_navigation(types: Any, chat_id: int, state: dict[str, Any]) -> Any:
+        """Keep failed text-input steps inside their owning module.
+
+        Text validation/API failures used to fall through to one generic
+        ``返回总控菜单`` keyboard.  That made a malformed value in (for
+        example) scheduled publishing or profile links look like the wizard
+        had been lost, even though its state was deliberately retained.  The
+        callback surface already has the correct contextual back actions; this
+        helper reuses those actions for the error reply as well.
+        """
+        payload = state.get("payload") if isinstance(state.get("payload"), dict) else {}
+        mode = str(state.get("mode") or "").strip()
+        try:
+            page = max(0, int(payload.get("page") or 0))
+        except (TypeError, ValueError):
+            # A stale/legacy state must not make the error renderer fail too;
+            # fall back to the first page while keeping the wizard exits usable.
+            page = 0
+        back_callback = ""
+        back_text = ""
+
+        def persona_management() -> tuple[str, str]:
+            return callback_token(chat_id, "personamanage", {"page": page}), "返回人设管理"
+
+        def post_detail() -> tuple[str, str]:
+            source = "favorites" if str(payload.get("source") or "") == "favorites" else "posts"
+            return callback_token(chat_id, "f" if source == "favorites" else "d", {
+                "persona_id": str(state.get("selected_persona_id") or ""),
+                "post_id": str(payload.get("post_id") or ""),
+                "source": source,
+                "page": page,
+                "intent": str(payload.get("intent") or ""),
+            }), "返回推文详情"
+
+        if mode in {
+            "persona_new_name",
+            "persona_new",
+            "persona_ai_name",
+            "persona_ai_create",
+            "persona_copy_url",
+        }:
+            back_callback, back_text = persona_management()
+        elif mode == "persona_new_content":
+            back_callback, back_text = "tt:persona_new_name", "返回重新输入名称"
+        elif mode == "persona_ai_prompt":
+            back_callback, back_text = "tt:persona_ai_name", "返回重新输入名称"
+        elif mode == "persona_copy_name":
+            back_callback = callback_token(chat_id, "personacopyurl", {})
+            back_text = "返回重新输入链接"
+        elif mode == "persona_copy_analyze":
+            back_callback = callback_token(chat_id, "personacopyurl", {})
+            back_text = "返回重新输入链接"
+        elif mode == "generate_count_input":
+            # This is a child page of the count picker, not of the mode
+            # picker.  ``gcount:back`` now re-renders that picker below.
+            back_callback, back_text = "tt:gcount:back", "返回生成数量"
+        elif mode == "generate_prompt":
+            back_callback = "tt:gprompt:back"
+            back_text = (
+                "返回配图比例"
+                if str(payload.get("generation_mode") or "text") == "media"
+                else "返回生成数量"
+            )
+        elif mode == "persona_image_prompt":
+            back_callback = callback_token(chat_id, "personaimage", {
+                "persona_id": str(state.get("selected_persona_id") or ""),
+                "page": page,
+            })
+            back_text = "返回人设图库"
+        elif mode == "image_prompt":
+            back_callback = callback_token(chat_id, "image", {
+                "persona_id": str(state.get("selected_persona_id") or ""),
+                "post_id": str(payload.get("post_id") or ""),
+                "source": str(payload.get("source") or "posts"),
+                "page": page,
+                "intent": "image",
+            })
+            back_text = "返回配图设置"
+        elif mode in {"draft_new"}:
+            back_callback, back_text = "tt:pmod:create", "返回新建推文"
+        elif mode == "draft_edit":
+            back_callback, back_text = post_detail()
+        elif mode == "schedule_time":
+            back_callback, back_text = post_detail()
+        elif mode in {"history_link", "history_recognize"}:
+            back_callback = f"tt:persona_history:{page}"
+            back_text = "返回发布历史"
+        elif mode == "history_caption":
+            back_callback = callback_token(chat_id, "historylink", {"page": page})
+            back_text = "返回重新输入链接"
+        elif mode in {"profile_content", "profile_style", "profile_name", "profile_ai", "profile_threads"}:
+            back_callback, back_text = "tt:profile", "返回基础资料"
+        elif mode == "profile_memory_create":
+            back_callback = callback_token(chat_id, "pmemories", {"page": page})
+            back_text = "返回人设记忆"
+        elif mode in {"profile_link_name", "profile_link_create"}:
+            back_callback = callback_token(chat_id, "plinks", {"page": page})
+            back_text = "返回链接模板"
+        elif mode == "profile_link_url":
+            back_callback = callback_token(chat_id, "plinkname", {"page": page})
+            back_text = "返回重新输入名称"
+        elif mode == "profile_link_ending":
+            back_callback = callback_token(chat_id, "plinkurl", {"page": page})
+            back_text = "返回重新输入链接"
+        elif mode == "automation_plan_create":
+            back_callback = f"tt:automationplans:{page}"
+            back_text = "返回自动化计划"
+        elif mode == "hot_rewrite":
+            back_callback = callback_token(chat_id, "hotlist", {
+                "task_id": str(payload.get("last_hot_task_id") or ""),
+                "persona_id": str(state.get("selected_persona_id") or ""),
+            })
+            back_text = "返回候选列表"
+        elif mode == "hot_prompt":
+            back_callback, back_text = "tt:hot", "返回热点创作"
+
+        if back_callback:
+            return NativeTweetBotController._step_navigation_markup(
+                types,
+                back_callback=back_callback,
+                back_text=back_text,
+            )
+        return types.InlineKeyboardMarkup(inline_keyboard=[[
+            types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
+            types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
+        ]])
+
+    @staticmethod
     def _generation_count_keyboard(
         types: Any,
         *,
@@ -5672,6 +5800,11 @@ class NativeTweetBotController:
                             query, types, page=0, notice="返回人设记忆选择。",
                         )
                         return
+                    if state["mode"] == "generate_count_input":
+                        await self._render_generation_count_step(
+                            query, types, payload=payload, notice="返回生成数量选择。",
+                        )
+                        return
                     raise HTTPException(status_code=409, detail="返回步骤已失效，请重新开始")
                 if parts[2] == "input":
                     save_state(chat_id, mode="generate_count_input", payload=payload)
@@ -7974,7 +8107,10 @@ class NativeTweetBotController:
             elif mode == "generate_count_input":
                 raw_count = text.strip()
                 count_payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
-                count_back_callback, count_back_text = self._generation_count_navigation(count_payload)
+                # Custom quantity is a child of the count picker.  Returning
+                # from an invalid value must reopen that picker, not skip back
+                # to the generation-mode page.
+                count_back_callback, count_back_text = "tt:gcount:back", "返回生成数量"
                 try:
                     count = int(raw_count)
                 except (TypeError, ValueError):
@@ -8573,10 +8709,7 @@ class NativeTweetBotController:
             await message.answer(
                 f"操作失败：{_error_text(exc)}\n"
                 "状态已保留，可修正后重试；也可以点击下方返回或取消，不必输入命令。",
-                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                    types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
-                    types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
-                ]]),
+                reply_markup=self._text_error_navigation(types, chat_id, load_state(chat_id)),
             )
 
     async def handle_media(self, message: Any, types: Any) -> None:
@@ -8770,10 +8903,7 @@ class NativeTweetBotController:
             await message.answer(
                 f"媒体上传失败：{_error_text(exc)}\n"
                 "可重新发送支持的媒体，也可以点击下方取消当前步骤。",
-                reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                    types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
-                    types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
-                ]]),
+                reply_markup=media_input_navigation_markup(),
             )
 
     async def _watch_generation(
