@@ -3733,8 +3733,8 @@ class NativeTweetBotController:
             resource_id=new_id,
         )
         await reply(
-            f"AI 人设已创建：{created_name}\n"
-            "下一步可先进入人设图设置，再生成首张人设图；也可以直接完善基础资料。",
+            f"AI 生成人设 · 第 3/3 步\n已创建：{created_name}\n"
+            "请选择下一步：先生成首张人设图，或打开基础资料继续完善。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                 types.InlineKeyboardButton(
                     text="打开人设",
@@ -4519,13 +4519,13 @@ class NativeTweetBotController:
                         types, back_callback="tt:personamanage", back_text="返回人设管理",
                     ),
                 )
-            elif action == "persona_ai_new":
-                save_state(chat_id, mode="persona_ai_create", payload={})
+            elif action in {"persona_ai_new", "persona_ai_name"}:
+                save_state(chat_id, mode="persona_ai_name", payload={})
                 await query.message.edit_text(
-                    "AI 生成人设 · 第 1 步\n"
-                    "请发送：人设名称｜人设提示词\n"
-                    "例如：科技观察员｜关注 AI 产品、创业趋势，语气克制专业。\n"
-                    "下一步会展示普通关键词和热门关键词供选择，确认后才创建人设。",
+                    "AI 生成人设 · 第 1/3 步\n"
+                    "请单独发送人设名称。\n"
+                    "例如：科技观察员\n"
+                    "收到名称后，下一步会单独引导你发送人设提示词。",
                     reply_markup=self._step_navigation_markup(
                         types, back_callback="tt:personamanage", back_text="返回人设管理",
                     ),
@@ -4603,16 +4603,16 @@ class NativeTweetBotController:
                         reply_markup=self._persona_ai_keywords_markup(types, chat_id, payload),
                     )
                 elif action == "persona_ai_back":
-                    save_state(chat_id, mode="persona_ai_create", payload={
+                    save_state(chat_id, mode="persona_ai_prompt", payload={
                         "ai_name": name,
-                        "ai_prompt": prompt,
                     })
                     await query.message.edit_text(
-                        "AI 生成人设 · 返回修改\n"
-                        "请重新发送：人设名称｜人设提示词。\n"
-                        "修改后会重新生成候选关键词。",
+                        "AI 生成人设 · 第 2/3 步\n"
+                        f"名称：{name[:160]}\n"
+                        "请单独重新发送人设提示词。\n"
+                        "可描述身份、性格、内容方向、语气、受众和图片风格。",
                         reply_markup=self._step_navigation_markup(
-                            types, back_callback="tt:personamanage", back_text="返回人设管理",
+                            types, back_callback="tt:persona_ai_name", back_text="返回重新输入名称",
                         ),
                     )
                 else:
@@ -6982,13 +6982,57 @@ class NativeTweetBotController:
                             types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
                         ]]),
                     )
-            elif mode == "persona_ai_create":
-                name, separator, prompt = text.partition("｜")
-                if not separator:
-                    name, separator, prompt = text.partition("|")
-                name, prompt = name.strip(), prompt.strip()
-                if not name or not prompt:
-                    raise HTTPException(status_code=400, detail="格式应为：人设名称｜人设提示词")
+            elif mode in {"persona_ai_name", "persona_ai_prompt", "persona_ai_create"}:
+                value = text.strip()
+                name = ""
+                prompt = ""
+                if mode == "persona_ai_name":
+                    if "｜" in value or "|" in value:
+                        await message.answer(
+                            "AI 生成人设 · 第 1/3 步\n"
+                            "这一步只接收人设名称，请不要同时发送提示词。\n"
+                            "请重新单独发送名称，例如：科技观察员。",
+                            reply_markup=self._step_navigation_markup(
+                                types,
+                                back_callback="tt:personamanage",
+                                back_text="返回人设管理",
+                            ),
+                        )
+                        return
+                    if len(value) < 2:
+                        raise HTTPException(status_code=400, detail="人设名称至少需要 2 个字，请重新发送名称")
+                    save_state(chat_id, mode="persona_ai_prompt", payload={"ai_name": value[:160]})
+                    await message.answer(
+                        "AI 生成人设 · 第 2/3 步\n"
+                        f"名称：{value[:160]}\n"
+                        "请单独发送人设提示词。\n"
+                        "可描述身份、性格、内容方向、语气、受众和图片风格。",
+                        reply_markup=self._step_navigation_markup(
+                            types,
+                            back_callback="tt:persona_ai_name",
+                            back_text="返回重新输入名称",
+                        ),
+                    )
+                    return
+                elif mode == "persona_ai_prompt":
+                    name = str(state["payload"].get("ai_name") or "").strip()
+                    prompt = value
+                else:
+                    # Keep one-message input compatible with old pending states,
+                    # but never advertise it in the new step-by-step UI.
+                    name, separator, prompt = value.partition("｜")
+                    if not separator:
+                        name, separator, prompt = value.partition("|")
+                    name, prompt = name.strip(), prompt.strip()
+                if len(name) < 2 or not prompt:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "请先发送人设名称，再单独发送人设提示词。"
+                            if mode == "persona_ai_prompt"
+                            else "请发送有效的人设名称和提示词。"
+                        ),
+                    )
                 keyword_key = f"tg:persona-ai-keywords:{chat_id}:{int(message.message_id)}"
                 create_key = f"tg:persona-ai-create:{chat_id}:{int(message.message_id)}"
                 try:

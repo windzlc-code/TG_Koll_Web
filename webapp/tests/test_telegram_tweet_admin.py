@@ -1843,13 +1843,23 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         message = _Message()
         asyncio.run(controller.handle_callback(_Query("tt:persona_ai_new", message), _Types))
-        ai_input = _Message(text="AI观察员｜关注科技趋势并保持克制专业")
-        asyncio.run(controller.handle_text(ai_input, _Types))
+        self.assertIn("第 1/3 步", message.edits[-1][0])
+        self.assertNotIn("｜", message.edits[-1][0])
+        combined_input = _Message(text="AI观察员｜关注科技趋势并保持克制专业")
+        asyncio.run(controller.handle_text(combined_input, _Types))
+        self.assertEqual(load_state(101)["mode"], "persona_ai_name")
+        self.assertIn("只接收人设名称", combined_input.answers[-1][0])
+        name_input = _Message(text="AI观察员")
+        asyncio.run(controller.handle_text(name_input, _Types))
+        self.assertEqual(load_state(101)["mode"], "persona_ai_prompt")
+        self.assertIn("第 2/3 步", name_input.answers[-1][0])
+        prompt_input = _Message(text="关注科技趋势并保持克制专业")
+        asyncio.run(controller.handle_text(prompt_input, _Types))
         self.assertEqual(load_state(101)["selected_persona_id"], "persona-ai")
         self.assertTrue(any(action == "personas.ai_create" for action, _payload in calls))
         profile_button = next(
             button
-            for row in ai_input.answers[-1][1]["reply_markup"].inline_keyboard
+            for row in prompt_input.answers[-1][1]["reply_markup"].inline_keyboard
             for button in row
             if button.text == "基础资料"
         )
@@ -2006,7 +2016,10 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         message = _Message()
         asyncio.run(controller.handle_callback(_Query("tt:persona_ai_new", message), _Types))
-        keyword_message = _Message(text="生活观察员｜记录日常生活和城市见闻")
+        name_input = _Message(text="生活观察员")
+        asyncio.run(controller.handle_text(name_input, _Types))
+        self.assertEqual(load_state(101)["mode"], "persona_ai_prompt")
+        keyword_message = _Message(text="记录日常生活和城市见闻")
         asyncio.run(controller.handle_text(keyword_message, _Types))
         self.assertEqual(load_state(101)["mode"], "persona_ai_keyword_select")
         regular = next(
