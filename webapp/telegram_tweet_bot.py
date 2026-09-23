@@ -3819,7 +3819,9 @@ class NativeTweetBotController:
         result = await self._call(user_id, "personas.ai_create", {
             "name": name[:160],
             "prompt": prompt[:2000],
-            "selected_keywords": list(selected_keywords)[:4],
+            # Keep the callback surface and submitted payload in lockstep
+            # with the R18 wizard: at most two core keywords are accepted.
+            "selected_keywords": list(selected_keywords)[:2],
             "selected_regular_keywords": list(selected_regular_keywords)[:2],
             "selected_hot_keywords": list(selected_hot_keywords)[:2],
             "idempotency_key": str(idempotency_key or "")[:240],
@@ -4718,7 +4720,7 @@ class NativeTweetBotController:
                 payload["ai_selected_keywords"] = list(dict.fromkeys(
                     self._persona_ai_keyword_values(payload.get("ai_selected_regular_keywords"), limit=2)
                     + self._persona_ai_keyword_values(payload.get("ai_selected_hot_keywords"), limit=2)
-                ))[:4]
+                ))[:2]
                 save_state(chat_id, mode="persona_ai_keyword_select", payload=payload)
                 await query.message.edit_text(
                     self._persona_ai_keywords_text(payload),
