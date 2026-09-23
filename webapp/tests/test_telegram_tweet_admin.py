@@ -726,6 +726,15 @@ class TelegramTweetAdminTests(unittest.TestCase):
             "tt:genmode:text", "tt:genmode:media", "tt:genmode:custom",
             "tt:genmode:hot", "tt:pmod:create",
         })
+        generation_mode_markup = message.edits[-1][1]["reply_markup"]
+        self.assertEqual([len(row) for row in generation_mode_markup.inline_keyboard], [1, 1, 1, 1, 1])
+        generation_mode_labels = [
+            str(button.text)
+            for row in generation_mode_markup.inline_keyboard
+            for button in row
+        ]
+        self.assertTrue(any("配图/视频" in label for label in generation_mode_labels))
+        self.assertTrue(any(label.startswith("◀️") for label in generation_mode_labels))
         self.assertIn("请选择本次生成方式", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
         content_module_callbacks = {
@@ -928,7 +937,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
                 button.callback_data
                 for row in message.edits[-1][1]["reply_markup"].inline_keyboard
                 for button in row
-                if str(getattr(button, "text", "")) == "上一步"
+                if str(getattr(button, "text", "")).startswith("◀️")
             )
             asyncio.run(controller.handle_callback(_Query(back, message), _Types))
             self.assertIn("科技观察员", message.edits[-1][0])
@@ -1129,7 +1138,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("设为当前", message.edits[-1][0])
         image_back = next(
             button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
-            for button in row if str(getattr(button, "text", "")) == "上一步"
+            for button in row if str(getattr(button, "text", "")).startswith("◀️")
         )
         self.assertEqual(image_back.callback_data, "tt:pmod:settings")
         region = next(
@@ -1156,7 +1165,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             if getattr(button, "callback_data", None)
         ))
         self.assertTrue(any(
-            "返回人设图库" == str(button.text)
+            str(button.text).endswith("返回人设图库")
             for row in message.edits[-1][1]["reply_markup"].inline_keyboard
             for button in row
         ))
@@ -1337,7 +1346,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for row in message.answers[-1][1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        back = next(button for button in buttons if button.text == "返回生成数量")
+        back = next(button for button in buttons if str(button.text).endswith("返回生成数量"))
         self.assertEqual(back.callback_data, "tt:gcount:back")
         asyncio.run(controller.handle_callback(_Query(back.callback_data, message), _Types))
         self.assertEqual(load_state(101)["mode"], "generate_count")
@@ -1368,14 +1377,15 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for row in message.answers[-1][1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        back = next(button for button in buttons if button.text == "返回推文详情")
+        back = next(button for button in buttons if str(button.text).endswith("返回推文详情"))
         asyncio.run(controller.handle_callback(_Query(back.callback_data, message), _Types))
         self.assertIn("待发布正文", message.edits[-1][0])
-        self.assertIn("返回列表", {
-            button.text
-            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
-            for button in row
-        })
+        detail_markup = message.edits[-1][1]["reply_markup"]
+        self.assertTrue(all(len(row) == 1 for row in detail_markup.inline_keyboard))
+        detail_labels = [str(button.text) for row in detail_markup.inline_keyboard for button in row]
+        self.assertTrue(any(label.startswith("🚀") for label in detail_labels))
+        self.assertTrue(any(label.startswith("⏰") for label in detail_labels))
+        self.assertTrue(any(label.startswith("◀️") for label in detail_labels))
 
     def test_expired_callback_leaves_clickable_return_menu(self):
         controller = NativeTweetBotController(
@@ -2226,7 +2236,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             button.callback_data
             for row in name.answers[-1][1]["reply_markup"].inline_keyboard
             for button in row
-            if button.text == "返回重新输入名称"
+            if str(button.text).endswith("返回重新输入名称")
         )
         asyncio.run(controller.handle_callback(_Query(back_to_name, message), _Types))
         self.assertEqual(load_state(101)["mode"], "profile_link_name")
@@ -2271,7 +2281,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             button.callback_data
             for row in link.answers[-1][1]["reply_markup"].inline_keyboard
             for button in row
-            if button.text == "返回重新输入链接"
+            if str(button.text).endswith("返回重新输入链接")
         )
         asyncio.run(controller.handle_callback(_Query(back_to_link, message), _Types))
         self.assertEqual(load_state(101)["mode"], "history_link")

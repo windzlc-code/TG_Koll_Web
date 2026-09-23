@@ -40,6 +40,16 @@ CONTROL_BUTTONS = frozenset({
     LEGACY_ACCOUNT_CONTROL_BUTTON,
     STOP_CONTROL_BUTTON,
 })
+
+
+def _back_label(label: str) -> str:
+    """Render contextual return actions with the canonical R18 arrow marker."""
+    value = str(label or "返回")
+    if value.startswith(("◀️", "⏪")):
+        return value
+    return f"◀️ {value}"
+
+
 HELP_TEXT = (
     "使用提示\n\n"
     "• 首次使用请点击“在聊天中登录并绑定”，按提示在本私聊中完成登录。\n"
@@ -1116,7 +1126,7 @@ class NativeTweetBotController:
     @staticmethod
     def _return_keyboard(types: Any) -> Any:
         return types.InlineKeyboardMarkup(inline_keyboard=[[
-            types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
+            types.InlineKeyboardButton(text=_back_label("返回总控菜单"), callback_data="tt:menu"),
         ]])
 
     @staticmethod
@@ -1145,7 +1155,12 @@ class NativeTweetBotController:
                 callback_data=str(primary_callback),
             )])
         if str(back_callback or "").strip():
-            rows.append([button(text=back_text, callback_data=str(back_callback))])
+            # R18 uses a compact arrow marker for every contextual return.
+            # Keep callback data unchanged; this is presentation-only.
+            display_back_text = str(back_text or "返回上一步")
+            if display_back_text and not display_back_text.startswith(("◀️", "⏪")):
+                display_back_text = f"◀️ {display_back_text}"
+            rows.append([button(text=display_back_text, callback_data=str(back_callback))])
         rows.append([button(text="取消当前步骤", callback_data="tt:stepcancel")])
         return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1273,7 +1288,7 @@ class NativeTweetBotController:
                 back_text=back_text,
             )
         return types.InlineKeyboardMarkup(inline_keyboard=[[
-            types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
+            types.InlineKeyboardButton(text=_back_label("返回总控菜单"), callback_data="tt:menu"),
             types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
         ]])
 
@@ -1320,10 +1335,10 @@ class NativeTweetBotController:
         button = types.InlineKeyboardButton
         return types.InlineKeyboardMarkup(inline_keyboard=[
             [button(text="📝 只生成推文（不配图）", callback_data="tt:genmode:text")],
-            [button(text="🖼 生成推文＋配图", callback_data="tt:genmode:media")],
+            [button(text="🖼 生成推文＋配图/视频", callback_data="tt:genmode:media")],
             [button(text="🧩 自定义新建（文字/图片/视频素材）", callback_data="tt:genmode:custom")],
             [button(text="🔥 热点抓取", callback_data="tt:genmode:hot")],
-            [button(text="返回新建推文", callback_data="tt:pmod:create")],
+            [button(text="◀️ 返回新建推文", callback_data="tt:pmod:create")],
         ])
 
     async def _start_tweet_generation_modes(self, query: Any, types: Any) -> None:
@@ -1375,7 +1390,7 @@ class NativeTweetBotController:
             [button(text="✅ 已完成", callback_data="tt:tasks:0:completed"), button(text="⏸ 已暂停", callback_data="tt:tasks:0:paused")],
             [button(text="🚫 已取消", callback_data="tt:tasks:0:cancelled"), button(text="📚 全部任务", callback_data="tt:tasks:0:all")],
             [button(text="🧵 按平台筛选", callback_data="tt:taskfilter:platform"), button(text="👤 按人设筛选", callback_data="tt:taskfilter:persona")],
-            [button(text="返回总控菜单", callback_data="tt:menu")],
+            [button(text=_back_label("返回总控菜单"), callback_data="tt:menu")],
         ])
 
     async def send_main_menu(self, message: Any, types: Any) -> None:
@@ -1579,7 +1594,7 @@ class NativeTweetBotController:
             ], [
                 types.InlineKeyboardButton(text="长文 200 字", callback_data="tt:gwords:200"),
             ], [
-                types.InlineKeyboardButton(text="返回提示词", callback_data="tt:gprompt:back"),
+                types.InlineKeyboardButton(text=_back_label("返回提示词"), callback_data="tt:gprompt:back"),
                 types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
             ]]),
         )
@@ -1610,7 +1625,7 @@ class NativeTweetBotController:
                 callback_data=f"tt:gratio:{value.replace(':', '_')}",
             )])
         rows.append([
-            types.InlineKeyboardButton(text="返回生成数量", callback_data="tt:gratio:back"),
+            types.InlineKeyboardButton(text=_back_label("返回生成数量"), callback_data="tt:gratio:back"),
             types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
         ])
         await query.message.edit_text(
@@ -1646,7 +1661,7 @@ class NativeTweetBotController:
                 ),
             ])
         rows.append([types.InlineKeyboardButton(
-            text="返回新建推文",
+            text=_back_label("返回新建推文"),
             callback_data="tt:pmod:create",
         )])
         rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
@@ -1717,7 +1732,7 @@ class NativeTweetBotController:
             callback_for_page=lambda target: f"tt:personas:{target}",
         )
         rows.extend(nav)
-        rows.append([types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回总控菜单"), callback_data="tt:menu")])
         resume_action = str(state["payload"].get("resume_action") or "")
         resume_text = {
             "generate": "AI 生成推文",
@@ -1765,7 +1780,7 @@ class NativeTweetBotController:
             [button(text="➕ 新建人设", callback_data="tt:persona_ai_new")],
             [button(text="📝 手工新建资料", callback_data="tt:persona_new")],
             [button(text="🔗 复制公开人设", callback_data="tt:persona_copy_new")],
-            [button(text="返回人设列表", callback_data=f"tt:personas:{max(0, int(page or 0))}")],
+            [button(text=_back_label("返回人设列表"), callback_data=f"tt:personas:{max(0, int(page or 0))}")],
         ]
         await query.message.edit_text(
             "人设管理\n\n"
@@ -1799,7 +1814,7 @@ class NativeTweetBotController:
                 button(text="🚀 发布管理", callback_data="tt:pmod:publish"),
                 button(text="⚙️ 人设设置", callback_data="tt:pmod:settings"),
             ],
-            [button(text="返回我的人设", callback_data=f"tt:personas:{max(0, int(page or 0))}")],
+            [button(text=_back_label("返回我的人设"), callback_data=f"tt:personas:{max(0, int(page or 0))}")],
         ])
 
     @staticmethod
@@ -1810,10 +1825,19 @@ class NativeTweetBotController:
         module: str = "",
         page: int = 0,
     ) -> list[Any]:
+        module_back_labels = {
+            "create": "◀️ 返回新建推文",
+            "content": "◀️ 返回推文内容",
+            "publish": "◀️ 返回发布管理",
+            "settings": "◀️ 返回人设设置",
+        }
         if module:
-            return [types.InlineKeyboardButton(text="上一步", callback_data=f"tt:pmod:{module}")]
+            return [types.InlineKeyboardButton(
+                text=module_back_labels.get(str(module).strip().lower(), "◀️ 上一步"),
+                callback_data=f"tt:pmod:{module}",
+            )]
         return [types.InlineKeyboardButton(
-            text="上一步",
+            text="◀️ 返回我的人设",
             callback_data=callback_token(chat_id, "p", {
                 "persona_id": persona_id,
                 "page": max(0, int(page or 0)),
@@ -2010,7 +2034,7 @@ class NativeTweetBotController:
             )])
         rows.extend(nav)
         rows.append([types.InlineKeyboardButton(text="➕ 新建分组", callback_data="tt:groupnew")])
-        rows.append([types.InlineKeyboardButton(text="返回我的人设", callback_data="tt:personas:0")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回我的人设"), callback_data="tt:personas:0")])
         text = (
             f"人设分组（{len(groups)}）\n第 {safe_page + 1}/{total_pages}\n"
             if groups else "人设分组\n暂无分组"
@@ -2092,7 +2116,7 @@ class NativeTweetBotController:
                 "detail_page": safe_page,
                 "groups_page": max(0, int(groups_page or 0)),
             }))],
-            [types.InlineKeyboardButton(text="返回人设分组", callback_data=f"tt:personagroups:{max(0, int(groups_page or 0))}")],
+            [types.InlineKeyboardButton(text=_back_label("返回人设分组"), callback_data=f"tt:personagroups:{max(0, int(groups_page or 0))}")],
         ])
         visible_member_ids = member_ids[start:start + PAGE_SIZE]
         members_text = "、".join(
@@ -2155,7 +2179,7 @@ class NativeTweetBotController:
                 }),
             )])
         rows.extend(nav)
-        rows.append([types.InlineKeyboardButton(text="返回分组", callback_data=callback_token(chat_id, "group", {
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回分组"), callback_data=callback_token(chat_id, "group", {
             "group_id": group_id,
             "page": max(0, int(detail_page or 0)),
             "groups_page": max(0, int(groups_page or 0)),
@@ -2306,7 +2330,7 @@ class NativeTweetBotController:
                 text="📂 打开平台账号管理",
                 url=f"{base}/console.html?view=accounts",
             )])
-        rows.append([types.InlineKeyboardButton(text="返回", callback_data=return_callback)])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回"), callback_data=return_callback)])
         return text, types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _persona_binding_payload(
@@ -2425,7 +2449,7 @@ class NativeTweetBotController:
                 )])
         rows.extend(page_rows)
         rows.append([types.InlineKeyboardButton(text="📂 查看全部平台账号", callback_data="tt:platformaccounts")])
-        rows.append([types.InlineKeyboardButton(text="上一步", callback_data="tt:pmod:settings")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("上一步"), callback_data="tt:pmod:settings")])
         text = (
             "🔗 人设账号绑定\n\n"
             f"人设：{persona_name}\n"
@@ -2443,7 +2467,7 @@ class NativeTweetBotController:
         rows = [
             [types.InlineKeyboardButton(text="🔁 登录/切换 VECTO 账号", callback_data="tt:chatlogin")],
             [types.InlineKeyboardButton(text="🚪 退出 VECTO 账号", callback_data="tt:aclogout")],
-            [types.InlineKeyboardButton(text="返回账号管理", callback_data="tt:accountmenu")],
+            [types.InlineKeyboardButton(text=_back_label("返回账号管理"), callback_data="tt:accountmenu")],
         ]
         return (
             "VECTO 网页账号\n\n"
@@ -2466,7 +2490,7 @@ class NativeTweetBotController:
         rows = [
             [types.InlineKeyboardButton(text="🔐 VECTO 网页账号（登录/退出）", callback_data="tt:vectosession")],
             [types.InlineKeyboardButton(text=f"🌐 平台授权账号（{len(accounts)}）", callback_data="tt:platformaccounts")],
-            [types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")],
+            [types.InlineKeyboardButton(text=_back_label("返回总控菜单"), callback_data="tt:menu")],
         ]
         return (
             "账号管理\n\n"
@@ -2565,7 +2589,7 @@ class NativeTweetBotController:
             callback_data=callback_token(chat_id, "acremove", token_payload),
         )])
         rows.append([types.InlineKeyboardButton(
-            text="返回账号列表",
+            text=_back_label("返回账号列表"),
             callback_data=(
                 callback_token(chat_id, "accountspage", {
                     "page": max(0, int(page or 0)),
@@ -2638,7 +2662,7 @@ class NativeTweetBotController:
             )])
         rows.extend(page_rows)
         rows.append([types.InlineKeyboardButton(
-            text="返回账号详情",
+            text=_back_label("返回账号详情"),
             callback_data=callback_token(chat_id, "ac", {
                 "account_id": str(account_id),
                 "operation": str(operation or ""),
@@ -2747,7 +2771,7 @@ class NativeTweetBotController:
             rows.append([button(text="🗓 自动化计划", callback_data="tt:automationplans:0")])
         if failed or count("failed", 0):
             rows.append([button(text="🔄 处理失败任务", callback_data="tt:tasks:0:failed")])
-        rows.append([button(text="返回总控菜单", callback_data="tt:menu")])
+        rows.append([button(text=_back_label("返回总控菜单"), callback_data="tt:menu")])
         return "\n".join(lines), types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _stop_current_tasks(self, message: Any, types: Any, member: dict[str, Any]) -> None:
@@ -2831,7 +2855,7 @@ class NativeTweetBotController:
         start = page * PAGE_SIZE
         prefix = "f" if source == "favorites" else "d"
         rows = [[types.InlineKeyboardButton(
-            text=_post_label(post, start + index),
+            text=f"👁 查看第 {start + index + 1} 篇 · {_post_label(post, start + index)}"[:56],
             callback_data=callback_token(
                 int(query.message.chat.id), prefix,
                 {
@@ -2954,7 +2978,7 @@ class NativeTweetBotController:
             [types.InlineKeyboardButton(text="🧭 生成构图方向", callback_data=callback_token(chat_id, "imgstyles", payload))],
             [types.InlineKeyboardButton(text="✍️ 补充提示词", callback_data=callback_token(chat_id, "imgprompt", payload))],
             [types.InlineKeyboardButton(text="🚀 提交配图任务", callback_data=callback_token(chat_id, "imggenerate", payload))],
-            [types.InlineKeyboardButton(text="返回推文详情", callback_data=callback_token(chat_id, "d", {
+            [types.InlineKeyboardButton(text=_back_label("返回推文详情"), callback_data=callback_token(chat_id, "d", {
                 "persona_id": persona_id, "post_id": post_id, "source": source,
                 "page": current_page, "intent": "image",
             }))],
@@ -3155,7 +3179,7 @@ class NativeTweetBotController:
                 )
                 for key, caption in values[index:index + 2]
             ])
-        rows.append([types.InlineKeyboardButton(text="返回人设图设置", callback_data=callback_token(chat_id, "personaimage", {"persona_id": persona_id, "page": page}))])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回人设图设置"), callback_data=callback_token(chat_id, "personaimage", {"persona_id": persona_id, "page": page}))])
         await query.message.edit_text(
             f"人设图设置 · {label}\n"
             f"当前：{next((caption for key, caption in values if key == current), '自动')}\n"
@@ -3194,23 +3218,25 @@ class NativeTweetBotController:
             "intent": str(intent or ""),
         }
         rows = [
-            [types.InlineKeyboardButton(text="✏️ 编辑", callback_data=callback_token(int(query.message.chat.id), "edit", context)),
-             types.InlineKeyboardButton(text="📎 添加媒体", callback_data=callback_token(int(query.message.chat.id), "media", context))],
+            [types.InlineKeyboardButton(text="✏️ 编辑", callback_data=callback_token(int(query.message.chat.id), "edit", context))],
+            [types.InlineKeyboardButton(text="📎 添加媒体", callback_data=callback_token(int(query.message.chat.id), "media", context))],
             [types.InlineKeyboardButton(text="🖼 生成推文配图", callback_data=callback_token(int(query.message.chat.id), "image", context))],
-            [types.InlineKeyboardButton(text="立即发布", callback_data=callback_token(int(query.message.chat.id), "pub", context)),
-             types.InlineKeyboardButton(text="定时发布", callback_data=callback_token(int(query.message.chat.id), "sched", context))],
+            [types.InlineKeyboardButton(text="🚀 立即发布", callback_data=callback_token(int(query.message.chat.id), "pub", context))],
+            [types.InlineKeyboardButton(text="⏰ 定时发布", callback_data=callback_token(int(query.message.chat.id), "sched", context))],
         ]
         if media:
             rows.append([
                 types.InlineKeyboardButton(text="♻️ 替换首个媒体", callback_data=callback_token(int(query.message.chat.id), "mediareplace", {**context, "index": 0})),
-                types.InlineKeyboardButton(text="移除最后媒体", callback_data=callback_token(int(query.message.chat.id), "mediadel", {**context, "index": len(media) - 1})),
+            ])
+            rows.append([
+                types.InlineKeyboardButton(text="🗑️ 移除最后媒体", callback_data=callback_token(int(query.message.chat.id), "mediadel", {**context, "index": len(media) - 1})),
             ])
         if source == "posts":
             rows.append([types.InlineKeyboardButton(text="⭐ 加入收藏", callback_data=callback_token(int(query.message.chat.id), "favadd", context))])
         rows.extend([
-            [types.InlineKeyboardButton(text="🗑 删除", callback_data=callback_token(int(query.message.chat.id), "delask", context))],
+            [types.InlineKeyboardButton(text="🗑️ 删除推文", callback_data=callback_token(int(query.message.chat.id), "delask", context))],
             [types.InlineKeyboardButton(
-                text="返回列表",
+                text=("◀️ 返回收藏推文" if source == "favorites" else "◀️ 返回推文列表"),
                 callback_data=(
                     "tt:imageposts:" + str(context["page"])
                     if context["intent"] == "image"
@@ -3404,7 +3430,7 @@ class NativeTweetBotController:
             callback_for_page=_task_page_callback,
         )
         rows.extend(nav)
-        rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回排程状态"), callback_data="tt:taskmenu")])
         filter_label = {
             "active": "进行中",
             "pending": "待发布",
@@ -3502,7 +3528,7 @@ class NativeTweetBotController:
             text = empty
         else:
             text = title + f"\n第 {page + 1}/{total_pages} 页"
-        rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回排程状态"), callback_data="tt:taskmenu")])
         await query.message.edit_text(
             text,
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -3561,7 +3587,7 @@ class NativeTweetBotController:
                 text=f"下一步：确认 {len(selected)} 个人设",
                 callback_data="tt:matrixnext",
             )])
-        rows.append([types.InlineKeyboardButton(text="返回发布管理", callback_data="tt:pmod:publish")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回发布管理"), callback_data="tt:pmod:publish")])
         rows.append([types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")])
         await query.message.edit_text(
             "矩阵发布 · 第 1/4 步\n"
@@ -3579,7 +3605,7 @@ class NativeTweetBotController:
         rows = [[
             types.InlineKeyboardButton(text="📝 草稿", callback_data="tt:mxsource:posts"),
             types.InlineKeyboardButton(text="⭐ 收藏", callback_data="tt:mxsource:favorites"),
-        ], [types.InlineKeyboardButton(text="上一步", callback_data="tt:matrixback")]]
+        ], [types.InlineKeyboardButton(text=_back_label("上一步"), callback_data="tt:matrixback")]]
         await query.message.edit_text(
             "矩阵发布 · 第 2/4 步\n"
             f"已选择 {len(persona_ids)} 个人设，请选择每个人设要取用的内容来源。\n"
@@ -3611,7 +3637,7 @@ class NativeTweetBotController:
             rows.append([types.InlineKeyboardButton(text="Threads", callback_data="tt:mxplatform:threads")])
         if "instagram" in platforms:
             rows.append([types.InlineKeyboardButton(text="Instagram", callback_data="tt:mxplatform:instagram")])
-        rows.append([types.InlineKeyboardButton(text="上一步", callback_data="tt:mxbacksource")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("上一步"), callback_data="tt:mxbacksource")])
         source_ready_count = int(state["payload"].get("matrix_source_ready_count") or len(persona_ids))
         source_skipped_count = max(0, len(persona_ids) - source_ready_count)
         source_note = (
@@ -3664,7 +3690,7 @@ class NativeTweetBotController:
         ])
         rows.append([
             types.InlineKeyboardButton(text="换一批", callback_data=callback_token(chat_id, "gdir", {"refresh": True})),
-            types.InlineKeyboardButton(text="返回确认", callback_data=callback_token(chat_id, "gdirback", {})),
+            types.InlineKeyboardButton(text=_back_label("返回确认"), callback_data=callback_token(chat_id, "gdirback", {})),
         ])
         rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
         await query.message.edit_text(
@@ -3919,7 +3945,7 @@ class NativeTweetBotController:
             text="➕ 新增记忆",
             callback_data=callback_token(chat_id, "pmemadd", {"page": safe_page}),
         )])
-        rows.append([types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile")])
         await query.message.edit_text(
             f"人设记忆（{len(memories)} 条）\n第 {safe_page + 1}/{total_pages}\n"
             "生成推文时可将选中的记忆作为上下文，删除只会隐藏该条记忆。",
@@ -3965,7 +3991,7 @@ class NativeTweetBotController:
             text="➕ 新增链接模板",
             callback_data=callback_token(chat_id, "plinkadd", {"page": safe_page}),
         )])
-        rows.append([types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile")])
         await query.message.edit_text(
             f"链接模板（{len(presets)} 条，第 {safe_page + 1}/{total_pages} 页）\n\n"
             + ("\n".join(
@@ -4117,7 +4143,7 @@ class NativeTweetBotController:
             text="➕ 新建自动化计划",
             callback_data=callback_token(chat_id, "automationplannew", {"page": safe_page}),
         )])
-        rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回排程状态"), callback_data="tt:taskmenu")])
         await query.message.edit_text(
             f"自动化计划（{len(plans)} 条）\n第 {safe_page + 1}/{total_pages}\n"
             "计划会按平台账号和人设绑定执行；停止计划不会删除账号。",
@@ -4569,7 +4595,7 @@ class NativeTweetBotController:
                     )])
                 rows.extend([
                     [types.InlineKeyboardButton(text="📋 查看已授权账号", callback_data="tt:platformaccounts")],
-                    [types.InlineKeyboardButton(text="返回账号管理", callback_data="tt:accountmenu")],
+                    [types.InlineKeyboardButton(text=_back_label("返回账号管理"), callback_data="tt:accountmenu")],
                 ])
                 await query.message.edit_text(
                     "添加平台账号\n\n"
@@ -4750,7 +4776,7 @@ class NativeTweetBotController:
                     "账号已移除。" if deleted else "账号已停用或已不存在。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(
-                            text="返回账号列表",
+                            text=_back_label("返回账号列表"),
                             callback_data=callback_token(chat_id, "accountspage", {
                                 "page": max(0, int(reference.get("page") or 0)),
                                 "persona_id": str(reference.get("persona_filter") or ""),
@@ -4758,7 +4784,7 @@ class NativeTweetBotController:
                                 "return_callback": str(reference.get("return_callback") or "tt:platformaccounts"),
                             }),
                         ),
-                        types.InlineKeyboardButton(text="返回账号管理", callback_data="tt:accountmenu"),
+                        types.InlineKeyboardButton(text=_back_label("返回账号管理"), callback_data="tt:accountmenu"),
                     ]]),
                 )
             elif action == "personamanage":
@@ -4817,7 +4843,7 @@ class NativeTweetBotController:
                     "Telegram 版已移除人设分组功能。\n"
                     "请返回人设设置继续管理资料、图库、平台账号或数据刷新。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text="返回", callback_data=return_callback),
+                        types.InlineKeyboardButton(text=_back_label("返回"), callback_data=return_callback),
                     ]]),
                 )
             elif action == "personagroups":
@@ -4947,7 +4973,7 @@ class NativeTweetBotController:
                             "persona_id": duplicate_id,
                             "page": persona_page,
                         })),
-                        types.InlineKeyboardButton(text="返回我的人设", callback_data=f"tt:personas:{persona_page}"),
+                        types.InlineKeyboardButton(text=_back_label("返回我的人设"), callback_data=f"tt:personas:{persona_page}"),
                     ]]),
                 )
             elif action == "pdeleteask" and len(parts) > 2:
@@ -5000,7 +5026,7 @@ class NativeTweetBotController:
                         }),
                     )])
                 refresh_rows.append([types.InlineKeyboardButton(
-                    text="返回人设设置",
+                    text=_back_label("返回人设设置"),
                     callback_data="tt:pmod:settings",
                 )])
                 await query.message.edit_text(
@@ -5395,7 +5421,7 @@ class NativeTweetBotController:
                         }),
                     )])
                 rows.append([types.InlineKeyboardButton(
-                    text="返回人设图库",
+                    text=_back_label("返回人设图库"),
                     callback_data=callback_token(chat_id, "personaimage", {
                         "persona_id": persona_id, "page": max(0, int(reference.get("page") or 0)),
                     }),
@@ -5675,7 +5701,7 @@ class NativeTweetBotController:
                     types.InlineKeyboardButton(text="删除记录", callback_data=callback_token(chat_id, "phdelete", {
                         "persona_id": persona_id, "history_id": history_id, "page": history_page,
                     })),
-                ], [types.InlineKeyboardButton(text="返回发布历史", callback_data=f"tt:persona_history:{history_page}")]]
+                ], [types.InlineKeyboardButton(text=_back_label("返回发布历史"), callback_data=f"tt:persona_history:{history_page}")]]
                 await query.message.edit_text(
                     f"发布记录\n\n平台：{record.get('platform') or '—'}\n账号：{record.get('account_username') or record.get('username') or '—'}\n"
                     f"时间：{record.get('published_at') or record.get('captured_at') or '—'}\n\n"
@@ -5698,7 +5724,7 @@ class NativeTweetBotController:
                             callback_data=f"tt:drafts:{max(0, int(reference.get('page') or 0))}",
                         ),
                         types.InlineKeyboardButton(
-                            text="返回发布历史",
+                            text=_back_label("返回发布历史"),
                             callback_data=f"tt:persona_history:{max(0, int(reference.get('page') or 0))}",
                         ),
                     ]]),
@@ -5713,7 +5739,7 @@ class NativeTweetBotController:
                     "发布记录已删除。\n历史记录已从当前列表移除，不会影响原平台内容。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(
-                            text="返回发布历史",
+                            text=_back_label("返回发布历史"),
                             callback_data=f"tt:persona_history:{max(0, int(reference.get('page') or 0))}",
                         ),
                     ]]),
@@ -5841,7 +5867,7 @@ class NativeTweetBotController:
                 ], [
                     types.InlineKeyboardButton(text="长文 200 字", callback_data="tt:gwords:200"),
                 ], [
-                    types.InlineKeyboardButton(text="上一步", callback_data=generation_back),
+                    types.InlineKeyboardButton(text=_back_label("上一步"), callback_data=generation_back),
                     types.InlineKeyboardButton(text="取消", callback_data="tt:menu"),
                 ]]
                 await query.message.edit_text(
@@ -5944,7 +5970,7 @@ class NativeTweetBotController:
                         text=("✅ " if str(payload.get("platform") or "threads") == value else "") + label,
                         callback_data=callback_token(chat_id, "gplatformpick", {"platform": value}),
                     )] for value, label in PERSONA_CONTENT_PLATFORMS]
-                    rows.append([types.InlineKeyboardButton(text="返回生成确认", callback_data=callback_token(chat_id, "gplatformback", {}))])
+                    rows.append([types.InlineKeyboardButton(text=_back_label("返回生成确认"), callback_data=callback_token(chat_id, "gplatformback", {}))])
                     await query.message.edit_text(
                         "AI 生成推文 · 选择目标平台\n"
                         "平台会影响语气、互动方式和生成链路；这里只选择内容目标，不会执行发布。",
@@ -5961,7 +5987,7 @@ class NativeTweetBotController:
                             )
                             for value, label in PERSONA_WRITING_LOCALES[index:index + 2]
                         ])
-                    locale_rows.append([types.InlineKeyboardButton(text="返回生成确认", callback_data=callback_token(chat_id, "glocaleback", {}))])
+                    locale_rows.append([types.InlineKeyboardButton(text=_back_label("返回生成确认"), callback_data=callback_token(chat_id, "glocaleback", {}))])
                     await query.message.edit_text(
                         "AI 生成推文 · 选择语言与地区口吻\n"
                         "生成内容会统一使用所选语言；未修改的人设资料和其他参数会继续保留。",
@@ -5973,7 +5999,7 @@ class NativeTweetBotController:
                         text=("✅ " if str(payload.get("content_time_slot") or "") == value else "") + label,
                         callback_data=callback_token(chat_id, "gslotpick", {"slot": value}),
                     )] for value, label in PERSONA_CONTENT_TIME_SLOTS]
-                    rows.append([types.InlineKeyboardButton(text="返回生成确认", callback_data=callback_token(chat_id, "gslotback", {}))])
+                    rows.append([types.InlineKeyboardButton(text=_back_label("返回生成确认"), callback_data=callback_token(chat_id, "gslotback", {}))])
                     await query.message.edit_text(
                         "AI 生成推文 · 选择文案时段\n"
                         "时段只作为内容语境提示，当前支持早上、晚上或不指定；不会改变发布时间。",
@@ -6218,8 +6244,8 @@ class NativeTweetBotController:
                             "task_id": str(reference.get("task_id") or ""), "task_kind": "normal", "status_filter": "completed",
                         })),
                     ], [
-                        types.InlineKeyboardButton(text="返回新建推文", callback_data="tt:pmod:create"),
-                        types.InlineKeyboardButton(text="返回人设详情", callback_data=callback_token(chat_id, "p", {
+                        types.InlineKeyboardButton(text=_back_label("返回新建推文"), callback_data="tt:pmod:create"),
+                        types.InlineKeyboardButton(text=_back_label("返回人设详情"), callback_data=callback_token(chat_id, "p", {
                             "persona_id": selected_persona_id,
                         })),
                     ]]),
@@ -6273,9 +6299,9 @@ class NativeTweetBotController:
                     "完成后 Bot 会返回结果；也可以先在排程状态查看进度。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(text="查看任务", callback_data="tt:tasks:0:active"),
-                        types.InlineKeyboardButton(text="返回新建推文", callback_data="tt:pmod:create"),
+                        types.InlineKeyboardButton(text=_back_label("返回新建推文"), callback_data="tt:pmod:create"),
                     ], [
-                        types.InlineKeyboardButton(text="返回人设详情", callback_data=callback_token(chat_id, "p", {
+                        types.InlineKeyboardButton(text=_back_label("返回人设详情"), callback_data=callback_token(chat_id, "p", {
                             "persona_id": str(state["selected_persona_id"] or ""),
                         })),
                     ]]),
@@ -6430,7 +6456,7 @@ class NativeTweetBotController:
                         }),
                     )])
                 rows.append([types.InlineKeyboardButton(
-                    text="返回推文详情",
+                    text=_back_label("返回推文详情"),
                     callback_data=callback_token(chat_id, "d", {
                         "persona_id": persona_id,
                         "post_id": str(reference.get("post_id") or ""),
@@ -6684,7 +6710,7 @@ class NativeTweetBotController:
                         }),
                     )])
                 rows.append([types.InlineKeyboardButton(
-                    text="返回原草稿",
+                    text=_back_label("返回原草稿"),
                     callback_data=callback_token(chat_id, "d", {
                         "persona_id": persona_id, "post_id": post_id, "source": "posts",
                         "page": max(0, int(reference.get("page") or 0)),
@@ -6803,7 +6829,7 @@ class NativeTweetBotController:
                                     }),
                                 ),
                                 types.InlineKeyboardButton(
-                                    text="返回推文",
+                                    text=_back_label("返回推文"),
                                     callback_data=callback_token(chat_id, "d" if source == "posts" else "f", {
                                         "persona_id": persona_id, "source": source, "post_id": post_id,
                                         "page": max(0, int(reference.get("page") or 0)),
@@ -6938,7 +6964,7 @@ class NativeTweetBotController:
                                 callback_data=callback_token(chat_id, "hotagain", {"persona_id": persona_id}),
                             ),
                             types.InlineKeyboardButton(
-                                text="返回新建推文",
+                                text=_back_label("返回新建推文"),
                                 callback_data="tt:pmod:create",
                             ),
                         ]]),
@@ -6974,7 +7000,7 @@ class NativeTweetBotController:
                                 ),
                             ])
                         rows.append([types.InlineKeyboardButton(
-                            text="返回新建推文",
+                            text=_back_label("返回新建推文"),
                             callback_data="tt:pmod:create",
                         )])
                         await query.message.edit_text(
@@ -7010,7 +7036,7 @@ class NativeTweetBotController:
                                     callback_data=callback_token(chat_id, "hotagain", {"persona_id": persona_id}),
                                 ),
                                 types.InlineKeyboardButton(
-                                    text="返回新建推文",
+                                    text=_back_label("返回新建推文"),
                                     callback_data="tt:pmod:create",
                                 ),
                             ]]),
@@ -7081,7 +7107,7 @@ class NativeTweetBotController:
                         ),
                     ])
                 rows.append([types.InlineKeyboardButton(
-                    text="返回新建推文",
+                    text=_back_label("返回新建推文"),
                     callback_data="tt:pmod:create",
                 )])
                 await query.message.edit_text(
@@ -7240,7 +7266,7 @@ class NativeTweetBotController:
                             "per_persona_count": 1,
                         }),
                     ),
-                    types.InlineKeyboardButton(text="上一步", callback_data="tt:mxbackplatform"),
+                    types.InlineKeyboardButton(text=_back_label("上一步"), callback_data="tt:mxbackplatform"),
                 ]]
                 confirmation_text = (
                     "矩阵发布 · 第 4/4 步\n"
@@ -7354,7 +7380,7 @@ class NativeTweetBotController:
                         "plan_id": plan_id,
                         "page": plan_page,
                     })),
-                ], [types.InlineKeyboardButton(text="返回自动化计划", callback_data=f"tt:automationplans:{plan_page}")]]
+                ], [types.InlineKeyboardButton(text=_back_label("返回自动化计划"), callback_data=f"tt:automationplans:{plan_page}")]]
                 await query.message.edit_text(
                     f"自动化计划详情\n\nID：{plan_id}\n"
                     f"平台：{plan.get('platform') or '—'}\n状态：{plan.get('status') or '—'}\n"
@@ -7373,7 +7399,7 @@ class NativeTweetBotController:
                     await self._call(user_id, "automation.plans.delete", {"plan_id": plan_id})
                     notice = "自动化计划已删除。\n计划配置已移除，已经入队的任务不会被这一步自动删除。"
                 await query.message.edit_text(notice, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                    types.InlineKeyboardButton(text="返回自动化计划", callback_data=f"tt:automationplans:{plan_page}"),
+                    types.InlineKeyboardButton(text=_back_label("返回自动化计划"), callback_data=f"tt:automationplans:{plan_page}"),
                 ]]))
             elif action == "automationplannew":
                 reference = resolve_callback_token(chat_id, "automationplannew", parts[2]) if len(parts) > 2 else {}
@@ -7469,7 +7495,7 @@ class NativeTweetBotController:
                         "persona_id": persona_filter,
                         "queue": queue_filter,
                     }) if (platform_filter or persona_filter or queue_filter != "all") else f"tt:tasks:{page}:{status_filter}"
-                rows.append([types.InlineKeyboardButton(text="返回任务", callback_data=back_data)])
+                rows.append([types.InlineKeyboardButton(text=_back_label("返回任务"), callback_data=back_data)])
                 scheduled_at = _task_timestamp(task.get("scheduled_at"))
                 summary = _task_display_name(task)
                 account = str(
@@ -7528,7 +7554,7 @@ class NativeTweetBotController:
                 await query.message.edit_text(
                     str(result.get("message") or "操作已提交"),
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text="返回任务", callback_data=back_data),
+                        types.InlineKeyboardButton(text=_back_label("返回任务"), callback_data=back_data),
                     ]]),
                 )
             elif action == "profile":
@@ -7787,7 +7813,7 @@ class NativeTweetBotController:
                     "媒体添加完成。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(
-                            text="返回推文详情",
+                            text=_back_label("返回推文详情"),
                             callback_data=callback_token(chat_id, action, {
                                 "persona_id": state["selected_persona_id"],
                                 "post_id": str(payload.get("post_id") or ""), "source": source,
@@ -7909,7 +7935,7 @@ class NativeTweetBotController:
                                 callback_data=callback_token(chat_id, "personaimage", {"persona_id": new_id, "page": 0}),
                             ),
                         ], [
-                            types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
+                            types.InlineKeyboardButton(text=_back_label("返回总控菜单"), callback_data="tt:menu"),
                         ]]),
                     )
             elif mode in {"persona_ai_name", "persona_ai_prompt", "persona_ai_create"}:
@@ -8051,7 +8077,7 @@ class NativeTweetBotController:
                         ),
                     ], [
                         types.InlineKeyboardButton(
-                            text="返回重新输入链接",
+                            text=_back_label("返回重新输入链接"),
                             callback_data=callback_token(chat_id, "personacopyurl", {}),
                         ),
                     ], [types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")]]),
@@ -8116,7 +8142,7 @@ class NativeTweetBotController:
                 await message.answer(
                     "Telegram 版已移除人设分组功能；本次输入已取消。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
-                        text="返回人设", callback_data="tt:personas:0",
+                        text=_back_label("返回人设"), callback_data="tt:personas:0",
                     )]]),
                 )
             elif mode == "generate_count_input":
@@ -8165,7 +8191,7 @@ class NativeTweetBotController:
                             text=label,
                             callback_data=f"tt:gratio:{value.replace(':', '_')}",
                         )])
-                    rows.append([types.InlineKeyboardButton(text="返回生成数量", callback_data="tt:gratio:back"), types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")])
+                    rows.append([types.InlineKeyboardButton(text=_back_label("返回生成数量"), callback_data="tt:gratio:back"), types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")])
                     await message.answer(
                         "AI 生成推文 · 第 3 步\n"
                         f"数量：{count} 篇\n\n"
@@ -8202,7 +8228,7 @@ class NativeTweetBotController:
                             types.InlineKeyboardButton(text="精简 80 字", callback_data="tt:gwords:80"),
                             types.InlineKeyboardButton(text="标准 120 字", callback_data="tt:gwords:120"),
                         ], [types.InlineKeyboardButton(text="长文 200 字", callback_data="tt:gwords:200")], [
-                            types.InlineKeyboardButton(text="返回提示词", callback_data="tt:gprompt:back"),
+                            types.InlineKeyboardButton(text=_back_label("返回提示词"), callback_data="tt:gprompt:back"),
                             types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
                         ]]),
                     )
@@ -8254,7 +8280,7 @@ class NativeTweetBotController:
                             }),
                         ),
                         types.InlineKeyboardButton(
-                            text="返回人设图库",
+                            text=_back_label("返回人设图库"),
                             callback_data=callback_token(chat_id, "personaimage", {
                                 "persona_id": persona_id, "page": page,
                             }),
@@ -8273,7 +8299,7 @@ class NativeTweetBotController:
                     "配图补充提示词已保存。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(
-                            text="返回配图设置",
+                            text=_back_label("返回配图设置"),
                             callback_data=callback_token(chat_id, "image", {
                                 "persona_id": persona_id,
                                 "post_id": str(payload.get("post_id") or ""),
@@ -8324,7 +8350,7 @@ class NativeTweetBotController:
                     "推文已更新。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(
-                            text="返回推文详情",
+                            text=_back_label("返回推文详情"),
                             callback_data=callback_token(chat_id, action, {
                                 "persona_id": persona_id,
                                 "post_id": str(payload.get("post_id") or ""), "source": source,
@@ -8404,7 +8430,7 @@ class NativeTweetBotController:
                         ),
                     ], [
                         types.InlineKeyboardButton(
-                            text="返回重新输入链接",
+                            text=_back_label("返回重新输入链接"),
                             callback_data=callback_token(chat_id, "historylink", {"page": history_page}),
                         ),
                     ], [types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")]]),
@@ -8460,14 +8486,14 @@ class NativeTweetBotController:
                 await message.answer(
                     "基础资料已保存。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile"),
+                        types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
                     ]]),
                 )
             elif mode == "profile_name":
                 await self._call(user_id, "profile.update", {"persona_id": persona_id, "name": text[:120]})
                 clear_pending_state(chat_id)
                 await message.answer("人设名称已更新。", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                    types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile"),
+                    types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
                 ]]))
             elif mode == "profile_ai":
                 name = str(state["payload"].get("name") or "")
@@ -8485,7 +8511,7 @@ class NativeTweetBotController:
                 await message.answer(
                     "AI 已重写人设简介并保存。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile"),
+                        types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
                     ]]),
                 )
             elif mode == "profile_memory_create":
@@ -8555,7 +8581,7 @@ class NativeTweetBotController:
                         ),
                     ], [
                         types.InlineKeyboardButton(
-                            text="返回重新输入链接",
+                            text=_back_label("返回重新输入链接"),
                             callback_data=callback_token(chat_id, "plinkurl", {"page": page}),
                         ),
                     ], [types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")]]),
@@ -8614,7 +8640,7 @@ class NativeTweetBotController:
                     notice = "Threads 人设绑定已更新。"
                 clear_pending_state(chat_id)
                 await message.answer(notice, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                    types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile"),
+                    types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
                 ]]))
             elif mode == "automation_plan_create":
                 try:
@@ -8681,7 +8707,7 @@ class NativeTweetBotController:
                         }),
                     ),
                 ], [types.InlineKeyboardButton(
-                    text="返回候选列表",
+                    text=_back_label("返回候选列表"),
                     callback_data=callback_token(chat_id, "hotlist", {
                         "task_id": task_id, "persona_id": persona_id,
                     }),
@@ -8707,7 +8733,7 @@ class NativeTweetBotController:
                     ),
                     types.InlineKeyboardButton(text="修改主题", callback_data="tt:hot"),
                 ], [
-                    types.InlineKeyboardButton(text="返回新建推文", callback_data="tt:pmod:create"),
+                    types.InlineKeyboardButton(text=_back_label("返回新建推文"), callback_data="tt:pmod:create"),
                     types.InlineKeyboardButton(text="取消", callback_data="tt:menu"),
                 ]]
                 await message.answer(
@@ -8763,7 +8789,7 @@ class NativeTweetBotController:
                     except (TypeError, ValueError):
                         page = 0
                     rows.append([button(
-                        text="返回人设图设置",
+                        text=_back_label("返回人设图设置"),
                         callback_data=callback_token(chat_id, "personaimage", {
                             "persona_id": persona_id,
                             "page": page,
@@ -8778,7 +8804,7 @@ class NativeTweetBotController:
                     except (TypeError, ValueError):
                         page = 0
                     rows.append([button(
-                        text="返回推文详情",
+                        text=_back_label("返回推文详情"),
                         callback_data=callback_token(chat_id, "f" if source == "favorites" else "d", {
                             "persona_id": str(state.get("selected_persona_id") or ""),
                             "post_id": post_id,
@@ -8788,7 +8814,7 @@ class NativeTweetBotController:
                         }),
                     )])
             rows.append([
-                button(text="返回总控菜单", callback_data="tt:menu"),
+                button(text=_back_label("返回总控菜单"), callback_data="tt:menu"),
                 button(text="取消当前步骤", callback_data="tt:stepcancel"),
             ])
             return types.InlineKeyboardMarkup(inline_keyboard=rows)
@@ -8852,7 +8878,7 @@ class NativeTweetBotController:
                 await message.answer(
                     "人设图已上传并保存到图库。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
-                        text="返回人设图设置",
+                        text=_back_label("返回人设图设置"),
                         callback_data=callback_token(chat_id, "personaimage", {
                             "persona_id": state["selected_persona_id"], "page": int(payload.get("page") or 0),
                         }),
@@ -8877,7 +8903,7 @@ class NativeTweetBotController:
                     "媒体已替换。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(
-                            text="返回推文详情",
+                            text=_back_label("返回推文详情"),
                             callback_data=callback_token(chat_id, action, {
                                 "persona_id": state["selected_persona_id"],
                                 "post_id": str(payload.get("post_id") or ""), "source": source,
@@ -9026,7 +9052,7 @@ class NativeTweetBotController:
                             }),
                         )])
                 result_rows.append([types.InlineKeyboardButton(
-                    text="返回人设详情",
+                    text=_back_label("返回人设详情"),
                     callback_data=callback_token(chat_id, "p", {"persona_id": persona_id}),
                 )])
                 await bot.send_message(
@@ -9058,8 +9084,8 @@ class NativeTweetBotController:
                             }),
                         ),
                     ], [
-                        types.InlineKeyboardButton(text="返回新建推文", callback_data="tt:pmod:create"),
-                        types.InlineKeyboardButton(text="返回人设详情", callback_data=callback_token(chat_id, "p", {
+                        types.InlineKeyboardButton(text=_back_label("返回新建推文"), callback_data="tt:pmod:create"),
+                        types.InlineKeyboardButton(text=_back_label("返回人设详情"), callback_data=callback_token(chat_id, "p", {
                             "persona_id": persona_id,
                         })),
                     ]]),
@@ -9175,7 +9201,7 @@ class NativeTweetBotController:
                         chat_id,
                         f"{'人设图' if persona_task else '推文配图'}任务{status}：{str(task.get('error') or '')[:1200]}",
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
-                            text="返回人设设置" if persona_task else "返回推文内容",
+                            text=_back_label("返回人设设置") if persona_task else _back_label("返回推文内容"),
                             callback_data=(callback_token(chat_id, "personaimage", {
                                 "persona_id": persona_id,
                                 "page": max(0, int(page or 0)),
@@ -9289,7 +9315,7 @@ class NativeTweetBotController:
                         ),
                     ])
                 rows.append([types.InlineKeyboardButton(
-                    text="返回新建推文",
+                    text=_back_label("返回新建推文"),
                     callback_data="tt:pmod:create",
                 )])
                 # State/keyboard construction can yield to a rebind or
@@ -9314,7 +9340,7 @@ class NativeTweetBotController:
                             callback_data=callback_token(chat_id, "hotagain", {"persona_id": persona_id}),
                         ),
                         types.InlineKeyboardButton(
-                            text="返回新建推文",
+                            text=_back_label("返回新建推文"),
                             callback_data="tt:pmod:create",
                         ),
                     ]]),
@@ -9332,7 +9358,7 @@ class NativeTweetBotController:
                         }),
                     ),
                     types.InlineKeyboardButton(
-                        text="返回新建推文",
+                        text=_back_label("返回新建推文"),
                         callback_data="tt:pmod:create",
                     ),
                 ]]),
