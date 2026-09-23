@@ -280,7 +280,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
     def test_tweet_bot_authorization_reports_profile_without_changing_member_binding(self):
         remember = mock.Mock()
         controller = NativeTweetBotController(
-            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: [], dispatch_async=_unused_async_dispatch),
             get_runtime=self._get,
             load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id, "label": "固定备注"},
             remember_member_profile=remember,
@@ -1845,7 +1845,13 @@ class TelegramTweetAdminTests(unittest.TestCase):
         def dispatch(_user_id, action, payload):
             calls.append((action, payload))
             if action == "personas.ai_create":
-                return {"profile": {"id": "persona-ai", "name": "AI 人设"}}
+                return {
+                    "profile": {
+                        "id": "persona-ai",
+                        "name": "AI 人设",
+                        "content": "关注科技趋势并保持克制专业。",
+                    }
+                }
             if action == "personas.copy_analyze":
                 return {
                     "source": {"platform": "threads", "url": "https://www.threads.net/@public"},
@@ -1862,7 +1868,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         message = _Message()
         asyncio.run(controller.handle_callback(_Query("tt:persona_ai_new", message), _Types))
-        self.assertIn("第 1/3 步", message.edits[-1][0])
+        self.assertIn("⭐ 新建人设", message.edits[-1][0])
+        self.assertIn("步骤 1/3", message.edits[-1][0])
         self.assertNotIn("｜", message.edits[-1][0])
         combined_input = _Message(text="AI观察员｜关注科技趋势并保持克制专业")
         asyncio.run(controller.handle_text(combined_input, _Types))
@@ -1871,18 +1878,20 @@ class TelegramTweetAdminTests(unittest.TestCase):
         name_input = _Message(text="AI观察员")
         asyncio.run(controller.handle_text(name_input, _Types))
         self.assertEqual(load_state(101)["mode"], "persona_ai_prompt")
-        self.assertIn("第 2/3 步", name_input.answers[-1][0])
+        self.assertIn("步骤 2/3", name_input.answers[-1][0])
         prompt_input = _Message(text="关注科技趋势并保持克制专业")
         asyncio.run(controller.handle_text(prompt_input, _Types))
         self.assertEqual(load_state(101)["selected_persona_id"], "persona-ai")
         self.assertTrue(any(action == "personas.ai_create" for action, _payload in calls))
+        self.assertIn("步骤 3/3", prompt_input.answers[-1][0])
+        self.assertIn("请先生成人设图", prompt_input.answers[-1][0])
         profile_button = next(
             button
             for row in prompt_input.answers[-1][1]["reply_markup"].inline_keyboard
             for button in row
-            if button.text == "基础资料"
+            if button.text == "🧾 查看人设详情"
         )
-        self.assertEqual(profile_button.callback_data, "tt:profile")
+        self.assertTrue(str(profile_button.callback_data).startswith("tt:p:"))
 
         asyncio.run(controller.handle_callback(_Query("tt:persona_copy_new", message), _Types))
         asyncio.run(controller.handle_text(_Message(text="https://www.threads.net/@public"), _Types))
@@ -1981,7 +1990,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
 
     def test_text_input_steps_expose_inline_cancel_and_cancel_without_reauth(self):
         controller = NativeTweetBotController(
-            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: [], dispatch_async=_unused_async_dispatch),
             get_runtime=self._get,
             load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
         )
@@ -1994,21 +2003,11 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for row in prompt_markup.inline_keyboard
             for button in row
         }
-        self.assertIn("tt:personamanage", prompt_callbacks)
-        self.assertIn("tt:stepcancel", prompt_callbacks)
-        asyncio.run(controller.handle_callback(_Query("tt:stepcancel", message), _Types))
-        self.assertIn("已取消当前步骤", message.edits[-1][0])
+        self.assertIn("tt:personas:0", prompt_callbacks)
+        self.assertNotIn("tt:stepcancel", prompt_callbacks)
+        asyncio.run(controller.handle_callback(_Query("tt:personas:0", message), _Types))
+        self.assertIn("我的人设", message.edits[-1][0])
         self.assertEqual(load_state(101)["mode"], "")
-        self.assertTrue(message.answers)
-        main_markup = message.answers[-1][1]["reply_markup"]
-        self.assertIsInstance(main_markup, _ReplyMarkup)
-        main_button_texts = {
-            str(button.text)
-            for row in main_markup.keyboard
-            for button in row
-        }
-        self.assertIn(PERSONA_CONTROL_BUTTON, main_button_texts)
-        self.assertIn(TASK_CONTROL_BUTTON, main_button_texts)
         edited_markup = message.edits[-1][1].get("reply_markup")
         self.assertNotIn("tt:chatlogin", {
             str(getattr(button, "callback_data", "") or "")
@@ -2143,6 +2142,20 @@ class TelegramTweetAdminTests(unittest.TestCase):
         keyword_message = _Message(text="记录日常生活和城市见闻")
         asyncio.run(controller.handle_text(keyword_message, _Types))
         self.assertEqual(load_state(101)["mode"], "persona_ai_keyword_select")
+        self.assertIn("✍️ 新建人设", keyword_message.answers[-1][0])
+        self.assertIn("最多可选 2 个", keyword_message.answers[-1][0])
+        self.assertNotIn("普通候选", keyword_message.answers[-1][0])
+        visible_keyword_buttons = [
+            button for row in keyword_message.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if str(button.text).endswith(("长期方向一", "长期方向二", "长期方向三", "热门方向一", "热门方向二"))
+        ]
+        self.assertLessEqual(len(visible_keyword_buttons), 5)
+        self.assertNotIn("跳过关键词直接创建", {
+            str(button.text)
+            for row in keyword_message.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        })
         regular = next(
             button for row in keyword_message.answers[-1][1]["reply_markup"].inline_keyboard
             for button in row if str(button.text).endswith("长期方向一")
@@ -2155,7 +2168,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query(hot.callback_data, keyword_message), _Types))
         confirm = next(
             button for row in keyword_message.edits[-1][1]["reply_markup"].inline_keyboard
-            for button in row if str(button.text).startswith("确认生成人设")
+            for button in row if str(button.text).startswith("✅ 确认并生成人设")
         )
         asyncio.run(controller.handle_callback(_Query(confirm.callback_data, keyword_message), _Types))
         created = [payload for action, payload in calls if action == "personas.ai_create"]

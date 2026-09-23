@@ -1374,8 +1374,8 @@ class NativeTweetBotController:
         """
         button = types.InlineKeyboardButton
         rows = [
-            [button(text="➕ 手工新建人设", callback_data="tt:persona_new")],
-            [button(text="✨ AI 生成人设", callback_data="tt:persona_ai_new")],
+            [button(text="➕ 新建人设", callback_data="tt:persona_ai_new")],
+            [button(text="📝 手工新建资料", callback_data="tt:persona_new")],
             [button(text="🔗 复制公开人设", callback_data="tt:persona_copy_new")],
             [button(text="返回人设列表", callback_data=f"tt:personas:{max(0, int(page or 0))}")],
         ]
@@ -3738,76 +3738,62 @@ class NativeTweetBotController:
         hot = cls._persona_ai_keyword_values(payload.get("ai_hot_keywords"))
         selected_regular = cls._persona_ai_keyword_values(payload.get("ai_selected_regular_keywords"), limit=2)
         selected_hot = cls._persona_ai_keyword_values(payload.get("ai_selected_hot_keywords"), limit=2)
-        selected = set(selected_regular) | set(selected_hot)
         rows: list[list[Any]] = []
-        for kind, title, values, chosen in (
-            ("regular", "普通关键词（长期方向）", regular, set(selected_regular)),
-            ("hot", "热门关键词（可选热点方向）", hot, set(selected_hot)),
-        ):
-            if not values:
-                continue
-            rows.append([types.InlineKeyboardButton(text=title, callback_data="tt:persona_ai_noop")])
-            for index in range(0, len(values), 2):
-                row = []
-                for offset in (0, 1):
-                    candidate_index = index + offset
-                    if candidate_index >= len(values):
-                        continue
-                    keyword = values[candidate_index]
-                    row.append(types.InlineKeyboardButton(
-                        text=("✅ " if keyword in chosen else "▫️ ") + keyword[:32],
-                        callback_data=callback_token(chat_id, "persona_ai_keyword", {
-                            "kind": kind,
-                            "index": candidate_index,
-                        }),
-                    ))
-                if row:
-                    rows.append(row)
+        # R18 presents one compact five-item picker and allows at most two
+        # selections. Keep regular/hot source information in callback data so
+        # the existing backend payload remains unchanged.
+        choices: list[tuple[str, int, str]] = []
+        for index in range(max(len(regular), len(hot))):
+            if index < len(regular):
+                choices.append(("regular", index, regular[index]))
+            if index < len(hot):
+                choices.append(("hot", index, hot[index]))
+            if len(choices) >= 5:
+                break
+        for offset in range(0, len(choices), 2):
+            row = []
+            for kind, index, keyword in choices[offset:offset + 2]:
+                chosen = set(selected_regular if kind == "regular" else selected_hot)
+                row.append(types.InlineKeyboardButton(
+                    text=("✅ " if keyword in chosen else "☑️ ") + keyword[:32],
+                    callback_data=callback_token(chat_id, "persona_ai_keyword", {
+                        "kind": kind,
+                        "index": index,
+                    }),
+                ))
+            rows.append(row)
         rows.append([
             types.InlineKeyboardButton(
-                text=f"确认生成人设（{len(selected)}）",
+                text="✅ 确认并生成人设",
                 callback_data=callback_token(chat_id, "persona_ai_confirm", {}),
             ),
-            types.InlineKeyboardButton(
-                text="清空选择",
-                callback_data=callback_token(chat_id, "persona_ai_clear", {}),
-            ),
         ])
         rows.append([
             types.InlineKeyboardButton(
-                text="返回修改提示词",
-                callback_data=callback_token(chat_id, "persona_ai_back", {}),
+                text="🧹 清空选择",
+                callback_data=callback_token(chat_id, "persona_ai_clear", {}),
             ),
             types.InlineKeyboardButton(
-                text="跳过关键词直接创建",
-                callback_data=callback_token(chat_id, "persona_ai_direct", {}),
+                text="◀️ 返回修改提示词",
+                callback_data=callback_token(chat_id, "persona_ai_back", {}),
             ),
         ])
-        rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
         return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     @classmethod
     def _persona_ai_keywords_text(cls, payload: dict[str, Any], *, notice: str = "") -> str:
-        regular = cls._persona_ai_keyword_values(payload.get("ai_keywords"))
-        hot = cls._persona_ai_keyword_values(payload.get("ai_hot_keywords"))
         selected_regular = cls._persona_ai_keyword_values(payload.get("ai_selected_regular_keywords"), limit=2)
         selected_hot = cls._persona_ai_keyword_values(payload.get("ai_selected_hot_keywords"), limit=2)
-        source = payload.get("ai_hot_keyword_source") if isinstance(payload.get("ai_hot_keyword_source"), dict) else {}
-        if source.get("available"):
-            source_text = f"热门候选参考 {int(source.get('candidate_count') or 0)} 条公开趋势内容。"
-        elif source.get("fallback") == "persona_model":
-            source_text = "未取得可核验实时热度，热门候选由模型按人设生成。"
-        else:
-            source_text = "热门候选为模型按人设生成的可选方向。"
+        selected = list(dict.fromkeys(selected_regular + selected_hot))
         prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
         return (
             prefix
-            + "AI 生成人设 · 选择关键词\n"
-            + f"名称：{str(payload.get('ai_name') or '')[:160]}\n"
-            + f"提示词：{str(payload.get('ai_prompt') or '')[:800]}\n\n"
-            + f"普通候选 {len(regular)} 个，热门候选 {len(hot)} 个。每列最多选 2 个，至少选 2 个；共最多 4 个。\n"
-            + f"当前已选：普通 {len(selected_regular)} / 2，热门 {len(selected_hot)} / 2。\n"
-            + source_text
+            + "✍️ 新建人设\n\n"
+            + f"人设：{str(payload.get('ai_name') or '')[:160]}\n\n"
+            + "请先选择本次人设走向的核心关键词。\n"
+            + "最多可选 2 个；选好后再生成完整人设。\n\n"
+            + f"目前已选：{'、'.join(selected) if selected else '尚未选择'}\n\n"
+            + f"原始提示：{str(payload.get('ai_prompt') or '')[:800]}"
         )
 
     async def _finish_persona_ai_create(
@@ -3843,6 +3829,11 @@ class NativeTweetBotController:
         if not new_id:
             raise HTTPException(status_code=502, detail="AI 未返回新建人设标识")
         created_name = str(profile.get("name") or (result.get("name") if isinstance(result, dict) else "") or name)
+        created_content = str(
+            profile.get("content")
+            or (result.get("content") if isinstance(result, dict) else "")
+            or ""
+        ).strip()
         clear_pending_state(chat_id)
         save_state(chat_id, selected_persona_id=new_id, payload={})
         audit_action(
@@ -3853,21 +3844,24 @@ class NativeTweetBotController:
             resource_type="persona",
             resource_id=new_id,
         )
+        success_lines = [f"✅ 已新建人设：{created_name}", ""]
+        if created_content:
+            success_lines.extend([created_content[:2800], ""])
+        success_lines.append(
+            "步骤 3/3：请先生成人设图。后续生成推文配图会优先使用人设图锁定人物长相。"
+        )
         await reply(
-            f"AI 生成人设 · 第 3/3 步\n已创建：{created_name}\n"
-            "请选择下一步：先生成首张人设图，或打开基础资料继续完善。",
+            "\n".join(success_lines),
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                 types.InlineKeyboardButton(
-                    text="打开人设",
-                    callback_data=callback_token(chat_id, "p", {"persona_id": new_id}),
-                ),
-                types.InlineKeyboardButton(text="查看我的人设", callback_data="tt:personas:0"),
-            ], [
-                types.InlineKeyboardButton(
-                    text="进入人设图设置",
+                    text="🎨 生成人设图",
                     callback_data=callback_token(chat_id, "personaimage", {"persona_id": new_id, "page": 0}),
                 ),
-                types.InlineKeyboardButton(text="基础资料", callback_data="tt:profile"),
+            ], [
+                types.InlineKeyboardButton(
+                    text="🧾 查看人设详情",
+                    callback_data=callback_token(chat_id, "p", {"persona_id": new_id}),
+                ),
             ]]),
         )
         return new_id
@@ -4377,6 +4371,12 @@ class NativeTweetBotController:
                 clear_pending_state(chat_id)
                 await self._render_persona_module(query, types, member, "publish")
             elif action == "personas":
+                # R18's create-persona wizard returns to the list and drops
+                # its transient input state. Preserve resume actions used by
+                # generation/publish selectors, but never leave a persona
+                # creation step armed after the user taps 返回.
+                if str(load_state(chat_id).get("mode") or "").startswith("persona_"):
+                    clear_pending_state(chat_id)
                 await self._persona_list(query, types, member, int(parts[2]) if len(parts) > 2 else 0)
             elif action in {
                 "personagroups",
@@ -4668,13 +4668,12 @@ class NativeTweetBotController:
             elif action in {"persona_ai_new", "persona_ai_name"}:
                 save_state(chat_id, mode="persona_ai_name", payload={})
                 await query.message.edit_text(
-                    "AI 生成人设 · 第 1/3 步\n"
-                    "请单独发送人设名称。\n"
-                    "例如：科技观察员\n"
-                    "收到名称后，下一步会单独引导你发送人设提示词。",
-                    reply_markup=self._step_navigation_markup(
-                        types, back_callback="tt:personamanage", back_text="返回人设管理",
-                    ),
+                    "⭐ 新建人设\n\n"
+                    "步骤 1/3：请先输入人设名称。\n\n"
+                    "例如：科技观察员",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="◀️ 返回", callback_data="tt:personas:0"),
+                    ]]),
                 )
             elif action == "persona_ai_noop":
                 await query.answer("请选择下方关键词，标题本身不可操作。")
@@ -4712,8 +4711,8 @@ class NativeTweetBotController:
                         self._persona_ai_keyword_values(payload.get("ai_selected_regular_keywords"), limit=2)
                         + self._persona_ai_keyword_values(payload.get("ai_selected_hot_keywords"), limit=2)
                     )
-                    if len(all_selected) >= 4:
-                        raise HTTPException(status_code=400, detail="最多选择 4 个关键词")
+                    if len(all_selected) >= 2:
+                        raise HTTPException(status_code=400, detail="最多选择 2 个核心关键词")
                     selected.append(keyword)
                 payload[selected_field] = selected
                 payload["ai_selected_keywords"] = list(dict.fromkeys(
@@ -4753,13 +4752,14 @@ class NativeTweetBotController:
                         "ai_name": name,
                     })
                     await query.message.edit_text(
-                        "AI 生成人设 · 第 2/3 步\n"
-                        f"名称：{name[:160]}\n"
-                        "请单独重新发送人设提示词。\n"
-                        "可描述身份、性格、内容方向、语气、受众和图片风格。",
-                        reply_markup=self._step_navigation_markup(
-                            types, back_callback="tt:persona_ai_name", back_text="返回重新输入名称",
-                        ),
+                        "✍️ 新建人设\n\n"
+                        f"角色名称：{name[:160]}\n\n"
+                        "步骤 2/3：请重新输入人设提示词。\n"
+                        "我会沿用原来正常的人设生成流程，根据你的提示词生成人设卡片与后续推文设置。\n\n"
+                        "可以描述身份、性格、内容方向、语气、受众、图片风格等。",
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                            types.InlineKeyboardButton(text="◀️ 返回重新输入名称", callback_data="tt:persona_ai_name"),
+                        ]]),
                     )
                 else:
                     selected_regular = self._persona_ai_keyword_values(
@@ -4769,8 +4769,6 @@ class NativeTweetBotController:
                         payload.get("ai_selected_hot_keywords"), limit=2,
                     )
                     if action == "persona_ai_confirm":
-                        if len(set(selected_regular) | set(selected_hot)) < 2:
-                            raise HTTPException(status_code=400, detail="请至少选择 2 个人设关键词，或点击直接创建")
                         await self._finish_persona_ai_create(
                             user_id=user_id,
                             chat_id=chat_id,
@@ -7299,29 +7297,30 @@ class NativeTweetBotController:
                 if mode == "persona_ai_name":
                     if "｜" in value or "|" in value:
                         await message.answer(
-                            "AI 生成人设 · 第 1/3 步\n"
-                            "这一步只接收人设名称，请不要同时发送提示词。\n"
-                            "请重新单独发送名称，例如：科技观察员。",
-                            reply_markup=self._step_navigation_markup(
-                                types,
-                                back_callback="tt:personamanage",
-                                back_text="返回人设管理",
-                            ),
+                            "❌ 这一步只接收人设名称，请重新输入 2 个字以上的名称。",
+                            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                                types.InlineKeyboardButton(text="◀️ 返回", callback_data="tt:personas:0"),
+                            ]]),
                         )
                         return
                     if len(value) < 2:
-                        raise HTTPException(status_code=400, detail="人设名称至少需要 2 个字，请重新发送名称")
+                        await message.answer(
+                            "❌ 人设名称太短，请重新输入 2 个字以上的名称。",
+                            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                                types.InlineKeyboardButton(text="◀️ 返回人设列表", callback_data="tt:personas:0"),
+                            ]]),
+                        )
+                        return
                     save_state(chat_id, mode="persona_ai_prompt", payload={"ai_name": value[:160]})
                     await message.answer(
-                        "AI 生成人设 · 第 2/3 步\n"
-                        f"名称：{value[:160]}\n"
-                        "请单独发送人设提示词。\n"
-                        "可描述身份、性格、内容方向、语气、受众和图片风格。",
-                        reply_markup=self._step_navigation_markup(
-                            types,
-                            back_callback="tt:persona_ai_name",
-                            back_text="返回重新输入名称",
-                        ),
+                        "✍️ 新建人设\n\n"
+                        f"角色名称：{value[:160]}\n\n"
+                        "步骤 2/3：请输入人设提示词。\n"
+                        "我会沿用原来正常的人设生成流程，根据你的提示词生成人设卡片与后续推文设置。\n\n"
+                        "可以描述身份、性格、内容方向、语气、受众、图片风格等。",
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                            types.InlineKeyboardButton(text="◀️ 返回重新输入名称", callback_data="tt:persona_ai_name"),
+                        ]]),
                     )
                     return
                 elif mode == "persona_ai_prompt":
@@ -7338,7 +7337,7 @@ class NativeTweetBotController:
                     raise HTTPException(
                         status_code=400,
                         detail=(
-                            "请先发送人设名称，再单独发送人设提示词。"
+                            "人设提示词不能为空，请重新输入。"
                             if mode == "persona_ai_prompt"
                             else "请发送有效的人设名称和提示词。"
                         ),
@@ -7401,6 +7400,20 @@ class NativeTweetBotController:
                         idempotency_key=create_key,
                         reply=message.answer,
                     )
+            elif mode == "persona_ai_keyword_select":
+                # Match the R18 step: keyword choices are callback buttons;
+                # free-form text keeps the wizard open and exposes only the
+                # relevant return action instead of falling into an invalid
+                # state message.
+                await message.answer(
+                    "请先点击上方按钮选择核心关键词；最多选 2 个，选好后点击“确认并生成人设”。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(
+                            text="◀️ 返回修改提示词",
+                            callback_data=callback_token(chat_id, "persona_ai_back", {}),
+                        ),
+                    ]]),
+                )
             elif mode == "persona_copy_url":
                 if "｜" in text or "|" in text or not text.startswith(("http://", "https://")):
                     raise HTTPException(status_code=400, detail="请单独发送 Threads 或 Instagram 公开主页链接")
