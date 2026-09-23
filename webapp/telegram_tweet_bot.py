@@ -7739,12 +7739,27 @@ class NativeTweetBotController:
                 await query.message.edit_text(page_text, reply_markup=markup)
             else:
                 await query.answer("操作已过期，请返回总控菜单", show_alert=True)
+                try:
+                    await query.message.edit_text(
+                        "操作已过期，请重新从总控菜单进入该功能。",
+                        reply_markup=self._return_keyboard(types),
+                    )
+                except Exception:
+                    logger.debug("Unable to render expired callback return keyboard", exc_info=True)
                 return
             await query.answer()
         except Exception as exc:
             logger.exception("Telegram tweet callback failed: %s", data)
             audit_action(chat_id, user_id, action or "callback", status="failed", detail=_error_text(exc))
             await query.answer(_error_text(exc)[:180], show_alert=True)
+            try:
+                await query.message.edit_text(
+                    f"操作失败：{_error_text(exc)}\n"
+                    "当前步骤状态已保留，请点击下方返回或取消。",
+                    reply_markup=self._text_error_navigation(types, chat_id, load_state(chat_id)),
+                )
+            except Exception:
+                logger.debug("Unable to render callback error navigation", exc_info=True)
 
     async def handle_text(self, message: Any, types: Any) -> None:
         if await self._handle_chat_login_text(message, types):

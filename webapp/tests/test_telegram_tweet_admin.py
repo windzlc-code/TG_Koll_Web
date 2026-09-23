@@ -1377,6 +1377,21 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
         })
 
+    def test_expired_callback_leaves_clickable_return_menu(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        query = _Query("tt:callback-that-no-longer-exists", message)
+        asyncio.run(controller.handle_callback(query, _Types))
+        self.assertIn("操作已过期", message.edits[-1][0])
+        self.assertEqual(
+            message.edits[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data,
+            "tt:menu",
+        )
+
     def test_r18_free_generation_modes_keep_stepwise_callbacks(self):
         calls = []
 
