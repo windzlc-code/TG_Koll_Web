@@ -712,9 +712,21 @@ class TelegramTweetAdminTests(unittest.TestCase):
         }
         self.assertEqual(
             {item for item in create_module_callbacks if not item.startswith("tt:p:")},
-            {"tt:generate", "tt:hot", "tt:draft_new"},
+            {"tt:genmodes"},
         )
         self.assertEqual(sum(item.startswith("tt:p:") for item in create_module_callbacks), 1)
+        asyncio.run(controller.handle_callback(_Query("tt:genmodes", message), _Types))
+        generation_mode_callbacks = {
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertEqual(generation_mode_callbacks, {
+            "tt:genmode:text", "tt:genmode:media", "tt:genmode:custom",
+            "tt:genmode:hot", "tt:pmod:create",
+        })
+        self.assertIn("请选择本次生成方式", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
         content_module_callbacks = {
             button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
@@ -1163,6 +1175,75 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(generated[0]["count"], 3)
         self.assertEqual(generated[0]["target_words"], 120)
         self.assertEqual(generated[0]["prompt"], "AI 产品趋势")
+
+    def test_r18_free_generation_modes_keep_stepwise_callbacks(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "profile.memories":
+                return {"memories": [{"id": "memory-1", "summary": "保持克制语气"}]}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        message = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:genmodes", message), _Types))
+        self.assertTrue(any(
+            "只生成推文" in str(button.text)
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        ))
+        asyncio.run(controller.handle_callback(_Query("tt:genmode:text", message), _Types))
+        self.assertIn("选择人设记忆", message.edits[-1][0])
+        skip = next(
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "不指定记忆" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(skip, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_count")
+        asyncio.run(controller.handle_callback(_Query("tt:gcount:2", message), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_prompt")
+        prompt_button = next(
+            button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if "跳过提示词" in str(button.text)
+        )
+        self.assertTrue(str(prompt_button.callback_data).startswith("tt:gprompt:skip"))
+        prompt = _Message(text="科技产品趋势")
+        asyncio.run(controller.handle_text(prompt, _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_words")
+        asyncio.run(controller.handle_callback(_Query("tt:gwords:80", prompt), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_confirm")
+        self.assertIn("只生成推文", prompt.edits[-1][0])
+        self.assertEqual([action for action, _payload in calls].count("generation.start"), 0)
+
+        # The media branch adds the ratio step before the same prompt/word
+        # steps, while preserving the Tweet Workbench backend contract.
+        save_state(101, selected_persona_id="persona-a")
+        media = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:genmode:media", media), _Types))
+        media_skip = next(
+            button.callback_data
+            for row in media.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row if "不指定记忆" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(media_skip, media), _Types))
+        asyncio.run(controller.handle_callback(_Query("tt:gcount:1", media), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_ratio")
+        asyncio.run(controller.handle_callback(_Query("tt:gratio:9_16", media), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_prompt")
+        self.assertIn("画面比例", media.edits[-2][0])
+
+        custom = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:genmode:custom", custom), _Types))
+        self.assertEqual(load_state(101)["mode"], "draft_new")
+        self.assertIn("第 1/2 步", custom.edits[-1][0])
 
     def test_generation_memory_picker_keeps_selected_context_in_enqueue_payload(self):
         calls = []
@@ -2386,6 +2467,43 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertNotIn("posts.list", calls)
         callback = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data
         self.assertTrue(callback.startswith("tt:gendrafts:"))
+
+    def test_media_generation_keeps_mode_and_opens_existing_image_flow(self):
+        def dispatch(_user_id, action, _payload):
+            if action == "generation.status":
+                return {
+                    # The Web Workbench strips Telegram's presentation-only
+                    # generation_mode from the persisted task input.  The
+                    # watcher must therefore retain the mode it was started
+                    # with and expose the existing image.generate entry point.
+                    "status": "success",
+                    "output": {
+                        "posts": [{"id": "new-media-1", "content": "本次配图推文"}],
+                    },
+                }
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        bot = SimpleNamespace(send_message=mock.AsyncMock())
+        with mock.patch("webapp.telegram_tweet_bot.asyncio.sleep", new=mock.AsyncMock()):
+            asyncio.run(controller._watch_generation(
+                bot,
+                101,
+                self.alice_id,
+                "persona-a",
+                "task-media",
+                _Types,
+                generation_mode="media",
+                aspect_ratio="3:4",
+            ))
+        rendered = bot.send_message.await_args.kwargs["reply_markup"].inline_keyboard
+        buttons = [button for row in rendered for button in row]
+        self.assertIn("进入第 1 篇配图", [str(button.text) for button in buttons])
+        self.assertIn("推文＋配图模式", bot.send_message.await_args.args[1])
 
     def test_task_submenu_filters_before_opening_task_detail(self):
         def dispatch(_user_id, action, _payload):
