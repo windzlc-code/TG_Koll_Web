@@ -1121,6 +1121,8 @@ class NativeTweetBotController:
         *,
         back_callback: str = "tt:menu",
         back_text: str = "返回上一步",
+        primary_callback: str = "",
+        primary_text: str = "",
     ) -> Any:
         """Render the R18-style controls for a text/media input step.
 
@@ -1128,11 +1130,16 @@ class NativeTweetBotController:
         they cannot be attached to an individual wizard message.  Every
         transient input step therefore gets an inline escape hatch as well:
         the first row returns to the owning module (or the workbench menu),
-        and the second row clears the pending state without requiring the
-        user to type ``/cancel``.
+        and the second row clears the pending state without requiring command
+        text.
         """
         button = types.InlineKeyboardButton
         rows: list[list[Any]] = []
+        if str(primary_callback or "").strip():
+            rows.append([button(
+                text=str(primary_text or "继续"),
+                callback_data=str(primary_callback),
+            )])
         if str(back_callback or "").strip():
             rows.append([button(text=back_text, callback_data=str(back_callback))])
         rows.append([button(text="取消当前步骤", callback_data="tt:stepcancel")])
@@ -4272,7 +4279,6 @@ class NativeTweetBotController:
                 await query.message.edit_text(
                     "人设分组 · 新建\n"
                     "请发送分组名称；分组只用于整理人设、筛选和矩阵发布，不会复制或删除人设资料。\n"
-                    "发送 /cancel 取消。"
                 )
             elif action == "groupadd" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "groupadd", parts[2])
@@ -4337,7 +4343,6 @@ class NativeTweetBotController:
                 await query.message.edit_text(
                     "人设分组 · 重命名\n"
                     "请发送新的分组名称；只修改分组标题，不会改变组内人设。\n"
-                    "发送 /cancel 取消。"
                 )
             elif action == "groupdeleteask" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "groupdeleteask", parts[2])
@@ -4477,7 +4482,7 @@ class NativeTweetBotController:
                 if resume_action == "draft_new":
                     save_state(chat_id, mode="draft_new", payload={})
                     await query.message.edit_text(
-                        "手工新建草稿 · 输入正文\n请发送草稿正文。\n发送 /cancel 取消。",
+                        "手工新建草稿 · 输入正文\n请发送草稿正文。",
                         reply_markup=self._step_navigation_markup(
                             types, back_callback="tt:pmod:create", back_text="返回新建推文",
                         ),
@@ -4509,8 +4514,7 @@ class NativeTweetBotController:
                     "手工新建人设 · 第 1 步\n"
                     "请发送：人设名称｜简介\n"
                     "例如：科技观察员｜关注 AI 产品与创业趋势，语气克制专业。\n"
-                    "简介会作为后续推文、配图和人设图的基础上下文；未填写的其他字段保持默认。\n"
-                    "发送 /cancel 取消。",
+                    "简介会作为后续推文、配图和人设图的基础上下文；未填写的其他字段保持默认。",
                     reply_markup=self._step_navigation_markup(
                         types, back_callback="tt:personamanage", back_text="返回人设管理",
                     ),
@@ -4521,8 +4525,7 @@ class NativeTweetBotController:
                     "AI 生成人设 · 第 1 步\n"
                     "请发送：人设名称｜人设提示词\n"
                     "例如：科技观察员｜关注 AI 产品、创业趋势，语气克制专业。\n"
-                    "下一步会展示普通关键词和热门关键词供选择，确认后才创建人设。\n"
-                    "发送 /cancel 取消。",
+                    "下一步会展示普通关键词和热门关键词供选择，确认后才创建人设。",
                     reply_markup=self._step_navigation_markup(
                         types, back_callback="tt:personamanage", back_text="返回人设管理",
                     ),
@@ -4607,7 +4610,7 @@ class NativeTweetBotController:
                     await query.message.edit_text(
                         "AI 生成人设 · 返回修改\n"
                         "请重新发送：人设名称｜人设提示词。\n"
-                        "修改后会重新生成候选关键词；发送 /cancel 取消。",
+                        "修改后会重新生成候选关键词。",
                         reply_markup=self._step_navigation_markup(
                             types, back_callback="tt:personamanage", back_text="返回人设管理",
                         ),
@@ -4652,8 +4655,7 @@ class NativeTweetBotController:
                 await query.message.edit_text(
                     "复制公开人设\n请发送公开 Threads 或 Instagram 用户主页链接；\n"
                     "如需指定新名称，可发送：新名称｜公开主页链接。\n"
-                    "系统会先分析公开资料，下一步展示结果供确认；不会修改原账号或原人设。\n"
-                    "发送 /cancel 取消。",
+                    "系统会先分析公开资料，下一步展示结果供确认；不会修改原账号或原人设。",
                     reply_markup=self._step_navigation_markup(
                         types, back_callback="tt:personamanage", back_text="返回人设管理",
                     ),
@@ -4836,7 +4838,7 @@ class NativeTweetBotController:
                 payload["page"] = int(reference.get("page") or 0)
                 save_state(chat_id, selected_persona_id=payload["persona_id"], mode="persona_image_prompt", payload=payload)
                 await query.message.edit_text(
-                    "请发送人设图补充提示词；发送 /cancel 取消。\n"
+                    "请发送人设图补充提示词。\n"
                     "未填写的选项将继续沿用原有人设简介。",
                     reply_markup=self._step_navigation_markup(
                         types,
@@ -4861,7 +4863,7 @@ class NativeTweetBotController:
                 await query.message.edit_text(
                     "人设图库 · 上传自定义图\n"
                     "请发送一张图片；支持 JPG、PNG、WebP、GIF。上传后会保存到当前人设图库，可再设置为参考图或头像。\n"
-                    "不会覆盖现有图片；发送 /cancel 取消。",
+                    "不会覆盖现有图片。",
                     reply_markup=self._step_navigation_markup(
                         types,
                         back_callback=callback_token(chat_id, "personaimage", {
@@ -4884,8 +4886,7 @@ class NativeTweetBotController:
                 })
                 await query.message.edit_text(
                     "人设图库 · 替换图片\n"
-                    "请发送用于替换的 JPG、PNG、WebP 或 GIF 图片；只替换当前选中的图库记录，其他图片和人设简介保持不变。\n"
-                    "发送 /cancel 取消。",
+                    "请发送用于替换的 JPG、PNG、WebP 或 GIF 图片；只替换当前选中的图库记录，其他图片和人设简介保持不变。",
                     reply_markup=self._step_navigation_markup(
                         types,
                         back_callback=callback_token(chat_id, "personaimage", {
@@ -5122,7 +5123,7 @@ class NativeTweetBotController:
                     "page": max(0, int(reference.get("page") or 0)),
                 })
                 await query.message.edit_text(
-                    "请发送已发布帖子链接；如需补充正文，可发送：链接｜正文。\n发送 /cancel 取消。",
+                    "请发送已发布帖子链接；如需补充正文，可发送：链接｜正文。",
                     reply_markup=self._step_navigation_markup(
                         types,
                         back_callback=f"tt:persona_history:{max(0, int(reference.get('page') or 0))}",
@@ -5577,7 +5578,7 @@ class NativeTweetBotController:
                 await query.message.edit_text(
                     "推文配图 · 补充提示词\n"
                     "请发送本次图片的局部要求，例如人物动作、镜头距离、背景物件或需要避免的元素。\n"
-                    "提示词只追加到当前配图任务，不会修改推文正文或人设简介；发送 /cancel 取消。",
+                    "提示词只追加到当前配图任务，不会修改推文正文或人设简介。",
                     reply_markup=self._step_navigation_markup(
                         types,
                         back_callback=callback_token(chat_id, "image", {
@@ -5710,8 +5711,7 @@ class NativeTweetBotController:
                 await query.message.edit_text(
                     "手工新建草稿 · 第 1 步\n"
                     "请发送草稿正文；内容会保存到当前人设，不会自动发布。\n"
-                    "提交后可继续添加媒体、生成配图、收藏或发布。\n"
-                    "发送 /cancel 取消。",
+                    "提交后可继续添加媒体、生成配图、收藏或发布。",
                     reply_markup=self._step_navigation_markup(
                         types, back_callback="tt:pmod:create", back_text="返回新建推文",
                     ),
@@ -5731,8 +5731,7 @@ class NativeTweetBotController:
                     })
                     await query.message.edit_text(
                         "编辑推文正文\n"
-                        "请发送新的完整正文；本次只替换文字，不会删除已有媒体或改变收藏状态。\n"
-                        "发送 /cancel 取消。",
+                        "请发送新的完整正文；本次只替换文字，不会删除已有媒体或改变收藏状态。",
                         reply_markup=self._step_navigation_markup(
                             types,
                             back_callback=callback_token(chat_id, "d", {
@@ -5755,7 +5754,7 @@ class NativeTweetBotController:
                     await query.message.edit_text(
                         "添加推文媒体\n"
                         "请发送图片、视频或文件；上传成功后可继续添加多个素材。\n"
-                        "发送 /done 完成并返回详情，发送 /cancel 取消。",
+                        "上传完成后点击下方“完成并返回详情”。",
                         reply_markup=self._step_navigation_markup(
                             types,
                             back_callback=callback_token(chat_id, "d", {
@@ -5766,6 +5765,14 @@ class NativeTweetBotController:
                                 "intent": str(reference.get("intent") or ""),
                             }),
                             back_text="返回推文详情",
+                            primary_callback=callback_token(chat_id, "d", {
+                                "persona_id": reference_persona_id,
+                                "post_id": post_id,
+                                "source": source,
+                                "page": max(0, int(reference.get("page") or 0)),
+                                "intent": str(reference.get("intent") or ""),
+                            }),
+                            primary_text="完成并返回详情",
                         ),
                     )
                 elif action == "mediareplace":
@@ -5778,8 +5785,7 @@ class NativeTweetBotController:
                     })
                     await query.message.edit_text(
                         "替换推文媒体\n"
-                        "请发送新的图片、视频或文件；只替换当前选中的媒体位置，其他素材保持不变。\n"
-                        "发送 /cancel 取消。",
+                        "请发送新的图片、视频或文件；只替换当前选中的媒体位置，其他素材保持不变。",
                         reply_markup=self._step_navigation_markup(
                             types,
                             back_callback=callback_token(chat_id, "d", {
@@ -5893,7 +5899,7 @@ class NativeTweetBotController:
                     await query.message.edit_text(
                         "定时发布 · 设置时间\n"
                         "请输入北京时间 YYYY-MM-DD HH:MM。时间仅决定发布计划，不会修改正文。\n"
-                        "下一步会展示平台、账号、正文和计划时间供最终确认；发送 /cancel 取消。",
+                        "下一步会展示平台、账号、正文和计划时间供最终确认。",
                         reply_markup=self._step_navigation_markup(
                             types,
                             back_callback=callback_token(chat_id, "d", {
@@ -6223,7 +6229,7 @@ class NativeTweetBotController:
                 })
                 await query.message.edit_text(
                     "请发送改写要求；例如：改成更生活化的语气、保留数字但换一个开头。\n"
-                    "如果只按当前人设正常改写，请发送 /auto。\n发送 /cancel 取消。\n\n"
+                    "如果只按当前人设正常改写，请发送 /auto。\n\n"
                     f"当前候选：{source_content[:1800]}",
                     reply_markup=self._step_navigation_markup(
                         types,
@@ -6564,7 +6570,7 @@ class NativeTweetBotController:
                     "请发送自动化计划 JSON：\n"
                     '{"account_id":"账号ID","platform":"instagram","mode":"list",'
                     '"items":[{"task_type":"instagram_warmup","payload":{},"reservation_minutes":0}]}\n'
-                    "账号必须已授权并绑定人设；发送 /cancel 取消。",
+                    "账号必须已授权并绑定人设。",
                     reply_markup=self._step_navigation_markup(
                         types,
                         back_callback=f"tt:automationplans:{max(0, int(reference.get('page') or 0))}",
@@ -6749,8 +6755,7 @@ class NativeTweetBotController:
                 save_state(chat_id, mode="profile_content" if action == "bio" else "profile_style", payload={})
                 await query.message.edit_text(
                     "人设设置 · " + ("修改简介" if action == "bio" else "修改推文风格") + "\n"
-                    "请发送新的完整内容；只更新当前字段，名称、记忆、链接模板、图库和账号绑定保持不变。\n"
-                    "发送 /cancel 取消。",
+                    "请发送新的完整内容；只更新当前字段，名称、记忆、链接模板、图库和账号绑定保持不变。",
                     reply_markup=self._step_navigation_markup(
                         types, back_callback="tt:profile", back_text="返回基础资料",
                     ),
@@ -6759,8 +6764,7 @@ class NativeTweetBotController:
                 save_state(chat_id, mode="profile_name", payload={})
                 await query.message.edit_text(
                     "人设设置 · 修改名称\n"
-                    "请发送新的人设名称；只修改显示名称，不会影响简介、推文、图库或绑定账号。\n"
-                    "发送 /cancel 取消。",
+                    "请发送新的人设名称；只修改显示名称，不会影响简介、推文、图库或绑定账号。",
                     reply_markup=self._step_navigation_markup(
                         types, back_callback="tt:profile", back_text="返回基础资料",
                     ),
@@ -6770,7 +6774,7 @@ class NativeTweetBotController:
                 save_state(chat_id, mode="profile_ai", payload={"name": str(profile.get("name") or "")})
                 await query.message.edit_text(
                     "请发送希望 AI 优化的人设方向或补充要求。\n"
-                    "AI 只会更新简介字段，不会覆盖名称、链接模板或图库。发送 /cancel 取消。",
+                    "AI 只会更新简介字段，不会覆盖名称、链接模板或图库。",
                     reply_markup=self._step_navigation_markup(
                         types, back_callback="tt:profile", back_text="返回基础资料",
                     ),
@@ -6787,8 +6791,7 @@ class NativeTweetBotController:
                 })
                 await query.message.edit_text(
                     "人设记忆 · 新增\n"
-                    "请发送一条可复用的事实、偏好或表达约束；生成推文时可按需勾选，不会自动覆盖简介。\n"
-                    "发送 /cancel 取消。",
+                    "请发送一条可复用的事实、偏好或表达约束；生成推文时可按需勾选，不会自动覆盖简介。",
                     reply_markup=self._step_navigation_markup(
                         types,
                         back_callback=callback_token(chat_id, "pmemories", {"page": max(0, int(reference.get("page") or 0))}),
@@ -6814,8 +6817,7 @@ class NativeTweetBotController:
                     "链接模板 · 新增\n"
                     "请发送：模板名称｜链接｜结尾文案\n"
                     "例如：官网｜https://example.com｜了解更多。\n"
-                    "保存后可在正文生成时启用；只影响链接模板，不会修改现有推文。\n"
-                    "发送 /cancel 取消。",
+                     "保存后可在正文生成时启用；只影响链接模板，不会修改现有推文。",
                     reply_markup=self._step_navigation_markup(
                         types,
                         back_callback=callback_token(chat_id, "plinks", {"page": max(0, int(reference.get("page") or 0))}),
@@ -6851,7 +6853,7 @@ class NativeTweetBotController:
                 await query.message.edit_text(
                     f"Threads 人设绑定\n当前绑定：@{current}\n"
                     "请发送新的 Threads 用户名；只更新当前人设的平台字段。\n"
-                    "发送 /unbind 解除绑定，发送 /cancel 取消。",
+                     "发送 /unbind 解除绑定。",
                     reply_markup=self._step_navigation_markup(
                         types,
                         back_callback="tt:profile", back_text="返回基础资料",

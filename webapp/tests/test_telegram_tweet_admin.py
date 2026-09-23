@@ -1872,6 +1872,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         message = _Message()
         asyncio.run(controller.handle_callback(_Query("tt:persona_ai_new", message), _Types))
+        self.assertNotIn("/cancel", message.edits[-1][0])
         prompt_markup = message.edits[-1][1]["reply_markup"]
         prompt_callbacks = {
             str(button.callback_data)
@@ -1883,6 +1884,33 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:stepcancel", message), _Types))
         self.assertIn("已取消当前步骤", message.edits[-1][0])
         self.assertEqual(load_state(101)["mode"], "")
+
+    def test_media_step_uses_callback_completion_instead_of_done_command(self):
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=lambda _uid, _action, _payload: {}, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a", mode="", payload={})
+        message = _Message()
+        media_callback = callback_token(101, "media", {
+            "persona_id": "persona-a",
+            "post_id": "post-a",
+            "source": "posts",
+            "page": 0,
+            "intent": "image",
+        })
+        asyncio.run(controller.handle_callback(_Query(media_callback, message), _Types))
+        prompt_text, prompt_kwargs = message.edits[-1]
+        self.assertNotIn("/cancel", prompt_text)
+        self.assertNotIn("/done", prompt_text)
+        buttons = [
+            button
+            for row in prompt_kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertTrue(any(button.text == "完成并返回详情" for button in buttons))
+        self.assertTrue(any(str(button.callback_data).startswith("tt:d:") for button in buttons))
 
     def test_invalid_media_replies_keep_detail_menu_and_cancel_actions(self):
         controller = NativeTweetBotController(
