@@ -1811,7 +1811,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
         self.assertEqual(sent["platform"], "instagram")
         self.assertEqual(popen.call_args.kwargs["env"]["TG_HOT_READER_INCLUDE_INSTAGRAM"], "1")
 
-    def test_crm_live_search_rotates_account_after_sparse_result(self) -> None:
+    def test_crm_live_search_rotates_account_without_poisoning_sparse_result(self) -> None:
         class FakePool:
             def __init__(self):
                 self.acquired = 0
@@ -1841,7 +1841,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
 
         pool = FakePool()
         responses = [
-            {"ok": True, "candidates": [{"id": "one", "hotScore": 600}]},
+            {"ok": True, "candidates": []},
             {"ok": True, "candidates": [
                 {"id": "two", "hotScore": 900},
                 {"id": "three", "hotScore": 700},

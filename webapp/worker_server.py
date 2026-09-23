@@ -2145,8 +2145,13 @@ def _run_tool_r18_job_once(
                 raise RuntimeError(str(metrics.get("error") or "profile metrics fetch failed")[:1000])
         candidate_rows = parsed.get("candidates") if isinstance(parsed.get("candidates"), list) else []
         requested_limit = max(1, min(int(runtime_payload.get("limit") or 10), 20))
+        # A live CRM search may legitimately return fewer than three posts (or
+        # no posts) after the authenticated account has searched the supplied
+        # keyword.  It is still a successful live read; treating that result as
+        # an account failure poisons the collector pool and eventually makes
+        # the next CRM search fail with "no healthy collector account".
         sparse_collector_result = (
-            capability in {"persona.hot_candidates.v1", "crm.threads_live_search.v1"}
+            capability == "persona.hot_candidates.v1"
             and len(candidate_rows) < min(requested_limit, 3)
         )
         succeeded = not sparse_collector_result
