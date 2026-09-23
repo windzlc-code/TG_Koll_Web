@@ -1146,12 +1146,20 @@ class NativeTweetBotController:
         return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     @staticmethod
-    def _generation_count_keyboard(types: Any) -> Any:
+    def _generation_count_keyboard(
+        types: Any,
+        *,
+        back_callback: str = "tt:pmod:create",
+        back_text: str = "返回新建推文",
+    ) -> Any:
         return types.InlineKeyboardMarkup(inline_keyboard=[[
             types.InlineKeyboardButton(text="1 篇", callback_data="tt:gcount:1"),
             types.InlineKeyboardButton(text="3 篇", callback_data="tt:gcount:3"),
             types.InlineKeyboardButton(text="5 篇", callback_data="tt:gcount:5"),
-        ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]])
+        ], [
+            types.InlineKeyboardButton(text=back_text, callback_data=back_callback),
+            types.InlineKeyboardButton(text="取消", callback_data="tt:menu"),
+        ]])
 
     @staticmethod
     def _task_filter_keyboard(types: Any) -> Any:
@@ -1272,6 +1280,10 @@ class NativeTweetBotController:
                     }),
                 ),
             ])
+        rows.append([types.InlineKeyboardButton(
+            text="返回新建推文",
+            callback_data="tt:pmod:create",
+        )])
         rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
         await query.message.edit_text(
             "热点创作 · 第 1/2 步\n"
@@ -3158,7 +3170,8 @@ class NativeTweetBotController:
                 text=f"下一步：确认 {len(selected)} 个人设",
                 callback_data="tt:matrixnext",
             )])
-        rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:personas:0")])
+        rows.append([types.InlineKeyboardButton(text="返回发布管理", callback_data="tt:pmod:publish")])
+        rows.append([types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")])
         await query.message.edit_text(
             "矩阵发布 · 第 1/4 步\n"
             "请选择要发布的人设；可多选，后续再选择内容来源和发布平台。\n"
@@ -3550,6 +3563,114 @@ class NativeTweetBotController:
                 for item in presets[start:start + PAGE_SIZE] if isinstance(item, dict)
             ) or "暂无链接模板。"),
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
+    async def _save_profile_link_template(
+        self,
+        *,
+        user_id: int,
+        chat_id: int,
+        persona_id: str,
+        name: str,
+        link_url: str,
+        ending_text: str,
+        page: int,
+        types: Any,
+        reply: Callable[..., Awaitable[Any]],
+    ) -> None:
+        """Persist one link template after the guided input steps finish."""
+        profile = await self._call(user_id, "profile.get", {"persona_id": persona_id})
+        presets = [
+            dict(item)
+            for item in (profile.get("link_presets") or [])
+            if isinstance(item, dict)
+        ]
+        preset = {
+            "id": f"tg-link-{int(time.time() * 1000)}",
+            "name": name[:80],
+            "link_url": link_url[:500],
+            "ending_text": ending_text[:300],
+            "enabled": True,
+        }
+        presets.append(preset)
+        await self._call(user_id, "profile.update", {
+            "persona_id": persona_id,
+            "link_presets": presets,
+            "active_link_preset_id": str(profile.get("active_link_preset_id") or preset["id"]),
+        })
+        links_page = max(0, int(page or 0))
+        clear_pending_state(chat_id)
+        await reply(
+            "链接模板已保存。",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(
+                    text="查看链接模板",
+                    callback_data=callback_token(chat_id, "plinks", {"page": links_page}),
+                ),
+            ]]),
+        )
+
+    async def _analyze_persona_copy(
+        self,
+        *,
+        user_id: int,
+        chat_id: int,
+        url: str,
+        name: str,
+        idempotency_key: str,
+        types: Any,
+        reply: Callable[..., Awaitable[Any]],
+    ) -> None:
+        result = await self._call(user_id, "personas.copy_analyze", {
+            "url": url[:500],
+            "name": name[:160],
+            "idempotency_key": str(idempotency_key or f"tg:persona-copy-analyze:{chat_id}")[:240],
+        })
+        profile = result.get("profile") if isinstance(result, dict) and isinstance(result.get("profile"), dict) else {}
+        source = result.get("source") if isinstance(result, dict) and isinstance(result.get("source"), dict) else {}
+        if not str(profile.get("name") or "").strip() or not str(profile.get("content") or "").strip():
+            raise HTTPException(status_code=502, detail="公开资料分析未返回完整人设内容")
+        save_state(chat_id, mode="persona_copy_confirm", payload={
+            "copy_profile": profile,
+            "copy_source": source,
+        })
+        await reply(
+            "公开资料分析完成，请确认后创建人设。\n\n"
+            f"名称：{str(profile.get('name') or '')[:160]}\n\n"
+            f"简介：{str(profile.get('content') or '')[:2200]}",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(text="确认并创建", callback_data="tt:persona_copy_confirm"),
+                types.InlineKeyboardButton(text="重新分析", callback_data="tt:persona_copy_new"),
+            ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]),
+        )
+
+    async def _recognize_history_record(
+        self,
+        *,
+        user_id: int,
+        chat_id: int,
+        persona_id: str,
+        url: str,
+        caption: str,
+        page: int,
+        types: Any,
+        reply: Callable[..., Awaitable[Any]],
+    ) -> None:
+        result = await self._call(user_id, "profile.history.recognize", {
+            "persona_id": persona_id,
+            "url": url,
+            "caption": caption,
+        })
+        clear_pending_state(chat_id)
+        reused = bool(result.get("reused")) if isinstance(result, dict) else False
+        await reply(
+            "发布记录已识别并保存。" + ("（已存在记录已复用）" if reused else ""),
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                types.InlineKeyboardButton(
+                    text="查看发布历史",
+                    callback_data=f"tt:persona_history:{max(0, int(page or 0))}",
+                ),
+            ]]),
         )
 
     async def _render_automation_plans(self, query: Any, types: Any, *, page: int = 0) -> None:
@@ -4502,19 +4623,19 @@ class NativeTweetBotController:
             elif action == "pmod":
                 module = str(parts[2] if len(parts) > 2 else "").strip().lower()
                 await self._render_persona_module(query, types, member, module)
-            elif action == "persona_new":
+            elif action in {"persona_new", "persona_new_name"}:
                 state = load_state(chat_id)
                 retained = {
                     key: value
                     for key, value in state["payload"].items()
                     if str(key).startswith("last_") or key == "resume_action"
                 }
-                save_state(chat_id, mode="persona_new", payload=retained)
+                save_state(chat_id, mode="persona_new_name", payload=retained)
                 await query.message.edit_text(
-                    "手工新建人设 · 第 1 步\n"
-                    "请发送：人设名称｜简介\n"
-                    "例如：科技观察员｜关注 AI 产品与创业趋势，语气克制专业。\n"
-                    "简介会作为后续推文、配图和人设图的基础上下文；未填写的其他字段保持默认。",
+                    "手工新建人设 · 第 1/2 步\n"
+                    "请单独发送人设名称。\n"
+                    "例如：科技观察员\n"
+                    "收到名称后，下一步会单独引导你填写人设简介。",
                     reply_markup=self._step_navigation_markup(
                         types, back_callback="tt:personamanage", back_text="返回人设管理",
                     ),
@@ -4651,14 +4772,41 @@ class NativeTweetBotController:
                             reply=query.message.edit_text,
                         )
             elif action == "persona_copy_new":
-                save_state(chat_id, mode="persona_copy_analyze", payload={})
+                save_state(chat_id, mode="persona_copy_url", payload={})
                 await query.message.edit_text(
-                    "复制公开人设\n请发送公开 Threads 或 Instagram 用户主页链接；\n"
-                    "如需指定新名称，可发送：新名称｜公开主页链接。\n"
-                    "系统会先分析公开资料，下一步展示结果供确认；不会修改原账号或原人设。",
+                    "复制公开人设 · 第 1/2 步\n"
+                    "请单独发送公开 Threads 或 Instagram 用户主页链接。\n"
+                    "收到链接后，下一步可选填写新名称；不填写则沿用公开资料名称。",
                     reply_markup=self._step_navigation_markup(
                         types, back_callback="tt:personamanage", back_text="返回人设管理",
                     ),
+                )
+            elif action == "personacopyurl" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "personacopyurl", parts[2])
+                save_state(chat_id, mode="persona_copy_url", payload={})
+                await query.message.edit_text(
+                    "复制公开人设 · 第 1/2 步\n"
+                    "请单独发送公开 Threads 或 Instagram 用户主页链接。",
+                    reply_markup=self._step_navigation_markup(
+                        types, back_callback="tt:personamanage", back_text="返回人设管理",
+                    ),
+                )
+            elif action == "personacopydefault" and len(parts) > 2:
+                resolve_callback_token(chat_id, "personacopydefault", parts[2])
+                state = load_state(chat_id)
+                if state["mode"] != "persona_copy_name":
+                    raise HTTPException(status_code=409, detail="复制人设步骤已失效，请重新开始")
+                url = str(state["payload"].get("copy_url") or "").strip()
+                if not url:
+                    raise HTTPException(status_code=409, detail="公开主页链接已失效，请重新开始")
+                await self._analyze_persona_copy(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    url=url,
+                    name="",
+                    idempotency_key=f"tg:persona-copy-analyze:{chat_id}:{int(query.message.message_id)}",
+                    types=types,
+                    reply=query.message.edit_text,
                 )
             elif action == "persona_copy_confirm":
                 state = load_state(chat_id)
@@ -5118,17 +5266,53 @@ class NativeTweetBotController:
             elif action == "phrecognize" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "phrecognize", parts[2])
                 persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"] or "")
-                save_state(chat_id, selected_persona_id=persona_id, mode="history_recognize", payload={
+                page = max(0, int(reference.get("page") or 0))
+                save_state(chat_id, selected_persona_id=persona_id, mode="history_link", payload={
                     "persona_id": persona_id,
-                    "page": max(0, int(reference.get("page") or 0)),
+                    "page": page,
                 })
                 await query.message.edit_text(
-                    "请发送已发布帖子链接；如需补充正文，可发送：链接｜正文。",
+                    "发布历史识别 · 第 1/2 步\n"
+                    "请单独发送已发布帖子链接。\n"
+                    "收到链接后，下一步可选补充正文内容。",
                     reply_markup=self._step_navigation_markup(
                         types,
-                        back_callback=f"tt:persona_history:{max(0, int(reference.get('page') or 0))}",
+                        back_callback=f"tt:persona_history:{page}",
                         back_text="返回发布历史",
                     ),
+                )
+            elif action == "historylink" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "historylink", parts[2])
+                state = load_state(chat_id)
+                persona_id = str(state["payload"].get("persona_id") or state["selected_persona_id"] or "")
+                page = max(0, int(reference.get("page") or state["payload"].get("page") or 0))
+                save_state(chat_id, selected_persona_id=persona_id, mode="history_link", payload={
+                    "persona_id": persona_id,
+                    "page": page,
+                })
+                await query.message.edit_text(
+                    "发布历史识别 · 第 1/2 步\n请单独发送已发布帖子链接。",
+                    reply_markup=self._step_navigation_markup(
+                        types,
+                        back_callback=f"tt:persona_history:{page}",
+                        back_text="返回发布历史",
+                    ),
+                )
+            elif action == "historyskip" and len(parts) > 2:
+                resolve_callback_token(chat_id, "historyskip", parts[2])
+                state = load_state(chat_id)
+                if state["mode"] != "history_caption":
+                    raise HTTPException(status_code=409, detail="发布历史识别步骤已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                await self._recognize_history_record(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    persona_id=str(payload.get("persona_id") or state["selected_persona_id"] or ""),
+                    url=str(payload.get("history_url") or ""),
+                    caption="",
+                    page=max(0, int(payload.get("page") or 0)),
+                    types=types,
+                    reply=query.message.edit_text,
                 )
             elif action == "gcount" and len(parts) > 2:
                 state = load_state(chat_id)
@@ -6810,19 +6994,77 @@ class NativeTweetBotController:
                 await self._render_profile_links(query, types, page=int(reference.get("page") or 0))
             elif action == "plinkadd":
                 reference = resolve_callback_token(chat_id, "plinkadd", parts[2]) if len(parts) > 2 else {}
-                save_state(chat_id, mode="profile_link_create", payload={
-                    "page": max(0, int(reference.get("page") or 0)),
+                page = max(0, int(reference.get("page") or 0))
+                save_state(chat_id, mode="profile_link_name", payload={
+                    "page": page,
                 })
                 await query.message.edit_text(
-                    "链接模板 · 新增\n"
-                    "请发送：模板名称｜链接｜结尾文案\n"
-                    "例如：官网｜https://example.com｜了解更多。\n"
-                     "保存后可在正文生成时启用；只影响链接模板，不会修改现有推文。",
+                    "链接模板 · 第 1/3 步\n"
+                    "请单独发送模板名称。\n"
+                    "例如：官网\n"
+                    "收到名称后，下一步会单独填写链接。",
                     reply_markup=self._step_navigation_markup(
                         types,
-                        back_callback=callback_token(chat_id, "plinks", {"page": max(0, int(reference.get("page") or 0))}),
+                        back_callback=callback_token(chat_id, "plinks", {"page": page}),
                         back_text="返回链接模板",
                     ),
+                )
+            elif action == "plinkname" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "plinkname", parts[2])
+                page = max(0, int(reference.get("page") or 0))
+                save_state(chat_id, mode="profile_link_name", payload={"page": page})
+                await query.message.edit_text(
+                    "链接模板 · 第 1/3 步\n"
+                    "请单独发送模板名称。\n"
+                    "例如：官网",
+                    reply_markup=self._step_navigation_markup(
+                        types,
+                        back_callback=callback_token(chat_id, "plinks", {"page": page}),
+                        back_text="返回链接模板",
+                    ),
+                )
+            elif action == "plinkurl" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "plinkurl", parts[2])
+                state = load_state(chat_id)
+                if state["mode"] not in {"profile_link_url", "profile_link_ending"}:
+                    raise HTTPException(status_code=409, detail="链接模板步骤已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                name = str(payload.get("link_name") or "").strip()
+                page = max(0, int(reference.get("page") or payload.get("page") or 0))
+                if not name:
+                    raise HTTPException(status_code=409, detail="模板名称已失效，请重新开始")
+                payload["page"] = page
+                save_state(chat_id, mode="profile_link_url", payload=payload)
+                await query.message.edit_text(
+                    "链接模板 · 第 2/3 步\n"
+                    f"模板名称：{name[:80]}\n"
+                    "请单独发送完整链接（需以 http:// 或 https:// 开头）。",
+                    reply_markup=self._step_navigation_markup(
+                        types,
+                        back_callback=callback_token(chat_id, "plinkname", {"page": page}),
+                        back_text="返回重新输入名称",
+                    ),
+                )
+            elif action == "plinkskip" and len(parts) > 2:
+                resolve_callback_token(chat_id, "plinkskip", parts[2])
+                state = load_state(chat_id)
+                if state["mode"] != "profile_link_ending":
+                    raise HTTPException(status_code=409, detail="链接模板步骤已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                name = str(payload.get("link_name") or "").strip()
+                link_url = str(payload.get("link_url") or "").strip()
+                if not name or not link_url:
+                    raise HTTPException(status_code=409, detail="链接模板信息已失效，请重新开始")
+                await self._save_profile_link_template(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    persona_id=load_state(chat_id)["selected_persona_id"],
+                    name=name,
+                    link_url=link_url,
+                    ending_text="",
+                    page=max(0, int(payload.get("page") or 0)),
+                    types=types,
+                    reply=query.message.edit_text,
                 )
             elif action in {"plinkactivate", "plinkdelete"} and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, action, parts[2], consume=True)
@@ -6923,10 +7165,53 @@ class NativeTweetBotController:
             await self.send_main_menu(message, types)
             return
         try:
-            if mode == "persona_new":
-                name, _, content = text.partition("｜")
-                if not content:
-                    name, _, content = text.partition("|")
+            if mode == "persona_new_name":
+                if "｜" in text or "|" in text:
+                    await message.answer(
+                        "手工新建人设 · 第 1/2 步\n"
+                        "这一步只接收人设名称，请不要同时发送简介。\n"
+                        "请重新单独发送名称，例如：科技观察员。",
+                        reply_markup=self._step_navigation_markup(
+                            types,
+                            back_callback="tt:personamanage",
+                            back_text="返回人设管理",
+                        ),
+                    )
+                    return
+                if len(text) < 2:
+                    raise HTTPException(status_code=400, detail="人设名称至少需要 2 个字，请重新发送名称")
+                retained = {
+                    key: value
+                    for key, value in state["payload"].items()
+                    if str(key).startswith("last_") or key == "resume_action"
+                }
+                retained["persona_name"] = text[:160]
+                save_state(chat_id, mode="persona_new_content", payload=retained)
+                await message.answer(
+                    "手工新建人设 · 第 2/2 步\n"
+                    f"名称：{text[:160]}\n"
+                    "请单独发送人设简介。\n"
+                    "可描述身份、性格、内容方向、语气和受众；未填写的其他字段保持默认。",
+                    reply_markup=self._step_navigation_markup(
+                        types,
+                        back_callback="tt:persona_new_name",
+                        back_text="返回重新输入名称",
+                    ),
+                )
+                return
+            elif mode in {"persona_new_content", "persona_new"}:
+                if mode == "persona_new_content":
+                    name = str(state["payload"].get("persona_name") or "").strip()
+                    content = text
+                else:
+                    # Keep one-message input compatible with old pending states;
+                    # newly opened flows always use the two-step path above.
+                    name, _, content = text.partition("｜")
+                    if not content:
+                        name, _, content = text.partition("|")
+                name, content = name.strip(), content.strip()
+                if len(name) < 2 or not content:
+                    raise HTTPException(status_code=400, detail="请先发送人设名称，再单独发送人设简介。")
                 result = await self._call(user_id, "personas.create", {"name": name.strip(), "content": content.strip()})
                 persona = result.get("persona") if isinstance(result, dict) else result
                 new_id = str((persona or {}).get("id") or result.get("id") or "")
@@ -7091,7 +7376,45 @@ class NativeTweetBotController:
                         idempotency_key=create_key,
                         reply=message.answer,
                     )
+            elif mode == "persona_copy_url":
+                if "｜" in text or "|" in text or not text.startswith(("http://", "https://")):
+                    raise HTTPException(status_code=400, detail="请单独发送 Threads 或 Instagram 公开主页链接")
+                save_state(chat_id, mode="persona_copy_name", payload={"copy_url": text[:500]})
+                await message.answer(
+                    "复制公开人设 · 第 2/2 步\n"
+                    f"公开主页：{text[:500]}\n"
+                    "可单独发送新的本地人设名称；如果沿用公开资料名称，请点击下方按钮继续分析。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(
+                            text="沿用公开资料名称并分析",
+                            callback_data=callback_token(chat_id, "personacopydefault", {}),
+                        ),
+                    ], [
+                        types.InlineKeyboardButton(
+                            text="返回重新输入链接",
+                            callback_data=callback_token(chat_id, "personacopyurl", {}),
+                        ),
+                    ], [types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")]]),
+                )
+            elif mode == "persona_copy_name":
+                name = text.strip()
+                if not name or "｜" in name or "|" in name:
+                    raise HTTPException(status_code=400, detail="请单独发送新的本地人设名称")
+                url = str(state["payload"].get("copy_url") or "").strip()
+                if not url:
+                    raise HTTPException(status_code=409, detail="公开主页链接已失效，请重新开始")
+                await self._analyze_persona_copy(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    url=url,
+                    name=name,
+                    idempotency_key=f"tg:persona-copy-analyze:{chat_id}:{int(message.message_id)}",
+                    types=types,
+                    reply=message.answer,
+                )
             elif mode == "persona_copy_analyze":
+                # Compatibility for pending states created before the guided
+                # URL/name flow was deployed.
                 first, separator, second = text.partition("｜")
                 if not separator:
                     first, separator, second = text.partition("|")
@@ -7297,7 +7620,52 @@ class NativeTweetBotController:
                     f"北京时间：{scheduled_text}\n\n确认后才会提交发布队列。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
+            elif mode == "history_link":
+                history_url = text.strip()
+                if "｜" in history_url or "|" in history_url or not history_url.startswith(("http://", "https://")):
+                    raise HTTPException(status_code=400, detail="请单独发送已发布帖子链接（需以 http:// 或 https:// 开头）")
+                history_persona_id = str(state["payload"].get("persona_id") or persona_id).strip()
+                history_page = max(0, int(state["payload"].get("page") or 0))
+                save_state(chat_id, selected_persona_id=history_persona_id, mode="history_caption", payload={
+                    "persona_id": history_persona_id,
+                    "page": history_page,
+                    "history_url": history_url[:500],
+                })
+                await message.answer(
+                    "发布历史识别 · 第 2/2 步\n"
+                    f"链接：{history_url[:500]}\n"
+                    "可发送该帖正文作为补充说明；如果不需要正文，点击“跳过并保存”。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(
+                            text="跳过并保存",
+                            callback_data=callback_token(chat_id, "historyskip", {"page": history_page}),
+                        ),
+                    ], [
+                        types.InlineKeyboardButton(
+                            text="返回重新输入链接",
+                            callback_data=callback_token(chat_id, "historylink", {"page": history_page}),
+                        ),
+                    ], [types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")]]),
+                )
+            elif mode == "history_caption":
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                history_url = str(payload.get("history_url") or "").strip()
+                history_persona_id = str(payload.get("persona_id") or persona_id).strip()
+                if not history_url:
+                    raise HTTPException(status_code=409, detail="帖子链接已失效，请重新开始")
+                await self._recognize_history_record(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    persona_id=history_persona_id,
+                    url=history_url,
+                    caption=text,
+                    page=max(0, int(payload.get("page") or 0)),
+                    types=types,
+                    reply=message.answer,
+                )
             elif mode == "history_recognize":
+                # Compatibility for pending states created before the guided
+                # URL/caption flow was deployed.
                 url, separator, caption = text.partition("｜")
                 if not separator:
                     url, separator, caption = text.partition("|")
@@ -7368,7 +7736,87 @@ class NativeTweetBotController:
                         callback_data=callback_token(chat_id, "pmemories", {"page": memory_page}),
                     ),
                 ]]))
+            elif mode == "profile_link_name":
+                if "｜" in text or "|" in text:
+                    await message.answer(
+                        "链接模板 · 第 1/3 步\n"
+                        "这一步只接收模板名称，请不要同时发送链接或结尾文案。\n"
+                        "请重新单独发送名称，例如：官网。",
+                        reply_markup=self._step_navigation_markup(
+                            types,
+                            back_callback=callback_token(chat_id, "plinks", {
+                                "page": max(0, int(state["payload"].get("page") or 0)),
+                            }),
+                            back_text="返回链接模板",
+                        ),
+                    )
+                    return
+                if not text:
+                    raise HTTPException(status_code=400, detail="模板名称不能为空")
+                page = max(0, int(state["payload"].get("page") or 0))
+                save_state(chat_id, mode="profile_link_url", payload={
+                    "link_name": text[:80],
+                    "page": page,
+                })
+                await message.answer(
+                    "链接模板 · 第 2/3 步\n"
+                    f"模板名称：{text[:80]}\n"
+                    "请单独发送完整链接（需以 http:// 或 https:// 开头）。",
+                    reply_markup=self._step_navigation_markup(
+                        types,
+                        back_callback=callback_token(chat_id, "plinkname", {"page": page}),
+                        back_text="返回重新输入名称",
+                    ),
+                )
+            elif mode == "profile_link_url":
+                link_url = text.strip()
+                if not link_url.startswith(("http://", "https://")):
+                    raise HTTPException(status_code=400, detail="链接必须以 http:// 或 https:// 开头")
+                name = str(state["payload"].get("link_name") or "").strip()
+                if not name:
+                    raise HTTPException(status_code=409, detail="模板名称已失效，请重新开始")
+                page = max(0, int(state["payload"].get("page") or 0))
+                save_state(chat_id, mode="profile_link_ending", payload={
+                    "link_name": name,
+                    "link_url": link_url[:500],
+                    "page": page,
+                })
+                await message.answer(
+                    "链接模板 · 第 3/3 步\n"
+                    f"模板名称：{name[:80]}\n"
+                    f"链接：{link_url[:500]}\n"
+                    "请发送结尾文案；如果不需要结尾文案，可点击“跳过并保存”。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(
+                            text="跳过并保存",
+                            callback_data=callback_token(chat_id, "plinkskip", {"page": page}),
+                        ),
+                    ], [
+                        types.InlineKeyboardButton(
+                            text="返回重新输入链接",
+                            callback_data=callback_token(chat_id, "plinkurl", {"page": page}),
+                        ),
+                    ], [types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")]]),
+                )
+            elif mode == "profile_link_ending":
+                name = str(state["payload"].get("link_name") or "").strip()
+                link_url = str(state["payload"].get("link_url") or "").strip()
+                if not name or not link_url:
+                    raise HTTPException(status_code=409, detail="链接模板信息已失效，请重新开始")
+                await self._save_profile_link_template(
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    persona_id=persona_id,
+                    name=name,
+                    link_url=link_url,
+                    ending_text=text,
+                    page=max(0, int(state["payload"].get("page") or 0)),
+                    types=types,
+                    reply=message.answer,
+                )
             elif mode == "profile_link_create":
+                # Keep one-message input compatible with pending states created
+                # before the guided three-step flow was deployed.
                 parts = [part.strip() for part in re.split(r"[｜|]", text, maxsplit=2)]
                 if len(parts) < 2 or not parts[0] or not parts[1]:
                     raise HTTPException(status_code=400, detail="格式应为：模板名称｜链接｜结尾文案")
@@ -7496,7 +7944,10 @@ class NativeTweetBotController:
                         callback_data=callback_token(chat_id, "hotsubmit", {}),
                     ),
                     types.InlineKeyboardButton(text="修改主题", callback_data="tt:hot"),
-                ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]
+                ], [
+                    types.InlineKeyboardButton(text="返回新建推文", callback_data="tt:pmod:create"),
+                    types.InlineKeyboardButton(text="取消", callback_data="tt:menu"),
+                ]]
                 await message.answer(
                     "热点创作 · 第 2/2 步\n"
                     f"主题：{text[:1200]}\n\n确认后才会提交热点任务。",

@@ -346,8 +346,17 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         prompt = _Message()
         asyncio.run(controller.handle_callback(_Query("tt:persona_new", prompt), _Types))
-        self.assertEqual(load_state(101)["mode"], "persona_new")
-        answer = _Message(text="科技观察员｜关注 AI 产品")
+        self.assertEqual(load_state(101)["mode"], "persona_new_name")
+        self.assertIn("第 1/2 步", prompt.edits[-1][0])
+        combined = _Message(text="科技观察员｜关注 AI 产品")
+        asyncio.run(controller.handle_text(combined, _Types))
+        self.assertEqual(load_state(101)["mode"], "persona_new_name")
+        self.assertIn("只接收人设名称", combined.answers[-1][0])
+        name = _Message(text="科技观察员")
+        asyncio.run(controller.handle_text(name, _Types))
+        self.assertEqual(load_state(101)["mode"], "persona_new_content")
+        self.assertIn("第 2/2 步", name.answers[-1][0])
+        answer = _Message(text="关注 AI 产品")
         asyncio.run(controller.handle_text(answer, _Types))
         self.assertEqual(load_state(101)["selected_persona_id"], "persona-new")
         self.assertEqual(calls[-1][1], "personas.create")
@@ -1129,6 +1138,14 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query(persona_callback, message), _Types))
         self.assertEqual(load_state(101)["mode"], "generate_count")
         self.assertIn("第 1/3 步", message.edits[-1][0])
+        self.assertIn(
+            "tt:pmod:create",
+            [
+                str(button.callback_data)
+                for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+            ],
+        )
         asyncio.run(controller.handle_callback(_Query("tt:gcount:3", message), _Types))
         asyncio.run(controller.handle_callback(_Query("tt:gwords:120", message), _Types))
         self.assertEqual(load_state(101)["mode"], "generate_prompt")
@@ -1866,13 +1883,99 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(profile_button.callback_data, "tt:profile")
 
         asyncio.run(controller.handle_callback(_Query("tt:persona_copy_new", message), _Types))
-        asyncio.run(controller.handle_text(_Message(text="复制观察员｜https://www.threads.net/@public"), _Types))
+        asyncio.run(controller.handle_text(_Message(text="https://www.threads.net/@public"), _Types))
+        self.assertEqual(load_state(101)["mode"], "persona_copy_name")
+        asyncio.run(controller.handle_text(_Message(text="复制观察员"), _Types))
         self.assertEqual(load_state(101)["mode"], "persona_copy_confirm")
         asyncio.run(controller.handle_callback(_Query("tt:persona_copy_confirm", message), _Types))
         created = [payload for action, payload in calls if action == "personas.create"]
         self.assertEqual(len(created), 1)
         self.assertEqual(created[0]["copy_source"]["platform"], "threads")
         self.assertEqual(created[0]["setup"]["personaGender"], "female")
+
+    def test_profile_link_template_uses_three_input_steps_and_can_go_back(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "profile.get":
+                return {"link_presets": [], "active_link_preset_id": ""}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        start = callback_token(101, "plinkadd", {"page": 0})
+        asyncio.run(controller.handle_callback(_Query(start, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "profile_link_name")
+        name = _Message(text="官网")
+        asyncio.run(controller.handle_text(name, _Types))
+        self.assertEqual(load_state(101)["mode"], "profile_link_url")
+        back_to_name = next(
+            button.callback_data
+            for row in name.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if button.text == "返回重新输入名称"
+        )
+        asyncio.run(controller.handle_callback(_Query(back_to_name, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "profile_link_name")
+        name_again = _Message(text="官网")
+        asyncio.run(controller.handle_text(name_again, _Types))
+        url = _Message(text="https://example.com")
+        asyncio.run(controller.handle_text(url, _Types))
+        self.assertEqual(load_state(101)["mode"], "profile_link_ending")
+        skip = next(
+            button.callback_data
+            for row in url.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if button.text == "跳过并保存"
+        )
+        asyncio.run(controller.handle_callback(_Query(skip, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "")
+        self.assertIn("链接模板已保存", message.edits[-1][0])
+        self.assertEqual([action for action, _payload in calls].count("profile.update"), 1)
+
+    def test_history_recognition_uses_link_then_caption_steps_with_return(self):
+        calls = []
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "profile.history.recognize":
+                return {"reused": False}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        message = _Message()
+        start = callback_token(101, "phrecognize", {"persona_id": "persona-a", "page": 0})
+        asyncio.run(controller.handle_callback(_Query(start, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "history_link")
+        link = _Message(text="https://threads.net/@alice/post/1")
+        asyncio.run(controller.handle_text(link, _Types))
+        self.assertEqual(load_state(101)["mode"], "history_caption")
+        back_to_link = next(
+            button.callback_data
+            for row in link.answers[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if button.text == "返回重新输入链接"
+        )
+        asyncio.run(controller.handle_callback(_Query(back_to_link, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "history_link")
+        link_again = _Message(text="https://threads.net/@alice/post/1")
+        asyncio.run(controller.handle_text(link_again, _Types))
+        caption = _Message(text="今天的记录正文")
+        asyncio.run(controller.handle_text(caption, _Types))
+        self.assertEqual(load_state(101)["mode"], "")
+        action, payload = next(item for item in calls if item[0] == "profile.history.recognize")
+        self.assertEqual(action, "profile.history.recognize")
+        self.assertEqual(payload["url"], "https://threads.net/@alice/post/1")
+        self.assertEqual(payload["caption"], "今天的记录正文")
 
     def test_text_input_steps_expose_inline_cancel_and_cancel_without_reauth(self):
         controller = NativeTweetBotController(
