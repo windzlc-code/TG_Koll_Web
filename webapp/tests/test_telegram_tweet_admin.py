@@ -19,6 +19,8 @@ from webapp.auth import create_session, session_storage_token
 from webapp.db import db, init_db
 from webapp.telegram_tweet_bot import (
     NativeTweetBotController,
+    PERSONA_CONTROL_BUTTON,
+    TASK_CONTROL_BUTTON,
     TweetWorkbenchOps,
     _persona_image_option_definition,
     _reconcile_persona_image_options,
@@ -1997,6 +1999,22 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:stepcancel", message), _Types))
         self.assertIn("已取消当前步骤", message.edits[-1][0])
         self.assertEqual(load_state(101)["mode"], "")
+        self.assertTrue(message.answers)
+        main_markup = message.answers[-1][1]["reply_markup"]
+        self.assertIsInstance(main_markup, _ReplyMarkup)
+        main_button_texts = {
+            str(button.text)
+            for row in main_markup.keyboard
+            for button in row
+        }
+        self.assertIn(PERSONA_CONTROL_BUTTON, main_button_texts)
+        self.assertIn(TASK_CONTROL_BUTTON, main_button_texts)
+        edited_markup = message.edits[-1][1].get("reply_markup")
+        self.assertNotIn("tt:chatlogin", {
+            str(getattr(button, "callback_data", "") or "")
+            for row in getattr(edited_markup, "inline_keyboard", [])
+            for button in row
+        })
 
     def test_media_step_uses_callback_completion_instead_of_done_command(self):
         controller = NativeTweetBotController(

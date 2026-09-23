@@ -3918,10 +3918,35 @@ class NativeTweetBotController:
             # escape a stale prompt.
             await query.answer()
             clear_pending_state(chat_id)
-            await query.message.edit_text(
-                "已取消当前步骤，未提交新的任务或修改。",
-                reply_markup=self._binding_markup(types, chat_id),
-            )
+            member = self._member(chat_id)
+            session_active = False
+            if member is not None:
+                try:
+                    member_user_id = int(member.get("web_user_id") or 0)
+                except (TypeError, ValueError):
+                    member_user_id = 0
+                if member_user_id:
+                    session_active = self._member_still_bound(chat_id, member_user_id)
+            if session_active:
+                # A bound, active user should return to the persistent
+                # workbench controls just like the Video Bot.  The callback
+                # remains usable after a stale prompt without re-running the
+                # full authorization gate; only the cleared state is changed.
+                await query.message.edit_text(
+                    "已取消当前步骤，未提交新的任务或修改。",
+                )
+                await query.message.answer(
+                    "请选择总控功能。",
+                    reply_markup=self._main_keyboard(types),
+                )
+            else:
+                # Keep the safe escape path for an unbound or expired session:
+                # cancellation must not expose workbench controls and should
+                # leave the user at the self-service login entry point.
+                await query.message.edit_text(
+                    "已取消当前步骤，未提交新的任务或修改。",
+                    reply_markup=self._binding_markup(types, chat_id),
+                )
             return
         if data == "tt:chatlogin":
             # This action is intentionally available before _authorized(): the
