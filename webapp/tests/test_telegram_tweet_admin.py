@@ -899,6 +899,46 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         module_reference = resolve_callback_token(101, "p", module_back.split(":", 2)[2])
         self.assertEqual(module_reference["page"], 1)
+        self.assertTrue(module_reference["return_home"])
+
+    def test_persona_module_back_renders_persona_home_instead_of_plain_menu_text(self):
+        def dispatch(_user_id, action, _payload):
+            if action == "personas.list":
+                return [{"id": "persona-a", "name": "科技观察员", "counts": {"posts": 2}}]
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        # Simulate a user returning from an earlier “select persona then
+        # resume generation” flow.  The module back button must still render
+        # the previous persona window instead of re-entering that stale flow.
+        save_state(101, selected_persona_id="persona-a", payload={
+            "persona_list_page": 0,
+            "resume_action": "genmode:text",
+        })
+        message = _Message()
+        for module in ("create", "content", "publish", "settings"):
+            asyncio.run(controller.handle_callback(_Query(f"tt:pmod:{module}", message), _Types))
+            self.assertEqual(load_state(101)["mode"], "")
+            self.assertNotIn("resume_action", load_state(101)["payload"])
+            back = next(
+                button.callback_data
+                for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+                if str(getattr(button, "text", "")) == "上一步"
+            )
+            asyncio.run(controller.handle_callback(_Query(back, message), _Types))
+            self.assertIn("科技观察员", message.edits[-1][0])
+            self.assertIn("tt:pmod:create", {
+                button.callback_data
+                for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+                if getattr(button, "callback_data", None)
+            })
+            self.assertNotEqual(message.edits[-1][0], "已返回推文工作台总控菜单。")
 
     def test_persona_publish_history_is_scoped_to_selected_persona(self):
         def dispatch(_user_id, action, _payload):

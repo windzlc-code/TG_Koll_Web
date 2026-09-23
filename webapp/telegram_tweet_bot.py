@@ -418,12 +418,16 @@ def save_state(
     return next_state
 
 
-def clear_pending_state(chat_id: int) -> dict[str, Any]:
+def clear_pending_state(
+    chat_id: int,
+    *,
+    retain_keys: tuple[str, ...] = (),
+) -> dict[str, Any]:
     current = load_state(chat_id)
     retained = {
         key: value
         for key, value in current["payload"].items()
-        if str(key).startswith("last_")
+        if str(key).startswith("last_") or key in set(retain_keys)
     }
     return save_state(chat_id, mode="", payload=retained)
 
@@ -1667,6 +1671,10 @@ class NativeTweetBotController:
             callback_data=callback_token(chat_id, "p", {
                 "persona_id": persona_id,
                 "page": max(0, int(page or 0)),
+                # A module-level back action is navigation, not persona
+                # selection.  Mark it explicitly so a stale resume_action
+                # from an earlier wizard can never hijack the return path.
+                "return_home": True,
             }),
         )]
 
@@ -4869,6 +4877,9 @@ class NativeTweetBotController:
                 }
                 retained["persona_list_page"] = persona_page
                 save_state(chat_id, selected_persona_id=persona_id, mode="", payload=retained)
+                if bool(reference.get("return_home")):
+                    await self._render_persona_home(query, types, persona, chat_id, page=persona_page)
+                    return
                 if resume_action == "genmode" or resume_action.startswith("genmode:"):
                     selected_mode = resume_action.partition(":")[2]
                     if selected_mode:
@@ -4907,6 +4918,10 @@ class NativeTweetBotController:
                 await self._render_persona_home(query, types, persona, chat_id, page=persona_page)
             elif action == "pmod":
                 module = str(parts[2] if len(parts) > 2 else "").strip().lower()
+                # Entering a persona module is a navigation boundary.  Drop
+                # any unfinished input wizard so a later message cannot be
+                # consumed by the page the user just left.
+                clear_pending_state(chat_id, retain_keys=("persona_list_page",))
                 await self._render_persona_module(query, types, member, module)
             elif action in {"persona_new", "persona_new_name"}:
                 state = load_state(chat_id)
@@ -5162,6 +5177,7 @@ class NativeTweetBotController:
                 if not state["selected_persona_id"]:
                     await self._persona_list(query, types, member, 0)
                     return
+                clear_pending_state(chat_id)
                 rows = [[
                     types.InlineKeyboardButton(text="📝 查看草稿", callback_data="tt:drafts:0"),
                     types.InlineKeyboardButton(text="⭐ 查看收藏", callback_data="tt:favorites:0"),
@@ -5175,6 +5191,7 @@ class NativeTweetBotController:
                 if not state["selected_persona_id"]:
                     await self._persona_list(query, types, member, 0)
                     return
+                clear_pending_state(chat_id)
                 await self._post_list(
                     query,
                     types,
@@ -5195,6 +5212,7 @@ class NativeTweetBotController:
                 if not persona_id:
                     await self._persona_list(query, types, member, 0)
                     return
+                clear_pending_state(chat_id)
                 await self._render_persona_image_options(
                     query, types, member, persona_id=persona_id, page=page,
                 )
@@ -5406,6 +5424,7 @@ class NativeTweetBotController:
                 if not persona_id:
                     await self._persona_list(query, types, member, 0)
                     return
+                clear_pending_state(chat_id)
                 history_result = await self._call(user_id, "profile.history", {"persona_id": persona_id})
                 history = history_result.get("publish_history") if isinstance(history_result, dict) else []
                 history = [item for item in history if isinstance(item, dict)]
@@ -6076,6 +6095,7 @@ class NativeTweetBotController:
                     await query.answer("请先选择人设，选择后会自动继续")
                     await self._persona_list(query, types, member, 0)
                     return
+                clear_pending_state(chat_id)
                 await self._post_list(query, types, member, source="posts", page=int(parts[2]) if len(parts) > 2 else 0)
             elif action == "favorites":
                 if not load_state(chat_id)["selected_persona_id"]:
@@ -6083,6 +6103,7 @@ class NativeTweetBotController:
                     await query.answer("请先选择人设，选择后会自动继续")
                     await self._persona_list(query, types, member, 0)
                     return
+                clear_pending_state(chat_id)
                 await self._post_list(query, types, member, source="favorites", page=int(parts[2]) if len(parts) > 2 else 0)
             elif action == "publish_one":
                 if not load_state(chat_id)["selected_persona_id"]:
@@ -6090,6 +6111,7 @@ class NativeTweetBotController:
                     await query.answer("请先选择人设，选择后会自动继续")
                     await self._persona_list(query, types, member, 0)
                     return
+                clear_pending_state(chat_id)
                 await self._post_list(
                     query, types, member, source="posts", page=0,
                     intro="单篇发布 · 请选择要发布的草稿。",
