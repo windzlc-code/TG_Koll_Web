@@ -1168,6 +1168,20 @@ class NativeTweetBotController:
         ]])
 
     @staticmethod
+    def _generation_count_navigation(payload: dict[str, Any]) -> tuple[str, str]:
+        """Return the immediate previous page for the count step.
+
+        The free/R18 flow has a memory picker before the count page.  Keeping
+        that boundary in the payload prevents a later ``上一步`` from
+        jumping all the way back to the generation-mode picker.
+        """
+        if bool(payload.get("r18_flow")) and bool(payload.get("memory_step")):
+            return "tt:gcount:back", "返回人设记忆"
+        back_callback = str(payload.get("generation_back") or "tt:genmodes")
+        back_text = "返回生成方式" if back_callback == "tt:genmodes" else "返回新建推文"
+        return back_callback, back_text
+
+    @staticmethod
     def _tweet_generation_mode_markup(types: Any) -> Any:
         """Render the R18-style ordinary-persona creation mode picker.
 
@@ -1325,6 +1339,7 @@ class NativeTweetBotController:
             "generation_mode": generation_mode,
             "generation_back": str(back_callback or "tt:pmod:create"),
             "r18_flow": bool(preflight_memory),
+            "memory_step": bool(preflight_memory),
             "selected_memory_ids": [],
             "selected_memory_summaries": [],
         }
@@ -1368,6 +1383,7 @@ class NativeTweetBotController:
         mode_label = "文字＋配图" if generation_mode == "media" else "只生成推文"
         save_state(chat_id, mode="generate_count", payload=dict(payload))
         prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
+        back_callback, back_text = self._generation_count_navigation(payload)
         await query.message.edit_text(
             prefix
             + f"AI 生成推文（{mode_label}）· 第 2 步\n"
@@ -1375,8 +1391,8 @@ class NativeTweetBotController:
             "可用下方快捷数量，也可以点击“输入数量（1-5）”发送自定义数量。",
             reply_markup=self._generation_count_keyboard(
                 types,
-                back_callback=str(payload.get("generation_back") or "tt:genmodes"),
-                back_text="返回生成方式" if str(payload.get("generation_back")) == "tt:genmodes" else "返回新建推文",
+                back_callback=back_callback,
+                back_text=back_text,
             ),
         )
 
@@ -1394,6 +1410,8 @@ class NativeTweetBotController:
         save_state(chat_id, mode="generate_prompt", payload=payload)
         count = int(payload.get("count") or 3)
         mode_label = "文字＋配图" if str(payload.get("generation_mode") or "text") == "media" else "只生成推文"
+        is_media = str(payload.get("generation_mode") or "text") == "media"
+        prompt_back_text = "返回配图比例" if is_media else "返回生成数量"
         prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
         await query.message.edit_text(
             prefix
@@ -1403,8 +1421,8 @@ class NativeTweetBotController:
             "如果不需要额外要求，可以点击“跳过提示词”。",
             reply_markup=self._step_navigation_markup(
                 types,
-                back_callback="tt:genmodes",
-                back_text="返回生成方式",
+                back_callback="tt:gprompt:back",
+                back_text=prompt_back_text,
                 primary_callback="tt:gprompt:skip",
                 primary_text="跳过提示词",
             ),
@@ -3712,14 +3730,20 @@ class NativeTweetBotController:
                 callback_data=callback_token(chat_id, "gmemclear", {}),
             ),
         ])
-        if state["mode"] == "generate_memory_setup":
+        if state["mode"] == "generate_memory_setup" or (
+            bool(payload.get("r18_flow")) and not payload.get("target_words")
+        ):
             rows.append([types.InlineKeyboardButton(
                 text="不指定记忆，继续",
                 callback_data=callback_token(chat_id, "gmemskip", {}),
             )])
         rows.extend(nav)
+        memory_back_to_count = bool(payload.get("memory_return_to_count"))
         rows.append([types.InlineKeyboardButton(
-            text=("返回生成方式" if state["mode"] == "generate_memory_setup" else "返回生成确认"),
+            text=(
+                "返回生成数量" if memory_back_to_count
+                else ("返回生成方式" if state["mode"] == "generate_memory_setup" else "返回生成确认")
+            ),
             callback_data=callback_token(chat_id, "gmemback", {}),
         )])
         await query.message.edit_text(
@@ -4889,7 +4913,7 @@ class NativeTweetBotController:
                     await query.answer(f"已选择 {persona.get('name') or '人设'}")
                     return
                 if resume_action == "generate":
-                    await self._start_generation_setup(query, types)
+                    await self._start_tweet_generation_modes(query, types)
                     await query.answer(f"已选择 {persona.get('name') or '人设'}")
                     return
                 if resume_action == "hot":
@@ -5165,13 +5189,15 @@ class NativeTweetBotController:
                     await query.answer("请先选择人设，选择后会自动继续")
                     await self._persona_list(query, types, member, 0)
                     return
-                await self._start_generation_setup(query, types)
+                # Keep the legacy callback compatible, but route it through
+                # the same free/R18 mode picker as the visible New Tweet page.
+                await self._start_tweet_generation_modes(query, types)
             elif action == "gagain" and len(parts) > 2:
                 persona_id = str(resolve_callback_token(chat_id, "gagain", parts[2]).get("persona_id") or "")
                 if not persona_id:
                     raise HTTPException(status_code=410, detail="生成人设入口已失效，请重新选择")
                 save_state(chat_id, selected_persona_id=persona_id)
-                await self._start_generation_setup(query, types)
+                await self._start_tweet_generation_modes(query, types)
             elif action == "postsmenu":
                 state = load_state(chat_id)
                 if not state["selected_persona_id"]:
@@ -5637,16 +5663,26 @@ class NativeTweetBotController:
                 state = load_state(chat_id)
                 if state["mode"] not in {"generate_count", "generate_count_input"}:
                     raise HTTPException(status_code=409, detail="生成步骤已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                if parts[2] == "back":
+                    if bool(payload.get("r18_flow")) and bool(payload.get("memory_step")):
+                        payload["memory_return_to_count"] = True
+                        save_state(chat_id, mode="generate_memories", payload=payload)
+                        await self._render_generation_memories(
+                            query, types, page=0, notice="返回人设记忆选择。",
+                        )
+                        return
+                    raise HTTPException(status_code=409, detail="返回步骤已失效，请重新开始")
                 if parts[2] == "input":
-                    payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
                     save_state(chat_id, mode="generate_count_input", payload=payload)
+                    back_callback, back_text = self._generation_count_navigation(payload)
                     await query.message.edit_text(
                         "AI 生成推文 · 输入数量\n"
                         "请发送 1-5 之间的整数；数量只决定创建几篇草稿，不会立即发布。",
                         reply_markup=self._step_navigation_markup(
                             types,
-                            back_callback=str(payload.get("generation_back") or "tt:genmodes"),
-                            back_text="返回生成方式" if str(payload.get("generation_back")) == "tt:genmodes" else "返回生成数量",
+                            back_callback=back_callback,
+                            back_text=back_text,
                         ),
                     )
                     return
@@ -5656,7 +5692,6 @@ class NativeTweetBotController:
                     raise HTTPException(status_code=400, detail="生成数量无效，请选择或输入 1-5")
                 if count < 1 or count > 5:
                     raise HTTPException(status_code=400, detail="生成数量必须在 1-5 之间")
-                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
                 payload["count"] = count
                 generation_mode = str(payload.get("generation_mode") or "text").strip().lower()
                 if bool(payload.get("r18_flow")):
@@ -5702,7 +5737,17 @@ class NativeTweetBotController:
                 if not bool(payload.get("r18_flow")):
                     raise HTTPException(status_code=409, detail="当前生成方式不支持该步骤")
                 if parts[2] == "back":
-                    await self._render_generation_prompt_step(query, types, payload=payload)
+                    if state["mode"] == "generate_prompt":
+                        # Prompt is immediately after count for text mode and
+                        # immediately after ratio for media mode.  Re-render
+                        # that exact previous page instead of jumping to the
+                        # mode picker (or merely repeating the same prompt).
+                        if str(payload.get("generation_mode") or "text") == "media":
+                            await self._render_generation_ratio_step(query, types, payload=payload)
+                        else:
+                            await self._render_generation_count_step(query, types, payload=payload)
+                    else:
+                        await self._render_generation_prompt_step(query, types, payload=payload)
                     return
                 if parts[2] == "skip":
                     payload["prompt"] = ""
@@ -5959,7 +6004,8 @@ class NativeTweetBotController:
                 if state["mode"] != "generate_memories":
                     raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
                 payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
-                if bool(payload.get("r18_flow")) and not payload.get("count"):
+                if bool(payload.get("r18_flow")) and not payload.get("target_words"):
+                    payload.pop("memory_return_to_count", None)
                     await self._render_generation_count_step(
                         query,
                         types,
@@ -5982,7 +6028,7 @@ class NativeTweetBotController:
                 payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
                 payload["selected_memory_ids"] = []
                 payload["selected_memory_summaries"] = []
-                if bool(payload.get("r18_flow")) and not payload.get("count"):
+                if bool(payload.get("r18_flow")) and not payload.get("target_words"):
                     save_state(chat_id, mode="generate_memory_setup", payload=payload)
                     await self._render_generation_memories(query, types, page=0, notice="已清空本次记忆选择")
                     return
@@ -5998,6 +6044,7 @@ class NativeTweetBotController:
                 payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
                 payload["selected_memory_ids"] = []
                 payload["selected_memory_summaries"] = []
+                payload.pop("memory_return_to_count", None)
                 await self._render_generation_count_step(
                     query, types, payload=payload, notice="本次生成不指定人设记忆。",
                 )
@@ -6007,7 +6054,13 @@ class NativeTweetBotController:
                 if state["mode"] not in {"generate_memories", "generate_memory_setup"}:
                     raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
                 payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
-                if state["mode"] == "generate_memory_setup" or bool(payload.get("r18_flow")) and not payload.get("count"):
+                if bool(payload.get("memory_return_to_count")):
+                    payload.pop("memory_return_to_count", None)
+                    await self._render_generation_count_step(
+                        query, types, payload=payload, notice="返回生成数量。",
+                    )
+                    return
+                if state["mode"] == "generate_memory_setup" or bool(payload.get("r18_flow")) and not payload.get("target_words"):
                     clear_pending_state(chat_id)
                     await self._start_tweet_generation_modes(query, types)
                     return
@@ -6030,6 +6083,11 @@ class NativeTweetBotController:
                         })),
                         types.InlineKeyboardButton(text="查看任务", callback_data=callback_token(chat_id, "t", {
                             "task_id": str(reference.get("task_id") or ""), "task_kind": "normal", "status_filter": "completed",
+                        })),
+                    ], [
+                        types.InlineKeyboardButton(text="返回新建推文", callback_data="tt:pmod:create"),
+                        types.InlineKeyboardButton(text="返回人设详情", callback_data=callback_token(chat_id, "p", {
+                            "persona_id": selected_persona_id,
                         })),
                     ]]),
                 )
@@ -6082,6 +6140,11 @@ class NativeTweetBotController:
                     "完成后 Bot 会返回结果；也可以先在排程状态查看进度。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(text="查看任务", callback_data="tt:tasks:0:active"),
+                        types.InlineKeyboardButton(text="返回新建推文", callback_data="tt:pmod:create"),
+                    ], [
+                        types.InlineKeyboardButton(text="返回人设详情", callback_data=callback_token(chat_id, "p", {
+                            "persona_id": str(state["selected_persona_id"] or ""),
+                        })),
                     ]]),
                 )
                 asyncio.create_task(self._watch_generation(
@@ -7910,6 +7973,8 @@ class NativeTweetBotController:
                 )
             elif mode == "generate_count_input":
                 raw_count = text.strip()
+                count_payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                count_back_callback, count_back_text = self._generation_count_navigation(count_payload)
                 try:
                     count = int(raw_count)
                 except (TypeError, ValueError):
@@ -7917,8 +7982,8 @@ class NativeTweetBotController:
                         "数量必须是 1-5 之间的整数，请重新发送。",
                         reply_markup=self._step_navigation_markup(
                             types,
-                            back_callback=str(state["payload"].get("generation_back") or "tt:genmodes"),
-                            back_text="返回生成方式",
+                            back_callback=count_back_callback,
+                            back_text=count_back_text,
                         ),
                     )
                     return
@@ -7927,12 +7992,12 @@ class NativeTweetBotController:
                         "数量必须是 1-5 之间的整数，请重新发送。",
                         reply_markup=self._step_navigation_markup(
                             types,
-                            back_callback=str(state["payload"].get("generation_back") or "tt:genmodes"),
-                            back_text="返回生成方式",
+                            back_callback=count_back_callback,
+                            back_text=count_back_text,
                         ),
                     )
                     return
-                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                payload = count_payload
                 payload["count"] = count
                 if str(payload.get("generation_mode") or "text") == "media":
                     save_state(chat_id, mode="generate_ratio", payload=payload)
@@ -7965,8 +8030,8 @@ class NativeTweetBotController:
                         "请发送本次生成提示词；如果不需要额外要求，可以点击下方跳过。",
                         reply_markup=self._step_navigation_markup(
                             types,
-                            back_callback=str(payload.get("generation_back") or "tt:genmodes"),
-                            back_text="返回生成方式",
+                            back_callback="tt:gprompt:back",
+                            back_text="返回生成数量",
                             primary_callback="tt:gprompt:skip",
                             primary_text="跳过提示词",
                         ),
@@ -8847,6 +8912,11 @@ class NativeTweetBotController:
                                 "task_id": task_id, "task_kind": "normal", "status_filter": "failed",
                             }),
                         ),
+                    ], [
+                        types.InlineKeyboardButton(text="返回新建推文", callback_data="tt:pmod:create"),
+                        types.InlineKeyboardButton(text="返回人设详情", callback_data=callback_token(chat_id, "p", {
+                            "persona_id": persona_id,
+                        })),
                     ]]),
                 )
             return

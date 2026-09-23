@@ -1190,31 +1190,134 @@ class TelegramTweetAdminTests(unittest.TestCase):
             if str(getattr(button, "callback_data", "")).startswith("tt:p:")
         )
         asyncio.run(controller.handle_callback(_Query(persona_callback, message), _Types))
-        self.assertEqual(load_state(101)["mode"], "generate_count")
-        self.assertIn("第 1/3 步", message.edits[-1][0])
-        self.assertIn(
-            "tt:pmod:create",
-            [
-                str(button.callback_data)
-                for row in message.edits[-1][1]["reply_markup"].inline_keyboard
-                for button in row
-            ],
+        self.assertEqual(load_state(101)["mode"], "tweet_generation_mode")
+        mode_callback = next(
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "只生成推文" in str(button.text)
         )
+        asyncio.run(controller.handle_callback(_Query(mode_callback, message), _Types))
+        skip_memory = next(
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "不指定记忆" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(skip_memory, message), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_count")
+        self.assertIn("第 2 步", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:gcount:3", message), _Types))
-        asyncio.run(controller.handle_callback(_Query("tt:gwords:120", message), _Types))
-        self.assertEqual(load_state(101)["mode"], "generate_prompt")
         prompt = _Message(text="AI 产品趋势")
         asyncio.run(controller.handle_text(prompt, _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_words")
+        asyncio.run(controller.handle_callback(_Query("tt:gwords:120", message), _Types))
         self.assertEqual(load_state(101)["mode"], "generate_confirm")
         self.assertEqual([action for action, _payload in calls].count("generation.start"), 0)
-        confirm = prompt.answers[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
+        confirm = message.edits[-1][1]["reply_markup"].inline_keyboard[0][0].callback_data
         with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
-            asyncio.run(controller.handle_callback(_Query(confirm, prompt), _Types))
+            asyncio.run(controller.handle_callback(_Query(confirm, message), _Types))
         generated = [payload for action, payload in calls if action == "generation.start"]
         self.assertEqual(len(generated), 1)
         self.assertEqual(generated[0]["count"], 3)
         self.assertEqual(generated[0]["target_words"], 120)
         self.assertEqual(generated[0]["prompt"], "AI 产品趋势")
+
+    def test_generation_back_callbacks_restore_the_immediate_previous_page(self):
+        def dispatch(_user_id, action, _payload):
+            if action == "profile.memories":
+                return {"memories": [{"id": "memory-1", "summary": "保持克制语气"}]}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+
+        media = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:genmode:media", media), _Types))
+        memory_back = next(
+            button.callback_data
+            for row in media.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "返回生成方式" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(memory_back, media), _Types))
+        self.assertEqual(load_state(101)["mode"], "tweet_generation_mode")
+
+        # Re-enter the media flow and verify memory -> count -> ratio -> prompt
+        # all return to the page immediately preceding the current one.
+        asyncio.run(controller.handle_callback(_Query("tt:genmode:media", media), _Types))
+        skip = next(
+            button.callback_data
+            for row in media.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "不指定记忆" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(skip, media), _Types))
+        asyncio.run(controller.handle_callback(_Query("tt:gcount:2", media), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_ratio")
+        ratio_back = next(
+            button.callback_data
+            for row in media.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "返回生成数量" in str(button.text)
+        )
+        self.assertEqual(ratio_back, "tt:gratio:back")
+        asyncio.run(controller.handle_callback(_Query(ratio_back, media), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_count")
+        memory_back_from_count = next(
+            button.callback_data
+            for row in media.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "返回人设记忆" in str(button.text)
+        )
+        self.assertEqual(memory_back_from_count, "tt:gcount:back")
+        asyncio.run(controller.handle_callback(_Query(memory_back_from_count, media), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_memories")
+
+        # Continue again to the prompt and verify its back button returns to
+        # the ratio page rather than the mode picker.
+        skip = next(
+            button.callback_data
+            for row in media.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "不指定记忆" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(skip, media), _Types))
+        asyncio.run(controller.handle_callback(_Query("tt:gcount:2", media), _Types))
+        asyncio.run(controller.handle_callback(_Query("tt:gratio:9_16", media), _Types))
+        prompt_back = next(
+            button.callback_data
+            for row in media.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "返回配图比例" in str(button.text)
+        )
+        self.assertEqual(prompt_back, "tt:gprompt:back")
+        asyncio.run(controller.handle_callback(_Query(prompt_back, media), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_ratio")
+
+        # Text mode has no ratio page, so the same callback returns to count.
+        text = _Message()
+        asyncio.run(controller.handle_callback(_Query("tt:genmode:text", text), _Types))
+        text_skip = next(
+            button.callback_data
+            for row in text.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "不指定记忆" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(text_skip, text), _Types))
+        asyncio.run(controller.handle_callback(_Query("tt:gcount:1", text), _Types))
+        text_back = next(
+            button.callback_data
+            for row in text.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "返回生成数量" in str(button.text)
+        )
+        asyncio.run(controller.handle_callback(_Query(text_back, text), _Types))
+        self.assertEqual(load_state(101)["mode"], "generate_count")
 
     def test_r18_free_generation_modes_keep_stepwise_callbacks(self):
         calls = []
