@@ -1325,7 +1325,12 @@ class NativeTweetBotController:
         return back_callback, back_text
 
     @staticmethod
-    def _tweet_generation_mode_markup(types: Any) -> Any:
+    def _tweet_generation_mode_markup(
+        types: Any,
+        *,
+        back_callback: str = "tt:pmod:create",
+        back_text: str = "◀️ 返回新建推文",
+    ) -> Any:
         """Render the R18-style ordinary-persona creation mode picker.
 
         The Telegram surface intentionally keeps this as a navigation layer.
@@ -1338,7 +1343,7 @@ class NativeTweetBotController:
             [button(text="🖼 生成推文＋配图/视频", callback_data="tt:genmode:media")],
             [button(text="🧩 自定义新建（文字/图片/视频素材）", callback_data="tt:genmode:custom")],
             [button(text="🔥 热点抓取", callback_data="tt:genmode:hot")],
-            [button(text="◀️ 返回新建推文", callback_data="tt:pmod:create")],
+            [button(text=back_text, callback_data=str(back_callback or "tt:pmod:create"))],
         ])
 
     async def _start_tweet_generation_modes(self, query: Any, types: Any) -> None:
@@ -1355,6 +1360,13 @@ class NativeTweetBotController:
             await query.answer("请先选择人设，选择后会自动继续")
             return
         save_state(chat_id, mode="tweet_generation_mode", payload={})
+        member = self._member(chat_id)
+        if member and member.get("web_user_id"):
+            # Reuse the same R18-style page used by the visible persona
+            # entry.  This keeps a wizard back action from exposing the old
+            # one-button “选择生成方式” intermediate page.
+            await self._render_persona_module(query, types, member, "create")
+            return
         await query.message.edit_text(
             "✍️ 新建推文\n\n"
             "请选择本次生成方式；选择后会按步骤逐项引导，确认前不会提交任务。\n\n"
@@ -1807,13 +1819,14 @@ class NativeTweetBotController:
         button = types.InlineKeyboardButton
         return types.InlineKeyboardMarkup(inline_keyboard=[
             [
-                button(text="✍️ 新建推文", callback_data="tt:pmod:create"),
-                button(text="📝 推文内容", callback_data="tt:pmod:content"),
+                button(text="📝 查看推文", callback_data="tt:postsmenu"),
+                button(text="🕘 发布历史", callback_data="tt:persona_history:0"),
             ],
             [
-                button(text="🚀 发布管理", callback_data="tt:pmod:publish"),
+                button(text="✍️ 新建推文", callback_data="tt:pmod:create"),
                 button(text="⚙️ 人设设置", callback_data="tt:pmod:settings"),
             ],
+            [button(text="🚀 发布推文", callback_data="tt:pmod:publish")],
             [button(text=_back_label("返回我的人设"), callback_data=f"tt:personas:{max(0, int(page or 0))}")],
         ])
 
@@ -1912,18 +1925,27 @@ class NativeTweetBotController:
                 ]),
             )
         if module == "create":
+            counts = persona.get("counts") if isinstance(persona, dict) and isinstance(persona.get("counts"), dict) else {}
+            mode_back = callback_token(chat_id, "p", {
+                "persona_id": persona_id,
+                "page": max(0, int(page or 0)),
+                "return_home": True,
+            })
             return (
-                "✍️ 新建推文\n\n" + persona_context
-                + "为当前人设创建待发布内容；请选择生成方式，下一步会逐项引导。",
-                types.InlineKeyboardMarkup(inline_keyboard=[
-                    [button(text="✍️ 选择生成方式", callback_data="tt:genmodes")],
-                    back,
-                ]),
+                "✍️ 新建推文\n\n"
+                f"人设：{persona_name or '未命名人设'}\n"
+                f"当前待发布：{counts.get('posts', 0)} 篇\n\n"
+                "请选择生成模式：",
+                self._tweet_generation_mode_markup(
+                    types,
+                    back_callback=mode_back,
+                    back_text="◀️ 返回人设详情",
+                ),
             )
         if module == "content":
             return (
-                "📝 推文内容\n\n" + persona_context
-                + "管理当前人设的草稿、收藏和推文配图；编辑只影响当前内容，不会覆盖人设资料。",
+                "📝 查看推文\n\n" + persona_context
+                + "查看当前人设的草稿、收藏和推文配图；编辑只影响当前内容，不会覆盖人设资料。",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [
                         button(text="📝 草稿与推文", callback_data="tt:postsmenu"),

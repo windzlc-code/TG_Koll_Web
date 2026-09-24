@@ -686,9 +686,9 @@ class TelegramTweetAdminTests(unittest.TestCase):
             if getattr(button, "callback_data", None)
         }
         self.assertEqual(callbacks, {
-            "tt:pmod:create", "tt:pmod:content", "tt:pmod:publish", "tt:pmod:settings", "tt:personas:0",
+            "tt:postsmenu", "tt:persona_history:0", "tt:pmod:create", "tt:pmod:settings",
+            "tt:pmod:publish", "tt:personas:0",
         })
-        self.assertNotIn("tt:postsmenu", callbacks)
         self.assertNotIn("tt:createmenu", callbacks)
         asyncio.run(controller.handle_callback(_Query("tt:personamanage", message), _Types))
         management_callbacks = {
@@ -712,9 +712,16 @@ class TelegramTweetAdminTests(unittest.TestCase):
         }
         self.assertEqual(
             {item for item in create_module_callbacks if not item.startswith("tt:p:")},
-            {"tt:genmodes"},
+            {"tt:genmode:text", "tt:genmode:media", "tt:genmode:custom", "tt:genmode:hot"},
         )
         self.assertEqual(sum(item.startswith("tt:p:") for item in create_module_callbacks), 1)
+        create_labels = [
+            str(button.text)
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("请选择生成模式：", message.edits[-1][0])
+        self.assertTrue(any(label.endswith("返回人设详情") for label in create_labels))
         asyncio.run(controller.handle_callback(_Query("tt:genmodes", message), _Types))
         generation_mode_callbacks = {
             button.callback_data
@@ -722,10 +729,11 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertEqual(generation_mode_callbacks, {
-            "tt:genmode:text", "tt:genmode:media", "tt:genmode:custom",
-            "tt:genmode:hot", "tt:pmod:create",
-        })
+        self.assertEqual(
+            {item for item in generation_mode_callbacks if not item.startswith("tt:p:")},
+            {"tt:genmode:text", "tt:genmode:media", "tt:genmode:custom", "tt:genmode:hot"},
+        )
+        self.assertEqual(sum(item.startswith("tt:p:") for item in generation_mode_callbacks), 1)
         generation_mode_markup = message.edits[-1][1]["reply_markup"]
         self.assertEqual([len(row) for row in generation_mode_markup.inline_keyboard], [1, 1, 1, 1, 1])
         generation_mode_labels = [
@@ -735,8 +743,9 @@ class TelegramTweetAdminTests(unittest.TestCase):
         ]
         self.assertTrue(any("配图/视频" in label for label in generation_mode_labels))
         self.assertTrue(any(label.startswith("◀️") for label in generation_mode_labels))
-        self.assertIn("请选择本次生成方式", message.edits[-1][0])
+        self.assertIn("请选择生成模式", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
+        self.assertIn("查看推文", message.edits[-1][0])
         content_module_callbacks = {
             button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
             if getattr(button, "callback_data", None) and not button.callback_data.startswith("tt:p:")
@@ -764,7 +773,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:createmenu", message), _Types))
         self.assertIn("新建推文", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:contentmenu", message), _Types))
-        self.assertIn("推文内容", message.edits[-1][0])
+        self.assertIn("查看推文", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:publishmenu", message), _Types))
         self.assertIn("发布管理", message.edits[-1][0])
 
@@ -786,7 +795,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertFalse(any("group" in item for item in settings_callbacks))
 
         asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
-        self.assertIn("推文内容", message.edits[-1][0])
+        self.assertIn("查看推文", message.edits[-1][0])
         self.assertIn("草稿、收藏和推文配图", message.edits[-1][0])
 
         save_state(101, mode="persona_group_create", payload={})
