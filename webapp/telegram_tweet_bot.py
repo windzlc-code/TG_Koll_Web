@@ -2003,10 +2003,18 @@ class NativeTweetBotController:
             )
             return (
                 "⚙️ 人设设置\n\n" + settings_context
-                + "请选择要设置的项目。",
+                + "请选择要设置的项目；资料、账号与数据、图库和维护操作均在这里进入。",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [
-                        button(text="⚙️ 基础资料", callback_data="tt:profile"),
+                        button(text="✏️ 修改名称", callback_data="tt:profilename"),
+                        button(text="🧾 人设简介", callback_data="tt:bio"),
+                    ],
+                    [
+                        button(text="🧵 推文风格", callback_data="tt:style"),
+                        button(text="🔗 链接设置", callback_data="tt:plinks"),
+                    ],
+                    [
+                        button(text="🧠 人设记忆", callback_data="tt:pmemories:0"),
                         button(text="🧑‍🎨 人设图与图库", callback_data="tt:personaimage"),
                     ],
                     [
@@ -2015,6 +2023,10 @@ class NativeTweetBotController:
                             "persona_id": persona_id,
                             "persona_page": max(0, int(page or 0)),
                         })),
+                    ],
+                    [
+                        button(text="🤖 AI 重写简介", callback_data="tt:profileai"),
+                        button(text="🧵 Threads 人设绑定", callback_data="tt:pthreads"),
                     ],
                     [
                         button(text="📄 复制当前人设", callback_data=callback_token(chat_id, "pduplicate", {
