@@ -742,6 +742,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
         ]
         self.assertTrue(any("配图/视频" in label for label in generation_mode_labels))
+        self.assertIn("🖼 生成推文+配图/视频", generation_mode_labels)
+        self.assertIn("🧩 自订新建（文字/图片/视频）", generation_mode_labels)
         self.assertTrue(any(label.startswith("◀️") for label in generation_mode_labels))
         self.assertIn("请选择生成模式", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))

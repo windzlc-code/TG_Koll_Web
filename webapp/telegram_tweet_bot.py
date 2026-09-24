@@ -1340,8 +1340,8 @@ class NativeTweetBotController:
         button = types.InlineKeyboardButton
         return types.InlineKeyboardMarkup(inline_keyboard=[
             [button(text="📝 只生成推文（不配图）", callback_data="tt:genmode:text")],
-            [button(text="🖼 生成推文＋配图/视频", callback_data="tt:genmode:media")],
-            [button(text="🧩 自定义新建（文字/图片/视频素材）", callback_data="tt:genmode:custom")],
+            [button(text="🖼 生成推文+配图/视频", callback_data="tt:genmode:media")],
+            [button(text="🧩 自订新建（文字/图片/视频）", callback_data="tt:genmode:custom")],
             [button(text="🔥 热点抓取", callback_data="tt:genmode:hot")],
             [button(text=back_text, callback_data=str(back_callback or "tt:pmod:create"))],
         ])
