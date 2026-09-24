@@ -1849,7 +1849,6 @@ class NativeTweetBotController:
             callback_for_page=lambda target: f"tt:personas:{target}",
         )
         rows.extend(nav)
-        rows.append([types.InlineKeyboardButton(text=_back_label("返回总控菜单"), callback_data="tt:menu")])
         resume_action = str(state["payload"].get("resume_action") or "")
         resume_text = {
             "generate": "AI 生成推文",

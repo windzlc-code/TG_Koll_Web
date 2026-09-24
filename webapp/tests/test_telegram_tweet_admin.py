@@ -417,7 +417,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         expected_callbacks = {
             "👤 我的人设": {
-                "tt:personamanage", "tt:menu",
+                "tt:personamanage",
             },
             "📊 排程状态": {
                 "tt:tasks:0:pending", "tt:tasks:0:failed", "tt:tasks:0:scheduled",
@@ -674,6 +674,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("tt:personamanage", list_callbacks)
         self.assertNotIn("tt:matrix", list_callbacks)
         self.assertNotIn("tt:persona_new", list_callbacks)
+        self.assertNotIn("tt:menu", list_callbacks)
         persona_callback = next(
             button.callback_data for row in list_markup.inline_keyboard for button in row
             if str(getattr(button, "callback_data", "")).startswith("tt:p:")
