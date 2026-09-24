@@ -961,7 +961,10 @@ class TelegramTweetAdminTests(unittest.TestCase):
             self.assertNotEqual(message.edits[-1][0], "已返回推文工作台总控菜单。")
 
     def test_persona_publish_history_is_scoped_to_selected_persona(self):
+        calls = []
+
         def dispatch(_user_id, action, _payload):
+            calls.append(action)
             if action == "tasks.list":
                 return [
                     {"id": "ok-a", "persona_id": "persona-a", "status": "success", "_tg_task_kind": "social", "platform": "threads"},
@@ -984,6 +987,21 @@ class TelegramTweetAdminTests(unittest.TestCase):
             if str(getattr(button, "callback_data", "")).startswith("tt:t:")
         ]
         self.assertEqual(len(task_buttons), 1)
+        self.assertIn("profile.history.recognize", calls)
+        labels = [
+            str(button.text)
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertIn("🔄 重新同步网页发布内容", labels)
+        self.assertNotIn("➕ 手动录入链接", labels)
+        back = next(
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if str(getattr(button, "text", "")).startswith("◀️")
+        )
+        self.assertTrue(str(back).startswith("tt:p:"))
 
     def test_stop_current_task_cancels_active_tasks_and_pending_input(self):
         calls = []

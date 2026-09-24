@@ -5627,6 +5627,21 @@ class NativeTweetBotController:
                     await self._persona_list(query, types, member, 0)
                     return
                 clear_pending_state(chat_id)
+                requested_page = int(parts[2]) if len(parts) > 2 else 0
+                # The Web workbench treats platform history as authoritative
+                # and reconciles newly published posts before rendering the
+                # first page.  Do the same here so Telegram never asks the
+                # user to paste a published URL just to see Web-side posts.
+                if requested_page == 0:
+                    try:
+                        await self._call(user_id, "profile.history.recognize", {
+                            "persona_id": persona_id,
+                            "auto": True,
+                        })
+                    except Exception:
+                        # History remains readable when a platform refresh is
+                        # temporarily unavailable; the next open can retry.
+                        pass
                 history_result = await self._call(user_id, "profile.history", {"persona_id": persona_id})
                 history = history_result.get("publish_history") if isinstance(history_result, dict) else []
                 history = [item for item in history if isinstance(item, dict)]
@@ -5645,7 +5660,6 @@ class NativeTweetBotController:
                         and str(item.get("persona_id") or item.get("archive_id") or "") == persona_id
                         and _task_status(item) in {"success", "succeeded", "completed", "published"}
                     ]
-                requested_page = int(parts[2]) if len(parts) > 2 else 0
                 total_pages = max(1, (len(history) + PAGE_SIZE - 1) // PAGE_SIZE)
                 page = min(max(0, requested_page), total_pages - 1)
                 start = page * PAGE_SIZE
@@ -5682,24 +5696,19 @@ class NativeTweetBotController:
                     callback_for_page=lambda target: f"tt:persona_history:{target}",
                 )
                 rows.extend(nav)
-                if history_from_archive:
-                    rows.append([
-                        types.InlineKeyboardButton(
-                            text="🔄 自动识别已发布内容",
-                            callback_data=callback_token(chat_id, "phrecognizeauto", {
-                                "persona_id": persona_id,
-                                "page": page,
-                            }),
-                        ),
-                        types.InlineKeyboardButton(
-                            text="➕ 手动录入链接",
-                            callback_data=callback_token(chat_id, "phrecognize", {
-                                "persona_id": persona_id,
-                                "page": page,
-                            }),
-                        ),
-                    ])
-                rows.append(self._persona_module_back_row(types, chat_id, persona_id, "publish"))
+                rows.append([
+                    types.InlineKeyboardButton(
+                        text="🔄 重新同步网页发布内容",
+                        callback_data=callback_token(chat_id, "phrecognizeauto", {
+                            "persona_id": persona_id,
+                            "page": page,
+                        }),
+                    ),
+                ])
+                # History is opened from the persona detail page.  Return to
+                # that page directly instead of forcing an extra publish-menu
+                # hop; the publish module still exposes history as a shortcut.
+                rows.append(self._persona_module_back_row(types, chat_id, persona_id, page=page))
                 await query.message.edit_text(
                     (f"发布历史（{len(history)} 条）\n第 {page + 1}/{total_pages} 页"
                      if history else "发布历史\n暂无记录"),
