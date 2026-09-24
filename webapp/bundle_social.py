@@ -33,18 +33,18 @@ def platform_label(platform: Any) -> str:
     return {"threads": "Threads", "instagram": "Instagram"}.get(normalized, normalized or "平台")
 
 _VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
-_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 _IMAGE_LIMITS = {
     "threads": {
         "min_width": 320,
         "max_width": 1440,
         "max_bytes": 8 * 1024 * 1024,
-        "min_aspect": 0.01,
+        "min_aspect": 0.8,
         "max_aspect": 1.91,
     },
     "instagram": {
-        "min_width": 0,
-        "max_width": 1920,
+        "min_width": 320,
+        "max_width": 1440,
         "max_bytes": 8 * 1024 * 1024,
         "min_aspect": 0.8,
         "max_aspect": 1.91,
@@ -263,8 +263,15 @@ def _text_limit_for(platform: str) -> int:
     return int(_TEXT_LIMITS.get(str(platform or "").strip().lower()) or 0)
 
 
+def _image_on_white(image: Image.Image) -> Image.Image:
+    rgba = image.convert("RGBA")
+    rgb = Image.new("RGB", rgba.size, (255, 255, 255))
+    rgb.paste(rgba, mask=rgba.getchannel("A"))
+    return rgb
+
+
 def _save_jpeg(image: Image.Image, dest: Path, max_bytes: int) -> None:
-    rgb = image.convert("RGB")
+    rgb = _image_on_white(image)
     dest.parent.mkdir(parents=True, exist_ok=True)
     quality = 90
     limit = max(1, int(max_bytes or 0) or 8 * 1024 * 1024)
@@ -316,7 +323,7 @@ def _fit_image_to_limits(image: Image.Image, limits: dict[str, float]) -> Image.
     if max_aspect and aspect > max_aspect + 1e-6:
         target_height = max(1, int(round(width / max_aspect)))
         canvas = Image.new("RGB", (width, target_height), (255, 255, 255))
-        canvas.paste(fitted.convert("RGB"), (0, max(0, (target_height - height) // 2)))
+        canvas.paste(_image_on_white(fitted), (0, max(0, (target_height - height) // 2)))
         fitted = canvas
         width, height = fitted.size
         aspect = width / float(height)
@@ -329,26 +336,16 @@ def _fit_image_to_limits(image: Image.Image, limits: dict[str, float]) -> Image.
             width, height = fitted.size
             target_width = max_width
         canvas = Image.new("RGB", (target_width, height), (255, 255, 255))
-        canvas.paste(fitted.convert("RGB"), (max(0, (target_width - width) // 2), 0))
+        canvas.paste(_image_on_white(fitted), (max(0, (target_width - width) // 2), 0))
         fitted = canvas
     return fitted
-
-
-def _image_needs_prepare(path: Path, limits: dict[str, float]) -> bool:
-    max_bytes = int(limits.get("max_bytes") or 0)
-    if max_bytes and path.stat().st_size > max_bytes:
-        return True
-    with Image.open(path) as source:
-        image = ImageOps.exif_transpose(source)
-        width, height = image.size
-    return not _geometry_meets_limits(width, height, limits)
 
 
 def _write_compliant_jpeg(image: Image.Image, dest: Path, limits: dict[str, float]) -> None:
     max_bytes = int(limits.get("max_bytes") or 8 * 1024 * 1024)
     min_width = int(limits.get("min_width") or 0)
     max_width = int(limits.get("max_width") or 0)
-    fitted = _fit_image_to_limits(image, limits).convert("RGB")
+    fitted = _fit_image_to_limits(image, limits)
     floor_width = min_width or 320
     for _ in range(8):
         _save_jpeg(fitted, dest, max_bytes)
@@ -371,7 +368,7 @@ def _write_compliant_jpeg(image: Image.Image, dest: Path, limits: dict[str, floa
             (next_width, max(1, int(round(current_height * ratio)))),
             Image.Resampling.LANCZOS,
         )
-        fitted = _fit_image_to_limits(fitted, limits).convert("RGB")
+        fitted = _fit_image_to_limits(fitted, limits)
     if dest.is_file():
         with Image.open(dest) as saved:
             width, height = saved.size
@@ -393,28 +390,32 @@ def prepare_publish_media_paths(
         source = Path(str(raw or "")).expanduser()
         if not str(source):
             continue
-        if _is_video_path(source) or not _is_image_path(source) or not limits:
+        if _is_video_path(source):
             prepared.append(str(source))
             continue
         if not source.is_file():
             raise BundleSocialError(f"媒体文件不存在：{source.name}")
-        try:
-            needs_prepare = _image_needs_prepare(source, limits)
-        except Exception as exc:
-            raise BundleSocialError("图片无法读取，请更换文件后再发。") from exc
-        if not needs_prepare:
+        if not limits:
             prepared.append(str(source))
             continue
         dest = source.with_name(f"{source.stem}.prepared-{str(platform or '').strip().lower() or 'media'}.jpg")
         try:
             with Image.open(source) as original:
+                original.seek(0)
+                original.load()
                 _write_compliant_jpeg(original, dest, limits)
         except BundleSocialError:
             raise
         except Exception as exc:
-            raise BundleSocialError("图片无法按平台限制处理，请更换较小的图片后再发。") from exc
+            if _is_image_path(source):
+                raise BundleSocialError("图片无法读取或处理，请更换文件后再发。") from exc
+            raise BundleSocialError("媒体格式不受支持，请上传常见图片或视频格式后再发。") from exc
         with Image.open(dest) as saved:
             width, height = saved.size
+            saved_format = str(saved.format or "").upper()
+            saved_mode = str(saved.mode or "").upper()
+        if saved_format != "JPEG" or saved_mode != "RGB":
+            raise BundleSocialError("图片无法处理成平台支持的 JPEG 格式，请更换图片后再发。")
         if not _geometry_meets_limits(width, height, limits):
             raise BundleSocialError("图片无法处理成平台要求的尺寸，请更换较小的图片后再发。")
         if int(limits.get("max_bytes") or 0) and dest.stat().st_size > int(limits["max_bytes"]):

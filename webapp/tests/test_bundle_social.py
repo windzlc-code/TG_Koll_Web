@@ -743,14 +743,50 @@ def test_prepare_publish_media_downscales_threads_oversize_image(tmp_path):
     assert any(event[1] == "bundle_publish_media_prepared" for event in logger.events)
 
 
-def test_prepare_publish_media_keeps_compliant_threads_image(tmp_path):
+def test_prepare_publish_media_normalizes_compliant_threads_image_to_jpeg(tmp_path):
     from PIL import Image
     from webapp.bundle_social import prepare_publish_media_paths
 
-    source = tmp_path / "ok.jpg"
-    Image.new("RGB", (1080, 1080), (10, 10, 10)).save(source, format="JPEG", quality=90)
+    source = tmp_path / "ok.png"
+    Image.new("RGBA", (1080, 1080), (10, 10, 10, 120)).save(source, format="PNG")
     prepared = prepare_publish_media_paths("threads", [str(source)], logger=_Logger())
-    assert prepared == [str(source)]
+    assert len(prepared) == 1
+    dest = Path(prepared[0])
+    assert dest != source
+    assert dest.suffix.lower() == ".jpg"
+    with Image.open(dest) as image:
+        assert image.format == "JPEG"
+        assert image.mode == "RGB"
+        assert image.size == (1080, 1080)
+        red, green, blue = image.getpixel((0, 0))
+        assert min(red, green, blue) > 100
+
+
+def test_prepare_publish_media_detects_image_content_despite_unknown_extension(tmp_path):
+    from PIL import Image
+    from webapp.bundle_social import prepare_publish_media_paths
+
+    source = tmp_path / "uploaded-media.bin"
+    Image.new("RGB", (640, 640), (30, 60, 90)).save(source, format="PNG")
+    prepared = prepare_publish_media_paths("threads", [str(source)], logger=_Logger())
+    dest = Path(prepared[0])
+    assert dest != source
+    with Image.open(dest) as image:
+        assert image.format == "JPEG"
+        assert image.size == (640, 640)
+
+
+def test_prepare_publish_media_fits_threads_tall_aspect_before_upload(tmp_path):
+    from PIL import Image
+    from webapp.bundle_social import prepare_publish_media_paths
+
+    source = tmp_path / "portrait.webp"
+    Image.new("RGB", (600, 1600), (40, 80, 120)).save(source, format="WEBP")
+    dest = Path(prepare_publish_media_paths("threads", [str(source)], logger=_Logger())[0])
+    with Image.open(dest) as image:
+        width, height = image.size
+        assert image.format == "JPEG"
+    assert 0.8 - 1e-6 <= width / height <= 1.91 + 1e-6
 
 
 def test_prepare_publish_media_fits_threads_wide_aspect(tmp_path):
@@ -823,6 +859,36 @@ def test_threads_bundle_publish_prepares_oversize_image_before_upload(monkeypatc
         assert image.size[0] <= 1440
     assert uploaded["create_paths"] == [str(prepared)]
     assert any(event[1] == "bundle_publish_media_prepared" for event in logger.events)
+
+
+def test_threads_bundle_publish_preflights_every_image_before_any_upload(monkeypatch, tmp_path):
+    from PIL import Image
+    from webapp.bundle_social import run_bundle_social_task
+
+    valid = tmp_path / "valid.png"
+    invalid = tmp_path / "broken.jpg"
+    Image.new("RGB", (640, 640), (30, 30, 30)).save(valid, format="PNG")
+    invalid.write_bytes(b"not-an-image")
+    uploads = []
+
+    class _Client:
+        def upload_file(self, **kwargs):
+            uploads.append(kwargs["path"])
+            return "upload-1"
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: _Client())
+    with pytest.raises(BundleSocialError, match="图片无法读取或处理"):
+        run_bundle_social_task(
+            task={
+                "id": "task-invalid-image",
+                "task_type": "publish_post",
+                "platform": "threads",
+                "payload": {"content": "hello", "media_paths": [str(valid), str(invalid)]},
+            },
+            account={"external_team_id": "team-1", "external_account_id": "social-1", "platform": "threads"},
+            logger=_Logger(),
+        )
+    assert uploads == []
 
 
 def test_threads_bundle_publish_rejects_overlong_caption(monkeypatch):

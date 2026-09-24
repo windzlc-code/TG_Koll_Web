@@ -523,19 +523,22 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("safeExternalHttpUrl", preview)
         self.assertNotIn('String(activeRecord?.source_url', preview)
 
-    def test_publish_history_can_recycle_site_posts_into_global_pool(self):
+    def test_publish_history_has_no_manual_global_dataset_action(self):
         selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
         preview = function_source("renderPublishHistoryPreview", "renderPublishHistoryPanel")
         detail = function_source("openPublishHistoryRecordModal", "requeuePublishHistoryRecord")
-        recycle = function_source("recyclePublishHistoryRecord", "selectedPublishHistoryIds")
 
         self.assertIn("renderPublishHistoryCardEditMenu(recordId)", selection)
-        self.assertIn("data-publish-history-recycle", function_source("renderPublishHistoryCardEditMenu", "renderPersonaHistoryFilters"))
-        self.assertIn("data-publish-history-recycle", preview)
-        self.assertIn("加入全局数据集", detail)
-        self.assertIn("/publish_history/${encodeURIComponent(cleanHistoryId)}/recycle", recycle)
-        self.assertIn("result?.accepted", recycle)
-        self.assertIn("loadPersonaPublishHistory", recycle)
+        self.assertNotIn("data-publish-history-recycle", function_source("renderPublishHistoryCardEditMenu", "renderPersonaHistoryFilters"))
+        self.assertNotIn("data-publish-history-recycle", preview)
+        self.assertNotIn("加入全局数据集", detail)
+        self.assertNotIn("function recyclePublishHistoryRecord", CONSOLE_JS)
+
+    def test_successful_publish_refreshes_system_recognized_history(self):
+        refresh = function_source("refreshPersonaAfterPublishTasks", "blockingTaskStatus")
+        self.assertIn('String(task?.task_type || "").trim() !== "publish_post"', CONSOLE_JS)
+        self.assertIn('status !== "success"', CONSOLE_JS)
+        self.assertIn("loadPersonaPublishHistory(personaId, { force: true })", refresh)
 
     def test_custom_proxy_idempotency_fingerprint_is_not_written_to_dom(self):
         self.assertIn("const accountProxyCustomRequestState = new WeakMap()", CONSOLE_JS)
