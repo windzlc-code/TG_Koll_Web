@@ -1964,6 +1964,13 @@ class NativeTweetBotController:
             }),
         )]
 
+    @staticmethod
+    def _persona_settings_back_row(types: Any) -> list[Any]:
+        return [types.InlineKeyboardButton(
+            text="◀️ 返回人设设置",
+            callback_data="tt:pmod:settings",
+        )]
+
     def _persona_module_payload(
         self,
         types: Any,
@@ -2001,7 +2008,24 @@ class NativeTweetBotController:
             )
             return (
                 "⚙️ 人设设置\n\n" + settings_context
-                + "请选择要设置的项目；资料、账号与数据、图库和维护操作均在这里进入。",
+                + "请选择设置模块：",
+                types.InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        button(text="🧾 基础资料", callback_data="tt:psettings:profile"),
+                        button(text="🔗 账号与数据", callback_data="tt:psettings:accounts"),
+                    ],
+                    [
+                        button(text="🧑‍🎨 图库与生成", callback_data="tt:psettings:media"),
+                        button(text="🛠 维护操作", callback_data="tt:psettings:maintenance"),
+                    ],
+                    back,
+                ]),
+            )
+        settings_back = self._persona_settings_back_row(types)
+        if module == "settings_profile":
+            return (
+                "🧾 基础资料\n\n" + persona_context
+                + "名称、简介、推文风格、链接模板和人设记忆在这里分别维护。",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [
                         button(text="✏️ 修改名称", callback_data="tt:profilename"),
@@ -2013,30 +2037,51 @@ class NativeTweetBotController:
                     ],
                     [
                         button(text="🧠 人设记忆", callback_data="tt:pmemories:0"),
-                        button(text="🧑‍🎨 人设图与图库", callback_data="tt:personaimage"),
-                    ],
-                    [
-                        button(text="🔗 平台账号绑定", callback_data="tt:persona_accounts"),
-                        button(text="🔄 刷新数据", callback_data=callback_token(chat_id, "prefresh", {
-                            "persona_id": persona_id,
-                            "persona_page": max(0, int(page or 0)),
-                        })),
-                    ],
-                    [
                         button(text="🤖 AI 重写简介", callback_data="tt:profileai"),
-                        button(text="🧵 Threads 人设绑定", callback_data="tt:pthreads"),
                     ],
+                    settings_back,
+                ]),
+            )
+        if module == "settings_accounts":
+            refresh_callback = callback_token(chat_id, "prefresh", {
+                "persona_id": persona_id,
+                "persona_page": max(0, int(page or 0)),
+            })
+            return (
+                "🔗 账号与数据\n\n" + persona_context
+                + "平台授权账号、人设平台字段和公开资料刷新在这里管理。",
+                types.InlineKeyboardMarkup(inline_keyboard=[
+                    [button(text="🔗 平台账号绑定", callback_data="tt:persona_accounts")],
                     [
-                        button(text="📄 复制当前人设", callback_data=callback_token(chat_id, "pduplicate", {
-                            "persona_id": persona_id,
-                            "persona_page": max(0, int(page or 0)),
-                        })),
-                        button(text="🗑 删除人设", callback_data=callback_token(chat_id, "pdeleteask", {
-                            "persona_id": persona_id,
-                            "persona_page": max(0, int(page or 0)),
-                        })),
+                        button(text="🧵 Threads 人设绑定", callback_data="tt:pthreads"),
+                        button(text="🔄 刷新数据", callback_data=refresh_callback),
                     ],
-                    back,
+                    settings_back,
+                ]),
+            )
+        if module == "settings_media":
+            return (
+                "🧑‍🎨 图库与生成\n\n" + persona_context
+                + "查看、上传、替换、删除或重新生成人设图，所有图库操作从这里进入。",
+                types.InlineKeyboardMarkup(inline_keyboard=[
+                    [button(text="🧑‍🎨 打开人设图与图库", callback_data="tt:personaimage")],
+                    settings_back,
+                ]),
+            )
+        if module == "settings_maintenance":
+            return (
+                "🛠 维护操作\n\n" + persona_context
+                + "复制当前人设会创建独立副本；删除会移除该人设及其关联内容。",
+                types.InlineKeyboardMarkup(inline_keyboard=[
+                    [button(text="📄 复制当前人设", callback_data=callback_token(chat_id, "pduplicate", {
+                        "persona_id": persona_id,
+                        "persona_page": max(0, int(page or 0)),
+                    }))],
+                    [button(text="🗑 删除人设", callback_data=callback_token(chat_id, "pdeleteask", {
+                        "persona_id": persona_id,
+                        "persona_page": max(0, int(page or 0)),
+                    }))],
+                    settings_back,
                 ]),
             )
         if module == "create":
@@ -5278,6 +5323,18 @@ class NativeTweetBotController:
                 # consumed by the page the user just left.
                 clear_pending_state(chat_id, retain_keys=("persona_list_page",))
                 await self._render_persona_module(query, types, member, module)
+            elif action == "psettings":
+                module = str(parts[2] if len(parts) > 2 else "").strip().lower()
+                settings_module = {
+                    "profile": "settings_profile",
+                    "accounts": "settings_accounts",
+                    "media": "settings_media",
+                    "maintenance": "settings_maintenance",
+                }.get(module)
+                if not settings_module:
+                    raise HTTPException(status_code=400, detail="人设设置模块不存在")
+                clear_pending_state(chat_id, retain_keys=("persona_list_page",))
+                await self._render_persona_module(query, types, member, settings_module)
             elif action in {"persona_new", "persona_new_name"}:
                 state = load_state(chat_id)
                 retained = {

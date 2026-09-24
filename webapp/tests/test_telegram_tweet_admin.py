@@ -805,7 +805,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:pmod:settings", message), _Types))
         self.assertIn("人设设置", message.edits[-1][0])
         self.assertIn("待发布推文：2 篇", message.edits[-1][0])
-        self.assertIn("请选择要设置的项目", message.edits[-1][0])
+        self.assertIn("请选择设置模块", message.edits[-1][0])
         self.assertNotIn("基础资料：名称、简介", message.edits[-1][0])
         self.assertNotIn("平台账号绑定：管理", message.edits[-1][0])
         self.assertNotIn("加入分组", message.edits[-1][0])
@@ -815,7 +815,58 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
+        self.assertEqual(
+            {item for item in settings_callbacks if not item.startswith("tt:p:")},
+            {
+                "tt:psettings:profile",
+                "tt:psettings:accounts",
+                "tt:psettings:media",
+                "tt:psettings:maintenance",
+            },
+        )
         self.assertFalse(any("group" in item for item in settings_callbacks))
+
+        settings_groups = {
+            "profile": {"tt:profilename", "tt:bio", "tt:style", "tt:plinks", "tt:pmemories:0", "tt:profileai"},
+            "accounts": {"tt:persona_accounts", "tt:pthreads"},
+            "media": {"tt:personaimage"},
+        }
+        for group, expected in settings_groups.items():
+            asyncio.run(controller.handle_callback(_Query(f"tt:psettings:{group}", message), _Types))
+            self.assertIn(
+                {
+                    "profile": "基础资料",
+                    "accounts": "账号与数据",
+                    "media": "图库与生成",
+                }[group],
+                message.edits[-1][0],
+            )
+            group_callbacks = {
+                button.callback_data
+                for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+                if getattr(button, "callback_data", None)
+            }
+            self.assertEqual(
+                {
+                    item for item in group_callbacks
+                    if not item.startswith(("tt:p:", "tt:prefresh:"))
+                    and item != "tt:pmod:settings"
+                },
+                expected,
+            )
+            self.assertIn("tt:pmod:settings", group_callbacks)
+
+        asyncio.run(controller.handle_callback(_Query("tt:psettings:maintenance", message), _Types))
+        maintenance_callbacks = {
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertTrue(any(item.startswith("tt:pduplicate:") for item in maintenance_callbacks))
+        self.assertTrue(any(item.startswith("tt:pdeleteask:") for item in maintenance_callbacks))
+        self.assertIn("tt:pmod:settings", maintenance_callbacks)
 
         asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
         self.assertIn("查看推文", message.edits[-1][0])
