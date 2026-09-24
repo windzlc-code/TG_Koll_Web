@@ -1923,14 +1923,13 @@ class NativeTweetBotController:
         button = types.InlineKeyboardButton
         return types.InlineKeyboardMarkup(inline_keyboard=[
             [
-                button(text="📝 查看推文", callback_data="tt:postsmenu"),
-                button(text="🕘 发布历史", callback_data="tt:persona_history:0"),
+                button(text="✨ 推文生成", callback_data="tt:pmod:create"),
+                button(text="📝 推文内容", callback_data="tt:pmod:content"),
             ],
             [
-                button(text="✍️ 新建推文", callback_data="tt:pmod:create"),
+                button(text="🚀 发布管理", callback_data="tt:pmod:publish"),
                 button(text="⚙️ 人设设置", callback_data="tt:pmod:settings"),
             ],
-            [button(text="🚀 发布推文", callback_data="tt:pmod:publish")],
             [button(text=_back_label("返回我的人设"), callback_data=f"tt:personas:{max(0, int(page or 0))}")],
         ])
 
@@ -5861,10 +5860,12 @@ class NativeTweetBotController:
                         }),
                     ),
                 ])
-                # History is opened from the persona detail page.  Return to
-                # that page directly instead of forcing an extra publish-menu
-                # hop; the publish module still exposes history as a shortcut.
-                rows.append(self._persona_module_back_row(types, chat_id, persona_id, page=page))
+                # History is a child of the publish-management module.  Keep
+                # the return path there so users do not jump back to the
+                # persona home and see another flat list of actions.
+                rows.append(self._persona_module_back_row(
+                    types, chat_id, persona_id, "publish", page=page,
+                ))
                 await query.message.edit_text(
                     (f"发布历史（{len(history)} 条）\n第 {page + 1}/{total_pages} 页"
                      if history else "发布历史\n暂无记录"),

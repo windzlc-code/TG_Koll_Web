@@ -687,10 +687,16 @@ class TelegramTweetAdminTests(unittest.TestCase):
             if getattr(button, "callback_data", None)
         }
         self.assertEqual(callbacks, {
-            "tt:postsmenu", "tt:persona_history:0", "tt:pmod:create", "tt:pmod:settings",
+            "tt:pmod:create", "tt:pmod:content", "tt:pmod:settings",
             "tt:pmod:publish", "tt:personas:0",
         })
+        self.assertEqual(
+            [len(row) for row in message.edits[-1][1]["reply_markup"].inline_keyboard],
+            [2, 2, 1],
+        )
         self.assertNotIn("tt:createmenu", callbacks)
+        self.assertNotIn("tt:postsmenu", callbacks)
+        self.assertNotIn("tt:persona_history:0", callbacks)
         asyncio.run(controller.handle_callback(_Query("tt:personamanage", message), _Types))
         management_callbacks = {
             button.callback_data for row in message.edits[-1][1]["reply_markup"].inline_keyboard for button in row
@@ -766,6 +772,20 @@ class TelegramTweetAdminTests(unittest.TestCase):
             {"tt:publish_one", "tt:matrix", "tt:persona_history:0"},
         )
         self.assertEqual(sum(item.startswith("tt:p:") for item in publish_module_callbacks), 1)
+        history_back = next(
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if str(getattr(button, "callback_data", "")).startswith("tt:persona_history:")
+        )
+        asyncio.run(controller.handle_callback(_Query(history_back, message), _Types))
+        history_back_button = next(
+            button
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if str(getattr(button, "text", "")).startswith("◀️")
+        )
+        self.assertEqual(history_back_button.callback_data, "tt:pmod:publish")
 
         # Saved messages from the previous taxonomy remain usable and now
         # land in the matching module instead of returning to the selector.
@@ -1002,7 +1022,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if str(getattr(button, "text", "")).startswith("◀️")
         )
-        self.assertTrue(str(back).startswith("tt:p:"))
+        self.assertEqual(back, "tt:pmod:publish")
 
     def test_stop_current_task_cancels_active_tasks_and_pending_input(self):
         calls = []
