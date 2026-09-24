@@ -8,6 +8,7 @@ import re
 import secrets
 import threading
 import time
+import tempfile
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -1228,6 +1229,9 @@ class NativeTweetBotController:
                 if str(payload.get("generation_mode") or "text") == "media"
                 else "返回生成数量"
             )
+        elif mode == "generate_memory_custom":
+            back_callback = callback_token(chat_id, "gmemcustomback", {})
+            back_text = "返回记忆选择"
         elif mode == "persona_image_prompt":
             back_callback = callback_token(chat_id, "personaimage", {
                 "persona_id": str(state.get("selected_persona_id") or ""),
@@ -1311,6 +1315,40 @@ class NativeTweetBotController:
         ]])
 
     @staticmethod
+    def _generation_ratio_keyboard(
+        types: Any,
+        payload: dict[str, Any],
+        *,
+        back_callback: str = "tt:gratio:back",
+        back_text: str = "返回生成数量",
+    ) -> Any:
+        """Render the free image-ratio picker in the R18 two-column layout.
+
+        The values deliberately remain the Tweet Workbench values.  This is
+        only a presentation adapter for the Telegram wizard, so no R18 paid
+        image backend or additional ratio is introduced here.
+        """
+        choices = (
+            ("auto", "自动（按推文内容）"),
+            ("1:1", "方形 1:1"),
+            ("3:4", "竖幅 3:4"),
+            ("4:3", "横幅 4:3"),
+            ("16:9", "横屏 16:9"),
+            ("9:16", "竖屏 9:16"),
+        )
+        selected = str(payload.get("aspect_ratio") or "auto").strip()
+        buttons = [types.InlineKeyboardButton(
+            text=("✅ " if selected == value else "") + label,
+            callback_data=f"tt:gratio:{value.replace(':', '_')}",
+        ) for value, label in choices]
+        rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
+        rows.append([
+            types.InlineKeyboardButton(text=_back_label(back_text), callback_data=back_callback),
+            types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
+        ])
+        return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+    @staticmethod
     def _generation_count_navigation(payload: dict[str, Any]) -> tuple[str, str]:
         """Return the immediate previous page for the count step.
 
@@ -1359,6 +1397,8 @@ class NativeTweetBotController:
             self._resume_payload(chat_id, "genmode")
             await query.answer("请先选择人设，选择后会自动继续")
             return
+        pending_payload = state.get("payload") if isinstance(state.get("payload"), dict) else {}
+        self._custom_media_cleanup(pending_payload.get("custom_media_path"))
         save_state(chat_id, mode="tweet_generation_mode", payload={})
         member = self._member(chat_id)
         if member and member.get("web_user_id"):
@@ -1425,7 +1465,7 @@ class NativeTweetBotController:
                     selected = f"\n当前人设：{current.get('name') or '未命名人设'}"
             except Exception:
                 selected = ""
-        clear_pending_state(int(message.chat.id))
+        self._clear_pending_state(int(message.chat.id))
         await message.answer(
             f"当前 Telegram 已绑定且网页登录会话有效。{selected}",
             reply_markup=self._main_keyboard(types),
@@ -1443,7 +1483,7 @@ class NativeTweetBotController:
         chat_id = int(message.chat.id)
         user_id = int(member["web_user_id"])
         if text != STOP_CONTROL_BUTTON:
-            clear_pending_state(chat_id)
+            self._clear_pending_state(chat_id)
         try:
             if text == PERSONA_CONTROL_BUTTON:
                 page_text, markup = await self._persona_list_payload(types, member, chat_id, 0)
@@ -1566,14 +1606,16 @@ class NativeTweetBotController:
         count = int(payload.get("count") or 3)
         mode_label = "文字＋配图" if str(payload.get("generation_mode") or "text") == "media" else "只生成推文"
         is_media = str(payload.get("generation_mode") or "text") == "media"
+        prompt_step = "第 4 步" if is_media else "第 3 步"
         prompt_back_text = "返回配图比例" if is_media else "返回生成数量"
         prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
         await query.message.edit_text(
             prefix
-            + "AI 生成推文 · 第 3 步\n"
+            + f"AI 生成推文 · {prompt_step}\n"
             + f"生成方式：{mode_label} · 数量：{count} 篇\n"
-            "请发送本次生成提示词；提示词会与当前人设简介、已选记忆一起提交。\n"
-            "如果不需要额外要求，可以点击“跳过提示词”。",
+            "⭐ 请发送本次生成的提示词 ⭐\n"
+            "提示词会与当前人设简介、已选记忆和推文方向一起提交。\n"
+            "如果不需要额外要求，可以点击“跳过提示词”，由 AI 自动补全。",
             reply_markup=self._step_navigation_markup(
                 types,
                 back_callback="tt:gprompt:back",
@@ -1595,11 +1637,14 @@ class NativeTweetBotController:
         save_state(chat_id, mode="generate_words", payload=dict(payload))
         count = int(payload.get("count") or 3)
         prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
+        prompt_note = "已选择让 AI 自动生成提示词。\n" if not str(payload.get("prompt") or "").strip() else ""
         await query.message.edit_text(
             prefix
             + "AI 生成推文 · 第 4 步\n"
             + f"数量：{count} 篇\n"
-            "请选择每篇目标字数；这只控制生成篇幅，确认前仍可返回修改。",
+            + prompt_note
+            + "⭐ 请发送每篇推文的目标字数 ⭐\n"
+            + "这只控制生成篇幅，确认前仍可返回修改。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                 types.InlineKeyboardButton(text="精简 80 字", callback_data="tt:gwords:80"),
                 types.InlineKeyboardButton(text="标准 120 字", callback_data="tt:gwords:120"),
@@ -1620,32 +1665,12 @@ class NativeTweetBotController:
     ) -> None:
         chat_id = int(query.message.chat.id)
         save_state(chat_id, mode="generate_ratio", payload=dict(payload))
-        rows = []
-        # Keep the Telegram choices aligned with the existing Tweet Workbench
-        # image.generate contract.  Do not expose a ratio that the web flow
-        # cannot select or persist.
-        for value, label in (
-            ("auto", "自动（按推文内容）"),
-            ("1:1", "方形 1:1"),
-            ("3:4", "竖幅 3:4"),
-            ("4:3", "横幅 4:3"),
-            ("16:9", "横屏 16:9"),
-            ("9:16", "竖屏 9:16"),
-        ):
-            rows.append([types.InlineKeyboardButton(
-                text=("✅ " if str(payload.get("aspect_ratio") or "auto") == value else "") + label,
-                callback_data=f"tt:gratio:{value.replace(':', '_')}",
-            )])
-        rows.append([
-            types.InlineKeyboardButton(text=_back_label("返回生成数量"), callback_data="tt:gratio:back"),
-            types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
-        ])
         await query.message.edit_text(
-            "AI 生成推文 · 第 3 步\n"
+            "AI 生成推文（文字＋配图）· 第 3 步\n"
+            "⭐ 请选择免费配图画面比例 ⭐\n"
             f"数量：{int(payload.get('count') or 3)} 篇\n\n"
-            "请选择后续推文配图的画面比例；选择后再发送本次生成提示词。\n"
-            "自动会结合推文内容、人设和主体类型选择合理比例。",
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+            "选择后再发送本次生成提示词；自动会结合推文内容、人设和主体类型选择合理比例。",
+            reply_markup=self._generation_ratio_keyboard(types, payload),
         )
 
     async def _start_hot_input(self, query: Any, types: Any) -> None:
@@ -1692,17 +1717,97 @@ class NativeTweetBotController:
         backend while still giving Telegram the same separate custom branch.
         """
         chat_id = int(query.message.chat.id)
+        state = load_state(chat_id)
+        persona_id = str(state.get("selected_persona_id") or "").strip()
         save_state(chat_id, mode="draft_new", payload={"creation_mode": "custom"})
         await query.message.edit_text(
-            "🧩 自定义新建 · 第 1/2 步\n"
-            "请单独发送要保存的推文正文。\n"
-            "正文保存后，可以继续添加图片/视频、生成配图或进入发布；不会自动发布。",
-            reply_markup=self._step_navigation_markup(
-                types,
-                back_callback="tt:genmodes",
-                back_text="返回生成方式",
-            ),
+            "🧩 自订新建推文（自定义新建 · 第 1/2 步）\n\n"
+            "目前步骤：等待推文内容\n\n"
+            "请直接发送以下任一内容：\n"
+            "1) 纯文字推文\n"
+            "2) 图片/视频 + 文案（caption 或下一条文字）\n\n"
+            "收到完整内容后，我会写入待发布推文库。",
+            reply_markup=self._custom_draft_navigation(types, chat_id, persona_id),
         )
+
+    @staticmethod
+    def _custom_media_cleanup(path: Any) -> None:
+        value = str(path or "").strip()
+        if not value:
+            return
+        try:
+            Path(value).unlink(missing_ok=True)
+        except Exception:
+            logger.debug("Failed to clean temporary custom tweet media", exc_info=True)
+
+    @staticmethod
+    def _custom_draft_navigation(
+        types: Any,
+        chat_id: int,
+        persona_id: str,
+        *,
+        include_cancel: bool = False,
+    ) -> Any:
+        rows = [[types.InlineKeyboardButton(text="◀️ 返回生成模式", callback_data="tt:genmodes")]]
+        if str(persona_id or "").strip():
+            rows.append([types.InlineKeyboardButton(
+                text="◀️ 返回人设详情",
+                callback_data=callback_token(chat_id, "p", {
+                    "persona_id": str(persona_id),
+                    "return_home": True,
+                }),
+            )])
+        if include_cancel:
+            rows.append([types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")])
+        return types.InlineKeyboardMarkup(inline_keyboard=rows)
+
+    def _clear_pending_state(self, chat_id: int, *, retain_keys: tuple[str, ...] = ()) -> dict[str, Any]:
+        """Clear Telegram wizard state and any staged custom-upload file."""
+        state = load_state(int(chat_id))
+        payload = state.get("payload") if isinstance(state.get("payload"), dict) else {}
+        self._custom_media_cleanup(payload.get("custom_media_path"))
+        return clear_pending_state(int(chat_id), retain_keys=retain_keys)
+
+    async def _create_custom_draft_with_media(
+        self,
+        *,
+        user_id: int,
+        persona_id: str,
+        content: str,
+        media_path: str = "",
+        media_filename: str = "",
+        media_mime_type: str = "",
+    ) -> dict[str, Any]:
+        """Create a Web draft and optionally attach one Telegram-uploaded file.
+
+        The Web workbench remains the source of truth: this only composes its
+        existing ``posts.create`` and ``media.add`` actions for the R18-style
+        custom input page.
+        """
+        result = await self._call(user_id, "posts.create", {
+            "persona_id": persona_id,
+            "content": str(content or "").strip(),
+        })
+        post = result.get("post") if isinstance(result, dict) and isinstance(result.get("post"), dict) else result
+        post_object = post if isinstance(post, dict) else {}
+        result_object = result if isinstance(result, dict) else {}
+        post_id = str(post_object.get("id") or result_object.get("id") or "")
+        if media_path and not post_id:
+            raise HTTPException(status_code=502, detail="推文草稿已返回但缺少标识，媒体未能安全关联")
+        if media_path:
+            raw_path = Path(media_path)
+            if not raw_path.is_file():
+                raise HTTPException(status_code=400, detail="临时媒体已失效，请重新发送图片或视频")
+            await self._call_async(user_id, "media.add", {
+                "persona_id": persona_id,
+                "source": "posts",
+                "post_id": post_id,
+                "filename": media_filename or raw_path.name,
+                "mime_type": media_mime_type or "application/octet-stream",
+                "content": raw_path.read_bytes(),
+                "replace_index": None,
+            })
+        return result if isinstance(result, dict) else {"post": post, "id": post_id}
 
     async def _persona_list_payload(
         self,
@@ -3874,6 +3979,22 @@ class NativeTweetBotController:
             for memory_id in selected_ids
             if str(available[memory_id].get("summary") or "").strip()
         ]
+        persona_name = str(payload.get("persona_name") or "").strip()
+        if not persona_name:
+            try:
+                personas = await self._call(int(member["web_user_id"]), "personas.list")
+                if isinstance(personas, dict):
+                    personas = personas.get("personas") or []
+                current_persona = next(
+                    (item for item in (personas or [])
+                     if isinstance(item, dict) and str(item.get("id") or "") == persona_id),
+                    None,
+                )
+                persona_name = str((current_persona or {}).get("name") or "").strip()
+                if persona_name:
+                    payload["persona_name"] = persona_name[:160]
+            except Exception:
+                logger.debug("Unable to resolve persona name for memory picker", exc_info=True)
         payload["selected_memory_ids"] = selected_ids
         payload["selected_memory_summaries"] = selected_summaries
         save_state(chat_id, mode="generate_memories", payload=payload)
@@ -3898,7 +4019,7 @@ class NativeTweetBotController:
             )])
         rows.append([
             types.InlineKeyboardButton(
-                text=f"确认使用（{len(selected_ids)}）",
+                text="✅ 使用已选记忆",
                 callback_data=callback_token(chat_id, "gmemconfirm", {}),
             ),
             types.InlineKeyboardButton(
@@ -3906,6 +4027,26 @@ class NativeTweetBotController:
                 callback_data=callback_token(chat_id, "gmemclear", {}),
             ),
         ])
+        if memories:
+            selectable_ids = [
+                str(item.get("id") or "").strip()
+                for item in memories[:8]
+                if isinstance(item, dict) and str(item.get("id") or "").strip()
+            ]
+            all_selected = selected_ids == selectable_ids
+            rows.append([types.InlineKeyboardButton(
+                text=("取消全选" if all_selected else "全选记忆（最多 8 条）"),
+                callback_data=callback_token(chat_id, "gmemall", {"clear": all_selected}),
+            )])
+        if selected_ids:
+            rows.append([types.InlineKeyboardButton(
+                text="🗑 删除已选记忆",
+                callback_data=callback_token(chat_id, "gmemdelete", {}),
+            )])
+        rows.append([types.InlineKeyboardButton(
+            text="➕ 添加自定义记忆",
+            callback_data=callback_token(chat_id, "gmemadd", {}),
+        )])
         if state["mode"] == "generate_memory_setup" or (
             bool(payload.get("r18_flow")) and not payload.get("target_words")
         ):
@@ -3924,9 +4065,11 @@ class NativeTweetBotController:
         )])
         await query.message.edit_text(
             (f"{notice.strip()}\n\n" if notice.strip() else "")
-            + "AI 生成推文 · 选择人设记忆\n"
+            + "🧠 选择人设记忆（本次参考）\n"
+            + f"人设：{persona_name or '当前人设'}\n"
+            + f"可选记忆：{len(memories)} 条 · 已选：{len(selected_ids)} 条\n"
             + f"第 {safe_page + 1}/{total_pages} 页；最多选择 8 条。\n"
-            + ("记忆会作为本次生成的上下文，不会覆盖人设简介。" if memories else "当前人设暂无可选记忆，可点击“不指定记忆，继续”。"),
+            + ("勾选后，本轮生成会围绕这些记忆自然延展；也可以跳过。" if memories else "当前人设暂无可选记忆，可点击“不指定记忆，继续”。"),
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -4057,7 +4200,7 @@ class NativeTweetBotController:
             "active_link_preset_id": str(profile.get("active_link_preset_id") or preset["id"]),
         })
         links_page = max(0, int(page or 0))
-        clear_pending_state(chat_id)
+        self._clear_pending_state(chat_id)
         await reply(
             "链接模板已保存。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
@@ -4371,7 +4514,7 @@ class NativeTweetBotController:
             # draft/FSM state and must never require a second login just to
             # escape a stale prompt.
             await query.answer()
-            clear_pending_state(chat_id)
+            self._clear_pending_state(chat_id)
             member = self._member(chat_id)
             session_active = False
             if member is not None:
@@ -4444,7 +4587,7 @@ class NativeTweetBotController:
         action = parts[1] if len(parts) > 1 else ""
         try:
             if action == "menu":
-                clear_pending_state(chat_id)
+                self._clear_pending_state(chat_id)
                 await query.message.edit_text("已返回推文工作台总控菜单。")
                 await query.message.answer("请选择总控功能。", reply_markup=self._main_keyboard(types))
             elif action == "stepcancel":
@@ -4452,7 +4595,7 @@ class NativeTweetBotController:
                 # message itself.  This is intentionally separate from the
                 # task-stop control: it only clears the pending input state
                 # and never touches an already submitted backend task.
-                clear_pending_state(chat_id)
+                self._clear_pending_state(chat_id)
                 await query.message.edit_text(
                     "已取消当前步骤，未提交新的任务或修改。",
                     reply_markup=self._return_keyboard(types),
@@ -4469,14 +4612,14 @@ class NativeTweetBotController:
                     reply_markup=self._return_keyboard(types),
                 )
             elif action == "taskmenu":
-                clear_pending_state(chat_id)
+                self._clear_pending_state(chat_id)
                 status_text, status_markup = await self._task_status_payload(types, member)
                 await query.message.edit_text(
                     status_text,
                     reply_markup=status_markup,
                 )
             elif action == "accountmenu":
-                clear_pending_state(chat_id)
+                self._clear_pending_state(chat_id)
                 page_text, markup = await self._account_management_payload(types, member)
                 await query.message.edit_text(page_text, reply_markup=markup)
             elif action == "vectosession":
@@ -5064,6 +5207,8 @@ class NativeTweetBotController:
                 if not persona:
                     raise HTTPException(status_code=404, detail="人设不存在")
                 previous = load_state(chat_id)
+                previous_payload = previous.get("payload") if isinstance(previous.get("payload"), dict) else {}
+                self._custom_media_cleanup(previous_payload.get("custom_media_path"))
                 persona_page = max(0, int(
                     reference.get("page")
                     if reference.get("page") is not None
@@ -6188,6 +6333,93 @@ class NativeTweetBotController:
                 await self._render_generation_memories(
                     query, types, page=int(reference.get("page") or 0),
                 )
+            elif action == "gmemall" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "gmemall", parts[2], consume=True)
+                state = load_state(chat_id)
+                if state["mode"] not in {"generate_memories", "generate_memory_setup"}:
+                    raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
+                persona_id = str(state["selected_persona_id"] or "").strip()
+                memories_result = await self._call(user_id, "profile.memories", {"persona_id": persona_id})
+                memories = memories_result.get("memories") if isinstance(memories_result, dict) else []
+                available = [
+                    item for item in memories
+                    if isinstance(item, dict) and str(item.get("id") or "").strip()
+                ]
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                should_clear = bool(reference.get("clear"))
+                chosen = [] if should_clear else available[:8]
+                payload["selected_memory_ids"] = [str(item.get("id") or "").strip() for item in chosen]
+                payload["selected_memory_summaries"] = [
+                    str(item.get("summary") or "").strip() for item in chosen if str(item.get("summary") or "").strip()
+                ]
+                save_state(chat_id, mode="generate_memories", payload=payload)
+                await self._render_generation_memories(
+                    query, types, page=int(payload.get("memory_page") or 0),
+                    notice=("已取消全选。" if should_clear else f"已选择前 {len(chosen)} 条记忆。"),
+                )
+            elif action == "gmemadd" and len(parts) > 2:
+                resolve_callback_token(chat_id, "gmemadd", parts[2], consume=True)
+                state = load_state(chat_id)
+                if state["mode"] not in {"generate_memories", "generate_memory_setup"}:
+                    raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                save_state(chat_id, mode="generate_memory_custom", payload=payload)
+                await query.message.edit_text(
+                    "➕ 添加自定义人设记忆\n\n"
+                    "请直接发送要新增的人设记忆内容。\n"
+                    "可以是一句设定、一次发布经验、人物偏好、内容方向或避雷要求。\n\n"
+                    "例如：早上内容要偏生活感，语气轻松像朋友聊天。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(
+                            text=_back_label("返回记忆选择"),
+                            callback_data=callback_token(chat_id, "gmemcustomback", {}),
+                        ),
+                    ]]),
+                )
+            elif action == "gmemcustomback" and len(parts) > 2:
+                resolve_callback_token(chat_id, "gmemcustomback", parts[2], consume=True)
+                state = load_state(chat_id)
+                if state["mode"] not in {"generate_memory_custom", "generate_memories", "generate_memory_setup"}:
+                    raise HTTPException(status_code=409, detail="自定义记忆步骤已失效，请重新开始")
+                if state["mode"] == "generate_memory_custom":
+                    save_state(chat_id, mode="generate_memories", payload=dict(state.get("payload") or {}))
+                await self._render_generation_memories(query, types, page=0, notice="已返回记忆选择。")
+            elif action == "gmemdelete" and len(parts) > 2:
+                resolve_callback_token(chat_id, "gmemdelete", parts[2], consume=True)
+                state = load_state(chat_id)
+                if state["mode"] not in {"generate_memories", "generate_memory_setup"}:
+                    raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
+                selected = [str(item or "").strip() for item in (state["payload"].get("selected_memory_ids") or []) if str(item or "").strip()]
+                if not selected:
+                    await query.answer("请先勾选要删除的人设记忆", show_alert=True)
+                    return
+                await query.message.edit_text(
+                    f"🗑 删除已选人设记忆\n\n将删除 {len(selected)} 条记忆。删除后本轮生成不会再引用这些内容。\n\n请确认是否继续？",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="✅ 确认删除", callback_data=callback_token(chat_id, "gmemdeleteconfirm", {})),
+                    ], [
+                        types.InlineKeyboardButton(text=_back_label("返回记忆选择"), callback_data=callback_token(chat_id, "gmemcustomback", {})),
+                    ]]),
+                )
+            elif action == "gmemdeleteconfirm" and len(parts) > 2:
+                resolve_callback_token(chat_id, "gmemdeleteconfirm", parts[2], consume=True)
+                state = load_state(chat_id)
+                if state["mode"] not in {"generate_memories", "generate_memory_setup"}:
+                    raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
+                persona_id = str(state["selected_persona_id"] or "").strip()
+                selected = [str(item or "").strip() for item in (state["payload"].get("selected_memory_ids") or []) if str(item or "").strip()]
+                deleted = 0
+                for memory_id in selected:
+                    try:
+                        await self._call(user_id, "profile.memory.delete", {"persona_id": persona_id, "memory_id": memory_id})
+                        deleted += 1
+                    except Exception:
+                        logger.info("Failed to delete selected generation memory %s", memory_id, exc_info=True)
+                payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                payload["selected_memory_ids"] = []
+                payload["selected_memory_summaries"] = []
+                save_state(chat_id, mode="generate_memories", payload=payload)
+                await self._render_generation_memories(query, types, page=0, notice=f"已删除 {deleted} 条人设记忆。")
             elif action == "gmemconfirm" and len(parts) > 2:
                 resolve_callback_token(chat_id, "gmemconfirm", parts[2], consume=True)
                 state = load_state(chat_id)
@@ -6268,7 +6500,7 @@ class NativeTweetBotController:
                 await query.message.edit_text(
                     "已保留所选推文候选，其他候选已清理。\n现在可以在草稿列表中编辑、配图或发布。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text="查看生成草稿", callback_data=callback_token(chat_id, "gendrafts", {
+                        types.InlineKeyboardButton(text="📝 查看推文列表", callback_data=callback_token(chat_id, "gendrafts", {
                             "persona_id": selected_persona_id,
                         })),
                         types.InlineKeyboardButton(text="查看任务", callback_data=callback_token(chat_id, "t", {
@@ -8176,6 +8408,36 @@ class NativeTweetBotController:
                         text=_back_label("返回人设"), callback_data="tt:personas:0",
                     )]]),
                 )
+            elif mode == "generate_memory_custom":
+                raw_memory = str(text or "").replace("\n", " ").strip()
+                if len(raw_memory) < 2:
+                    await message.answer(
+                        "记忆内容太短，请重新发送更完整的人设记忆。",
+                        reply_markup=self._text_error_navigation(types, chat_id, state),
+                    )
+                    return
+                try:
+                    await self._call(user_id, "profile.memory.create", {
+                        "persona_id": persona_id,
+                        "summary": raw_memory[:1000],
+                    })
+                    payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                    save_state(chat_id, mode="generate_memories", payload=payload)
+                    await message.answer(
+                        "✅ 已添加自定义人设记忆，并返回选择页。",
+                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                            types.InlineKeyboardButton(
+                                text="打开记忆选择",
+                                callback_data=callback_token(chat_id, "gmem", {"page": 0}),
+                            ),
+                        ]]),
+                    )
+                except Exception as exc:
+                    await message.answer(
+                        f"❌ 添加记忆失败：{_error_text(exc)}",
+                        reply_markup=self._text_error_navigation(types, chat_id, state),
+                    )
+                return
             elif mode == "generate_count_input":
                 raw_count = text.strip()
                 count_payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
@@ -8209,25 +8471,12 @@ class NativeTweetBotController:
                 payload["count"] = count
                 if str(payload.get("generation_mode") or "text") == "media":
                     save_state(chat_id, mode="generate_ratio", payload=payload)
-                    rows = []
-                    for value, label in (
-                        ("auto", "自动（按推文内容）"),
-                        ("1:1", "方形 1:1"),
-                        ("3:4", "竖幅 3:4"),
-                        ("4:3", "横幅 4:3"),
-                        ("16:9", "横屏 16:9"),
-                        ("9:16", "竖屏 9:16"),
-                    ):
-                        rows.append([types.InlineKeyboardButton(
-                            text=label,
-                            callback_data=f"tt:gratio:{value.replace(':', '_')}",
-                        )])
-                    rows.append([types.InlineKeyboardButton(text=_back_label("返回生成数量"), callback_data="tt:gratio:back"), types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")])
                     await message.answer(
-                        "AI 生成推文 · 第 3 步\n"
+                        "AI 生成推文（文字＋配图）· 第 3 步\n"
+                        "⭐ 请选择免费配图画面比例 ⭐\n"
                         f"数量：{count} 篇\n\n"
-                        "请选择后续推文配图的画面比例；自动会结合推文内容和人设主体选择合理比例。",
-                        reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                        "选择后再发送本次生成提示词；自动会结合推文内容、人设和主体类型选择合理比例。",
+                        reply_markup=self._generation_ratio_keyboard(types, payload),
                     )
                 else:
                     payload["r18_flow"] = True
@@ -8252,9 +8501,9 @@ class NativeTweetBotController:
                     payload["prompt"] = text[:1200]
                     await message.answer(
                         "已收到本次生成提示词。\n\n"
-                        "AI 生成推文 · 第 4 步\n"
-                        f"数量：{int(payload.get('count') or 3)} 篇\n"
-                        "请选择每篇目标字数。",
+                        + ("AI 生成推文（文字＋配图）· 第 4 步\n" if str(payload.get("generation_mode") or "text") == "media" else "AI 生成推文 · 第 4 步\n")
+                        + f"数量：{int(payload.get('count') or 3)} 篇\n"
+                        + "⭐ 请选择每篇推文的目标字数 ⭐\n",
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                             types.InlineKeyboardButton(text="精简 80 字", callback_data="tt:gwords:80"),
                             types.InlineKeyboardButton(text="标准 120 字", callback_data="tt:gwords:120"),
@@ -8342,7 +8591,20 @@ class NativeTweetBotController:
                     ]]),
                 )
             elif mode == "draft_new":
-                result = await self._call(user_id, "posts.create", {"persona_id": persona_id, "content": text})
+                draft_payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
+                custom_media_path = str(draft_payload.get("custom_media_path") or "").strip()
+                try:
+                    result = await self._create_custom_draft_with_media(
+                        user_id=user_id,
+                        persona_id=persona_id,
+                        content=text,
+                        media_path=custom_media_path,
+                        media_filename=str(draft_payload.get("custom_media_filename") or ""),
+                        media_mime_type=str(draft_payload.get("custom_media_mime_type") or ""),
+                    )
+                finally:
+                    if custom_media_path:
+                        self._custom_media_cleanup(custom_media_path)
                 post = result.get("post") if isinstance(result, dict) else result
                 post_id = str((post or {}).get("id") or result.get("id") or "")
                 creation_mode = str(state["payload"].get("creation_mode") or "").strip().lower()
@@ -8356,6 +8618,12 @@ class NativeTweetBotController:
                 result_rows = [[types.InlineKeyboardButton(
                     text="查看此草稿",
                     callback_data=callback_token(chat_id, "d", detail_context),
+                )], [types.InlineKeyboardButton(
+                    text="📝 查看推文列表",
+                    callback_data=callback_token(chat_id, "gendrafts", {"persona_id": persona_id}),
+                )], [types.InlineKeyboardButton(
+                    text=_back_label("返回人设详情"),
+                    callback_data=callback_token(chat_id, "p", {"persona_id": persona_id, "return_home": True}),
                 )]]
                 if creation_mode == "custom":
                     result_rows.append([types.InlineKeyboardButton(
@@ -8364,7 +8632,7 @@ class NativeTweetBotController:
                     )])
                 await message.answer(
                     (
-                        "自定义草稿已保存。下一步可添加图片/视频、生成配图或发布。"
+                        "自订推文已保存。可以打开推文列表继续编辑、配图或发布。"
                         if creation_mode == "custom"
                         else "草稿已保存，可继续编辑、添加媒体或发布。"
                     ),
@@ -8797,7 +9065,7 @@ class NativeTweetBotController:
         chat_id = int(message.chat.id)
         user_id = int(member["web_user_id"])
         state = load_state(chat_id)
-        if state["mode"] not in {"media_upload", "media_replace", "persona_image_upload"}:
+        if state["mode"] not in {"media_upload", "media_replace", "persona_image_upload", "draft_new"}:
             await message.answer("请先从草稿详情或人设图设置选择上传入口。", reply_markup=self._main_keyboard(types))
             return
         state_payload = state["payload"] if isinstance(state.get("payload"), dict) else {}
@@ -8812,6 +9080,16 @@ class NativeTweetBotController:
             """
             button = types.InlineKeyboardButton
             rows: list[list[Any]] = []
+            if state["mode"] == "draft_new":
+                # Custom creation is its own R18-style branch.  Keep a staged
+                # media upload inside that branch instead of sending the user
+                # back to the generic post-detail/menu controls.
+                return self._custom_draft_navigation(
+                    types,
+                    chat_id,
+                    str(state.get("selected_persona_id") or ""),
+                    include_cancel=True,
+                )
             if state["mode"] == "persona_image_upload":
                 persona_id = str(state.get("selected_persona_id") or "").strip()
                 if persona_id:
@@ -8890,6 +9168,63 @@ class NativeTweetBotController:
             await message.bot.download(media, destination=target)
             content = target.getvalue()
             payload = state_payload
+            if state["mode"] == "draft_new":
+                # R18 custom creation accepts a media message with an inline
+                # caption, or a media message followed by a text caption.  We
+                # keep the Web workbench as the canonical store and hold only
+                # a short-lived local file until the caption arrives.
+                self._custom_media_cleanup(payload.get("custom_media_path"))
+                fd, temp_name = tempfile.mkstemp(prefix=f"tg-custom-{chat_id}-", suffix=canonical_suffix)
+                os.close(fd)
+                Path(temp_name).write_bytes(content)
+                caption = str(getattr(message, "caption", "") or "").strip()
+                custom_payload = dict(payload)
+                custom_payload.update({
+                    "custom_media_path": temp_name,
+                    "custom_media_filename": filename,
+                    "custom_media_mime_type": mime_type,
+                })
+                if not caption:
+                    save_state(chat_id, mode="draft_new", payload=custom_payload)
+                    await message.answer(
+                        "✅ 已收到媒体。\n\n目前步骤：等待文案\n\n请再发送一条文案，我会把媒体和文案一起写入待发布推文库。",
+                        reply_markup=self._custom_draft_navigation(
+                            types,
+                            chat_id,
+                            str(state.get("selected_persona_id") or ""),
+                            include_cancel=True,
+                        ),
+                    )
+                    return
+                try:
+                    result = await self._create_custom_draft_with_media(
+                        user_id=user_id,
+                        persona_id=str(state.get("selected_persona_id") or ""),
+                        content=caption,
+                        media_path=temp_name,
+                        media_filename=filename,
+                        media_mime_type=mime_type,
+                    )
+                finally:
+                    self._custom_media_cleanup(temp_name)
+                post = result.get("post") if isinstance(result, dict) else result
+                post_id = str((post or {}).get("id") or (result or {}).get("id") or "")
+                clear_pending_state(chat_id)
+                audit_action(chat_id, user_id, "post.create", status="success", resource_type="post", resource_id=post_id)
+                detail_context = {"persona_id": str(state.get("selected_persona_id") or ""), "post_id": post_id, "source": "posts"}
+                await message.answer(
+                    "✅ 已写入推文库\n类型：图文/视频文案\n可进入草稿详情继续编辑、配图或发布。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="查看此草稿", callback_data=callback_token(chat_id, "d", detail_context)),
+                    ], [
+                        types.InlineKeyboardButton(text="📝 查看推文列表", callback_data="tt:drafts:0"),
+                    ], [
+                        types.InlineKeyboardButton(text=_back_label("返回人设详情"), callback_data=callback_token(chat_id, "p", {
+                            "persona_id": str(state.get("selected_persona_id") or ""), "return_home": True,
+                        })),
+                    ]]),
+                )
+                return
             if state["mode"] == "persona_image_upload":
                 if not mime_type.lower().startswith("image/"):
                     await message.answer(
@@ -9060,7 +9395,7 @@ class NativeTweetBotController:
                     return
                 result_rows = [[
                     types.InlineKeyboardButton(
-                        text="查看生成草稿",
+                        text="📝 查看推文列表",
                         callback_data=callback_token(chat_id, "gendrafts", {"persona_id": persona_id}),
                     ),
                     types.InlineKeyboardButton(
