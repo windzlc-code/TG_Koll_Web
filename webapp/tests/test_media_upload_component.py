@@ -732,6 +732,14 @@ class MediaUploadComponentContractTests(unittest.TestCase):
         self.assertIn("files = imageFiles.slice(-1);", self.script)
         self.assertIn("const files = modifyItem ? [] : mediaUploadState.files;", self.script)
 
+    def test_custom_publish_upload_reuses_public_draft_media_cards(self):
+        publish_preview = self.script.split("function renderPublishContentPreview", 1)[1].split(
+            "function renderPublishContentPanel", 1
+        )[0]
+        self.assertIn('renderUploadDropzone("simpleMediaFiles"', publish_preview)
+        self.assertIn("publicMediaCards: true", publish_preview)
+        self.assertNotIn('class="file-chip file-chip--preview', publish_preview)
+
     def test_media_preview_requires_content_or_prompt_and_allows_pending_image_edit(self):
         submitter = self.script[
             self.script.index("async function submitPersonaMediaTask"):

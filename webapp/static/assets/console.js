@@ -15859,7 +15859,11 @@ function renderPublishContentPreview(persona = selectedPersona(), source = state
           <span data-publish-custom-count>${esc(limit ? `${length} / ${limit} 字` : "")}</span>
           <strong data-publish-custom-hint aria-live="polite" ${hint ? "" : "hidden"}>${esc(hint)}</strong>
         </div>
-        ${renderUploadDropzone("simpleMediaFiles", { label: "上传素材", hint: "拖动图片或视频到这里，或点击选择。任务内容会读取这里的文件。" })}
+        ${renderUploadDropzone("simpleMediaFiles", {
+          label: "上传素材",
+          hint: "拖动图片或视频到这里，或点击选择。任务内容会读取这里的文件。",
+          publicMediaCards: true,
+        })}
       </section>`;
   }
   const sourceRows = publishSourceRows(persona, cleanSource);
