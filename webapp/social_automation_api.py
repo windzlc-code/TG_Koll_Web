@@ -1343,6 +1343,32 @@ def _create_social_task_for_user(payload: SocialTaskPayload, user: dict[str, Any
             clear_admin_billing_waived_payload(payload)
 
 
+def _preflight_bundle_publish_media_before_billing(
+    *,
+    auth_provider: str,
+    platform: str,
+    task_type: str,
+    task_payload: dict[str, Any],
+) -> None:
+    if str(task_type or "").strip() != "publish_post":
+        return
+    media_paths = [
+        str(value or "").strip()
+        for value in (task_payload.get("media_paths") or [])
+        if str(value or "").strip()
+    ]
+    if not media_paths:
+        return
+    if str(auth_provider or "browser").strip().lower() != "bundle":
+        return
+    from .bundle_social import BundleSocialError, preflight_publish_media_paths
+
+    try:
+        preflight_publish_media_paths(platform, media_paths)
+    except BundleSocialError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 def _automation_plan_task_id(plan_id: str, cycle_index: int, sequence: int) -> str:
     digest = uuid.uuid5(
         uuid.NAMESPACE_URL,
@@ -7651,6 +7677,12 @@ def create_social_task(payload: SocialTaskPayload, *, billing_admin_waived: bool
             )
             if not publish_policy["can_publish"]:
                 raise HTTPException(status_code=429, detail=publish_policy["message"] or DAILY_PUBLISH_LIMIT_MESSAGE)
+        _preflight_bundle_publish_media_before_billing(
+            auth_provider=auth_provider,
+            platform=platform,
+            task_type=task_type,
+            task_payload=task_payload,
+        )
         billing_reservation: dict[str, Any] | None = None
         billing_sku = social_task_billing_sku(platform, task_type, task_payload)
         if billing_sku and owner_user_id > 0:

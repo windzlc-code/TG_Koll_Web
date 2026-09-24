@@ -3,9 +3,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import mimetypes
 import os
 import re
+import shutil
+import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +38,30 @@ def platform_label(platform: Any) -> str:
 
 _VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
+_MEDIA_MAX_FILES = 10
+_MEDIA_MAX_TOTAL_BYTES = 100 * 1024 * 1024
+_VIDEO_LIMITS = {
+    "threads": {
+        "min_duration": 0.1,
+        "max_duration": 300.0,
+        "max_width": 1920,
+        "max_fps": 60.0,
+        "max_bitrate": 25_000_000,
+        "max_bytes": 50 * 1024 * 1024,
+        "min_aspect": 0.01,
+        "max_aspect": 10.0,
+    },
+    "instagram": {
+        "min_duration": 3.0,
+        "max_duration": 900.0,
+        "max_width": 1920,
+        "max_fps": 60.0,
+        "max_bitrate": 25_000_000,
+        "max_bytes": 50 * 1024 * 1024,
+        "min_aspect": 0.01,
+        "max_aspect": 10.0,
+    },
+}
 _IMAGE_LIMITS = {
     "threads": {
         "min_width": 320,
@@ -259,8 +287,303 @@ def _image_limits_for(platform: str) -> dict[str, float]:
     return dict(_IMAGE_LIMITS.get(str(platform or "").strip().lower()) or {})
 
 
+def _video_limits_for(platform: str) -> dict[str, float]:
+    return dict(_VIDEO_LIMITS.get(str(platform or "").strip().lower()) or {})
+
+
 def _text_limit_for(platform: str) -> int:
     return int(_TEXT_LIMITS.get(str(platform or "").strip().lower()) or 0)
+
+
+def _resolve_video_tool(name: str) -> str:
+    found = shutil.which(name)
+    if found:
+        return found
+    if name == "ffmpeg":
+        try:
+            import imageio_ffmpeg
+
+            candidate = Path(imageio_ffmpeg.get_ffmpeg_exe())
+            if candidate.is_file():
+                return str(candidate)
+        except Exception:
+            pass
+    if name == "ffprobe":
+        ffmpeg = Path(_resolve_video_tool("ffmpeg"))
+        for candidate in (ffmpeg.with_name("ffprobe"), ffmpeg.with_name("ffprobe.exe")):
+            if candidate.is_file():
+                return str(candidate)
+    raise BundleSocialError("服务器视频处理组件未就绪，已在调用平台 API 前阻止提交。")
+
+
+def _compact_process_error(completed: subprocess.CompletedProcess[str], fallback: str) -> str:
+    detail = str(completed.stderr or completed.stdout or fallback).strip()
+    return re.sub(r"\s+", " ", detail)[-600:] if detail else fallback
+
+
+def _frame_rate(value: Any) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return 0.0
+    try:
+        if "/" in text:
+            numerator, denominator = text.split("/", 1)
+            denominator_value = float(denominator or 0)
+            return float(numerator or 0) / denominator_value if denominator_value else 0.0
+        return float(text)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def _probe_publish_video(path: Path) -> dict[str, Any]:
+    try:
+        completed = subprocess.run(
+            [
+                _resolve_video_tool("ffprobe"),
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration,format_name,bit_rate:stream=codec_type,codec_name,width,height,avg_frame_rate,bit_rate",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise BundleSocialError("视频无法读取或处理，已在调用平台 API 前阻止提交。") from exc
+    if completed.returncode != 0:
+        raise BundleSocialError(
+            "视频无法读取或处理，已在调用平台 API 前阻止提交。",
+            provider_error_detail=_compact_process_error(completed, "ffprobe failed"),
+        )
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except (TypeError, ValueError) as exc:
+        raise BundleSocialError("视频无法读取或处理，已在调用平台 API 前阻止提交。") from exc
+    streams = payload.get("streams") if isinstance(payload.get("streams"), list) else []
+    video = next((item for item in streams if isinstance(item, dict) and item.get("codec_type") == "video"), None)
+    audio = next((item for item in streams if isinstance(item, dict) and item.get("codec_type") == "audio"), None)
+    format_info = payload.get("format") if isinstance(payload.get("format"), dict) else {}
+    try:
+        duration = float(format_info.get("duration") or 0)
+        width = int((video or {}).get("width") or 0)
+        height = int((video or {}).get("height") or 0)
+        bitrate = int((video or {}).get("bit_rate") or format_info.get("bit_rate") or 0)
+    except (TypeError, ValueError) as exc:
+        raise BundleSocialError("视频无法读取或处理，已在调用平台 API 前阻止提交。") from exc
+    if not video or duration <= 0 or width <= 0 or height <= 0:
+        raise BundleSocialError("视频无法读取或处理，已在调用平台 API 前阻止提交。")
+    return {
+        "duration": duration,
+        "width": width,
+        "height": height,
+        "fps": _frame_rate(video.get("avg_frame_rate")),
+        "video_codec": str(video.get("codec_name") or "").strip().lower(),
+        "audio_codec": str((audio or {}).get("codec_name") or "").strip().lower(),
+        "has_audio": bool(audio),
+        "format_name": str(format_info.get("format_name") or "").strip().lower(),
+        "bitrate": max(0, bitrate),
+        "size": path.stat().st_size,
+    }
+
+
+def _validate_publish_video_metadata(platform: str, metadata: dict[str, Any], limits: dict[str, float]) -> None:
+    label = platform_label(platform)
+    duration = float(metadata.get("duration") or 0)
+    min_duration = float(limits.get("min_duration") or 0)
+    max_duration = float(limits.get("max_duration") or 0)
+    if min_duration and duration + 1e-3 < min_duration:
+        raise BundleSocialError(f"{label} 视频至少需要 {min_duration:g} 秒，已在调用平台 API 前阻止提交。")
+    if max_duration and duration > max_duration + 1e-3:
+        raise BundleSocialError(f"{label} 视频不能超过 {max_duration:g} 秒，已在调用平台 API 前阻止提交。")
+    width = int(metadata.get("width") or 0)
+    height = int(metadata.get("height") or 0)
+    aspect = width / float(height) if width > 0 and height > 0 else 0.0
+    min_aspect = float(limits.get("min_aspect") or 0)
+    max_aspect = float(limits.get("max_aspect") or 0)
+    if not aspect or (min_aspect and aspect < min_aspect) or (max_aspect and aspect > max_aspect):
+        raise BundleSocialError(f"{label} 视频画面比例不符合平台要求，已在调用平台 API 前阻止提交。")
+
+
+def _publish_video_is_compliant(path: Path, metadata: dict[str, Any], limits: dict[str, float]) -> bool:
+    format_names = {value.strip() for value in str(metadata.get("format_name") or "").split(",") if value.strip()}
+    if path.suffix.lower() != ".mp4" or "mp4" not in format_names:
+        return False
+    if str(metadata.get("video_codec") or "") != "h264":
+        return False
+    if metadata.get("has_audio") and str(metadata.get("audio_codec") or "") != "aac":
+        return False
+    if int(metadata.get("width") or 0) > int(limits.get("max_width") or 0):
+        return False
+    if float(metadata.get("fps") or 0) > float(limits.get("max_fps") or 0) + 1e-3:
+        return False
+    if int(metadata.get("bitrate") or 0) > int(limits.get("max_bitrate") or 0):
+        return False
+    if int(metadata.get("size") or 0) > int(limits.get("max_bytes") or 0):
+        return False
+    return True
+
+
+def _prepared_video_path(source: Path, platform: str) -> Path:
+    stat = source.stat()
+    fingerprint = hashlib.sha256(
+        f"{source.resolve()}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8", errors="ignore")
+    ).hexdigest()[:12]
+    return source.with_name(f"{source.stem}.prepared-{str(platform or '').strip().lower()}-{fingerprint}.mp4")
+
+
+def _transcode_publish_video(
+    source: Path,
+    dest: Path,
+    metadata: dict[str, Any],
+    limits: dict[str, float],
+) -> None:
+    width = int(metadata.get("width") or 0)
+    height = int(metadata.get("height") or 0)
+    max_width = int(limits.get("max_width") or 1920)
+    target_width = min(width, max_width)
+    target_width = max(2, target_width - (target_width % 2))
+    target_height = max(2, int(round(height * (target_width / float(width)))))
+    target_height -= target_height % 2
+    filters = [f"scale={target_width}:{target_height}"]
+    if float(metadata.get("fps") or 0) > float(limits.get("max_fps") or 60):
+        filters.append(f"fps={int(limits.get('max_fps') or 60)}")
+    duration = max(0.1, float(metadata.get("duration") or 0.1))
+    max_bytes = int(limits.get("max_bytes") or 50 * 1024 * 1024)
+    target_bytes = min(max_bytes - 1024 * 1024, 44 * 1024 * 1024)
+    audio_bitrate = 128_000 if metadata.get("has_audio") else 0
+    video_bitrate = int((target_bytes * 8 / duration) - audio_bitrate - 32_000)
+    video_bitrate = max(250_000, min(video_bitrate, 8_000_000))
+    temp = dest.with_name(f".{dest.name}.{os.getpid()}.{threading.get_ident()}.tmp.mp4")
+    command = [
+        _resolve_video_tool("ffmpeg"),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-sn",
+        "-dn",
+        "-vf",
+        ",".join(filters),
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-b:v",
+        str(video_bitrate),
+        "-maxrate",
+        str(min(int(video_bitrate * 1.2), int(limits.get("max_bitrate") or 25_000_000))),
+        "-bufsize",
+        str(video_bitrate * 2),
+        "-c:a",
+        "aac",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
+        str(temp),
+    ]
+    timeout = min(3600, max(300, int(duration * 4)))
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        if completed.returncode != 0 or not temp.is_file() or temp.stat().st_size <= 0:
+            raise BundleSocialError(
+                "视频无法自动处理成平台支持的格式，已在调用平台 API 前阻止提交。",
+                provider_error_detail=_compact_process_error(completed, "ffmpeg failed"),
+            )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(temp, dest)
+    except BundleSocialError:
+        raise
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise BundleSocialError("视频自动处理超时或失败，已在调用平台 API 前阻止提交。") from exc
+    finally:
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _prepare_publish_video(platform: str, source: Path) -> tuple[Path, bool]:
+    limits = _video_limits_for(platform)
+    if not limits:
+        raise BundleSocialError(f"平台暂不支持视频发布：{platform_label(platform)}")
+    metadata = _probe_publish_video(source)
+    _validate_publish_video_metadata(platform, metadata, limits)
+    if _publish_video_is_compliant(source, metadata, limits):
+        return source, False
+    dest = _prepared_video_path(source, platform)
+    if dest.is_file():
+        try:
+            cached = _probe_publish_video(dest)
+            _validate_publish_video_metadata(platform, cached, limits)
+            if _publish_video_is_compliant(dest, cached, limits):
+                return dest, True
+        except BundleSocialError:
+            pass
+    _transcode_publish_video(source, dest, metadata, limits)
+    prepared = _probe_publish_video(dest)
+    _validate_publish_video_metadata(platform, prepared, limits)
+    if not _publish_video_is_compliant(dest, prepared, limits):
+        raise BundleSocialError("视频无法自动处理成平台支持的格式，已在调用平台 API 前阻止提交。")
+    return dest, True
+
+
+def preflight_publish_media_paths(platform: str, media_paths: list[str] | None) -> None:
+    """Reject unreadable or semantically invalid media before task billing is reserved."""
+    raw_paths = [str(raw or "").strip() for raw in (media_paths or []) if str(raw or "").strip()]
+    if len(raw_paths) > _MEDIA_MAX_FILES:
+        raise BundleSocialError(
+            f"单次最多发布 {_MEDIA_MAX_FILES} 个媒体文件，已在调用平台 API 前阻止提交。"
+        )
+    for raw in raw_paths:
+        source = Path(raw).expanduser()
+        if not source.is_file():
+            raise BundleSocialError(f"媒体文件不存在：{source.name}")
+        if _is_video_path(source):
+            limits = _video_limits_for(platform)
+            if not limits:
+                raise BundleSocialError(f"平台暂不支持视频发布：{platform_label(platform)}")
+            metadata = _probe_publish_video(source)
+            _validate_publish_video_metadata(platform, metadata, limits)
+            continue
+        try:
+            with Image.open(source) as image:
+                image.seek(0)
+                image.load()
+        except (OSError, ValueError) as exc:
+            raise BundleSocialError(
+                f"图片无法读取或格式不受支持：{source.name}，已在调用平台 API 前阻止提交。"
+            ) from exc
+
+
+def _run_publish_submit(
+    context_control: Any | None,
+    cancel_event: Any | None,
+    action: Any,
+) -> Any:
+    if cancel_event is not None and callable(getattr(cancel_event, "is_set", None)) and cancel_event.is_set():
+        raise BundleSocialError("任务已取消")
+    callback = context_control.get("publish_submit_callback") if isinstance(context_control, dict) else None
+    if callable(callback):
+        return callback(action)
+    return action()
 
 
 def _image_on_white(image: Image.Image) -> Image.Image:
@@ -385,16 +708,32 @@ def prepare_publish_media_paths(
 ) -> list[str]:
     limits = _image_limits_for(platform)
     prepared: list[str] = []
-    changed = 0
-    for raw in media_paths or []:
+    image_changed = 0
+    video_changed = 0
+    raw_paths = [str(raw or "").strip() for raw in (media_paths or []) if str(raw or "").strip()]
+    if len(raw_paths) > _MEDIA_MAX_FILES:
+        raise BundleSocialError(
+            f"单次最多发布 {_MEDIA_MAX_FILES} 个媒体文件，已在调用平台 API 前阻止提交。"
+        )
+    for raw in raw_paths:
         source = Path(str(raw or "")).expanduser()
         if not str(source):
             continue
-        if _is_video_path(source):
-            prepared.append(str(source))
-            continue
         if not source.is_file():
             raise BundleSocialError(f"媒体文件不存在：{source.name}")
+        if _is_video_path(source):
+            video_path, was_changed = _prepare_publish_video(platform, source)
+            prepared.append(str(video_path))
+            if was_changed:
+                video_changed += 1
+                if logger is not None:
+                    logger.log(
+                        "info",
+                        "bundle_publish_video_prepared",
+                        "已把视频处理成平台支持的 MP4 规格，再提交发布。",
+                        {"source": source.name, "prepared": video_path.name},
+                    )
+            continue
         if not limits:
             prepared.append(str(source))
             continue
@@ -421,7 +760,7 @@ def prepare_publish_media_paths(
         if int(limits.get("max_bytes") or 0) and dest.stat().st_size > int(limits["max_bytes"]):
             raise BundleSocialError("图片文件过大（需不超过 8MB），已阻止提交以免浪费额度。")
         prepared.append(str(dest))
-        changed += 1
+        image_changed += 1
         if logger is not None:
             logger.log(
                 "info",
@@ -429,12 +768,22 @@ def prepare_publish_media_paths(
                 "已把图片处理成平台要求的尺寸，再提交发布。",
                 {"source": source.name, "prepared": dest.name},
             )
-    if changed and logger is not None:
+    total_bytes = sum(Path(path).stat().st_size for path in prepared)
+    if total_bytes > _MEDIA_MAX_TOTAL_BYTES:
+        raise BundleSocialError("单次发布的媒体总大小不能超过 100MB，已在调用平台 API 前阻止提交。")
+    if image_changed and logger is not None:
         logger.log(
             "info",
             "bundle_publish_media_prepared",
-            f"已处理 {changed} 张图片为平台规范尺寸，未提交原图。",
-            {"changed": changed},
+            f"已处理 {image_changed} 张图片为平台规范尺寸，未提交原图。",
+            {"changed": image_changed},
+        )
+    if video_changed and logger is not None:
+        logger.log(
+            "info",
+            "bundle_publish_video_prepared",
+            f"已处理 {video_changed} 个视频为平台规范 MP4，未提交原视频。",
+            {"changed": video_changed},
         )
     return prepared
 
@@ -1135,7 +1484,11 @@ def run_bundle_social_task(
         try:
             resource_id = ""
             if media_paths:
-                _set_bundle_assistance(context_control, "正在处理图片", "正在把图片处理成平台要求的尺寸，避免超限提交。")
+                _set_bundle_assistance(
+                    context_control,
+                    "正在处理媒体",
+                    "正在校验并自动处理图片或视频，只有符合平台规范后才会提交。",
+                )
                 media_paths = prepare_publish_media_paths(platform, media_paths, logger=logger)
             for path in media_paths:
                 if cancel_event is not None and callable(getattr(cancel_event, "is_set", None)) and cancel_event.is_set():
@@ -1143,13 +1496,17 @@ def run_bundle_social_task(
                 upload_ids.append(client.upload_file(team_id=team_id, path=path))
             logger.log("info", "bundle_publish_submit", "正在通过平台授权接口提交发布内容。", {"upload_count": len(upload_ids)})
             _set_bundle_assistance(context_control, "正在发布", "正在通过平台授权接口提交内容。")
-            created = client.create_post(
-                team_id=team_id,
-                platform=platform,
-                text=text,
-                upload_ids=upload_ids,
-                reference_key=task_id,
-                media_paths=media_paths,
+            created = _run_publish_submit(
+                context_control,
+                cancel_event,
+                lambda: client.create_post(
+                    team_id=team_id,
+                    platform=platform,
+                    text=text,
+                    upload_ids=upload_ids,
+                    reference_key=task_id,
+                    media_paths=media_paths,
+                ),
             )
             resource_id = _resource_id(created)
             if not resource_id:

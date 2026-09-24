@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import threading
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -374,6 +376,38 @@ def test_bundle_publish_success_proof_is_posted_status_and_permalink(monkeypatch
     assert social_automation_api._confirmed_published_url(result, "threads") == "https://www.threads.net/@hiro504522/post/abc"
 
 
+def test_bundle_publish_uses_server_publish_submit_guard(monkeypatch):
+    from webapp.bundle_social import run_bundle_social_task
+
+    events = []
+
+    class _Client:
+        def create_post(self, **_kwargs):
+            events.append("submit")
+            return {"id": "post-guarded", "status": "SCHEDULED"}
+
+        def wait_for_result(self, **_kwargs):
+            return {
+                "id": "post-guarded",
+                "status": "POSTED",
+                "externalData": {"THREADS": {"permalink": "https://www.threads.net/@safe/post/guarded"}},
+            }
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: _Client())
+    context_control = {
+        "publish_submit_callback": lambda action: (events.append("guard"), action())[1],
+    }
+    result = run_bundle_social_task(
+        task={"id": "task-guarded", "task_type": "publish_post", "platform": "threads", "payload": {"content": "hello"}},
+        account={"external_team_id": "team-1", "external_account_id": "social-1", "platform": "threads"},
+        logger=_Logger(),
+        context_control=context_control,
+    )
+
+    assert result["ok"] is True
+    assert events == ["guard", "submit"]
+
+
 def test_bundle_publish_submit_error_is_logged_with_safe_provider_diagnostic(monkeypatch):
     from webapp.bundle_social import run_bundle_social_task
 
@@ -583,6 +617,7 @@ def test_instagram_bundle_publish_success_proof_is_posted_status_and_permalink(m
             }
 
     monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: _Client())
+    monkeypatch.setattr("webapp.bundle_social.prepare_publish_media_paths", lambda *_args, **_kwargs: ["clip.mp4"])
     result = run_bundle_social_task(
         task={
             "id": "task-ig",
@@ -682,6 +717,7 @@ def test_bundle_runner_dispatch_does_not_open_browser(monkeypatch, tmp_path):
     )
     assert result == {"ok": True, "provider": "bundle"}
     assert called["task"]["payload"]["content"] == "hello"
+    assert called["context_control"] is None
     assert any(event[1] == "bundle_dispatch" for event in logger.events)
 
 
@@ -699,6 +735,7 @@ def test_instagram_bundle_runner_dispatch_does_not_open_browser(monkeypatch, tmp
         lambda **_: pytest.fail("Bundle account must not start Camoufox"),
     )
     logger = _Logger()
+    context_control = {"publish_submit_callback": lambda action: action()}
     result = runner.run_social_task(
         task={
             "id": "task-ig",
@@ -717,11 +754,13 @@ def test_instagram_bundle_runner_dispatch_does_not_open_browser(monkeypatch, tmp
         data_dir=tmp_path,
         logger=logger,
         cancel_event=threading.Event(),
+        context_control=context_control,
     )
     assert result == {"ok": True, "provider": "bundle"}
     assert called["task"]["platform"] == "instagram"
     assert called["task"]["payload"]["media_paths"] == ["clip.mp4"]
     assert called["account"]["external_account_id"] == "social-ig"
+    assert called["context_control"] is context_control
     assert any(event[1] == "bundle_dispatch" for event in logger.events)
 
 
@@ -889,6 +928,150 @@ def test_threads_bundle_publish_preflights_every_image_before_any_upload(monkeyp
             logger=_Logger(),
         )
     assert uploads == []
+
+
+def test_threads_bundle_publish_rejects_fake_video_before_any_upload(monkeypatch, tmp_path):
+    from webapp.bundle_social import run_bundle_social_task
+
+    invalid = tmp_path / "broken.mp4"
+    invalid.write_bytes(b"not-a-real-video")
+    uploads = []
+
+    class _Client:
+        def upload_file(self, **kwargs):
+            uploads.append(kwargs["path"])
+            return "upload-1"
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: _Client())
+    with pytest.raises(BundleSocialError, match="视频无法读取或处理"):
+        run_bundle_social_task(
+            task={
+                "id": "task-invalid-video",
+                "task_type": "publish_post",
+                "platform": "threads",
+                "payload": {"content": "hello", "media_paths": [str(invalid)]},
+            },
+            account={"external_team_id": "team-1", "external_account_id": "social-1", "platform": "threads"},
+            logger=_Logger(),
+        )
+    assert uploads == []
+
+
+def test_publish_rejects_hard_video_limit_before_transcode_or_upload(monkeypatch, tmp_path):
+    from webapp.bundle_social import run_bundle_social_task
+
+    source = tmp_path / "overlong.mov"
+    source.write_bytes(b"video-placeholder")
+    uploads = []
+    monkeypatch.setattr(
+        "webapp.bundle_social._probe_publish_video",
+        lambda _path: {
+            "duration": 301.0,
+            "width": 1920,
+            "height": 1080,
+            "fps": 30.0,
+            "video_codec": "h264",
+            "audio_codec": "aac",
+            "has_audio": True,
+            "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+            "bitrate": 4_000_000,
+            "size": source.stat().st_size,
+        },
+    )
+    monkeypatch.setattr(
+        "webapp.bundle_social._transcode_publish_video",
+        lambda *_args, **_kwargs: pytest.fail("hard-limit media must not be transcoded"),
+    )
+
+    class _Client:
+        def upload_file(self, **kwargs):
+            uploads.append(kwargs["path"])
+            return "upload-1"
+
+    monkeypatch.setattr("webapp.bundle_social.BundleSocialClient", lambda: _Client())
+    with pytest.raises(BundleSocialError, match="不能超过 300 秒"):
+        run_bundle_social_task(
+            task={
+                "id": "task-overlong-video",
+                "task_type": "publish_post",
+                "platform": "threads",
+                "payload": {"content": "hello", "media_paths": [str(source)]},
+            },
+            account={"external_team_id": "team-1", "external_account_id": "social-1", "platform": "threads"},
+            logger=_Logger(),
+        )
+    assert uploads == []
+
+
+def test_publish_media_preflight_rejects_broken_image_before_task_reservation(tmp_path):
+    from webapp.bundle_social import preflight_publish_media_paths
+
+    invalid = tmp_path / "broken.jpg"
+    invalid.write_bytes(b"not-a-real-image")
+
+    with pytest.raises(BundleSocialError, match="图片无法读取"):
+        preflight_publish_media_paths("threads", [str(invalid)])
+
+
+@pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="ffmpeg/ffprobe unavailable",
+)
+def test_prepare_publish_media_normalizes_video_to_platform_safe_mp4(tmp_path):
+    from webapp.bundle_social import prepare_publish_media_paths
+
+    source = tmp_path / "source.avi"
+    subprocess.run(
+        [
+            str(shutil.which("ffmpeg")),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x180:rate=75:duration=3",
+            "-c:v",
+            "mpeg4",
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    prepared = prepare_publish_media_paths("instagram", [str(source)], logger=_Logger())
+
+    assert len(prepared) == 1
+    output = Path(prepared[0])
+    assert output != source
+    assert output.suffix.lower() == ".mp4"
+    assert 0 < output.stat().st_size <= 50 * 1024 * 1024
+    probed = subprocess.run(
+        [
+            str(shutil.which("ffprobe")),
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,codec_name,width,height,avg_frame_rate:format=duration,format_name",
+            "-of",
+            "json",
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    metadata = json.loads(probed.stdout)
+    video = next(item for item in metadata["streams"] if item["codec_type"] == "video")
+    fps_num, fps_den = (int(part) for part in str(video["avg_frame_rate"]).split("/", 1))
+    assert video["codec_name"] == "h264"
+    assert int(video["width"]) <= 1920
+    assert fps_num / fps_den <= 60
+    assert float(metadata["format"]["duration"]) >= 3
 
 
 def test_threads_bundle_publish_rejects_overlong_caption(monkeypatch):

@@ -1214,6 +1214,7 @@ def run_social_task(
             account=account,
             logger=logger,
             cancel_event=cancel_event,
+            context_control=context_control,
         )
     data_root = Path(data_dir).resolve()
     screenshot_dir = data_root / "social_automation" / "screenshots"

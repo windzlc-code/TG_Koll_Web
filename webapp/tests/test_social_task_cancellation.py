@@ -414,8 +414,42 @@ class SocialTaskCancellationTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(created["status"], "queued")
-        self.assertEqual(created["task_type"], "publish_post")
+            self.assertEqual(created["status"], "queued")
+            self.assertEqual(created["task_type"], "publish_post")
+
+    def test_bundle_video_preflight_rejects_invalid_file_before_billing_reservation(self):
+        self._insert_account()
+        invalid = Path(self._tmpdir.name) / "broken.mp4"
+        invalid.write_bytes(b"not-a-real-video")
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE social_accounts
+                SET persona_id = '', auth_provider = 'bundle',
+                    external_team_id = 'team-1', external_account_id = 'external-1'
+                WHERE id = 'account-1'
+                """
+            )
+
+        with mock.patch.object(
+            social_automation_api.commercial_billing,
+            "reserve_charge",
+        ) as reserve_charge:
+            with self.assertRaises(social_automation_api.HTTPException) as raised:
+                social_automation_api.create_social_task(
+                    social_automation_api.SocialTaskPayload(
+                        persona_id="",
+                        account_id="account-1",
+                        platform="threads",
+                        task_type="publish_post",
+                        scheduled_at=10_000_000_000,
+                        payload={"content": "video", "media_paths": [str(invalid)]},
+                    )
+                )
+
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertIn("视频无法读取或处理", str(raised.exception.detail))
+        reserve_charge.assert_not_called()
 
     def test_banned_account_can_create_open_login_task(self):
         self._insert_account(status="disabled")
