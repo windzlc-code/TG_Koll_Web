@@ -9480,7 +9480,8 @@ body.persona-touch-dragging .persona-list-card:active {
 .publish-history-requeue-button .ui-requeue-icon,
 .publish-history-requeue-button .ui-recycle-icon,
 .persona-history-delete-selected .ui-trash-icon,
-.console-modal-actions .ui-requeue-icon {
+.console-modal-actions .ui-requeue-icon,
+.console-modal-actions .ui-recycle-icon {
   width: 17px;
   height: 17px;
   fill: none;
@@ -9643,9 +9644,14 @@ body.persona-touch-dragging .persona-list-card:active {
   opacity: .82;
 }
 
-.console-modal-actions button .ui-requeue-icon {
+.console-modal-actions button :is(.ui-requeue-icon, .ui-recycle-icon) {
   margin-right: 6px;
   vertical-align: -3px;
+}
+
+.console-modal[data-modal-key="publish-history-detail"] .console-modal-actions button {
+  min-width: 0;
+  white-space: nowrap;
 }
 
 @media (max-width: 1500px) {
@@ -23900,6 +23906,10 @@ body.live-browser-modal-open {
   .console-modal-actions button {
     min-height: 36px;
     padding: 5px 9px;
+  }
+
+  .console-modal[data-modal-key="publish-history-detail"] .console-modal-actions > [data-console-modal-cancel] {
+    grid-column: 1 / -1;
   }
 
   .persona-media-lightbox {

@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+import requests
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from starlette.requests import Request
@@ -178,6 +179,28 @@ def test_provider_error_keeps_redacted_diagnostic_without_changing_user_message(
     assert error.provider_http_status == 400
     assert error.provider_error_code == "POST_DENIED"
     assert error.provider_error_detail == "POST_DENIED token=***"
+
+
+def test_transport_error_keeps_safe_request_diagnostic_without_changing_user_message():
+    class _TimeoutSession:
+        def request(self, *_args, **_kwargs):
+            raise requests.ConnectTimeout("test-key must not leak")
+
+    client = BundleSocialClient(
+        api_key="test-key",
+        api_base="https://api.example/api/v1",
+        session=_TimeoutSession(),
+    )
+
+    with pytest.raises(BundleSocialError) as exc_info:
+        client.list_teams(limit=1)
+
+    error = exc_info.value
+    assert str(error) == "平台授权服务请求失败，请稍后重试"
+    assert error.provider_http_status == 0
+    assert error.provider_error_code == "ConnectTimeout"
+    assert error.provider_error_detail == "GET /team/ (ConnectTimeout)"
+    assert "test-key" not in error.provider_error_detail
 
 
 def test_already_connected_team_is_disconnected_then_reconnected():
@@ -741,7 +764,7 @@ def test_prepare_publish_media_fits_threads_wide_aspect(tmp_path):
         width, height = image.size
     assert width <= 1440
     assert width >= 320
-    assert width / height <= 10 + 1e-6
+    assert width / height <= 1.91 + 1e-6
 
 
 def test_prepare_publish_media_fits_instagram_tall_aspect(tmp_path):

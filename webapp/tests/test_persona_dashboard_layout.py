@@ -2716,11 +2716,11 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn('data-publish-history-requeue="${esc(recordId)}"', self.console_script)
         self.assertIn("function openPublishHistoryRecordModal", self.console_script)
         self.assertNotIn('extraActions: record.__dashboard_metric_only', self.console_script)
-        self.assertIn('extraActions: [{ value: "requeue"', self.console_script)
+        self.assertIn('{ value: "recycle", text: "加入全局数据集", iconHtml: renderRecycleIcon() }', self.console_script)
         self.assertIn('{ value: "requeue", text: "重回草稿", iconHtml: renderRequeueIcon() }', self.console_script)
         self.assertIn("renderSourceLinkIcon()", self.console_script)
         self.assertIn(".publish-history-card-requeue", self.styles)
-        self.assertIn('title="重回草稿" aria-label="重回草稿">${renderRequeueIcon()}<span>重回草稿</span></button>', self.console_script)
+        self.assertIn('data-publish-history-requeue="${esc(recordId)}">${renderRequeueIcon()}<span>重回草稿</span></button>', self.console_script)
         self.assertIn(".publish-history-card .publish-post-card-copy {\n    display: contents;", self.styles)
         self.assertIn(".publish-history-card-requeue span {\n  display: inline-block;", self.styles)
         self.assertIn(".publish-history-card-main {\n    align-items: center;\n    padding: 5px 7px;", self.styles)
@@ -2732,6 +2732,18 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn(".publish-history-card-actions {", self.styles)
         self.assertIn(".publish-history-card .publish-post-card-snippet", self.styles)
         self.assertIn("-webkit-line-clamp: 2;", self.styles)
+        self.assertIn(
+            ".console-modal-actions .ui-recycle-icon",
+            self.styles,
+        )
+        self.assertIn(
+            '.console-modal[data-modal-key="publish-history-detail"] .console-modal-actions',
+            self.styles,
+        )
+        self.assertIn(
+            '.console-modal[data-modal-key="publish-history-detail"] .console-modal-actions > [data-console-modal-cancel]',
+            self.styles,
+        )
 
     def test_refresh_actions_have_distinct_labels_and_behaviors(self):
         self.assertIn('class="persona-dashboard-toolbar-refresh"', self.markup)

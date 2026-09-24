@@ -40,7 +40,7 @@ _IMAGE_LIMITS = {
         "max_width": 1440,
         "max_bytes": 8 * 1024 * 1024,
         "min_aspect": 0.01,
-        "max_aspect": 10.0,
+        "max_aspect": 1.91,
     },
     "instagram": {
         "min_width": 0,
@@ -602,7 +602,14 @@ class BundleSocialClient:
                 timeout=self.timeout_seconds,
             )
         except requests.RequestException as exc:
-            raise BundleSocialError("平台授权服务请求失败，请稍后重试") from exc
+            safe_method = str(method or "REQUEST").strip().upper() or "REQUEST"
+            safe_path = f"/{str(path or '').lstrip('/').split('?', 1)[0]}"
+            transport_code = type(exc).__name__[:120]
+            raise BundleSocialError(
+                "平台授权服务请求失败，请稍后重试",
+                provider_error_code=transport_code,
+                provider_error_detail=f"{safe_method} {safe_path} ({transport_code})",
+            ) from exc
         try:
             payload = response.json()
         except ValueError:
