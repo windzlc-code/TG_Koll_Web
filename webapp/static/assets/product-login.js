@@ -9,7 +9,22 @@
   const mfaField = document.getElementById("loginMfaField");
   const mfaInput = document.getElementById("loginMfaCode");
   const fallbackRedirect = String(document.body.dataset.loginRedirect || "/console.html");
-  const TELEGRAM_LOGIN_CONTEXT_KEY = "vecto-telegram-tweet-login-context";
+  const TELEGRAM_LOGIN_CONTEXTS = {
+    tweet: {
+      flag: "telegram_tweet",
+      returnPath: "/telegram/tweet/open",
+      storageKey: "vecto-telegram-tweet-login-context",
+      ticketField: "telegram_tweet_ticket",
+      initField: "telegram_init_data",
+    },
+    video: {
+      flag: "telegram_video",
+      returnPath: "/telegram/video/open",
+      storageKey: "vecto-telegram-video-login-context",
+      ticketField: "telegram_video_ticket",
+      initField: "telegram_video_init_data",
+    },
+  };
 
   function loginDeviceId() {
     try {
@@ -66,17 +81,18 @@
 
   function telegramLoginContext() {
     const params = new URLSearchParams(window.location.search);
-    if (params.get("telegram_tweet") !== "1") return null;
+    const contextSpec = Object.values(TELEGRAM_LOGIN_CONTEXTS).find((candidate) => params.get(candidate.flag) === "1");
+    if (!contextSpec) return null;
     try {
       const target = new URL(requestedReturnUrl(), window.location.origin);
-      if (target.pathname !== "/telegram/tweet/open") return null;
+      if (target.pathname !== contextSpec.returnPath) return null;
       const ticket = String(target.searchParams.get("ticket") || "").trim();
       if (!ticket) return null;
-      const raw = sessionStorage.getItem(TELEGRAM_LOGIN_CONTEXT_KEY);
+      const raw = sessionStorage.getItem(contextSpec.storageKey);
       const context = raw ? JSON.parse(raw) : null;
       if (!context || context.ticket !== ticket || !context.initData) return null;
       if (Number(context.expiresAt || 0) <= Date.now()) return null;
-      return { ticket, initData: String(context.initData) };
+      return { ...contextSpec, ticket, initData: String(context.initData) };
     } catch {
       return null;
     }
@@ -158,8 +174,8 @@
           device_id: loginDeviceId(),
           ...(telegramContext
             ? {
-                telegram_tweet_ticket: telegramContext.ticket,
-                telegram_init_data: telegramContext.initData,
+                [telegramContext.ticketField]: telegramContext.ticket,
+                [telegramContext.initField]: telegramContext.initData,
               }
             : {}),
         }),

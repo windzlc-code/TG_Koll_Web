@@ -192,8 +192,8 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertTrue(any("可用工作流" in text for text in response_texts))
         self.assertFalse(any("后台白名单不会直接解锁" in text for text in response_texts))
 
-    def test_video_account_status_and_login_prompt_are_two_level_flow(self):
-        """Account status opens first, then the same private-chat login flow as Tweet Bot."""
+    def test_video_account_status_and_web_login_prompt_are_two_level_flow(self):
+        """Account status opens first, then the normal VECTO WebApp login flow."""
         from types import SimpleNamespace
 
         dispatcher = tg_bot.build_dispatcher(
@@ -208,6 +208,7 @@ class TelegramClosedLoopTests(unittest.TestCase):
             has_active_web_session=lambda _member: True,
             chat_login=lambda *_args, **_kwargs: {"ok": True},
             logout_member=lambda _chat_id: {"ok": True, "bound": True},
+            web_login_url=lambda _chat_id: "https://example.test/telegram/video/open?ticket=test",
         )
         state = _VideoState()
 
@@ -229,23 +230,14 @@ class TelegramClosedLoopTests(unittest.TestCase):
         login_callback = _video_route_callback(dispatcher, "video_account_login_start")
         login_message = _VideoReplyMessage()
         asyncio.run(login_callback(login_message, state))
-        self.assertIn("VECTO 用户名或邮箱", login_message.answers[-1][0])
-        self.assertIn("密码", login_message.answers[-1][0])
-        self.assertIn("私聊", login_message.answers[-1][0])
+        self.assertIn("网页授权登录", login_message.answers[-1][0])
+        self.assertIn("Google", login_message.answers[-1][0])
+        self.assertNotIn("发送 VECTO 登录密码", login_message.answers[-1][0])
         login_markup = login_message.answers[-1][1]["reply_markup"]
-        login_labels = {
-            str(getattr(button, "text", ""))
-            for row in login_markup.inline_keyboard
-            for button in row
-        }
-        self.assertIn(tg_bot.VIDEO_LOGIN_CANCEL_BUTTON, login_labels)
-        self.assertIn(tg_bot.VIDEO_ACCOUNT_BACK_BUTTON, login_labels)
-        callbacks = {
-            str(getattr(button, "callback_data", ""))
-            for row in login_markup.inline_keyboard
-            for button in row
-        }
-        self.assertEqual(callbacks, {"tv:login_cancel", "tv:accountmenu"})
+        login_button = login_markup.inline_keyboard[0][0]
+        self.assertEqual(str(getattr(login_button, "text", "")), "🌐 网页授权登录/切换 VECTO 账号")
+        self.assertEqual(getattr(getattr(login_button, "web_app", None), "url", ""), "https://example.test/telegram/video/open?ticket=test")
+        self.assertEqual(getattr(login_markup.inline_keyboard[1][0], "callback_data", ""), "tv:accountmenu")
 
     def test_video_login_cancel_button_clears_pending_flow(self):
         dispatcher = tg_bot.build_dispatcher(
@@ -267,7 +259,7 @@ class TelegramClosedLoopTests(unittest.TestCase):
             for row in markup.inline_keyboard
             for button in row
         }
-        self.assertIn("🔁 登录/切换 VECTO 账号", labels)
+        self.assertIn("🌐 网页授权登录/切换 VECTO 账号", labels)
         self.assertIn("返回账号管理", labels)
 
     def test_video_account_subpages_use_callback_edit_flow(self):
@@ -282,6 +274,7 @@ class TelegramClosedLoopTests(unittest.TestCase):
             },
             has_active_web_session=lambda _member: True,
             chat_login=lambda *_args, **_kwargs: {"ok": True},
+            web_login_url=lambda _chat_id: "https://example.test/telegram/video/open?ticket=test",
         )
         callback = _video_callback_route(dispatcher, "video_account_callback")
         state = _VideoState()
@@ -295,19 +288,20 @@ class TelegramClosedLoopTests(unittest.TestCase):
             for row in session_markup.inline_keyboard
             for button in row
         }
-        self.assertEqual(callbacks, {"tv:chatlogin", "tv:aclogout", "tv:accountmenu"})
+        self.assertEqual({value for value in callbacks if value != "None"}, {"tv:aclogout", "tv:accountmenu"})
+        session_login_button = next(
+            button
+            for row in session_markup.inline_keyboard
+            for button in row
+            if getattr(button, "web_app", None) is not None
+        )
+        self.assertEqual(getattr(session_login_button.web_app, "url", ""), "https://example.test/telegram/video/open?ticket=test")
 
         asyncio.run(callback(_VideoCallbackQuery(message, "tv:chatlogin"), state))
-        self.assertIn("聊天内登录绑定", message.edits[-1][0])
+        self.assertIn("网页授权登录", message.edits[-1][0])
+        self.assertNotIn("发送 VECTO 登录密码", message.edits[-1][0])
         login_markup = message.edits[-1][1]["reply_markup"]
-        self.assertEqual(
-            {
-                str(getattr(button, "callback_data", ""))
-                for row in login_markup.inline_keyboard
-                for button in row
-            },
-            {"tv:login_cancel", "tv:accountmenu"},
-        )
+        self.assertEqual(getattr(login_markup.inline_keyboard[0][0].web_app, "url", ""), "https://example.test/telegram/video/open?ticket=test")
 
         asyncio.run(callback(_VideoCallbackQuery(message, "tv:login_cancel"), state))
         self.assertIn("已取消视频工作台登录", message.edits[-1][0])
@@ -318,6 +312,8 @@ class TelegramClosedLoopTests(unittest.TestCase):
         source = Path(tg_bot.__file__).read_text(encoding="utf-8")
         self.assertNotIn("步骤导航", source)
         self.assertNotIn("tv:step_", source)
+        self.assertNotIn("set_state(VideoAccountLoginForm.waiting_for_username)", source)
+        self.assertNotIn("聊天内登录绑定", source)
 
     def test_account_and_main_menu_return_are_available_before_login(self):
         dispatcher = tg_bot.build_dispatcher(

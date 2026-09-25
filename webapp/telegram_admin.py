@@ -15,15 +15,23 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from .auth import (
+    ADMIN_SESSION_COOKIE,
+    SESSION_COOKIE,
+    get_current_user_for_session,
+    session_storage_token,
+)
 from .db import db, get_db_path
 
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_ROOT = "https://api.telegram.org"
 DEFAULT_VIDEO_ENTRY = "/video.html"
+DEFAULT_PUBLIC_BASE_URL = "https://www.vecto-ai.cn"
 _BOT_LOCK = threading.RLock()
 _BOT_STOP = threading.Event()
 _BOT_THREAD: threading.Thread | None = None
@@ -59,6 +67,11 @@ class TgTrustedUserPayload(BaseModel):
 
 class TgTrustedUserTogglePayload(BaseModel):
     enabled: bool = True
+
+
+class VideoTgExchangePayload(BaseModel):
+    ticket: str = Field(default="", max_length=256)
+    init_data: str = Field(default="", max_length=8192)
 
 
 def ensure_telegram_schema(conn) -> None:
@@ -499,6 +512,25 @@ def _authorized_chat_ids(runtime: dict[str, Any]) -> set[int]:
     return allowed
 
 
+def is_video_chat_authorized(chat_id: int, runtime: dict[str, Any] | None = None) -> bool:
+    """Read the live video-Bot allow-list without relying on worker cache."""
+    member_id = int(chat_id or 0)
+    if member_id <= 0:
+        return False
+    with db() as conn:
+        ensure_telegram_schema(conn)
+        row = conn.execute(
+            "SELECT enabled FROM telegram_trusted_users WHERE chat_id = ?",
+            (member_id,),
+        ).fetchone()
+    # An explicit admin row wins, including a disabled row.  The legacy
+    # comma-separated setting remains supported for existing deployments.
+    if row is not None:
+        return bool(int(row["enabled"] or 0))
+    config = runtime if isinstance(runtime, dict) else {}
+    return member_id in set(_parse_chat_ids(str(config.get("telegram_allowed_chat_ids") or "")))
+
+
 VIDEO_LINK_TTL_SECONDS = 180
 
 
@@ -656,6 +688,75 @@ def validate_video_webapp_login_context(
     return expected_chat_id
 
 
+def _video_public_base_url(runtime: dict[str, Any] | None) -> str:
+    config = runtime if isinstance(runtime, dict) else {}
+    raw = str(
+        os.getenv("PUBLIC_BASE_URL")
+        or os.getenv("VECTO_PUBLIC_BASE_URL")
+        or config.get("telegram_video_public_base_url")
+        or DEFAULT_PUBLIC_BASE_URL
+    ).strip().rstrip("/")
+    parsed = urllib.parse.urlsplit(raw)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
+        raise RuntimeError("Telegram 视频网页登录地址必须使用 https:// 公网地址")
+    return raw
+
+
+def create_video_webapp_url(chat_id: int, get_runtime: GetRuntime) -> str:
+    """Create a short-lived Telegram WebApp URL for the video account flow.
+
+    The URL contains only a hashed-at-rest, one-time ticket.  Telegram's
+    signed ``initData`` is collected by the WebApp itself and never travels
+    through the Bot chat or a query string.
+    """
+    runtime = get_runtime() or {}
+    if not is_video_chat_authorized(int(chat_id), runtime):
+        raise RuntimeError("Telegram Chat ID 尚未加入视频工作台授权列表")
+    # Resolve the public origin before creating the one-time ticket, so a bad
+    # deployment URL cannot leave an apparently valid ticket behind.
+    base = _video_public_base_url(runtime)
+    token = create_video_link_ticket(int(chat_id))
+    return f"{base}/telegram/video/open?{urllib.parse.urlencode({'ticket': token})}"
+
+
+def _authenticated_video_web_session(request: Request) -> tuple[dict[str, Any], str]:
+    """Resolve the existing normal/admin browser session for video binding."""
+    candidates = (
+        (SESSION_COOKIE, False),
+        (ADMIN_SESSION_COOKIE, True),
+    )
+    for cookie_name, expected_admin in candidates:
+        raw_token = str(request.cookies.get(cookie_name) or "").strip()
+        if not raw_token:
+            continue
+        try:
+            user = get_current_user_for_session(
+                raw_token,
+                expected_admin_session=expected_admin,
+                request=request,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 428:
+                raise
+            continue
+        unavailable = (
+            int(user.get("is_disabled") or 0) == 1
+            or int(user.get("deleted_at") or 0) > 0
+            or str(user.get("lifecycle_status") or "active") != "active"
+            or (
+                int(user.get("is_admin") or 0) != 1
+                and str(user.get("approval_status") or "") != "approved"
+            )
+        )
+        if unavailable:
+            raise HTTPException(status_code=403, detail="当前 VECTO 账号不可用于 Telegram 视频工作台")
+        return user, session_storage_token(raw_token)
+    raise HTTPException(
+        status_code=401,
+        detail={"code": "web_login_required", "message": "请先在此网页完成 VECTO 登录，再返回 Telegram。"},
+    )
+
+
 def invalidate_video_link_ticket(token: str) -> None:
     digest = _video_ticket_digest(token)
     if not digest:
@@ -673,6 +774,7 @@ def consume_video_link_ticket(
     tg_profile: dict[str, Any],
     web_user: dict[str, Any],
     session_hash: str,
+    runtime: dict[str, Any] | None = None,
 ) -> None:
     clean = str(token or "").strip()
     digest = _video_ticket_digest(clean)
@@ -706,6 +808,18 @@ def consume_video_link_ticket(
                 status_code=403,
                 detail={"code": "telegram_binding_disabled", "message": "该 Telegram 绑定已被管理员停用，请联系管理员处理。"},
             )
+        if existing is None:
+            legacy_allowed = chat_id in set(
+                _parse_chat_ids(str((runtime or {}).get("telegram_allowed_chat_ids") or ""))
+            )
+            if not legacy_allowed:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "telegram_binding_not_authorized",
+                        "message": "该 Telegram Chat ID 尚未加入视频工作台授权列表，请联系管理员处理。",
+                    },
+                )
         old_user_id = int(existing["web_user_id"] or 0) if existing else 0
         if existing and old_user_id and old_user_id != web_user_id:
             linked_hash = str(existing["linked_session_token_hash"] or "").strip()
@@ -967,8 +1081,9 @@ async def _run_original_bot(get_runtime: GetRuntime) -> None:
                 service,
                 load_member=load_video_member,
                 has_active_web_session=video_member_has_active_web_session,
-                chat_login=_video_chat_login_proxy,
                 logout_member=logout_video_member,
+                web_login_url=lambda chat_id: create_video_webapp_url(int(chat_id), get_runtime),
+                chat_authorized=lambda chat_id: is_video_chat_authorized(int(chat_id), get_runtime()),
             )
             await bot.start()
             current = bot
@@ -1077,6 +1192,93 @@ def inject_telegram_admin(
     def api_admin_delete_tg_trusted_user(chat_id: int, _user: dict[str, Any] = Depends(require_admin)):
         delete_trusted_user(chat_id)
         return {"ok": True, "tg_settings": load_tg_settings(get_runtime)}
+
+    @router.get("/telegram/video/open")
+    def open_video_workbench(ticket: str = ""):
+        """Bridge Telegram's WebApp identity into the normal video login page."""
+        _video_ticket_chat_id(ticket)
+        encoded_ticket = json.dumps(str(ticket or ""), ensure_ascii=False)
+        response = HTMLResponse(
+            """<!doctype html><html lang="zh-Hans"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>绑定 Telegram 视频工作台</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}main{max-width:520px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}h1{font-size:22px;margin:0 0 12px}p{line-height:1.65;color:#52697a}#status{min-height:1.8em}</style></head>
+<body><main><h1>正在绑定 Telegram 视频工作台</h1><p id="status">正在验证 Telegram 身份和网页登录状态，请稍候…</p></main>
+<script>
+(async () => {
+  const status = document.getElementById("status");
+  const ticket = TICKET;
+  const loginContextKey = "vecto-telegram-video-login-context";
+  const loginReturn = "/telegram/video/open?ticket=" + encodeURIComponent(ticket);
+  const loginPage = "/video-login.html?return_url=" + encodeURIComponent(loginReturn) + "&telegram_video=1";
+  try {
+    const webApp = window.Telegram?.WebApp;
+    const initData = webApp?.initData || "";
+    if (!initData) throw new Error("请从 Telegram Bot 的网页授权按钮打开此页面");
+    webApp.ready();
+    const response = await fetch("/telegram/video/exchange", {
+      method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ticket, init_data: initData}),
+    });
+    const payload = await response.json().catch(() => ({}));
+    const detail = payload?.detail;
+    if (response.status === 401 && detail?.code === "web_login_required") {
+      try {
+        sessionStorage.setItem(loginContextKey, JSON.stringify({
+          ticket,
+          initData,
+          expiresAt: Date.now() + 150000,
+        }));
+      } catch (_) {
+        throw new Error("当前 Telegram WebView 不支持安全登录续接，请重新打开授权入口");
+      }
+      window.location.replace(loginPage);
+      return;
+    }
+    if (!response.ok) throw new Error(detail?.message || detail || "绑定失败");
+    try { sessionStorage.removeItem(loginContextKey); } catch (_) {}
+    status.textContent = "绑定成功，正在打开视频工作台…";
+    window.location.replace(payload.target || "/video.html");
+  } catch (error) {
+    status.textContent = error?.message || String(error);
+  }
+})();
+</script></body></html>""".replace("TICKET", encoded_ticket),
+            status_code=200,
+        )
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @router.post("/telegram/video/exchange")
+    def exchange_video_workbench(payload: VideoTgExchangePayload, request: Request):
+        runtime = get_runtime() or {}
+        bot_token = str(runtime.get("telegram_bot_token") or "").strip()
+        if not bool(runtime.get("telegram_bot_enabled")) or not bot_token:
+            raise HTTPException(status_code=403, detail="视频工作台 Bot 当前未启用")
+        expected_chat_id = _video_ticket_chat_id(payload.ticket)
+        # Resolve the normal browser session first.  An unauthenticated WebApp
+        # is redirected to the standard website login page, including Google
+        # OAuth, rather than receiving a second credential flow in Telegram.
+        web_user, session_hash = _authenticated_video_web_session(request)
+        tg_profile = _validate_video_init_data(
+            payload.init_data,
+            bot_token,
+            expected_chat_id,
+        )
+        consume_video_link_ticket(payload.ticket, tg_profile, web_user, session_hash, runtime)
+        target = "/admin-video.html" if int(web_user.get("is_admin") or 0) == 1 else DEFAULT_VIDEO_ENTRY
+        response = JSONResponse({"ok": True, "target": target})
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
     app.include_router(router)
     start_telegram_bot_worker(get_runtime)
