@@ -115,10 +115,10 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertEqual(
             labels,
             [
-                [tg_bot.DIGITAL_HUMAN_VIDEO_BUTTON, tg_bot.ECOMMERCE_SHORT_VIDEO_BUTTON],
-                [tg_bot.VIDEO_EDIT_BUTTON, tg_bot.IMAGE_GENERATION_MENU_BUTTON],
+                [tg_bot.DIGITAL_HUMAN_VIDEO_MENU_BUTTON, tg_bot.ECOMMERCE_SHORT_VIDEO_MENU_BUTTON],
+                [tg_bot.VIDEO_EDIT_MENU_BUTTON, tg_bot.IMAGE_GENERATION_MENU_BUTTON_DISPLAY],
                 ["🔐 账号管理"],
-                [tg_bot.RERUN_BUTTON, tg_bot.STATUS_BUTTON, tg_bot.STOP_BUTTON],
+                [tg_bot.RERUN_MENU_BUTTON, tg_bot.STATUS_MENU_BUTTON, tg_bot.STOP_MENU_BUTTON],
             ],
         )
 
@@ -162,7 +162,7 @@ class TelegramClosedLoopTests(unittest.TestCase):
         markup = message.answers[0][1]["reply_markup"]
         labels = [[str(getattr(button, "text", "")) for button in row] for row in markup.keyboard]
         self.assertEqual(labels[2], ["🔐 账号管理"])
-        self.assertEqual(labels[3], [tg_bot.RERUN_BUTTON, tg_bot.STATUS_BUTTON, tg_bot.STOP_BUTTON])
+        self.assertEqual(labels[3], [tg_bot.RERUN_MENU_BUTTON, tg_bot.STATUS_MENU_BUTTON, tg_bot.STOP_MENU_BUTTON])
 
     def test_video_workbench_accepts_legacy_whitelist_without_web_login(self):
         """A backend-authorized Chat ID remains sufficient for video actions."""
