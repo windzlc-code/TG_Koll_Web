@@ -34635,7 +34635,7 @@ function renderAccountPoolLoading() {
       <span class="account-pool-skeleton-line is-medium"></span>
     </article>`).join("");
   return `
-    <div class="account-pool-layout account-pool-layout--standalone" data-account-pool-loading="true">
+    <div class="account-pool-layout account-pool-layout--standalone" data-account-pool-loading="true" data-account-pool-layout-revision="desktop-persona-rail-v2">
       <section class="account-pool-main">
         <div class="account-pool-body">
           ${renderAccountPoolPlatformTabs()}
@@ -34667,7 +34667,7 @@ function renderAccountPool() {
   const accounts = accountPoolAccounts();
   const selectedAccount = selectedAccountPoolAccount();
   return `
-    <div class="account-pool-layout account-pool-layout--standalone">
+    <div class="account-pool-layout account-pool-layout--standalone" data-account-pool-layout-revision="desktop-persona-rail-v2">
       <section class="account-pool-main">
         <div class="account-pool-body">
           ${renderAccountPoolPlatformTabs()}

@@ -1568,15 +1568,33 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertIn('class="account-pool-desktop-controls"', self.console_script)
         self.assertIn("account-pool-mobile-controls", cards)
         self.assertIn('class="account-pool-count"', cards)
+        self.assertEqual(
+            self.console_script.count('data-account-pool-layout-revision="desktop-persona-rail-v2"'),
+            2,
+        )
 
         marker = "/* Desktop account pool mirrors the admin account-and-login workspace. */"
         self.assertIn(marker, self.styles)
         desktop_styles = self.styles[self.styles.index(marker):]
         self.assertIn("@media (min-width: 761px)", desktop_styles)
         self.assertIn("grid-template-columns: 176px minmax(0, 1fr);", desktop_styles)
-        self.assertIn("grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));", desktop_styles)
+        self.assertIn("grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));", desktop_styles)
+        self.assertIn(
+            ".console-page .account-pool-layout--standalone > .account-pool-persona-shell",
+            desktop_styles,
+        )
+        self.assertIn("grid-template-columns: minmax(0, 1fr) 280px;", desktop_styles)
+        self.assertIn("display: grid;", desktop_styles)
         self.assertIn(".account-pool-desktop-controls .account-pool-edit-toolbar", desktop_styles)
         self.assertIn("display: flex;", desktop_styles)
+        account_name_rule = desktop_styles[
+            desktop_styles.index(
+                ".console-page .account-pool-layout--standalone .account-pool-card-copy strong"
+            ):
+        ]
+        account_name_rule = account_name_rule[:account_name_rule.index("}")]
+        self.assertNotIn("text-overflow: ellipsis", account_name_rule)
+        self.assertNotIn("white-space: nowrap", account_name_rule)
         self.assertIn(".account-pool-mobile-controls", desktop_styles)
         self.assertIn("display: none;", desktop_styles)
         self.assertIn("@media (max-width: 760px)", desktop_styles)

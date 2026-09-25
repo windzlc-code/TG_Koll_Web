@@ -29392,7 +29392,7 @@ body.console-page {
   }
 
   .console-page .account-pool-layout--standalone .account-pool-list {
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
     gap: 10px;
     align-items: stretch;
   }
@@ -29406,13 +29406,13 @@ body.console-page {
   }
 
   .console-page .account-pool-layout--standalone .account-pool-card-copy strong {
-    overflow: hidden;
+    overflow: visible;
     font-size: 16px;
-    line-height: 1.15;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    overflow-wrap: normal;
-    word-break: normal;
+    line-height: 1.35;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .console-page .account-pool-layout--standalone .account-pool-count {
@@ -29423,6 +29423,16 @@ body.console-page {
 
   .console-page .account-pool-layout--standalone .account-pool-mobile-controls {
     display: none !important;
+  }
+}
+
+@media (min-width: 981px) {
+  .console-page .account-pool-layout--standalone {
+    grid-template-columns: minmax(0, 1fr) 280px;
+  }
+
+  .console-page .account-pool-layout--standalone > .account-pool-persona-shell {
+    display: grid;
   }
 }
 
