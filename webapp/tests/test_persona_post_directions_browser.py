@@ -185,11 +185,12 @@ def test_post_image_render_styles_are_grouped_before_generation_and_keep_origina
               document.body.append(host);
               const initial = {
                 count: host.querySelectorAll("[data-persona-image-render-style]").length,
-                groupCount: host.querySelectorAll(".persona-post-image-render-style-group").length,
+                tabCount: host.querySelectorAll("[data-persona-image-render-style-group]").length,
                 radioGroupCount: host.querySelectorAll('[role="radiogroup"]').length,
-                semanticGroupCount: host.querySelectorAll('.persona-post-image-render-style-group[role="group"]').length,
                 checked: host.querySelector('[data-persona-image-render-style][aria-checked="true"]')?.dataset.personaImageRenderStyle || "",
                 labels: Array.from(host.querySelectorAll("[data-persona-image-render-style] strong"), (node) => node.textContent.trim()),
+                preview: host.querySelector(".persona-picker-preview img")?.getAttribute("src") || "",
+                allLabels: PERSONA_POST_IMAGE_RENDER_STYLES.map((item) => item.label),
               };
               const selected = selectPersonaPostImageRenderStyle(mediaForm, "cinematic_cg");
               const rejected = selectPersonaPostImageRenderStyle(mediaForm, "../../custom-prompt");
@@ -201,25 +202,29 @@ def test_post_image_render_styles_are_grouped_before_generation_and_keep_origina
                 value: mediaForm.imageRenderStyle,
                 checked: host.querySelector('[data-persona-image-render-style][aria-checked="true"]')?.dataset.personaImageRenderStyle || "",
                 checkedCount: host.querySelectorAll('[data-persona-image-render-style][aria-checked="true"]').length,
+                activeTab: host.querySelector("[data-persona-image-render-style-group].is-active")?.textContent.trim() || "",
+                preview: host.querySelector(".persona-picker-preview img")?.getAttribute("src") || "",
               };
             }"""
         )
 
-        assert result["initial"]["count"] == 14
-        assert result["initial"]["groupCount"] == 4
+        assert result["initial"]["count"] == 4
+        assert result["initial"]["tabCount"] == 4
         assert result["initial"]["radioGroupCount"] == 1
-        assert result["initial"]["semanticGroupCount"] == 4
         assert result["initial"]["checked"] == "original"
-        assert "原有风格（默认）" in result["initial"]["labels"]
-        assert "赛璐璐" in result["initial"]["labels"]
-        assert "影视 CG" in result["initial"]["labels"]
-        assert "3 渲 2" in result["initial"]["labels"]
-        assert "美式卡通" in result["initial"]["labels"]
+        assert "原有风格" in result["initial"]["labels"]
+        assert result["initial"]["preview"].startswith("/assets/persona-previews/styles/original.jpg?")
+        assert "赛璐璐" in result["initial"]["allLabels"]
+        assert "影视 CG" in result["initial"]["allLabels"]
+        assert "3 渲 2" in result["initial"]["allLabels"]
+        assert "美式卡通" in result["initial"]["allLabels"]
         assert result["selected"] is True
         assert result["rejected"] is False
         assert result["value"] == "cinematic_cg"
         assert result["checked"] == "cinematic_cg"
         assert result["checkedCount"] == 1
+        assert result["activeTab"] == "三维渲染"
+        assert result["preview"].startswith("/assets/persona-previews/styles/cinematic_cg.jpg?")
         browser.close()
 
 
@@ -267,38 +272,35 @@ def test_mobile_composition_cards_keep_kind_and_description_visible_and_task_pre
               currentLanguage = () => "zh-Hans";
               isActionLocked = () => false;
               const post = { id: "post-1", title: "健身", content: "记录训练动作" };
-              const styleState = personaImageStyleState("persona-1", post.id);
-              styleState.styles = [
-                { kind: "person", label: "人物自拍", kind_label: "人物" },
-                { kind: "third_person", label: "群像互动", kind_label: "群像" },
-                { kind: "third_person", label: "第三人称纪实", kind_label: "第三人称" },
-                { kind: "pov", label: "第一人称视角", kind_label: "第一人称" },
-                { kind: "scene", label: "环境场景", kind_label: "场景" },
-                { kind: "object", label: "物件特写", kind_label: "事物" },
-              ];
-              styleState.sourceFingerprint = personaImageStyleSourceFingerprint(post);
               const host = document.querySelector("#host");
               host.innerHTML = renderPersonaImageCompositionPicker({ id: "persona-1" }, post);
-              const cards = Array.from(host.querySelectorAll(".persona-image-composition-tag"));
+              const cards = Array.from(host.querySelectorAll(".persona-picker-option"));
+              const preview = host.querySelector(".persona-picker-preview img");
               return {
                 count: cards.length,
-                kind: cards[2].querySelector(".persona-image-composition-tag-kind")?.textContent.trim(),
-                label: cards[2].querySelector(".persona-image-composition-tag-label")?.textContent.trim(),
+                kind: cards[2].querySelector("strong")?.textContent.trim(),
+                label: cards[2].querySelector("small")?.textContent.trim(),
                 whiteSpace: getComputedStyle(cards[2]).whiteSpace,
                 overflow: getComputedStyle(cards[2]).overflow,
                 minHeight: parseFloat(getComputedStyle(cards[2]).minHeight),
                 clientHeight: cards[2].clientHeight,
                 scrollHeight: cards[2].scrollHeight,
+                preview: preview?.getAttribute("src") || "",
+                loading: preview?.getAttribute("loading") || "",
+                fetchPriority: preview?.getAttribute("fetchpriority") || "",
               };
             }"""
         )
-        assert result["count"] == 6
+        assert result["count"] == 7
         assert result["kind"] == "第三人称"
         assert result["label"] == "第三人称纪实"
         assert result["whiteSpace"] == "normal"
         assert result["overflow"] == "visible"
-        assert result["minHeight"] >= 50
+        assert result["minHeight"] >= 56
         assert result["scrollHeight"] <= result["clientHeight"] + 1
+        assert result["preview"].startswith("/assets/persona-previews/compositions/person.jpg?")
+        assert result["loading"] == "eager"
+        assert result["fetchPriority"] == "high"
         browser.close()
 
 
@@ -437,15 +439,19 @@ def test_post_image_render_style_selection_is_locked_immediately_during_submissi
               document.body.innerHTML = renderPersonaPostImageRenderStylePicker(mediaForm);
               setPersonaPostImageRenderStyleInteractionLocked(true);
               const locked = Array.from(document.querySelectorAll("[data-persona-image-render-style]"), (button) => button.disabled);
+              const lockedTabs = Array.from(document.querySelectorAll("[data-persona-image-render-style-group]"), (button) => button.disabled);
               const selectedWhileLocked = document.querySelector('[data-persona-image-render-style="cel_shading"]')?.getAttribute("aria-checked");
               const lockedCopy = renderPersonaPostImageRenderStylePicker(mediaForm, true);
               setPersonaPostImageRenderStyleInteractionLocked(false);
               const unlocked = Array.from(document.querySelectorAll("[data-persona-image-render-style]"), (button) => button.disabled);
-              return { locked, unlocked, selectedWhileLocked, lockedCopy };
+              const unlockedTabs = Array.from(document.querySelectorAll("[data-persona-image-render-style-group]"), (button) => button.disabled);
+              return { locked, lockedTabs, unlocked, unlockedTabs, selectedWhileLocked, lockedCopy };
             }"""
         )
         assert all(result["locked"])
+        assert all(result["lockedTabs"])
         assert not any(result["unlocked"])
+        assert not any(result["unlockedTabs"])
         assert result["selectedWhileLocked"] == "true"
         assert "配图生成期间已锁定，完成后可重新选择" in result["lockedCopy"]
         assert 'data-persona-image-render-style="cel_shading"' in result["lockedCopy"]
@@ -500,18 +506,20 @@ def test_post_and_image_sections_use_responsive_dividers_without_mobile_overflow
             """node => ({
               left: getComputedStyle(node).borderLeftWidth,
               top: getComputedStyle(node).borderTopWidth,
-              panel: getComputedStyle(node.querySelector(".persona-post-image-render-style-panel")).borderTopWidth,
-              divider: getComputedStyle(node.querySelector(".persona-post-image-settings-divider"), "::before").backgroundColor,
-              groups: node.querySelectorAll(".persona-post-image-render-style-group").length,
-              options: node.querySelectorAll("[data-persona-image-render-style]").length,
-            })"""
+                  panel: getComputedStyle(node.querySelector(".persona-post-image-render-style-panel")).borderTopWidth,
+                  divider: getComputedStyle(node.querySelector(".persona-post-image-settings-divider"), "::before").backgroundColor,
+                  tabs: node.querySelectorAll("[data-persona-image-render-style-group]").length,
+                  options: node.querySelectorAll("[data-persona-image-render-style]").length,
+                  previews: node.querySelectorAll(".persona-picker-preview img").length,
+                })"""
         )
         assert desktop["left"] == "1px"
         assert desktop["top"] == "0px"
         assert desktop["panel"] == "1px"
         assert desktop["divider"] != "rgba(0, 0, 0, 0)"
-        assert desktop["groups"] == 4
-        assert desktop["options"] == 14
+        assert desktop["tabs"] == 4
+        assert desktop["options"] == 4
+        assert desktop["previews"] == 1
 
         for width in (390, 320):
             page.set_viewport_size({"width": width, "height": 844})
@@ -525,7 +533,7 @@ def test_post_and_image_sections_use_responsive_dividers_without_mobile_overflow
                     left: style.borderLeftWidth,
                     top: style.borderTopWidth,
                     overflow: document.documentElement.scrollWidth > window.innerWidth,
-                    columns: getComputedStyle(document.querySelector(".persona-post-image-render-style-grid")).gridTemplateColumns.split(" ").length,
+                    columns: getComputedStyle(document.querySelector(".persona-picker-split")).gridTemplateColumns.split(" ").length,
                     optionsInside: optionRects.every((rect) => rect.left >= panel.left - 1 && rect.right <= panel.right + 1),
                   };
                 }"""
