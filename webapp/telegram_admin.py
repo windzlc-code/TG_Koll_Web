@@ -72,6 +72,9 @@ class TgTrustedUserTogglePayload(BaseModel):
 class VideoTgExchangePayload(BaseModel):
     ticket: str = Field(default="", max_length=256)
     init_data: str = Field(default="", max_length=8192)
+    # URL buttons open the normal HTTPS browser instead of Telegram's WebApp
+    # surface. The one-time ticket remains the browser hand-off credential.
+    browser: bool = False
 
 
 def ensure_telegram_schema(conn) -> None:
@@ -688,6 +691,34 @@ def validate_video_webapp_login_context(
     return expected_chat_id
 
 
+def validate_video_browser_login_context(
+    ticket: str,
+    runtime: dict[str, Any] | None = None,
+    *,
+    conn=None,
+) -> int:
+    """Validate the one-time ticket used by the external HTTPS browser flow.
+
+    A normal URL button cannot provide Telegram WebApp ``initData``. The
+    ticket is still random, short-lived, single-use, and issued only after a
+    live allow-list check; re-check the allow-list here so disabling a member
+    immediately invalidates an outstanding browser link.
+    """
+    config = runtime if isinstance(runtime, dict) else {}
+    if not bool(config.get("telegram_bot_enabled")) or not str(config.get("telegram_bot_token") or "").strip():
+        raise HTTPException(status_code=403, detail="视频工作台 Bot 当前未启用")
+    expected_chat_id = _video_ticket_chat_id(ticket, conn=conn)
+    if not is_video_chat_authorized(expected_chat_id, config):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "telegram_binding_not_authorized",
+                "message": "该 Telegram Chat ID 已不在视频工作台授权列表中，请重新联系管理员。",
+            },
+        )
+    return expected_chat_id
+
+
 def _video_public_base_url(runtime: dict[str, Any] | None) -> str:
     config = runtime if isinstance(runtime, dict) else {}
     raw = str(
@@ -703,11 +734,11 @@ def _video_public_base_url(runtime: dict[str, Any] | None) -> str:
 
 
 def create_video_webapp_url(chat_id: int, get_runtime: GetRuntime) -> str:
-    """Create a short-lived Telegram WebApp URL for the video account flow.
+    """Create a short-lived HTTPS browser URL for the video account flow.
 
-    The URL contains only a hashed-at-rest, one-time ticket.  Telegram's
-    signed ``initData`` is collected by the WebApp itself and never travels
-    through the Bot chat or a query string.
+    The URL contains only a hashed-at-rest, one-time ticket. The Bot sends it
+    as a regular URL button so Telegram opens the Vecto HTTPS page in its
+    browser surface rather than an embedded WebApp login form.
     """
     runtime = get_runtime() or {}
     if not is_video_chat_authorized(int(chat_id), runtime):
@@ -1195,7 +1226,7 @@ def inject_telegram_admin(
 
     @router.get("/telegram/video/open")
     def open_video_workbench(ticket: str = ""):
-        """Bridge Telegram's WebApp identity into the normal video login page."""
+        """Bridge the Telegram browser ticket into the normal video login page."""
         _video_ticket_chat_id(ticket)
         encoded_ticket = json.dumps(str(ticket or ""), ensure_ascii=False)
         response = HTMLResponse(
@@ -1216,12 +1247,12 @@ def inject_telegram_admin(
   try {
     const webApp = window.Telegram?.WebApp;
     const initData = webApp?.initData || "";
-    if (!initData) throw new Error("请从 Telegram Bot 的网页授权按钮打开此页面");
-    webApp.ready();
+    const browser = !initData;
+    if (!browser) webApp.ready();
     const response = await fetch("/telegram/video/exchange", {
       method: "POST", credentials: "same-origin",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ticket, init_data: initData}),
+      body: JSON.stringify({ticket, init_data: initData, browser}),
     });
     const payload = await response.json().catch(() => ({}));
     const detail = payload?.detail;
@@ -1230,10 +1261,11 @@ def inject_telegram_admin(
         sessionStorage.setItem(loginContextKey, JSON.stringify({
           ticket,
           initData,
+          browser,
           expiresAt: Date.now() + 150000,
         }));
       } catch (_) {
-        throw new Error("当前 Telegram WebView 不支持安全登录续接，请重新打开授权入口");
+        throw new Error("当前浏览器不支持安全登录续接，请重新打开授权入口");
       }
       window.location.replace(loginPage);
       return;
@@ -1263,15 +1295,18 @@ def inject_telegram_admin(
         if not bool(runtime.get("telegram_bot_enabled")) or not bot_token:
             raise HTTPException(status_code=403, detail="视频工作台 Bot 当前未启用")
         expected_chat_id = _video_ticket_chat_id(payload.ticket)
-        # Resolve the normal browser session first.  An unauthenticated WebApp
+        # Resolve the normal browser session first. An unauthenticated browser
         # is redirected to the standard website login page, including Google
         # OAuth, rather than receiving a second credential flow in Telegram.
         web_user, session_hash = _authenticated_video_web_session(request)
-        tg_profile = _validate_video_init_data(
-            payload.init_data,
-            bot_token,
-            expected_chat_id,
-        )
+        init_data = str(payload.init_data or "").strip()
+        if init_data:
+            tg_profile = _validate_video_init_data(init_data, bot_token, expected_chat_id)
+        else:
+            if not payload.browser:
+                raise HTTPException(status_code=401, detail="缺少 Telegram 浏览器授权上下文，请回到 Bot 重新打开入口")
+            validate_video_browser_login_context(payload.ticket, runtime)
+            tg_profile = {"id": expected_chat_id, "username": "", "display_name": ""}
         consume_video_link_ticket(payload.ticket, tg_profile, web_user, session_hash, runtime)
         target = "/admin-video.html" if int(web_user.get("is_admin") or 0) == 1 else DEFAULT_VIDEO_ENTRY
         response = JSONResponse({"ok": True, "target": target})

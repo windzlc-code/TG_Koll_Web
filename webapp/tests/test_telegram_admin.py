@@ -137,6 +137,20 @@ class TelegramAdminTests(unittest.TestCase):
             731,
         )
 
+    def test_video_browser_ticket_rechecks_live_authorization(self):
+        self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
+        telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=731, label="视频用户"))
+        token = telegram_admin.create_video_link_ticket(731)
+        self.assertEqual(
+            telegram_admin.validate_video_browser_login_context(token, self.runtime),
+            731,
+        )
+        telegram_admin.toggle_trusted_user(731, False)
+        with self.assertRaises(HTTPException) as raised:
+            telegram_admin.validate_video_browser_login_context(token, self.runtime)
+        self.assertEqual(getattr(raised.exception, "status_code", None), 403)
+        self.assertEqual(getattr(raised.exception, "detail", {}).get("code"), "telegram_binding_not_authorized")
+
     def test_video_webapp_url_and_landing_page_are_video_scoped(self):
         self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
         telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=731, label="视频用户"))
@@ -158,6 +172,7 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertIn("/telegram/video/exchange", response.text)
         self.assertIn("telegram-video-login-context", response.text)
         self.assertIn("video-login.html", response.text)
+        self.assertIn("browser", response.text)
         self.assertNotIn("telegram/tweet/open", response.text)
 
     def test_video_webapp_ticket_requires_live_admin_authorization(self):
@@ -200,6 +215,32 @@ class TelegramAdminTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json().get("detail", {}).get("code"), "web_login_required")
+
+    def test_video_browser_exchange_accepts_external_url_context_after_web_login(self):
+        self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
+        telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=731, label="视频用户"))
+        token = telegram_admin.create_video_link_ticket(731)
+        app = FastAPI()
+        with mock.patch.object(telegram_admin, "start_telegram_bot_worker"):
+            telegram_admin.inject_telegram_admin(
+                app,
+                require_admin=lambda: {"is_admin": 1},
+                get_runtime=self._get,
+                save_runtime=self._save,
+            )
+        with mock.patch.object(
+            telegram_admin,
+            "_authenticated_video_web_session",
+            return_value=({"id": 42, "username": "vecto_user", "is_admin": 0}, "session-digest"),
+        ), mock.patch.object(telegram_admin, "consume_video_link_ticket") as consume:
+            response = TestClient(app).post(
+                "/telegram/video/exchange",
+                json={"ticket": token, "browser": True},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json().get("target"), "/video.html")
+        self.assertEqual(consume.call_args.args[0], token)
+        self.assertEqual(consume.call_args.args[1]["id"], 731)
 
     def test_load_settings_backfills_missing_user_name(self):
         telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=6258005891, label="客户A"))
@@ -311,6 +352,7 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertIn('vecto-telegram-video-login-context', js)
         self.assertIn('telegram_video_ticket', js)
         self.assertIn('telegram_video_init_data', js)
+        self.assertIn('telegram_video_browser', js)
 
 
 if __name__ == "__main__":

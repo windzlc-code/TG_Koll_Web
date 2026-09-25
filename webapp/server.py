@@ -177,6 +177,7 @@ from .telegram_admin import (
     inject_telegram_admin,
     invalidate_video_link_ticket,
     stop_telegram_bot_worker,
+    validate_video_browser_login_context,
     validate_video_webapp_login_context,
 )
 from .telegram_tweet_admin import (
@@ -13634,15 +13635,18 @@ class LoginPayload(BaseModel):
     security_verification_method: str = Field(default="", max_length=16)
     security_challenge_id: str = Field(default="", max_length=120)
     security_verification_code: str = Field(default="", max_length=16)
-    # These fields are only accepted as a pair from the Telegram WebApp login
-    # continuation.  The server validates the signed initData and one-time
-    # ticket before it permits an additional WebView session.
+    # These fields are only accepted from the Telegram login continuation. The
+    # server validates signed WebApp initData or the short-lived browser ticket
+    # before it permits an additional session.
     telegram_tweet_ticket: str = Field(default="", max_length=256)
     telegram_init_data: str = Field(default="", max_length=8192)
     # Video Bot uses the same normal login policy, but keeps its Bot token and
-    # one-time binding tickets isolated from the Tweet Bot.
+    # one-time binding tickets isolated from the Tweet Bot. ``browser`` is
+    # true only for the external HTTPS URL-button flow, where Telegram cannot
+    # provide WebApp initData.
     telegram_video_ticket: str = Field(default="", max_length=256)
     telegram_video_init_data: str = Field(default="", max_length=8192)
+    telegram_video_browser: bool = False
 
 
 class ChangePasswordPayload(BaseModel):
@@ -30649,6 +30653,7 @@ def create_app() -> FastAPI:
             telegram_init_data = str(payload.telegram_init_data or "").strip()
             telegram_video_ticket = str(payload.telegram_video_ticket or "").strip()
             telegram_video_init_data = str(payload.telegram_video_init_data or "").strip()
+            telegram_video_browser = bool(payload.telegram_video_browser)
             if telegram_ticket or telegram_init_data:
                 if not telegram_ticket or not telegram_init_data:
                     raise HTTPException(status_code=400, detail="Telegram 登录上下文不完整，请回到 Bot 重新打开绑定入口")
@@ -30662,15 +30667,24 @@ def create_app() -> FastAPI:
                 # customer accounts may add the authenticated Telegram WebView
                 # without revoking an existing browser session.
                 telegram_parallel_session = not is_admin
-            elif telegram_video_ticket or telegram_video_init_data:
-                if not telegram_video_ticket or not telegram_video_init_data:
+            elif telegram_video_ticket or telegram_video_init_data or telegram_video_browser:
+                if not telegram_video_ticket:
                     raise HTTPException(status_code=400, detail="Telegram 视频登录上下文不完整，请回到 Bot 重新开始")
-                validate_video_webapp_login_context(
-                    telegram_video_ticket,
-                    telegram_video_init_data,
-                    runtime,
-                    conn=conn,
-                )
+                if telegram_video_init_data:
+                    validate_video_webapp_login_context(
+                        telegram_video_ticket,
+                        telegram_video_init_data,
+                        runtime,
+                        conn=conn,
+                    )
+                elif telegram_video_browser:
+                    validate_video_browser_login_context(
+                        telegram_video_ticket,
+                        runtime,
+                        conn=conn,
+                    )
+                else:
+                    raise HTTPException(status_code=400, detail="Telegram 视频登录上下文不完整，请回到 Bot 重新开始")
                 telegram_parallel_session = not is_admin
 
             email_2fa_required = bool(email_2fa_enabled and not mfa_enabled)

@@ -23,6 +23,7 @@
       storageKey: "vecto-telegram-video-login-context",
       ticketField: "telegram_video_ticket",
       initField: "telegram_video_init_data",
+      browserField: "telegram_video_browser",
     },
   };
 
@@ -90,9 +91,14 @@
       if (!ticket) return null;
       const raw = sessionStorage.getItem(contextSpec.storageKey);
       const context = raw ? JSON.parse(raw) : null;
-      if (!context || context.ticket !== ticket || !context.initData) return null;
+      if (!context || context.ticket !== ticket || (!context.initData && !context.browser)) return null;
       if (Number(context.expiresAt || 0) <= Date.now()) return null;
-      return { ...contextSpec, ticket, initData: String(context.initData) };
+      return {
+        ...contextSpec,
+        ticket,
+        initData: String(context.initData || ""),
+        browser: Boolean(context.browser),
+      };
     } catch {
       return null;
     }
@@ -176,6 +182,9 @@
             ? {
                 [telegramContext.ticketField]: telegramContext.ticket,
                 [telegramContext.initField]: telegramContext.initData,
+                ...(telegramContext.browser && telegramContext.browserField
+                  ? { [telegramContext.browserField]: true }
+                  : {}),
               }
             : {}),
         }),

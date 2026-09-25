@@ -25,7 +25,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaAudio, KeyboardButton, Message, ReplyKeyboardMarkup, WebAppInfo
+from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaAudio, KeyboardButton, Message, ReplyKeyboardMarkup
 
 import voice_presets
 from .config import AppConfig
@@ -2037,7 +2037,7 @@ def build_dispatcher(
             return None
 
     def _is_chat_authorized(chat_id: int) -> bool:
-        """Resolve the live admin allow-list before issuing any WebApp ticket."""
+        """Resolve the live admin allow-list before issuing any browser ticket."""
         if chat_authorized is not None:
             try:
                 return bool(chat_authorized(int(chat_id)))
@@ -2058,21 +2058,37 @@ def build_dispatcher(
             except Exception:
                 return default
 
-    def _account_management_keyboard() -> InlineKeyboardMarkup:
-        """Render the account root as a callback page, like the Tweet Bot.
+    def _account_management_keyboard(
+        *,
+        chat_id: int | None = None,
+        include_logout: bool = False,
+    ) -> InlineKeyboardMarkup:
+        """Render every account action on the first account-management page.
 
-        The workbench ReplyKeyboard remains the single persistent entry point;
-        account sub-pages must not replace it with another text-routed menu.
-        Keeping the callbacks scoped to ``tv:`` also prevents a stale button
-        from one Bot from being accepted by the other Bot.
+        The account entry is intentionally flat: opening it immediately
+        exposes web login/switch and, when a live session exists, logout.
+        ``tv:`` callbacks remain scoped to this Bot so stale buttons cannot be
+        accepted by the other workbench.
         """
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(
-                text=VIDEO_ACCOUNT_SESSION_BUTTON,
-                callback_data="tv:vectosession",
-            )],
-            [InlineKeyboardButton(text="返回总控菜单", callback_data="tv:menu")],
-        ])
+        rows: list[list[InlineKeyboardButton]] = []
+        clean_chat_id = int(chat_id or 0)
+        if clean_chat_id > 0 and _is_chat_authorized(clean_chat_id):
+            login_button = _video_web_login_button(clean_chat_id)
+            rows.append([
+                login_button
+                if login_button is not None
+                else InlineKeyboardButton(
+                    text="🌐 网页授权登录/切换 VECTO 账号",
+                    callback_data="tv:chatlogin",
+                )
+            ])
+            if include_logout:
+                rows.append([InlineKeyboardButton(
+                    text=VIDEO_LOGOUT_BUTTON,
+                    callback_data="tv:aclogout",
+                )])
+        rows.append([InlineKeyboardButton(text="返回总控菜单", callback_data="tv:menu")])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def _video_web_login_button(chat_id: int) -> InlineKeyboardButton | None:
         if web_login_url is None or int(chat_id or 0) <= 0 or not _is_chat_authorized(int(chat_id)):
@@ -2080,13 +2096,13 @@ def build_dispatcher(
         try:
             login_url = str(web_login_url(int(chat_id)) or "").strip()
         except Exception:
-            logger.exception("Failed to create video WebApp login URL")
+            logger.exception("Failed to create video browser login URL")
             return None
         if not login_url:
             return None
         return InlineKeyboardButton(
             text="🌐 网页授权登录/切换 VECTO 账号",
-            web_app=WebAppInfo(url=login_url),
+            url=login_url,
         )
 
     def _account_keyboard(
@@ -2117,12 +2133,10 @@ def build_dispatcher(
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def _video_login_keyboard(placeholder: str) -> InlineKeyboardMarkup:
-        """Keep cancel/back controls on the same callback login page.
+        """Keep cancel/back controls for compatibility with old callbacks.
 
-        ``placeholder`` is retained for callers/documentation; Telegram's
-        inline buttons do not alter the private-chat input field.  Credentials
-        still arrive as ordinary private messages and are never put in a
-        callback payload.
+        The actual login is always performed on the HTTPS browser page; no
+        credential or verification input is accepted in the Telegram chat.
         """
         _ = placeholder
         return InlineKeyboardMarkup(inline_keyboard=[
@@ -3378,8 +3392,8 @@ def build_dispatcher(
             "账号管理\n\n"
             f"VECTO 网页账号：{username or '未登录'}\n"
             f"状态：{status}\n\n"
-            "可在此绑定或切换 VECTO 网页账号；后台已授权成员无需绑定也可直接使用视频工作台。",
-            _account_management_keyboard(),
+            "可直接选择网页授权登录/切换账号或退出账号。后台已授权成员无需绑定也可直接使用视频工作台。",
+            _account_management_keyboard(chat_id=chat_id, include_logout=bool(web_user_id)),
         )
 
     async def _send_account_status(message: Message) -> None:
@@ -3392,43 +3406,9 @@ def build_dispatcher(
         await message.answer(page_text, reply_markup=markup)
 
     async def _video_account_session_payload(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
-        authorized = _is_chat_authorized(chat_id)
-        if not authorized:
-            return (
-                "VECTO 网页账号\n\n"
-                "当前 Telegram Chat ID 尚未加入视频工作台授权列表。\n"
-                "请管理员先在后台添加并启用该 ID。",
-                _account_keyboard(include_login=False, include_logout=False, chat_id=chat_id),
-            )
-        member = _load_bound_member(chat_id)
-        web_user_id = int(_member_value(member, "web_user_id", 0) or 0)
-        username = str(_member_value(member, "web_username", "") or "").strip()
-        if not username:
-            username = str(_member_value(member, "label", "") or f"TG-{chat_id}").strip()
-        active = bool(web_user_id and authorized)
-        if active and has_active_web_session is not None:
-            try:
-                active = bool(has_active_web_session(member))
-            except Exception:
-                active = False
-        if active:
-            return (
-                "VECTO 网页账号\n\n"
-                f"当前账号：{username}\n"
-                "当前 Telegram 视频工作台使用的是这次绑定的 VECTO 网页会话。\n"
-                "状态：已登录并绑定\n\n"
-                "网页端退出会撤销该会话，Telegram 将立即要求重新登录；Telegram 不会独立保持一份永久登录。\n"
-                "退出网页或 Telegram 会撤销该 VECTO 账号的活动会话（包括其他设备）。\n"
-                "这里的登录/退出只管理 VECTO 账号，不会登录或退出其他平台账号。",
-                _account_keyboard(include_login=True, include_logout=True, chat_id=chat_id),
-            )
-        return (
-            "VECTO 网页账号\n\n"
-            f"当前账号：{username if web_user_id else '未登录'}\n"
-            "状态：未登录或会话已失效\n\n"
-            "可点击“登录/切换 VECTO 账号”完成网页会话绑定；当前后台授权成员仍可直接使用视频工作台。",
-            _account_keyboard(include_login=True, include_logout=False, chat_id=chat_id),
-        )
+        # Kept as a compatibility alias for old callback/text routes. The
+        # account root now renders the same complete action set directly.
+        return await _account_status_payload(chat_id)
 
     async def _send_video_account_session_status(message: Message) -> None:
         chat = getattr(message, "chat", None)
@@ -3482,7 +3462,7 @@ def build_dispatcher(
         await respond(
             "🌐 网页授权登录\n"
             "请点击下方按钮，在 VECTO 网页中完成账号登录或 Google 授权。\n"
-            "登录成功后会自动返回 Telegram 并绑定视频工作台；Telegram 不接收或保存账号密码。",
+            "登录成功后会自动绑定视频工作台并打开视频页面；Telegram 不接收或保存账号密码。",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [login_button],
                 [InlineKeyboardButton(text="返回账号管理", callback_data="tv:accountmenu")],
