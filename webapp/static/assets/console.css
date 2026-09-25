@@ -12486,6 +12486,7 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
 
 .persona-image-composition-panel {
   margin-bottom: 0;
+  background: var(--panel-solid);
 }
 
 .persona-workflow-stage-label {

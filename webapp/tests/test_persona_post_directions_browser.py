@@ -304,6 +304,66 @@ def test_mobile_composition_cards_keep_kind_and_description_visible_and_task_pre
         browser.close()
 
 
+def test_visual_pickers_share_white_panel_background_and_warm_versioned_preview_cache():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.set_content('<!doctype html><html><body class="console-page"><main class="persona-detail"><div id="style"></div><div id="composition"></div></main></body></html>')
+        page.add_script_tag(path=str(CONSOLE_JS))
+        page.add_style_tag(path=str(CONSOLE_CSS))
+        result = page.evaluate(
+            """() => {
+              const requested = [];
+              class PreviewImage {
+                constructor() {
+                  this.decoding = "";
+                  this.fetchPriority = "";
+                }
+                addEventListener() {}
+                set src(value) { this._src = value; requested.push({ value, decoding: this.decoding, priority: this.fetchPriority }); }
+                get src() { return this._src || ""; }
+              }
+              globalThis.Image = PreviewImage;
+              window.requestIdleCallback = (callback) => { callback(); return 1; };
+              const form = { media: { imageStylesByPost: {} } };
+              personaFormState = () => form;
+              currentLanguage = () => "zh-Hans";
+              const mediaForm = {};
+              document.querySelector("#style").innerHTML = renderPersonaPostImageRenderStylePicker(mediaForm);
+              document.querySelector("#composition").innerHTML = renderPersonaImageCompositionPicker(
+                { id: "persona-1" },
+                { id: "post-1", title: "健身", content: "记录训练动作" },
+              );
+              const firstCount = requested.length;
+              renderPersonaPostImageRenderStylePicker(mediaForm);
+              renderPersonaImageCompositionPicker(
+                { id: "persona-1" },
+                { id: "post-1", title: "健身", content: "记录训练动作" },
+              );
+              const stylePanel = document.querySelector(".persona-post-image-render-style-panel");
+              const compositionPanel = document.querySelector(".persona-image-composition-panel");
+              return {
+                firstCount,
+                finalCount: requested.length,
+                uniqueCount: new Set(requested.map((item) => item.value)).size,
+                allVersioned: requested.every((item) => item.value.includes("?v=")),
+                allAsync: requested.every((item) => item.decoding === "async"),
+                styleBackground: getComputedStyle(stylePanel).backgroundColor,
+                compositionBackground: getComputedStyle(compositionPanel).backgroundColor,
+              };
+            }"""
+        )
+        assert result["firstCount"] == 30
+        assert result["finalCount"] == 30
+        assert result["uniqueCount"] == 30
+        assert result["allVersioned"] is True
+        assert result["allAsync"] is True
+        assert result["styleBackground"] == result["compositionBackground"]
+        assert result["compositionBackground"] in {"rgb(255, 255, 255)", "rgba(255, 255, 255, 1)"}
+        browser.close()
+
+
 def test_composition_picker_spacing_and_nested_scroll_are_preserved_on_rerender():
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as playwright:

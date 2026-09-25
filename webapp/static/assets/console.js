@@ -96,6 +96,8 @@ const PERSONA_IMAGE_COMPOSITION_GROUPS = [
   },
 ];
 const PERSONA_PREVIEW_CACHE = "20260925a";
+const PERSONA_PREVIEW_IMAGE_CACHE = new Map();
+let personaPreviewCacheWarmScheduled = false;
 
 function personaPostImageRenderStylePreviewUrl(styleId) {
   const id = String(styleId || PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT).trim() || PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT;
@@ -105,6 +107,34 @@ function personaPostImageRenderStylePreviewUrl(styleId) {
 function personaImageCompositionPreviewUrl(kind) {
   const id = String(kind || "person").trim() || "person";
   return `${PERSONA_IMAGE_COMPOSITION_PREVIEW_DIR}/${encodeURIComponent(id)}.jpg?v=${PERSONA_PREVIEW_CACHE}`;
+}
+
+function preloadPersonaPreviewImages(urls, fetchPriority = "low") {
+  if (typeof Image !== "function") return;
+  Array.from(new Set((Array.isArray(urls) ? urls : []).map((value) => String(value || "").trim()).filter(Boolean))).forEach((url) => {
+    if (PERSONA_PREVIEW_IMAGE_CACHE.has(url)) return;
+    const image = new Image();
+    image.decoding = "async";
+    image.fetchPriority = fetchPriority;
+    PERSONA_PREVIEW_IMAGE_CACHE.set(url, image);
+    image.addEventListener("load", () => image.decode?.().catch(() => {}), { once: true });
+    image.addEventListener("error", () => PERSONA_PREVIEW_IMAGE_CACHE.delete(url), { once: true });
+    image.src = url;
+  });
+}
+
+function schedulePersonaPreviewCacheWarm() {
+  if (personaPreviewCacheWarmScheduled) return;
+  personaPreviewCacheWarmScheduled = true;
+  const warm = () => preloadPersonaPreviewImages([
+    ...PERSONA_POST_IMAGE_RENDER_STYLES.map((item) => personaPostImageRenderStylePreviewUrl(item.id)),
+    ...personaImageCompositionCatalog().map((item) => personaImageCompositionPreviewUrl(item.kind)),
+  ]);
+  if (typeof window?.requestIdleCallback === "function") {
+    window.requestIdleCallback(warm, { timeout: 1600 });
+  } else {
+    window.setTimeout(warm, 0);
+  }
 }
 
 function personaImageCompositionCatalog() {
@@ -4935,6 +4965,8 @@ function renderPersonaImageCompositionPicker(persona, post, disabled = false) {
   const group = PERSONA_IMAGE_COMPOSITION_GROUPS.find((item) => item.id === groupId) || PERSONA_IMAGE_COMPOSITION_GROUPS[0];
   styleState.compositionGroup = group.id;
   const previewItem = catalog.find((item) => personaImageStyleKey(item) === selectedKey) || defaultItem;
+  preloadPersonaPreviewImages(group.items.map((item) => personaImageCompositionPreviewUrl(item.kind)), "high");
+  schedulePersonaPreviewCacheWarm();
   return `<section class="persona-post-direction-panel persona-image-composition-panel" aria-label="推文配图构图方向" data-persona-image-composition-post="${esc(postId)}">
     <div class="persona-image-composition-head">
       <div>
@@ -4972,6 +5004,8 @@ function renderPersonaPostImageRenderStylePicker(mediaForm, disabled = false) {
   const groupId = personaImageRenderStyleGroupId(mediaForm);
   const group = PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS.find((item) => item.id === groupId) || PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS[0];
   const previewStyle = selectedStyle || group.styles[0];
+  preloadPersonaPreviewImages(group.styles.map((item) => personaPostImageRenderStylePreviewUrl(item.id)), "high");
+  schedulePersonaPreviewCacheWarm();
   return `<section class="persona-post-image-render-style-panel" aria-label="推文配图生成风格">
     <div class="persona-post-image-render-style-head">
       <div>

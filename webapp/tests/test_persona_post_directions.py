@@ -229,9 +229,14 @@ def test_console_keeps_visual_style_and_composition_preview_pickers_versioned():
     assert 'class="persona-picker-preview"' in script
     assert "personaPostImageRenderStylePreviewUrl(previewStyle.id)" in script
     assert "personaImageCompositionPreviewUrl(previewItem.kind)" in script
+    assert "const PERSONA_PREVIEW_IMAGE_CACHE = new Map()" in script
+    assert "function preloadPersonaPreviewImages" in script
+    assert "function schedulePersonaPreviewCacheWarm" in script
     assert '.persona-picker-tabs {' in styles
     assert '.persona-picker-split {' in styles
     assert '.persona-picker-preview {' in styles
+    composition_panel = styles.split(".persona-image-composition-panel {", 1)[1].split("}", 1)[0]
+    assert "background: var(--panel-solid);" in composition_panel
     expected_styles = {
         "original", "photorealistic", "cinematic_realism", "editorial_fashion",
         "cel_shading", "japanese_anime", "anime_painterly", "stylized_3d",
