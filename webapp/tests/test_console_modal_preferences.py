@@ -38,6 +38,10 @@ class ConsoleModalPreferenceTests(unittest.TestCase):
         self.assertIn("display: flex", remember)
         self.assertIn("input[type=\"checkbox\"]", remember)
         self.assertIn("min-height: 16px", remember)
+        self.assertIn("width: 16px !important", remember)
+        self.assertIn("height: 16px !important", remember)
+        self.assertIn("padding: 0 !important", remember)
+        self.assertIn("white-space: nowrap", remember)
         self.assertIn("accent-color: var(--accent)", remember)
 
 

@@ -15893,8 +15893,10 @@ body.persona-media-sorting {
 }
 
 .console-modal-dialog .console-modal-remember {
-  display: flex;
+  display: flex !important;
+  width: 100%;
   grid-template-columns: none;
+  flex-direction: row;
   align-items: center;
   gap: 8px;
   margin-top: 2px;
@@ -15906,16 +15908,25 @@ body.persona-media-sorting {
 }
 
 .console-modal-dialog .console-modal-remember input[type="checkbox"] {
-  width: 16px;
+  box-sizing: border-box;
+  display: inline-block;
+  flex: 0 0 16px;
+  width: 16px !important;
   min-width: 16px;
-  height: 16px;
-  min-height: 16px;
+  max-width: 16px;
+  height: 16px !important;
+  min-height: 16px !important;
+  max-height: 16px;
   margin: 0;
+  padding: 0 !important;
   accent-color: var(--accent);
 }
 
 .console-modal-dialog .console-modal-remember span {
+  display: inline-block;
+  min-width: 0;
   line-height: 1.45;
+  white-space: nowrap;
 }
 
 .console-modal-fields textarea {
