@@ -384,6 +384,7 @@ const ADMIN_PAGE_LABELS = {
   redemptionCodes: "兑换邀请",
   telegram: "Telegram",
   runtime: "系统配置",
+  fingerprintLogin: "账号与登录",
   sentimentCookies: "舆情 Cookie",
   account: "账号设置",
 };
@@ -690,6 +691,13 @@ function setActiveAdminPage(page, updateHash = true) {
     void loadProxyProviderCredentialStatus().catch((error) => {
       setMsg("proxyProviderCredentialMsg", `供应商凭据状态读取失败：${getErrorMessage(error)}`, false);
     });
+  }
+  if (nextPage === "fingerprintLogin") {
+    if (typeof loadFingerprintLoginAccounts === "function") {
+      void loadFingerprintLoginAccounts().catch((error) => {
+        setMsg("fingerprintLoginMsg", getErrorMessage(error), false);
+      });
+    }
   }
   return true;
 }
@@ -1958,7 +1966,7 @@ const TASK_TYPE_LABELS = {
   persona_post_image: "推文生成配图",
   persona_post_generation: "AI 推文草稿生成",
 };
-const ADMIN_PAGES = new Set(["overview", "users", "tasks", "security", "proxyMarket", "pricing", "redemptionCodes", "telegram", "runtime", "sentimentCookies", "account"]);
+const ADMIN_PAGES = new Set(["overview", "users", "tasks", "security", "proxyMarket", "pricing", "redemptionCodes", "telegram", "runtime", "fingerprintLogin", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",
   secUsers: "users",
@@ -1969,6 +1977,7 @@ const ADMIN_PAGE_ALIASES = {
   secRedemptionCodes: "redemptionCodes",
   secTelegram: "telegram",
   secRuntime: "runtime",
+  secFingerprintLogin: "fingerprintLogin",
   secSentimentCookies: "sentimentCookies",
   secAccount: "account",
 };

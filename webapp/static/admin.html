@@ -11,6 +11,7 @@
   </script>
   <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__">
   <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=__SITE_NAVIGATION_CSS_VERSION__">
+  <link rel="stylesheet" href="/assets/admin-fingerprint-login.css?v=__ADMIN_FINGERPRINT_LOGIN_CSS_VERSION__">
   <style>
     .proxy-market-admin-head-actions,
     .proxy-market-admin-actions,
@@ -968,6 +969,7 @@
           <button type="button" data-page="redemptionCodes">兑换邀请</button>
           <button type="button" data-page="telegram">Telegram</button>
           <button type="button" data-page="runtime">系统配置</button>
+          <button type="button" data-page="fingerprintLogin">账号与登录</button>
           <button type="button" data-page="sentimentCookies">舆情 Cookie</button>
         </nav>
 
@@ -1608,6 +1610,20 @@
         </div>
 
         <div id="proxyMarketMsg" class="msg" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="card section admin-page-view account-browser-shell" id="secFingerprintLogin" data-page-view="fingerprintLogin" data-account-browser-panel="accounts">
+        <div class="account-browser-tabs" role="tablist" aria-label="账号与登录">
+          <button type="button" class="is-active" data-fp-tab="accounts" data-account-browser-tab="accounts">账号池</button>
+          <button type="button" data-fp-tab="monitor" data-account-browser-tab="browsers">登录监控</button>
+        </div>
+        <section class="account-browser-page is-active" data-fp-panel="accounts" data-account-browser-page="accounts">
+          <div class="account-grid" id="fpAccountGrid"></div>
+        </section>
+        <section class="account-browser-page" data-fp-panel="monitor" data-account-browser-page="browsers" hidden>
+          <div id="fpLiveBrowserSessions"></div>
+        </section>
+        <div id="fingerprintLoginMsg" class="msg" role="status" aria-live="polite"></div>
       </section>
 
       <section class="card section admin-page-view" id="secSentimentCookies" data-page-view="sentimentCookies">
@@ -3106,5 +3122,6 @@
   <script src="/assets/vendor/opencc-js/st-characters.js?v=1.4.1"></script>
   <script src="/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__"></script>
   <script src="/assets/admin.js?v=__ADMIN_JS_VERSION__"></script>
+  <script src="/assets/admin-fingerprint-login.js?v=__ADMIN_FINGERPRINT_LOGIN_JS_VERSION__"></script>
 </body>
 </html>

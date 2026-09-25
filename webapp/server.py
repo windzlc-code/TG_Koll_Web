@@ -158,6 +158,7 @@ from .proxy_ip_admin import (
     stop_proxy_market_health_monitor,
 )
 from .collector_proxy_admin import register_collector_proxy_admin_routes
+from .fingerprint_login_admin import register_fingerprint_login_admin_routes
 from .proxy_purchase_api import (
     register_proxy_purchase_routes,
     start_proxy_purchase_worker,
@@ -27590,6 +27591,8 @@ def create_app() -> FastAPI:
             replacements={
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__ADMIN_JS_VERSION__": _asset_version("assets", "admin.js"),
+                "__ADMIN_FINGERPRINT_LOGIN_CSS_VERSION__": _asset_version("assets", "admin-fingerprint-login.css"),
+                "__ADMIN_FINGERPRINT_LOGIN_JS_VERSION__": _asset_version("assets", "admin-fingerprint-login.js"),
                 "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
                 "__SITE_NAVIGATION_JS_VERSION__": _asset_version("assets", "opc", "site-navigation.js"),
                 "__DEPLOYMENT_ROLE__": boundary.role,
@@ -27643,6 +27646,7 @@ def create_app() -> FastAPI:
         return _html_response_with_versions("batch.html")
 
     register_social_automation_routes(app)
+    register_fingerprint_login_admin_routes(app)
 
     def _crm_llm_provider(_tenant, request_payload: dict[str, Any]) -> dict[str, Any]:
         """Run CRM AI operations through the existing TG LLM configuration."""
