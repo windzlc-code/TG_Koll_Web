@@ -174,6 +174,8 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertIn("video-login.html", response.text)
         self.assertIn("browser", response.text)
         self.assertIn("authorization_required", response.text)
+        self.assertIn("already_authorized", response.text)
+        self.assertIn("auth_provider", response.text)
         self.assertIn("确认授权并打开视频工作台", response.text)
         self.assertNotIn("telegram/tweet/open", response.text)
 
@@ -275,9 +277,29 @@ class TelegramAdminTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json().get("authorization_required"))
+        self.assertFalse(response.json().get("already_authorized"))
         self.assertEqual(response.json().get("web_user", {}).get("username"), "vecto_user")
         self.assertEqual(response.json().get("auth_method"), "password")
         consume.assert_not_called()
+
+        with telegram_admin.db() as conn:
+            telegram_admin.ensure_telegram_schema(conn)
+            conn.execute(
+                "UPDATE telegram_trusted_users SET web_user_id = ? WHERE chat_id = ?",
+                (42, 731),
+            )
+        with mock.patch.object(
+            telegram_admin,
+            "_authenticated_video_web_session",
+            return_value=({"id": 42, "username": "vecto_user", "display_name": "Vecto User", "is_admin": 0}, "session-digest"),
+        ):
+            rebound = TestClient(app).post(
+                "/telegram/video/exchange",
+                json={"ticket": token, "browser": True, "preview": True},
+            )
+        self.assertEqual(rebound.status_code, 200)
+        self.assertFalse(rebound.json().get("authorization_required"))
+        self.assertTrue(rebound.json().get("already_authorized"))
 
     def test_load_settings_backfills_missing_user_name(self):
         telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=6258005891, label="客户A"))
@@ -391,7 +413,9 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertIn('telegram_video_init_data', js)
         self.assertIn('telegram_video_browser', js)
         self.assertIn('showTelegramAuthBanner', js)
-        self.assertIn('确认授权并打开视频工作台', js)
+        self.assertIn('独立授权页并检测当前授权状态', js)
+        self.assertIn('auth_provider', js)
+        self.assertIn('Google 官方授权', js)
         self.assertIn('oauthErrorMessage', js)
 
 

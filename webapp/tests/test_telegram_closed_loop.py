@@ -229,6 +229,8 @@ class TelegramClosedLoopTests(unittest.TestCase):
             for button in row
         }
         self.assertTrue(any("登录" in label or "切换" in label for label in status_labels))
+        self.assertIn(tg_bot.VIDEO_WEB_ACCOUNT_BUTTON, status_labels)
+        self.assertIn(tg_bot.VIDEO_GOOGLE_ACCOUNT_BUTTON, status_labels)
         self.assertTrue(any("退出" in label for label in status_labels))
         self.assertTrue(any("返回" in label for label in status_labels))
         self.assertNotIn("tv:vectosession", status_callbacks)
@@ -240,11 +242,15 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertIn("Google", login_message.answers[-1][0])
         self.assertNotIn("发送 VECTO 登录密码", login_message.answers[-1][0])
         login_markup = login_message.answers[-1][1]["reply_markup"]
-        login_button = login_markup.inline_keyboard[0][0]
-        self.assertEqual(str(getattr(login_button, "text", "")), "🌐 网页授权登录/切换 VECTO 账号")
-        self.assertEqual(getattr(login_button, "url", ""), "https://example.test/telegram/video/open?ticket=test")
-        self.assertIsNone(getattr(login_button, "web_app", None))
-        self.assertEqual(getattr(login_markup.inline_keyboard[1][0], "callback_data", ""), "tv:accountmenu")
+        password_button = login_markup.inline_keyboard[0][0]
+        google_button = login_markup.inline_keyboard[1][0]
+        self.assertEqual(str(getattr(password_button, "text", "")), tg_bot.VIDEO_WEB_ACCOUNT_BUTTON)
+        self.assertEqual(getattr(password_button, "url", ""), "https://example.test/telegram/video/open?ticket=test&provider=password")
+        self.assertEqual(str(getattr(google_button, "text", "")), tg_bot.VIDEO_GOOGLE_ACCOUNT_BUTTON)
+        self.assertEqual(getattr(google_button, "url", ""), "https://example.test/telegram/video/open?ticket=test&provider=google")
+        self.assertIsNone(getattr(password_button, "web_app", None))
+        self.assertIsNone(getattr(google_button, "web_app", None))
+        self.assertEqual(getattr(login_markup.inline_keyboard[2][0], "callback_data", ""), "tv:accountmenu")
 
     def test_video_login_cancel_button_clears_pending_flow(self):
         dispatcher = tg_bot.build_dispatcher(
@@ -266,7 +272,7 @@ class TelegramClosedLoopTests(unittest.TestCase):
             for row in markup.inline_keyboard
             for button in row
         }
-        self.assertIn("🌐 网页授权登录/切换 VECTO 账号", labels)
+        self.assertIn(tg_bot.VIDEO_WEB_ACCOUNT_BUTTON, labels)
         self.assertIn("返回账号管理", labels)
 
     def test_video_account_subpages_use_callback_edit_flow(self):
@@ -302,15 +308,17 @@ class TelegramClosedLoopTests(unittest.TestCase):
             for button in row
             if getattr(button, "url", None)
         )
-        self.assertEqual(getattr(session_login_button, "url", ""), "https://example.test/telegram/video/open?ticket=test")
+        self.assertEqual(getattr(session_login_button, "url", ""), "https://example.test/telegram/video/open?ticket=test&provider=password")
         self.assertIsNone(getattr(session_login_button, "web_app", None))
 
         asyncio.run(callback(_VideoCallbackQuery(message, "tv:chatlogin"), state))
         self.assertIn("网页授权登录", message.edits[-1][0])
         self.assertNotIn("发送 VECTO 登录密码", message.edits[-1][0])
         login_markup = message.edits[-1][1]["reply_markup"]
-        self.assertEqual(getattr(login_markup.inline_keyboard[0][0], "url", ""), "https://example.test/telegram/video/open?ticket=test")
+        self.assertEqual(getattr(login_markup.inline_keyboard[0][0], "url", ""), "https://example.test/telegram/video/open?ticket=test&provider=password")
+        self.assertEqual(getattr(login_markup.inline_keyboard[1][0], "url", ""), "https://example.test/telegram/video/open?ticket=test&provider=google")
         self.assertIsNone(getattr(login_markup.inline_keyboard[0][0], "web_app", None))
+        self.assertIsNone(getattr(login_markup.inline_keyboard[1][0], "web_app", None))
 
         asyncio.run(callback(_VideoCallbackQuery(message, "tv:login_cancel"), state))
         self.assertIn("已取消视频工作台登录", message.edits[-1][0])

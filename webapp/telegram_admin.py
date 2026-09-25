@@ -1043,6 +1043,26 @@ def video_member_has_active_web_session(member: Any) -> bool:
     return row is not None
 
 
+def video_member_bound_to_user(chat_id: int, web_user_id: int) -> bool:
+    """Return whether this Telegram member already selected this VECTO user.
+
+    A current browser session is still required by the exchange endpoint.  The
+    binding check only lets the bridge skip a second confirmation when the
+    same account is already selected, including after normal session rotation.
+    """
+    member_id = int(chat_id or 0)
+    user_id = int(web_user_id or 0)
+    if member_id <= 0 or user_id <= 0:
+        return False
+    with db() as conn:
+        ensure_telegram_schema(conn)
+        row = conn.execute(
+            "SELECT web_user_id, enabled FROM telegram_trusted_users WHERE chat_id = ?",
+            (member_id,),
+        ).fetchone()
+    return bool(row is not None and int(row["enabled"] or 0) == 1 and int(row["web_user_id"] or 0) == user_id)
+
+
 def logout_video_member(chat_id: int) -> dict[str, Any]:
     member_id = int(chat_id or 0)
     if member_id <= 0:
@@ -1329,7 +1349,8 @@ def inject_telegram_admin(
   const ticket = TICKET;
   const loginContextKey = "vecto-telegram-video-login-context";
   const loginReturn = "/telegram/video/open?ticket=" + encodeURIComponent(ticket);
-  const loginPage = "/video-login.html?return_url=" + encodeURIComponent(loginReturn) + "&telegram_video=1";
+  const requestedProvider = new URLSearchParams(window.location.search).get("provider") === "google" ? "google" : "password";
+  const loginPage = "/video-login.html?return_url=" + encodeURIComponent(loginReturn) + "&telegram_video=1&auth_provider=" + requestedProvider;
   const webApp = window.Telegram?.WebApp;
   const initData = webApp?.initData || "";
   const browser = !initData;
@@ -1383,6 +1404,7 @@ def inject_telegram_admin(
             ticket,
             initData,
             browser,
+            provider: requestedProvider,
             expiresAt: Date.now() + 150000,
           }));
         } catch (_) {
@@ -1394,6 +1416,11 @@ def inject_telegram_admin(
       if (!response.ok) {
         const message = detail?.message || detail || "Telegram 视频工作台授权失败，请重试。";
         showFailure(String(message), response.status === 410);
+        return;
+      }
+      if (!confirm && payload.already_authorized) {
+        status.textContent = "已检测到当前 Telegram 已绑定此 VECTO 账号，跳过重复授权，正在打开视频工作台…";
+        await exchange(true);
         return;
       }
       if (!confirm && payload.authorization_required) {
@@ -1443,11 +1470,13 @@ def inject_telegram_admin(
                 raise HTTPException(status_code=401, detail="缺少 Telegram 浏览器授权上下文，请回到 Bot 重新打开入口")
             validate_video_browser_login_context(payload.ticket, runtime)
             tg_profile = {"id": expected_chat_id, "username": "", "display_name": ""}
+        already_authorized = video_member_bound_to_user(expected_chat_id, int(web_user.get("id") or 0))
         if payload.preview:
             return JSONResponse(
                 {
                     "ok": True,
-                    "authorization_required": True,
+                    "authorization_required": not already_authorized,
+                    "already_authorized": already_authorized,
                     "web_user": {
                         "id": int(web_user.get("id") or 0),
                         "username": str(web_user.get("username") or ""),

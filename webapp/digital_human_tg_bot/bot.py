@@ -10,6 +10,7 @@ import re
 import shutil
 import sqlite3
 import time
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -233,6 +234,8 @@ STATUS_TEXTS = frozenset(
 VIDEO_LOGIN_BUTTON = "🔐 登录 VECTO 账号"
 VIDEO_SWITCH_BUTTON = "🔄 切换 VECTO 账号"
 VIDEO_LOGOUT_BUTTON = "🚪 退出 VECTO 账号"
+VIDEO_WEB_ACCOUNT_BUTTON = "🌐 VECTO 网页账号登录/切换"
+VIDEO_GOOGLE_ACCOUNT_BUTTON = "🔵 Google 官方授权登录/切换"
 VIDEO_LOGIN_CANCEL_BUTTON = "❌ 取消登录"
 ACCOUNT_BACK_BUTTON = "返回工作台"
 VIDEO_ACCOUNT_SESSION_BUTTON = "🔐 VECTO 网页账号（登录/退出）"
@@ -2100,15 +2103,23 @@ def build_dispatcher(
         rows: list[list[InlineKeyboardButton]] = []
         clean_chat_id = int(chat_id or 0)
         if clean_chat_id > 0 and _is_chat_authorized(clean_chat_id):
-            login_button = _video_web_login_button(clean_chat_id)
-            rows.append([
-                login_button
-                if login_button is not None
-                else InlineKeyboardButton(
-                    text="🌐 网页授权登录/切换 VECTO 账号",
+            login_url = _video_web_login_url(clean_chat_id)
+            if login_url:
+                rows.append([_video_web_login_button(
+                    clean_chat_id,
+                    provider="password",
+                    login_url=login_url,
+                )])
+                rows.append([_video_web_login_button(
+                    clean_chat_id,
+                    provider="google",
+                    login_url=login_url,
+                )])
+            else:
+                rows.append([InlineKeyboardButton(
+                    text=VIDEO_WEB_ACCOUNT_BUTTON,
                     callback_data="tv:chatlogin",
-                )
-            ])
+                )])
             if include_logout:
                 rows.append([InlineKeyboardButton(
                     text=VIDEO_LOGOUT_BUTTON,
@@ -2117,19 +2128,34 @@ def build_dispatcher(
         rows.append([InlineKeyboardButton(text="返回总控菜单", callback_data="tv:menu")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    def _video_web_login_button(chat_id: int) -> InlineKeyboardButton | None:
+    def _video_web_login_url(chat_id: int) -> str:
         if web_login_url is None or int(chat_id or 0) <= 0 or not _is_chat_authorized(int(chat_id)):
-            return None
+            return ""
         try:
             login_url = str(web_login_url(int(chat_id)) or "").strip()
         except Exception:
             logger.exception("Failed to create video browser login URL")
-            return None
+            return ""
+        return login_url
+
+    def _video_provider_url(login_url: str, provider: str) -> str:
+        parsed = urlsplit(str(login_url or ""))
+        query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key != "provider"]
+        query.append(("provider", "google" if str(provider or "").strip().lower() == "google" else "password"))
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+    def _video_web_login_button(
+        chat_id: int,
+        *,
+        provider: str = "password",
+        login_url: str | None = None,
+    ) -> InlineKeyboardButton | None:
+        login_url = str(login_url or _video_web_login_url(chat_id) or "").strip()
         if not login_url:
             return None
         return InlineKeyboardButton(
-            text="🌐 网页授权登录/切换 VECTO 账号",
-            url=login_url,
+            text=(VIDEO_GOOGLE_ACCOUNT_BUTTON if provider == "google" else VIDEO_WEB_ACCOUNT_BUTTON),
+            url=_video_provider_url(login_url, provider),
         )
 
     def _account_keyboard(
@@ -2141,13 +2167,23 @@ def build_dispatcher(
     ) -> InlineKeyboardMarkup:
         rows: list[list[InlineKeyboardButton]] = []
         if include_login:
-            login_button = _video_web_login_button(int(chat_id or 0))
-            if login_button is None:
-                login_button = InlineKeyboardButton(
-                    text="🌐 网页授权登录/切换 VECTO 账号",
+            login_url = _video_web_login_url(int(chat_id or 0))
+            if login_url:
+                rows.append([_video_web_login_button(
+                    int(chat_id or 0),
+                    provider="password",
+                    login_url=login_url,
+                )])
+                rows.append([_video_web_login_button(
+                    int(chat_id or 0),
+                    provider="google",
+                    login_url=login_url,
+                )])
+            else:
+                rows.append([InlineKeyboardButton(
+                    text=VIDEO_WEB_ACCOUNT_BUTTON,
                     callback_data="tv:chatlogin",
-                )
-            rows.append([login_button])
+                )])
         if include_logout:
             rows.append([InlineKeyboardButton(
                 text=VIDEO_LOGOUT_BUTTON,
@@ -3412,7 +3448,7 @@ def build_dispatcher(
                     active = bool(has_active_web_session(member))
                 except Exception:
                     active = False
-            status = "已登录并绑定" if active and authorized else "网页会话已失效"
+            status = "已登录并绑定（已检测，无需重复授权）" if active and authorized else "网页会话已失效"
         elif authorized:
             status = "后台授权可用，可选绑定 VECTO 账号"
         return (
@@ -3479,8 +3515,8 @@ def build_dispatcher(
             return
         _clear_video_login(chat_id)
         await state.clear()
-        login_button = _video_web_login_button(chat_id)
-        if login_button is None:
+        login_url = _video_web_login_url(chat_id)
+        if not login_url:
             await respond(
                 "视频 Bot 的网页授权入口尚未就绪，请稍后重试。",
                 reply_markup=_account_keyboard(chat_id=chat_id),
@@ -3488,10 +3524,11 @@ def build_dispatcher(
             return
         await respond(
             "🌐 网页授权登录\n"
-            "请点击下方按钮，在 VECTO 网页中完成账号登录或 Google 授权。\n"
+            "请选择 VECTO 网页账号登录，或使用 Google 官方授权。\n"
             "登录成功后会自动绑定视频工作台并打开视频页面；Telegram 不接收或保存账号密码。",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [login_button],
+                [_video_web_login_button(chat_id, provider="password", login_url=login_url)],
+                [_video_web_login_button(chat_id, provider="google", login_url=login_url)],
                 [InlineKeyboardButton(text="返回账号管理", callback_data="tv:accountmenu")],
             ]),
         )
@@ -3515,18 +3552,19 @@ def build_dispatcher(
             return
         _clear_video_login(chat_id)
         await state.clear()
-        login_button = _video_web_login_button(chat_id)
-        if login_button is None:
+        login_url = _video_web_login_url(chat_id)
+        if not login_url:
             await message.answer(
                 "视频 Bot 的网页授权入口尚未就绪，请稍后重试。",
                 reply_markup=_account_keyboard(chat_id=chat_id),
             )
             return
         await message.answer(
-            "账号登录已统一改为网页授权，请点击下方按钮完成登录或 Google 授权。\n"
+            "账号登录已统一改为网页授权，请选择 VECTO 网页账号或 Google 官方授权。\n"
             "请不要在 Telegram 聊天中发送账号、密码或验证码。",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [login_button],
+                [_video_web_login_button(chat_id, provider="password", login_url=login_url)],
+                [_video_web_login_button(chat_id, provider="google", login_url=login_url)],
                 [InlineKeyboardButton(text="返回账号管理", callback_data="tv:accountmenu")],
             ]),
         )

@@ -82,6 +82,7 @@
 
   function telegramLoginContext() {
     const params = new URLSearchParams(window.location.search);
+    const requestedProvider = params.get("auth_provider") === "google" ? "google" : "password";
     const contextSpec = Object.values(TELEGRAM_LOGIN_CONTEXTS).find((candidate) => params.get(candidate.flag) === "1");
     if (!contextSpec) return null;
     try {
@@ -98,6 +99,7 @@
         ticket,
         initData: String(context.initData || ""),
         browser: Boolean(context.browser),
+        provider: String(context.provider || requestedProvider).toLowerCase() === "google" ? "google" : "password",
       };
     } catch {
       return null;
@@ -111,9 +113,14 @@
     banner.className = "msg ok telegram-login-context-banner";
     banner.setAttribute("role", "status");
     banner.textContent = context.returnPath === "/telegram/video/open"
-      ? "Telegram 视频工作台授权：登录完成后会返回独立授权页，请点击“确认授权并打开视频工作台”。"
+      ? `Telegram 视频工作台：已选择${context.provider === "google" ? " Google 官方授权" : " VECTO 网页账号登录"}。登录完成后会返回独立授权页并检测当前授权状态。`
       : "Telegram 推文工作台授权：登录完成后会返回 Telegram 授权页。";
     form.prepend(banner);
+    if (context.returnPath === "/telegram/video/open" && context.provider === "google" && googleButton) {
+      googleButton.setAttribute("aria-label", "继续使用 Google 官方授权");
+      const label = googleButton.querySelector("span");
+      if (label) label.textContent = "继续使用 Google 官方授权";
+    }
   }
 
   function setStatus(message, ok) {
