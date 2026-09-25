@@ -106,7 +106,7 @@ def _video_callback_route(dispatcher, name: str):
 
 class TelegramClosedLoopTests(unittest.TestCase):
     def test_video_main_menu_keeps_original_controls_and_adds_account_entry(self):
-        """Controls gain visual icons while legacy labels remain accepted."""
+        """The account entry is additive; the original video controls stay unchanged."""
         markup = tg_bot._menu_keyboard()
         labels = [
             [str(getattr(button, "text", "")) for button in row]
@@ -115,23 +115,12 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertEqual(
             labels,
             [
-                [tg_bot.DIGITAL_HUMAN_VIDEO_MENU_BUTTON, tg_bot.ECOMMERCE_SHORT_VIDEO_MENU_BUTTON],
-                [tg_bot.VIDEO_EDIT_MENU_BUTTON, tg_bot.IMAGE_GENERATION_MENU_BUTTON_DISPLAY],
+                [tg_bot.DIGITAL_HUMAN_VIDEO_BUTTON, tg_bot.ECOMMERCE_SHORT_VIDEO_BUTTON],
+                [tg_bot.VIDEO_EDIT_BUTTON, tg_bot.IMAGE_GENERATION_MENU_BUTTON],
                 ["🔐 账号管理"],
-                [tg_bot.RERUN_MENU_BUTTON, tg_bot.STATUS_MENU_BUTTON, tg_bot.STOP_MENU_BUTTON],
+                [tg_bot.RERUN_BUTTON, tg_bot.STATUS_BUTTON, tg_bot.STOP_BUTTON],
             ],
         )
-
-        for legacy_label, accepted_labels in (
-            (tg_bot.DIGITAL_HUMAN_VIDEO_BUTTON, tg_bot.DIGITAL_HUMAN_VIDEO_TEXTS),
-            (tg_bot.ECOMMERCE_SHORT_VIDEO_BUTTON, tg_bot.ECOMMERCE_SHORT_VIDEO_TEXTS),
-            (tg_bot.VIDEO_EDIT_BUTTON, tg_bot.VIDEO_EDIT_TEXTS),
-            (tg_bot.IMAGE_GENERATION_MENU_BUTTON, tg_bot.IMAGE_GENERATION_MENU_TEXTS),
-            (tg_bot.RERUN_BUTTON, tg_bot.RERUN_TEXTS),
-            (tg_bot.STATUS_BUTTON, tg_bot.STATUS_TEXTS),
-            (tg_bot.STOP_BUTTON, tg_bot.STOP_TEXTS),
-        ):
-            self.assertIn(legacy_label, accepted_labels)
 
         source = Path(tg_bot.__file__).read_text(encoding="utf-8")
         # Existing labels remain the source-level contract for old keyboards
@@ -157,8 +146,11 @@ class TelegramClosedLoopTests(unittest.TestCase):
             self.assertIn(old_label, source)
 
     def test_video_start_shows_main_menu_before_web_login(self):
-        """The account entry must be reachable from /start before authentication."""
-        service = SimpleNamespace(get_app_title=lambda: "视频工作台")
+        """A backend-authorized chat can reach the account entry from /start."""
+        service = SimpleNamespace(
+            is_chat_authorized=lambda _chat_id: True,
+            get_app_title=lambda: "视频工作台",
+        )
         dispatcher = tg_bot.build_dispatcher(SimpleNamespace(), service)
         callback = _video_route_callback(dispatcher, "cmd_start")
         message = _VideoReplyMessage(text="/start")
@@ -170,32 +162,18 @@ class TelegramClosedLoopTests(unittest.TestCase):
         markup = message.answers[0][1]["reply_markup"]
         labels = [[str(getattr(button, "text", "")) for button in row] for row in markup.keyboard]
         self.assertEqual(labels[2], ["🔐 账号管理"])
-        self.assertEqual(labels[3], [tg_bot.RERUN_MENU_BUTTON, tg_bot.STATUS_MENU_BUTTON, tg_bot.STOP_MENU_BUTTON])
+        self.assertEqual(labels[3], [tg_bot.RERUN_BUTTON, tg_bot.STATUS_BUTTON, tg_bot.STOP_BUTTON])
 
-    def test_video_bot_command_menu_covers_supported_commands(self):
-        commands = tg_bot._video_bot_commands()
-        self.assertEqual(
-            [command.command for command in commands],
-            [
-                "start",
-                "account",
-                "login",
-                "logout",
-                "status",
-                "workflow",
-                "stop",
-                "rerun",
-                "cancel",
-            ],
-        )
-
-    def test_video_workbench_rejects_legacy_whitelist_without_web_login(self):
-        """An admin-seeded Chat ID is not enough for the new self-service gate."""
+    def test_video_workbench_accepts_legacy_whitelist_without_web_login(self):
+        """A backend-authorized Chat ID remains sufficient for video actions."""
         from types import SimpleNamespace
 
         dispatcher = tg_bot.build_dispatcher(
             SimpleNamespace(),
-            _AuthorizedVideoService(),
+            SimpleNamespace(
+                is_chat_authorized=lambda _chat_id: True,
+                get_app_title=lambda: "视频工作台",
+            ),
             load_member=lambda _chat_id: {
                 "chat_id": 6258005891,
                 "web_user_id": 0,
@@ -204,15 +182,15 @@ class TelegramClosedLoopTests(unittest.TestCase):
             has_active_web_session=lambda _member: True,
             chat_login=lambda *_args, **_kwargs: {"ok": True},
         )
-        callback = _video_route_callback(dispatcher, "cmd_status")
+        callback = _video_route_callback(dispatcher, "cmd_start")
         message = _VideoReplyMessage()
         with mock.patch("webapp.telegram_admin.remember_trusted_user_profile"):
             asyncio.run(callback(message))
 
         self.assertTrue(message.answers)
         response_texts = [text for text, _kwargs in message.answers]
-        self.assertTrue(any("登录" in text or "绑定" in text for text in response_texts))
-        self.assertFalse(any("正在读取工作台状态" in text for text in response_texts))
+        self.assertTrue(any("可用工作流" in text for text in response_texts))
+        self.assertFalse(any("后台白名单不会直接解锁" in text for text in response_texts))
 
     def test_video_account_status_and_login_prompt_are_two_level_flow(self):
         """Account status opens first, then the same private-chat login flow as Tweet Bot."""
@@ -335,38 +313,11 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertIn("已取消视频工作台登录", message.edits[-1][0])
         self.assertIn("账号管理", message.edits[-1][0])
 
-    def test_video_input_step_has_inline_escape_hatch_and_status(self):
-        service = SimpleNamespace(
-            is_chat_authorized=lambda _chat_id: True,
-            get_status_text=lambda **_kwargs: "当前没有后台任务。",
-        )
-        dispatcher = tg_bot.build_dispatcher(
-            SimpleNamespace(),
-            service,
-            load_member=lambda _chat_id: {
-                "chat_id": 6258005891,
-                "web_user_id": 42,
-                "web_username": "alice",
-                "enabled": 1,
-            },
-            has_active_web_session=lambda _member: True,
-        )
-        callback = _video_callback_route(dispatcher, "video_account_callback")
-        state = _VideoFlowState()
-        message = _VideoReplyMessage()
-        asyncio.run(callback(_VideoCallbackQuery(message, "tv:step_status"), state))
-        self.assertIn("当前 Telegram 步骤", message.edits[-1][0])
-        status_markup = message.edits[-1][1]["reply_markup"]
-        self.assertIn(
-            "tv:step_menu",
-            {
-                str(button.callback_data)
-                for row in status_markup.inline_keyboard
-                for button in row
-            },
-        )
-        asyncio.run(callback(_VideoCallbackQuery(message, "tv:step_cancel"), state))
-        self.assertIn("已取消当前步骤", message.edits[-1][0])
+    def test_video_workflows_do_not_emit_late_step_navigation(self):
+        """The initial video Bot has no generic inline step-navigation banner."""
+        source = Path(tg_bot.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("步骤导航", source)
+        self.assertNotIn("tv:step_", source)
 
     def test_account_and_main_menu_return_are_available_before_login(self):
         dispatcher = tg_bot.build_dispatcher(
@@ -388,54 +339,17 @@ class TelegramClosedLoopTests(unittest.TestCase):
         asyncio.run(main_back(main_message, state))
         self.assertIn("已返回主菜單", main_message.answers[-1][0])
 
-    def test_video_image_steps_honor_visible_back_button(self):
-        """Image workflow keyboards must not expose a dead 返回上一步 action."""
-        dispatcher = tg_bot.build_dispatcher(
-            SimpleNamespace(),
-            _AuthorizedVideoService(),
-            load_member=lambda _chat_id: {"web_user_id": 42, "enabled": 1},
-            has_active_web_session=lambda _member: True,
-        )
-        cases = (
-            (
-                "on_image_generate_model_image",
-                tg_bot.ProductionWorkflowForm.image_waiting_for_model_image,
-                tg_bot.ProductionWorkflowForm.image_waiting_for_product_image,
-                "商品图",
-            ),
-            (
-                "on_image_generate_size",
-                tg_bot.ProductionWorkflowForm.image_waiting_for_size,
-                tg_bot.ProductionWorkflowForm.image_waiting_for_model_image,
-                "模特图",
-            ),
-            (
-                "on_image_generate_prompt",
-                tg_bot.ProductionWorkflowForm.image_waiting_for_prompt,
-                tg_bot.ProductionWorkflowForm.image_waiting_for_size,
-                "图片比例",
-            ),
-        )
-        for handler_name, current_state, expected_state, expected_marker in cases:
-            with self.subTest(handler_name=handler_name):
-                callback = _video_route_callback(dispatcher, handler_name)
-                state = _VideoFlowState()
-                state.current = current_state.state
-                message = _VideoReplyMessage(text=tg_bot.BACK_STEP_BUTTON)
+    def test_video_image_keyboard_keeps_initial_navigation(self):
+        markup = tg_bot._image_edit_size_keyboard()
+        labels = {
+            str(getattr(button, "text", ""))
+            for row in markup.keyboard
+            for button in row
+        }
+        self.assertNotIn(tg_bot.BACK_STEP_BUTTON, labels)
+        self.assertIn(tg_bot.MAIN_MENU_BUTTON, labels)
 
-                asyncio.run(callback(message, state))
-
-                self.assertIn(expected_marker, message.answers[-2][0])
-                self.assertEqual(state.current, expected_state.state)
-                self.assertTrue(
-                    any(
-                        str(getattr(button, "text", "")) == tg_bot.BACK_STEP_BUTTON
-                        for row in message.answers[-2][1]["reply_markup"].keyboard
-                        for button in row
-                    )
-                )
-
-    def test_video_duration_validation_keeps_step_navigation(self):
+    def test_video_duration_validation_keeps_initial_menu(self):
         dispatcher = tg_bot.build_dispatcher(
             SimpleNamespace(),
             _AuthorizedVideoService(),
@@ -467,20 +381,8 @@ class TelegramClosedLoopTests(unittest.TestCase):
                     for row in markup.keyboard
                     for button in row
                 }
-                self.assertIn(tg_bot.BACK_STEP_BUTTON, labels)
+                self.assertNotIn(tg_bot.BACK_STEP_BUTTON, labels)
                 self.assertEqual(state.current, state_name.state)
-
-    def test_legacy_model_duration_state_cannot_submit_a_task(self):
-        dispatcher = tg_bot.build_dispatcher(SimpleNamespace(), _AuthorizedVideoService())
-        callback = _video_route_callback(dispatcher, "on_replace_model_duration")
-        state = _VideoFlowState()
-        state.current = tg_bot.ProductionWorkflowForm.replace_model_waiting_for_duration.state
-        message = _VideoReplyMessage(text="30")
-
-        asyncio.run(callback(message, state))
-
-        self.assertTrue(state.cleared)
-        self.assertIn("旧版模特替换步骤已结束", message.answers[-1][0])
 
     def test_original_bot_keyboards_are_copied(self):
         source = Path(tg_bot.__file__).read_text(encoding="utf-8")
