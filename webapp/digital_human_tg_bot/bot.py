@@ -252,6 +252,10 @@ VIDEO_ACCOUNT_SESSION_LEGACY_BUTTON = "🔐 VECTO 网页账号（登录/退出�
 VIDEO_LOGIN_TEXTS = frozenset({VIDEO_LOGIN_BUTTON, VIDEO_LOGIN_LEGACY_BUTTON, VIDEO_SWITCH_BUTTON, VIDEO_SWITCH_LEGACY_BUTTON})
 VIDEO_LOGOUT_TEXTS = frozenset({VIDEO_LOGOUT_BUTTON, VIDEO_LOGOUT_LEGACY_BUTTON})
 VIDEO_ACCOUNT_SESSION_TEXTS = frozenset({VIDEO_ACCOUNT_SESSION_BUTTON, VIDEO_ACCOUNT_SESSION_LEGACY_BUTTON})
+VIDEO_ACCESS_DENIED_TEXT = (
+    "当前 Telegram 账号未完成自助登记，或已被管理员停用。\n"
+    "首次使用请发送 /start；若仍无法使用，请联系管理员。"
+)
 VIDEO_CHAT_LOGIN_TTL_SECONDS = 180
 VIDEO_CHAT_LOGIN_MAX_ATTEMPTS = 3
 
@@ -3504,7 +3508,7 @@ def build_dispatcher(
             return
         if not _is_chat_authorized(chat_id):
             await respond(
-                "当前 Telegram 账号尚未完成视频工作台自助登记，请重新发送 /start 后重试。",
+                VIDEO_ACCESS_DENIED_TEXT,
                 reply_markup=_account_management_keyboard(),
             )
             return
@@ -3650,7 +3654,7 @@ def build_dispatcher(
             "aclogout_confirm",
         } and not _is_chat_authorized(chat_id):
             await message.edit_text(
-                "当前 Telegram 账号尚未完成视频工作台自助登记，请重新发送 /start 后重试。",
+                VIDEO_ACCESS_DENIED_TEXT,
                 reply_markup=_account_management_keyboard(),
             )
             return
@@ -3736,7 +3740,7 @@ def build_dispatcher(
         await state.clear()
         if not _is_chat_authorized(int(getattr(getattr(message, "chat", None), "id", 0) or 0)):
             await message.answer(
-                "当前 Telegram 账号尚未完成视频工作台自助登记，请重新发送 /start 后重试。",
+                VIDEO_ACCESS_DENIED_TEXT,
                 reply_markup=_account_management_keyboard(),
             )
             return
@@ -3747,7 +3751,7 @@ def build_dispatcher(
         await state.clear()
         if not _is_chat_authorized(int(getattr(getattr(message, "chat", None), "id", 0) or 0)):
             await message.answer(
-                "当前 Telegram 账号尚未完成视频工作台自助登记，请重新发送 /start 后重试。",
+                VIDEO_ACCESS_DENIED_TEXT,
                 reply_markup=_account_management_keyboard(),
             )
             return
@@ -3796,7 +3800,7 @@ def build_dispatcher(
             return
         chat_id = int(getattr(getattr(message, "chat", None), "id", 0) or 0)
         if not _is_chat_authorized(chat_id):
-            await message.answer("当前 Telegram 账号尚未完成视频工作台自助登记，请重新发送 /start 后重试。")
+            await message.answer(VIDEO_ACCESS_DENIED_TEXT)
             return
         await state.clear()
         await _show_video_logout_step(message)
