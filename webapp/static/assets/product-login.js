@@ -104,6 +104,18 @@
     }
   }
 
+  function showTelegramAuthBanner(context) {
+    if (!context || !form || form.querySelector("[data-telegram-auth-banner]")) return;
+    const banner = document.createElement("div");
+    banner.dataset.telegramAuthBanner = "1";
+    banner.className = "msg ok telegram-login-context-banner";
+    banner.setAttribute("role", "status");
+    banner.textContent = context.returnPath === "/telegram/video/open"
+      ? "Telegram 视频工作台授权：登录完成后会返回独立授权页，请点击“确认授权并打开视频工作台”。"
+      : "Telegram 推文工作台授权：登录完成后会返回 Telegram 授权页。";
+    form.prepend(banner);
+  }
+
   function setStatus(message, ok) {
     if (!status) return;
     status.textContent = message || "";
@@ -126,6 +138,9 @@
       verification: payload.verification || {},
     };
   }
+
+  const initialTelegramContext = telegramLoginContext();
+  showTelegramAuthBanner(initialTelegramContext);
 
   async function api(path, options = {}) {
     const response = await fetch(path, { credentials: "include", ...options });

@@ -15,7 +15,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -75,6 +75,11 @@ class VideoTgExchangePayload(BaseModel):
     # URL buttons open the normal HTTPS browser instead of Telegram's WebApp
     # surface. The one-time ticket remains the browser hand-off credential.
     browser: bool = False
+    # The bridge first previews the signed-in account, then asks the user to
+    # explicitly authorize the Telegram workbench before consuming the ticket.
+    # Keep the default false for older bridge clients that already completed
+    # the one-click flow.
+    preview: bool = False
 
 
 def ensure_telegram_schema(conn) -> None:
@@ -750,6 +755,51 @@ def create_video_webapp_url(chat_id: int, get_runtime: GetRuntime) -> str:
     return f"{base}/telegram/video/open?{urllib.parse.urlencode({'ticket': token})}"
 
 
+def _send_video_authorization_notice(
+    runtime: dict[str, Any] | None,
+    chat_id: int,
+    web_user: dict[str, Any],
+) -> None:
+    """Send a best-effort authorization receipt to the video Bot chat.
+
+    The browser exchange is the source of truth; this message is deliberately
+    out-of-band and must never make a successful binding fail if Telegram is
+    temporarily unavailable.  It uses the already-running video Bot token for
+    ``sendMessage`` only and does not start another polling worker.
+    """
+    config = runtime if isinstance(runtime, dict) else {}
+    token = str(config.get("telegram_bot_token") or "").strip()
+    if not bool(config.get("telegram_bot_enabled")) or not token or int(chat_id or 0) <= 0:
+        return
+    username = str(web_user.get("username") or "").strip()
+    display_name = str(web_user.get("display_name") or "").strip()
+    account = username or display_name or f"用户 {int(web_user.get('id') or 0)}"
+    payload = {
+        "chat_id": int(chat_id),
+        "text": (
+            "✅ Telegram 视频工作台授权成功\n\n"
+            f"VECTO 网页账号：{account}\n"
+            "当前 Telegram 账号已完成绑定，网页工作台已打开。\n"
+            "如需切换账号，请再次点击「🔐 账号管理」。"
+        ),
+        "disable_web_page_preview": True,
+    }
+    request = urllib.request.Request(
+        f"{TELEGRAM_API_ROOT}/bot{token}/sendMessage",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            response.read(256)
+    except Exception:
+        # Telegram acknowledgement is helpful but not part of the binding
+        # transaction.  Never turn a successful browser authorization into a
+        # visible error because the Bot API is briefly unreachable.
+        logger.warning("Unable to send video Telegram authorization receipt", exc_info=True)
+
+
 def _authenticated_video_web_session(request: Request) -> tuple[dict[str, Any], str]:
     """Resolve the existing normal/admin browser session for video binding."""
     candidates = (
@@ -1235,48 +1285,78 @@ def inject_telegram_admin(
 <meta name="robots" content="noindex,nofollow,noarchive">
 <title>绑定 Telegram 视频工作台</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<style>body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}main{max-width:520px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}h1{font-size:22px;margin:0 0 12px}p{line-height:1.65;color:#52697a}#status{min-height:1.8em}</style></head>
-<body><main><h1>正在绑定 Telegram 视频工作台</h1><p id="status">正在验证 Telegram 身份和网页登录状态，请稍候…</p></main>
+<style>body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}main{max-width:520px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}h1{font-size:22px;margin:0 0 12px}p{line-height:1.65;color:#52697a}#status{min-height:1.8em}.account{padding:14px 16px;border-radius:10px;background:#eef5f8;color:#193247;font-weight:600}.authorize{width:100%;border:0;border-radius:10px;padding:13px 16px;background:#193247;color:#fff;font-size:16px;font-weight:700;cursor:pointer}.authorize:disabled{opacity:.6;cursor:wait}</style></head>
+<body><main><h1>Telegram 视频工作台授权</h1><p id="status">正在验证 Telegram 身份和网页登录状态，请稍候…</p><div id="actions"></div></main>
 <script>
 (async () => {
   const status = document.getElementById("status");
+  const actions = document.getElementById("actions");
   const ticket = TICKET;
   const loginContextKey = "vecto-telegram-video-login-context";
   const loginReturn = "/telegram/video/open?ticket=" + encodeURIComponent(ticket);
   const loginPage = "/video-login.html?return_url=" + encodeURIComponent(loginReturn) + "&telegram_video=1";
-  try {
-    const webApp = window.Telegram?.WebApp;
-    const initData = webApp?.initData || "";
-    const browser = !initData;
-    if (!browser) webApp.ready();
-    const response = await fetch("/telegram/video/exchange", {
-      method: "POST", credentials: "same-origin",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ticket, init_data: initData, browser}),
+  const webApp = window.Telegram?.WebApp;
+  const initData = webApp?.initData || "";
+  const browser = !initData;
+  if (!browser) webApp.ready();
+
+  function showAuthorizationPrompt(payload, authorize) {
+    const account = payload?.web_user || {};
+    const username = String(account.username || account.display_name || "当前 VECTO 账号");
+    status.textContent = "已检测到网页登录状态，请确认将此账号授权给当前 Telegram 视频工作台。";
+    actions.replaceChildren();
+    const accountLine = document.createElement("p");
+    accountLine.className = "account";
+    accountLine.textContent = "VECTO 网页账号：" + username;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "authorize";
+    button.textContent = "✅ 确认授权并打开视频工作台";
+    button.addEventListener("click", () => {
+      button.disabled = true;
+      authorize(true);
     });
-    const payload = await response.json().catch(() => ({}));
-    const detail = payload?.detail;
-    if (response.status === 401 && detail?.code === "web_login_required") {
-      try {
-        sessionStorage.setItem(loginContextKey, JSON.stringify({
-          ticket,
-          initData,
-          browser,
-          expiresAt: Date.now() + 150000,
-        }));
-      } catch (_) {
-        throw new Error("当前浏览器不支持安全登录续接，请重新打开授权入口");
-      }
-      window.location.replace(loginPage);
-      return;
-    }
-    if (!response.ok) throw new Error(detail?.message || detail || "绑定失败");
-    try { sessionStorage.removeItem(loginContextKey); } catch (_) {}
-    status.textContent = "绑定成功，正在打开视频工作台…";
-    window.location.replace(payload.target || "/video.html");
-  } catch (error) {
-    status.textContent = error?.message || String(error);
+    actions.append(accountLine, button);
   }
+
+  async function exchange(confirm) {
+    try {
+      status.textContent = confirm ? "正在确认授权，请稍候…" : "正在检查网页登录状态…";
+      const response = await fetch("/telegram/video/exchange", {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ticket, init_data: initData, browser, preview: !confirm}),
+      });
+      const payload = await response.json().catch(() => ({}));
+      const detail = payload?.detail;
+      if (response.status === 401 && detail?.code === "web_login_required") {
+        try {
+          sessionStorage.setItem(loginContextKey, JSON.stringify({
+            ticket,
+            initData,
+            browser,
+            expiresAt: Date.now() + 150000,
+          }));
+        } catch (_) {
+          throw new Error("当前浏览器不支持安全登录续接，请重新打开授权入口");
+        }
+        window.location.replace(loginPage);
+        return;
+      }
+      if (!response.ok) throw new Error(detail?.message || detail || "绑定失败");
+      if (!confirm && payload.authorization_required) {
+        showAuthorizationPrompt(payload, exchange);
+        return;
+      }
+      try { sessionStorage.removeItem(loginContextKey); } catch (_) {}
+      status.textContent = "授权成功，正在打开视频工作台…";
+      window.location.replace(payload.target || "/video.html");
+    } catch (error) {
+      status.textContent = error?.message || String(error);
+    }
+  }
+
+  exchange(false);
 })();
 </script></body></html>""".replace("TICKET", encoded_ticket),
             status_code=200,
@@ -1289,7 +1369,11 @@ def inject_telegram_admin(
         return response
 
     @router.post("/telegram/video/exchange")
-    def exchange_video_workbench(payload: VideoTgExchangePayload, request: Request):
+    def exchange_video_workbench(
+        payload: VideoTgExchangePayload,
+        request: Request,
+        background_tasks: BackgroundTasks,
+    ):
         runtime = get_runtime() or {}
         bot_token = str(runtime.get("telegram_bot_token") or "").strip()
         if not bool(runtime.get("telegram_bot_enabled")) or not bot_token:
@@ -1307,7 +1391,25 @@ def inject_telegram_admin(
                 raise HTTPException(status_code=401, detail="缺少 Telegram 浏览器授权上下文，请回到 Bot 重新打开入口")
             validate_video_browser_login_context(payload.ticket, runtime)
             tg_profile = {"id": expected_chat_id, "username": "", "display_name": ""}
+        if payload.preview:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "authorization_required": True,
+                    "web_user": {
+                        "id": int(web_user.get("id") or 0),
+                        "username": str(web_user.get("username") or ""),
+                        "display_name": str(web_user.get("display_name") or ""),
+                    },
+                }
+            )
         consume_video_link_ticket(payload.ticket, tg_profile, web_user, session_hash, runtime)
+        background_tasks.add_task(
+            _send_video_authorization_notice,
+            runtime,
+            expected_chat_id,
+            web_user,
+        )
         target = "/admin-video.html" if int(web_user.get("is_admin") or 0) == 1 else DEFAULT_VIDEO_ENTRY
         response = JSONResponse({"ok": True, "target": target})
         response.headers["Cache-Control"] = "no-store, max-age=0"
