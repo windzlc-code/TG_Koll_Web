@@ -1390,7 +1390,7 @@ def inject_telegram_admin(
     const button = document.createElement("button");
     button.type = "button";
     button.className = "authorize";
-    button.textContent = "✅ 确认授权并打开视频工作台";
+    button.textContent = "确认授权并打开视频工作台";
     button.addEventListener("click", () => {
       button.disabled = true;
       authorize(true);
