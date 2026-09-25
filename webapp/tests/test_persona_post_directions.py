@@ -174,11 +174,11 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert "clearPersonaStepOperationKey(operationStep, operationKey)" in script
     assert "selected_directions" in script
     assert "data-persona-post-direction-keyword" in script
-    assert "data-persona-image-composition-index" in script
-    assert "data-persona-generate-image-compositions" in script
+    assert "data-persona-image-composition-kind" in script
+    assert "data-persona-image-composition-group" in script
     assert "function renderPersonaImageCompositionPicker" in script
     assert "/image_styles" in script
-    assert "构图方向（按正文推荐，可选）" in script
+    assert "全部可选，不按正文过滤，点选即可预览" in script
     assert "image_mode" in script
     assert "image_composition_label" in script
     assert "配图滤镜" not in script
@@ -195,8 +195,8 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert "renderPersonaPostImageControls" in script
     assert '?.kind || "person"' in script
     assert "请先生成并选择一种配图风格" not in script
-    assert 'targetState.selectedKey = ""' in script
-    assert 'styleState.selectedKey === styleKey ? "" : styleKey' in script
+    assert "personaImageCompositionCatalog()" in script
+    assert "styleState.selectedKey = styleKey" in script
     assert "160000" in script
     assert "换一批" in script
     assert "handlePersonaGeneratePrimaryAction" in script
@@ -216,9 +216,39 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert ".persona-post-direction-tools > .bulk-selection-icon-button" in styles
 
 
+def test_console_keeps_visual_style_and_composition_preview_pickers_versioned():
+    script = CONSOLE_JS.read_text(encoding="utf-8")
+    styles = CONSOLE_CSS.read_text(encoding="utf-8")
+    assets_root = CONSOLE_JS.parent / "persona-previews"
+
+    assert 'PERSONA_POST_IMAGE_STYLE_PREVIEW_DIR = "/assets/persona-previews/styles"' in script
+    assert 'PERSONA_IMAGE_COMPOSITION_PREVIEW_DIR = "/assets/persona-previews/compositions"' in script
+    assert "const PERSONA_IMAGE_COMPOSITION_GROUPS" in script
+    assert 'data-persona-image-render-style-group=' in script
+    assert 'data-persona-image-composition-group=' in script
+    assert 'class="persona-picker-preview"' in script
+    assert "personaPostImageRenderStylePreviewUrl(previewStyle.id)" in script
+    assert "personaImageCompositionPreviewUrl(previewItem.kind)" in script
+    assert '.persona-picker-tabs {' in styles
+    assert '.persona-picker-split {' in styles
+    assert '.persona-picker-preview {' in styles
+    expected_styles = {
+        "original", "photorealistic", "cinematic_realism", "editorial_fashion",
+        "cel_shading", "japanese_anime", "anime_painterly", "stylized_3d",
+        "realistic_cg", "cinematic_cg", "three_render_two", "american_cartoon",
+        "comic_ink", "storybook",
+    }
+    expected_compositions = {
+        "person", "group", "third_person", "pov", "scene", "object", "flatlay",
+        "chart", "infographic", "ad", "quote", "split", "process", "ui", "map", "document",
+    }
+    assert {item.stem for item in (assets_root / "styles").glob("*.jpg")} == expected_styles
+    assert {item.stem for item in (assets_root / "compositions").glob("*.jpg")} == expected_compositions
+
+
 def test_composition_selection_prevents_focus_scroll_during_detail_rerender():
     script = CONSOLE_JS.read_text(encoding="utf-8")
-    handler = script.split('const imageCompositionButton = event.target.closest("[data-persona-image-composition-index]");', 1)[1].split(
+    handler = script.split('const imageCompositionButton = event.target.closest("[data-persona-image-composition-kind]");', 1)[1].split(
         'if (event.target.closest("[data-persona-writing-locale-open]"))', 1
     )[0]
     assert "event.preventDefault();" in handler
@@ -238,11 +268,11 @@ def test_mobile_direction_picker_keeps_actions_aligned_and_reuses_selection_icon
         "function persistPersonaHotImports", 1
     )[0]
     assert "生成风格" not in picker
-    assert "data-persona-generate-image-compositions" in style_picker
-    assert "构图方向（按正文推荐，可选）" in style_picker
-    assert "data-persona-image-composition-index" in style_picker
-    assert "persona-image-composition-action" in style_picker
-    assert "personaImageStyleCaption" in script
+    assert "data-persona-image-composition-group" in style_picker
+    assert "全部可选，不按正文过滤，点选即可预览" in style_picker
+    assert "data-persona-image-composition-kind" in style_picker
+    assert "personaImageCompositionPreviewUrl" in style_picker
+    assert "persona-picker-preview" in style_picker
     assert "persona-post-direction-tools" not in style_picker
     assert "data-persona-image-style-key" not in style_picker
 

@@ -22,32 +22,106 @@ const PERSONA_GENERATE_DEFAULT_COUNT = 3;
 const PERSONA_GENERATE_MAX_COUNT = 5;
 const PERSONA_GENERATE_DEFAULT_TARGET_WORDS = 120;
 const PERSONA_POST_DIRECTION_COUNT = 10;
-const PERSONA_IMAGE_STYLE_COUNT = 6;
-const PERSONA_IMAGE_STYLE_KINDS = ["person", "third_person", "pov", "scene", "object"];
+const PERSONA_IMAGE_STYLE_COUNT = 8;
+const PERSONA_IMAGE_STYLE_KINDS = ["person", "group", "third_person", "pov", "scene", "object", "flatlay", "chart", "infographic", "ad", "quote", "split", "process", "ui", "map", "document"];
 const PERSONA_IMAGE_STYLE_KIND_LABELS = {
   "zh-Hans": {
+    person: "人物",
+    group: "群像",
+    third_person: "第三人称",
+    pov: "第一人称",
     scene: "场景",
     object: "事物",
-    pov: "第一人称",
-    third_person: "第三人称",
-    person: "人物",
+    flatlay: "平铺",
+    chart: "图表",
+    infographic: "信息图",
+    ad: "宣传",
+    quote: "金句",
+    split: "分镜",
+    process: "流程",
+    ui: "界面",
+    map: "地图",
+    document: "票据",
   },
   "zh-Hant": {
+    person: "人物",
+    group: "群像",
+    third_person: "第三人稱",
+    pov: "第一人稱",
     scene: "場景",
     object: "事物",
-    pov: "第一人稱",
-    third_person: "第三人稱",
-    person: "人物",
+    flatlay: "平鋪",
+    chart: "圖表",
+    infographic: "資訊圖",
+    ad: "宣傳",
+    quote: "金句",
+    split: "分鏡",
+    process: "流程",
+    ui: "界面",
+    map: "地圖",
+    document: "票據",
   },
 };
 const PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT = "original";
+const PERSONA_POST_IMAGE_STYLE_PREVIEW_DIR = "/assets/persona-previews/styles";
+const PERSONA_IMAGE_COMPOSITION_PREVIEW_DIR = "/assets/persona-previews/compositions";
+const PERSONA_IMAGE_COMPOSITION_GROUPS = [
+  {
+    id: "lens",
+    label: "镜头构图",
+    items: [
+      { kind: "person", label: "人物自拍" },
+      { kind: "group", label: "群像互动" },
+      { kind: "third_person", label: "第三人称纪实" },
+      { kind: "pov", label: "第一人称视角" },
+      { kind: "scene", label: "环境场景" },
+      { kind: "object", label: "物件特写" },
+      { kind: "flatlay", label: "桌面平铺" },
+    ],
+  },
+  {
+    id: "graphic",
+    label: "图文构图",
+    items: [
+      { kind: "chart", label: "图表看板" },
+      { kind: "infographic", label: "信息图" },
+      { kind: "ad", label: "宣传海报" },
+      { kind: "quote", label: "金句大字" },
+      { kind: "split", label: "分镜对比" },
+      { kind: "process", label: "流程图" },
+      { kind: "ui", label: "界面截图" },
+      { kind: "map", label: "地图平面" },
+      { kind: "document", label: "票据文件" },
+    ],
+  },
+];
+const PERSONA_PREVIEW_CACHE = "20260925a";
+
+function personaPostImageRenderStylePreviewUrl(styleId) {
+  const id = String(styleId || PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT).trim() || PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT;
+  return `${PERSONA_POST_IMAGE_STYLE_PREVIEW_DIR}/${encodeURIComponent(id)}.jpg?v=${PERSONA_PREVIEW_CACHE}`;
+}
+
+function personaImageCompositionPreviewUrl(kind) {
+  const id = String(kind || "person").trim() || "person";
+  return `${PERSONA_IMAGE_COMPOSITION_PREVIEW_DIR}/${encodeURIComponent(id)}.jpg?v=${PERSONA_PREVIEW_CACHE}`;
+}
+
+function personaImageCompositionCatalog() {
+  return PERSONA_IMAGE_COMPOSITION_GROUPS.flatMap((group) => group.items.map((item) => ({
+    kind: item.kind,
+    label: item.label,
+    kind_label: personaImageStyleKindLabel(item.kind),
+  })));
+}
+
 const PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS = [
   {
     id: "realistic",
     label: "写实影像",
     detail: "真实镜头与商业视觉",
     styles: [
-      { id: "original", label: "原有风格（默认）", detail: "沿用原生成逻辑，不额外指定风格" },
+      { id: "original", label: "原有风格", detail: "写实默认" },
       { id: "photorealistic", label: "写实摄影", detail: "自然摄影质感" },
       { id: "cinematic_realism", label: "电影写实", detail: "电影级真实画面" },
       { id: "editorial_fashion", label: "时尚杂志", detail: "精致编辑大片" },
@@ -88,6 +162,14 @@ const PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS = [
 const PERSONA_POST_IMAGE_RENDER_STYLES = PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS.flatMap((group) => (
   group.styles.map((style) => ({ ...style, groupId: group.id, groupLabel: group.label }))
 ));
+
+function personaImageRenderStyleGroupId(mediaForm) {
+  const selectedId = String(mediaForm?.imageRenderStyle || PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT).trim();
+  const selected = PERSONA_POST_IMAGE_RENDER_STYLES.find((item) => item.id === selectedId);
+  const requested = String(mediaForm?.imageRenderStyleGroup || "").trim();
+  if (requested && PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS.some((group) => group.id === requested)) return requested;
+  return selected?.groupId || PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS[0].id;
+}
 const PERSONA_WRITING_LOCALES = [
   ["zh-TW", "繁体中文（默认）", "繁體中文（預設）"],
   ["zh-CN", "简体中文", "簡體中文"],
@@ -287,8 +369,10 @@ function storedPersonaMediaImageCount() {
 function selectPersonaPostImageRenderStyle(mediaForm, value) {
   if (!mediaForm || typeof mediaForm !== "object") return false;
   const styleId = String(value || "").trim();
-  if (!PERSONA_POST_IMAGE_RENDER_STYLES.some((item) => item.id === styleId)) return false;
+  const style = PERSONA_POST_IMAGE_RENDER_STYLES.find((item) => item.id === styleId);
+  if (!style) return false;
   mediaForm.imageRenderStyle = styleId;
+  mediaForm.imageRenderStyleGroup = style.groupId;
   return true;
 }
 
@@ -304,6 +388,7 @@ function normalizePersonaMediaGenerationForm(mediaForm) {
   if (!selectPersonaPostImageRenderStyle(mediaForm, mediaForm.imageRenderStyle || PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT)) {
     mediaForm.imageRenderStyle = PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT;
   }
+  mediaForm.imageRenderStyleGroup = personaImageRenderStyleGroupId(mediaForm);
   return mediaForm;
 }
 
@@ -4196,7 +4281,7 @@ function personaFormState(personaId) {
     return {
       generate: { mode: "ai", composeMode: "tweet", count: PERSONA_GENERATE_DEFAULT_COUNT, targetWords: PERSONA_GENERATE_DEFAULT_TARGET_WORDS, contentTimeSlot: "", writingLocale: PERSONA_DEFAULT_WRITING_LOCALE, prompt: "", composeDraftInputs: { tweet: { title: "", content: "" }, tweet_media: { title: "", content: "" } }, postDirectionsByMode: { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() }, selectedMemoryIds: [], hotSelectedIds: [], hotPreviewId: "", hotEditingCandidateId: "", hotPrompt: "", hotKeywordText: "", hotCustomKeywordText: "", hotSearchMode: "strict", hotKeywordSourceMode: "strict", hotDeletedMediaByCandidate: {}, hotEditedContentByCandidate: {}, hotRewrittenByCandidate: {}, hotRewriteInstructionByCandidate: {}, hotSelectedMediaIndexByCandidate: {}, hotReplacementFilesByCandidate: {}, hotReplacementPoolByCandidate: {}, hotSelectedReplacementPoolIdByCandidate: {}, hotMediaDraftsByCandidate: {}, hotMediaOpsByCandidate: {} },
       draft: defaultPersonaDraftForm(),
-      media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", imageRenderStyle: PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT, resolution: "720p", duration: 2, replaceExisting: false },
+      media: { taskType: "persona_post_image", operationMode: "replace", contentMode: "draft", focusPostId: "", manualContent: "", prompt: "", imageCount: storedPersonaMediaImageCount(), aspectRatio: "auto", imageRenderStyle: PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT, imageRenderStyleGroup: PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS[0].id, resolution: "720p", duration: 2, replaceExisting: false },
       images: { prompt: "", aspectRatio: "1:1", selectedImageId: "" },
     };
   }
@@ -4249,6 +4334,7 @@ function personaFormState(personaId) {
         imageCount: storedPersonaMediaImageCount(),
         aspectRatio: "auto",
         imageRenderStyle: PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT,
+        imageRenderStyleGroup: PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS[0].id,
         resolution: "720p",
         duration: 2,
         replaceExisting: false,
@@ -4345,6 +4431,7 @@ function defaultPersonaImageStyleState(overrides = {}) {
     styles: [],
     selectedKey: "",
     sourceFingerprint: "",
+    compositionGroup: PERSONA_IMAGE_COMPOSITION_GROUPS[0].id,
     ...overrides,
   };
 }
@@ -4475,6 +4562,7 @@ function personaImageStyleState(personaId, postId = "") {
     styles: normalizePersonaImageStyles(current?.styles),
     selectedKey: String(current?.selectedKey || ""),
     sourceFingerprint: String(current?.sourceFingerprint || ""),
+    compositionGroup: String(current?.compositionGroup || ""),
   });
   return store[key];
 }
@@ -4492,9 +4580,10 @@ function personaImageStylesForPost(personaId, postId = "", sourceFingerprint = "
 
 function selectedPersonaImageStyle(personaId, postId = "", sourceFingerprint = "") {
   const styleState = personaImageStyleState(personaId, postId);
-  const styles = personaImageStylesForPost(personaId, postId, sourceFingerprint);
-  const selectedKey = String(styleState.selectedKey || "").trim();
-  return styles.find((item) => personaImageStyleKey(item) === selectedKey) || null;
+  personaImageStylesForPost(personaId, postId, sourceFingerprint);
+  const defaultItem = PERSONA_IMAGE_COMPOSITION_GROUPS[0]?.items?.[0] || { kind: "person", label: "人物自拍" };
+  const selectedKey = String(styleState.selectedKey || "").trim() || personaImageStyleKey(defaultItem);
+  return personaImageCompositionCatalog().find((item) => personaImageStyleKey(item) === selectedKey) || defaultItem;
 }
 
 function ensurePersonaPostDirectionsByMode(form) {
@@ -4833,31 +4922,46 @@ function renderPersonaImageCompositionPicker(persona, post, disabled = false) {
   if (!persona || !post) return "";
   const postId = String(post.id || "").trim();
   const styleState = personaImageStyleState(persona.id, postId);
-  const styles = personaImageStylesForPost(persona.id, postId, personaImageStyleSourceFingerprint(post));
-  const selectedKey = String(styleState.selectedKey || "").trim();
-  const stylesLocked = isActionLocked("persona", persona.id, "image_styles");
-  const hasStyles = styles.length > 0;
-  const actionLabel = stylesLocked
-    ? (hasStyles ? "正在换一批" : "正在生成构图方向")
-    : (hasStyles ? "换一批" : "生成构图方向");
-  const actionContent = stylesLocked
-    ? renderBusyButtonContent(actionLabel, true, actionLockStartedAt("persona", persona.id, "image_styles"))
-    : (hasStyles ? `${renderRefreshIcon()}<span>换一批</span>` : "生成构图方向");
+  const catalog = personaImageCompositionCatalog();
+  styleState.styles = catalog;
+  const defaultItem = PERSONA_IMAGE_COMPOSITION_GROUPS[0]?.items?.[0] || { kind: "person", label: "人物自拍" };
+  const defaultKey = personaImageStyleKey(defaultItem);
+  const selectedKey = String(styleState.selectedKey || "").trim() || defaultKey;
+  const requestedGroupId = String(styleState.compositionGroup || "").trim();
+  const groupId = (requestedGroupId && PERSONA_IMAGE_COMPOSITION_GROUPS.some((item) => item.id === requestedGroupId)
+    ? requestedGroupId
+    : PERSONA_IMAGE_COMPOSITION_GROUPS.find((item) => item.items.some((entry) => personaImageStyleKey(entry) === selectedKey))?.id)
+    || PERSONA_IMAGE_COMPOSITION_GROUPS[0].id;
+  const group = PERSONA_IMAGE_COMPOSITION_GROUPS.find((item) => item.id === groupId) || PERSONA_IMAGE_COMPOSITION_GROUPS[0];
+  styleState.compositionGroup = group.id;
+  const previewItem = catalog.find((item) => personaImageStyleKey(item) === selectedKey) || defaultItem;
   return `<section class="persona-post-direction-panel persona-image-composition-panel" aria-label="推文配图构图方向" data-persona-image-composition-post="${esc(postId)}">
     <div class="persona-image-composition-head">
-      <strong>构图方向（按正文推荐，可选）</strong>
-      <button type="button" class="primary persona-image-composition-action" data-persona-generate-image-compositions ${stylesLocked || disabled ? "disabled" : ""} aria-busy="${stylesLocked ? "true" : "false"}" aria-label="${esc(actionLabel)}">${actionContent}</button>
+      <div>
+        <strong>构图方向</strong>
+        <small>全部可选，不按正文过滤，点选即可预览</small>
+      </div>
     </div>
-    ${hasStyles ? `<div class="persona-image-composition-tags">
-      ${styles.map((style, index) => {
-        const key = personaImageStyleKey(style);
-        const active = key === selectedKey;
-        const kindLabel = String(style.kind_label || personaImageStyleKindLabel(style.kind) || "").trim();
-        const styleLabel = String(style.label || "").trim();
-        const caption = personaImageStyleCaption(style);
-        return `<button type="button" class="persona-post-direction-tag persona-image-composition-tag ${active ? "is-selected" : ""}" data-persona-image-composition-index="${esc(index)}" data-persona-image-composition-post="${esc(postId)}" data-persona-image-composition-kind="${esc(style.kind)}" data-persona-image-composition-label="${esc(style.label)}" aria-label="${esc(caption)}" title="${esc(caption)}" aria-pressed="${active ? "true" : "false"}" ${stylesLocked ? "disabled" : ""}><span class="persona-image-composition-tag-kind">${esc(kindLabel)}</span><span class="persona-image-composition-tag-label">${esc(styleLabel)}</span></button>`;
-      }).join("")}
-    </div>` : `<p class="persona-image-composition-empty">点击“生成构图方向”可按当前正文推荐人物、场景或物件构图；不选择则沿用原有人物配图逻辑。</p>`}
+    <div class="persona-picker-tabs" role="tablist" aria-label="构图类型">
+      ${PERSONA_IMAGE_COMPOSITION_GROUPS.map((item) => `<button type="button" class="persona-picker-tab ${item.id === group.id ? "is-active" : ""}" data-persona-image-composition-group="${esc(item.id)}" data-persona-image-composition-post="${esc(postId)}" role="tab" aria-selected="${item.id === group.id ? "true" : "false"}" ${disabled ? "disabled" : ""}>${esc(item.label)}</button>`).join("")}
+    </div>
+    <div class="persona-picker-split">
+      <div class="persona-picker-list" role="listbox" aria-label="${esc(group.label)}">
+        ${group.items.map((item) => {
+          const key = personaImageStyleKey(item);
+          const active = key === selectedKey;
+          const isDefault = key === defaultKey;
+          return `<button type="button" class="persona-picker-option ${active ? "is-selected" : ""} ${isDefault ? "is-default" : ""}" data-persona-image-composition-post="${esc(postId)}" data-persona-image-composition-kind="${esc(item.kind)}" data-persona-image-composition-label="${esc(item.label)}" aria-pressed="${active ? "true" : "false"}" ${disabled ? "disabled" : ""}>
+            <strong>${esc(personaImageStyleKindLabel(item.kind))}${isDefault ? '<span class="persona-picker-option-default">默认构图</span>' : ""}</strong>
+            <small>${esc(item.label)}</small>
+          </button>`;
+        }).join("")}
+      </div>
+      <figure class="persona-picker-preview">
+        <img src="${esc(personaImageCompositionPreviewUrl(previewItem.kind))}" alt="${esc(previewItem.label)}预览" width="640" height="480" loading="eager" fetchpriority="high" decoding="async" />
+        <figcaption>${esc(previewItem.label)}</figcaption>
+      </figure>
+    </div>
   </section>`;
 }
 
@@ -4865,33 +4969,40 @@ function renderPersonaPostImageRenderStylePicker(mediaForm, disabled = false) {
   normalizePersonaMediaGenerationForm(mediaForm);
   const selectedId = String(mediaForm?.imageRenderStyle || PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT).trim();
   const selectedStyle = PERSONA_POST_IMAGE_RENDER_STYLES.find((item) => item.id === selectedId);
+  const groupId = personaImageRenderStyleGroupId(mediaForm);
+  const group = PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS.find((item) => item.id === groupId) || PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS[0];
+  const previewStyle = selectedStyle || group.styles[0];
   return `<section class="persona-post-image-render-style-panel" aria-label="推文配图生成风格">
     <div class="persona-post-image-render-style-head">
       <div>
         <strong>生成风格</strong>
-        <small>${disabled ? "配图生成期间已锁定，完成后可重新选择" : "默认沿用原生成风格；选择其他风格后才会改变画面媒介"}</small>
+        <small>${disabled ? "配图生成期间已锁定，完成后可重新选择" : "点选即可预览效果，生成时按所选风格出图"}</small>
       </div>
-      <span>${esc(selectedStyle?.label || "原有风格（默认）")}</span>
+      <span>${esc(selectedStyle?.id === PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT ? "原有风格（默认）" : (selectedStyle?.label || "原有风格（默认）"))}</span>
     </div>
-    <div class="persona-post-image-render-style-groups" role="radiogroup" aria-label="选择生成风格">
-      ${PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS.map((group) => `<section class="persona-post-image-render-style-group" role="group" aria-label="${esc(group.label)}">
-        <div class="persona-post-image-render-style-group-head"><strong>${esc(group.label)}</strong><small>${esc(group.detail)}</small></div>
-        <div class="persona-post-image-render-style-grid">
-          ${group.styles.map((style) => {
-            const active = style.id === selectedId;
-            return `<button type="button" class="persona-post-image-render-style ${active ? "is-selected" : ""}" data-persona-image-render-style="${esc(style.id)}" role="radio" aria-checked="${active ? "true" : "false"}" title="${esc(`${style.label}：${style.detail}`)}" ${disabled ? "disabled" : ""}>
-              <span class="persona-post-image-render-style-swatch" aria-hidden="true"></span>
-              <span class="persona-post-image-render-style-copy"><strong>${esc(style.label)}</strong><small>${esc(style.detail)}</small></span>
-            </button>`;
-          }).join("")}
-        </div>
-      </section>`).join("")}
+    <div class="persona-picker-tabs" role="tablist" aria-label="风格类型">
+      ${PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS.map((item) => `<button type="button" class="persona-picker-tab ${item.id === group.id ? "is-active" : ""}" data-persona-image-render-style-group="${esc(item.id)}" role="tab" aria-selected="${item.id === group.id ? "true" : "false"}" ${disabled ? "disabled" : ""}>${esc(item.label)}</button>`).join("")}
+    </div>
+    <div class="persona-picker-split">
+      <div class="persona-picker-list" role="radiogroup" aria-label="${esc(group.label)}">
+        ${group.styles.map((style) => {
+          const active = style.id === selectedId;
+          return `<button type="button" class="persona-picker-option ${active ? "is-selected" : ""}" data-persona-image-render-style="${esc(style.id)}" role="radio" aria-checked="${active ? "true" : "false"}" ${disabled ? "disabled" : ""}>
+            <strong>${esc(style.label)}</strong>
+            <small>${esc(style.detail)}</small>
+          </button>`;
+        }).join("")}
+      </div>
+      <figure class="persona-picker-preview">
+        <img src="${esc(personaPostImageRenderStylePreviewUrl(previewStyle.id))}" alt="${esc(previewStyle.label)}预览" width="640" height="480" loading="eager" fetchpriority="high" decoding="async" />
+        <figcaption>${esc(previewStyle.label)}</figcaption>
+      </figure>
     </div>
   </section>`;
 }
 
 function setPersonaPostImageRenderStyleInteractionLocked(locked) {
-  document.querySelectorAll("[data-persona-image-render-style]").forEach((button) => {
+  document.querySelectorAll("[data-persona-image-render-style], [data-persona-image-render-style-group]").forEach((button) => {
     button.disabled = Boolean(locked);
     button.setAttribute("aria-disabled", locked ? "true" : "false");
   });
@@ -37895,17 +38006,61 @@ function bindEvents() {
       preparePersonaImageStyles().catch((error) => showMsg("commandMsg", error.detail || error.message || "生成构图方向失败", false));
       return;
     }
+    const imageRenderStyleGroupButton = event.target.closest("[data-persona-image-render-style-group]");
+    if (imageRenderStyleGroupButton) {
+      const persona = selectedPersona();
+      if (!persona || imageRenderStyleGroupButton.disabled) return;
+      event.preventDefault();
+      imageRenderStyleGroupButton.blur?.();
+      snapshotPersonaCurrentForm();
+      const mediaForm = personaFormState(persona.id).media;
+      const groupId = String(imageRenderStyleGroupButton.dataset.personaImageRenderStyleGroup || "").trim();
+      const group = PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS.find((item) => item.id === groupId);
+      if (!group) return;
+      mediaForm.imageRenderStyleGroup = group.id;
+      if (!group.styles.some((item) => item.id === String(mediaForm.imageRenderStyle || "").trim())) {
+        selectPersonaPostImageRenderStyle(mediaForm, group.styles[0].id);
+      }
+      withConsoleScrollPreserved(() => renderPersonaDetail());
+      return;
+    }
+    const imageCompositionGroupButton = event.target.closest("[data-persona-image-composition-group]");
+    if (imageCompositionGroupButton) {
+      const persona = selectedPersona();
+      if (!persona || imageCompositionGroupButton.disabled) return;
+      event.preventDefault();
+      imageCompositionGroupButton.blur?.();
+      snapshotPersonaCurrentForm();
+      const postId = String(imageCompositionGroupButton.dataset.personaImageCompositionPost || personaMediaTargetPost(persona).post?.id || "").trim();
+      if (!postId) return;
+      const groupId = String(imageCompositionGroupButton.dataset.personaImageCompositionGroup || "").trim();
+      const group = PERSONA_IMAGE_COMPOSITION_GROUPS.find((item) => item.id === groupId);
+      if (!group) return;
+      const styleState = personaImageStyleState(persona.id, postId);
+      styleState.compositionGroup = group.id;
+      if (!group.items.some((item) => personaImageStyleKey(item) === String(styleState.selectedKey || "").trim())) {
+        styleState.selectedKey = personaImageStyleKey(group.items[0]);
+      }
+      styleState.styles = personaImageCompositionCatalog();
+      withConsoleScrollPreserved(() => renderPersonaDetail());
+      return;
+    }
     const imageRenderStyleButton = event.target.closest("[data-persona-image-render-style]");
     if (imageRenderStyleButton) {
       const persona = selectedPersona();
       if (!persona || imageRenderStyleButton.disabled) return;
+      event.preventDefault();
+      imageRenderStyleButton.blur?.();
       snapshotPersonaCurrentForm();
       const renderStyleId = String(imageRenderStyleButton.dataset.personaImageRenderStyle || "").trim();
-      if (!selectPersonaPostImageRenderStyle(personaFormState(persona.id).media, renderStyleId)) return;
-      renderPersonaDetail();
+      const mediaForm = personaFormState(persona.id).media;
+      if (!selectPersonaPostImageRenderStyle(mediaForm, renderStyleId)) return;
+      const found = PERSONA_POST_IMAGE_RENDER_STYLES.find((item) => item.id === renderStyleId);
+      if (found) mediaForm.imageRenderStyleGroup = found.groupId;
+      withConsoleScrollPreserved(() => renderPersonaDetail());
       return;
     }
-    const imageCompositionButton = event.target.closest("[data-persona-image-composition-index]");
+    const imageCompositionButton = event.target.closest("[data-persona-image-composition-kind]");
     if (imageCompositionButton) {
       // This button only changes local selection. Prevent the browser from
       // focusing a node that is about to be replaced by renderPersonaDetail;
@@ -37917,13 +38072,15 @@ function bindEvents() {
       snapshotPersonaCurrentForm();
       const postId = String(imageCompositionButton.dataset.personaImageCompositionPost || personaMediaTargetPost(persona).post?.id || "").trim();
       if (!postId) return;
-      const styles = personaImageStylesForPost(persona.id, postId);
-      const index = Number(imageCompositionButton.dataset.personaImageCompositionIndex);
-      const style = Number.isInteger(index) ? styles[index] : null;
+      const style = {
+        kind: String(imageCompositionButton.dataset.personaImageCompositionKind || "").trim(),
+        label: String(imageCompositionButton.dataset.personaImageCompositionLabel || "").trim(),
+      };
       const styleKey = personaImageStyleKey(style);
       if (!styleKey) return;
       const styleState = personaImageStyleState(persona.id, postId);
-      styleState.selectedKey = styleState.selectedKey === styleKey ? "" : styleKey;
+      styleState.selectedKey = styleKey;
+      styleState.styles = personaImageCompositionCatalog();
       withConsoleScrollPreserved(() => renderPersonaDetail());
       return;
     }
