@@ -12,6 +12,7 @@ const PERSONA_POST_GENERATION_TASK_STORAGE_PREFIX = "wk-persona-post-generation-
 const TASK_QUEUE_PERSONA_PAGE_SIZE_KEY = "wk-task-queue-persona-page-size";
 const TASK_QUEUE_REGULAR_PAGE_SIZE_KEY = "wk-task-queue-regular-page-size";
 const LIVE_BROWSER_LAYOUT_KEY = "wk-live-browser-layout";
+const CONSOLE_MODAL_REMEMBER_PREFIX = "wk-console-modal-remember:";
 const LIVE_BROWSER_MOBILE_QUERY = "(max-width: 760px)";
 const SELECTED_PERSONA_STORAGE_KEY = "wk-selected-persona";
 const MOBILE_NAV_QUERY = "(max-width: 980px)";
@@ -2804,7 +2805,31 @@ function renderModalCloseButton(cancelAttribute = "data-console-modal-cancel") {
   </button>`;
 }
 
-function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, showConfirm = true, showClose = true, extraActions = [], modalKey = "", stack = false, dismissOnBackdrop = true, dismissOnEscape = true } = {}) {
+function consoleModalRememberStorageKey(value = "") {
+  const key = String(value || "").trim();
+  return key ? `${CONSOLE_MODAL_REMEMBER_PREFIX}${key}` : "";
+}
+
+function isConsoleModalRemembered(value = "") {
+  const key = consoleModalRememberStorageKey(value);
+  if (!key) return false;
+  try {
+    return window.localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setConsoleModalRemembered(value = "", enabled = true) {
+  const key = consoleModalRememberStorageKey(value);
+  if (!key) return;
+  try {
+    if (enabled) window.localStorage.setItem(key, "1");
+    else window.localStorage.removeItem(key);
+  } catch {}
+}
+
+function openConsoleModal({ title = "确认操作", message = "", contentHtml = "", inputLabel = "", inputValue = "", fields = [], confirmText = "确定", cancelText = "取消", danger = false, showCancel = true, showConfirm = true, showClose = true, extraActions = [], modalKey = "", stack = false, dismissOnBackdrop = true, dismissOnEscape = true, rememberKey = "", rememberLabel = "以后不再提示" } = {}) {
   if (!stack) closeConsoleModal(null);
   return new Promise((resolve) => {
     const modal = document.createElement("div");
@@ -2864,6 +2889,12 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
             `).join("")}
           </div>
         ` : ""}
+        ${String(rememberKey || "").trim() ? `
+          <label class="console-modal-remember">
+            <input type="checkbox" data-console-modal-remember />
+            <span>${esc(rememberLabel || "以后不再提示")}</span>
+          </label>
+        ` : ""}
         ${modalActionsHtml ? `<div class="console-modal-actions">${modalActionsHtml}</div>` : ""}
       </section>
     `;
@@ -2872,6 +2903,11 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
     translateConsoleLanguage(modal, currentLanguage());
     const input = modal.querySelector("#consoleModalInput");
     const fieldInputs = [...modal.querySelectorAll("[data-console-modal-field]")];
+    const rememberInput = modal.querySelector("[data-console-modal-remember]");
+    const persistRememberChoice = () => {
+      if (!rememberInput || !String(rememberKey || "").trim()) return;
+      setConsoleModalRemembered(rememberKey, Boolean(rememberInput.checked));
+    };
     const firstInput = input || fieldInputs.find((field) => field.type !== "hidden");
     if (firstInput) {
       firstInput.focus();
@@ -2884,6 +2920,7 @@ function openConsoleModal({ title = "确认操作", message = "", contentHtml = 
       )?.focus();
     }
     const requestClose = (result) => {
+      persistRememberChoice();
       if (typeof modal.__requestClose === "function") {
         modal.__requestClose(result);
         return;
@@ -29242,12 +29279,18 @@ function activeTransientWorkspaceState() {
   }
   const publishCustom = activePublishCustomTransientState();
   if (publishCustom) {
+    const pendingParts = [
+      publishCustom.content ? "正文" : "",
+      publishCustom.fileCount ? `${publishCustom.fileCount} 个上传素材` : "",
+    ].filter(Boolean);
     return {
       kind: "publish_custom",
-      title: "离开自定义任务？",
-      message: `当前自定义任务内容${publishCustom.fileCount ? `和 ${publishCustom.fileCount} 个上传素材` : ""}还没有提交。确定离开后，上传选择可能需要重新选择。`,
+      title: "离开自定义发布？",
+      message: `当前自定义发布${pendingParts.length ? `的${pendingParts.join("和")}` : "内容"}尚未提交。离开后，未提交的正文不会保存，上传素材可能需要重新选择；已提交的任务不受影响。`,
       confirmText: "离开并继续",
       cancelText: "继续编辑",
+      rememberKey: "publish_custom_leave_warning",
+      rememberLabel: "以后不再提示此类离开提醒",
     };
   }
   const automationPlan = activeAutomationPlanTransientState();
@@ -29274,25 +29317,33 @@ async function confirmLeaveTransientWorkspaceState({ allowNextUnload = false } =
     if (allowNextUnload) state.transientWorkspaceAllowNextUnload = true;
     return true;
   }
+  const completeLeave = () => {
+    if (typeof activeState.clear === "function") {
+      activeState.clear();
+      const remainingState = activeState.acknowledgeRemainingState
+        ? activeTransientWorkspaceState()
+        : null;
+      state.transientWorkspaceLeaveAcknowledgement = remainingState?.guardKey || "";
+    } else if (activeState.guardKey) {
+      state.transientWorkspaceLeaveAcknowledgement = activeState.guardKey;
+    }
+    if (allowNextUnload) state.transientWorkspaceAllowNextUnload = true;
+    return true;
+  };
+  if (activeState.rememberKey && isConsoleModalRemembered(activeState.rememberKey)) {
+    return completeLeave();
+  }
   const confirmed = await openConsoleModal({
     title: activeState.title,
     message: activeState.message,
     confirmText: activeState.confirmText || "继续",
     cancelText: activeState.cancelText || "取消",
     danger: Boolean(activeState.danger),
+    rememberKey: activeState.rememberKey || "",
+    rememberLabel: activeState.rememberLabel || "以后不再提示",
   });
   if (!confirmed) return false;
-  if (typeof activeState.clear === "function") {
-    activeState.clear();
-    const remainingState = activeState.acknowledgeRemainingState
-      ? activeTransientWorkspaceState()
-      : null;
-    state.transientWorkspaceLeaveAcknowledgement = remainingState?.guardKey || "";
-  } else if (activeState.guardKey) {
-    state.transientWorkspaceLeaveAcknowledgement = activeState.guardKey;
-  }
-  if (allowNextUnload) state.transientWorkspaceAllowNextUnload = true;
-  return true;
+  return completeLeave();
 }
 
 function selectGeneratedPreviewPost(postId) {
@@ -37434,6 +37485,7 @@ function bindEvents() {
   window.addEventListener("beforeunload", (event) => {
     const activeState = activeTransientWorkspaceState();
     if (!activeState) return;
+    if (activeState.rememberKey && isConsoleModalRemembered(activeState.rememberKey)) return;
     if (state.transientWorkspaceAllowNextUnload) {
       state.transientWorkspaceAllowNextUnload = false;
       return;

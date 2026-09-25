@@ -15892,6 +15892,32 @@ body.persona-media-sorting {
   grid-column: 1 / -1;
 }
 
+.console-modal-dialog .console-modal-remember {
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.console-modal-dialog .console-modal-remember input[type="checkbox"] {
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.console-modal-dialog .console-modal-remember span {
+  line-height: 1.45;
+}
+
 .console-modal-fields textarea {
   width: 100%;
   min-height: 76px;
