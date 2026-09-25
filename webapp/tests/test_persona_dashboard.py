@@ -3173,6 +3173,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                             "image_count": 3,
                             "aspect_ratio": "1:1",
                             "image_render_style": "cinematic_cg",
+                            "image_mode": "infographic",
                             "image_composition_label": "车窗侧面抓拍",
                         },
                         ensure_ascii=False,
@@ -3189,6 +3190,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(captured["payload"]["image_count"], 3)
         self.assertEqual(captured["payload"]["aspect_ratio"], "1:1")
         self.assertEqual(captured["payload"]["image_render_style"], "cinematic_cg")
+        self.assertEqual(captured["payload"]["image_mode"], "infographic")
         self.assertEqual(captured["payload"]["image_composition_label"], "车窗侧面抓拍")
 
     def test_task_submit_defaults_and_validates_persona_post_image_render_style(self):

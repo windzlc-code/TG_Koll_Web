@@ -315,6 +315,7 @@ def test_visual_pickers_share_white_panel_background_and_warm_versioned_preview_
         result = page.evaluate(
             """() => {
               const requested = [];
+              const idleCallbacks = [];
               class PreviewImage {
                 constructor() {
                   this.decoding = "";
@@ -325,7 +326,7 @@ def test_visual_pickers_share_white_panel_background_and_warm_versioned_preview_
                 get src() { return this._src || ""; }
               }
               globalThis.Image = PreviewImage;
-              window.requestIdleCallback = (callback) => { callback(); return 1; };
+              window.requestIdleCallback = (callback) => { idleCallbacks.push(callback); return idleCallbacks.length; };
               const form = { media: { imageStylesByPost: {} } };
               personaFormState = () => form;
               currentLanguage = () => "zh-Hans";
@@ -336,6 +337,8 @@ def test_visual_pickers_share_white_panel_background_and_warm_versioned_preview_
                 { id: "post-1", title: "健身", content: "记录训练动作" },
               );
               const firstCount = requested.length;
+              const firstHighPriorityCount = requested.filter((item) => item.priority === "high").length;
+              idleCallbacks.forEach((callback) => callback());
               renderPersonaPostImageRenderStylePicker(mediaForm);
               renderPersonaImageCompositionPicker(
                 { id: "persona-1" },
@@ -343,24 +346,38 @@ def test_visual_pickers_share_white_panel_background_and_warm_versioned_preview_
               );
               const stylePanel = document.querySelector(".persona-post-image-render-style-panel");
               const compositionPanel = document.querySelector(".persona-image-composition-panel");
+              const styleTabs = stylePanel.querySelector(".persona-picker-tabs");
+              const styleTabWidths = Array.from(
+                styleTabs.querySelectorAll(".persona-picker-tab"),
+                (tab) => tab.getBoundingClientRect().width,
+              );
               return {
                 firstCount,
+                firstHighPriorityCount,
                 finalCount: requested.length,
                 uniqueCount: new Set(requested.map((item) => item.value)).size,
                 allVersioned: requested.every((item) => item.value.includes("?v=")),
                 allAsync: requested.every((item) => item.decoding === "async"),
                 styleBackground: getComputedStyle(stylePanel).backgroundColor,
                 compositionBackground: getComputedStyle(compositionPanel).backgroundColor,
+                styleTabsDisplay: getComputedStyle(styleTabs).display,
+                styleTabWidths,
+                styleTabsClientWidth: styleTabs.clientWidth,
+                styleTabsScrollWidth: styleTabs.scrollWidth,
               };
             }"""
         )
-        assert result["firstCount"] == 30
+        assert result["firstCount"] == 11
+        assert result["firstHighPriorityCount"] == 2
         assert result["finalCount"] == 30
         assert result["uniqueCount"] == 30
         assert result["allVersioned"] is True
         assert result["allAsync"] is True
         assert result["styleBackground"] == result["compositionBackground"]
         assert result["compositionBackground"] in {"rgb(255, 255, 255)", "rgba(255, 255, 255, 1)"}
+        assert result["styleTabsDisplay"] == "grid"
+        assert max(result["styleTabWidths"]) - min(result["styleTabWidths"]) <= 1
+        assert result["styleTabsScrollWidth"] <= result["styleTabsClientWidth"]
         browser.close()
 
 
@@ -438,7 +455,7 @@ def test_composition_picker_spacing_and_nested_scroll_are_preserved_on_rerender(
         browser.close()
 
 
-def test_composition_picker_cards_match_style_cards_on_mobile_and_scroll_after_four_rows():
+def test_composition_picker_cards_match_style_cards_on_mobile_and_scroll_after_three_complete_rows():
     sync_api = pytest.importorskip("playwright.sync_api")
     with sync_api.sync_playwright() as playwright:
         browser = _launch_browser(playwright)
@@ -463,6 +480,12 @@ def test_composition_picker_cards_match_style_cards_on_mobile_and_scroll_after_f
               const option = document.querySelector('.persona-picker-option');
               const styleCard = document.querySelector('.persona-post-image-render-style');
               const style = getComputedStyle(option);
+              const listRect = list.getBoundingClientRect();
+              const partiallyVisibleCards = Array.from(list.querySelectorAll('.persona-picker-option')).filter((card) => {
+                const rect = card.getBoundingClientRect();
+                const visibleHeight = Math.min(rect.bottom, listRect.bottom) - Math.max(rect.top, listRect.top);
+                return visibleHeight > 0 && visibleHeight < rect.height;
+              });
               return {
                 minHeight: parseFloat(style.minHeight),
                 styleCardHeight: styleCard.getBoundingClientRect().height,
@@ -471,8 +494,10 @@ def test_composition_picker_cards_match_style_cards_on_mobile_and_scroll_after_f
                 paddingLeft: parseFloat(style.paddingLeft),
                 listMaxHeight: parseFloat(getComputedStyle(list).maxHeight),
                 listOverflow: getComputedStyle(list).overflowY,
+                listOverflowX: getComputedStyle(list).overflowX,
                 clientHeight: list.clientHeight,
                 scrollHeight: list.scrollHeight,
+                partiallyVisibleCount: partiallyVisibleCards.length,
               };
             }"""
         )
@@ -480,9 +505,92 @@ def test_composition_picker_cards_match_style_cards_on_mobile_and_scroll_after_f
         assert abs(result["compositionCardHeight"] - result["styleCardHeight"]) <= 1
         assert result["paddingTop"] >= 5
         assert result["paddingLeft"] >= 6
-        assert result["listMaxHeight"] == 198
+        assert result["listMaxHeight"] == 190
         assert result["listOverflow"] == "auto"
+        assert result["listOverflowX"] == "hidden"
         assert result["scrollHeight"] > result["clientHeight"]
+        assert result["partiallyVisibleCount"] == 0
+        browser.close()
+
+
+def test_generation_style_picker_mobile_pager_has_equal_tabs_and_only_complete_cards():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.set_content('<!doctype html><html><body class="console-page"><main class="persona-detail"><div id="host"></div></main></body></html>')
+        page.add_script_tag(path=str(CONSOLE_JS))
+        page.add_style_tag(path=str(CONSOLE_CSS))
+        result = page.evaluate(
+            """async () => {
+              const mediaForm = { imageRenderStyle: "stylized_3d", imageRenderStyleGroup: "three_d" };
+              const render = () => {
+                document.querySelector("#host").innerHTML = renderPersonaPostImageRenderStylePicker(mediaForm);
+              };
+              render();
+              const panel = document.querySelector(".persona-post-image-render-style-panel");
+              const tabs = panel.querySelector(".persona-picker-tabs");
+              const tabWidths = Array.from(tabs.querySelectorAll(".persona-picker-tab"), (tab) => tab.getBoundingClientRect().width);
+              const tabsClientWidth = tabs.clientWidth;
+              const tabsScrollWidth = tabs.scrollWidth;
+              const list = panel.querySelector(".persona-picker-list");
+              const cards = Array.from(list.querySelectorAll(".persona-picker-option"));
+              const visibleHeight = (card) => {
+                const listRect = list.getBoundingClientRect();
+                const rect = card.getBoundingClientRect();
+                return Math.max(0, Math.min(rect.bottom, listRect.bottom) - Math.max(rect.top, listRect.top));
+              };
+              const initialVisibleHeights = cards.map(visibleHeight);
+              const initialActiveTabs = tabs.querySelectorAll('.persona-picker-tab.is-active[aria-selected="true"]').length;
+              const initialListClientHeight = list.clientHeight;
+              const initialListScrollHeight = list.scrollHeight;
+              const initialCardHeights = cards.map((card) => card.getBoundingClientRect().height);
+              const initialPreview = panel.querySelector(".persona-picker-preview img")?.getAttribute("src") || "";
+              list.scrollTop = list.scrollHeight;
+              const finalVisibleHeight = visibleHeight(cards.at(-1));
+              const snapshot = snapshotConsoleScrollState();
+              render();
+              restoreConsoleScrollState(snapshot);
+              await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+              const sameGroupScrollTop = document.querySelector(".persona-picker-list").scrollTop;
+              mediaForm.imageRenderStyle = "original";
+              mediaForm.imageRenderStyleGroup = "realistic";
+              render();
+              restoreConsoleScrollState(snapshot);
+              await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+              const newList = document.querySelector(".persona-picker-list");
+              const selectedCard = newList.querySelector('[aria-checked="true"]');
+              const newListRect = newList.getBoundingClientRect();
+              const selectedRect = selectedCard.getBoundingClientRect();
+              return {
+                activeTabs: initialActiveTabs,
+                tabWidths,
+                tabsClientWidth,
+                tabsScrollWidth,
+                listClientHeight: initialListClientHeight,
+                listScrollHeight: initialListScrollHeight,
+                initialVisibleHeights,
+                cardHeights: initialCardHeights,
+                finalVisibleHeight,
+                preview: initialPreview,
+                sameGroupScrollTop,
+                newGroupScrollTop: newList.scrollTop,
+                selectedVisibleHeight: Math.min(selectedRect.bottom, newListRect.bottom) - Math.max(selectedRect.top, newListRect.top),
+                selectedCardHeight: selectedRect.height,
+              };
+            }"""
+        )
+        assert result["activeTabs"] == 1
+        assert max(result["tabWidths"]) - min(result["tabWidths"]) <= 1
+        assert result["tabsScrollWidth"] <= result["tabsClientWidth"]
+        assert result["listScrollHeight"] > result["listClientHeight"]
+        assert result["initialVisibleHeights"][:3] == result["cardHeights"][:3]
+        assert result["initialVisibleHeights"][3] == 0
+        assert result["finalVisibleHeight"] == result["cardHeights"][3]
+        assert result["preview"].startswith("/assets/persona-previews/styles/stylized_3d.jpg?")
+        assert result["sameGroupScrollTop"] > 0
+        assert result["newGroupScrollTop"] == 0
+        assert result["selectedVisibleHeight"] == result["selectedCardHeight"]
         browser.close()
 
 
@@ -491,30 +599,101 @@ def test_post_image_render_style_selection_is_locked_immediately_during_submissi
     with sync_api.sync_playwright() as playwright:
         browser = _launch_browser(playwright)
         page = browser.new_page()
-        page.set_content("<!doctype html><html><body></body></html>")
+        page.route(
+            "http://picker-lock.test/",
+            lambda route: route.fulfill(status=200, content_type="text/html", body="<!doctype html><html><body></body></html>"),
+        )
+        page.goto("http://picker-lock.test/")
         page.add_script_tag(path=str(CONSOLE_JS))
         result = page.evaluate(
             """() => {
               const mediaForm = { imageRenderStyle: "cel_shading" };
-              document.body.innerHTML = renderPersonaPostImageRenderStylePicker(mediaForm);
+              const persona = { id: "persona-lock" };
+              const post = { id: "post-lock", title: "夜晚咖啡", content: "和朋友在咖啡店聊天" };
+              document.body.innerHTML = renderPersonaPostImageRenderStylePicker(mediaForm)
+                + renderPersonaImageCompositionPicker(persona, post);
               setPersonaPostImageRenderStyleInteractionLocked(true);
               const locked = Array.from(document.querySelectorAll("[data-persona-image-render-style]"), (button) => button.disabled);
               const lockedTabs = Array.from(document.querySelectorAll("[data-persona-image-render-style-group]"), (button) => button.disabled);
+              const lockedCompositions = Array.from(document.querySelectorAll("[data-persona-image-composition-kind]"), (button) => button.disabled);
+              const lockedCompositionTabs = Array.from(document.querySelectorAll("[data-persona-image-composition-group]"), (button) => button.disabled);
               const selectedWhileLocked = document.querySelector('[data-persona-image-render-style="cel_shading"]')?.getAttribute("aria-checked");
               const lockedCopy = renderPersonaPostImageRenderStylePicker(mediaForm, true);
               setPersonaPostImageRenderStyleInteractionLocked(false);
               const unlocked = Array.from(document.querySelectorAll("[data-persona-image-render-style]"), (button) => button.disabled);
               const unlockedTabs = Array.from(document.querySelectorAll("[data-persona-image-render-style-group]"), (button) => button.disabled);
-              return { locked, lockedTabs, unlocked, unlockedTabs, selectedWhileLocked, lockedCopy };
+              const unlockedCompositions = Array.from(document.querySelectorAll("[data-persona-image-composition-kind]"), (button) => button.disabled);
+              const unlockedCompositionTabs = Array.from(document.querySelectorAll("[data-persona-image-composition-group]"), (button) => button.disabled);
+              return {
+                locked,
+                lockedTabs,
+                lockedCompositions,
+                lockedCompositionTabs,
+                unlocked,
+                unlockedTabs,
+                unlockedCompositions,
+                unlockedCompositionTabs,
+                selectedWhileLocked,
+                lockedCopy,
+              };
             }"""
         )
         assert all(result["locked"])
         assert all(result["lockedTabs"])
+        assert all(result["lockedCompositions"])
+        assert all(result["lockedCompositionTabs"])
         assert not any(result["unlocked"])
         assert not any(result["unlockedTabs"])
+        assert not any(result["unlockedCompositions"])
+        assert not any(result["unlockedCompositionTabs"])
         assert result["selectedWhileLocked"] == "true"
         assert "配图生成期间已锁定，完成后可重新选择" in result["lockedCopy"]
         assert 'data-persona-image-render-style="cel_shading"' in result["lockedCopy"]
+        browser.close()
+
+
+def test_active_media_task_restores_the_actual_style_and_composition_selection():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        page = browser.new_page()
+        page.route(
+            "http://picker-restore.test/",
+            lambda route: route.fulfill(status=200, content_type="text/html", body="<!doctype html><html><body></body></html>"),
+        )
+        page.goto("http://picker-restore.test/")
+        page.add_script_tag(path=str(CONSOLE_JS))
+        result = page.evaluate(
+            """() => {
+              restorePersonaMediaVisualSelections("persona-restore", "post-restore", {
+                image_render_style: "cinematic_cg",
+                image_mode: "infographic",
+                image_composition_label: "信息图",
+              });
+              const form = personaFormState("persona-restore").media;
+              const selected = selectedPersonaImageStyle("persona-restore", "post-restore");
+              const picker = renderPersonaImageCompositionPicker(
+                { id: "persona-restore" },
+                { id: "post-restore", title: "数据", content: "本月增长" },
+                true,
+              );
+              return {
+                renderStyle: form.imageRenderStyle,
+                renderStyleGroup: form.imageRenderStyleGroup,
+                compositionKind: selected.kind,
+                compositionLabel: selected.label,
+                compositionGroup: personaImageStyleState("persona-restore", "post-restore").compositionGroup,
+                picker,
+              };
+            }"""
+        )
+        assert result["renderStyle"] == "cinematic_cg"
+        assert result["renderStyleGroup"] == "three_d"
+        assert result["compositionKind"] == "infographic"
+        assert result["compositionLabel"] == "信息图"
+        assert result["compositionGroup"] == "graphic"
+        assert 'data-persona-image-composition-kind="infographic"' in result["picker"]
+        assert 'aria-pressed="true"' in result["picker"]
         browser.close()
 
 

@@ -10,7 +10,24 @@ import {
 } from "@/lib/persona-image-search";
 import type { DramaSetup } from "@/types/drama";
 
-export type PersonaImageGenerationMode = "auto" | "person" | "pov" | "scene" | "object" | "third_person";
+export type PersonaImageGenerationMode =
+  | "auto"
+  | "person"
+  | "group"
+  | "third_person"
+  | "pov"
+  | "scene"
+  | "object"
+  | "flatlay"
+  | "chart"
+  | "infographic"
+  | "ad"
+  | "quote"
+  | "split"
+  | "process"
+  | "ui"
+  | "map"
+  | "document";
 export type PersonaImageReferenceMode = "none" | "outfit" | "pose" | "outfit+pose";
 export type PersonaImageClosedMode = "closed-person" | "closed-pov" | "closed-scene";
 export type PersonaImageResolvedMode = PersonaImageClosedMode | "blocked-missing-reference";
@@ -32,9 +49,22 @@ export function resolvePersonaImageMode(
   setup: DramaSetup,
   requestedMode: PersonaImageGenerationMode = "auto",
 ): PersonaImageClosedMode {
-  if (requestedMode === "person" || requestedMode === "third_person") return "closed-person";
+  if (requestedMode === "person" || requestedMode === "group" || requestedMode === "third_person") return "closed-person";
   if (requestedMode === "pov") return "closed-pov";
-  if (requestedMode === "scene" || requestedMode === "object") return "closed-scene";
+  if ([
+    "scene",
+    "object",
+    "flatlay",
+    "chart",
+    "infographic",
+    "ad",
+    "quote",
+    "split",
+    "process",
+    "ui",
+    "map",
+    "document",
+  ].includes(requestedMode)) return "closed-scene";
   const subject = classifyPersonaImageSubject(content, setup);
   if (subject === "pov") return "closed-pov";
   if (subject === "scene") return "closed-scene";
@@ -308,6 +338,48 @@ export function buildPersonaImagePrompt(
       : referenceMode === "outfit+pose"
         ? "reference image should guide both outfit styling and pose, while keeping the new scene natural"
         : "";
+  const compositionDirective = ({
+    group: "MANDATORY SELECTED COMPOSITION: group interaction with 2–6 distinct people; keep the referenced persona clearly identifiable as the primary subject, show natural interaction and readable shared context, and do not collapse the result into a solo portrait or selfie.",
+    flatlay: "MANDATORY SELECTED COMPOSITION: strict overhead flat-lay arrangement on one surface, balanced spacing and complete objects visible; no people, faces, bodies, or hands in frame.",
+    chart: "MANDATORY SELECTED COMPOSITION: data-chart dashboard with a strong chart-first visual hierarchy, clearly separated plotting area, legend and metric-card regions; do not turn it into a portrait or ordinary scenery photo.",
+    infographic: "MANDATORY SELECTED COMPOSITION: structured infographic with clearly separated information sections, icons and a deliberate reading order; prioritize visual explanation over photographic portraiture.",
+    ad: "MANDATORY SELECTED COMPOSITION: polished advertising-poster layout with one clear hero subject, deliberate negative space and campaign-grade visual hierarchy.",
+    quote: "MANDATORY SELECTED COMPOSITION: quote-card layout with a dominant clean typography-safe focal area, restrained supporting imagery and strong contrast; leave readable uncluttered space for the quote.",
+    split: "MANDATORY SELECTED COMPOSITION: explicit split-panel comparison with two or more clearly separated frames, consistent visual logic and an immediately readable contrast between panels.",
+    process: "MANDATORY SELECTED COMPOSITION: step-by-step process diagram with distinct ordered stages, directional flow and consistent visual symbols; do not render it as one undivided scene.",
+    ui: "MANDATORY SELECTED COMPOSITION: interface or application-screen composition with an organized header, navigation, content panels and controls; use coherent screen-layout hierarchy rather than a lifestyle portrait.",
+    map: "MANDATORY SELECTED COMPOSITION: top-down map or plan view with spatial paths, landmarks and clear area hierarchy; no eye-level camera perspective.",
+    document: "MANDATORY SELECTED COMPOSITION: document, receipt or form shown flat and fully framed with clear structural sections, margins and line hierarchy; no portrait composition.",
+  } as Partial<Record<PersonaImageGenerationMode, string>>)[requestedMode] || "";
+
+  if (requestedMode === "group") {
+    return {
+      prompt: [
+        compositionDirective,
+        buildLifestyleCameraDirection(true, `${content}|${hint}|${variationKey || ""}`),
+        buildPersonaSocialImagePrompt(content, setup, signals),
+        hint ? `group-scene direction: ${hint}` : "",
+        "the referenced persona remains the recognizable main subject while naturally interacting with several different people in the environment; preserve distinct bodies and faces, believable spacing, and a lived-in candid moment",
+        referencePrompt,
+      ].filter(Boolean).join(", "),
+      mode: "closed-person",
+      withAvatar: true,
+    };
+  }
+
+  if (["flatlay", "chart", "infographic", "ad", "quote", "split", "process", "ui", "map", "document"].includes(requestedMode)) {
+    return {
+      prompt: [
+        compositionDirective,
+        buildSceneOnlyImagePrompt(content, setup, signals),
+        hint ? `selected composition subject: ${hint}` : "",
+        "follow the selected composition exactly; keep the full layout inside frame, visually coherent, cleanly separated, and free of watermarks",
+        referencePrompt,
+      ].filter(Boolean).join(", "),
+      mode: "closed-scene",
+      withAvatar: false,
+    };
+  }
 
   if (requestedMode === "object") {
     const objectContent = `${content}\n不出现人物，不要手，object only，只拍事物特写${hint ? `：${hint}` : ""}`;

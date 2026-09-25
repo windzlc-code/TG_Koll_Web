@@ -185,6 +185,8 @@ def test_console_uses_two_stage_direction_picker_for_normal_and_batch_posts():
     assert "原有风格（默认）" in script
     assert 'PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT = "original"' in script
     assert "setPersonaPostImageRenderStyleInteractionLocked(true)" in script
+    assert "[data-persona-image-composition-kind]" in script
+    assert "restorePersonaMediaVisualSelections(personaId, postId, input)" in script
     assert "配图生成期间已锁定，完成后可重新选择" in script
     assert "cel_shading" in script
     assert "cinematic_cg" in script
@@ -505,6 +507,8 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
     assert captured["payload"]["setup"]["personaReferenceIdentity"] == "中国地区特征，18至22岁的成年女性"
     assert result["image_render_style"] == "three_render_two"
     assert result["image_render_style_label"] == "3 渲 2"
+    assert result["image_mode"] == "scene"
+    assert result["image_composition_label"] == "便利店夜景"
 
     default_result = server._run_persona_post_image_task("task-2", {
         "related_persona_id": "persona-1",
@@ -559,6 +563,32 @@ def test_post_image_runner_passes_selected_image_style_mode(monkeypatch, tmp_pat
         "task-3:1:2",
         "task-3:2:2",
     }
+
+
+def test_all_visual_composition_modes_survive_backend_normalization():
+    expected = (
+        "auto",
+        "person",
+        "group",
+        "third_person",
+        "pov",
+        "scene",
+        "object",
+        "flatlay",
+        "chart",
+        "infographic",
+        "ad",
+        "quote",
+        "split",
+        "process",
+        "ui",
+        "map",
+        "document",
+    )
+
+    assert server._PERSONA_POST_IMAGE_MODES == expected
+    assert [server._normalize_persona_post_image_mode(item) for item in expected] == list(expected)
+    assert server._normalize_persona_post_image_mode("not-a-composition") == "auto"
 
 
 def test_generation_style_catalog_is_not_the_removed_filter_catalog():

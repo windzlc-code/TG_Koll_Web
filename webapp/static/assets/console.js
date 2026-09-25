@@ -4616,6 +4616,28 @@ function selectedPersonaImageStyle(personaId, postId = "", sourceFingerprint = "
   return personaImageCompositionCatalog().find((item) => personaImageStyleKey(item) === selectedKey) || defaultItem;
 }
 
+function restorePersonaMediaVisualSelections(personaId, postId, taskInput = {}) {
+  if (!taskInput || typeof taskInput !== "object") return;
+  const mediaForm = personaFormState(personaId).media;
+  const renderStyle = String(taskInput.image_render_style || taskInput.imageRenderStyle || "").trim();
+  if (renderStyle) selectPersonaPostImageRenderStyle(mediaForm, renderStyle);
+
+  const requestedKind = String(taskInput.image_mode || taskInput.mode || "").trim();
+  const requestedLabel = String(taskInput.image_composition_label || taskInput.image_style_label || "").trim();
+  const catalog = personaImageCompositionCatalog();
+  const selected = catalog.find((item) => (
+    item.kind === requestedKind
+    && (!requestedLabel || item.label === requestedLabel)
+  )) || catalog.find((item) => item.kind === requestedKind);
+  if (!selected) return;
+  const styleState = personaImageStyleState(personaId, postId);
+  styleState.styles = catalog;
+  styleState.selectedKey = personaImageStyleKey(selected);
+  styleState.compositionGroup = PERSONA_IMAGE_COMPOSITION_GROUPS.find(
+    (group) => group.items.some((item) => personaImageStyleKey(item) === styleState.selectedKey),
+  )?.id || PERSONA_IMAGE_COMPOSITION_GROUPS[0].id;
+}
+
 function ensurePersonaPostDirectionsByMode(form) {
   if (!form || typeof form !== "object") {
     return { tweet: defaultPersonaPostDirectionState(), tweet_media: defaultPersonaPostDirectionState() };
@@ -4965,7 +4987,12 @@ function renderPersonaImageCompositionPicker(persona, post, disabled = false) {
   const group = PERSONA_IMAGE_COMPOSITION_GROUPS.find((item) => item.id === groupId) || PERSONA_IMAGE_COMPOSITION_GROUPS[0];
   styleState.compositionGroup = group.id;
   const previewItem = catalog.find((item) => personaImageStyleKey(item) === selectedKey) || defaultItem;
-  preloadPersonaPreviewImages(group.items.map((item) => personaImageCompositionPreviewUrl(item.kind)), "high");
+  const previewUrl = personaImageCompositionPreviewUrl(previewItem.kind);
+  preloadPersonaPreviewImages([previewUrl], "high");
+  preloadPersonaPreviewImages(
+    group.items.map((item) => personaImageCompositionPreviewUrl(item.kind)).filter((url) => url !== previewUrl),
+    "low",
+  );
   schedulePersonaPreviewCacheWarm();
   return `<section class="persona-post-direction-panel persona-image-composition-panel" aria-label="推文配图构图方向" data-persona-image-composition-post="${esc(postId)}">
     <div class="persona-image-composition-head">
@@ -5004,7 +5031,12 @@ function renderPersonaPostImageRenderStylePicker(mediaForm, disabled = false) {
   const groupId = personaImageRenderStyleGroupId(mediaForm);
   const group = PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS.find((item) => item.id === groupId) || PERSONA_POST_IMAGE_RENDER_STYLE_GROUPS[0];
   const previewStyle = selectedStyle || group.styles[0];
-  preloadPersonaPreviewImages(group.styles.map((item) => personaPostImageRenderStylePreviewUrl(item.id)), "high");
+  const previewUrl = personaPostImageRenderStylePreviewUrl(previewStyle.id);
+  preloadPersonaPreviewImages([previewUrl], "high");
+  preloadPersonaPreviewImages(
+    group.styles.map((item) => personaPostImageRenderStylePreviewUrl(item.id)).filter((url) => url !== previewUrl),
+    "low",
+  );
   schedulePersonaPreviewCacheWarm();
   return `<section class="persona-post-image-render-style-panel" aria-label="推文配图生成风格">
     <div class="persona-post-image-render-style-head">
@@ -5036,11 +5068,11 @@ function renderPersonaPostImageRenderStylePicker(mediaForm, disabled = false) {
 }
 
 function setPersonaPostImageRenderStyleInteractionLocked(locked) {
-  document.querySelectorAll("[data-persona-image-render-style], [data-persona-image-render-style-group]").forEach((button) => {
+  document.querySelectorAll("[data-persona-image-render-style], [data-persona-image-render-style-group], [data-persona-image-composition-kind], [data-persona-image-composition-group]").forEach((button) => {
     button.disabled = Boolean(locked);
     button.setAttribute("aria-disabled", locked ? "true" : "false");
   });
-  document.querySelectorAll(".persona-post-image-render-style-panel").forEach((panel) => {
+  document.querySelectorAll(".persona-post-image-render-style-panel, .persona-image-composition-panel").forEach((panel) => {
     panel.classList.toggle("is-locked", Boolean(locked));
     panel.setAttribute("aria-busy", locked ? "true" : "false");
   });
@@ -9128,7 +9160,15 @@ function personaPickerScrollSnapshotKey(node, index) {
   const host = node?.closest?.("[data-persona-image-composition-post], .persona-post-image-render-style-panel");
   const postId = String(host?.dataset?.personaImageCompositionPost || "").trim();
   const role = String(node?.getAttribute?.("role") || "").trim();
-  return `${postId || role || "picker"}:${index}`;
+  const activeGroup = host?.querySelector?.(
+    "[data-persona-image-render-style-group].is-active, [data-persona-image-composition-group].is-active",
+  );
+  const groupId = String(
+    activeGroup?.dataset?.personaImageRenderStyleGroup
+      || activeGroup?.dataset?.personaImageCompositionGroup
+      || "",
+  ).trim();
+  return `${postId || role || "picker"}:${groupId || "default"}:${index}`;
 }
 
 function snapshotPersonaPickerScrolls() {
@@ -9231,8 +9271,12 @@ function restoreConsoleScrollState(snapshot) {
     });
     const currentPersonaPickerScrolls = Array.from(document.querySelectorAll(".persona-picker-list"));
     (snapshot.personaPickerScrolls || []).forEach((item) => {
-      const target = currentPersonaPickerScrolls.find((node, index) => personaPickerScrollSnapshotKey(node, index) === item.key)
-        || currentPersonaPickerScrolls[item.index];
+      // Picker pages have independent scroll positions. Falling back to the
+      // same DOM index carries the previous page's offset into a newly selected
+      // style/composition group and can hide its automatically selected item.
+      const target = currentPersonaPickerScrolls.find(
+        (node, index) => personaPickerScrollSnapshotKey(node, index) === item.key,
+      );
       if (target) target.scrollTop = item.top || 0;
     });
     if (personaHotLayout && Number.isFinite(snapshot.personaHotLayoutTop)) {
@@ -25717,6 +25761,7 @@ async function restorePersonaMediaTasksFromTaskList(tasks = state.tasks) {
     const postId = String(input.related_post_id || "").trim();
     const taskId = String(detail.id || "").trim();
     if (!personaId || !postId || !taskId) return;
+    restorePersonaMediaVisualSelections(personaId, postId, input);
     const key = personaMediaTaskKey(personaId, postId);
     const current = state.personaMediaTasks[key];
     const startedAt = toastTimestampMs(detail.started_at || detail.created_at) || Date.now();
@@ -25845,6 +25890,17 @@ async function submitPersonaMediaTask() {
   let taskAccepted = false;
   setActionLocked(lockParts, true, submittedAt);
   setPersonaPostImageRenderStyleInteractionLocked(true);
+  normalizePersonaMediaGenerationForm(form);
+  const submittedImageRenderStyle = taskType === "persona_post_image"
+    ? String(form.imageRenderStyle || PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT)
+    : "";
+  const submittedComposition = taskType === "persona_post_image"
+    ? selectedPersonaImageStyle(
+      persona.id,
+      post.id,
+      personaImageStyleSourceFingerprint(post, generationContent),
+    )
+    : null;
   clearMsg("commandMsg");
   const submitButton = document.querySelector("[data-persona-run-media-task]");
   if (submitButton) {
@@ -25874,18 +25930,10 @@ async function submitPersonaMediaTask() {
       return;
     }
     const draftSourceText = personaMediaTaskGenerationContent(persona, post, source);
-    normalizePersonaMediaGenerationForm(form);
     const desiredImageCount = modifyItem
       ? 1
       : Math.min(Math.max(Number(form.imageCount || state.personaMediaImageCountDefault || storedPersonaMediaImageCount() || 1), 1), 4);
     form.imageCount = desiredImageCount;
-    const selectedComposition = taskType === "persona_post_image"
-      ? selectedPersonaImageStyle(
-        persona.id,
-        post.id,
-        personaImageStyleSourceFingerprint(post, generationContent),
-      )
-      : null;
     const params = compactPayload({
       prompt,
       prompt_text: prompt,
@@ -25903,13 +25951,13 @@ async function submitPersonaMediaTask() {
       draft_source_text: draftSourceText,
       aspect_ratio: taskType === "persona_post_image" ? String(form.aspectRatio || "auto") : undefined,
       image_render_style: taskType === "persona_post_image"
-        ? String(form.imageRenderStyle || PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT)
+        ? submittedImageRenderStyle
         : undefined,
       image_mode: taskType === "persona_post_image"
-        ? String(selectedComposition?.kind || "person")
+        ? String(submittedComposition?.kind || "person")
         : undefined,
       image_composition_label: taskType === "persona_post_image"
-        ? String(selectedComposition?.label || "")
+        ? String(submittedComposition?.label || "")
         : undefined,
       image_edit_mode: Boolean(modifyItem),
       edit_source: modifyItem && !modifyItem.replacementFile ? {

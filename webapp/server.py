@@ -11775,7 +11775,25 @@ _PERSONA_POST_IMAGE_ASPECT_RATIOS = ("1:1", "3:4", "4:3", "9:16", "16:9")
 _PERSONA_POST_IMAGE_ASPECT_RATIO_VALUES = {"auto", *_PERSONA_POST_IMAGE_ASPECT_RATIOS}
 _PERSONA_POST_IMAGE_RATIO_TWEET_MAX_CHARS = 4000
 _PERSONA_POST_IMAGE_RATIO_PROMPT_MAX_CHARS = 2000
-_PERSONA_POST_IMAGE_MODES = ("auto", "person", "pov", "scene", "object", "third_person")
+_PERSONA_POST_IMAGE_MODES = (
+    "auto",
+    "person",
+    "group",
+    "third_person",
+    "pov",
+    "scene",
+    "object",
+    "flatlay",
+    "chart",
+    "infographic",
+    "ad",
+    "quote",
+    "split",
+    "process",
+    "ui",
+    "map",
+    "document",
+)
 _PERSONA_POST_IMAGE_RENDER_STYLE_DEFAULT = "original"
 _PERSONA_POST_IMAGE_RENDER_STYLES: dict[str, tuple[str, str]] = {
     "original": ("原有风格（默认）", ""),
@@ -12412,6 +12430,8 @@ def _run_persona_post_image_task(task_id: str, payload: dict[str, Any]) -> dict[
         "edit_source": payload.get("edit_source") if edit_reference_path else None,
         "image_render_style": image_render_style,
         "image_render_style_label": image_render_style_label,
+        "image_mode": image_mode,
+        "image_composition_label": style_hint,
         "aspect_ratio": aspect_ratio,
         "aspect_ratio_selection": aspect_ratio_selection,
         "timings": compatible_timings,

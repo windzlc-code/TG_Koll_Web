@@ -31284,6 +31284,20 @@ body.console-page {
   flex-wrap: nowrap;
 }
 
+/* The four generation-style pages are one control. Equal columns keep the
+   pager visually stable when switching between labels of different lengths. */
+.persona-post-image-render-style-panel .persona-picker-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: visible;
+}
+
+.persona-post-image-render-style-panel .persona-picker-tab {
+  width: 100% !important;
+  min-width: 0;
+  padding-inline: 8px !important;
+}
+
 button.persona-picker-tab,
 .persona-picker-tab {
   display: inline-flex !important;
@@ -31459,6 +31473,7 @@ button.persona-picker-tab,
   max-height: 214px;
   gap: 6px;
   padding: 2px;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -31507,7 +31522,9 @@ button.persona-picker-tab,
 
 @media (max-width: 760px) {
   .persona-picker-list {
-    max-height: 198px;
+    /* Exactly three 58px cards + two 6px gaps + vertical padding. This avoids
+       exposing the rounded top edge of the next card below the viewport. */
+    max-height: 190px;
   }
 
   .persona-picker-option {
@@ -31524,6 +31541,6 @@ button.persona-picker-tab,
 
 @media (max-width: 360px) {
   .persona-picker-list {
-    max-height: 198px;
+    max-height: 190px;
   }
 }

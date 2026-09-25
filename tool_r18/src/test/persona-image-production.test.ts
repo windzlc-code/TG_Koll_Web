@@ -900,6 +900,36 @@ describe("persona image production", () => {
     expect(built.prompt).not.toContain("photorealistic portrait or half-body lifestyle photo");
   });
 
+  it("preserves every visual composition preset as a mandatory prompt directive", () => {
+    const cases = [
+      ["group", "group interaction with 2–6 distinct people", "closed-person", true],
+      ["flatlay", "strict overhead flat-lay arrangement", "closed-scene", false],
+      ["chart", "data-chart dashboard", "closed-scene", false],
+      ["infographic", "structured infographic", "closed-scene", false],
+      ["ad", "advertising-poster layout", "closed-scene", false],
+      ["quote", "quote-card layout", "closed-scene", false],
+      ["split", "split-panel comparison", "closed-scene", false],
+      ["process", "step-by-step process diagram", "closed-scene", false],
+      ["ui", "interface or application-screen composition", "closed-scene", false],
+      ["map", "top-down map or plan view", "closed-scene", false],
+      ["document", "document, receipt or form shown flat", "closed-scene", false],
+    ] as const;
+
+    for (const [mode, directive, resolvedMode, withAvatar] of cases) {
+      const built = buildPersonaImagePrompt(
+        "整理本月运营数据并分享给团队",
+        nonWorkflowSetup(),
+        mode,
+        "none",
+        "运营复盘",
+      );
+      expect(built.mode).toBe(resolvedMode);
+      expect(built.withAvatar).toBe(withAvatar);
+      expect(built.prompt).toContain("MANDATORY SELECTED COMPOSITION");
+      expect(built.prompt).toContain(directive);
+    }
+  });
+
   it("builds varied lived-in camera direction for persona tweet images", () => {
     const built = buildPersonaImagePrompt(
       "下班回家躺在床上，终于可以放松一下",
