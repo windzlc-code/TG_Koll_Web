@@ -122,6 +122,19 @@
     status.className = `msg ${ok ? "ok" : message ? "err" : ""}`;
   }
 
+  function oauthErrorMessage(code) {
+    const messages = {
+      provider_denied: "你已取消 Google 授权，请重新点击 Google 登录。",
+      oauth_state_invalid: "Google 登录请求已过期，请重新开始授权。",
+      google_verification_failed: "Google 身份验证失败，请重试。",
+      google_login_disabled: "此 Google 账号的登录已被管理员停用。",
+      google_login_unavailable: "Google 登录当前不可用，请稍后重试。",
+      google_identity_conflict: "此 Google 账号已绑定其他用户。",
+      account_unavailable: "Google 账号当前不可登录，请联系管理员。",
+    };
+    return messages[String(code || "").trim().toLowerCase()] || "Google 授权失败，请重试。";
+  }
+
   function apiErrorDetail(error) {
     const payload = error && typeof error === "object" ? error : {};
     const detail = payload.detail;
@@ -141,6 +154,8 @@
 
   const initialTelegramContext = telegramLoginContext();
   showTelegramAuthBanner(initialTelegramContext);
+  const initialOauthError = new URLSearchParams(window.location.search).get("oauth_error");
+  if (initialOauthError) setStatus(oauthErrorMessage(initialOauthError), false);
 
   async function api(path, options = {}) {
     const response = await fetch(path, { credentials: "include", ...options });

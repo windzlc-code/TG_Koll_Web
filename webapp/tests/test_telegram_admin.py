@@ -177,6 +177,11 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertIn("确认授权并打开视频工作台", response.text)
         self.assertNotIn("telegram/tweet/open", response.text)
 
+        expired = TestClient(app).get("/telegram/video/open", params={"ticket": "expired-or-invalid"})
+        self.assertEqual(expired.status_code, 410)
+        self.assertIn("请返回 Telegram Bot", expired.text)
+        self.assertIn("重新点击", expired.text)
+
     def test_video_webapp_ticket_requires_live_admin_authorization(self):
         self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
         with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://example.test"}, clear=False):
@@ -271,6 +276,7 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json().get("authorization_required"))
         self.assertEqual(response.json().get("web_user", {}).get("username"), "vecto_user")
+        self.assertEqual(response.json().get("auth_method"), "password")
         consume.assert_not_called()
 
     def test_load_settings_backfills_missing_user_name(self):
@@ -386,6 +392,7 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertIn('telegram_video_browser', js)
         self.assertIn('showTelegramAuthBanner', js)
         self.assertIn('确认授权并打开视频工作台', js)
+        self.assertIn('oauthErrorMessage', js)
 
 
 if __name__ == "__main__":

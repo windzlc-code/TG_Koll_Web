@@ -907,6 +907,38 @@ class VerifiedEmailGoogleAuthTests(unittest.TestCase):
         )
         exchange.assert_not_called()
 
+    def test_google_denial_returns_to_telegram_video_authorization_page(self):
+        client = TestClient(self.app)
+        captured = {}
+
+        def authorization_url(state, nonce, redirect_uri):
+            captured["state"] = state
+            return "https://accounts.google.test/auth"
+
+        with mock.patch.object(
+            server,
+            "create_google_authorization",
+            side_effect=authorization_url,
+        ):
+            started = client.get(
+                "/api/auth/google/start",
+                params={"return_url": "/telegram/video/open?ticket=test-ticket"},
+                follow_redirects=False,
+            )
+        self.assertEqual(started.status_code, 302, started.text)
+        state = captured["state"]
+        denied = client.get(
+            f"/api/auth/google/callback?state={state}&error=access_denied",
+            follow_redirects=False,
+        )
+        self.assertEqual(denied.status_code, 302, denied.text)
+        location = urlsplit(denied.headers["location"])
+        self.assertEqual(location.path, "/video-login.html")
+        query = parse_qs(location.query)
+        self.assertEqual(query["return_url"], ["/telegram/video/open?ticket=test-ticket"])
+        self.assertEqual(query["telegram_video"], ["1"])
+        self.assertEqual(query["oauth_error"], ["provider_denied"])
+
     def test_google_start_limits_pending_flows_and_cleans_expired_rows(self):
         def authorization_url(state, nonce, redirect_uri):
             return f"https://accounts.google.test/auth?state={state}"

@@ -29662,15 +29662,65 @@ def create_app() -> FastAPI:
         ).strip().rstrip("/")
         return f"{origin}/api/auth/google/callback"
 
-    def _oauth_error_redirect(code: str) -> RedirectResponse:
+    def _oauth_error_redirect(code: str, return_path: str = "/") -> RedirectResponse:
         clean_code = re.sub(r"[^a-z0-9_-]", "", str(code or "").lower())[:64] or "oauth_failed"
+        safe_return = _safe_local_return_url(return_path, "/")
+        return_path_name = urlsplit(safe_return).path
+        if return_path_name == "/telegram/video/open":
+            login_path = "/video-login.html"
+            context_flag = "telegram_video=1"
+        elif return_path_name == "/telegram/tweet/open":
+            login_path = "/console-login.html"
+            context_flag = "telegram_tweet=1"
+        else:
+            login_path = _product_login_path_for_return(safe_return)
+            context_flag = ""
+        if login_path:
+            query = {
+                "return_url": safe_return,
+                "oauth_error": clean_code,
+            }
+            if context_flag:
+                key, value = context_flag.split("=", 1)
+                query[key] = value
+            location = f"{login_path}?{urlencode(query)}"
+        else:
+            query = {"login": "1", "oauth_error": clean_code}
+            if safe_return != "/":
+                query["return_url"] = safe_return
+            location = f"/?{urlencode(query)}"
         response = RedirectResponse(
-            url=f"/?login=1&oauth_error={quote(clean_code, safe='')}",
+            url=location,
             status_code=302,
         )
         response.delete_cookie(GOOGLE_OAUTH_FLOW_COOKIE, path="/")
         response.delete_cookie(GOOGLE_OAUTH_ONBOARDING_COOKIE, path="/")
         return response
+
+    def _google_flow_return_path_for_error(state: str, flow_cookie: str) -> str:
+        """Recover a Telegram return path when Google denies before code exchange."""
+        try:
+            state_digest = oauth_token_digest(state)
+            cookie_digest = oauth_token_digest(flow_cookie)
+        except ValueError:
+            return "/"
+        try:
+            with db() as conn:
+                row = conn.execute(
+                    "SELECT return_path, nonce_digest, flow_token_digest "
+                    "FROM oauth_authorization_flows "
+                    "WHERE state_digest = ? AND provider = 'google'",
+                    (state_digest,),
+                ).fetchone()
+        except Exception:
+            return "/"
+        if (
+            row is None
+            or not hmac.compare_digest(str(row["nonce_digest"] or ""), cookie_digest)
+            or not hmac.compare_digest(str(row["flow_token_digest"] or ""), cookie_digest)
+        ):
+            return "/"
+        return _safe_local_return_url(str(row["return_path"] or "/"), "/")
 
     def _google_customer_login_response(
         conn: sqlite3.Connection,
@@ -29949,7 +29999,11 @@ def create_app() -> FastAPI:
         error: str = "",
     ):
         if error:
-            return _oauth_error_redirect("provider_denied")
+            flow_cookie = str(request.cookies.get(GOOGLE_OAUTH_FLOW_COOKIE) or "").strip()
+            return _oauth_error_redirect(
+                "provider_denied",
+                _google_flow_return_path_for_error(state, flow_cookie),
+            )
         flow_cookie = str(request.cookies.get(GOOGLE_OAUTH_FLOW_COOKIE) or "").strip()
         if not state or not code or not flow_cookie:
             return _oauth_error_redirect("oauth_state_invalid")
@@ -29972,10 +30026,11 @@ def create_app() -> FastAPI:
                 or not hmac.compare_digest(str(row["flow_token_digest"] or ""), cookie_digest)
             ):
                 return _oauth_error_redirect("oauth_state_invalid")
+            return_path = _safe_local_return_url(str(row["return_path"] or "/"), "/")
             try:
                 runtime = _get_runtime_config(conn)
             except RuntimeConfigFileError:
-                return _oauth_error_redirect("google_login_unavailable")
+                return _oauth_error_redirect("google_login_unavailable", return_path)
             if not _auth_login_policy(runtime)["google_login_enabled"]:
                 conn.execute(
                     """
@@ -29985,7 +30040,7 @@ def create_app() -> FastAPI:
                     """,
                     (now, state_digest),
                 )
-                return _oauth_error_redirect("google_login_unavailable")
+                return _oauth_error_redirect("google_login_unavailable", return_path)
             consumed = conn.execute(
                 """
                 UPDATE oauth_authorization_flows
@@ -29995,8 +30050,7 @@ def create_app() -> FastAPI:
                 (now, state_digest, now),
             )
             if consumed.rowcount != 1:
-                return _oauth_error_redirect("oauth_state_invalid")
-            return_path = _safe_local_return_url(str(row["return_path"] or "/"), "/")
+                return _oauth_error_redirect("oauth_state_invalid", return_path)
             try:
                 flow_context = json.loads(str(row["context_json"] or "{}"))
             except (TypeError, ValueError, json.JSONDecodeError):
@@ -30008,7 +30062,7 @@ def create_app() -> FastAPI:
                 flow_cookie,
             )
         except (GoogleOAuthError, GoogleOAuthConfigurationError):
-            return _oauth_error_redirect("google_verification_failed")
+            return _oauth_error_redirect("google_verification_failed", return_path)
         subject = str(claims["sub"])
         email = str(claims["email"])
         profile_json = json.dumps(
@@ -30022,11 +30076,11 @@ def create_app() -> FastAPI:
         if str(flow_context.get("purpose") or "") == "social_account_session":
             owner_user_id = int(flow_context.get("user_id") or row["user_id"] or 0)
             if owner_user_id <= 0:
-                return _oauth_error_redirect("oauth_state_invalid")
+                return _oauth_error_redirect("oauth_state_invalid", return_path)
             with db() as conn:
                 owner = conn.execute("SELECT * FROM users WHERE id = ?", (owner_user_id,)).fetchone()
                 if owner is None or int(owner["is_disabled"] or 0):
-                    return _oauth_error_redirect("account_unavailable")
+                    return _oauth_error_redirect("account_unavailable", return_path)
                 subject_identity = conn.execute(
                     "SELECT id, user_id FROM oauth_identities WHERE provider = 'google' AND provider_subject = ?",
                     (subject,),
@@ -30084,7 +30138,7 @@ def create_app() -> FastAPI:
             if identity is not None:
                 identity_data = dict(identity)
                 if int(identity_data.get("google_login_enabled") or 0) != 1:
-                    return _oauth_error_redirect("google_login_disabled")
+                    return _oauth_error_redirect("google_login_disabled", return_path)
                 conn.execute(
                     """
                     UPDATE oauth_identities
@@ -30108,7 +30162,7 @@ def create_app() -> FastAPI:
                         return_path,
                     )
                 except HTTPException:
-                    return _oauth_error_redirect("account_unavailable")
+                    return _oauth_error_redirect("account_unavailable", return_path)
             verified_email = conn.execute(
                 """
                 SELECT users.*
@@ -30126,7 +30180,7 @@ def create_app() -> FastAPI:
                     (int(linked_user["id"]),),
                 ).fetchone()
                 if existing_provider is not None:
-                    return _oauth_error_redirect("google_identity_conflict")
+                    return _oauth_error_redirect("google_identity_conflict", return_path)
                 conn.execute(
                     """
                     INSERT INTO oauth_identities(
@@ -30151,7 +30205,7 @@ def create_app() -> FastAPI:
                         return_path,
                     )
                 except HTTPException:
-                    return _oauth_error_redirect("account_unavailable")
+                    return _oauth_error_redirect("account_unavailable", return_path)
             onboarding_token = generate_oauth_token()
             onboarding_expires_at = now + 600
             conn.execute(

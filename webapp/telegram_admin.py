@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import html
 import json
 import logging
 import os
@@ -774,11 +775,14 @@ def _send_video_authorization_notice(
     username = str(web_user.get("username") or "").strip()
     display_name = str(web_user.get("display_name") or "").strip()
     account = username or display_name or f"用户 {int(web_user.get('id') or 0)}"
+    auth_method = str(web_user.get("last_login_method") or "").strip().lower()
+    method_label = "Google 官方授权" if auth_method == "google" else "VECTO 网页账号登录"
     payload = {
         "chat_id": int(chat_id),
         "text": (
             "✅ Telegram 视频工作台授权成功\n\n"
             f"VECTO 网页账号：{account}\n"
+            f"授权方式：{method_label}\n"
             "当前 Telegram 账号已完成绑定，网页工作台已打开。\n"
             "如需切换账号，请再次点击「🔐 账号管理」。"
         ),
@@ -836,6 +840,31 @@ def _authenticated_video_web_session(request: Request) -> tuple[dict[str, Any], 
         status_code=401,
         detail={"code": "web_login_required", "message": "请先在此网页完成 VECTO 登录，再返回 Telegram。"},
     )
+
+
+def _video_authorization_error_page(message: str, *, status_code: int = 410) -> HTMLResponse:
+    """Render a useful browser page when a Telegram hand-off link is stale.
+
+    The HTTP status remains 410/403 so clients and monitoring can distinguish a
+    dead ticket, but users should not be left with a raw FastAPI JSON error.
+    """
+    clean_message = html.escape(str(message or "Telegram 视频工作台授权入口已失效。"))
+    content = f"""<!doctype html><html lang=\"zh-Hans\"><head><meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<meta name=\"robots\" content=\"noindex,nofollow,noarchive\"><title>Telegram 视频工作台授权</title>
+<style>body{{font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}}
+main{{max-width:560px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}}
+h1{{font-size:22px;margin:0 0 12px}}p{{line-height:1.65;color:#52697a}}.error{{color:#b42318;font-weight:700}}
+.hint{{margin-top:18px;padding:14px 16px;border-radius:10px;background:#fff4ed;color:#8a3518}}</style></head>
+<body><main><h1>Telegram 视频工作台授权</h1><p class=\"error\">{clean_message}</p>
+<p class=\"hint\">请返回 Telegram Bot，重新点击「🔐 账号管理」获取新的授权链接。旧链接不会再次使用。</p></main></body></html>"""
+    response = HTMLResponse(content=content, status_code=int(status_code or 410))
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 def invalidate_video_link_ticket(token: str) -> None:
@@ -1277,7 +1306,13 @@ def inject_telegram_admin(
     @router.get("/telegram/video/open")
     def open_video_workbench(ticket: str = ""):
         """Bridge the Telegram browser ticket into the normal video login page."""
-        _video_ticket_chat_id(ticket)
+        try:
+            _video_ticket_chat_id(ticket)
+        except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict):
+                detail = detail.get("message") or detail.get("detail") or "Telegram 视频工作台授权入口已失效。"
+            return _video_authorization_error_page(str(detail), status_code=exc.status_code)
         encoded_ticket = json.dumps(str(ticket or ""), ensure_ascii=False)
         response = HTMLResponse(
             """<!doctype html><html lang="zh-Hans"><head><meta charset="utf-8">
@@ -1285,7 +1320,7 @@ def inject_telegram_admin(
 <meta name="robots" content="noindex,nofollow,noarchive">
 <title>绑定 Telegram 视频工作台</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<style>body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}main{max-width:520px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}h1{font-size:22px;margin:0 0 12px}p{line-height:1.65;color:#52697a}#status{min-height:1.8em}.account{padding:14px 16px;border-radius:10px;background:#eef5f8;color:#193247;font-weight:600}.authorize{width:100%;border:0;border-radius:10px;padding:13px 16px;background:#193247;color:#fff;font-size:16px;font-weight:700;cursor:pointer}.authorize:disabled{opacity:.6;cursor:wait}</style></head>
+<style>body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}main{max-width:520px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}h1{font-size:22px;margin:0 0 12px}p{line-height:1.65;color:#52697a}#status{min-height:1.8em}.account{padding:14px 16px;border-radius:10px;background:#eef5f8;color:#193247;font-weight:600}.error{color:#b42318;font-weight:700}.hint{margin-top:18px;padding:14px 16px;border-radius:10px;background:#fff4ed;color:#8a3518}.authorize{width:100%;border:0;border-radius:10px;padding:13px 16px;background:#193247;color:#fff;font-size:16px;font-weight:700;cursor:pointer}.authorize:disabled{opacity:.6;cursor:wait}</style></head>
 <body><main><h1>Telegram 视频工作台授权</h1><p id="status">正在验证 Telegram 身份和网页登录状态，请稍候…</p><div id="actions"></div></main>
 <script>
 (async () => {
@@ -1303,11 +1338,12 @@ def inject_telegram_admin(
   function showAuthorizationPrompt(payload, authorize) {
     const account = payload?.web_user || {};
     const username = String(account.username || account.display_name || "当前 VECTO 账号");
-    status.textContent = "已检测到网页登录状态，请确认将此账号授权给当前 Telegram 视频工作台。";
+    const provider = payload?.auth_method === "google" ? "Google 账号" : "VECTO 网页账号";
+    status.textContent = "已检测到 " + provider + " 登录状态，请确认将此账号授权给当前 Telegram 视频工作台。";
     actions.replaceChildren();
     const accountLine = document.createElement("p");
     accountLine.className = "account";
-    accountLine.textContent = "VECTO 网页账号：" + username;
+    accountLine.textContent = provider + "：" + username;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "authorize";
@@ -1317,6 +1353,18 @@ def inject_telegram_admin(
       authorize(true);
     });
     actions.append(accountLine, button);
+  }
+
+  function showFailure(message, expired = false) {
+    status.className = "error";
+    status.textContent = message || "Telegram 视频工作台授权失败，请重试。";
+    actions.replaceChildren();
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = expired
+      ? "请返回 Telegram Bot，重新点击「🔐 账号管理」获取新的授权链接。"
+      : "请返回 Telegram Bot 重试；如问题持续，请联系管理员。";
+    actions.append(hint);
   }
 
   async function exchange(confirm) {
@@ -1343,7 +1391,11 @@ def inject_telegram_admin(
         window.location.replace(loginPage);
         return;
       }
-      if (!response.ok) throw new Error(detail?.message || detail || "绑定失败");
+      if (!response.ok) {
+        const message = detail?.message || detail || "Telegram 视频工作台授权失败，请重试。";
+        showFailure(String(message), response.status === 410);
+        return;
+      }
       if (!confirm && payload.authorization_required) {
         showAuthorizationPrompt(payload, exchange);
         return;
@@ -1352,7 +1404,7 @@ def inject_telegram_admin(
       status.textContent = "授权成功，正在打开视频工作台…";
       window.location.replace(payload.target || "/video.html");
     } catch (error) {
-      status.textContent = error?.message || String(error);
+      showFailure(error?.message || String(error));
     }
   }
 
@@ -1401,6 +1453,11 @@ def inject_telegram_admin(
                         "username": str(web_user.get("username") or ""),
                         "display_name": str(web_user.get("display_name") or ""),
                     },
+                    "auth_method": (
+                        "google"
+                        if str(web_user.get("last_login_method") or "").strip().lower() == "google"
+                        else "password"
+                    ),
                 }
             )
         consume_video_link_ticket(payload.ticket, tg_profile, web_user, session_hash, runtime)
