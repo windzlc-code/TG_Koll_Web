@@ -257,34 +257,64 @@ def _lookup_member_profile(token: str, chat_ref: int | str) -> dict[str, Any] | 
         return None
 
 
-def remember_trusted_user_profile(chat_id: int, *, username: str = "", display_name: str = "") -> None:
+def ensure_video_chat_member(
+    chat_id: int,
+    *,
+    username: str = "",
+    display_name: str = "",
+) -> bool:
+    """Create the first video-Bot member record on a private-chat visit.
+
+    The video Bot is self-service: a user who starts a private chat is added
+    to the enabled member table before opening the normal web authorization
+    page.  An existing disabled row is never re-enabled implicitly; that is
+    the explicit administrator opt-out boundary.
+    """
     member_id = int(chat_id or 0)
+    if member_id <= 0:
+        return False
     next_username = str(username or "").strip().lstrip("@")
     next_display = str(display_name or "").strip()
-    if not member_id or not (next_username or next_display):
-        return
+    now = time.time()
     with db() as conn:
         ensure_telegram_schema(conn)
         row = conn.execute(
-            "SELECT tg_username, tg_display_name FROM telegram_trusted_users WHERE chat_id = ?",
+            "SELECT tg_username, tg_display_name, enabled, label FROM telegram_trusted_users WHERE chat_id = ?",
             (member_id,),
         ).fetchone()
         if not row:
-            return
+            label = next_display or (f"@{next_username}" if next_username else f"TG-{member_id}")
+            conn.execute(
+                """
+                INSERT INTO telegram_trusted_users(
+                  chat_id, label, tg_username, tg_display_name, enabled,
+                  notify_busy, notify_available, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 1, 1, 1, ?, ?)
+                """,
+                (member_id, label, next_username, next_display, now, now),
+            )
+            return True
         current_username = str(row["tg_username"] or "").strip().lstrip("@")
         current_display = str(row["tg_display_name"] or "").strip()
         saved_username = next_username or current_username
         saved_display = next_display or current_display
-        if saved_username == current_username and saved_display == current_display:
-            return
-        conn.execute(
-            """
-            UPDATE telegram_trusted_users
-            SET tg_username = ?, tg_display_name = ?, updated_at = ?
-            WHERE chat_id = ?
-            """,
-            (saved_username, saved_display, time.time(), member_id),
-        )
+        if saved_username != current_username or saved_display != current_display:
+            current_label = str(row["label"] or "").strip()
+            next_label = current_label or saved_display or (f"@{saved_username}" if saved_username else f"TG-{member_id}")
+            conn.execute(
+                """
+                UPDATE telegram_trusted_users
+                SET label = ?, tg_username = ?, tg_display_name = ?, updated_at = ?
+                WHERE chat_id = ?
+                """,
+                (next_label, saved_username, saved_display, now, member_id),
+            )
+        return bool(int(row["enabled"] or 0))
+
+
+def remember_trusted_user_profile(chat_id: int, *, username: str = "", display_name: str = "") -> None:
+    """Backfill the Telegram profile while also enabling self-service entry."""
+    ensure_video_chat_member(chat_id, username=username, display_name=display_name)
 
 
 def _member_payload(row) -> dict[str, Any]:
@@ -522,7 +552,11 @@ def _authorized_chat_ids(runtime: dict[str, Any]) -> set[int]:
 
 
 def is_video_chat_authorized(chat_id: int, runtime: dict[str, Any] | None = None) -> bool:
-    """Read the live video-Bot allow-list without relying on worker cache."""
+    """Read the live video-Bot member state without relying on worker cache.
+
+    A missing row is a first-time private-chat visitor and is registered as an
+    enabled self-service member.  Only an existing disabled row blocks access.
+    """
     member_id = int(chat_id or 0)
     if member_id <= 0:
         return False
@@ -532,12 +566,12 @@ def is_video_chat_authorized(chat_id: int, runtime: dict[str, Any] | None = None
             "SELECT enabled FROM telegram_trusted_users WHERE chat_id = ?",
             (member_id,),
         ).fetchone()
-    # An explicit admin row wins, including a disabled row.  The legacy
-    # comma-separated setting remains supported for existing deployments.
+    # An explicit admin row wins, including a disabled row.
     if row is not None:
         return bool(int(row["enabled"] or 0))
-    config = runtime if isinstance(runtime, dict) else {}
-    return member_id in set(_parse_chat_ids(str(config.get("telegram_allowed_chat_ids") or "")))
+    # Legacy comma-separated IDs remain valid, but first-time users no longer
+    # need an admin-maintained whitelist before opening browser authorization.
+    return ensure_video_chat_member(member_id)
 
 
 VIDEO_LINK_TTL_SECONDS = 180
@@ -719,7 +753,7 @@ def validate_video_browser_login_context(
             status_code=403,
             detail={
                 "code": "telegram_binding_not_authorized",
-                "message": "该 Telegram Chat ID 已不在视频工作台授权列表中，请重新联系管理员。",
+                "message": "该 Telegram 账号已被管理员停用，请联系管理员重新启用。",
             },
         )
     return expected_chat_id
@@ -748,7 +782,7 @@ def create_video_webapp_url(chat_id: int, get_runtime: GetRuntime) -> str:
     """
     runtime = get_runtime() or {}
     if not is_video_chat_authorized(int(chat_id), runtime):
-        raise RuntimeError("Telegram Chat ID 尚未加入视频工作台授权列表")
+        raise RuntimeError("该 Telegram 账号已被管理员停用")
     # Resolve the public origin before creating the one-time ticket, so a bad
     # deployment URL cannot leave an apparently valid ticket behind.
     base = _video_public_base_url(runtime)
@@ -780,11 +814,11 @@ def _send_video_authorization_notice(
     payload = {
         "chat_id": int(chat_id),
         "text": (
-            "✅ Telegram 视频工作台授权成功\n\n"
+            "Telegram 视频工作台授权成功\n\n"
             f"VECTO 网页账号：{account}\n"
             f"授权方式：{method_label}\n"
             "当前 Telegram 账号已完成绑定，网页工作台已打开。\n"
-            "如需切换账号，请再次点击「🔐 账号管理」。"
+            "如需切换账号，请再次点击「账号管理」。"
         ),
         "disable_web_page_preview": True,
     }
@@ -857,7 +891,7 @@ main{{max-width:560px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;bor
 h1{{font-size:22px;margin:0 0 12px}}p{{line-height:1.65;color:#52697a}}.error{{color:#b42318;font-weight:700}}
 .hint{{margin-top:18px;padding:14px 16px;border-radius:10px;background:#fff4ed;color:#8a3518}}</style></head>
 <body><main><h1>Telegram 视频工作台授权</h1><p class=\"error\">{clean_message}</p>
-<p class=\"hint\">请返回 Telegram Bot，重新点击「🔐 账号管理」获取新的授权链接。旧链接不会再次使用。</p></main></body></html>"""
+<p class=\"hint\">请返回 Telegram Bot，重新点击「账号管理」获取新的授权链接。旧链接不会再次使用。</p></main></body></html>"""
     response = HTMLResponse(content=content, status_code=int(status_code or 410))
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -918,18 +952,6 @@ def consume_video_link_ticket(
                 status_code=403,
                 detail={"code": "telegram_binding_disabled", "message": "该 Telegram 绑定已被管理员停用，请联系管理员处理。"},
             )
-        if existing is None:
-            legacy_allowed = chat_id in set(
-                _parse_chat_ids(str((runtime or {}).get("telegram_allowed_chat_ids") or ""))
-            )
-            if not legacy_allowed:
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "code": "telegram_binding_not_authorized",
-                        "message": "该 Telegram Chat ID 尚未加入视频工作台授权列表，请联系管理员处理。",
-                    },
-                )
         old_user_id = int(existing["web_user_id"] or 0) if existing else 0
         if existing and old_user_id and old_user_id != web_user_id:
             linked_hash = str(existing["linked_session_token_hash"] or "").strip()
@@ -1383,7 +1405,7 @@ def inject_telegram_admin(
     const hint = document.createElement("p");
     hint.className = "hint";
     hint.textContent = expired
-      ? "请返回 Telegram Bot，重新点击「🔐 账号管理」获取新的授权链接。"
+      ? "请返回 Telegram Bot，重新点击「账号管理」获取新的授权链接。"
       : "请返回 Telegram Bot 重试；如问题持续，请联系管理员。";
     actions.append(hint);
   }

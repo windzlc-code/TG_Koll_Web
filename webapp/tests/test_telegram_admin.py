@@ -90,8 +90,18 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertEqual(row["tg_display_name"], "到底")
         self.assertEqual(row["label"], "客户A")
 
+    def test_first_private_chat_self_registers_video_member(self):
+        self.assertTrue(telegram_admin.ensure_video_chat_member(731, username="new_user", display_name="新用户"))
+        row = telegram_admin._list_members()[0]
+        self.assertEqual(row["chat_id"], 731)
+        self.assertTrue(row["enabled"])
+        self.assertEqual(row["tg_username"], "new_user")
+        self.assertEqual(row["tg_display_name"], "新用户")
+        telegram_admin.toggle_trusted_user(731, False)
+        self.assertFalse(telegram_admin.ensure_video_chat_member(731, username="new_user", display_name="新用户"))
+        self.assertFalse(telegram_admin.is_video_chat_authorized(731, self.runtime))
+
     def test_video_self_service_ticket_binds_and_logout_clears_session_link(self):
-        telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=6258005891, label="客户A"))
         token = telegram_admin.create_video_link_ticket(6258005891)
         telegram_admin.consume_video_link_ticket(
             token,
@@ -187,14 +197,16 @@ class TelegramAdminTests(unittest.TestCase):
     def test_video_webapp_ticket_requires_live_admin_authorization(self):
         self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
         with mock.patch.dict(os.environ, {"PUBLIC_BASE_URL": "https://example.test"}, clear=False):
-            with self.assertRaises(RuntimeError):
-                telegram_admin.create_video_webapp_url(731, self._get)
-        telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=731, label="视频用户"))
+            url = telegram_admin.create_video_webapp_url(731, self._get)
+        self.assertTrue(url.startswith("https://example.test/telegram/video/open?ticket="))
+        self.assertEqual(telegram_admin._list_members()[0]["chat_id"], 731)
         self.assertTrue(telegram_admin.is_video_chat_authorized(731, self.runtime))
         telegram_admin.toggle_trusted_user(731, False)
         self.assertFalse(telegram_admin.is_video_chat_authorized(731, self.runtime))
 
-    def test_video_ticket_cannot_bind_chat_id_removed_from_admin_list(self):
+    def test_video_ticket_cannot_bind_disabled_chat_id(self):
+        telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=731, label="视频用户"))
+        telegram_admin.toggle_trusted_user(731, False)
         token = telegram_admin.create_video_link_ticket(731)
         with self.assertRaises(HTTPException) as raised:
             telegram_admin.consume_video_link_ticket(
@@ -205,7 +217,7 @@ class TelegramAdminTests(unittest.TestCase):
             )
         self.assertEqual(getattr(raised.exception, "status_code", None), 403)
         detail = getattr(raised.exception, "detail", {})
-        self.assertEqual(detail.get("code"), "telegram_binding_not_authorized")
+        self.assertEqual(detail.get("code"), "telegram_binding_disabled")
 
     def test_video_webapp_exchange_requires_normal_web_session(self):
         self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
