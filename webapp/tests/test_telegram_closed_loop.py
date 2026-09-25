@@ -107,6 +107,9 @@ def _video_callback_route(dispatcher, name: str):
 class TelegramClosedLoopTests(unittest.TestCase):
     def test_video_main_menu_keeps_original_controls_and_adds_account_entry(self):
         """The account entry is additive; the original video controls stay unchanged."""
+        self.assertEqual(tg_bot.VIDEO_EDIT_MENU_BUTTON, "🎞️ 视频编辑")
+        self.assertNotEqual(tg_bot.VIDEO_EDIT_MENU_BUTTON, "✂️ 视频编辑")
+        self.assertIn("✂️ 视频编辑", tg_bot.VIDEO_EDIT_TEXTS)
         markup = tg_bot._menu_keyboard()
         labels = [
             [str(getattr(button, "text", "")) for button in row]

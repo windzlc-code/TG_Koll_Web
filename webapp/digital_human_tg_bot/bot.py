@@ -210,7 +210,7 @@ ACCOUNT_MANAGEMENT_BUTTON = "🔐 账号管理"
 # update continue to work during a rolling deployment.
 DIGITAL_HUMAN_VIDEO_MENU_BUTTON = "🎬 数字人视频生成"
 ECOMMERCE_SHORT_VIDEO_MENU_BUTTON = "📣 广告短视频"
-VIDEO_EDIT_MENU_BUTTON = "✂️ 视频编辑"
+VIDEO_EDIT_MENU_BUTTON = "🎞️ 视频编辑"
 IMAGE_GENERATION_MENU_BUTTON_DISPLAY = "🖼️ 图片生成"
 RERUN_MENU_BUTTON = "🔄 重跑最近任务"
 STATUS_MENU_BUTTON = "📊 查看工作台状态"
@@ -222,7 +222,10 @@ DIGITAL_HUMAN_VIDEO_TEXTS = frozenset(
 ECOMMERCE_SHORT_VIDEO_TEXTS = frozenset(
     {ECOMMERCE_SHORT_VIDEO_BUTTON, "广告短视频", ECOMMERCE_SHORT_VIDEO_MENU_BUTTON}
 )
-VIDEO_EDIT_TEXTS = frozenset({VIDEO_EDIT_BUTTON, "视频编辑", VIDEO_EDIT_MENU_BUTTON})
+# Keep accepting the previously displayed scissors label while the refreshed
+# menu uses a film-frame icon that describes video editing rather than cutting.
+VIDEO_EDIT_LEGACY_MENU_BUTTON = "✂️ 视频编辑"
+VIDEO_EDIT_TEXTS = frozenset({VIDEO_EDIT_BUTTON, "视频编辑", VIDEO_EDIT_MENU_BUTTON, VIDEO_EDIT_LEGACY_MENU_BUTTON})
 IMAGE_GENERATION_MENU_TEXTS = frozenset(
     {IMAGE_GENERATION_MENU_BUTTON, "图片生成", IMAGE_GENERATION_MENU_BUTTON_DISPLAY}
 )
