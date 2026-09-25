@@ -341,6 +341,43 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertEqual(settings["allowed_chat_ids_env"], [11, 22])
         self.assertEqual(self.runtime["telegram_bot_token"], "123456:ABCDEF-token")
 
+    def test_video_save_passes_only_selected_runtime_updates(self):
+        self.runtime.update({
+            "telegram_bot_token": "old-video-token",
+            "telegram_bot_enabled": True,
+            "llm_api_key": "keep-this-value",
+        })
+        captured: dict[str, object] = {}
+
+        def save(updates):
+            captured.update(updates)
+            self.runtime.update(updates)
+
+        with mock.patch.object(telegram_admin, "verify_bot_token", return_value={"username": "video_bot", "id": 1}), \
+             mock.patch.object(telegram_admin, "reload_telegram_bot_worker"):
+            telegram_admin.save_tg_env(
+                TgEnvPayload(bot_enabled=False),
+                self._get,
+                save,
+            )
+        self.assertEqual(captured, {"telegram_bot_enabled": False})
+        self.assertEqual(self.runtime["llm_api_key"], "keep-this-value")
+
+    def test_video_save_rejects_same_token_when_both_bots_are_enabled(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "shared-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        with mock.patch.object(telegram_admin, "verify_bot_token", return_value={"username": "video_bot", "id": 1}):
+            with self.assertRaises(HTTPException) as raised:
+                telegram_admin.save_tg_env(
+                    TgEnvPayload(bot_token="shared-token", bot_enabled=True),
+                    self._get,
+                    self._save,
+                )
+        self.assertEqual(getattr(raised.exception, "status_code", None), 400)
+        self.assertIn("不能与推文工作台共用", str(getattr(raised.exception, "detail", "")))
+
     def test_empty_token_clears_existing_token_and_stops_polling(self):
         self.runtime["telegram_bot_token"] = "123456:ABCDEF-token"
         self.runtime["telegram_bot_enabled"] = True
