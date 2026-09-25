@@ -1555,6 +1555,33 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         self.assertNotIn("@keyframes account-pool-platform", mobile_account_pool_styles)
         self.assertNotIn("will-change: transform, opacity;", mobile_account_pool_styles)
 
+    def test_desktop_account_pool_reuses_admin_two_column_workspace_without_changing_mobile(self):
+        platform_tabs_start = self.console_script.index("function renderAccountPoolPlatformTabs(")
+        platform_tabs_end = self.console_script.index("\nfunction accountById", platform_tabs_start)
+        platform_tabs = self.console_script[platform_tabs_start:platform_tabs_end]
+        cards_start = self.console_script.index("function renderAccountPoolCards(")
+        cards_end = self.console_script.index("\nfunction accountPoolDraftValue", cards_start)
+        cards = self.console_script[cards_start:cards_end]
+
+        self.assertIn("const accounts = loading ? [] : accountPoolAccounts();", platform_tabs)
+        self.assertIn("renderAccountPoolControls(accounts, { placement: \"desktop\"", platform_tabs)
+        self.assertIn('class="account-pool-desktop-controls"', self.console_script)
+        self.assertIn("account-pool-mobile-controls", cards)
+        self.assertIn('class="account-pool-count"', cards)
+
+        marker = "/* Desktop account pool mirrors the admin account-and-login workspace. */"
+        self.assertIn(marker, self.styles)
+        desktop_styles = self.styles[self.styles.index(marker):]
+        self.assertIn("@media (min-width: 761px)", desktop_styles)
+        self.assertIn("grid-template-columns: 176px minmax(0, 1fr);", desktop_styles)
+        self.assertIn("grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));", desktop_styles)
+        self.assertIn(".account-pool-desktop-controls .account-pool-edit-toolbar", desktop_styles)
+        self.assertIn("display: flex;", desktop_styles)
+        self.assertIn(".account-pool-mobile-controls", desktop_styles)
+        self.assertIn("display: none;", desktop_styles)
+        self.assertIn("@media (max-width: 760px)", desktop_styles)
+        self.assertIn(".account-pool-desktop-controls", desktop_styles)
+
     def test_mobile_persistent_dock_pages_hide_the_left_toolbar_toggle_except_page_back_navigation(self):
         helper_start = self.console_script.index("function isMobilePersistentDockPage()")
         helper_end = self.console_script.index("\nfunction syncMobilePageToolbar()", helper_start)

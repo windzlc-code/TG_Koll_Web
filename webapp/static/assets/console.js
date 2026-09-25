@@ -31505,10 +31505,44 @@ function selectAccountPoolPersona(personaId = "") {
   renderSocialAccounts();
 }
 
+function renderAccountPoolControls(accounts = [], { placement = "mobile", loading = false, selectedIds: selectedIdsOverride = null } = {}) {
+  const selectedIds = loading
+    ? new Set()
+    : (selectedIdsOverride === null
+      ? new Set(accountPoolSelectedIds())
+      : new Set(Array.from(selectedIdsOverride || []).map((id) => String(id || ""))));
+  const selectedCount = selectedIds.size;
+  const allSelected = Boolean(accounts.length) && selectedCount === accounts.length;
+  const selectionAction = allSelected ? "clear" : "all";
+  const selectionLabel = allSelected ? "取消全选" : "全选账号";
+  const placementClass = placement === "desktop" ? "account-pool-desktop-controls" : "account-pool-mobile-controls";
+  const addButton = `<button type="button" class="account-pool-add-button" data-account-pool-add ${loading ? "disabled" : ""}>
+    <span aria-hidden="true"></span>
+    <strong>添加账号</strong>
+  </button>`;
+  const editToolbar = `<div class="account-pool-edit-toolbar ${placementClass}" role="toolbar" aria-label="账号编辑操作">
+    <span class="account-pool-selection-count">${esc(selectedCount ? `已选 ${selectedCount} 个` : "未选择")}</span>
+    <button type="button" data-account-pool-copy-selected title="复制账号卡" aria-label="复制账号卡" ${selectedCount && !loading ? "" : "disabled"}><span aria-hidden="true"></span></button>
+    <button type="button" class="bulk-selection-icon-button" data-account-pool-selection="${selectionAction}" title="${selectionLabel}" aria-label="${selectionLabel}" ${accounts.length && !loading ? "" : "disabled"}>${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
+    <button type="button" class="danger unified-action-icon-button" data-account-pool-delete-selected title="删除账号" aria-label="删除账号" ${selectedCount && !loading ? "" : "disabled"}>${renderTrashIcon()}</button>
+  </div>`;
+  if (placement !== "desktop") return { addButton, editToolbar };
+  return `<div class="account-pool-desktop-controls">
+    <div class="account-pool-section-head"><strong>操作</strong></div>
+    <div class="account-pool-ops">
+      <div class="account-pool-add-row">${addButton}</div>
+      ${editToolbar}
+    </div>
+  </div>`;
+}
+
 function renderAccountPoolPlatformTabs() {
+  const loading = accountPoolDataPending();
+  const accounts = loading ? [] : accountPoolAccounts();
   const active = normalizeAccountPoolPlatform();
   return `
     <section class="account-pool-platform-panel">
+      ${renderAccountPoolControls(accounts, { placement: "desktop", loading })}
       <div class="account-pool-platforms account-pool-platform-tabs" data-account-pool-platform-tabs role="tablist" aria-label="平台">
         ${accountPoolPlatforms.map(([value, label]) => {
           const isActive = active === value;
@@ -31719,27 +31753,15 @@ function renderAccountPoolCards(accounts, selectedAccount, selectedAccountIds = 
   const selectedIds = selectedAccountIds === null
     ? new Set(accountPoolSelectedIds())
     : new Set(Array.from(selectedAccountIds || []).map((id) => String(id || "")));
-  const selectedCount = selectedIds.size;
-  const allSelected = Boolean(accounts.length) && selectedCount === accounts.length;
-  const selectionAction = allSelected ? "clear" : "all";
-  const selectionLabel = allSelected ? "取消全选" : "全选账号";
-  const addButton = `<button type="button" class="account-pool-add-button" data-account-pool-add>
-    <span aria-hidden="true"></span>
-    <strong>添加账号</strong>
-  </button>`;
-  const editToolbar = `<div class="account-pool-edit-toolbar" role="toolbar" aria-label="账号编辑操作">
-    <span class="account-pool-selection-count">${esc(selectedCount ? `已选 ${selectedCount} 个` : "未选择")}</span>
-    <button type="button" data-account-pool-copy-selected title="复制账号卡" aria-label="复制账号卡" ${selectedCount ? "" : "disabled"}><span aria-hidden="true"></span></button>
-    <button type="button" class="bulk-selection-icon-button" data-account-pool-selection="${selectionAction}" title="${selectionLabel}" aria-label="${selectionLabel}" ${accounts.length ? "" : "disabled"}>${allSelected ? renderClearSelectionIcon() : renderSelectAllIcon()}</button>
-    <button type="button" class="danger unified-action-icon-button" data-account-pool-delete-selected title="删除账号" aria-label="删除账号" ${selectedCount ? "" : "disabled"}>${renderTrashIcon()}</button>
-  </div>`;
+  const { addButton, editToolbar } = renderAccountPoolControls(accounts, { placement: "mobile", selectedIds });
   if (!accounts.length) return `
     <section class="account-pool-account-panel">
       <div class="account-pool-section-head">
         <strong>账号</strong>
+        <span class="account-pool-count">0 个</span>
         ${editToolbar}
       </div>
-      <div class="account-pool-add-row">${addButton}</div>
+      <div class="account-pool-add-row account-pool-mobile-controls">${addButton}</div>
       <div class="account-pool-content-window">
         <div class="account-pool-content">
           <div class="account-pool-empty-state" role="status">
@@ -31754,9 +31776,10 @@ function renderAccountPoolCards(accounts, selectedAccount, selectedAccountIds = 
     <section class="account-pool-account-panel">
       <div class="account-pool-section-head">
         <strong>账号</strong>
+        <span class="account-pool-count">${esc(`${accounts.length} 个`)}</span>
         ${editToolbar}
       </div>
-      <div class="account-pool-add-row">${addButton}</div>
+      <div class="account-pool-add-row account-pool-mobile-controls">${addButton}</div>
       <div class="account-pool-content-window">
         <div class="account-pool-content">
           <div class="account-pool-list">
@@ -34621,7 +34644,7 @@ function renderAccountPoolLoading() {
               <strong>账号</strong>
               <span class="account-pool-loading-copy">正在加载账号</span>
             </div>
-            <div class="account-pool-add-row">
+            <div class="account-pool-add-row account-pool-mobile-controls">
               <button type="button" class="account-pool-add-button" disabled>
                 <span aria-hidden="true"></span>
                 <strong>添加账号</strong>
