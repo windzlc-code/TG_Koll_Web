@@ -41,6 +41,9 @@ def test_product_menu_has_keyboard_and_mobile_styles():
         ".site-nav-link-icon",
     ):
         assert selector in STYLES
+    assert ".site-product-option {" in STYLES
+    assert ".site-nav .site-product-option" in STYLES
+    assert "justify-content: start;" in STYLES
     assert "aria-expanded" in NAVIGATION
     assert 'event.key === "ArrowDown"' in NAVIGATION
     assert 'event.key === "Escape"' in NAVIGATION
