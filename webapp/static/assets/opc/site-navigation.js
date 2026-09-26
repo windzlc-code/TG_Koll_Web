@@ -63,6 +63,11 @@
       pricing: "订阅方案",
       difference: "服务差异",
       caseStudies: "热门案例",
+      productWorkspaces: "产品工作台",
+      videoWorkbench: "视频工作台",
+      videoWorkbenchHint: "视频生成、记录与简易剪辑",
+      collectorWorkbench: "采集工作台",
+      collectorWorkbenchHint: "采集热点、素材与数据",
       console: "推文工作台",
       video: "视频工作台",
       crm: "采集工作台",
@@ -176,6 +181,11 @@
       pricing: "訂閱方案",
       difference: "服務差異",
       caseStudies: "熱門案例",
+      productWorkspaces: "產品工作台",
+      videoWorkbench: "視頻工作台",
+      videoWorkbenchHint: "視頻生成、記錄與簡易剪輯",
+      collectorWorkbench: "採集工作台",
+      collectorWorkbenchHint: "採集熱點、素材與數據",
       console: "推文工作台",
       video: "視頻工作台",
       crm: "採集工作台",
@@ -578,6 +588,37 @@
     return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}${videoEntry}${crmEntry}${register}><span data-site-copy="${key}"></span></a>`;
   }
 
+  function productIcon(kind = "product") {
+    const paths = {
+      product: '<rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><rect x="14" y="14" width="6" height="6" rx="1"></rect>',
+      video: '<rect x="3.5" y="5" width="12.5" height="14" rx="2"></rect><path d="m16 10 4.5-2.5v9L16 14"></path>',
+      collector: '<path d="M5 4h14v16H5z"></path><path d="M8 8h8M8 12h5M8 16h3"></path><circle cx="17" cy="16" r="2.5"></circle>',
+    };
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[kind] || paths.product}</svg>`;
+  }
+
+  function productMenuMarkup({ mobile = false } = {}) {
+    const suffix = mobile ? "Mobile" : "";
+    const rootClass = mobile ? "site-product-menu site-product-menu-mobile" : "site-product-menu";
+    return `<div class="${rootClass}" data-site-product-menu>
+      <button class="site-product-trigger" type="button" aria-controls="siteProductMenuPopover${suffix}" aria-haspopup="menu" aria-expanded="false" data-site-product-trigger>
+        <span class="site-product-trigger-icon">${productIcon()}</span><span data-site-copy="productWorkspaces"></span><svg class="site-product-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5"></path></svg>
+      </button>
+      <div id="siteProductMenuPopover${suffix}" class="site-product-popover" data-site-product-popover hidden role="menu">
+        <a class="site-product-option" data-product-option data-video-entry href="/video.html" role="menuitem">
+          <span class="site-product-option-icon">${productIcon("video")}</span><span class="site-product-option-copy"><strong data-site-copy="videoWorkbench"></strong><small data-site-copy="videoWorkbenchHint"></small></span>
+        </a>
+        <a class="site-product-option" data-product-option data-crm-entry href="/crm.html" role="menuitem">
+          <span class="site-product-option-icon">${productIcon("collector")}</span><span class="site-product-option-copy"><strong data-site-copy="collectorWorkbench"></strong><small data-site-copy="collectorWorkbenchHint"></small></span>
+        </a>
+      </div>
+    </div>`;
+  }
+
+  function pageKeepsProductMenu(page) {
+    return ["", "home"].includes(String(page || ""));
+  }
+
   function publicPageKeepsTweetWorkbench(page) {
     return ["", "home", "aboutVecto", "pricing", "caseStudies", "console", "console-login"].includes(String(page || ""));
   }
@@ -602,7 +643,49 @@
     if (pageKeepsCaseStudies(page)) {
       links.push(navLink({ key: "caseStudies", href: "/case-studies.html", current }));
     }
+    if (pageKeepsProductMenu(page)) links.push(productMenuMarkup());
     return links.join("");
+  }
+
+  function setProductMenuOpen(menu, active, { restoreFocus = false } = {}) {
+    if (!menu) return;
+    const trigger = menu.querySelector("[data-site-product-trigger]");
+    const popover = menu.querySelector("[data-site-product-popover]");
+    if (!trigger || !popover) return;
+    if (active) {
+      document.querySelectorAll("[data-site-product-menu].is-open").forEach((other) => {
+        if (other !== menu) setProductMenuOpen(other, false);
+      });
+    }
+    menu.classList.toggle("is-open", active);
+    trigger.setAttribute("aria-expanded", active ? "true" : "false");
+    popover.hidden = !active;
+    if (!active && restoreFocus) trigger.focus();
+    if (active && restoreFocus) menu.querySelector("[data-product-option]")?.focus();
+  }
+
+  function bindProductMenus(header) {
+    header?.querySelectorAll("[data-site-product-menu]").forEach((menu) => {
+      if (menu.dataset.siteProductMenuReady === "true") return;
+      const trigger = menu.querySelector("[data-site-product-trigger]");
+      if (!trigger) return;
+      menu.dataset.siteProductMenuReady = "true";
+      trigger.addEventListener("click", () => {
+        setProductMenuOpen(menu, !menu.classList.contains("is-open"));
+      });
+      trigger.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          setProductMenuOpen(menu, true, { restoreFocus: event.key === "ArrowDown" });
+        }
+      });
+      menu.querySelectorAll("[data-product-option]").forEach((option) => {
+        option.addEventListener("click", () => setProductMenuOpen(menu, false));
+        option.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") setProductMenuOpen(menu, false, { restoreFocus: true });
+        });
+      });
+    });
   }
 
   function stripPublicWorkspaceSwitcher(header) {
@@ -834,7 +917,7 @@
     if (pageKeepsCaseStudies(page)) {
       items.push({ group: "mobileWorkspace", key: "caseStudies", href: "/case-studies.html" });
     }
-    return items.map(({ group, key, href }, index, items) => {
+    const links = items.map(({ group, key, href }, index, items) => {
       const active = current === key ? ' aria-current="page"' : "";
       const consoleEntry = key === "console" ? " data-console-entry" : "";
       const videoEntry = key === "video" ? " data-video-entry" : "";
@@ -844,6 +927,7 @@
         : "";
       return `${groupLabel}<a class="site-mobile-menu-link" data-site-nav-key="${key}" href="${href}"${active}${consoleEntry}${videoEntry}${crmEntry}><span class="site-mobile-menu-link-icon">${mobileMenuItemIcon(key)}</span><span data-site-copy="${key}"></span></a>`;
     }).join("");
+    return pageKeepsProductMenu(page) ? `${links}${productMenuMarkup({ mobile: true })}` : links;
   }
 
   function renderMobileMenu(page, current) {
@@ -2460,6 +2544,7 @@
     header.dataset.i18nSkip = "true";
     bindPreferenceControls(header);
     bindMobileMenus(header);
+    bindProductMenus(header);
     bindAccountMenus(header);
     bindNotificationMenus(header);
     sync();
@@ -2543,6 +2628,9 @@
     document.querySelectorAll("[data-site-notification-menu].is-open").forEach((menu) => {
       if (!menu.contains(event.target)) setNotificationMenuOpen(menu, false);
     });
+    document.querySelectorAll("[data-site-product-menu].is-open").forEach((menu) => {
+      if (!menu.contains(event.target)) setProductMenuOpen(menu, false);
+    });
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
@@ -2550,6 +2638,7 @@
     document.querySelectorAll("[data-site-language-menu].is-open").forEach((menu) => setLanguageMenuOpen(menu, false, { restoreFocus: true }));
     document.querySelectorAll("[data-site-account-menu].is-open").forEach((menu) => setAccountMenuOpen(menu, false, { restoreFocus: true }));
     document.querySelectorAll("[data-site-notification-menu].is-open").forEach((menu) => setNotificationMenuOpen(menu, false, { restoreFocus: true }));
+    document.querySelectorAll("[data-site-product-menu].is-open").forEach((menu) => setProductMenuOpen(menu, false, { restoreFocus: true }));
   });
   window.addEventListener("storage", (event) => {
     if (event.key === LANGUAGE_STORAGE_KEY) {
