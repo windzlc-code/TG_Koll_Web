@@ -2142,7 +2142,6 @@ def build_dispatcher(
                     text=VIDEO_LOGOUT_BUTTON,
                     callback_data="tv:logout_step",
                 )])
-        rows.append([InlineKeyboardButton(text="↩️ 返回总控", callback_data="tv:menu")])
         return InlineKeyboardMarkup(inline_keyboard=rows)
 
     def _video_web_login_url(chat_id: int) -> str:
@@ -3463,6 +3462,7 @@ def build_dispatcher(
         if not username:
             username = str(_member_value(member, "label", "") or "").strip()
         status = "未登录"
+        active = False
         if web_user_id:
             active = True
             if has_active_web_session is not None:
@@ -3470,7 +3470,7 @@ def build_dispatcher(
                     active = bool(has_active_web_session(member))
                 except Exception:
                     active = False
-            status = "已登录并绑定（已检测，无需重复授权）" if active and authorized else "网页会话已失效"
+            status = "已登录并绑定（已检测，无需重复授权）" if active else "网页会话已失效"
         elif authorized:
             status = "Telegram 已登记，可选绑定 VECTO 账号"
         return (
@@ -3479,7 +3479,7 @@ def build_dispatcher(
             f"状态：{status}\n\n"
             "点击「🌐 网页登录/切换」打开 VECTO 官方网页，再选择 VECTO 账号登录或 Google 官方授权；完成后 Bot 会发送结果反馈。\n"
             "首次私聊会自动登记，不需要手工填写 Chat ID。",
-            _account_management_keyboard(chat_id=chat_id, include_logout=bool(web_user_id)),
+            _account_management_keyboard(chat_id=chat_id, include_logout=bool(web_user_id and active)),
         )
 
     async def _send_account_status(message: Message) -> None:

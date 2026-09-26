@@ -233,12 +233,12 @@ class TelegramClosedLoopTests(unittest.TestCase):
         }
         self.assertIn(tg_bot.VIDEO_WEB_ACCOUNT_BUTTON, status_labels)
         self.assertIn(tg_bot.VIDEO_LOGOUT_BUTTON, status_labels)
-        self.assertIn("↩️ 返回总控", status_labels)
+        self.assertNotIn("↩️ 返回总控", status_labels)
         self.assertNotIn(tg_bot.VIDEO_GOOGLE_ACCOUNT_BUTTON, status_labels)
         self.assertNotIn("tv:vectosession", status_callbacks)
         self.assertNotIn("tv:login_step_vecto", status_callbacks)
         self.assertNotIn("tv:login_step_google", status_callbacks)
-        self.assertEqual(len(status_markup.inline_keyboard), 3)
+        self.assertEqual(len(status_markup.inline_keyboard), 2)
         login_button = status_markup.inline_keyboard[0][0]
         self.assertEqual(getattr(login_button, "url", ""), "https://example.test/telegram/video/open?ticket=test")
         self.assertIsNone(getattr(login_button, "web_app", None))
@@ -279,6 +279,37 @@ class TelegramClosedLoopTests(unittest.TestCase):
         }
         self.assertIn(tg_bot.VIDEO_WEB_ACCOUNT_BUTTON, labels)
         self.assertTrue(any("返回账号管理" in label for label in labels))
+
+    def test_video_account_management_hides_logout_when_session_is_expired(self):
+        dispatcher = tg_bot.build_dispatcher(
+            SimpleNamespace(),
+            _AuthorizedVideoService(),
+            load_member=lambda _chat_id: {
+                "chat_id": 6258005891,
+                "web_user_id": 42,
+                "web_username": "alice",
+                "enabled": 1,
+            },
+            has_active_web_session=lambda _member: False,
+            web_login_url=lambda _chat_id: "https://example.test/telegram/video/open?ticket=test",
+        )
+        callback = _video_route_callback(dispatcher, "video_account_management")
+        state = _VideoState()
+        message = _VideoReplyMessage()
+
+        asyncio.run(callback(message, state))
+
+        self.assertIn("网页会话已失效", message.answers[-1][0])
+        markup = message.answers[-1][1]["reply_markup"]
+        labels = {
+            str(getattr(button, "text", ""))
+            for row in markup.inline_keyboard
+            for button in row
+        }
+        self.assertIn(tg_bot.VIDEO_WEB_ACCOUNT_BUTTON, labels)
+        self.assertNotIn(tg_bot.VIDEO_LOGOUT_BUTTON, labels)
+        self.assertNotIn("↩️ 返回总控", labels)
+        self.assertEqual(len(markup.inline_keyboard), 1)
 
     def test_video_account_login_and_logout_failures_have_actionable_feedback(self):
         unavailable_dispatcher = tg_bot.build_dispatcher(
@@ -355,7 +386,7 @@ class TelegramClosedLoopTests(unittest.TestCase):
         }
         self.assertEqual(
             {value for value in callbacks if value != "None"},
-            {"tv:logout_step", "tv:menu"},
+            {"tv:logout_step"},
         )
         session_login_button = session_markup.inline_keyboard[0][0]
         self.assertEqual(getattr(session_login_button, "url", ""), "https://example.test/telegram/video/open?ticket=test")
