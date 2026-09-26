@@ -695,9 +695,18 @@ class TelegramTweetAdminTests(unittest.TestCase):
             get_runtime=self._get,
             load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
         )
+        save_state(101, selected_persona_id="persona-a")
         message = _Message(text="👤 我的人设")
         asyncio.run(controller.handle_text(message, _Types))
         list_markup = message.answers[-1][1]["reply_markup"]
+        persona_labels = [
+            str(button.text)
+            for row in list_markup.inline_keyboard
+            for button in row
+            if str(getattr(button, "callback_data", "")).startswith("tt:p:")
+        ]
+        self.assertEqual(persona_labels, ["科技观察员（2篇）"])
+        self.assertFalse(any("✅" in label for label in persona_labels))
         list_callbacks = {
             button.callback_data
             for row in list_markup.inline_keyboard
@@ -838,42 +847,35 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:pmod:settings", message), _Types))
         self.assertIn("人设设置", message.edits[-1][0])
         self.assertIn("待发布推文：2 篇", message.edits[-1][0])
-        self.assertIn("请选择设置模块", message.edits[-1][0])
-        self.assertNotIn("基础资料：名称、简介", message.edits[-1][0])
-        self.assertNotIn("平台账号绑定：管理", message.edits[-1][0])
+        self.assertIn("常用设置已集中展开", message.edits[-1][0])
+        self.assertNotIn("请选择设置模块", message.edits[-1][0])
         self.assertNotIn("加入分组", message.edits[-1][0])
+        settings_markup = message.edits[-1][1]["reply_markup"]
         settings_callbacks = {
-            button.callback_data
-            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
-            for button in row
+            button.callback_data for row in settings_markup.inline_keyboard for button in row
             if getattr(button, "callback_data", None)
         }
+        direct_settings_callbacks = {
+            "tt:profilename", "tt:style", "tt:bio", "tt:profileai",
+            "tt:plinks", "tt:pmemories:0", "tt:persona_accounts",
+            "tt:pthreads", "tt:personaimage",
+        }
         self.assertEqual(
-            {item for item in settings_callbacks if not item.startswith("tt:p:")},
-            {
-                "tt:psettings:profile",
-                "tt:psettings:accounts",
-                "tt:psettings:media",
-                "tt:psettings:maintenance",
-            },
+            {item for item in settings_callbacks if item in direct_settings_callbacks},
+            direct_settings_callbacks,
         )
+        self.assertFalse(any(item.startswith("tt:psettings:") for item in settings_callbacks))
+        self.assertTrue(any(item.startswith("tt:prefresh:") for item in settings_callbacks))
+        self.assertTrue(any(item.startswith("tt:pduplicate:") for item in settings_callbacks))
+        self.assertTrue(any(item.startswith("tt:pdeleteask:") for item in settings_callbacks))
+        self.assertEqual([len(row) for row in settings_markup.inline_keyboard], [2, 2, 2, 2, 2, 2, 1])
         self.assertFalse(any("group" in item for item in settings_callbacks))
 
-        settings_groups = {
-            "profile": {"tt:profilename", "tt:bio", "tt:style", "tt:plinks", "tt:pmemories:0", "tt:profileai"},
-            "accounts": {"tt:persona_accounts", "tt:pthreads"},
-            "media": {"tt:personaimage"},
-        }
-        for group, expected in settings_groups.items():
+        # Previously sent category callbacks stay valid, but now all return to
+        # the same flat settings surface instead of reopening a hidden layer.
+        for group in ("profile", "accounts", "media", "maintenance"):
             asyncio.run(controller.handle_callback(_Query(f"tt:psettings:{group}", message), _Types))
-            self.assertIn(
-                {
-                    "profile": "基础资料",
-                    "accounts": "账号与数据",
-                    "media": "图库与生成",
-                }[group],
-                message.edits[-1][0],
-            )
+            self.assertIn("常用设置已集中展开", message.edits[-1][0])
             group_callbacks = {
                 button.callback_data
                 for row in message.edits[-1][1]["reply_markup"].inline_keyboard
@@ -881,25 +883,13 @@ class TelegramTweetAdminTests(unittest.TestCase):
                 if getattr(button, "callback_data", None)
             }
             self.assertEqual(
-                {
-                    item for item in group_callbacks
-                    if not item.startswith(("tt:p:", "tt:prefresh:"))
-                    and item != "tt:pmod:settings"
-                },
-                expected,
+                {item for item in group_callbacks if item in direct_settings_callbacks},
+                direct_settings_callbacks,
             )
-            self.assertIn("tt:pmod:settings", group_callbacks)
+            self.assertFalse(any(item.startswith("tt:psettings:") for item in group_callbacks))
 
-        asyncio.run(controller.handle_callback(_Query("tt:psettings:maintenance", message), _Types))
-        maintenance_callbacks = {
-            button.callback_data
-            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
-            for button in row
-            if getattr(button, "callback_data", None)
-        }
-        self.assertTrue(any(item.startswith("tt:pduplicate:") for item in maintenance_callbacks))
-        self.assertTrue(any(item.startswith("tt:pdeleteask:") for item in maintenance_callbacks))
-        self.assertIn("tt:pmod:settings", maintenance_callbacks)
+        asyncio.run(controller.handle_callback(_Query("tt:profile", message), _Types))
+        self.assertIn("常用设置已集中展开", message.edits[-1][0])
 
         asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
         self.assertIn("查看推文", message.edits[-1][0])
@@ -2965,8 +2955,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
 
     def test_content_settings_are_available_without_a_second_switch(self):
         def dispatch(_user_id, action, _payload):
-            if action == "profile.get":
-                return {"content": "简介", "tweet_style_sample": "风格"}
+            if action == "personas.list":
+                return [{"id": "persona-a", "name": "科技观察员", "counts": {"posts": 2}}]
             return {}
 
         controller = NativeTweetBotController(
@@ -2977,8 +2967,17 @@ class TelegramTweetAdminTests(unittest.TestCase):
         save_state(101, selected_persona_id="persona-a")
         message = _Message()
         asyncio.run(controller.handle_callback(_Query("tt:profile", message), _Types))
-        self.assertIn("基础资料", message.edits[-1][0])
-        self.assertIn("简介", message.edits[-1][0])
+        self.assertIn("人设设置", message.edits[-1][0])
+        self.assertIn("常用设置已集中展开", message.edits[-1][0])
+        callbacks = {
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertIn("tt:bio", callbacks)
+        self.assertIn("tt:style", callbacks)
+        self.assertNotIn("tt:psettings:profile", callbacks)
         asyncio.run(controller.handle_callback(_Query("tt:bio", message), _Types))
         self.assertEqual(load_state(101)["mode"], "profile_content")
 

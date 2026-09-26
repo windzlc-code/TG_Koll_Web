@@ -59,7 +59,7 @@ HELP_TEXT = (
     "• 网页会自动识别已登录的账号；授权成功后 Bot 会回传状态，不会要求在 Telegram 中输入密码。\n"
     "• 未绑定或会话失效时发送 /bind，可重新打开独立网页授权入口。\n"
     "• 人设、生成、草稿、收藏、媒体、热点和任务均可直接在 Telegram 内操作。\n"
-    "• “我的人设”按人设管理、新建推文、推文内容、发布管理、人设设置分层。\n"
+    "• “我的人设”按人设进入详情；人设设置中的常用入口集中展开，可直接选择。\n"
     "• 首次发布前需已有可用的 Threads 或 Instagram 账号；可从“账号管理”逐步完成授权、登录检测和人设绑定。\n"
     "• 在输入流程中点击任一总控按钮，会退出当前未提交的输入并切换模块。\n"
     "• VECTO 网页账号与平台账号的登录、OAuth、验证码均在安全网页/浏览器中完成，Bot 不接收账号密码或验证码。"
@@ -1283,7 +1283,7 @@ class NativeTweetBotController:
             back_callback = callback_token(chat_id, "historylink", {"page": page})
             back_text = "返回重新输入链接"
         elif mode in {"profile_content", "profile_style", "profile_name", "profile_ai", "profile_threads"}:
-            back_callback, back_text = "tt:profile", "返回基础资料"
+            back_callback, back_text = "tt:pmod:settings", "返回人设设置"
         elif mode == "profile_memory_create":
             back_callback = callback_token(chat_id, "pmemories", {"page": page})
             back_text = "返回人设记忆"
@@ -1856,10 +1856,9 @@ class NativeTweetBotController:
         state = load_state(chat_id)
         for item in personas[start:start + PAGE_SIZE]:
             persona_id = str(item.get("id") or "")
-            marker = "✅ " if persona_id == state["selected_persona_id"] else ""
             count = int((item.get("counts") or {}).get("posts") or 0)
             rows.append([types.InlineKeyboardButton(
-                text=f"{marker}{str(item.get('name') or '未命名人设')[:24]}（{count}篇）",
+                text=f"{str(item.get('name') or '未命名人设')[:24]}（{count}篇）",
                 callback_data=callback_token(chat_id, "p", {
                     "persona_id": persona_id,
                     "page": page,
@@ -1987,13 +1986,6 @@ class NativeTweetBotController:
             }),
         )]
 
-    @staticmethod
-    def _persona_settings_back_row(types: Any) -> list[Any]:
-        return [types.InlineKeyboardButton(
-            text="◀️ 返回人设设置",
-            callback_data="tt:pmod:settings",
-        )]
-
     def _persona_module_payload(
         self,
         types: Any,
@@ -2020,6 +2012,18 @@ class NativeTweetBotController:
         if module == "settings":
             counts = persona.get("counts") if isinstance(persona, dict) and isinstance(persona.get("counts"), dict) else {}
             platform_accounts = counts.get("platform_accounts") if isinstance(counts.get("platform_accounts"), list) else []
+            refresh_callback = callback_token(chat_id, "prefresh", {
+                "persona_id": persona_id,
+                "persona_page": max(0, int(page or 0)),
+            })
+            duplicate_callback = callback_token(chat_id, "pduplicate", {
+                "persona_id": persona_id,
+                "persona_page": max(0, int(page or 0)),
+            })
+            delete_callback = callback_token(chat_id, "pdeleteask", {
+                "persona_id": persona_id,
+                "persona_page": max(0, int(page or 0)),
+            })
             settings_context = (
                 f"{persona_context}"
                 f"平台账号：{'、'.join(str(item).strip() for item in platform_accounts if str(item).strip()) or '未绑定'}\n"
@@ -2031,80 +2035,33 @@ class NativeTweetBotController:
             )
             return (
                 "⚙️ 人设设置\n\n" + settings_context
-                + "请选择设置模块：",
-                types.InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        button(text="🧾 基础资料", callback_data="tt:psettings:profile"),
-                        button(text="🔗 账号与数据", callback_data="tt:psettings:accounts"),
-                    ],
-                    [
-                        button(text="🧑‍🎨 图库与生成", callback_data="tt:psettings:media"),
-                        button(text="🛠 维护操作", callback_data="tt:psettings:maintenance"),
-                    ],
-                    back,
-                ]),
-            )
-        settings_back = self._persona_settings_back_row(types)
-        if module == "settings_profile":
-            return (
-                "🧾 基础资料\n\n" + persona_context
-                + "名称、简介、推文风格、链接模板和人设记忆在这里分别维护。",
+                + "常用设置已集中展开，请直接选择要修改的内容：",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [
                         button(text="✏️ 修改名称", callback_data="tt:profilename"),
-                        button(text="🧾 人设简介", callback_data="tt:bio"),
-                    ],
-                    [
                         button(text="🧵 推文风格", callback_data="tt:style"),
-                        button(text="🔗 链接设置", callback_data="tt:plinks"),
                     ],
                     [
-                        button(text="🧠 人设记忆", callback_data="tt:pmemories:0"),
+                        button(text="🧾 人设简介", callback_data="tt:bio"),
                         button(text="🤖 AI 重写简介", callback_data="tt:profileai"),
                     ],
-                    settings_back,
-                ]),
-            )
-        if module == "settings_accounts":
-            refresh_callback = callback_token(chat_id, "prefresh", {
-                "persona_id": persona_id,
-                "persona_page": max(0, int(page or 0)),
-            })
-            return (
-                "🔗 账号与数据\n\n" + persona_context
-                + "平台授权账号、人设平台字段和公开资料刷新在这里管理。",
-                types.InlineKeyboardMarkup(inline_keyboard=[
-                    [button(text="🔗 平台账号绑定", callback_data="tt:persona_accounts")],
                     [
-                        button(text="🧵 Threads 人设绑定", callback_data="tt:pthreads"),
-                        button(text="🔄 刷新数据", callback_data=refresh_callback),
+                        button(text="🔗 链接设置", callback_data="tt:plinks"),
+                        button(text="🧠 人设记忆", callback_data="tt:pmemories:0"),
                     ],
-                    settings_back,
-                ]),
-            )
-        if module == "settings_media":
-            return (
-                "🧑‍🎨 图库与生成\n\n" + persona_context
-                + "查看、上传、替换、删除或重新生成人设图，所有图库操作从这里进入。",
-                types.InlineKeyboardMarkup(inline_keyboard=[
-                    [button(text="🧑‍🎨 打开人设图与图库", callback_data="tt:personaimage")],
-                    settings_back,
-                ]),
-            )
-        if module == "settings_maintenance":
-            return (
-                "🛠 维护操作\n\n" + persona_context
-                + "复制当前人设会创建独立副本；删除会移除该人设及其关联内容。",
-                types.InlineKeyboardMarkup(inline_keyboard=[
-                    [button(text="📄 复制当前人设", callback_data=callback_token(chat_id, "pduplicate", {
-                        "persona_id": persona_id,
-                        "persona_page": max(0, int(page or 0)),
-                    }))],
-                    [button(text="🗑 删除人设", callback_data=callback_token(chat_id, "pdeleteask", {
-                        "persona_id": persona_id,
-                        "persona_page": max(0, int(page or 0)),
-                    }))],
-                    settings_back,
+                    [
+                        button(text="🔐 平台账号绑定", callback_data="tt:persona_accounts"),
+                        button(text="🧵 Threads 绑定", callback_data="tt:pthreads"),
+                    ],
+                    [
+                        button(text="🧑‍🎨 人设图与图库", callback_data="tt:personaimage"),
+                        button(text="🔄 刷新人设数据", callback_data=refresh_callback),
+                    ],
+                    [
+                        button(text="📄 复制当前人设", callback_data=duplicate_callback),
+                        button(text="🗑 删除人设", callback_data=delete_callback),
+                    ],
+                    back,
                 ]),
             )
         if module == "create":
@@ -4238,7 +4195,7 @@ class NativeTweetBotController:
             text="➕ 新增记忆",
             callback_data=callback_token(chat_id, "pmemadd", {"page": safe_page}),
         )])
-        rows.append([types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回人设设置"), callback_data="tt:pmod:settings")])
         await query.message.edit_text(
             f"人设记忆（{len(memories)} 条）\n第 {safe_page + 1}/{total_pages}\n"
             "生成推文时可将选中的记忆作为上下文，删除只会隐藏该条记忆。",
@@ -4284,7 +4241,7 @@ class NativeTweetBotController:
             text="➕ 新增链接模板",
             callback_data=callback_token(chat_id, "plinkadd", {"page": safe_page}),
         )])
-        rows.append([types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回人设设置"), callback_data="tt:pmod:settings")])
         await query.message.edit_text(
             f"链接模板（{len(presets)} 条，第 {safe_page + 1}/{total_pages} 页）\n\n"
             + ("\n".join(
@@ -5403,17 +5360,14 @@ class NativeTweetBotController:
                 clear_pending_state(chat_id, retain_keys=("persona_list_page",))
                 await self._render_persona_module(query, types, member, module)
             elif action == "psettings":
-                module = str(parts[2] if len(parts) > 2 else "").strip().lower()
-                settings_module = {
-                    "profile": "settings_profile",
-                    "accounts": "settings_accounts",
-                    "media": "settings_media",
-                    "maintenance": "settings_maintenance",
-                }.get(module)
-                if not settings_module:
+                legacy_section = str(parts[2] if len(parts) > 2 else "").strip().lower()
+                if legacy_section not in {"profile", "accounts", "media", "maintenance"}:
                     raise HTTPException(status_code=400, detail="人设设置模块不存在")
+                # Old messages may still contain the former category buttons.
+                # Route every one of them to the single expanded settings page
+                # so users never re-enter the removed intermediate layer.
                 clear_pending_state(chat_id, retain_keys=("persona_list_page",))
-                await self._render_persona_module(query, types, member, settings_module)
+                await self._render_persona_module(query, types, member, "settings")
             elif action in {"persona_new", "persona_new_name"}:
                 state = load_state(chat_id)
                 retained = {
@@ -7969,46 +7923,18 @@ class NativeTweetBotController:
                     ]]),
                 )
             elif action == "profile":
-                state = load_state(chat_id)
-                if not state["selected_persona_id"]:
-                    raise HTTPException(status_code=400, detail="请先选择人设")
-                profile = await self._call(user_id, "profile.get", {"persona_id": state["selected_persona_id"]})
-                rows = [[
-                    types.InlineKeyboardButton(text="编辑简介", callback_data="tt:bio"),
-                    types.InlineKeyboardButton(text="编辑推文风格", callback_data="tt:style"),
-                ], [types.InlineKeyboardButton(
-                    text="✏️ 修改人设名称",
-                    callback_data="tt:profilename",
-                ), types.InlineKeyboardButton(
-                    text="🤖 AI 重写简介",
-                    callback_data="tt:profileai",
-                )], [types.InlineKeyboardButton(
-                    text="🧠 人设记忆",
-                    callback_data="tt:pmemories:0",
-                ), types.InlineKeyboardButton(
-                    text="🔗 链接模板",
-                    callback_data="tt:plinks",
-                )], [types.InlineKeyboardButton(
-                    text="🧵 Threads 人设绑定",
-                    callback_data="tt:pthreads",
-                )], self._persona_module_back_row(
-                    types, chat_id, state["selected_persona_id"], "settings",
-                )]
-                await query.message.edit_text(
-                    f"基础资料\n\n"
-                    f"简介：{str(profile.get('content') or '')[:1200]}\n\n"
-                    f"推文风格：{str(profile.get('tweet_style_sample') or '')[:1200]}\n\n"
-                    "可分别修改简介、推文风格和名称；AI 重写只更新简介。\n"
-                    "人设记忆用于生成时按需选择，链接模板用于正文结尾，Threads 绑定只影响对应平台字段。",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
-                )
+                # Compatibility callback from the former “基础资料” page.
+                # Old messages now return to the same expanded settings page
+                # instead of restoring the removed intermediate category.
+                clear_pending_state(chat_id, retain_keys=("persona_list_page",))
+                await self._render_persona_module(query, types, member, "settings")
             elif action in {"bio", "style"}:
                 save_state(chat_id, mode="profile_content" if action == "bio" else "profile_style", payload={})
                 await query.message.edit_text(
                     "人设设置 · " + ("修改简介" if action == "bio" else "修改推文风格") + "\n"
                     "请发送新的完整内容；只更新当前字段，名称、记忆、链接模板、图库和账号绑定保持不变。",
                     reply_markup=self._step_navigation_markup(
-                        types, back_callback="tt:profile", back_text="返回基础资料",
+                        types, back_callback="tt:pmod:settings", back_text="返回人设设置",
                     ),
                 )
             elif action == "profilename":
@@ -8017,7 +7943,7 @@ class NativeTweetBotController:
                     "人设设置 · 修改名称\n"
                     "请发送新的人设名称；只修改显示名称，不会影响简介、推文、图库或绑定账号。",
                     reply_markup=self._step_navigation_markup(
-                        types, back_callback="tt:profile", back_text="返回基础资料",
+                        types, back_callback="tt:pmod:settings", back_text="返回人设设置",
                     ),
                 )
             elif action == "profileai":
@@ -8027,7 +7953,7 @@ class NativeTweetBotController:
                     "请发送希望 AI 优化的人设方向或补充要求。\n"
                     "AI 只会更新简介字段，不会覆盖名称、链接模板或图库。",
                     reply_markup=self._step_navigation_markup(
-                        types, back_callback="tt:profile", back_text="返回基础资料",
+                        types, back_callback="tt:pmod:settings", back_text="返回人设设置",
                     ),
                 )
             elif action == "pmemories":
@@ -8165,7 +8091,7 @@ class NativeTweetBotController:
                      "发送 /unbind 解除绑定。",
                     reply_markup=self._step_navigation_markup(
                         types,
-                        back_callback="tt:profile", back_text="返回基础资料",
+                        back_callback="tt:pmod:settings", back_text="返回人设设置",
                     ),
                 )
             elif action == "accounts":
@@ -8937,14 +8863,14 @@ class NativeTweetBotController:
                 await message.answer(
                     "基础资料已保存。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
+                        types.InlineKeyboardButton(text=_back_label("返回人设设置"), callback_data="tt:pmod:settings"),
                     ]]),
                 )
             elif mode == "profile_name":
                 await self._call(user_id, "profile.update", {"persona_id": persona_id, "name": text[:120]})
                 clear_pending_state(chat_id)
                 await message.answer("人设名称已更新。", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                    types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
+                    types.InlineKeyboardButton(text=_back_label("返回人设设置"), callback_data="tt:pmod:settings"),
                 ]]))
             elif mode == "profile_ai":
                 name = str(state["payload"].get("name") or "")
@@ -8962,7 +8888,7 @@ class NativeTweetBotController:
                 await message.answer(
                     "AI 已重写人设简介并保存。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
+                        types.InlineKeyboardButton(text=_back_label("返回人设设置"), callback_data="tt:pmod:settings"),
                     ]]),
                 )
             elif mode == "profile_memory_create":
@@ -9091,7 +9017,7 @@ class NativeTweetBotController:
                     notice = "Threads 人设绑定已更新。"
                 clear_pending_state(chat_id)
                 await message.answer(notice, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                    types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
+                    types.InlineKeyboardButton(text=_back_label("返回人设设置"), callback_data="tt:pmod:settings"),
                 ]]))
             elif mode == "automation_plan_create":
                 try:
