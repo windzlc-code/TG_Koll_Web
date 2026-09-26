@@ -161,15 +161,19 @@ body.page-auth-shell.product-login-page {
 .auth-stage-brand-mark {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  color: #176c66;
-  background: linear-gradient(145deg, #c7ffed, #a7e9ff);
-  border-radius: 12px;
+  width: 46px;
+  height: 46px;
+  overflow: hidden;
+  background: #071112;
+  border-radius: 14px;
   box-shadow: 0 9px 18px rgba(68, 159, 151, 0.18);
-  font-size: 16px;
-  font-weight: 900;
-  letter-spacing: 0;
+}
+
+.auth-stage-brand-logo {
+  display: block;
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
 }
 
 .auth-stage-live {
@@ -213,7 +217,7 @@ body.page-auth-shell.product-login-page {
 
 .product-login-page .auth-stage-title {
   color: #173548;
-  font-size: clamp(42px, 5vw, 68px);
+  font-size: clamp(36px, 3.8vw, 54px);
   line-height: 1;
   letter-spacing: -0.05em;
   text-wrap: balance;
@@ -252,7 +256,7 @@ body.page-auth-shell.product-login-page {
 /* A friendly icon constellation replaces the previous promotional photo card. */
 .auth-stage-constellation {
   position: relative;
-  min-height: 285px;
+  min-height: 315px;
   margin: 30px 0 10px;
 }
 
@@ -288,8 +292,8 @@ body.page-auth-shell.product-login-page {
   left: 50%;
   display: grid;
   place-items: center;
-  width: 142px;
-  height: 142px;
+  width: 164px;
+  height: 164px;
   padding: 18px;
   color: #286460;
   text-align: center;
@@ -320,8 +324,8 @@ body.page-auth-shell.product-login-page {
   display: flex;
   align-items: center;
   gap: 9px;
-  min-width: 140px;
-  padding: 10px 13px 10px 10px;
+  min-width: 162px;
+  padding: 12px 15px 12px 11px;
   color: #31565e;
   background: rgba(255, 255, 255, 0.67);
   border-radius: 22px;
@@ -333,6 +337,11 @@ body.page-auth-shell.product-login-page {
 .auth-stage-node-b { top: 9%; right: 4%; animation-delay: -2s; }
 .auth-stage-node-c { bottom: 4%; left: 12%; animation-delay: -4s; }
 .auth-stage-node-d { right: 11%; bottom: 2%; animation-delay: -5s; }
+
+.auth-stage-node-a { animation: product-login-node-a 7.2s ease-in-out infinite; }
+.auth-stage-node-b { animation: product-login-node-b 8.1s ease-in-out -2s infinite; }
+.auth-stage-node-c { animation: product-login-node-c 7.7s ease-in-out -4s infinite; }
+.auth-stage-node-d { animation: product-login-node-d 8.6s ease-in-out -5s infinite; }
 
 .auth-stage-node-icon,
 .auth-stage-card-icon {
@@ -456,11 +465,15 @@ body.page-auth-shell.product-login-page {
 @keyframes product-login-halo { 0%, 100% { transform: translate(-50%, -50%) scale(0.96); opacity: 0.74; } 50% { transform: translate(-50%, -50%) scale(1.07); opacity: 1; } }
 @keyframes product-login-core { 0%, 100% { transform: translate(-50%, -50%) rotate(-1deg); } 50% { transform: translate(-50%, -50%) rotate(1deg) scale(1.02); } }
 @keyframes product-login-node { 0%, 100% { transform: translate3d(0, 0, 0); } 50% { transform: translate3d(0, -5px, 0); } }
+@keyframes product-login-node-a { 0%, 100% { transform: translate3d(0, 0, 0) rotate(-1deg); } 50% { transform: translate3d(8px, -9px, 0) rotate(1deg); } }
+@keyframes product-login-node-b { 0%, 100% { transform: translate3d(0, 0, 0) rotate(1deg); } 50% { transform: translate3d(-7px, 7px, 0) rotate(-1deg); } }
+@keyframes product-login-node-c { 0%, 100% { transform: translate3d(0, 0, 0) rotate(1deg); } 50% { transform: translate3d(7px, -6px, 0) rotate(-1deg); } }
+@keyframes product-login-node-d { 0%, 100% { transform: translate3d(0, 0, 0) rotate(-1deg); } 50% { transform: translate3d(-8px, 6px, 0) rotate(1deg); } }
 @keyframes product-login-spark { 0%, 100% { transform: scale(0.88) rotate(-8deg); opacity: 0.58; } 50% { transform: scale(1.14) rotate(12deg); opacity: 1; } }
 
 @media (max-width: 1120px) {
   .product-login-page .auth-shell { grid-template-columns: minmax(0, 1fr) minmax(340px, 0.68fr); gap: 28px; padding-right: 32px; padding-left: 32px; }
-  .auth-stage-node { min-width: 132px; }
+  .auth-stage-node { min-width: 146px; }
 }
 
 @media (max-width: 900px) {
@@ -470,7 +483,9 @@ body.page-auth-shell.product-login-page {
 }
 
 @media (max-width: 760px) {
-  .product-login-page .auth-shell { gap: 15px; padding: 84px 12px 28px; }
+  .product-login-page .auth-shell { grid-template-columns: 1fr; gap: 0; min-height: 100dvh; height: 100dvh; padding: 78px 12px 12px; align-items: start; overflow: hidden; }
+  .product-login-page .auth-stage { display: none; }
+  .product-login-page .auth-card-product { max-height: calc(100dvh - 90px); overflow-y: auto; }
   .product-login-page .auth-stage { padding: 22px 14px; }
   .product-login-page .auth-stage-title { font-size: clamp(36px, 11vw, 52px); }
   .auth-stage-constellation { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; min-height: 0; margin-top: 25px; }
@@ -487,6 +502,19 @@ body.page-auth-shell.product-login-page {
 }
 
 @media (max-width: 480px) {
+  .product-login-page .auth-card-product { padding: 17px 16px; }
+  .product-login-page .auth-card-head { margin-bottom: 12px; }
+  .product-login-page .auth-title { font-size: 24px; }
+  .product-login-page .auth-sub { margin-top: 5px; font-size: 12px; line-height: 1.5; }
+  .product-login-page .auth-form > label { font-size: 12px; }
+  .product-login-page .auth-form input:not([type="checkbox"]) { min-height: 40px; padding: 8px 10px; }
+  .product-login-page .auth-login-remember { margin-top: 5px; font-size: 12px; }
+  .product-login-page .auth-submit-row { margin-top: 11px; }
+  .product-login-page .auth-submit-row button.primary,
+  .product-google-button { min-height: 42px; }
+  .product-login-page .auth-provider-divider { margin: 10px 0 8px; }
+  .product-login-page .auth-quick-setup { margin-top: 9px; }
+  .product-login-page .auth-quick-setup-link { min-height: 40px; font-size: 12px; }
   .product-login-page .auth-stage { padding: 18px 7px; }
   .auth-stage-topline { font-size: 8px; letter-spacing: 0.1em; }
   .auth-stage-brand-mark { width: 27px; height: 27px; }

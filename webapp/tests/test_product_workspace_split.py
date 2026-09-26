@@ -15,6 +15,7 @@ SERVER = (ROOT / "webapp" / "server.py").read_text(encoding="utf-8")
 CONSOLE = (STATIC / "console.html").read_text(encoding="utf-8")
 VIDEO = (STATIC / "video.html").read_text(encoding="utf-8")
 LOGIN = (STATIC / "product-login.html").read_text(encoding="utf-8")
+LOGIN_CSS = (STATIC / "assets" / "product-login.css").read_text(encoding="utf-8")
 ADMIN = (STATIC / "admin.html").read_text(encoding="utf-8")
 NAVIGATION = (STATIC / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
 
@@ -51,11 +52,15 @@ def test_product_login_keeps_auth_hooks_and_rich_split_promotion():
         'class="auth-stage-node auth-stage-node-d"',
         'class="auth-stage-particles"',
         'class="auth-stage-orbit auth-stage-orbit-a"',
+        '/assets/opc/vecto-logo-ui-icon.png?v=20260711',
     ):
         assert marker in LOGIN
     stage = LOGIN.split('<section class="auth-stage"', 1)[1].split('</section>', 1)[0]
-    assert '<img ' not in stage
+    assert '/assets/opc/home/' not in stage
     assert 'auth-stage-showcase' not in stage
+    assert '.auth-stage-brand-logo' in LOGIN_CSS
+    assert 'product-login-node-a' in LOGIN_CSS
+    assert '.product-login-page .auth-stage { display: none; }' in LOGIN_CSS
     for marker in (
         'id="productLoginForm"',
         'id="loginUsername"',
