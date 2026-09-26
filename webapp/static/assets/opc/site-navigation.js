@@ -63,7 +63,7 @@
       pricing: "订阅方案",
       difference: "服务差异",
       caseStudies: "热门案例",
-      productWorkspaces: "产品工作台",
+      productWorkspaces: "相关产品",
       videoWorkbench: "视频工作台",
       videoWorkbenchHint: "视频生成、记录与简易剪辑",
       collectorWorkbench: "采集工作台",
@@ -181,7 +181,7 @@
       pricing: "訂閱方案",
       difference: "服務差異",
       caseStudies: "熱門案例",
-      productWorkspaces: "產品工作台",
+      productWorkspaces: "相關產品",
       videoWorkbench: "視頻工作台",
       videoWorkbenchHint: "視頻生成、記錄與簡易剪輯",
       collectorWorkbench: "採集工作台",
@@ -578,6 +578,20 @@
     return page === "home" ? hash : `/${hash}`;
   }
 
+  function navigationIconPaths(key) {
+    return {
+      solution: '<path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"></path><path d="m18.5 16 .7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"></path>',
+      console: '<rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><path d="M15 17h5M17.5 14.5v5"></path>',
+      caseStudies: '<path d="m12 3 2.3 4.7L19.5 8.5l-3.8 3.7.9 5.3-4.6-2.4-4.6 2.4.9-5.3L4.5 8.5l5.2-.8z"></path>',
+      aboutVecto: '<circle cx="12" cy="12" r="8"></circle><path d="M12 10v5M12 7h.01"></path>',
+    }[key] || '<circle cx="12" cy="12" r="8"></circle><path d="M12 8v8M8 12h8"></path>';
+  }
+
+  function navigationIcon(key, className = "site-nav-link-icon") {
+    const classAttribute = className ? ` class="${className}"` : "";
+    return `<svg${classAttribute} viewBox="0 0 24 24" aria-hidden="true">${navigationIconPaths(key)}</svg>`;
+  }
+
   function navLink({ key, href, current, className = "" }) {
     const busy = key === "console" ? " data-console-entry" : "";
     const videoEntry = key === "video" ? " data-video-entry" : "";
@@ -585,7 +599,7 @@
     const register = key === "guest" ? " data-open-register" : "";
     const active = current === key ? ' aria-current="page"' : "";
     const classAttribute = className ? ` class="${className}"` : "";
-    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}${videoEntry}${crmEntry}${register}><span data-site-copy="${key}"></span></a>`;
+    return `<a${classAttribute} data-site-nav-key="${key}" href="${href}"${active}${busy}${videoEntry}${crmEntry}${register}>${navigationIcon(key)}<span data-site-copy="${key}"></span></a>`;
   }
 
   function productIcon(kind = "product") {

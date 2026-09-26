@@ -11,6 +11,8 @@ def test_home_header_exposes_product_menu_with_real_workspace_targets():
     assert 'data-site-product-menu' in INDEX
     assert 'data-site-product-trigger' in INDEX
     assert 'data-site-copy="productWorkspaces"' in INDEX
+    assert any(label in INDEX for label in ("相关产品", "相關產品"))
+    assert 'class="site-nav-link-icon"' in INDEX
     assert 'data-video-entry href="/video.html"' in INDEX
     assert 'data-crm-entry href="/crm.html"' in INDEX
     assert 'role="menuitem"' in INDEX
@@ -22,6 +24,8 @@ def test_shared_navigation_generates_and_binds_home_product_menu():
     assert 'return ["", "home"].includes(String(page || ""));' in NAVIGATION
     assert "function setProductMenuOpen" in NAVIGATION
     assert "function bindProductMenus" in NAVIGATION
+    assert "function navigationIconPaths" in NAVIGATION
+    assert "navigationIcon(key)" in NAVIGATION
     assert "bindProductMenus(header);" in NAVIGATION
     assert "syncVideoEntryTargets();" in NAVIGATION
     assert "syncCrmEntryTargets();" in NAVIGATION
@@ -34,6 +38,7 @@ def test_product_menu_has_keyboard_and_mobile_styles():
         ".site-product-option",
         ".site-product-menu-mobile",
         ".site-mobile-menu-links .site-product-menu-mobile .site-product-popover",
+        ".site-nav-link-icon",
     ):
         assert selector in STYLES
     assert "aria-expanded" in NAVIGATION
