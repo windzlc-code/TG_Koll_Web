@@ -27617,6 +27617,8 @@ def create_app() -> FastAPI:
             replacements={
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__ADMIN_JS_VERSION__": _asset_version("assets", "admin.js"),
+                "__ADMIN_COLLECTOR_PROXY_CSS_VERSION__": _asset_version("assets", "admin-collector-proxy.css"),
+                "__ADMIN_COLLECTOR_PROXY_JS_VERSION__": _asset_version("assets", "admin-collector-proxy.js"),
                 "__ADMIN_FINGERPRINT_LOGIN_CSS_VERSION__": _asset_version("assets", "admin-fingerprint-login.css"),
                 "__ADMIN_FINGERPRINT_LOGIN_JS_VERSION__": _asset_version("assets", "admin-fingerprint-login.js"),
                 "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
