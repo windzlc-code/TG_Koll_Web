@@ -185,6 +185,7 @@ from .telegram_tweet_admin import (
     _create_link_ticket,
     inject_tweet_telegram_admin,
     start_tweet_telegram_bot_worker,
+    validate_tweet_browser_login_context,
     stop_tweet_telegram_bot_worker,
     validate_tweet_webapp_login_context,
 )
@@ -13660,6 +13661,7 @@ class LoginPayload(BaseModel):
     # before it permits an additional session.
     telegram_tweet_ticket: str = Field(default="", max_length=256)
     telegram_init_data: str = Field(default="", max_length=8192)
+    telegram_tweet_browser: bool = False
     # Video Bot uses the same normal login policy, but keeps its Bot token and
     # one-time binding tickets isolated from the Tweet Bot. ``browser`` is
     # true only for the external HTTPS URL-button flow, where Telegram cannot
@@ -30725,18 +30727,24 @@ def create_app() -> FastAPI:
 
             telegram_ticket = str(payload.telegram_tweet_ticket or "").strip()
             telegram_init_data = str(payload.telegram_init_data or "").strip()
+            telegram_tweet_browser = bool(payload.telegram_tweet_browser)
             telegram_video_ticket = str(payload.telegram_video_ticket or "").strip()
             telegram_video_init_data = str(payload.telegram_video_init_data or "").strip()
             telegram_video_browser = bool(payload.telegram_video_browser)
-            if telegram_ticket or telegram_init_data:
-                if not telegram_ticket or not telegram_init_data:
+            if telegram_ticket or telegram_init_data or telegram_tweet_browser:
+                if not telegram_ticket:
                     raise HTTPException(status_code=400, detail="Telegram 登录上下文不完整，请回到 Bot 重新打开绑定入口")
-                validate_tweet_webapp_login_context(
-                    telegram_ticket,
-                    telegram_init_data,
-                    runtime,
-                    conn=conn,
-                )
+                if telegram_init_data:
+                    validate_tweet_webapp_login_context(
+                        telegram_ticket,
+                        telegram_init_data,
+                        runtime,
+                        conn=conn,
+                    )
+                elif telegram_tweet_browser:
+                    validate_tweet_browser_login_context(telegram_ticket, runtime, conn=conn)
+                else:
+                    raise HTTPException(status_code=400, detail="Telegram 登录上下文不完整，请回到 Bot 重新打开绑定入口")
                 # Administrators retain the stricter single-session boundary;
                 # customer accounts may add the authenticated Telegram WebView
                 # without revoking an existing browser session.

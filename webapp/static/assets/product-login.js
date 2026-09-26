@@ -16,6 +16,7 @@
       storageKey: "vecto-telegram-tweet-login-context",
       ticketField: "telegram_tweet_ticket",
       initField: "telegram_init_data",
+      browserField: "telegram_tweet_browser",
     },
     video: {
       flag: "telegram_video",
@@ -121,7 +122,11 @@
         : context.provider === "password"
           ? "Telegram 视频工作台：已选择 VECTO 网页账号登录。登录完成后会返回独立授权页并检测当前授权状态。"
           : "Telegram 视频工作台：请在网页中选择 VECTO 网页账号登录或 Google 官方授权。登录完成后会返回独立授权页并检测当前授权状态。")
-      : "Telegram 推文工作台授权：登录完成后会返回 Telegram 授权页。";
+      : (context.provider === "google"
+        ? "Telegram 推文工作台：已选择 Google 官方授权。登录完成后会返回独立授权页并检测当前授权状态。"
+        : context.provider === "password"
+          ? "Telegram 推文工作台：已选择 VECTO 网页账号登录。登录完成后会返回独立授权页并检测当前授权状态。"
+          : "Telegram 推文工作台：请在网页中选择 VECTO 网页账号登录或 Google 官方授权。登录完成后会返回独立授权页并检测当前授权状态。");
     form.prepend(banner);
     if (context.returnPath === "/telegram/video/open" && context.provider === "google" && googleButton) {
       googleButton.setAttribute("aria-label", "继续使用 Google 官方授权");
