@@ -82,7 +82,9 @@
 
   function telegramLoginContext() {
     const params = new URLSearchParams(window.location.search);
-    const requestedProvider = params.get("auth_provider") === "google" ? "google" : "password";
+    const requestedProvider = params.get("auth_provider") === "google"
+      ? "google"
+      : (params.get("auth_provider") === "password" ? "password" : "");
     const contextSpec = Object.values(TELEGRAM_LOGIN_CONTEXTS).find((candidate) => params.get(candidate.flag) === "1");
     if (!contextSpec) return null;
     try {
@@ -94,12 +96,13 @@
       const context = raw ? JSON.parse(raw) : null;
       if (!context || context.ticket !== ticket || (!context.initData && !context.browser)) return null;
       if (Number(context.expiresAt || 0) <= Date.now()) return null;
+      const storedProvider = String(context.provider || "").toLowerCase();
       return {
         ...contextSpec,
         ticket,
         initData: String(context.initData || ""),
         browser: Boolean(context.browser),
-        provider: String(context.provider || requestedProvider).toLowerCase() === "google" ? "google" : "password",
+        provider: storedProvider === "google" || storedProvider === "password" ? storedProvider : requestedProvider,
       };
     } catch {
       return null;
@@ -113,7 +116,11 @@
     banner.className = "msg ok telegram-login-context-banner";
     banner.setAttribute("role", "status");
     banner.textContent = context.returnPath === "/telegram/video/open"
-      ? `Telegram 视频工作台：已选择${context.provider === "google" ? " Google 官方授权" : " VECTO 网页账号登录"}。登录完成后会返回独立授权页并检测当前授权状态。`
+      ? (context.provider === "google"
+        ? "Telegram 视频工作台：已选择 Google 官方授权。登录完成后会返回独立授权页并检测当前授权状态。"
+        : context.provider === "password"
+          ? "Telegram 视频工作台：已选择 VECTO 网页账号登录。登录完成后会返回独立授权页并检测当前授权状态。"
+          : "Telegram 视频工作台：请在网页中选择 VECTO 网页账号登录或 Google 官方授权。登录完成后会返回独立授权页并检测当前授权状态。")
       : "Telegram 推文工作台授权：登录完成后会返回 Telegram 授权页。";
     form.prepend(banner);
     if (context.returnPath === "/telegram/video/open" && context.provider === "google" && googleButton) {

@@ -1380,8 +1380,11 @@ def inject_telegram_admin(
   const ticket = TICKET;
   const loginContextKey = "vecto-telegram-video-login-context";
   const loginReturn = "/telegram/video/open?ticket=" + encodeURIComponent(ticket);
-  const requestedProvider = new URLSearchParams(window.location.search).get("provider") === "google" ? "google" : "password";
-  const loginPage = "/video-login.html?return_url=" + encodeURIComponent(loginReturn) + "&telegram_video=1&auth_provider=" + requestedProvider;
+  // The Bot exposes one browser entry point.  The web page itself owns the
+  // VECTO-password vs Google choice; keep an explicit provider only for old
+  // links that may still contain ?provider=google.
+  const requestedProvider = new URLSearchParams(window.location.search).get("provider") === "google" ? "google" : "";
+  const loginPage = "/video-login.html?return_url=" + encodeURIComponent(loginReturn) + "&telegram_video=1" + (requestedProvider ? "&auth_provider=" + requestedProvider : "");
   const webApp = window.Telegram?.WebApp;
   const initData = webApp?.initData || "";
   const browser = !initData;

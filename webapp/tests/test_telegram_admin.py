@@ -463,6 +463,7 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertIn('telegram_video_browser', js)
         self.assertIn('showTelegramAuthBanner', js)
         self.assertIn('独立授权页并检测当前授权状态', js)
+        self.assertIn('请在网页中选择 VECTO 网页账号登录或 Google 官方授权', js)
         self.assertIn('auth_provider', js)
         self.assertIn('Google 官方授权', js)
         self.assertIn('oauthErrorMessage', js)
