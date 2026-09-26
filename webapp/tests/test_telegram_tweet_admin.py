@@ -586,6 +586,38 @@ class TelegramTweetAdminTests(unittest.TestCase):
             calls,
         )
 
+    def test_account_return_callback_uses_clicking_user_not_bot_message_sender(self):
+        """A private-chat account return must not fail the chat guard.
+
+        Telegram puts the Bot in ``CallbackQuery.message.from_user`` because
+        the edited message was sent by the Bot.  The user who pressed the
+        button is ``CallbackQuery.from_user``.  Keep those identities
+        different here so this regression cannot be hidden by the test mock.
+        """
+        def dispatch(_user_id, action, _payload):
+            if action == "accounts.list":
+                return []
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {
+                "chat_id": chat_id,
+                "web_user_id": self.alice_id,
+                "web_username": "tweet_alice",
+            },
+        )
+        for callback_data in ("tt:accountmenu", "tt:vectosession"):
+            message = _Message()
+            message.from_user = SimpleNamespace(id=9001)  # Bot message sender.
+            query = _Query(callback_data, message)
+            query.from_user = SimpleNamespace(id=101)  # Human button clicker.
+            asyncio.run(controller.handle_callback(query, _Types))
+            self.assertTrue(message.edits)
+            self.assertIn("账号管理", message.edits[-1][0])
+            self.assertNotIn("只支持与 Bot 私聊", message.edits[-1][0])
+
     def test_vecto_session_and_platform_accounts_are_separate_callback_pages(self):
         calls = []
 

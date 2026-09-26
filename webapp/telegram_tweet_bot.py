@@ -2708,6 +2708,7 @@ class NativeTweetBotController:
         types: Any,
         *,
         edit_message: bool = False,
+        actor: Any | None = None,
     ) -> None:
         """Show account status even when the bound web session is expired.
 
@@ -2717,7 +2718,12 @@ class NativeTweetBotController:
         status while every other workbench action remains session-protected.
         """
         chat = getattr(message, "chat", None)
-        actor = getattr(message, "from_user", None)
+        # For a normal incoming message, ``message.from_user`` is the person
+        # who sent it.  For an inline-button callback, however,
+        # ``query.message`` is the Bot's previously sent message and its
+        # ``from_user`` is therefore the Bot.  Callback callers must pass the
+        # actual clicker explicitly via ``query.from_user``.
+        actor = actor if actor is not None else getattr(message, "from_user", None)
         chat_id = int(getattr(chat, "id", 0) or 0)
         if (
             chat is None
@@ -4683,7 +4689,12 @@ class NativeTweetBotController:
             # reachable after a browser session expires.  Do not run the
             # normal workbench session gate before rendering it.
             await query.answer()
-            await self._show_account_management(query.message, types, edit_message=True)
+            await self._show_account_management(
+                query.message,
+                types,
+                edit_message=True,
+                actor=getattr(query, "from_user", None),
+            )
             return
         async def authorization_reply(text: str, **kwargs: Any) -> Any:
             # CallbackQuery.answer cannot carry reply_markup.  Send the
