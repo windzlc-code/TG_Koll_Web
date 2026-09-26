@@ -42,6 +42,30 @@ def test_product_pages_share_vecto_logo_and_keep_independent_shells():
     assert 'data-view="video_workspace"' not in CONSOLE.split("sidebar-bottom-actions")[0]
 
 
+def test_product_login_keeps_auth_hooks_and_rich_split_promotion():
+    """The shared product login may be branded, but its auth contract stays stable."""
+    for marker in (
+        'class="auth-stage-showcase"',
+        'class="auth-stage-media"',
+        '/assets/opc/home/content-studio.jpg',
+        '/assets/opc/home/hero-ai-control.jpg',
+        'class="auth-stage-particles"',
+        'class="auth-stage-orbit auth-stage-orbit-a"',
+    ):
+        assert marker in LOGIN
+    for marker in (
+        'id="productLoginForm"',
+        'id="loginUsername"',
+        'id="loginPassword"',
+        'id="loginMfaCode"',
+        'data-google-login',
+        'id="loginStatus"',
+    ):
+        assert marker in LOGIN
+    assert 'auth-stage-grid-compact' in LOGIN
+    assert 'auth-stage-card-title' in LOGIN
+
+
 def test_admin_sidebar_links_to_each_workspace():
     assert 'href="/admin-console.html">进入推文工作台</a>' in ADMIN
     assert 'href="/admin-video.html">进入视频工作台</a>' in ADMIN
