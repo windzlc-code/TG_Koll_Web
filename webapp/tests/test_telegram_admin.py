@@ -187,6 +187,10 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertIn("already_authorized", response.text)
         self.assertIn("auth_provider", response.text)
         self.assertIn("确认授权并打开视频工作台", response.text)
+        self.assertIn("tg-bridge-shell", response.text)
+        self.assertIn("accountAvatar", response.text)
+        self.assertIn("accountProviderLogo", response.text)
+        self.assertIn("Google 官方授权", response.text)
         self.assertNotIn("telegram/tweet/open", response.text)
 
         expired = TestClient(app).get("/telegram/video/open", params={"ticket": "expired-or-invalid"})

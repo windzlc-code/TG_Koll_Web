@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from webapp import telegram_admin, telegram_tweet_admin as tweet_tg
 from webapp.auth import create_session, session_storage_token
 from webapp.db import db, init_db
+from webapp.telegram_auth_ui import account_avatar_url
 from webapp.telegram_tweet_bot import (
     NativeTweetBotController,
     PERSONA_CONTROL_BUTTON,
@@ -1837,7 +1838,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
                 json={"ticket": ticket, "init_data": init_data},
             )
         self.assertEqual(landing.status_code, 200, landing.text)
-        self.assertIn("正在绑定 Telegram 推文工作台", landing.text)
+        self.assertIn("tg-bridge-shell", landing.text)
+        self.assertIn("Telegram 推文工作台授权", landing.text)
         self.assertIn("vecto-telegram-tweet-login-context", landing.text)
         self.assertIn("telegram_tweet=1", landing.text)
         self.assertEqual(exchange.status_code, 200, exchange.text)
@@ -1849,6 +1851,35 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(int(member["web_user_id"]), self.alice_id)
         self.assertEqual(str(member["linked_session_token_hash"]), session_storage_token(session))
         self.assertTrue(tweet_tg._member_has_active_web_session(member))
+
+    def test_authorization_surface_shows_identity_avatar_and_provider_metadata(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        avatar = "https://images.example.test/alice.png"
+        with db() as conn:
+            conn.execute(
+                "UPDATE users SET full_name = ?, email = ?, avatar_url = ? WHERE id = ?",
+                ("Alice Vecto", "alice@example.test", avatar, self.alice_id),
+            )
+        session = self._session(self.alice_id)
+        ticket_url = tweet_tg._create_link_ticket(909, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", session)
+            landing = client.get(ticket_url)
+            preview = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": ticket, "init_data": "", "browser": True, "preview": True},
+            )
+        self.assertEqual(landing.status_code, 200, landing.text)
+        for marker in ("tg-bridge-shell", "tg-bridge-showcase", "accountAvatar", "accountProviderLogo", "Google 官方授权", "确认授权并打开推文工作台"):
+            self.assertIn(marker, landing.text)
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.json()["auth_method"], "password")
+        self.assertEqual(preview.json()["web_user"]["avatar_url"], avatar)
+        self.assertEqual(account_avatar_url({"id": self.alice_id, "avatar_url": avatar}), avatar)
 
     def test_login_context_requires_signed_webapp_data_and_live_ticket(self):
         self.runtime.update({

@@ -27,6 +27,11 @@ from .auth import (
     session_storage_token,
 )
 from .db import db, get_db_path
+from .telegram_auth_ui import (
+    account_avatar_url,
+    render_telegram_authorization_error_page,
+    render_telegram_authorization_page,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -891,16 +896,12 @@ def _video_authorization_error_page(message: str, *, status_code: int = 410) -> 
     The HTTP status remains 410/403 so clients and monitoring can distinguish a
     dead ticket, but users should not be left with a raw FastAPI JSON error.
     """
-    clean_message = html.escape(str(message or "Telegram 视频工作台授权入口已失效。"))
-    content = f"""<!doctype html><html lang=\"zh-Hans\"><head><meta charset=\"utf-8\">
-<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-<meta name=\"robots\" content=\"noindex,nofollow,noarchive\"><title>Telegram 视频工作台授权</title>
-<style>body{{font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}}
-main{{max-width:560px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}}
-h1{{font-size:22px;margin:0 0 12px}}p{{line-height:1.65;color:#52697a}}.error{{color:#b42318;font-weight:700}}
-.hint{{margin-top:18px;padding:14px 16px;border-radius:10px;background:#fff4ed;color:#8a3518}}</style></head>
-<body><main><h1>Telegram 视频工作台授权</h1><p class=\"error\">{clean_message}</p>
-<p class=\"hint\">请返回 Telegram Bot，重新点击「账号管理」获取新的授权链接。旧链接不会再次使用。</p></main></body></html>"""
+    content = render_telegram_authorization_error_page(
+        message,
+        page_title="Telegram 视频工作台授权",
+        workbench_label="视频工作台",
+        status_code=status_code,
+    )
     response = HTMLResponse(content=content, status_code=int(status_code or 410))
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -1474,6 +1475,20 @@ def inject_telegram_admin(
 </script></body></html>""".replace("TICKET", encoded_ticket),
             status_code=200,
         )
+        response = HTMLResponse(
+            render_telegram_authorization_page(
+                ticket=ticket,
+                workbench_label="视频工作台",
+                page_title="绑定 Telegram 视频工作台",
+                login_path="/video-login.html",
+                return_path="/telegram/video/open",
+                context_key="vecto-telegram-video-login-context",
+                context_flag="telegram_video",
+                exchange_path="/telegram/video/exchange",
+                fallback_target=DEFAULT_VIDEO_ENTRY,
+            ),
+            status_code=200,
+        )
         response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -1515,6 +1530,9 @@ def inject_telegram_admin(
                         "id": int(web_user.get("id") or 0),
                         "username": str(web_user.get("username") or ""),
                         "display_name": str(web_user.get("display_name") or ""),
+                        "full_name": str(web_user.get("full_name") or ""),
+                        "email": str(web_user.get("email") or ""),
+                        "avatar_url": account_avatar_url(web_user),
                     },
                     "auth_method": (
                         "google"
