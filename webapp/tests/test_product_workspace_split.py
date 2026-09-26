@@ -45,14 +45,17 @@ def test_product_pages_share_vecto_logo_and_keep_independent_shells():
 def test_product_login_keeps_auth_hooks_and_rich_split_promotion():
     """The shared product login may be branded, but its auth contract stays stable."""
     for marker in (
-        'class="auth-stage-showcase"',
-        'class="auth-stage-media"',
-        '/assets/opc/home/content-studio.jpg',
-        '/assets/opc/home/hero-ai-control.jpg',
+        'class="auth-stage-constellation"',
+        'class="auth-stage-constellation-core"',
+        'class="auth-stage-node auth-stage-node-a"',
+        'class="auth-stage-node auth-stage-node-d"',
         'class="auth-stage-particles"',
         'class="auth-stage-orbit auth-stage-orbit-a"',
     ):
         assert marker in LOGIN
+    stage = LOGIN.split('<section class="auth-stage"', 1)[1].split('</section>', 1)[0]
+    assert '<img ' not in stage
+    assert 'auth-stage-showcase' not in stage
     for marker in (
         'id="productLoginForm"',
         'id="loginUsername"',
