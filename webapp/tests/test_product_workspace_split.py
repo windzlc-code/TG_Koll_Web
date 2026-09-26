@@ -53,6 +53,7 @@ def test_product_login_keeps_auth_hooks_and_rich_split_promotion():
         'class="auth-stage-particles"',
         'class="auth-stage-orbit auth-stage-orbit-a"',
         '/assets/opc/vecto-logo-ui-icon.png?v=20260711',
+        'class="auth-mobile-ornament"',
     ):
         assert marker in LOGIN
     stage = LOGIN.split('<section class="auth-stage"', 1)[1].split('</section>', 1)[0]
@@ -61,6 +62,7 @@ def test_product_login_keeps_auth_hooks_and_rich_split_promotion():
     assert '.auth-stage-brand-logo' in LOGIN_CSS
     assert 'product-login-node-a' in LOGIN_CSS
     assert '.product-login-page .auth-stage { display: none; }' in LOGIN_CSS
+    assert '.auth-mobile-ornament { display: flex;' in LOGIN_CSS
     for marker in (
         'id="productLoginForm"',
         'id="loginUsername"',

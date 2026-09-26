@@ -414,6 +414,8 @@ body.page-auth-shell.product-login-page {
 
 .auth-stage-footer span:first-child { display: inline-flex; align-items: center; gap: 8px; }
 
+.auth-mobile-ornament { display: none; }
+
 /* Login card: the only solid surface, so it remains clearly actionable. */
 .product-login-page .auth-card-product {
   position: relative;
@@ -470,6 +472,10 @@ body.page-auth-shell.product-login-page {
 @keyframes product-login-node-c { 0%, 100% { transform: translate3d(0, 0, 0) rotate(1deg); } 50% { transform: translate3d(7px, -6px, 0) rotate(-1deg); } }
 @keyframes product-login-node-d { 0%, 100% { transform: translate3d(0, 0, 0) rotate(-1deg); } 50% { transform: translate3d(-8px, 6px, 0) rotate(1deg); } }
 @keyframes product-login-spark { 0%, 100% { transform: scale(0.88) rotate(-8deg); opacity: 0.58; } 50% { transform: scale(1.14) rotate(12deg); opacity: 1; } }
+@keyframes product-login-mobile-orb-a { 0%, 100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-4px) rotate(4deg); } }
+@keyframes product-login-mobile-orb-b { 0%, 100% { transform: translateY(1px) rotate(3deg); } 50% { transform: translateY(-5px) rotate(-5deg); } }
+@keyframes product-login-mobile-orb-c { 0%, 100% { transform: translateY(-1px) rotate(-3deg); } 50% { transform: translateY(4px) rotate(5deg); } }
+@keyframes product-login-mobile-orb-d { 0%, 100% { transform: translateY(1px) rotate(4deg); } 50% { transform: translateY(-4px) rotate(-4deg); } }
 
 @media (max-width: 1120px) {
   .product-login-page .auth-shell { grid-template-columns: minmax(0, 1fr) minmax(340px, 0.68fr); gap: 28px; padding-right: 32px; padding-left: 32px; }
@@ -483,8 +489,14 @@ body.page-auth-shell.product-login-page {
 }
 
 @media (max-width: 760px) {
-  .product-login-page .auth-shell { grid-template-columns: 1fr; gap: 0; min-height: 100dvh; height: 100dvh; padding: 78px 12px 12px; align-items: start; overflow: hidden; }
+  .product-login-page .auth-shell { grid-template-columns: 1fr; gap: 8px; min-height: 100dvh; height: 100dvh; padding: 82px 12px 12px; align-items: start; overflow: hidden; }
   .product-login-page .auth-stage { display: none; }
+  .auth-mobile-ornament { display: flex; order: -2; width: min(240px, 72vw); height: 38px; align-items: center; justify-content: center; gap: 12px; margin: 0 auto; }
+  .auth-mobile-ornament-orb { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 13px; box-shadow: 0 8px 14px rgba(77, 127, 124, 0.12); font-size: 17px; line-height: 1; }
+  .auth-mobile-ornament-orb-mint { background: #c8f9e8; animation: product-login-mobile-orb-a 4.8s ease-in-out infinite; }
+  .auth-mobile-ornament-orb-coral { background: #ffe0d4; animation: product-login-mobile-orb-b 5.6s ease-in-out -1.4s infinite; }
+  .auth-mobile-ornament-orb-yellow { background: #fff0b9; animation: product-login-mobile-orb-c 5.1s ease-in-out -2.4s infinite; }
+  .auth-mobile-ornament-orb-lilac { background: #e8ddff; animation: product-login-mobile-orb-d 5.9s ease-in-out -3.2s infinite; }
   .product-login-page .auth-card-product { max-height: calc(100dvh - 90px); overflow-y: auto; }
   .product-login-page .auth-stage { padding: 22px 14px; }
   .product-login-page .auth-stage-title { font-size: clamp(36px, 11vw, 52px); }
@@ -526,5 +538,5 @@ body.page-auth-shell.product-login-page {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .product-login-page::before, .product-login-page::after, .auth-stage-orbit, .auth-stage-particles i, .auth-stage-constellation-halo, .auth-stage-constellation-core, .auth-stage-node, .auth-stage-spark { animation: none; }
+  .product-login-page::before, .product-login-page::after, .auth-stage-orbit, .auth-stage-particles i, .auth-stage-constellation-halo, .auth-stage-constellation-core, .auth-stage-node, .auth-stage-spark, .auth-mobile-ornament-orb { animation: none; }
 }
