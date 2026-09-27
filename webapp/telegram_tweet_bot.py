@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -1161,15 +1162,14 @@ class NativeTweetBotController:
         back_text: str = "返回上一步",
         primary_callback: str = "",
         primary_text: str = "",
+        include_cancel: bool = True,
     ) -> Any:
         """Render the R18-style controls for a text/media input step.
 
         Reply keyboards are useful for the persistent workbench controls, but
-        they cannot be attached to an individual wizard message.  Every
-        transient input step therefore gets an inline escape hatch as well:
-        the first row returns to the owning module (or the workbench menu),
-        and the second row clears the pending state without requiring command
-        text.
+        they cannot be attached to an individual wizard message.  Transient
+        input steps therefore get a contextual return action and, where the
+        flow needs a separate abort action, an explicit state-clearing row.
         """
         button = types.InlineKeyboardButton
         rows: list[list[Any]] = []
@@ -1182,10 +1182,11 @@ class NativeTweetBotController:
             # R18 uses a compact arrow marker for every contextual return.
             # Keep callback data unchanged; this is presentation-only.
             display_back_text = str(back_text or "返回上一步")
-            if display_back_text and not display_back_text.startswith(("◀️", "⏪")):
+            if display_back_text and not display_back_text.startswith(("◀️", "⏪", "❌")):
                 display_back_text = f"◀️ {display_back_text}"
             rows.append([button(text=display_back_text, callback_data=str(back_callback))])
-        rows.append([button(text="取消当前步骤", callback_data="tt:stepcancel")])
+        if include_cancel:
+            rows.append([button(text="取消当前步骤", callback_data="tt:stepcancel")])
         return types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     @staticmethod
@@ -1313,10 +1314,18 @@ class NativeTweetBotController:
             back_callback, back_text = "tt:hot", "返回热点创作"
 
         if back_callback:
+            persona_setting_modes = {
+                "profile_content", "profile_ai", "profile_threads", "profile_style", "profile_name",
+                "profile_memory_create", "profile_link_name", "profile_link_create",
+                "profile_link_url", "profile_link_ending",
+            }
             return NativeTweetBotController._step_navigation_markup(
                 types,
                 back_callback=back_callback,
-                back_text=back_text,
+                back_text="❌ 取消" if mode in {
+                    "profile_content", "profile_ai", "profile_threads", "profile_style", "profile_name",
+                } else back_text,
+                include_cancel=mode not in persona_setting_modes,
             )
         return types.InlineKeyboardMarkup(inline_keyboard=[[
             types.InlineKeyboardButton(text=_back_label("返回总控菜单"), callback_data="tt:menu"),
@@ -2025,28 +2034,38 @@ class NativeTweetBotController:
                 if persona_name
                 else ""
             )
+            try:
+                image_count = max(0, int(counts.get("images") or 0))
+            except (TypeError, ValueError):
+                image_count = 0
+            settings_rows: list[list[Any]] = [
+                [
+                    button(text="✏️ 修改名称", callback_data="tt:profilename"),
+                    button(text="🧵 推文风格", callback_data="tt:style"),
+                ],
+                [
+                    button(text="🧾 人设简介", callback_data="tt:profile"),
+                    button(text="🔗 链接设置", callback_data="tt:plinks"),
+                ],
+                [
+                    button(text="🔐 账号与数据", callback_data="tt:psettings:accounts"),
+                    button(text="🛠 维护操作", callback_data="tt:psettings:maintenance"),
+                ],
+            ]
+            if image_count > 0:
+                settings_rows.append([
+                    button(text="👁 查看人设图", callback_data="tt:pimgview"),
+                    button(text="🔄 重新生成人设图", callback_data="tt:personaimage"),
+                ])
+            else:
+                settings_rows.append([
+                    button(text="🎨 生成人设图", callback_data="tt:personaimage"),
+                ])
+            settings_rows.append(back)
             return (
                 "⚙️ 人设设置\n\n" + settings_context
-                + "基础字段可直接修改；账号、数据与维护操作已按用途归类：",
-                types.InlineKeyboardMarkup(inline_keyboard=[
-                    [
-                        button(text="✏️ 修改名称", callback_data="tt:profilename"),
-                        button(text="🧵 推文风格", callback_data="tt:style"),
-                    ],
-                    [
-                        button(text="🧾 人设简介", callback_data="tt:profile"),
-                        button(text="🔗 链接设置", callback_data="tt:plinks"),
-                    ],
-                    [
-                        button(text="🧠 人设记忆", callback_data="tt:pmemories:0"),
-                        button(text="🔐 账号与数据", callback_data="tt:psettings:accounts"),
-                    ],
-                    [
-                        button(text="🧑‍🎨 人设图与图库", callback_data="tt:personaimage"),
-                        button(text="🛠 维护操作", callback_data="tt:psettings:maintenance"),
-                    ],
-                    back,
-                ]),
+                + "基础字段可直接修改；账号、数据、人设图与维护操作已按用途归类：",
+                types.InlineKeyboardMarkup(inline_keyboard=settings_rows),
             )
         settings_back = [button(text="◀️ 返回人设设置", callback_data="tt:pmod:settings")]
         if module == "settings_accounts":
@@ -2097,7 +2116,7 @@ class NativeTweetBotController:
                 "✍️ 新建推文\n\n"
                 f"人设：{persona_name or '未命名人设'}\n"
                 f"当前待发布：{counts.get('posts', 0)} 篇\n\n"
-                "请选择生成模式：",
+                "请选择生成模式；选择 AI 生成后，第一步会选择本次参考的人设记忆：",
                 self._tweet_generation_mode_markup(
                     types,
                     back_callback=mode_back,
@@ -3232,6 +3251,111 @@ class NativeTweetBotController:
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
+    async def _send_persona_image_preview(
+        self,
+        query: Any,
+        types: Any,
+        member: dict[str, Any],
+        *,
+        persona_id: str,
+        image_id: str = "",
+        page: int = 0,
+    ) -> None:
+        """Send a real Telegram preview for the selected/current persona image.
+
+        The library previously rendered each image as a no-op text row, so a
+        user could manage metadata but could not see the actual image.  Keep
+        authorization in the canonical owner-scoped operation, then send the
+        returned local file, public URL, or data URL through Telegram.
+        """
+        chat_id = int(query.message.chat.id)
+        result = await self._call(
+            int(member["web_user_id"]),
+            "persona_image.list",
+            {"persona_id": persona_id},
+        )
+        items = result.get("items") if isinstance(result, dict) and isinstance(result.get("items"), list) else []
+        items = [item for item in items if isinstance(item, dict)]
+        selected = next(
+            (item for item in items if image_id and str(item.get("id") or "").strip() == image_id),
+            None,
+        )
+        if selected is None:
+            selected = next((item for item in items if bool(item.get("is_reference"))), None)
+        if selected is None and items:
+            selected = items[0]
+        if selected is None:
+            raise HTTPException(status_code=404, detail="当前人设还没有可查看的人设图")
+
+        selected_id = str(selected.get("id") or "").strip()
+        raw_url = str(selected.get("image_url") or "").strip()
+        if not selected_id or not raw_url:
+            raise HTTPException(status_code=404, detail="人设图源文件不存在")
+
+        try:
+            from aiogram.types import BufferedInputFile, FSInputFile
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Telegram 图片预览组件不可用") from exc
+
+        photo: Any
+        if re.match(r"^https?://", raw_url, re.I):
+            photo = raw_url
+        elif raw_url.startswith("data:"):
+            try:
+                header, encoded = raw_url.split(",", 1)
+                binary = base64.b64decode(encoded) if ";base64" in header.lower() else encoded.encode("utf-8")
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=422, detail="人设图数据格式无效") from exc
+            photo = BufferedInputFile(binary, filename=f"persona-{selected_id}.png")
+        else:
+            path = Path(raw_url).expanduser()
+            if not path.is_file():
+                raise HTTPException(status_code=404, detail="人设图源文件不存在")
+            photo = FSInputFile(str(path.resolve()))
+
+        created = str(selected.get("created_at") or "").strip()[:16].replace("T", " ")
+        source = str(selected.get("source") or "生成").strip() or "生成"
+        reference_text = " · 当前使用中" if bool(selected.get("is_reference")) else ""
+        rows = [[
+            types.InlineKeyboardButton(
+                text="当前使用中" if bool(selected.get("is_reference")) else "设为当前",
+                callback_data=callback_token(chat_id, "pimgapply", {
+                    "persona_id": persona_id, "image_id": selected_id, "page": max(0, int(page or 0)),
+                }),
+            ),
+            types.InlineKeyboardButton(
+                text="设为头像",
+                callback_data=callback_token(chat_id, "pimgavatar", {
+                    "persona_id": persona_id, "image_id": selected_id, "page": max(0, int(page or 0)),
+                }),
+            ),
+        ], [
+            types.InlineKeyboardButton(
+                text="替换",
+                callback_data=callback_token(chat_id, "pimgreplace", {
+                    "persona_id": persona_id, "image_id": selected_id, "page": max(0, int(page or 0)),
+                }),
+            ),
+            types.InlineKeyboardButton(
+                text="删除",
+                callback_data=callback_token(chat_id, "pimgdeleteconfirm", {
+                    "persona_id": persona_id, "image_id": selected_id, "page": max(0, int(page or 0)),
+                }),
+            ),
+        ], [
+            types.InlineKeyboardButton(
+                text=_back_label("返回人设图库"),
+                callback_data=callback_token(chat_id, "personaimage", {
+                    "persona_id": persona_id, "page": max(0, int(page or 0)),
+                }),
+            ),
+        ]]
+        await query.message.answer_photo(
+            photo=photo,
+            caption=f"👁 当前人设图{reference_text}\n来源：{source}\n时间：{created or '未记录'}",
+            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+
     async def _render_persona_image_options(
         self,
         query: Any,
@@ -3289,10 +3413,12 @@ class NativeTweetBotController:
             marker = "✅ " if bool(item.get("is_reference")) else ""
             created = str(item.get("created_at") or "")[:16].replace("T", " ")
             source = str(item.get("source") or "生成")
-            label = f"{marker}{source} · {created or '人设图'}"[:42]
+            label = f"👁 查看 · {marker}{source} · {created or '人设图'}"[:42]
             rows.append([types.InlineKeyboardButton(
                 text=label,
-                callback_data=callback_token(chat_id, "pimgnoop", {"persona_id": persona_id}),
+                callback_data=callback_token(chat_id, "pimgview", {
+                    "persona_id": persona_id, "image_id": image_id, "page": safe_page,
+                }),
             )])
             rows.append([
                 types.InlineKeyboardButton(
@@ -5725,8 +5851,31 @@ class NativeTweetBotController:
                     page=max(0, int(reference.get("page") or 0)),
                     persona_task=True,
                 ))
+            elif action == "pimgview":
+                state = load_state(chat_id)
+                reference = resolve_callback_token(chat_id, "pimgview", parts[2]) if len(parts) > 2 else {}
+                persona_id = str(reference.get("persona_id") or state["selected_persona_id"] or "").strip()
+                if not persona_id:
+                    raise HTTPException(status_code=409, detail="请先选择人设")
+                await self._send_persona_image_preview(
+                    query,
+                    types,
+                    member,
+                    persona_id=persona_id,
+                    image_id=str(reference.get("image_id") or "").strip(),
+                    page=max(0, int(reference.get("page") or 0)),
+                )
             elif action == "pimgnoop":
-                await query.answer("请使用下方按钮管理这张人设图")
+                # Compatibility for buttons sent before real image previews
+                # were added.  Reopen the current library instead of leaving
+                # the old no-op interaction in place.
+                await self._render_persona_image_options(
+                    query,
+                    types,
+                    member,
+                    persona_id=str(load_state(chat_id)["selected_persona_id"] or ""),
+                    page=0,
+                )
             elif action == "pimgpage" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pimgpage", parts[2])
                 await self._render_persona_image_options(
@@ -7973,7 +8122,7 @@ class NativeTweetBotController:
                     "人设设置 · " + ("修改简介" if action == "bio" else "修改推文风格") + "\n"
                     "请发送新的完整内容；只更新当前字段，名称、记忆、链接模板、图库和账号绑定保持不变。",
                     reply_markup=self._step_navigation_markup(
-                        types, back_callback=back_callback, back_text=back_text,
+                        types, back_callback=back_callback, back_text="❌ 取消", include_cancel=False,
                     ),
                 )
             elif action == "profilename":
@@ -7982,7 +8131,7 @@ class NativeTweetBotController:
                     "人设设置 · 修改名称\n"
                     "请发送新的人设名称；只修改显示名称，不会影响简介、推文、图库或绑定账号。",
                     reply_markup=self._step_navigation_markup(
-                        types, back_callback="tt:pmod:settings", back_text="返回人设设置",
+                        types, back_callback="tt:pmod:settings", back_text="❌ 取消", include_cancel=False,
                     ),
                 )
             elif action == "profileai":
@@ -7992,7 +8141,7 @@ class NativeTweetBotController:
                     "请发送希望 AI 优化的人设方向或补充要求。\n"
                     "AI 只会更新简介字段，不会覆盖名称、链接模板或图库。",
                     reply_markup=self._step_navigation_markup(
-                        types, back_callback="tt:profile", back_text="返回人设简介",
+                        types, back_callback="tt:profile", back_text="❌ 取消", include_cancel=False,
                     ),
                 )
             elif action == "pmemories":
@@ -8012,6 +8161,7 @@ class NativeTweetBotController:
                         types,
                         back_callback=callback_token(chat_id, "pmemories", {"page": max(0, int(reference.get("page") or 0))}),
                         back_text="返回人设记忆",
+                        include_cancel=False,
                     ),
                 )
             elif action == "pmemdelete" and len(parts) > 2:
@@ -8039,6 +8189,7 @@ class NativeTweetBotController:
                         types,
                         back_callback=callback_token(chat_id, "plinks", {"page": page}),
                         back_text="返回链接模板",
+                        include_cancel=False,
                     ),
                 )
             elif action == "plinkname" and len(parts) > 2:
@@ -8053,6 +8204,7 @@ class NativeTweetBotController:
                         types,
                         back_callback=callback_token(chat_id, "plinks", {"page": page}),
                         back_text="返回链接模板",
+                        include_cancel=False,
                     ),
                 )
             elif action == "plinkurl" and len(parts) > 2:
@@ -8075,6 +8227,7 @@ class NativeTweetBotController:
                         types,
                         back_callback=callback_token(chat_id, "plinkname", {"page": page}),
                         back_text="返回重新输入名称",
+                        include_cancel=False,
                     ),
                 )
             elif action == "plinkskip" and len(parts) > 2:
@@ -8130,7 +8283,7 @@ class NativeTweetBotController:
                      "发送 /unbind 解除绑定。",
                     reply_markup=self._step_navigation_markup(
                         types,
-                        back_callback="tt:psettings:accounts", back_text="返回账号与数据",
+                        back_callback="tt:psettings:accounts", back_text="❌ 取消", include_cancel=False,
                     ),
                 )
             elif action == "accounts":
@@ -8954,6 +9107,7 @@ class NativeTweetBotController:
                                 "page": max(0, int(state["payload"].get("page") or 0)),
                             }),
                             back_text="返回链接模板",
+                            include_cancel=False,
                         ),
                     )
                     return
@@ -8972,6 +9126,7 @@ class NativeTweetBotController:
                         types,
                         back_callback=callback_token(chat_id, "plinkname", {"page": page}),
                         back_text="返回重新输入名称",
+                        include_cancel=False,
                     ),
                 )
             elif mode == "profile_link_url":
@@ -9002,7 +9157,7 @@ class NativeTweetBotController:
                             text=_back_label("返回重新输入链接"),
                             callback_data=callback_token(chat_id, "plinkurl", {"page": page}),
                         ),
-                    ], [types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")]]),
+                    ]]),
                 )
             elif mode == "profile_link_ending":
                 name = str(state["payload"].get("link_name") or "").strip()

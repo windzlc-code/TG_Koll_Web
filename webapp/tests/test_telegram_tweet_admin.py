@@ -76,6 +76,7 @@ class _Message:
         self.message_id = message_id
         self.answers = []
         self.edits = []
+        self.photos = []
         self.bot = SimpleNamespace()
 
     async def answer(self, text, **kwargs):
@@ -83,6 +84,9 @@ class _Message:
 
     async def edit_text(self, text, **kwargs):
         self.edits.append((text, kwargs))
+
+    async def answer_photo(self, photo, **kwargs):
+        self.photos.append((photo, kwargs))
 
 
 class _Query:
@@ -771,7 +775,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for row in message.edits[-1][1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertIn("请选择生成模式：", message.edits[-1][0])
+        self.assertIn("请选择生成模式", message.edits[-1][0])
+        self.assertIn("人设记忆", message.edits[-1][0])
         self.assertTrue(any(label.endswith("返回人设详情") for label in create_labels))
         asyncio.run(controller.handle_callback(_Query("tt:genmodes", message), _Types))
         generation_mode_callbacks = {
@@ -851,6 +856,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("待发布推文：2 篇", message.edits[-1][0])
         self.assertIn("基础字段可直接修改", message.edits[-1][0])
         self.assertIn("按用途归类", message.edits[-1][0])
+        self.assertNotIn("人设记忆", message.edits[-1][0])
         self.assertNotIn("加入分组", message.edits[-1][0])
         settings_markup = message.edits[-1][1]["reply_markup"]
         settings_callbacks = {
@@ -859,7 +865,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         }
         direct_settings_callbacks = {
             "tt:profilename", "tt:style", "tt:profile", "tt:plinks",
-            "tt:pmemories:0", "tt:personaimage",
+            "tt:personaimage",
             "tt:psettings:accounts", "tt:psettings:maintenance",
         }
         self.assertEqual(
@@ -873,7 +879,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertNotIn("tt:profileai", settings_callbacks)
         self.assertNotIn("tt:persona_accounts", settings_callbacks)
         self.assertNotIn("tt:pthreads", settings_callbacks)
-        self.assertEqual([len(row) for row in settings_markup.inline_keyboard], [2, 2, 2, 2, 1])
+        self.assertNotIn("tt:pmemories:0", settings_callbacks)
+        self.assertEqual([len(row) for row in settings_markup.inline_keyboard], [2, 2, 2, 1, 1])
         self.assertFalse(any("group" in item for item in settings_callbacks))
 
         asyncio.run(controller.handle_callback(_Query("tt:psettings:accounts", message), _Types))
@@ -1349,6 +1356,93 @@ class TelegramTweetAdminTests(unittest.TestCase):
         image_calls = [payload for action, payload in calls if action == "persona_image.generate"]
         self.assertEqual(image_calls[0]["persona_image_options"]["digital_human_character_region"], "europe_america")
         self.assertIn("persona_image.list", [action for action, _payload in calls])
+
+    def test_persona_settings_match_r18_memory_and_image_placement(self):
+        image_path = Path(self.tmpdir.name) / "persona-reference.png"
+        image_path.write_bytes(b"persona-preview")
+
+        def dispatch(_user_id, action, _payload):
+            if action == "personas.list":
+                return [{
+                    "id": "persona-a",
+                    "name": "科技观察员",
+                    "counts": {"posts": 2, "favorites": 0, "published": 1, "images": 1},
+                }]
+            if action == "persona_image.list":
+                return {"items": [{
+                    "id": "img-1",
+                    "image_url": str(image_path),
+                    "created_at": "2026-09-27T10:00:00",
+                    "source": "生成",
+                    "is_reference": True,
+                }]}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        message = _Message()
+
+        asyncio.run(controller.handle_callback(_Query("tt:pmod:settings", message), _Types))
+        settings_buttons = [
+            button
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertFalse(any("人设记忆" in str(button.text) for button in settings_buttons))
+        self.assertTrue(any(button.text == "👁 查看人设图" for button in settings_buttons))
+        self.assertTrue(any(button.text == "🔄 重新生成人设图" for button in settings_buttons))
+
+        view_root = next(button.callback_data for button in settings_buttons if button.text == "👁 查看人设图")
+        asyncio.run(controller.handle_callback(_Query(view_root, message), _Types))
+        self.assertEqual(len(message.photos), 1)
+        self.assertIn("当前人设图", message.photos[-1][1]["caption"])
+
+        asyncio.run(controller.handle_callback(_Query("tt:personaimage", message), _Types))
+        gallery_buttons = [
+            button
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        view_item = next(button for button in gallery_buttons if str(button.text).startswith("👁 查看"))
+        self.assertNotIn("pimgnoop", str(view_item.callback_data))
+        asyncio.run(controller.handle_callback(_Query(view_item.callback_data, message), _Types))
+        self.assertEqual(len(message.photos), 2)
+
+    def test_persona_setting_input_uses_one_r18_cancel_action(self):
+        def dispatch(_user_id, action, _payload):
+            if action == "profile.get":
+                return {"id": "persona-a", "name": "科技观察员", "content": "关注科技"}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        message = _Message()
+
+        for callback, expected_parent in (
+            ("tt:profilename", "tt:pmod:settings"),
+            ("tt:style", "tt:pmod:settings"),
+            ("tt:bio", "tt:profile"),
+            ("tt:profileai", "tt:profile"),
+            ("tt:pthreads", "tt:psettings:accounts"),
+        ):
+            asyncio.run(controller.handle_callback(_Query(callback, message), _Types))
+            buttons = [
+                button
+                for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+            ]
+            self.assertEqual([(button.text, button.callback_data) for button in buttons], [
+                ("❌ 取消", expected_parent),
+            ])
+            self.assertNotIn("tt:stepcancel", {button.callback_data for button in buttons})
 
     def test_generation_resumes_after_persona_and_confirms_before_enqueue(self):
         calls = []
