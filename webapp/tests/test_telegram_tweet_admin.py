@@ -77,6 +77,8 @@ class _Message:
         self.answers = []
         self.edits = []
         self.photos = []
+        self.media_edits = []
+        self.caption_edits = []
         self.bot = SimpleNamespace()
 
     async def answer(self, text, **kwargs):
@@ -87,6 +89,12 @@ class _Message:
 
     async def answer_photo(self, photo, **kwargs):
         self.photos.append((photo, kwargs))
+
+    async def edit_media(self, media, **kwargs):
+        self.media_edits.append((media, kwargs))
+
+    async def edit_caption(self, caption, **kwargs):
+        self.caption_edits.append((caption, kwargs))
 
 
 class _PhotoMessage(_Message):
@@ -1436,11 +1444,12 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:pimgview", message), _Types))
         legacy_preview_callbacks = {
             button.callback_data
-            for row in message.photos[-1][1]["reply_markup"].inline_keyboard
+            for row in message.media_edits[-1][1]["reply_markup"].inline_keyboard
             for button in row
             if getattr(button, "callback_data", None)
         }
         self.assertIn("tt:pmod:settings", legacy_preview_callbacks)
+        self.assertEqual(message.photos, [])
 
         asyncio.run(controller.handle_callback(_Query("tt:personaimage", message), _Types))
         gallery_buttons = [
@@ -1452,10 +1461,10 @@ class TelegramTweetAdminTests(unittest.TestCase):
         generate_item = next(button for button in gallery_buttons if button.text == "🚀 直接生成")
         self.assertNotIn("pimgnoop", str(view_item.callback_data))
         asyncio.run(controller.handle_callback(_Query(view_item.callback_data, message), _Types))
-        self.assertEqual(len(message.photos), 2)
+        self.assertEqual(len(message.media_edits), 2)
         preview_buttons = {
             str(button.text): button.callback_data
-            for row in message.photos[-1][1]["reply_markup"].inline_keyboard
+            for row in message.media_edits[-1][1]["reply_markup"].inline_keyboard
             for button in row
             if getattr(button, "callback_data", None)
         }
@@ -1466,19 +1475,22 @@ class TelegramTweetAdminTests(unittest.TestCase):
         photo_message = _PhotoMessage()
         photo_query = _Query(return_to_gallery, photo_message)
         asyncio.run(controller.handle_callback(photo_query, _Types))
-        self.assertIn("人设图与图库", photo_message.answers[-1][0])
+        self.assertIn("人设图与图库", photo_message.caption_edits[-1][0])
+        self.assertEqual(photo_message.answers, [])
         self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in photo_query.answers))
 
         replace_message = _PhotoMessage()
         replace_query = _Query(preview_buttons["替换"], replace_message)
         asyncio.run(controller.handle_callback(replace_query, _Types))
-        self.assertIn("替换图片", replace_message.answers[-1][0])
+        self.assertIn("替换图片", replace_message.caption_edits[-1][0])
+        self.assertEqual(replace_message.answers, [])
         self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in replace_query.answers))
 
         delete_message = _PhotoMessage()
         delete_query = _Query(preview_buttons["删除"], delete_message)
         asyncio.run(controller.handle_callback(delete_query, _Types))
-        self.assertIn("确认删除这张人设图", delete_message.answers[-1][0])
+        self.assertIn("确认删除这张人设图", delete_message.caption_edits[-1][0])
+        self.assertEqual(delete_message.answers, [])
         self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in delete_query.answers))
 
         with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):

@@ -3271,7 +3271,7 @@ class NativeTweetBotController:
             raise HTTPException(status_code=404, detail="人设图源文件不存在")
 
         try:
-            from aiogram.types import BufferedInputFile, FSInputFile
+            from aiogram.types import BufferedInputFile, FSInputFile, InputMediaPhoto
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Telegram 图片预览组件不可用") from exc
 
@@ -3332,27 +3332,29 @@ class NativeTweetBotController:
                 ),
             ),
         ]]
-        await query.message.answer_photo(
-            photo=photo,
-            caption=f"👁 当前人设图{reference_text}\n来源：{source}\n时间：{created or '未记录'}",
+        await query.message.edit_media(
+            media=InputMediaPhoto(
+                media=photo,
+                caption=f"👁 当前人设图{reference_text}\n来源：{source}\n时间：{created or '未记录'}",
+            ),
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
     @staticmethod
-    async def _edit_or_answer_callback_text(
+    async def _edit_callback_text(
         query: Any,
         text: str,
         *,
         reply_markup: Any,
     ) -> None:
-        """Render a text page from either a text or media callback message."""
+        """Update a callback page without creating an additional message."""
         message = query.message
         media_only = not getattr(message, "text", None) and any(
             bool(getattr(message, field, None))
             for field in ("photo", "video", "document", "animation")
         )
         if media_only:
-            await message.answer(text, reply_markup=reply_markup)
+            await message.edit_caption(caption=text, reply_markup=reply_markup)
         else:
             await message.edit_text(text, reply_markup=reply_markup)
 
@@ -3504,10 +3506,9 @@ class NativeTweetBotController:
             f"当前选项：{selected_options or '全部自动（保持原有人设生成链路）'}\n"
             f"补充提示词：{supplement_prompt[:220] if supplement_prompt else '未填写'}"
         )
-        # A preview is sent as a photo message.  Telegram does not allow
-        # editMessageText on media-only messages, so the shared renderer
-        # sends the next text page instead of trying an invalid edit.
-        await self._edit_or_answer_callback_text(
+        # A preview is a media message.  Returning keeps the same message and
+        # updates its caption/keyboard instead of consuming another message.
+        await self._edit_callback_text(
             query,
             text,
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -5950,7 +5951,7 @@ class NativeTweetBotController:
                     "persona_image_options": dict(prior_payload.get("persona_image_options") or {}) if isinstance(prior_payload.get("persona_image_options"), dict) else {},
                     "supplement_prompt": str(prior_payload.get("supplement_prompt") or ""),
                 })
-                await self._edit_or_answer_callback_text(
+                await self._edit_callback_text(
                     query,
                     "人设图库 · 替换图片\n"
                     "请发送用于替换的 JPG、PNG、WebP 或 GIF 图片；只替换当前选中的图库记录，其他图片和人设简介保持不变。",
@@ -5992,7 +5993,7 @@ class NativeTweetBotController:
                 )
             elif action == "pimgdeleteconfirm" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pimgdeleteconfirm", parts[2])
-                await self._edit_or_answer_callback_text(
+                await self._edit_callback_text(
                     query,
                     "确认删除这张人设图？如果它是当前参考图，系统会自动切换到最近的剩余图片。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
