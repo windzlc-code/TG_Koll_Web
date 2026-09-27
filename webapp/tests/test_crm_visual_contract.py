@@ -12,7 +12,7 @@ def test_crm_shell_loads_desktop_visual_overrides_after_bundle():
     for shell_path in (STATIC / "crm.html", STATIC / "assets" / "crm" / "index.html"):
         shell = shell_path.read_text(encoding="utf-8")
         bundle_link = 'href="/assets/crm/assets/index-C_WLJXL7.css"'
-        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260927-crm-visual5"'
+        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260927-crm-visual6"'
         assert bundle_link in shell
         assert override_link in shell
         assert shell.index(bundle_link) < shell.index(override_link)
@@ -34,6 +34,8 @@ def test_crm_visual_overrides_are_desktop_scoped_and_use_shared_brand_assets():
     assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
     assert "flex: 0 1 180px" in css
     assert "flex: 0 1 240px" in css
+    assert ".crm-member-platforms, .crm-platform-fieldset" in css
+    assert ".crm-detail-pane > *" in css
     assert "body.crm-page" in css
     assert "@media (max-width:" not in css
 
