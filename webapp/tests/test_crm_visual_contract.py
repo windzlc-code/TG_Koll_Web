@@ -12,7 +12,7 @@ def test_crm_shell_loads_desktop_visual_overrides_after_bundle():
     for shell_path in (STATIC / "crm.html", STATIC / "assets" / "crm" / "index.html"):
         shell = shell_path.read_text(encoding="utf-8")
         bundle_link = 'href="/assets/crm/assets/index-C_WLJXL7.css"'
-        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260927-crm-visual1"'
+        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260927-crm-visual2"'
         assert bundle_link in shell
         assert override_link in shell
         assert shell.index(bundle_link) < shell.index(override_link)
@@ -21,7 +21,7 @@ def test_crm_shell_loads_desktop_visual_overrides_after_bundle():
 def test_crm_visual_overrides_are_desktop_scoped_and_use_shared_brand_assets():
     css = OVERRIDES.read_text(encoding="utf-8")
     assert "@media (min-width: 981px)" in css
-    assert "--crm-sidebar-width: 264px" in css
+    assert "--crm-sidebar-width: 304px" in css
     assert "vecto-logo-ui-icon.png" in css
     assert "max-height: 300px" in css
     assert "body.crm-page" in css
@@ -44,10 +44,12 @@ def test_crm_visual_overrides_keep_desktop_chart_bounded_and_mobile_unchanged():
     css = OVERRIDES.read_text(encoding="utf-8")
     base_css = """
       body.crm-page { --crm-sidebar-width: 188px; font-size: 14px; }
+      * { box-sizing: border-box; }
+      .crm-sidebar { width: var(--crm-sidebar-width); }
       .crm-line-chart { width: 100%; min-height: 180px; }
     """
     fixture = """
-      <aside class="crm-sidebar"><div class="crm-sidebar-head"><div class="crm-monogram">CRM</div><strong>采集工作台</strong></div></aside>
+      <aside class="crm-sidebar"><div class="crm-sidebar-head"><div class="crm-monogram">CRM</div><strong>采集工作台</strong></div><nav class="crm-nav"><button><svg viewBox="0 0 24 24"></svg><span>总览</span></button><button><svg viewBox="0 0 24 24"></svg><span>采集</span></button></nav></aside>
       <main class="crm-main"><svg class="crm-line-chart" viewBox="0 0 720 250"><text x="52" y="30">任务数</text></svg></main>
     """
     with sync_api.sync_playwright() as playwright:
@@ -59,7 +61,17 @@ def test_crm_visual_overrides_keep_desktop_chart_bounded_and_mobile_unchanged():
                 "el => ({sidebar: getComputedStyle(el).getPropertyValue('--crm-sidebar-width').trim(), font: getComputedStyle(el).fontSize})"
             )
             chart = page.locator(".crm-line-chart").bounding_box()
-            assert desktop == {"sidebar": "264px", "font": "15px"}
+            assert desktop == {"sidebar": "304px", "font": "15px"}
+            sidebar = page.locator(".crm-sidebar").bounding_box()
+            logo = page.locator(".crm-monogram").bounding_box()
+            title = page.locator(".crm-sidebar-head strong").evaluate("el => getComputedStyle(el).fontSize")
+            nav_row = page.locator(".crm-nav button").first.bounding_box()
+            nav_text = page.locator(".crm-nav button > span").first.evaluate("el => getComputedStyle(el).fontSize")
+            assert sidebar is not None and sidebar["width"] == 304
+            assert logo is not None and logo["width"] == 42 and logo["height"] == 42
+            assert title == "18px"
+            assert nav_row is not None and nav_row["height"] == 50
+            assert nav_text == "16px"
             assert chart is not None
             assert chart["width"] <= 980.5
             assert chart["height"] <= 300.5
