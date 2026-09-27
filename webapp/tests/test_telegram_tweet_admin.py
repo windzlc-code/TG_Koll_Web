@@ -1479,6 +1479,51 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(photo_message.answers, [])
         self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in photo_query.answers))
 
+        # A Telegram message remains a photo message after its caption is
+        # changed back to the gallery.  Returning from that gallery must keep
+        # editing the caption instead of calling editMessageText, which the Bot
+        # API rejects with "there is no text in the message to edit".
+        gallery_back = next(
+            button.callback_data
+            for row in photo_message.caption_edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if button.callback_data == "tt:pmod:settings"
+        )
+        settings_query = _Query(gallery_back, photo_message)
+        asyncio.run(controller.handle_callback(settings_query, _Types))
+        self.assertIn("⚙️ 人设设置", photo_message.caption_edits[-1][0])
+        self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in settings_query.answers))
+
+        # Every visible Settings action can be pressed while the same Telegram
+        # message is still a photo.  They must all use the shared media-aware
+        # renderer; otherwise one forgotten edit_text call reintroduces the
+        # production Bad Request on that individual button.
+        settings_callbacks = {
+            button.callback_data
+            for row in photo_message.caption_edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        for callback_data in {
+            "tt:profilename",
+            "tt:style",
+            "tt:profile",
+            "tt:plinks",
+            "tt:persona_accounts",
+            "tt:personaimage",
+            "tt:psettings:maintenance",
+        }:
+            self.assertIn(callback_data, settings_callbacks)
+            save_state(101, selected_persona_id="persona-a", mode="", payload={})
+            action_message = _PhotoMessage()
+            action_query = _Query(callback_data, action_message)
+            asyncio.run(controller.handle_callback(action_query, _Types))
+            self.assertTrue(action_message.caption_edits, callback_data)
+            self.assertFalse(
+                any(kwargs.get("show_alert") for _text, kwargs in action_query.answers),
+                callback_data,
+            )
+
         replace_message = _PhotoMessage()
         replace_query = _Query(preview_buttons["替换"], replace_message)
         asyncio.run(controller.handle_callback(replace_query, _Types))

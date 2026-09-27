@@ -1446,7 +1446,7 @@ class NativeTweetBotController:
             # one-button “选择生成方式” intermediate page.
             await self._render_persona_module(query, types, member, "create")
             return
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             "✍️ 新建推文\n\n"
             "请选择本次生成方式；选择后会按步骤逐项引导，确认前不会提交任务。\n\n"
             "普通人设可从文字生成、配图流程、自定义素材或热点创作进入。",
@@ -1592,7 +1592,7 @@ class NativeTweetBotController:
             return
         save_state(chat_id, mode="generate_count", payload=payload)
         mode_label = "文字＋配图" if generation_mode == "media" else "只生成推文"
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"AI 生成推文（{mode_label}）· 第 1/3 步\n"
             "请选择本次生成数量；数量只决定要创建几篇草稿，不会立即发布。\n"
             "下一步还会设置每篇字数，最后填写主题并进入统一确认页。",
@@ -1618,7 +1618,7 @@ class NativeTweetBotController:
         save_state(chat_id, mode="generate_count", payload=dict(payload))
         prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
         back_callback, back_text = self._generation_count_navigation(payload)
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             prefix
             + f"AI 生成推文（{mode_label}）· 第 2 步\n"
             "请选择或输入本次生成数量；数量只决定要创建几篇草稿，不会立即发布。\n"
@@ -1648,7 +1648,7 @@ class NativeTweetBotController:
         prompt_step = "第 4 步" if is_media else "第 3 步"
         prompt_back_text = "返回配图比例" if is_media else "返回生成数量"
         prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             prefix
             + f"AI 生成推文 · {prompt_step}\n"
             + f"生成方式：{mode_label} · 数量：{count} 篇\n"
@@ -1677,7 +1677,7 @@ class NativeTweetBotController:
         count = int(payload.get("count") or 3)
         prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
         prompt_note = "已选择让 AI 自动生成提示词。\n" if not str(payload.get("prompt") or "").strip() else ""
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             prefix
             + "AI 生成推文 · 第 4 步\n"
             + f"数量：{count} 篇\n"
@@ -1704,7 +1704,7 @@ class NativeTweetBotController:
     ) -> None:
         chat_id = int(query.message.chat.id)
         save_state(chat_id, mode="generate_ratio", payload=dict(payload))
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             "AI 生成推文（文字＋配图）· 第 3 步\n"
             "⭐ 请选择免费配图画面比例 ⭐\n"
             f"数量：{int(payload.get('count') or 3)} 篇\n\n"
@@ -1741,7 +1741,7 @@ class NativeTweetBotController:
             callback_data="tt:pmod:create",
         )])
         rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             "热点创作 · 第 1/2 步\n"
             "请发送热点主题或关键词；系统会结合当前人设生成可选候选。\n"
             "收到后先展示主题确认页，任务完成后再由你选择保存或改写，不会自动发布。",
@@ -1759,7 +1759,7 @@ class NativeTweetBotController:
         state = load_state(chat_id)
         persona_id = str(state.get("selected_persona_id") or "").strip()
         save_state(chat_id, mode="draft_new", payload={"creation_mode": "custom"})
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             "🧩 自订新建推文（自定义新建 · 第 1/2 步）\n\n"
             "目前步骤：等待推文内容\n\n"
             "请直接发送以下任一内容：\n"
@@ -1913,7 +1913,7 @@ class NativeTweetBotController:
         text, markup = await self._persona_list_payload(
             types, member, int(query.message.chat.id), page,
         )
-        await query.message.edit_text(text, reply_markup=markup)
+        await self._edit_callback_text(query, text, reply_markup=markup)
 
     async def _persona_management(
         self,
@@ -1936,7 +1936,7 @@ class NativeTweetBotController:
             [button(text="🔗 复制公开人设", callback_data="tt:persona_copy_new")],
             [button(text=_back_label("返回人设列表"), callback_data=f"tt:personas:{max(0, int(page or 0))}")],
         ]
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             "人设管理\n\n"
             "新建或复制人设资料；选择具体人设后，再进入推文生成、内容管理、发布和设置。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -2135,7 +2135,7 @@ class NativeTweetBotController:
         page: int = 0,
     ) -> None:
         persona_id = str(persona.get("id") or "")
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             self._persona_home_text(persona),
             reply_markup=self._persona_home_markup(types, chat_id, persona_id, page),
         )
@@ -2173,7 +2173,7 @@ class NativeTweetBotController:
         )
         if str(notice or "").strip():
             text = f"{str(notice).strip()}\n\n{text}"
-        await query.message.edit_text(text, reply_markup=markup)
+        await self._edit_callback_text(query, text, reply_markup=markup)
 
     async def _persona_groups(self, query: Any, types: Any, member: dict[str, Any], page: int = 0) -> None:
         """Render the same owner-scoped persona groups exposed by the Web UI."""
@@ -2219,7 +2219,7 @@ class NativeTweetBotController:
             f"人设分组（{len(groups)}）\n第 {safe_page + 1}/{total_pages}\n"
             if groups else "人设分组\n暂无分组"
         )
-        await query.message.edit_text(text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows))
+        await self._edit_callback_text(query, text, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows))
 
     async def _persona_group_detail(
         self,
@@ -2303,7 +2303,7 @@ class NativeTweetBotController:
             persona_names.get(persona_id, "未命名人设")
             for persona_id in visible_member_ids
         ) or "暂无成员"
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"人设分组：{str(group.get('name') or '未命名分组')}\n\n"
             f"成员（{len(member_ids)}，第 {safe_page + 1}/{total_pages} 页）：{members_text}\n\n"
             "点击成员可移出分组；“添加人设”只会调整分组关系，不会删除人设本身。\n"
@@ -2364,7 +2364,7 @@ class NativeTweetBotController:
             "page": max(0, int(detail_page or 0)),
             "groups_page": max(0, int(groups_page or 0)),
         }))])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"添加人设到分组（第 {safe_page + 1}/{total_pages} 页）\n"
             "请选择要加入当前分组的人设；选择后按 Web 端规则调整分组归属，不会删除人设资料。\n"
             "没有可选人设时，请先返回创建人设或检查已有分组关系。",
@@ -2404,7 +2404,7 @@ class NativeTweetBotController:
         ]
         rows.extend(nav)
         rows.append(self._persona_module_back_row(types, chat_id, persona_id, "settings"))
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             (
                 f"请选择要加入的人设分组（第 {safe_page + 1}/{total_pages} 页，共 {len(groups)} 个）。\n"
                 "选择后会更新当前人设的分组归属；若已有其他分组，后端按 Web 端规则处理关系。"
@@ -2708,7 +2708,7 @@ class NativeTweetBotController:
         ):
             text = "推文工作台账号管理只支持与 Bot 私聊使用。"
             if edit_message and getattr(message, "edit_text", None) is not None:
-                await message.edit_text(text)
+                await self._edit_message_text(message, text)
             else:
                 await message.answer(text)
             return
@@ -2725,7 +2725,7 @@ class NativeTweetBotController:
                 text = f"账号管理暂时无法打开：{_error_text(exc)}"
                 markup = self._binding_markup(types, chat_id)
         if edit_message and getattr(message, "edit_text", None) is not None:
-            await message.edit_text(text, reply_markup=markup)
+            await self._edit_message_text(message, text, reply_markup=markup)
         else:
             await message.answer(text, reply_markup=markup)
 
@@ -2901,7 +2901,7 @@ class NativeTweetBotController:
                 "return_callback": str(return_callback or "tt:platformaccounts"),
             }),
         )])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"平台账号绑定人设 · 第 {page + 1}/{total_pages} 步\n"
             f"请选择要绑定的人设（共 {len(personas)} 个）。\n\n"
             "同一平台同一人设只保留一个账号；确认绑定后，原有同平台账号会按后端规则解绑。"
@@ -3118,7 +3118,7 @@ class NativeTweetBotController:
             f"{'收藏' if source == 'favorites' else '草稿'}（{len(posts)}，第 {page + 1}/{total_pages} 页）\n"
             if posts else f"当前人设暂无{'收藏' if source == 'favorites' else '草稿'}。"
         )
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"{intro}\n\n{list_text}" if intro else list_text,
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
@@ -3217,7 +3217,7 @@ class NativeTweetBotController:
             f"数量 {payload['image_count']} · 比例 {payload['aspect_ratio']} · 构图 {payload['image_mode']} · "
             f"风格 {style_labels.get(payload['image_render_style'], payload['image_render_style'])}"
         )
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"{notice.strip()}\n\n" if notice.strip() else ""
             f"推文配图设置\n"
             "先选择数量、比例、构图和渲染风格。自动比例会结合正文主体、人物/静物、动作和环境综合判断；手动比例会覆盖本次自动判断。\n"
@@ -3341,22 +3341,51 @@ class NativeTweetBotController:
         )
 
     @staticmethod
-    async def _edit_callback_text(
-        query: Any,
+    async def _edit_message_text(
+        message: Any,
         text: str,
         *,
-        reply_markup: Any,
+        reply_markup: Any = None,
+        **kwargs: Any,
     ) -> None:
-        """Update a callback page without creating an additional message."""
-        message = query.message
+        """Update a Bot message in place, including a former photo preview.
+
+        Telegram can turn a text message into a media message with
+        ``editMessageMedia``, but it cannot turn that media message back into a
+        plain text message.  Every later callback must therefore edit the
+        caption while the message still carries media.  Keeping this decision
+        in one renderer prevents individual return/action buttons from falling
+        back to the invalid ``editMessageText`` method.
+        """
         media_only = not getattr(message, "text", None) and any(
             bool(getattr(message, field, None))
             for field in ("photo", "video", "document", "animation")
         )
         if media_only:
-            await message.edit_caption(caption=text, reply_markup=reply_markup)
+            # Telegram captions are limited to 1024 characters.  Keep the
+            # controls usable if a text-heavy detail page is reached after an
+            # image preview instead of surfacing another Bad Request.
+            caption = str(text or "")
+            if len(caption) > 1024:
+                caption = caption[:1018].rstrip() + "\n…"
+            await message.edit_caption(caption=caption, reply_markup=reply_markup, **kwargs)
         else:
-            await message.edit_text(text, reply_markup=reply_markup)
+            await message.edit_text(text, reply_markup=reply_markup, **kwargs)
+
+    @staticmethod
+    async def _edit_callback_text(
+        query: Any,
+        text: str,
+        *,
+        reply_markup: Any = None,
+        **kwargs: Any,
+    ) -> None:
+        await NativeTweetBotController._edit_message_text(
+            query.message,
+            text,
+            reply_markup=reply_markup,
+            **kwargs,
+        )
 
     async def _render_persona_image_options(
         self,
@@ -3548,7 +3577,7 @@ class NativeTweetBotController:
                 for key, caption in values[index:index + 2]
             ])
         rows.append([types.InlineKeyboardButton(text=_back_label("返回人设图设置"), callback_data=callback_token(chat_id, "personaimage", {"persona_id": persona_id, "page": page}))])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"人设图设置 · {label}\n"
             f"当前：{next((caption for key, caption in values if key == current), '自动')}\n"
             "请选择一个值；选择“自动”只影响这一项，其余未定义项保持原有人设简介。\n"
@@ -3618,7 +3647,7 @@ class NativeTweetBotController:
         ])
         content = str(post.get("content") or "").strip()
         prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"{prefix}{str(post.get('title') or '推文')[:100]}\n\n{content[:3000]}\n\n"
             f"媒体：{len(media)} 项\n\n"
             "请选择下一步：编辑正文、管理媒体、生成配图，或选择账号后立即/定时发布。\n"
@@ -3697,7 +3726,7 @@ class NativeTweetBotController:
                 )
             ),
         )])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"{'定时' if scheduled else '立即'}发布 · 选择账号\n"
             f"当前人设已绑定 {len(eligible)} 个可用账号，第 {page + 1}/{total_pages} 页。\n"
             "账号选择后还会展示平台、正文和时间的最终确认；提交时后端会再次校验平台授权状态。没有账号请先完成平台授权和人设绑定。",
@@ -3819,7 +3848,7 @@ class NativeTweetBotController:
             filter_suffix += f" · 平台 {platform_filter}"
         if persona_filter:
             filter_suffix += f" · 人设 {persona_filter[:18]}"
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             (f"{filter_label}任务{filter_suffix}（{len(tasks)} 条）\n第 {page + 1}/{total_pages} 页\n"
              if tasks else f"暂无{filter_label}任务{filter_suffix}。\n"
              ),
@@ -3897,7 +3926,7 @@ class NativeTweetBotController:
         else:
             text = title + f"\n第 {page + 1}/{total_pages} 页"
         rows.append([types.InlineKeyboardButton(text=_back_label("返回排程状态"), callback_data="tt:taskmenu")])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             text,
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
@@ -3957,7 +3986,7 @@ class NativeTweetBotController:
             )])
         rows.append([types.InlineKeyboardButton(text=_back_label("返回发布管理"), callback_data="tt:pmod:publish")])
         rows.append([types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             "矩阵发布 · 第 1/4 步\n"
             "请选择要发布的人设；可多选，后续再选择内容来源和发布平台。\n"
             "只有拥有草稿或收藏的人设会显示；勾选不会立即提交。\n"
@@ -3974,7 +4003,7 @@ class NativeTweetBotController:
             types.InlineKeyboardButton(text="📝 草稿", callback_data="tt:mxsource:posts"),
             types.InlineKeyboardButton(text="⭐ 收藏", callback_data="tt:mxsource:favorites"),
         ], [types.InlineKeyboardButton(text=_back_label("上一步"), callback_data="tt:matrixback")]]
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             "矩阵发布 · 第 2/4 步\n"
             f"已选择 {len(persona_ids)} 个人设，请选择每个人设要取用的内容来源。\n"
             "草稿是待发布内容；收藏是已保存的参考内容。系统会在下一步检查每个人设是否有可用条目。",
@@ -4018,7 +4047,7 @@ class NativeTweetBotController:
             if platforms
             else "矩阵发布 · 第 3/4 步\n所选人设尚未绑定 Threads 或 Instagram 账号，请先完成账号授权，再返回此步骤。"
         )
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             message,
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
@@ -4061,7 +4090,7 @@ class NativeTweetBotController:
             types.InlineKeyboardButton(text=_back_label("返回确认"), callback_data=callback_token(chat_id, "gdirback", {})),
         ])
         rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             (f"{notice.strip()}\n\n" if notice.strip() else "")
             + "AI 生成推文 · 选择推文方向\n"
             + "方向只作为生成链路的辅助约束；可多选，也可以明确不使用。\n"
@@ -4169,7 +4198,7 @@ class NativeTweetBotController:
         payload: dict[str, Any],
         notice: str = "",
     ) -> None:
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             self._generation_confirmation_text(payload, notice=notice),
             reply_markup=self._generation_confirmation_markup(
                 types, int(query.message.chat.id), payload,
@@ -4304,7 +4333,7 @@ class NativeTweetBotController:
             ),
             callback_data=callback_token(chat_id, "gmemback", {}),
         )])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             (f"{notice.strip()}\n\n" if notice.strip() else "")
             + "🧠 选择人设记忆（本次参考）\n"
             + f"人设：{persona_name or '当前人设'}\n"
@@ -4354,7 +4383,7 @@ class NativeTweetBotController:
             callback_data=callback_token(chat_id, "plinkadd", {"page": safe_page}),
         )])
         rows.append([types.InlineKeyboardButton(text=_back_label("返回人设设置"), callback_data="tt:pmod:settings")])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"链接模板（{len(presets)} 条，第 {safe_page + 1}/{total_pages} 页）\n\n"
             + ("\n".join(
                 f"• {str(item.get('name') or '链接模板')}：{str(item.get('link_url') or '')[:90]}"
@@ -4506,7 +4535,7 @@ class NativeTweetBotController:
             callback_data=callback_token(chat_id, "automationplannew", {"page": safe_page}),
         )])
         rows.append([types.InlineKeyboardButton(text=_back_label("返回排程状态"), callback_data="tt:taskmenu")])
-        await query.message.edit_text(
+        await self._edit_callback_text(query,
             f"自动化计划（{len(plans)} 条）\n第 {safe_page + 1}/{total_pages}\n"
             "计划会按平台账号和人设绑定执行；停止计划不会删除账号。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -4691,16 +4720,16 @@ class NativeTweetBotController:
                     try:
                         page_text, markup = await self._account_management_payload(types, member)
                         prefix = "已返回账号管理。" if data == "tt:accountmenu" else "已取消推文工作台登录。"
-                        await query.message.edit_text(prefix + "\n\n" + page_text, reply_markup=markup)
+                        await self._edit_callback_text(query, prefix + "\n\n" + page_text, reply_markup=markup)
                     except Exception:
                         logger.debug("Unable to render tweet account menu after login callback", exc_info=True)
-                        await query.message.edit_text(
+                        await self._edit_callback_text(query,
                             "已返回账号管理。\n如需继续，请点击下方按钮重新开始。",
                             reply_markup=self._binding_markup(types, chat_id),
                         )
                 else:
                     prefix = "已返回账号管理。" if data == "tt:accountmenu" else "已取消推文工作台登录。"
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         prefix + "\n当前 Telegram 尚未绑定 VECTO 用户，请点击下方按钮打开网页登录授权。",
                         reply_markup=self._binding_markup(types, chat_id),
                     )
@@ -4726,7 +4755,7 @@ class NativeTweetBotController:
                 # workbench controls just like the Video Bot.  The callback
                 # remains usable after a stale prompt without re-running the
                 # full authorization gate; only the cleared state is changed.
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "已取消当前步骤，未提交新的任务或修改。",
                 )
                 await query.message.answer(
@@ -4737,7 +4766,7 @@ class NativeTweetBotController:
                 # Keep the safe escape path for an unbound or expired session:
                 # cancellation must not expose workbench controls and should
                 # leave the user at the self-service login entry point.
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "已取消当前步骤，未提交新的任务或修改。",
                     reply_markup=self._binding_markup(types, chat_id),
                 )
@@ -4797,7 +4826,7 @@ class NativeTweetBotController:
         try:
             if action == "menu":
                 self._clear_pending_state(chat_id)
-                await query.message.edit_text("已返回推文工作台总控菜单。")
+                await self._edit_callback_text(query, "已返回推文工作台总控菜单。")
                 await query.message.answer("请选择总控功能。", reply_markup=self._main_keyboard(types))
             elif action == "stepcancel":
                 # Text/media wizard steps must be cancellable from the
@@ -4805,34 +4834,34 @@ class NativeTweetBotController:
                 # task-stop control: it only clears the pending input state
                 # and never touches an already submitted backend task.
                 self._clear_pending_state(chat_id)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "已取消当前步骤，未提交新的任务或修改。",
                     reply_markup=self._return_keyboard(types),
                 )
             elif action == "help":
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     HELP_TEXT,
                     reply_markup=self._return_keyboard(types),
                 )
             elif action == "taskmenu":
                 self._clear_pending_state(chat_id)
                 status_text, status_markup = await self._task_status_payload(types, member)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     status_text,
                     reply_markup=status_markup,
                 )
             elif action == "accountmenu":
                 self._clear_pending_state(chat_id)
                 page_text, markup = await self._account_management_payload(types, member)
-                await query.message.edit_text(page_text, reply_markup=markup)
+                await self._edit_callback_text(query, page_text, reply_markup=markup)
             elif action == "vectosession":
                 page_text, markup = await self._vecto_session_payload(types, member)
-                await query.message.edit_text(page_text, reply_markup=markup)
+                await self._edit_callback_text(query, page_text, reply_markup=markup)
             elif action == "platformaccounts":
                 page_text, markup = await self._accounts_payload(
                     types, member, return_callback="tt:accountmenu",
                 )
-                await query.message.edit_text(page_text, reply_markup=markup)
+                await self._edit_callback_text(query, page_text, reply_markup=markup)
             elif action == "accountspage" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "accountspage", parts[2])
                 page_text, markup = await self._accounts_payload(
@@ -4843,14 +4872,14 @@ class NativeTweetBotController:
                     operation=str(reference.get("operation") or ""),
                     page=int(reference.get("page") or 0),
                 )
-                await query.message.edit_text(page_text, reply_markup=markup)
+                await self._edit_callback_text(query, page_text, reply_markup=markup)
             elif action == "persona_accounts":
                 state = load_state(chat_id)
                 persona_id = str(state.get("selected_persona_id") or "").strip()
                 page_text, markup = await self._persona_binding_payload(
                     types, member, persona_id, page=0,
                 )
-                await query.message.edit_text(page_text, reply_markup=markup)
+                await self._edit_callback_text(query, page_text, reply_markup=markup)
             elif action == "pabindpage" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pabindpage", parts[2])
                 page_text, markup = await self._persona_binding_payload(
@@ -4859,7 +4888,7 @@ class NativeTweetBotController:
                     str(reference.get("persona_id") or ""),
                     page=int(reference.get("page") or 0),
                 )
-                await query.message.edit_text(page_text, reply_markup=markup)
+                await self._edit_callback_text(query, page_text, reply_markup=markup)
             elif action == "pabind" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pabind", parts[2])
                 account_id = str(reference.get("account_id") or "").strip()
@@ -4889,7 +4918,7 @@ class NativeTweetBotController:
                     })
                     platform = str(account.get("platform") or "未知平台").strip()
                     username = str(account.get("username") or "未设置账号").strip().lstrip("@")
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         f"确认改绑账号？\n\n平台：{platform}\n账号：@{username}\n"
                         f"当前人设：{reference.get('bound_persona_name') or '其他人设'}\n"
                         "确认后该账号将改为绑定当前人设。",
@@ -4908,7 +4937,7 @@ class NativeTweetBotController:
                     page_text, markup = await self._persona_binding_payload(
                         types, member, persona_id, page=int(reference.get("page") or 0),
                     )
-                    await query.message.edit_text("账号已绑定当前人设。\n\n" + page_text, reply_markup=markup)
+                    await self._edit_callback_text(query, "账号已绑定当前人设。\n\n" + page_text, reply_markup=markup)
             elif action == "pabindconfirm" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pabindconfirm", parts[2], consume=True)
                 account_id = str(reference.get("account_id") or "").strip()
@@ -4937,7 +4966,7 @@ class NativeTweetBotController:
                 page_text, markup = await self._persona_binding_payload(
                     types, member, persona_id, page=int(reference.get("page") or 0),
                 )
-                await query.message.edit_text("账号已改绑当前人设。\n\n" + page_text, reply_markup=markup)
+                await self._edit_callback_text(query, "账号已改绑当前人设。\n\n" + page_text, reply_markup=markup)
             elif action == "accounts":
                 # Compatibility for older notifications/bookmarks that still
                 # point at tt:accounts. Platform accounts now have their own
@@ -4945,7 +4974,7 @@ class NativeTweetBotController:
                 page_text, markup = await self._accounts_payload(
                     types, member, return_callback="tt:accountmenu",
                 )
-                await query.message.edit_text(page_text, reply_markup=markup)
+                await self._edit_callback_text(query, page_text, reply_markup=markup)
             elif action == "accountadd":
                 base = str((self.get_runtime() or {}).get("telegram_tweet_public_base_url") or "").rstrip("/")
                 rows = []
@@ -4965,7 +4994,7 @@ class NativeTweetBotController:
                     [types.InlineKeyboardButton(text="📋 查看已授权账号", callback_data="tt:platformaccounts")],
                     [types.InlineKeyboardButton(text=_back_label("返回账号管理"), callback_data="tt:accountmenu")],
                 ])
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "添加平台账号\n\n"
                     "平台账号登录、OAuth 和验证码必须在已有的安全网页/浏览器会话中完成。\n"
                     "完成后返回 Telegram，点击“查看已绑定账号”，再进入账号详情检测登录状态并绑定人设。\n"
@@ -4984,7 +5013,7 @@ class NativeTweetBotController:
                     return_callback="tt:platformaccounts",
                     operation=operation,
                 )
-                await query.message.edit_text(page_text, reply_markup=markup)
+                await self._edit_callback_text(query, page_text, reply_markup=markup)
             elif action == "ac" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "ac", parts[2])
                 account_id = str(reference.get("account_id") or "").strip()
@@ -5007,13 +5036,13 @@ class NativeTweetBotController:
                         persona_filter=str(reference.get("persona_id") or ""),
                         operation=operation,
                     )
-                    await query.message.edit_text(detail_text, reply_markup=detail_markup)
+                    await self._edit_callback_text(query, detail_text, reply_markup=detail_markup)
             elif action == "aclogout":
                 result = await self._call(user_id, "auth.logout", {"chat_id": chat_id})
                 self._clear_chat_login(chat_id)
                 revoked = int(result.get("revoked_sessions") or 0) if isinstance(result, dict) else 0
                 markup = self._binding_markup(types, chat_id)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "VECTO 网页账号已退出。\n"
                     f"已撤销 {revoked} 个登录会话；Telegram 推文工作台也已停止使用。\n"
                     "如需继续，请在本私聊中重新登录并绑定。",
@@ -5045,7 +5074,7 @@ class NativeTweetBotController:
                     persona_filter=str(reference.get("persona_filter") or ""),
                     operation=str(reference.get("operation") or ""),
                 )
-                await query.message.edit_text(message_text + "\n\n" + detail_text, reply_markup=detail_markup)
+                await self._edit_callback_text(query, message_text + "\n\n" + detail_text, reply_markup=detail_markup)
             elif action == "acbind" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "acbind", parts[2])
                 account_id = str(reference.get("account_id") or "").strip()
@@ -5098,7 +5127,7 @@ class NativeTweetBotController:
                     persona_filter=str(reference.get("persona_filter") or ""),
                     operation=str(reference.get("operation") or ""),
                 )
-                await query.message.edit_text("人设绑定已更新。\n\n" + detail_text, reply_markup=detail_markup)
+                await self._edit_callback_text(query, "人设绑定已更新。\n\n" + detail_text, reply_markup=detail_markup)
             elif action == "acunbind" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "acunbind", parts[2], consume=True)
                 account_id = str(reference.get("account_id") or "").strip()
@@ -5111,7 +5140,7 @@ class NativeTweetBotController:
                     operation="unbind",
                     page=int(reference.get("page") or 0),
                 )
-                await query.message.edit_text("人设已解绑，账号资料仍保留。\n\n" + page_text, reply_markup=markup)
+                await self._edit_callback_text(query, "人设已解绑，账号资料仍保留。\n\n" + page_text, reply_markup=markup)
             elif action == "acremove" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "acremove", parts[2])
                 account_id = str(reference.get("account_id") or "").strip()
@@ -5123,7 +5152,7 @@ class NativeTweetBotController:
                     "return_callback": str(reference.get("return_callback") or "tt:platformaccounts"),
                 }
                 confirm_token = callback_token(chat_id, "acremoveconfirm", remove_context)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "确认移除账号？\n\n这会停用账号、取消进行中的自动化任务并删除账号记录；如果只是更换人设，请选择“解绑人设”。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(text="确认移除", callback_data=confirm_token)
@@ -5140,7 +5169,7 @@ class NativeTweetBotController:
                 result = await self._call(user_id, "accounts.disable", {"account_id": account_id})
                 deleted = int(result.get("deleted") or 0) if isinstance(result, dict) else 0
                 audit_action(chat_id, user_id, "accounts.disable", status="success", resource_type="account", resource_id=account_id)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "账号已移除。" if deleted else "账号已停用或已不存在。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(
@@ -5207,7 +5236,7 @@ class NativeTweetBotController:
                     if state.get("selected_persona_id")
                     else "tt:personamanage"
                 )
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "Telegram 版已移除人设分组功能。\n"
                     "请返回人设设置继续管理资料、图库、平台账号或数据刷新。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
@@ -5228,7 +5257,7 @@ class NativeTweetBotController:
                 )
             elif action == "groupnew":
                 save_state(chat_id, mode="persona_group_create", payload={})
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "人设分组 · 新建\n"
                     "请发送分组名称；分组只用于整理人设、筛选和矩阵发布，不会复制或删除人设资料。\n"
                 )
@@ -5278,7 +5307,7 @@ class NativeTweetBotController:
                     "group_id": str(reference.get("group_id") or ""),
                     "persona_id": str(reference.get("persona_id") or ""),
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "人设已加入分组。\n"
                     "分组关系已更新，人设正文、图库、账号绑定和发布历史不受影响。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
@@ -5292,13 +5321,13 @@ class NativeTweetBotController:
                     "detail_page": int(reference.get("detail_page") or 0),
                     "groups_page": int(reference.get("groups_page") or 0),
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "人设分组 · 重命名\n"
                     "请发送新的分组名称；只修改分组标题，不会改变组内人设。\n"
                 )
             elif action == "groupdeleteask" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "groupdeleteask", parts[2])
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "确认删除这个人设分组？组内人设不会被删除，只会解除分组关系。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(
@@ -5334,7 +5363,7 @@ class NativeTweetBotController:
                 })
                 profile = result.get("profile") if isinstance(result, dict) and isinstance(result.get("profile"), dict) else {}
                 duplicate_id = str(profile.get("id") or result.get("id") or "")
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"人设已复制：{str(profile.get('name') or '副本人设')}。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(text="打开副本人设", callback_data=callback_token(chat_id, "p", {
@@ -5352,7 +5381,7 @@ class NativeTweetBotController:
                     if reference.get("persona_page") is not None
                     else state_payload.get("persona_list_page") or 0
                 ))
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "确认删除该人设？草稿、收藏、发布历史、人设图库和绑定关系都会一并移除，无法恢复。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(text="确认删除人设", callback_data=callback_token(chat_id, "pdelete", {
@@ -5383,7 +5412,7 @@ class NativeTweetBotController:
                 page_text, markup = await self._persona_binding_payload(
                     types, member, persona_id, page=0,
                 )
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "网页数据会在每次打开时自动同步，无需手动刷新。\n\n" + page_text,
                     reply_markup=markup,
                 )
@@ -5431,7 +5460,7 @@ class NativeTweetBotController:
                     return
                 if resume_action == "draft_new":
                     save_state(chat_id, mode="draft_new", payload={})
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "手工新建草稿 · 输入正文\n请发送草稿正文。",
                         reply_markup=self._step_navigation_markup(
                             types, back_callback="tt:pmod:create", back_text="返回新建推文",
@@ -5479,7 +5508,7 @@ class NativeTweetBotController:
                     page_text, markup = await self._persona_binding_payload(
                         types, member, persona_id, page=0,
                     )
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "账号资料以网页端已授权平台账号为准，每次打开都会读取最新数据。\n\n" + page_text,
                         reply_markup=markup,
                     )
@@ -5496,7 +5525,7 @@ class NativeTweetBotController:
                     if str(key).startswith("last_") or key == "resume_action"
                 }
                 save_state(chat_id, mode="persona_new_name", payload=retained)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "手工新建人设 · 第 1/2 步\n"
                     "请单独发送人设名称。\n"
                     "例如：科技观察员\n"
@@ -5507,7 +5536,7 @@ class NativeTweetBotController:
                 )
             elif action in {"persona_ai_new", "persona_ai_name"}:
                 save_state(chat_id, mode="persona_ai_name", payload={})
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "⭐ 新建人设\n\n"
                     "步骤 1/3：请先输入人设名称。\n\n"
                     "例如：科技观察员",
@@ -5560,7 +5589,7 @@ class NativeTweetBotController:
                     + self._persona_ai_keyword_values(payload.get("ai_selected_hot_keywords"), limit=2)
                 ))[:2]
                 save_state(chat_id, mode="persona_ai_keyword_select", payload=payload)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     self._persona_ai_keywords_text(payload),
                     reply_markup=self._persona_ai_keywords_markup(types, chat_id, payload),
                 )
@@ -5583,7 +5612,7 @@ class NativeTweetBotController:
                     payload["ai_selected_hot_keywords"] = []
                     payload["ai_selected_keywords"] = []
                     save_state(chat_id, mode="persona_ai_keyword_select", payload=payload)
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         self._persona_ai_keywords_text(payload, notice="已清空关键词选择。"),
                         reply_markup=self._persona_ai_keywords_markup(types, chat_id, payload),
                     )
@@ -5591,7 +5620,7 @@ class NativeTweetBotController:
                     save_state(chat_id, mode="persona_ai_prompt", payload={
                         "ai_name": name,
                     })
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "✍️ 新建人设\n\n"
                         f"角色名称：{name[:160]}\n\n"
                         "步骤 2/3：请重新输入人设提示词。\n"
@@ -5619,7 +5648,7 @@ class NativeTweetBotController:
                             selected_regular_keywords=selected_regular,
                             selected_hot_keywords=selected_hot,
                             idempotency_key=str(payload.get("ai_create_idempotency_key") or f"tg:persona-ai-create:{chat_id}:{query.message.message_id}"),
-                            reply=query.message.edit_text,
+                            reply=lambda text, **kwargs: self._edit_callback_text(query, text, **kwargs),
                         )
                     else:
                         await self._finish_persona_ai_create(
@@ -5632,11 +5661,11 @@ class NativeTweetBotController:
                             selected_regular_keywords=[],
                             selected_hot_keywords=[],
                             idempotency_key=str(payload.get("ai_create_idempotency_key") or f"tg:persona-ai-create:{chat_id}:{query.message.message_id}"),
-                            reply=query.message.edit_text,
+                            reply=lambda text, **kwargs: self._edit_callback_text(query, text, **kwargs),
                         )
             elif action == "persona_copy_new":
                 save_state(chat_id, mode="persona_copy_url", payload={})
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "复制公开人设 · 第 1/2 步\n"
                     "请单独发送公开 Threads 或 Instagram 用户主页链接。\n"
                     "收到链接后，下一步可选填写新名称；不填写则沿用公开资料名称。",
@@ -5647,7 +5676,7 @@ class NativeTweetBotController:
             elif action == "personacopyurl" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "personacopyurl", parts[2])
                 save_state(chat_id, mode="persona_copy_url", payload={})
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "复制公开人设 · 第 1/2 步\n"
                     "请单独发送公开 Threads 或 Instagram 用户主页链接。",
                     reply_markup=self._step_navigation_markup(
@@ -5669,7 +5698,7 @@ class NativeTweetBotController:
                     name="",
                     idempotency_key=f"tg:persona-copy-analyze:{chat_id}:{int(query.message.message_id)}",
                     types=types,
-                    reply=query.message.edit_text,
+                    reply=lambda text, **kwargs: self._edit_callback_text(query, text, **kwargs),
                 )
             elif action == "persona_copy_confirm":
                 state = load_state(chat_id)
@@ -5692,7 +5721,7 @@ class NativeTweetBotController:
                 created_name = str((persona or {}).get("name") or name)
                 clear_pending_state(chat_id)
                 save_state(chat_id, selected_persona_id=new_id, payload={})
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"复制人设已创建：{created_name}\n"
                     "已建立独立的人设资料；原公开人设不会被修改。\n"
                     "可以打开副本人设继续完善简介、图库、账号绑定和推文设置。\n"
@@ -5749,7 +5778,7 @@ class NativeTweetBotController:
                     types.InlineKeyboardButton(text="📝 查看草稿", callback_data="tt:drafts:0"),
                     types.InlineKeyboardButton(text="⭐ 查看收藏", callback_data="tt:favorites:0"),
                 ], self._persona_module_back_row(types, chat_id, state["selected_persona_id"], "content")]
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "推文内容",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
@@ -5818,7 +5847,7 @@ class NativeTweetBotController:
                         })
                     ),
                 )])
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"人设图任务已提交：{task_id}\n后台会生成新的图库素材，完成后 Bot 会发送结果；也可先查看任务状态。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
@@ -5904,7 +5933,7 @@ class NativeTweetBotController:
                 payload["persona_id"] = str(reference.get("persona_id") or state["selected_persona_id"])
                 payload["page"] = int(reference.get("page") or 0)
                 save_state(chat_id, selected_persona_id=payload["persona_id"], mode="persona_image_prompt", payload=payload)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "请发送人设图补充提示词。\n"
                     "未填写的选项将继续沿用原有人设简介。",
                     reply_markup=self._step_navigation_markup(
@@ -5927,7 +5956,7 @@ class NativeTweetBotController:
                     "persona_image_options": dict(prior_payload.get("persona_image_options") or {}) if isinstance(prior_payload.get("persona_image_options"), dict) else {},
                     "supplement_prompt": str(prior_payload.get("supplement_prompt") or ""),
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "人设图库 · 上传自定义图\n"
                     "请发送一张图片；支持 JPG、PNG、WebP、GIF。上传后会保存到当前人设图库，可再设置为参考图或头像。\n"
                     "不会覆盖现有图片。",
@@ -6112,7 +6141,7 @@ class NativeTweetBotController:
                 rows.append(self._persona_module_back_row(
                     types, chat_id, persona_id, "publish", page=page,
                 ))
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     (f"发布历史（{len(history)} 条）\n第 {page + 1}/{total_pages} 页"
                      if history else "发布历史\n暂无记录"),
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -6136,7 +6165,7 @@ class NativeTweetBotController:
                         "persona_id": persona_id, "history_id": history_id, "page": history_page,
                     })),
                 ], [types.InlineKeyboardButton(text=_back_label("返回发布历史"), callback_data=f"tt:persona_history:{history_page}")]]
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"发布记录\n\n平台：{record.get('platform') or '—'}\n账号：{record.get('account_username') or record.get('username') or '—'}\n"
                     f"时间：{record.get('published_at') or record.get('captured_at') or '—'}\n\n"
                     f"{content[:2200] or '该记录没有可显示正文。'}\n\n"
@@ -6149,7 +6178,7 @@ class NativeTweetBotController:
                     "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
                     "history_id": str(reference.get("history_id") or ""),
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "发布记录已重新加入草稿。\n"
                     "现在可以打开草稿继续编辑正文、添加媒体、生成配图或重新发布。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
@@ -6169,7 +6198,7 @@ class NativeTweetBotController:
                     "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
                     "history_id": str(reference.get("history_id") or ""),
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "发布记录已删除。\n历史记录已从当前列表移除，不会影响原平台内容。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(
@@ -6187,7 +6216,7 @@ class NativeTweetBotController:
                 })
                 added = int(result.get("added_count") or 0) if isinstance(result, dict) else 0
                 updated = int(result.get("updated_count") or 0) if isinstance(result, dict) else 0
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"已完成发布历史识别：新增 {added} 条，更新 {updated} 条。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(
@@ -6204,7 +6233,7 @@ class NativeTweetBotController:
                     "persona_id": persona_id,
                     "page": page,
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "发布历史识别 · 第 1/2 步\n"
                     "请单独发送已发布帖子链接。\n"
                     "收到链接后，下一步可选补充正文内容。",
@@ -6223,7 +6252,7 @@ class NativeTweetBotController:
                     "persona_id": persona_id,
                     "page": page,
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "发布历史识别 · 第 1/2 步\n请单独发送已发布帖子链接。",
                     reply_markup=self._step_navigation_markup(
                         types,
@@ -6245,7 +6274,7 @@ class NativeTweetBotController:
                     caption="",
                     page=max(0, int(payload.get("page") or 0)),
                     types=types,
-                    reply=query.message.edit_text,
+                    reply=lambda text, **kwargs: self._edit_callback_text(query, text, **kwargs),
                 )
             elif action == "gcount" and len(parts) > 2:
                 state = load_state(chat_id)
@@ -6269,7 +6298,7 @@ class NativeTweetBotController:
                 if parts[2] == "input":
                     save_state(chat_id, mode="generate_count_input", payload=payload)
                     back_callback, back_text = self._generation_count_navigation(payload)
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "AI 生成推文 · 输入数量\n"
                         "请发送 1-5 之间的整数；数量只决定创建几篇草稿，不会立即发布。",
                         reply_markup=self._step_navigation_markup(
@@ -6304,7 +6333,7 @@ class NativeTweetBotController:
                     types.InlineKeyboardButton(text=_back_label("上一步"), callback_data=generation_back),
                     types.InlineKeyboardButton(text="取消", callback_data="tt:menu"),
                 ]]
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"AI 生成推文 · 第 2/3 步\n数量：{count} 篇\n"
                     "请选择每篇目标字数；这只控制生成篇幅，之后仍可返回修改其他参数。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -6381,7 +6410,7 @@ class NativeTweetBotController:
                     },
                 )
                 generation_back = str(state["payload"].get("generation_back") or "tt:generate")
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "AI 生成推文 · 第 3/3 步\n"
                     f"数量：{int(state['payload'].get('count') or 3)} 篇 · 每篇约 {target_words} 字\n"
                     "请发送本次主题或写作要求。\n"
@@ -6405,7 +6434,7 @@ class NativeTweetBotController:
                         callback_data=callback_token(chat_id, "gplatformpick", {"platform": value}),
                     )] for value, label in PERSONA_CONTENT_PLATFORMS]
                     rows.append([types.InlineKeyboardButton(text=_back_label("返回生成确认"), callback_data=callback_token(chat_id, "gplatformback", {}))])
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "AI 生成推文 · 选择目标平台\n"
                         "平台会影响语气、互动方式和生成链路；这里只选择内容目标，不会执行发布。",
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -6422,7 +6451,7 @@ class NativeTweetBotController:
                             for value, label in PERSONA_WRITING_LOCALES[index:index + 2]
                         ])
                     locale_rows.append([types.InlineKeyboardButton(text=_back_label("返回生成确认"), callback_data=callback_token(chat_id, "glocaleback", {}))])
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "AI 生成推文 · 选择语言与地区口吻\n"
                         "生成内容会统一使用所选语言；未修改的人设资料和其他参数会继续保留。",
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=locale_rows),
@@ -6434,7 +6463,7 @@ class NativeTweetBotController:
                         callback_data=callback_token(chat_id, "gslotpick", {"slot": value}),
                     )] for value, label in PERSONA_CONTENT_TIME_SLOTS]
                     rows.append([types.InlineKeyboardButton(text=_back_label("返回生成确认"), callback_data=callback_token(chat_id, "gslotback", {}))])
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "AI 生成推文 · 选择文案时段\n"
                         "时段只作为内容语境提示，当前支持早上、晚上或不指定；不会改变发布时间。",
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -6622,7 +6651,7 @@ class NativeTweetBotController:
                     raise HTTPException(status_code=409, detail="记忆选择已失效，请重新开始")
                 payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
                 save_state(chat_id, mode="generate_memory_custom", payload=payload)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "➕ 添加自定义人设记忆\n\n"
                     "请直接发送要新增的人设记忆内容。\n"
                     "可以是一句设定、一次发布经验、人物偏好、内容方向或避雷要求。\n\n"
@@ -6651,7 +6680,7 @@ class NativeTweetBotController:
                 if not selected:
                     await query.answer("请先勾选要删除的人设记忆", show_alert=True)
                     return
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"🗑 删除已选人设记忆\n\n将删除 {len(selected)} 条记忆。删除后本轮生成不会再引用这些内容。\n\n请确认是否继续？",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(text="✅ 确认删除", callback_data=callback_token(chat_id, "gmemdeleteconfirm", {})),
@@ -6755,7 +6784,7 @@ class NativeTweetBotController:
                     "selected_post_id": str(reference.get("post_id") or ""),
                     "title": str(reference.get("title") or ""),
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "已保留所选推文候选，其他候选已清理。\n现在可以在草稿列表中编辑、配图或发布。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(text="📝 查看推文列表", callback_data=callback_token(chat_id, "gendrafts", {
@@ -6797,7 +6826,7 @@ class NativeTweetBotController:
                         "idempotency_key": f"tg:{chat_id}:{int(query.message.message_id)}",
                     })
                 except Exception as exc:
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         f"生成任务提交失败：{_error_text(exc)}\n参数仍已保留，可重试或修改。"[:3500],
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                             types.InlineKeyboardButton(
@@ -6814,7 +6843,7 @@ class NativeTweetBotController:
                 task_id = str(result.get("task_id") or "")
                 save_state(chat_id, mode="", payload={"last_task_id": task_id})
                 audit_action(chat_id, user_id, "generation.start", status="success", resource_type="task", resource_id=task_id)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"生成任务已提交：{task_id}\n"
                     "后台会按确认页中的数量、平台、语言、时段、方向和人设记忆生成草稿。\n"
                     "完成后 Bot 会返回结果；也可以先在排程状态查看进度。",
@@ -6936,7 +6965,7 @@ class NativeTweetBotController:
             elif action == "imgprompt" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "imgprompt", parts[2])
                 save_state(chat_id, selected_persona_id=str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]), mode="image_prompt", payload=reference)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "推文配图 · 补充提示词\n"
                     "请发送本次图片的局部要求，例如人物动作、镜头距离、背景物件或需要避免的元素。\n"
                     "提示词只追加到当前配图任务，不会修改推文正文或人设简介。",
@@ -6986,7 +7015,7 @@ class NativeTweetBotController:
                         "intent": str(reference.get("intent") or "image"),
                     }),
                 )])
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"推文配图任务已提交：{task_id}\n后台会生成图片预览；完成后可添加到当前推文，也可先查看任务状态。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
@@ -7011,7 +7040,7 @@ class NativeTweetBotController:
                     "replace_existing": bool(reference.get("replace_existing")),
                     "media_indexes": reference.get("media_indexes") if isinstance(reference.get("media_indexes"), list) else [],
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "已将生成图片添加到推文媒体。\n"
                     "当前推文已保留原正文；可以返回详情继续编辑、替换媒体或进入立即/定时发布。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
@@ -7069,7 +7098,7 @@ class NativeTweetBotController:
                     await self._persona_list(query, types, member, 0)
                     return
                 save_state(chat_id, mode="draft_new", payload={})
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "手工新建草稿 · 第 1 步\n"
                     "请发送草稿正文；内容会保存到当前人设，不会自动发布。\n"
                     "提交后可继续添加媒体、生成配图、收藏或发布。",
@@ -7090,7 +7119,7 @@ class NativeTweetBotController:
                         "page": max(0, int(reference.get("page") or 0)),
                         "intent": str(reference.get("intent") or ""),
                     })
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "编辑推文正文\n"
                         "请发送新的完整正文；本次只替换文字，不会删除已有媒体或改变收藏状态。",
                         reply_markup=self._step_navigation_markup(
@@ -7112,7 +7141,7 @@ class NativeTweetBotController:
                         "page": max(0, int(reference.get("page") or 0)),
                         "intent": str(reference.get("intent") or ""),
                     })
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "添加推文媒体\n"
                         "请发送图片、视频或文件；上传成功后可继续添加多个素材。\n"
                         "上传完成后点击下方“完成并返回详情”。",
@@ -7144,7 +7173,7 @@ class NativeTweetBotController:
                         "page": max(0, int(reference.get("page") or 0)),
                         "intent": str(reference.get("intent") or ""),
                     })
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "替换推文媒体\n"
                         "请发送新的图片、视频或文件；只替换当前选中的媒体位置，其他素材保持不变。",
                         reply_markup=self._step_navigation_markup(
@@ -7205,7 +7234,7 @@ class NativeTweetBotController:
                             ),
                         ),
                     ]]
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "删除推文确认\n"
                         "删除后正文、媒体和收藏关系都无法恢复；发布历史不会被回写。\n"
                         "请确认是否继续。",
@@ -7238,7 +7267,7 @@ class NativeTweetBotController:
                         "intent": str(reference.get("intent") or ""),
                     }),
                 )])
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "已加入收藏。" if not bool(result.get("exists") if isinstance(result, dict) else False) else "该推文已在收藏中。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
@@ -7257,7 +7286,7 @@ class NativeTweetBotController:
                         "page": max(0, int(reference.get("page") or 0)),
                         "intent": str(reference.get("intent") or ""),
                     })
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "定时发布 · 设置时间\n"
                         "请输入北京时间 YYYY-MM-DD HH:MM。时间仅决定发布计划，不会修改正文。\n"
                         "下一步会展示平台、账号、正文和计划时间供最终确认。",
@@ -7298,7 +7327,7 @@ class NativeTweetBotController:
                             ),
                         ),
                     ]]
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         f"立即发布 · 最终确认\n"
                         f"平台：{platform.title()}\n"
                         "确认后会将当前正文和媒体提交到该平台发布队列；取消不会修改草稿。\n"
@@ -7333,7 +7362,7 @@ class NativeTweetBotController:
                     try:
                         result = await self._call(user_id, "publish.start", publish_request)
                     except Exception as exc:
-                        await query.message.edit_text(
+                        await self._edit_callback_text(query,
                             f"发布提交失败：{_error_text(exc)}"[:3500],
                             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                                 types.InlineKeyboardButton(
@@ -7379,7 +7408,7 @@ class NativeTweetBotController:
                             }),
                         )])
                     rows.append([types.InlineKeyboardButton(text="继续发布", callback_data="tt:publish_one")])
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         (
                             f"定时发布已入队。\n任务：{task_id or '已创建'}\n"
                             "到达计划时间后由后台执行；可在排程状态查看进度或取消。"
@@ -7416,7 +7445,7 @@ class NativeTweetBotController:
                         "prompt": str(state["payload"].get("prompt") or ""),
                     })
                 except Exception as exc:
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         f"热点任务提交失败：{_error_text(exc)}\n主题仍已保留，可重试或修改。"[:3500],
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                             types.InlineKeyboardButton(
@@ -7449,7 +7478,7 @@ class NativeTweetBotController:
                         }),
                     ),
                 ]]
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"热点任务已提交：{task_id}\n"
                     "后台会结合当前人设整理可用热点候选；完成后只返回候选，不会自动发布。\n"
                     "你可以刷新状态、取消任务，或在完成后选择保存/改写。",
@@ -7473,7 +7502,7 @@ class NativeTweetBotController:
                         chat_id, user_id, "hot.cancel", status="success",
                         resource_type="task", resource_id=task_id,
                     )
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         (
                             "热点任务已取消。\n未生成的候选不会写入草稿，可以返回新建推文重新输入主题。"
                             if result.get("cancelled")
@@ -7524,7 +7553,7 @@ class NativeTweetBotController:
                             text=_back_label("返回新建推文"),
                             callback_data="tt:pmod:create",
                         )])
-                        await query.message.edit_text(
+                        await self._edit_callback_text(query,
                             ("热点候选已完成。选择一条保存为草稿，或先改写后再保存；不会自动发布。"
                              if candidates else "热点任务已完成，但没有可导入候选；可以返回新建推文修改主题后重试。"),
                             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -7544,12 +7573,12 @@ class NativeTweetBotController:
                                 }),
                             ),
                         ]]
-                        await query.message.edit_text(
+                        await self._edit_callback_text(query,
                             f"热点任务进行中：{task_id}\n后台正在整理候选内容；可刷新状态或取消任务。",
                             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                         )
                     else:
-                        await query.message.edit_text(
+                        await self._edit_callback_text(query,
                             f"热点任务 {status}：{str(task.get('error') or '')[:1200]}",
                             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                                 types.InlineKeyboardButton(
@@ -7588,7 +7617,7 @@ class NativeTweetBotController:
                     "last_hot_task_id": task_id,
                     "last_hot_persona_id": persona_id,
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "请发送改写要求；例如：改成更生活化的语气、保留数字但换一个开头。\n"
                     "如果只按当前人设正常改写，请发送 /auto。\n\n"
                     f"当前候选：{source_content[:1800]}",
@@ -7631,7 +7660,7 @@ class NativeTweetBotController:
                     text=_back_label("返回新建推文"),
                     callback_data="tt:pmod:create",
                 )])
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     ("热点候选已完成，选择保存为草稿或先改写；保存后会回到草稿详情。"
                      if candidates else "热点任务已完成，但没有可用候选；请返回新建推文重新输入主题。"),
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -7666,7 +7695,7 @@ class NativeTweetBotController:
                         }),
                     )])
                 rows.append([types.InlineKeyboardButton(text="查看全部草稿", callback_data="tt:drafts:0")])
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "热点内容已保存为草稿。\n"
                     "候选已转为当前人设的可编辑草稿，不会自动发布；可查看详情继续改写、配图或提交发布。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
@@ -7799,7 +7828,7 @@ class NativeTweetBotController:
                 if source_skipped_count:
                     confirmation_text += f"\n其中 {source_skipped_count} 个人设无该来源内容，将自动跳过。"
                 confirmation_text += "\n请核对以上范围；提交后可在“排程状态”查看每个人设对应任务。"
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     confirmation_text,
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
@@ -7837,7 +7866,7 @@ class NativeTweetBotController:
                         "matrix_source_ready_count": len(persona_ids),
                         "matrix_page": max(0, int(load_state(chat_id)["payload"].get("matrix_page") or 0)),
                     })
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         f"矩阵发布提交失败：{_error_text(exc)}"[:3500],
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                             types.InlineKeyboardButton(
@@ -7863,7 +7892,7 @@ class NativeTweetBotController:
                         for item in (errors + skipped)[:5]
                     )
                     audit_action(chat_id, user_id, "publish.matrix", status="failed", detail=detail)
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         f"矩阵发布未入队。{detail or '没有符合条件的草稿或账号。'}"[:3500],
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                             types.InlineKeyboardButton(text="重新选择人设", callback_data="tt:matrix"),
@@ -7872,7 +7901,7 @@ class NativeTweetBotController:
                     )
                 else:
                     audit_action(chat_id, user_id, "publish.matrix", status="success", detail=str(result.get("batch_id") or ""))
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         f"矩阵发布已入队：{result.get('batch_id') or '已创建'}\n"
                         f"已创建 {len(created)} 个任务。\n"
                         "每个人设会按相同来源和平台分别执行；可在排程状态查看单个任务，失败项可单独处理。",
@@ -7902,7 +7931,7 @@ class NativeTweetBotController:
                         "page": plan_page,
                     })),
                 ], [types.InlineKeyboardButton(text=_back_label("返回自动化计划"), callback_data=f"tt:automationplans:{plan_page}")]]
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"自动化计划详情\n\nID：{plan_id}\n"
                     f"平台：{plan.get('platform') or '—'}\n状态：{plan.get('status') or '—'}\n"
                     f"步骤：{int(plan.get('task_count') or 0)}\n下次执行：{plan.get('next_run_at') or '—'}\n\n"
@@ -7919,7 +7948,7 @@ class NativeTweetBotController:
                 else:
                     await self._call(user_id, "automation.plans.delete", {"plan_id": plan_id})
                     notice = "自动化计划已删除。\n计划配置已移除，已经入队的任务不会被这一步自动删除。"
-                await query.message.edit_text(notice, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                await self._edit_callback_text(query, notice, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                     types.InlineKeyboardButton(text=_back_label("返回自动化计划"), callback_data=f"tt:automationplans:{plan_page}"),
                 ]]))
             elif action == "automationplannew":
@@ -7927,7 +7956,7 @@ class NativeTweetBotController:
                 save_state(chat_id, mode="automation_plan_create", payload={
                     "page": max(0, int(reference.get("page") or 0)),
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "请发送自动化计划 JSON：\n"
                     '{"account_id":"账号ID","platform":"instagram","mode":"list",'
                     '"items":[{"task_type":"instagram_warmup","payload":{},"reservation_minutes":0}]}\n'
@@ -8044,7 +8073,7 @@ class NativeTweetBotController:
                 error_text = str(task.get("error") or task.get("message") or "").strip()
                 if error_text:
                     detail_lines.append(error_text[:1500])
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "\n".join(detail_lines),
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
                 )
@@ -8072,7 +8101,7 @@ class NativeTweetBotController:
                         "persona_id": persona_filter,
                         "queue": queue_filter,
                     }) if (platform_filter or persona_filter or queue_filter != "all") else f"tt:tasks:{page}:{status_filter}"
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     str(result.get("message") or "操作已提交"),
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                         types.InlineKeyboardButton(text=_back_label("返回任务"), callback_data=back_data),
@@ -8085,7 +8114,7 @@ class NativeTweetBotController:
                     raise HTTPException(status_code=400, detail="请先选择人设")
                 profile = await self._call(user_id, "profile.get", {"persona_id": persona_id})
                 content = str(profile.get("content") or "").strip()
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "🧾 人设简介\n\n"
                     f"人设：{str(profile.get('name') or '当前人设')}\n"
                     f"当前简介：{content[:1200] or '尚未设置'}\n\n"
@@ -8100,7 +8129,7 @@ class NativeTweetBotController:
                 )
             elif action in {"bio", "style"}:
                 save_state(chat_id, mode="profile_content" if action == "bio" else "profile_style", payload={})
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "人设设置 · " + ("修改简介" if action == "bio" else "修改推文风格") + "\n"
                     "请发送新的完整内容；只更新当前字段，名称、记忆、链接模板、图库和账号绑定保持不变。",
                     reply_markup=self._step_navigation_markup(
@@ -8112,7 +8141,7 @@ class NativeTweetBotController:
                 )
             elif action == "profilename":
                 save_state(chat_id, mode="profile_name", payload={})
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "人设设置 · 修改名称\n"
                     "请发送新的人设名称；只修改显示名称，不会影响简介、推文、图库或绑定账号。",
                     reply_markup=self._step_navigation_markup(
@@ -8122,7 +8151,7 @@ class NativeTweetBotController:
             elif action == "profileai":
                 profile = await self._call(user_id, "profile.get", {"persona_id": load_state(chat_id)["selected_persona_id"]})
                 save_state(chat_id, mode="profile_ai", payload={"name": str(profile.get("name") or "")})
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "请发送希望 AI 优化的人设方向或补充要求。\n"
                     "AI 只会更新简介字段，不会覆盖名称、链接模板或图库。",
                     reply_markup=self._step_navigation_markup(
@@ -8151,7 +8180,7 @@ class NativeTweetBotController:
                 save_state(chat_id, mode="profile_link_name", payload={
                     "page": page,
                 })
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "链接模板 · 第 1/3 步\n"
                     "请单独发送模板名称。\n"
                     "例如：官网\n"
@@ -8167,7 +8196,7 @@ class NativeTweetBotController:
                 reference = resolve_callback_token(chat_id, "plinkname", parts[2])
                 page = max(0, int(reference.get("page") or 0))
                 save_state(chat_id, mode="profile_link_name", payload={"page": page})
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "链接模板 · 第 1/3 步\n"
                     "请单独发送模板名称。\n"
                     "例如：官网",
@@ -8190,7 +8219,7 @@ class NativeTweetBotController:
                     raise HTTPException(status_code=409, detail="模板名称已失效，请重新开始")
                 payload["page"] = page
                 save_state(chat_id, mode="profile_link_url", payload=payload)
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "链接模板 · 第 2/3 步\n"
                     f"模板名称：{name[:80]}\n"
                     "请单独发送完整链接（需以 http:// 或 https:// 开头）。",
@@ -8220,7 +8249,7 @@ class NativeTweetBotController:
                     ending_text="",
                     page=max(0, int(payload.get("page") or 0)),
                     types=types,
-                    reply=query.message.edit_text,
+                    reply=lambda text, **kwargs: self._edit_callback_text(query, text, **kwargs),
                 )
             elif action in {"plinkactivate", "plinkdelete"} and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, action, parts[2], consume=True)
@@ -8252,7 +8281,7 @@ class NativeTweetBotController:
                 page_text, markup = await self._persona_binding_payload(
                     types, member, persona_id, page=0,
                 )
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     "旧的 Threads 人设字段已改为读取网页平台账号，不再要求重复填写用户名。\n\n"
                     + page_text,
                     reply_markup=markup,
@@ -8262,11 +8291,11 @@ class NativeTweetBotController:
                 page_text, markup = await self._accounts_payload(
                     types, member, return_callback="tt:menu",
                 )
-                await query.message.edit_text(page_text, reply_markup=markup)
+                await self._edit_callback_text(query, page_text, reply_markup=markup)
             else:
                 await query.answer("操作已过期，请返回总控菜单", show_alert=True)
                 try:
-                    await query.message.edit_text(
+                    await self._edit_callback_text(query,
                         "操作已过期，请重新从总控菜单进入该功能。",
                         reply_markup=self._return_keyboard(types),
                     )
@@ -8279,7 +8308,7 @@ class NativeTweetBotController:
             audit_action(chat_id, user_id, action or "callback", status="failed", detail=_error_text(exc))
             await query.answer(_error_text(exc)[:180], show_alert=True)
             try:
-                await query.message.edit_text(
+                await self._edit_callback_text(query,
                     f"操作失败：{_error_text(exc)}\n"
                     "当前步骤状态已保留，请点击下方返回或取消。",
                     reply_markup=self._text_error_navigation(types, chat_id, load_state(chat_id)),
