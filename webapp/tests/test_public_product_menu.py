@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 NAVIGATION = (ROOT / "static" / "assets" / "opc" / "site-navigation.js").read_text(encoding="utf-8")
 STYLES = (ROOT / "static" / "assets" / "opc" / "site-navigation.css").read_text(encoding="utf-8")
+SERVER = (ROOT / "server.py").read_text(encoding="utf-8")
 
 
 def test_home_header_exposes_product_menu_with_real_workspace_targets():
@@ -83,3 +84,10 @@ def test_workbench_static_shells_match_hydrated_navigation_before_javascript_run
     pending_rule = pending_rule.split("}", 1)[0]
     assert "visibility: visible" in pending_rule
     assert "pointer-events: auto" in pending_rule
+
+
+def test_product_login_shell_is_not_cached_across_workbench_switches():
+    """The dynamic login shell must not replay an old title bar for five minutes."""
+    cache_branch = SERVER[SERVER.index('if filename in {"index.html"'):]
+    cache_branch = cache_branch.split("else:", 1)[0]
+    assert '"product-login.html"' not in cache_branch

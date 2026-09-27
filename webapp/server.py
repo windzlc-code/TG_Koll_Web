@@ -6229,7 +6229,7 @@ def _html_response_with_versions(filename: str, replacements: dict[str, str] | N
             f"  {fixed_theme_stylesheet}\n  {fixed_theme_bootstrap}\n</head>",
             1,
         )
-    if filename in {"index.html", "pricing.html", "about-vecto.html", "case-studies.html", "product-login.html"}:
+    if filename in {"index.html", "pricing.html", "about-vecto.html", "case-studies.html"}:
         headers = {"Cache-Control": "private, max-age=300, stale-while-revalidate=300"}
     else:
         headers = {
