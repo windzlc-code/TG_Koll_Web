@@ -1290,8 +1290,10 @@ class NativeTweetBotController:
         elif mode in {"profile_style", "profile_name"}:
             back_callback, back_text = "tt:pmod:settings", "返回人设设置"
         elif mode == "profile_memory_create":
-            back_callback = callback_token(chat_id, "pmemories", {"page": page})
-            back_text = "返回人设记忆"
+            # Compatibility for an input prompt that was already open during
+            # deployment.  Persona memory management now belongs to the first
+            # step of Tweet Generation, matching the R18 flow.
+            back_callback, back_text = "tt:pmod:create", "返回新建推文"
         elif mode in {"profile_link_name", "profile_link_create"}:
             back_callback = callback_token(chat_id, "plinks", {"page": page})
             back_text = "返回链接模板"
@@ -1324,6 +1326,7 @@ class NativeTweetBotController:
                 back_callback=back_callback,
                 back_text="❌ 取消" if mode in {
                     "profile_content", "profile_ai", "profile_threads", "profile_style", "profile_name",
+                    "profile_memory_create",
                 } else back_text,
                 include_cancel=mode not in persona_setting_modes,
             )
@@ -2054,12 +2057,24 @@ class NativeTweetBotController:
             ]
             if image_count > 0:
                 settings_rows.append([
-                    button(text="👁 查看人设图", callback_data="tt:pimgview"),
-                    button(text="🔄 重新生成人设图", callback_data="tt:personaimage"),
+                    button(text="👁 查看人设图", callback_data=callback_token(chat_id, "pimgview", {
+                        "persona_id": persona_id,
+                        "page": max(0, int(page or 0)),
+                        "return_to_settings": True,
+                    })),
+                    button(text="🔄 重新生成人设图", callback_data=callback_token(chat_id, "personaimmediate", {
+                        "persona_id": persona_id,
+                        "page": max(0, int(page or 0)),
+                        "return_to_settings": True,
+                    })),
                 ])
             else:
                 settings_rows.append([
-                    button(text="🎨 生成人设图", callback_data="tt:personaimage"),
+                    button(text="🎨 生成人设图", callback_data=callback_token(chat_id, "personaimmediate", {
+                        "persona_id": persona_id,
+                        "page": max(0, int(page or 0)),
+                        "return_to_settings": True,
+                    })),
                 ])
             settings_rows.append(back)
             return (
@@ -2172,6 +2187,7 @@ class NativeTweetBotController:
         types: Any,
         member: dict[str, Any],
         module: str,
+        notice: str = "",
     ) -> None:
         chat_id = int(query.message.chat.id)
         state = load_state(chat_id)
@@ -2196,6 +2212,8 @@ class NativeTweetBotController:
         text, markup = self._persona_module_payload(
             types, chat_id, persona_id, module, page=page, persona=persona,
         )
+        if str(notice or "").strip():
+            text = f"{str(notice).strip()}\n\n{text}"
         await query.message.edit_text(text, reply_markup=markup)
 
     async def _persona_groups(self, query: Any, types: Any, member: dict[str, Any], page: int = 0) -> None:
@@ -3260,6 +3278,7 @@ class NativeTweetBotController:
         persona_id: str,
         image_id: str = "",
         page: int = 0,
+        return_to_settings: bool = False,
     ) -> None:
         """Send a real Telegram preview for the selected/current persona image.
 
@@ -3344,10 +3363,14 @@ class NativeTweetBotController:
             ),
         ], [
             types.InlineKeyboardButton(
-                text=_back_label("返回人设图库"),
-                callback_data=callback_token(chat_id, "personaimage", {
-                    "persona_id": persona_id, "page": max(0, int(page or 0)),
-                }),
+                text=_back_label("返回人设设置" if return_to_settings else "返回人设图库"),
+                callback_data=(
+                    "tt:pmod:settings"
+                    if return_to_settings
+                    else callback_token(chat_id, "personaimage", {
+                        "persona_id": persona_id, "page": max(0, int(page or 0)),
+                    })
+                ),
             ),
         ]]
         await query.message.answer_photo(
@@ -4303,50 +4326,6 @@ class NativeTweetBotController:
             + f"可选记忆：{len(memories)} 条 · 已选：{len(selected_ids)} 条\n"
             + f"第 {safe_page + 1}/{total_pages} 页；最多选择 8 条。\n"
             + ("勾选后，本轮生成会围绕这些记忆自然延展；也可以跳过。" if memories else "当前人设暂无可选记忆，可点击“不指定记忆，继续”。"),
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
-        )
-
-    async def _render_profile_memories(self, query: Any, types: Any, *, page: int = 0) -> None:
-        chat_id = int(query.message.chat.id)
-        member = self._member(chat_id)
-        if not member:
-            raise HTTPException(status_code=401, detail="Telegram 会话未绑定")
-        state = load_state(chat_id)
-        persona_id = str(state["selected_persona_id"] or "").strip()
-        if not persona_id:
-            raise HTTPException(status_code=409, detail="请先选择人设")
-        result = await self._call(int(member["web_user_id"]), "profile.memories", {"persona_id": persona_id})
-        memories = result.get("memories") if isinstance(result, dict) and isinstance(result.get("memories"), list) else []
-        memories = [item for item in memories if isinstance(item, dict)]
-        nav, safe_page, total_pages = _pagination_rows(
-            types,
-            page=page,
-            total_items=len(memories),
-            callback_for_page=lambda target: callback_token(chat_id, "pmemories", {"page": target}),
-        )
-        rows: list[list[Any]] = []
-        start = safe_page * PAGE_SIZE
-        for item in memories[start:start + PAGE_SIZE]:
-            memory_id = str(item.get("id") or "").strip()
-            summary = str(item.get("summary") or "").strip().replace("\n", " ")[:48]
-            if not memory_id:
-                continue
-            rows.append([types.InlineKeyboardButton(
-                text=f"🧠 {summary or '未命名记忆'}",
-                callback_data=callback_token(chat_id, "pmemnoop", {}),
-            ), types.InlineKeyboardButton(
-                text="删除",
-                callback_data=callback_token(chat_id, "pmemdelete", {"memory_id": memory_id, "page": safe_page}),
-            )])
-        rows.extend(nav)
-        rows.append([types.InlineKeyboardButton(
-            text="➕ 新增记忆",
-            callback_data=callback_token(chat_id, "pmemadd", {"page": safe_page}),
-        )])
-        rows.append([types.InlineKeyboardButton(text=_back_label("返回人设设置"), callback_data="tt:pmod:settings")])
-        await query.message.edit_text(
-            f"人设记忆（{len(memories)} 条）\n第 {safe_page + 1}/{total_pages}\n"
-            "生成推文时可将选中的记忆作为上下文，删除只会隐藏该条记忆。",
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
 
@@ -5816,6 +5795,7 @@ class NativeTweetBotController:
                 state = load_state(chat_id)
                 reference = resolve_callback_token(chat_id, "personaimmediate", parts[2], consume=True) if len(parts) > 2 else {}
                 persona_id = str(reference.get("persona_id") or state["selected_persona_id"] or "").strip()
+                return_to_settings = bool(reference.get("return_to_settings"))
                 if not persona_id:
                     raise HTTPException(status_code=409, detail="请先选择人设")
                 options = state["payload"].get("persona_image_options") if isinstance(state.get("payload"), dict) and isinstance(state["payload"].get("persona_image_options"), dict) else {}
@@ -5837,10 +5817,14 @@ class NativeTweetBotController:
                         }),
                     )])
                 rows.append([types.InlineKeyboardButton(
-                    text=_back_label("返回人设图库"),
-                    callback_data=callback_token(chat_id, "personaimage", {
-                        "persona_id": persona_id, "page": max(0, int(reference.get("page") or 0)),
-                    }),
+                    text=_back_label("返回人设设置" if return_to_settings else "返回人设图库"),
+                    callback_data=(
+                        "tt:pmod:settings"
+                        if return_to_settings
+                        else callback_token(chat_id, "personaimage", {
+                            "persona_id": persona_id, "page": max(0, int(reference.get("page") or 0)),
+                        })
+                    ),
                 )])
                 await query.message.edit_text(
                     f"人设图任务已提交：{task_id}\n后台会生成新的图库素材，完成后 Bot 会发送结果；也可先查看任务状态。",
@@ -5850,6 +5834,7 @@ class NativeTweetBotController:
                     query.message.bot, chat_id, user_id, persona_id, task_id, types,
                     page=max(0, int(reference.get("page") or 0)),
                     persona_task=True,
+                    return_to_settings=return_to_settings,
                 ))
             elif action == "pimgview":
                 state = load_state(chat_id)
@@ -5864,6 +5849,11 @@ class NativeTweetBotController:
                     persona_id=persona_id,
                     image_id=str(reference.get("image_id") or "").strip(),
                     page=max(0, int(reference.get("page") or 0)),
+                    # The previous settings page emitted a literal
+                    # ``tt:pimgview`` callback.  Gallery rows have always used
+                    # a token, so a tokenless callback unambiguously returns to
+                    # Settings and remains compatible with already-sent menus.
+                    return_to_settings=(len(parts) <= 2 or bool(reference.get("return_to_settings"))),
                 )
             elif action == "pimgnoop":
                 # Compatibility for buttons sent before real image previews
@@ -8144,33 +8134,19 @@ class NativeTweetBotController:
                         types, back_callback="tt:profile", back_text="❌ 取消", include_cancel=False,
                     ),
                 )
-            elif action == "pmemories":
-                reference = resolve_callback_token(chat_id, "pmemories", parts[2]) if len(parts) > 2 else {}
-                await self._render_profile_memories(query, types, page=int(reference.get("page") or 0))
-            elif action == "pmemnoop":
-                await query.answer("请使用删除按钮管理记忆")
-            elif action == "pmemadd":
-                reference = resolve_callback_token(chat_id, "pmemadd", parts[2]) if len(parts) > 2 else {}
-                save_state(chat_id, mode="profile_memory_create", payload={
-                    "page": max(0, int(reference.get("page") or 0)),
-                })
-                await query.message.edit_text(
-                    "人设记忆 · 新增\n"
-                    "请发送一条可复用的事实、偏好或表达约束；生成推文时可按需勾选，不会自动覆盖简介。",
-                    reply_markup=self._step_navigation_markup(
-                        types,
-                        back_callback=callback_token(chat_id, "pmemories", {"page": max(0, int(reference.get("page") or 0))}),
-                        back_text="返回人设记忆",
-                        include_cancel=False,
-                    ),
+            elif action in {"pmemories", "pmemnoop", "pmemadd", "pmemdelete"}:
+                # Old messages can still contain the former Settings > Persona
+                # Memory callbacks.  Do not revive that retired hierarchy (or
+                # execute a stale destructive delete); guide every legacy
+                # action to the canonical R18 generation entry instead.
+                clear_pending_state(chat_id, retain_keys=("persona_list_page",))
+                await self._render_persona_module(
+                    query,
+                    types,
+                    member,
+                    "create",
+                    notice="人设记忆已移至推文生成：选择生成方式后，第一步即可选择、新增或删除记忆。",
                 )
-            elif action == "pmemdelete" and len(parts) > 2:
-                reference = resolve_callback_token(chat_id, "pmemdelete", parts[2], consume=True)
-                await self._call(user_id, "profile.memory.delete", {
-                    "persona_id": load_state(chat_id)["selected_persona_id"],
-                    "memory_id": str(reference.get("memory_id") or ""),
-                })
-                await self._render_profile_memories(query, types, page=int(reference.get("page") or 0))
             elif action == "plinks":
                 reference = resolve_callback_token(chat_id, "plinks", parts[2]) if len(parts) > 2 else {}
                 await self._render_profile_links(query, types, page=int(reference.get("page") or 0))
@@ -9087,12 +9063,11 @@ class NativeTweetBotController:
                 )
             elif mode == "profile_memory_create":
                 await self._call(user_id, "profile.memory.create", {"persona_id": persona_id, "summary": text[:1000]})
-                memory_page = max(0, int(state["payload"].get("page") or 0))
                 clear_pending_state(chat_id)
-                await message.answer("人设记忆已保存。", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                await message.answer("人设记忆已保存，可在下一次推文生成的第一步选择使用。", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
                     types.InlineKeyboardButton(
-                        text="查看人设记忆",
-                        callback_data=callback_token(chat_id, "pmemories", {"page": memory_page}),
+                        text="进入推文生成",
+                        callback_data="tt:pmod:create",
                     ),
                 ]]))
             elif mode == "profile_link_name":
@@ -9759,6 +9734,7 @@ class NativeTweetBotController:
         page: int = 0,
         intent: str = "image",
         persona_task: bool = False,
+        return_to_settings: bool = False,
     ) -> None:
         """Poll the canonical Web image task and deliver local media previews."""
         for _ in range(240):
@@ -9816,11 +9792,15 @@ class NativeTweetBotController:
                     )])
                 if persona_task:
                     rows.append([types.InlineKeyboardButton(
-                        text="查看人设图库",
-                        callback_data=callback_token(chat_id, "personaimage", {
-                            "persona_id": persona_id,
-                            "page": max(0, int(page or 0)),
-                        }),
+                        text=("返回人设设置" if return_to_settings else "查看人设图库"),
+                        callback_data=(
+                            "tt:pmod:settings"
+                            if return_to_settings
+                            else callback_token(chat_id, "personaimage", {
+                                "persona_id": persona_id,
+                                "page": max(0, int(page or 0)),
+                            })
+                        ),
                     )])
                 rows.append([types.InlineKeyboardButton(
                     text="查看任务",
@@ -9841,11 +9821,21 @@ class NativeTweetBotController:
                         chat_id,
                         f"{'人设图' if persona_task else '推文配图'}任务{status}：{str(task.get('error') or '')[:1200]}",
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(
-                            text=_back_label("返回人设设置") if persona_task else _back_label("返回推文内容"),
-                            callback_data=(callback_token(chat_id, "personaimage", {
-                                "persona_id": persona_id,
-                                "page": max(0, int(page or 0)),
-                            }) if persona_task else "tt:pmod:content"),
+                            text=(
+                                _back_label("返回人设设置" if return_to_settings else "返回人设图库")
+                                if persona_task else _back_label("返回推文内容")
+                            ),
+                            callback_data=(
+                                (
+                                    "tt:pmod:settings"
+                                    if return_to_settings
+                                    else callback_token(chat_id, "personaimage", {
+                                        "persona_id": persona_id,
+                                        "page": max(0, int(page or 0)),
+                                    })
+                                )
+                                if persona_task else "tt:pmod:content"
+                            ),
                         )]]),
                     )
             return
