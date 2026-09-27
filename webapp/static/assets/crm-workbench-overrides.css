@@ -26,7 +26,7 @@
   }
 
   body.crm-page .crm-sidebar-head {
-    grid-template-columns: 42px minmax(0, 1fr) auto;
+    grid-template-columns: 42px minmax(0, 1fr);
     gap: 12px;
     min-height: 42px;
     padding: 0;
@@ -44,25 +44,65 @@
   }
 
   body.crm-page .crm-sidebar-head strong {
+    display: grid;
+    align-content: center;
+    gap: 3px;
+    min-width: 0;
     font-size: 18px;
     font-weight: 850;
+    line-height: 1.2;
+  }
+
+  /* Keep the collection rail's identity block identical to the video rail:
+     title on top, concise product descriptor below. */
+  body.crm-page .crm-sidebar-head strong::after {
+    overflow: hidden;
+    color: var(--crm-muted);
+    content: "Vecto OS 采集与数据素材";
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   body.crm-page .crm-nav {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 0;
-    padding: 0;
+    padding: 12px 0 0;
+    border-top: 1px solid var(--crm-line);
   }
 
   body.crm-page .crm-nav button {
-    grid-template-columns: 28px minmax(0, 1fr);
-    gap: 12px;
-    min-height: 50px;
-    margin-bottom: 8px;
-    padding: 10px 12px;
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 10px;
+    min-height: 44px;
+    margin-bottom: 0;
+    padding: 8px 10px;
+    border-color: transparent;
+    border-bottom-color: var(--crm-line);
+    border-radius: 0;
+  }
+
+  body.crm-page .crm-nav button:first-child {
+    margin-bottom: 4px;
+    border-bottom-color: transparent;
     border-radius: 8px;
   }
 
-  body.crm-page .crm-nav button:last-child { margin-bottom: 0; }
+  body.crm-page .crm-nav button:last-child { border-bottom-color: transparent; }
+
+  body.crm-page .crm-nav button.is-active {
+    color: var(--crm-on-dark);
+    background: var(--crm-accent-strong);
+    border-color: var(--crm-accent-strong);
+  }
+
+  body.crm-page .crm-nav button.is-active::before { display: none; }
+
+  body.crm-page .crm-nav button.is-active > span,
+  body.crm-page .crm-nav button.is-active > svg { color: var(--crm-on-dark); }
 
   body.crm-page .crm-nav button > svg {
     width: 18px;
@@ -71,8 +111,9 @@
   }
 
   body.crm-page .crm-nav button > span {
-    font-size: 14px;
-    font-weight: 750;
+    font-size: 15px;
+    font-weight: 780;
+    line-height: 1.25;
   }
 
   body.crm-page .crm-service-state { margin-right: 0; margin-left: 0; }
