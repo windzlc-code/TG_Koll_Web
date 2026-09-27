@@ -12,7 +12,7 @@ def test_crm_shell_loads_desktop_visual_overrides_after_bundle():
     for shell_path in (STATIC / "crm.html", STATIC / "assets" / "crm" / "index.html"):
         shell = shell_path.read_text(encoding="utf-8")
         bundle_link = 'href="/assets/crm/assets/index-C_WLJXL7.css"'
-        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260927-crm-visual4"'
+        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260927-crm-visual5"'
         assert bundle_link in shell
         assert override_link in shell
         assert shell.index(bundle_link) < shell.index(override_link)
@@ -29,6 +29,11 @@ def test_crm_visual_overrides_are_desktop_scoped_and_use_shared_brand_assets():
     assert "--crm-sidebar-width: 264px" in css
     assert "vecto-logo-ui-icon.png" in css
     assert "max-height: 300px" in css
+    assert "border-bottom: 1px solid var(--crm-line)" in css
+    assert "max-width: 1180px" in css
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in css
+    assert "flex: 0 1 180px" in css
+    assert "flex: 0 1 240px" in css
     assert "body.crm-page" in css
     assert "@media (max-width:" not in css
 
@@ -75,6 +80,7 @@ def test_crm_visual_overrides_keep_desktop_chart_bounded_and_mobile_unchanged():
             nav_text = page.locator(".crm-nav button > span").first.evaluate("el => getComputedStyle(el).fontSize")
             subtitle = page.locator(".crm-sidebar-head strong").evaluate("el => getComputedStyle(el, '::after').content")
             active_background = page.locator(".crm-nav button.is-active").evaluate("el => getComputedStyle(el).backgroundColor")
+            header_border = page.locator(".crm-sidebar-head").evaluate("el => getComputedStyle(el).borderBottomColor")
             assert sidebar is not None
             assert sidebar["x"] == 16 and sidebar["y"] == 84
             assert sidebar["width"] == 264 and sidebar["height"] == 800
@@ -84,6 +90,7 @@ def test_crm_visual_overrides_keep_desktop_chart_bounded_and_mobile_unchanged():
             assert nav_text == "15px"
             assert subtitle == '"Vecto OS 采集与数据素材"'
             assert active_background != "rgba(0, 0, 0, 0)"
+            assert header_border != "rgba(0, 0, 0, 0)"
             main = page.locator(".crm-main").bounding_box()
             assert main is not None and main["x"] == 296
             assert chart is not None

@@ -30,7 +30,8 @@
     gap: 12px;
     min-height: 42px;
     padding: 0;
-    border-bottom: 0;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--crm-line);
   }
 
   body.crm-page .crm-monogram {
@@ -71,7 +72,7 @@
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
     padding: 12px 0 0;
-    border-top: 1px solid var(--crm-line);
+    border-top: 0;
   }
 
   body.crm-page .crm-nav button {
@@ -92,6 +93,13 @@
   }
 
   body.crm-page .crm-nav button:last-child { border-bottom-color: transparent; }
+
+  /* Keep the desktop rail readable like the video/tweet workbenches: the
+     active item is a dark pill, while the remaining items use quiet rules.
+     The header rule above is the only separator immediately below the logo. */
+  body.crm-page .crm-nav button:not(.is-active):not(:last-child) {
+    border-bottom-color: var(--crm-line);
+  }
 
   body.crm-page .crm-nav button.is-active {
     color: var(--crm-on-dark);
@@ -121,6 +129,72 @@
   body.crm-page .crm-main {
     margin-left: calc(var(--crm-sidebar-width) + 32px);
     padding: 16px 16px 32px;
+  }
+
+  /* Desktop content should read as a workbench, not a full-width mobile
+     column stretched across an ultrawide monitor. */
+  body.crm-page :is(
+    .crm-overview-title,
+    .crm-metrics,
+    .crm-overview-grid,
+    .crm-panel,
+    .crm-flow-board,
+    .crm-mix,
+    .crm-module-toolbar,
+    .crm-pipeline,
+    .crm-action-grid,
+    .crm-workspace-tabs,
+    .crm-compact-tabs,
+    .crm-split-workspace
+  ) {
+    max-width: 1180px;
+  }
+
+  /* Segment controls stay compact on desktop. They remain full-width on the
+     mobile breakpoints owned by the bundle. */
+  body.crm-page :is(.crm-workspace-tabs, .crm-compact-tabs) {
+    width: fit-content;
+    max-width: 100%;
+    margin-inline: auto;
+  }
+
+  body.crm-page :is(.crm-workspace-tabs, .crm-compact-tabs) button {
+    flex: 0 1 180px;
+    min-width: 148px;
+  }
+
+  body.crm-page .crm-account-platforms {
+    width: fit-content;
+    max-width: 100%;
+    margin-inline: auto;
+  }
+
+  body.crm-page .crm-account-platforms button {
+    flex: 0 1 240px;
+    min-width: 180px;
+  }
+
+  body.crm-page .crm-account-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  body.crm-page .crm-account-card-actions {
+    grid-auto-columns: max-content;
+    justify-content: start;
+  }
+
+  body.crm-page .crm-account-card-action {
+    width: auto;
+    min-width: 96px;
+  }
+
+  body.crm-page .crm-split-workspace {
+    grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
+  }
+
+  body.crm-page .crm-detail-pane {
+    padding: 16px;
   }
 
   body.crm-page .crm-overview-title h1 {
