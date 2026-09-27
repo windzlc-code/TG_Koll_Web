@@ -854,7 +854,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:pmod:settings", message), _Types))
         self.assertIn("人设设置", message.edits[-1][0])
         self.assertIn("待发布推文：2 篇", message.edits[-1][0])
-        self.assertIn("推文工作台功能已直接列出", message.edits[-1][0])
+        self.assertIn("按业务模块整理", message.edits[-1][0])
         self.assertNotIn("人设记忆", message.edits[-1][0])
         self.assertNotIn("加入分组", message.edits[-1][0])
         settings_markup = message.edits[-1][1]["reply_markup"]
@@ -865,32 +865,41 @@ class TelegramTweetAdminTests(unittest.TestCase):
         settings_labels = {
             str(button.text) for row in settings_markup.inline_keyboard for button in row
         }
+        self.assertEqual(
+            [[str(button.text) for button in row] for row in settings_markup.inline_keyboard[:4]],
+            [
+                ["✏️ 修改名称", "🧵 推文风格"],
+                ["🧾 人设简介", "🔗 链接设置"],
+                ["🔐 账号绑定与数据", "🧑‍🎨 人设图与图库"],
+                ["🛠 复制与删除"],
+            ],
+        )
         self.assertTrue({
-            "✏️ 修改名称", "🧵 推文风格", "🧾 修改简介", "🤖 AI 重写简介",
-            "🔗 链接设置", "🔐 平台账号绑定", "🧵 Threads 人设字段",
-            "🔄 刷新人设数据", "🧑‍🎨 人设图与图库",
-            "📄 复制当前人设", "🗑 删除人设",
+            "✏️ 修改名称", "🧵 推文风格", "🧾 人设简介", "🔗 链接设置",
+            "🔐 账号绑定与数据", "🧑‍🎨 人设图与图库", "🛠 复制与删除",
         }.issubset(settings_labels))
         direct_settings_callbacks = {
-            "tt:profilename", "tt:style", "tt:bio", "tt:profileai",
-            "tt:plinks", "tt:persona_accounts", "tt:pthreads", "tt:personaimage",
+            "tt:profilename", "tt:style", "tt:profile", "tt:plinks",
+            "tt:psettings:accounts", "tt:personaimage", "tt:psettings:maintenance",
         }
         self.assertTrue(direct_settings_callbacks.issubset(settings_callbacks))
-        self.assertTrue(any(item.startswith("tt:prefresh:") for item in settings_callbacks))
-        self.assertTrue(any(item.startswith("tt:pduplicate:") for item in settings_callbacks))
-        self.assertTrue(any(item.startswith("tt:pdeleteask:") for item in settings_callbacks))
-        self.assertNotIn("tt:profile", settings_callbacks)
-        self.assertNotIn("tt:psettings:accounts", settings_callbacks)
-        self.assertNotIn("tt:psettings:maintenance", settings_callbacks)
+        self.assertFalse(any(item.startswith("tt:prefresh:") for item in settings_callbacks))
+        self.assertFalse(any(item.startswith("tt:pduplicate:") for item in settings_callbacks))
+        self.assertFalse(any(item.startswith("tt:pdeleteask:") for item in settings_callbacks))
+        self.assertNotIn("tt:bio", settings_callbacks)
+        self.assertNotIn("tt:profileai", settings_callbacks)
+        self.assertNotIn("tt:persona_accounts", settings_callbacks)
+        self.assertNotIn("tt:pthreads", settings_callbacks)
         self.assertNotIn("tt:pmemories:0", settings_callbacks)
-        self.assertTrue(any(item.startswith("tt:personaimmediate:") for item in settings_callbacks))
+        self.assertFalse(any(item.startswith("tt:personaimmediate:") for item in settings_callbacks))
+        self.assertFalse(any(item.startswith("tt:pimgview:") for item in settings_callbacks))
         self.assertTrue(all(len(row) <= 2 for row in settings_markup.inline_keyboard))
         self.assertFalse(any("group" in item for item in settings_callbacks))
 
-        # Previously sent category callbacks remain safe, but no longer hide
-        # Tweet Workbench functions behind extra account/maintenance pages.
+        # Each module owns its related actions instead of flattening every
+        # operation into the settings home.
         asyncio.run(controller.handle_callback(_Query("tt:psettings:accounts", message), _Types))
-        self.assertIn("推文工作台功能已直接列出", message.edits[-1][0])
+        self.assertIn("账号绑定与数据", message.edits[-1][0])
         account_callbacks = {
             button.callback_data
             for row in message.edits[-1][1]["reply_markup"].inline_keyboard
@@ -907,7 +916,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertIn("tt:pmod:settings", binding_callbacks)
+        self.assertIn("tt:psettings:accounts", binding_callbacks)
         asyncio.run(controller.handle_callback(_Query("tt:pthreads", message), _Types))
         threads_back_callbacks = {
             button.callback_data
@@ -915,10 +924,10 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertIn("tt:pmod:settings", threads_back_callbacks)
+        self.assertIn("tt:psettings:accounts", threads_back_callbacks)
 
         asyncio.run(controller.handle_callback(_Query("tt:psettings:maintenance", message), _Types))
-        self.assertIn("推文工作台功能已直接列出", message.edits[-1][0])
+        self.assertIn("复制与删除", message.edits[-1][0])
         maintenance_callbacks = {
             button.callback_data
             for row in message.edits[-1][1]["reply_markup"].inline_keyboard
@@ -935,12 +944,14 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertIn("tt:pmod:settings", delete_confirm_callbacks)
+        self.assertIn("tt:psettings:maintenance", delete_confirm_callbacks)
 
-        # All old broad-category callbacks converge on the direct settings root.
-        for group in ("profile", "accounts", "media", "maintenance"):
-            asyncio.run(controller.handle_callback(_Query(f"tt:psettings:{group}", message), _Types))
-            self.assertIn("推文工作台功能已直接列出", message.edits[-1][0])
+        # Older profile/media category callbacks remain meaningful: profile
+        # returns to the settings modules, media opens the canonical image flow.
+        asyncio.run(controller.handle_callback(_Query("tt:psettings:profile", message), _Types))
+        self.assertIn("按业务模块整理", message.edits[-1][0])
+        asyncio.run(controller.handle_callback(_Query("tt:psettings:media", message), _Types))
+        self.assertIn("人设图与图库", message.edits[-1][0])
 
         asyncio.run(controller.handle_callback(_Query("tt:profile", message), _Types))
         self.assertIn("人设简介", message.edits[-1][0])
@@ -1359,7 +1370,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(image_calls[0]["persona_image_options"]["digital_human_character_region"], "europe_america")
         self.assertIn("persona_image.list", [action for action, _payload in calls])
 
-    def test_persona_settings_keep_memory_in_generation_and_image_actions_visible(self):
+    def test_persona_settings_nest_memory_and_image_actions_in_owning_flows(self):
         image_path = Path(self.tmpdir.name) / "persona-reference.png"
         image_path.write_bytes(b"persona-preview")
         calls = []
@@ -1399,20 +1410,10 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
         ]
         self.assertFalse(any("人设记忆" in str(button.text) for button in settings_buttons))
-        self.assertTrue(any(button.text == "👁 查看人设图" for button in settings_buttons))
-        self.assertTrue(any(button.text == "🔄 重新生成人设图" for button in settings_buttons))
-
-        view_root = next(button.callback_data for button in settings_buttons if button.text == "👁 查看人设图")
-        asyncio.run(controller.handle_callback(_Query(view_root, message), _Types))
-        self.assertEqual(len(message.photos), 1)
-        self.assertIn("当前人设图", message.photos[-1][1]["caption"])
-        preview_callbacks = {
-            button.callback_data
-            for row in message.photos[-1][1]["reply_markup"].inline_keyboard
-            for button in row
-            if getattr(button, "callback_data", None)
-        }
-        self.assertIn("tt:pmod:settings", preview_callbacks)
+        self.assertTrue(any(button.text == "🧑‍🎨 人设图与图库" for button in settings_buttons))
+        self.assertFalse(any(button.text == "👁 查看人设图" for button in settings_buttons))
+        self.assertFalse(any(button.text == "🔄 重新生成人设图" for button in settings_buttons))
+        self.assertFalse(any(button.text == "🎨 生成人设图" for button in settings_buttons))
 
         # Menus sent by the immediately previous release used a literal
         # callback.  They must keep the same origin-aware return behavior.
@@ -1425,13 +1426,27 @@ class TelegramTweetAdminTests(unittest.TestCase):
         }
         self.assertIn("tt:pmod:settings", legacy_preview_callbacks)
 
-        regenerate = next(
-            button.callback_data for button in settings_buttons
-            if button.text == "🔄 重新生成人设图"
-        )
-        self.assertTrue(str(regenerate).startswith("tt:personaimmediate:"))
+        asyncio.run(controller.handle_callback(_Query("tt:personaimage", message), _Types))
+        gallery_buttons = [
+            button
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        view_item = next(button for button in gallery_buttons if str(button.text).startswith("👁 查看"))
+        generate_item = next(button for button in gallery_buttons if button.text == "🚀 直接生成")
+        self.assertNotIn("pimgnoop", str(view_item.callback_data))
+        asyncio.run(controller.handle_callback(_Query(view_item.callback_data, message), _Types))
+        self.assertEqual(len(message.photos), 2)
+        preview_callbacks = {
+            button.callback_data
+            for row in message.photos[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertTrue(any(str(item).startswith("tt:personaimage:") for item in preview_callbacks))
+
         with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
-            asyncio.run(controller.handle_callback(_Query(regenerate, message), _Types))
+            asyncio.run(controller.handle_callback(_Query(generate_item.callback_data, message), _Types))
         self.assertIn("人设图任务已提交", message.edits[-1][0])
         self.assertIn(("persona_image.generate", {
             "persona_id": "persona-a",
@@ -1441,18 +1456,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
             "mode": "person",
         }), calls)
         generate_return = message.edits[-1][1]["reply_markup"].inline_keyboard[-1][0]
-        self.assertEqual((generate_return.text, generate_return.callback_data), ("◀️ 返回人设设置", "tt:pmod:settings"))
-
-        asyncio.run(controller.handle_callback(_Query("tt:personaimage", message), _Types))
-        gallery_buttons = [
-            button
-            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
-            for button in row
-        ]
-        view_item = next(button for button in gallery_buttons if str(button.text).startswith("👁 查看"))
-        self.assertNotIn("pimgnoop", str(view_item.callback_data))
-        asyncio.run(controller.handle_callback(_Query(view_item.callback_data, message), _Types))
-        self.assertEqual(len(message.photos), 3)
+        self.assertTrue(generate_return.text.endswith("返回人设图库"))
+        self.assertTrue(str(generate_return.callback_data).startswith("tt:personaimage:"))
 
     def test_legacy_persona_memory_callbacks_redirect_to_generation_without_deleting(self):
         calls = []
@@ -1530,7 +1535,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             ("返回人设设置", "tt:pmod:settings"),
         )
 
-    def test_persona_setting_input_returns_to_direct_tweet_settings(self):
+    def test_persona_setting_input_returns_to_its_owning_module(self):
         def dispatch(_user_id, action, _payload):
             if action == "profile.get":
                 return {"id": "persona-a", "name": "科技观察员", "content": "关注科技"}
@@ -1547,9 +1552,9 @@ class TelegramTweetAdminTests(unittest.TestCase):
         for callback, expected_parent in (
             ("tt:profilename", "tt:pmod:settings"),
             ("tt:style", "tt:pmod:settings"),
-            ("tt:bio", "tt:pmod:settings"),
-            ("tt:profileai", "tt:pmod:settings"),
-            ("tt:pthreads", "tt:pmod:settings"),
+            ("tt:bio", "tt:profile"),
+            ("tt:profileai", "tt:profile"),
+            ("tt:pthreads", "tt:psettings:accounts"),
         ):
             asyncio.run(controller.handle_callback(_Query(callback, message), _Types))
             buttons = [
