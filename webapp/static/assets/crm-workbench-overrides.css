@@ -8,32 +8,39 @@
  */
 @media (min-width: 981px) {
   body.crm-page {
-    /* Match the 304px rail used by console/video workbenches. */
-    --crm-sidebar-width: 304px;
-    font-size: 15px;
-    line-height: 1.5;
+    /* Match the effective desktop rail used by console/video workbenches. */
+    --crm-sidebar-width: 264px;
+    font-size: 14px;
+    line-height: 1.45;
   }
 
   body.crm-page .crm-sidebar {
-    box-shadow: 8px 0 24px rgb(16 24 32 / 5%);
+    top: calc(var(--site-header-height, 68px) + 16px);
+    right: auto;
+    bottom: 16px;
+    left: 16px;
+    padding: 16px;
+    border: 1px solid var(--crm-line);
+    border-radius: 8px;
+    box-shadow: var(--crm-shadow);
   }
 
   body.crm-page .crm-sidebar-head {
     grid-template-columns: 42px minmax(0, 1fr) auto;
     gap: 12px;
-    min-height: 74px;
-    padding: 16px;
+    min-height: 42px;
+    padding: 0;
+    border-bottom: 0;
   }
 
   body.crm-page .crm-monogram {
     width: 42px;
     height: 42px;
     color: transparent;
-    background: #071112 url("/assets/opc/vecto-logo-ui-icon.png?v=20260711") center / 32px 32px no-repeat;
-    border: 1px solid rgb(255 255 255 / 18%);
-    border-radius: 8px;
+    background: #071112 url("/assets/opc/vecto-logo-ui-icon.png?v=20260711") center / 34px 34px no-repeat;
+    border: 1px solid #23393a;
+    border-radius: 7px;
     font-size: 0;
-    box-shadow: 0 6px 16px rgb(16 24 32 / 12%);
   }
 
   body.crm-page .crm-sidebar-head strong {
@@ -43,7 +50,7 @@
 
   body.crm-page .crm-nav {
     gap: 0;
-    padding: 16px;
+    padding: 0;
   }
 
   body.crm-page .crm-nav button {
@@ -64,12 +71,15 @@
   }
 
   body.crm-page .crm-nav button > span {
-    font-size: 16px;
+    font-size: 14px;
     font-weight: 750;
   }
 
+  body.crm-page .crm-service-state { margin-right: 0; margin-left: 0; }
+
   body.crm-page .crm-main {
-    padding: 20px clamp(22px, 2.6vw, 40px) 32px;
+    margin-left: calc(var(--crm-sidebar-width) + 32px);
+    padding: 16px 16px 32px;
   }
 
   body.crm-page .crm-overview-title h1 {
