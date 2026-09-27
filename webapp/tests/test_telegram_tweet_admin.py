@@ -854,8 +854,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:pmod:settings", message), _Types))
         self.assertIn("人设设置", message.edits[-1][0])
         self.assertIn("待发布推文：2 篇", message.edits[-1][0])
-        self.assertIn("基础字段可直接修改", message.edits[-1][0])
-        self.assertIn("按用途归类", message.edits[-1][0])
+        self.assertIn("推文工作台功能已直接列出", message.edits[-1][0])
         self.assertNotIn("人设记忆", message.edits[-1][0])
         self.assertNotIn("加入分组", message.edits[-1][0])
         settings_markup = message.edits[-1][1]["reply_markup"]
@@ -863,28 +862,35 @@ class TelegramTweetAdminTests(unittest.TestCase):
             button.callback_data for row in settings_markup.inline_keyboard for button in row
             if getattr(button, "callback_data", None)
         }
-        direct_settings_callbacks = {
-            "tt:profilename", "tt:style", "tt:profile", "tt:plinks",
-            "tt:psettings:accounts", "tt:psettings:maintenance",
+        settings_labels = {
+            str(button.text) for row in settings_markup.inline_keyboard for button in row
         }
-        self.assertEqual(
-            {item for item in settings_callbacks if item in direct_settings_callbacks},
-            direct_settings_callbacks,
-        )
-        self.assertFalse(any(item.startswith("tt:prefresh:") for item in settings_callbacks))
-        self.assertFalse(any(item.startswith("tt:pduplicate:") for item in settings_callbacks))
-        self.assertFalse(any(item.startswith("tt:pdeleteask:") for item in settings_callbacks))
-        self.assertNotIn("tt:bio", settings_callbacks)
-        self.assertNotIn("tt:profileai", settings_callbacks)
-        self.assertNotIn("tt:persona_accounts", settings_callbacks)
-        self.assertNotIn("tt:pthreads", settings_callbacks)
+        self.assertTrue({
+            "✏️ 修改名称", "🧵 推文风格", "🧾 修改简介", "🤖 AI 重写简介",
+            "🔗 链接设置", "🔐 平台账号绑定", "🧵 Threads 人设字段",
+            "🔄 刷新人设数据", "🧑‍🎨 人设图与图库",
+            "📄 复制当前人设", "🗑 删除人设",
+        }.issubset(settings_labels))
+        direct_settings_callbacks = {
+            "tt:profilename", "tt:style", "tt:bio", "tt:profileai",
+            "tt:plinks", "tt:persona_accounts", "tt:pthreads", "tt:personaimage",
+        }
+        self.assertTrue(direct_settings_callbacks.issubset(settings_callbacks))
+        self.assertTrue(any(item.startswith("tt:prefresh:") for item in settings_callbacks))
+        self.assertTrue(any(item.startswith("tt:pduplicate:") for item in settings_callbacks))
+        self.assertTrue(any(item.startswith("tt:pdeleteask:") for item in settings_callbacks))
+        self.assertNotIn("tt:profile", settings_callbacks)
+        self.assertNotIn("tt:psettings:accounts", settings_callbacks)
+        self.assertNotIn("tt:psettings:maintenance", settings_callbacks)
         self.assertNotIn("tt:pmemories:0", settings_callbacks)
         self.assertTrue(any(item.startswith("tt:personaimmediate:") for item in settings_callbacks))
-        self.assertEqual([len(row) for row in settings_markup.inline_keyboard], [2, 2, 2, 1, 1])
+        self.assertTrue(all(len(row) <= 2 for row in settings_markup.inline_keyboard))
         self.assertFalse(any("group" in item for item in settings_callbacks))
 
+        # Previously sent category callbacks remain safe, but no longer hide
+        # Tweet Workbench functions behind extra account/maintenance pages.
         asyncio.run(controller.handle_callback(_Query("tt:psettings:accounts", message), _Types))
-        self.assertIn("账号与数据", message.edits[-1][0])
+        self.assertIn("推文工作台功能已直接列出", message.edits[-1][0])
         account_callbacks = {
             button.callback_data
             for row in message.edits[-1][1]["reply_markup"].inline_keyboard
@@ -894,7 +900,6 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("tt:persona_accounts", account_callbacks)
         self.assertIn("tt:pthreads", account_callbacks)
         self.assertTrue(any(item.startswith("tt:prefresh:") for item in account_callbacks))
-        self.assertIn("tt:pmod:settings", account_callbacks)
         asyncio.run(controller.handle_callback(_Query("tt:persona_accounts", message), _Types))
         binding_callbacks = {
             button.callback_data
@@ -902,7 +907,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertIn("tt:psettings:accounts", binding_callbacks)
+        self.assertIn("tt:pmod:settings", binding_callbacks)
         asyncio.run(controller.handle_callback(_Query("tt:pthreads", message), _Types))
         threads_back_callbacks = {
             button.callback_data
@@ -910,10 +915,10 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertIn("tt:psettings:accounts", threads_back_callbacks)
+        self.assertIn("tt:pmod:settings", threads_back_callbacks)
 
         asyncio.run(controller.handle_callback(_Query("tt:psettings:maintenance", message), _Types))
-        self.assertIn("维护操作", message.edits[-1][0])
+        self.assertIn("推文工作台功能已直接列出", message.edits[-1][0])
         maintenance_callbacks = {
             button.callback_data
             for row in message.edits[-1][1]["reply_markup"].inline_keyboard
@@ -922,7 +927,6 @@ class TelegramTweetAdminTests(unittest.TestCase):
         }
         self.assertTrue(any(item.startswith("tt:pduplicate:") for item in maintenance_callbacks))
         self.assertTrue(any(item.startswith("tt:pdeleteask:") for item in maintenance_callbacks))
-        self.assertIn("tt:pmod:settings", maintenance_callbacks)
         delete_callback = next(item for item in maintenance_callbacks if item.startswith("tt:pdeleteask:"))
         asyncio.run(controller.handle_callback(_Query(delete_callback, message), _Types))
         delete_confirm_callbacks = {
@@ -931,14 +935,12 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertIn("tt:psettings:maintenance", delete_confirm_callbacks)
+        self.assertIn("tt:pmod:settings", delete_confirm_callbacks)
 
-        # Old broad category callbacks remain safe: only coherent account and
-        # maintenance sections stay nested; retired profile/media categories
-        # return to the reorganized settings root.
-        for group in ("profile", "media"):
+        # All old broad-category callbacks converge on the direct settings root.
+        for group in ("profile", "accounts", "media", "maintenance"):
             asyncio.run(controller.handle_callback(_Query(f"tt:psettings:{group}", message), _Types))
-            self.assertIn("基础字段可直接修改", message.edits[-1][0])
+            self.assertIn("推文工作台功能已直接列出", message.edits[-1][0])
 
         asyncio.run(controller.handle_callback(_Query("tt:profile", message), _Types))
         self.assertIn("人设简介", message.edits[-1][0])
@@ -1357,7 +1359,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(image_calls[0]["persona_image_options"]["digital_human_character_region"], "europe_america")
         self.assertIn("persona_image.list", [action for action, _payload in calls])
 
-    def test_persona_settings_match_r18_memory_and_image_placement(self):
+    def test_persona_settings_keep_memory_in_generation_and_image_actions_visible(self):
         image_path = Path(self.tmpdir.name) / "persona-reference.png"
         image_path.write_bytes(b"persona-preview")
         calls = []
@@ -1528,7 +1530,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             ("返回人设设置", "tt:pmod:settings"),
         )
 
-    def test_persona_setting_input_uses_one_r18_cancel_action(self):
+    def test_persona_setting_input_returns_to_direct_tweet_settings(self):
         def dispatch(_user_id, action, _payload):
             if action == "profile.get":
                 return {"id": "persona-a", "name": "科技观察员", "content": "关注科技"}
@@ -1545,9 +1547,9 @@ class TelegramTweetAdminTests(unittest.TestCase):
         for callback, expected_parent in (
             ("tt:profilename", "tt:pmod:settings"),
             ("tt:style", "tt:pmod:settings"),
-            ("tt:bio", "tt:profile"),
-            ("tt:profileai", "tt:profile"),
-            ("tt:pthreads", "tt:psettings:accounts"),
+            ("tt:bio", "tt:pmod:settings"),
+            ("tt:profileai", "tt:pmod:settings"),
+            ("tt:pthreads", "tt:pmod:settings"),
         ):
             asyncio.run(controller.handle_callback(_Query(callback, message), _Types))
             buttons = [
