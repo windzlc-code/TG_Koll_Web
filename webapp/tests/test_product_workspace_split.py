@@ -32,10 +32,10 @@ def test_product_pages_share_vecto_logo_and_keep_independent_shells():
     assert ">采集工作台</a>" not in CONSOLE
     assert "推文工作台" in CONSOLE
     video_header = VIDEO.split("<header", 1)[1].split("</header>", 1)[0]
-    assert "推文工作台" not in video_header
-    assert 'data-site-nav-key="console"' not in video_header
-    assert "解决方案" not in video_header
-    assert "了解 Vecto" not in video_header
+    assert "推文工作台" in video_header
+    assert 'data-site-nav-key="console"' in video_header
+    assert 'data-site-product-menu' in video_header
+    assert 'href="/crm.html"' in video_header
     assert 'data-site-admin-entry' in video_header
     assert 'data-site-language-toggle' in video_header
     assert 'data-product-kind="__PRODUCT_KIND__"' in LOGIN

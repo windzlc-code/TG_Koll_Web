@@ -495,9 +495,12 @@ html {
   gap: 7px;
 }
 
+/* Keep the complete shared header visible while the session request is pending.
+   The static shell now contains the same nav/actions as the hydrated state, so
+   switching workbenches never flashes an incomplete/old title bar. */
 .site-header[data-site-mode="public"][data-site-auth-state="pending"] .header-actions {
-  visibility: hidden;
-  pointer-events: none;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .site-header[data-site-page="video"],
