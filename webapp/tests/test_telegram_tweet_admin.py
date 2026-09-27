@@ -79,6 +79,7 @@ class _Message:
         self.photos = []
         self.media_edits = []
         self.caption_edits = []
+        self.deletes = 0
         self.bot = SimpleNamespace()
 
     async def answer(self, text, **kwargs):
@@ -95,6 +96,9 @@ class _Message:
 
     async def edit_caption(self, caption, **kwargs):
         self.caption_edits.append((caption, kwargs))
+
+    async def delete(self):
+        self.deletes += 1
 
 
 class _PhotoMessage(_Message):
@@ -1439,17 +1443,18 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertFalse(any(button.text == "🔄 重新生成人设图" for button in settings_buttons))
         self.assertFalse(any(button.text == "🎨 生成人设图" for button in settings_buttons))
 
-        # Menus sent by the immediately previous release used a literal
-        # callback.  They must keep the same origin-aware return behavior.
+        # Menus sent by the immediately previous release used a literal view
+        # callback.  It now opens the same temporary, explicitly closable
+        # preview without changing the original Settings message into media.
         asyncio.run(controller.handle_callback(_Query("tt:pimgview", message), _Types))
         legacy_preview_callbacks = {
             button.callback_data
-            for row in message.media_edits[-1][1]["reply_markup"].inline_keyboard
+            for row in message.photos[-1][1]["reply_markup"].inline_keyboard
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertIn("tt:pmod:settings", legacy_preview_callbacks)
-        self.assertEqual(message.photos, [])
+        self.assertTrue(all(str(item).startswith("tt:pimgclose:") for item in legacy_preview_callbacks))
+        self.assertEqual(message.media_edits, [])
 
         asyncio.run(controller.handle_callback(_Query("tt:personaimage", message), _Types))
         gallery_buttons = [
@@ -1461,80 +1466,39 @@ class TelegramTweetAdminTests(unittest.TestCase):
         generate_item = next(button for button in gallery_buttons if button.text == "🚀 直接生成")
         self.assertNotIn("pimgnoop", str(view_item.callback_data))
         asyncio.run(controller.handle_callback(_Query(view_item.callback_data, message), _Types))
-        self.assertEqual(len(message.media_edits), 2)
+        self.assertEqual(len(message.photos), 2)
+        self.assertEqual(message.media_edits, [])
         preview_buttons = {
             str(button.text): button.callback_data
-            for row in message.media_edits[-1][1]["reply_markup"].inline_keyboard
+            for row in message.photos[-1][1]["reply_markup"].inline_keyboard
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertTrue(any(str(item).startswith("tt:personaimage:") for item in preview_buttons.values()))
-        return_to_gallery = next(
-            item for item in preview_buttons.values() if str(item).startswith("tt:personaimage:")
-        )
+        self.assertEqual(set(preview_buttons), {"✖️ 关闭预览"})
+        self.assertTrue(str(preview_buttons["✖️ 关闭预览"]).startswith("tt:pimgclose:"))
         photo_message = _PhotoMessage()
-        photo_query = _Query(return_to_gallery, photo_message)
+        photo_query = _Query(preview_buttons["✖️ 关闭预览"], photo_message)
         asyncio.run(controller.handle_callback(photo_query, _Types))
-        self.assertIn("人设图与图库", photo_message.caption_edits[-1][0])
+        self.assertEqual(photo_message.deletes, 1)
         self.assertEqual(photo_message.answers, [])
         self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in photo_query.answers))
 
-        # A Telegram message remains a photo message after its caption is
-        # changed back to the gallery.  Returning from that gallery must keep
-        # editing the caption instead of calling editMessageText, which the Bot
-        # API rejects with "there is no text in the message to edit".
-        gallery_back = next(
-            button.callback_data
-            for row in photo_message.caption_edits[-1][1]["reply_markup"].inline_keyboard
-            for button in row
-            if button.callback_data == "tt:pmod:settings"
-        )
-        settings_query = _Query(gallery_back, photo_message)
-        asyncio.run(controller.handle_callback(settings_query, _Types))
-        self.assertIn("⚙️ 人设设置", photo_message.caption_edits[-1][0])
-        self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in settings_query.answers))
-
-        # Every visible Settings action can be pressed while the same Telegram
-        # message is still a photo.  They must all use the shared media-aware
-        # renderer; otherwise one forgotten edit_text call reintroduces the
-        # production Bad Request on that individual button.
-        settings_callbacks = {
-            button.callback_data
-            for row in photo_message.caption_edits[-1][1]["reply_markup"].inline_keyboard
-            for button in row
+        gallery_callbacks = {
+            str(button.text): button.callback_data
+            for button in gallery_buttons
             if getattr(button, "callback_data", None)
         }
-        for callback_data in {
-            "tt:profilename",
-            "tt:style",
-            "tt:profile",
-            "tt:plinks",
-            "tt:persona_accounts",
-            "tt:personaimage",
-            "tt:psettings:maintenance",
-        }:
-            self.assertIn(callback_data, settings_callbacks)
-            save_state(101, selected_persona_id="persona-a", mode="", payload={})
-            action_message = _PhotoMessage()
-            action_query = _Query(callback_data, action_message)
-            asyncio.run(controller.handle_callback(action_query, _Types))
-            self.assertTrue(action_message.caption_edits, callback_data)
-            self.assertFalse(
-                any(kwargs.get("show_alert") for _text, kwargs in action_query.answers),
-                callback_data,
-            )
-
-        replace_message = _PhotoMessage()
-        replace_query = _Query(preview_buttons["替换"], replace_message)
+        replace_message = _Message(text="人设图与图库")
+        replace_query = _Query(gallery_callbacks["替换"], replace_message)
         asyncio.run(controller.handle_callback(replace_query, _Types))
-        self.assertIn("替换图片", replace_message.caption_edits[-1][0])
+        self.assertIn("替换图片", replace_message.edits[-1][0])
         self.assertEqual(replace_message.answers, [])
         self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in replace_query.answers))
 
-        delete_message = _PhotoMessage()
-        delete_query = _Query(preview_buttons["删除"], delete_message)
+        delete_message = _Message(text="人设图与图库")
+        delete_query = _Query(gallery_callbacks["删除"], delete_message)
         asyncio.run(controller.handle_callback(delete_query, _Types))
-        self.assertIn("确认删除这张人设图", delete_message.caption_edits[-1][0])
+        self.assertIn("确认删除这张人设图", delete_message.edits[-1][0])
         self.assertEqual(delete_message.answers, [])
         self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in delete_query.answers))
 
@@ -1551,6 +1515,65 @@ class TelegramTweetAdminTests(unittest.TestCase):
         generate_return = message.edits[-1][1]["reply_markup"].inline_keyboard[-1][0]
         self.assertTrue(generate_return.text.endswith("返回人设图库"))
         self.assertTrue(str(generate_return.callback_data).startswith("tt:personaimage:"))
+
+    def test_persona_image_preview_is_temporary_and_close_removes_it(self):
+        image_path = Path(self.tmpdir.name) / "temporary-persona-preview.png"
+        image_path.write_bytes(b"temporary-persona-preview")
+
+        def dispatch(_user_id, action, _payload):
+            if action == "persona_image.list":
+                return {"items": [{
+                    "id": "img-temporary",
+                    "image_url": str(image_path),
+                    "created_at": "2026-09-27T17:00:00",
+                    "source": "portrait",
+                    "is_reference": True,
+                }]}
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        gallery_message = _Message(text="人设图与图库")
+        preview_callback = callback_token(101, "pimgview", {
+            "persona_id": "persona-a",
+            "image_id": "img-temporary",
+            "page": 0,
+        })
+
+        preview_query = _Query(preview_callback, gallery_message)
+        asyncio.run(controller.handle_callback(preview_query, _Types))
+        self.assertEqual(gallery_message.media_edits, [])
+        self.assertEqual(len(gallery_message.photos), 1)
+        preview_buttons = [
+            button
+            for row in gallery_message.photos[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertEqual([button.text for button in preview_buttons], ["✖️ 关闭预览"])
+        self.assertTrue(str(preview_buttons[0].callback_data).startswith("tt:pimgclose:"))
+
+        temporary_photo = _PhotoMessage()
+        close_query = _Query(preview_buttons[0].callback_data, temporary_photo)
+        asyncio.run(controller.handle_callback(close_query, _Types))
+        self.assertEqual(temporary_photo.deletes, 1)
+        self.assertEqual(temporary_photo.answers, [])
+        self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in close_query.answers))
+
+        # Messages created by the previous release may already be permanent
+        # photo messages with ordinary Settings buttons.  The next click must
+        # remove that legacy photo and rebuild one clean text page exactly once.
+        legacy_photo = _PhotoMessage()
+        legacy_query = _Query("tt:pmod:settings", legacy_photo)
+        asyncio.run(controller.handle_callback(legacy_query, _Types))
+        self.assertEqual(legacy_photo.deletes, 1)
+        self.assertTrue(legacy_photo.answers)
+        self.assertIn("人设设置", legacy_photo.answers[-1][0])
+        self.assertEqual(legacy_photo.caption_edits, [])
+        self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in legacy_query.answers))
 
     def test_legacy_persona_memory_callbacks_redirect_to_generation_without_deleting(self):
         calls = []

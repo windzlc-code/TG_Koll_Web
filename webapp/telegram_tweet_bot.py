@@ -3271,7 +3271,7 @@ class NativeTweetBotController:
             raise HTTPException(status_code=404, detail="人设图源文件不存在")
 
         try:
-            from aiogram.types import BufferedInputFile, FSInputFile, InputMediaPhoto
+            from aiogram.types import BufferedInputFile, FSInputFile
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Telegram 图片预览组件不可用") from exc
 
@@ -3296,46 +3296,19 @@ class NativeTweetBotController:
         reference_text = " · 当前使用中" if bool(selected.get("is_reference")) else ""
         rows = [[
             types.InlineKeyboardButton(
-                text="当前使用中" if bool(selected.get("is_reference")) else "设为当前",
-                callback_data=callback_token(chat_id, "pimgapply", {
-                    "persona_id": persona_id, "image_id": selected_id, "page": max(0, int(page or 0)),
-                }),
-            ),
-            types.InlineKeyboardButton(
-                text="设为头像",
-                callback_data=callback_token(chat_id, "pimgavatar", {
-                    "persona_id": persona_id, "image_id": selected_id, "page": max(0, int(page or 0)),
-                }),
-            ),
-        ], [
-            types.InlineKeyboardButton(
-                text="替换",
-                callback_data=callback_token(chat_id, "pimgreplace", {
-                    "persona_id": persona_id, "image_id": selected_id, "page": max(0, int(page or 0)),
-                }),
-            ),
-            types.InlineKeyboardButton(
-                text="删除",
-                callback_data=callback_token(chat_id, "pimgdeleteconfirm", {
-                    "persona_id": persona_id, "image_id": selected_id, "page": max(0, int(page or 0)),
-                }),
-            ),
-        ], [
-            types.InlineKeyboardButton(
-                text=_back_label("返回人设设置" if return_to_settings else "返回人设图库"),
-                callback_data=(
-                    "tt:pmod:settings"
-                    if return_to_settings
-                    else callback_token(chat_id, "personaimage", {
-                        "persona_id": persona_id, "page": max(0, int(page or 0)),
-                    })
-                ),
+                text="✖️ 关闭预览",
+                callback_data=callback_token(chat_id, "pimgclose", {}),
             ),
         ]]
-        await query.message.edit_media(
-            media=InputMediaPhoto(
-                media=photo,
-                caption=f"👁 当前人设图{reference_text}\n来源：{source}\n时间：{created or '未记录'}",
+        # Telegram cannot remove media after editMessageMedia turns a text
+        # message into a photo message.  Keep the original menu untouched and
+        # send a temporary preview which is deleted by pimgclose instead.
+        await query.message.answer_photo(
+            photo=photo,
+            caption=(
+                f"👁 当前人设图{reference_text}\n"
+                f"来源：{source}\n时间：{created or '未记录'}\n\n"
+                "关闭预览后可继续在原页面操作。"
             ),
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
@@ -3352,23 +3325,21 @@ class NativeTweetBotController:
 
         Telegram can turn a text message into a media message with
         ``editMessageMedia``, but it cannot turn that media message back into a
-        plain text message.  Every later callback must therefore edit the
-        caption while the message still carries media.  Keeping this decision
-        in one renderer prevents individual return/action buttons from falling
-        back to the invalid ``editMessageText`` method.
+        plain text message. Keeping the compatibility recovery here prevents
+        individual return/action buttons from calling invalid
+        ``editMessageText`` methods on old media messages.
         """
         media_only = not getattr(message, "text", None) and any(
             bool(getattr(message, field, None))
             for field in ("photo", "video", "document", "animation")
         )
         if media_only:
-            # Telegram captions are limited to 1024 characters.  Keep the
-            # controls usable if a text-heavy detail page is reached after an
-            # image preview instead of surfacing another Bad Request.
-            caption = str(text or "")
-            if len(caption) > 1024:
-                caption = caption[:1018].rstrip() + "\n…"
-            await message.edit_caption(caption=caption, reply_markup=reply_markup, **kwargs)
+            # Compatibility cleanup for photo menus created by the previous
+            # release. Telegram cannot remove that media in place, so rebuild
+            # the requested page once as text and delete the stale photo. New
+            # previews use pimgclose and never enter this migration branch.
+            await message.answer(text, reply_markup=reply_markup, **kwargs)
+            await message.delete()
         else:
             await message.edit_text(text, reply_markup=reply_markup, **kwargs)
 
@@ -5876,6 +5847,13 @@ class NativeTweetBotController:
                     # Settings and remains compatible with already-sent menus.
                     return_to_settings=(len(parts) <= 2 or bool(reference.get("return_to_settings"))),
                 )
+            elif action == "pimgclose" and len(parts) > 2:
+                resolve_callback_token(chat_id, "pimgclose", parts[2], consume=True)
+                # The preview is intentionally a short-lived standalone photo.
+                # Deleting it reveals the unchanged gallery/settings message
+                # directly below, so no replacement navigation message is
+                # created and the image is visible only while being viewed.
+                await query.message.delete()
             elif action == "pimgnoop":
                 # Compatibility for buttons sent before real image previews
                 # were added.  Reopen the current library instead of leaving
