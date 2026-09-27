@@ -3293,25 +3293,97 @@ class NativeTweetBotController:
 
         created = str(selected.get("created_at") or "").strip()[:16].replace("T", " ")
         source = str(selected.get("source") or "生成").strip() or "生成"
-        reference_text = " · 当前使用中" if bool(selected.get("is_reference")) else ""
-        rows = [[
-            types.InlineKeyboardButton(
-                text="✖️ 关闭预览",
-                callback_data=callback_token(chat_id, "pimgclose", {}),
-            ),
-        ]]
+        reference = {
+            "persona_id": persona_id,
+            "image_id": selected_id,
+            "page": max(0, int(page or 0)),
+            "preview": True,
+            "origin_message_id": int(getattr(query.message, "message_id", 0) or 0),
+            "is_reference": bool(selected.get("is_reference")),
+            "source": source,
+            "created_at": created,
+            "return_to_settings": bool(return_to_settings),
+        }
+        rows = self._persona_image_preview_rows(types, chat_id, reference)
         # Telegram cannot remove media after editMessageMedia turns a text
         # message into a photo message.  Keep the original menu untouched and
-        # send a temporary preview which is deleted by pimgclose instead.
+        # send a separate preview.  Its action tokens retain the originating
+        # menu message so mutations can refresh that menu without producing a
+        # second stale copy.
         await query.message.answer_photo(
             photo=photo,
-            caption=(
-                f"👁 当前人设图{reference_text}\n"
-                f"来源：{source}\n时间：{created or '未记录'}\n\n"
-                "关闭预览后可继续在原页面操作。"
-            ),
+            caption=self._persona_image_preview_caption(reference),
             reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
+
+    @staticmethod
+    def _persona_image_preview_caption(reference: dict[str, Any], notice: str = "") -> str:
+        is_reference = bool(reference.get("is_reference"))
+        reference_text = " · 当前使用中" if is_reference else ""
+        prefix = f"{notice.strip()}\n\n" if notice.strip() else ""
+        display_note = (
+            "这是当前参考图，可保留在聊天中；也可关闭预览，图库记录不会被删除。"
+            if is_reference
+            else "这是手动打开的临时预览；关闭后只移除本条预览，图库记录不会被删除。"
+        )
+        return (
+            prefix
+            + f"👁 人设图{reference_text}\n"
+            + f"来源：{str(reference.get('source') or '生成')}\n"
+            + f"时间：{str(reference.get('created_at') or '未记录')}\n\n"
+            + f"{display_note}\n可直接管理这张图片。"
+        )
+
+    @staticmethod
+    def _persona_image_preview_rows(types: Any, chat_id: int, reference: dict[str, Any]) -> list[list[Any]]:
+        payload = dict(reference)
+        return [[
+            types.InlineKeyboardButton(
+                text="✅ 当前使用中" if bool(payload.get("is_reference")) else "设为当前",
+                callback_data=callback_token(chat_id, "pimgapply", payload),
+            ),
+            types.InlineKeyboardButton(
+                text="设为头像",
+                callback_data=callback_token(chat_id, "pimgavatar", payload),
+            ),
+        ], [
+            types.InlineKeyboardButton(
+                text="替换图片",
+                callback_data=callback_token(chat_id, "pimgreplace", payload),
+            ),
+            types.InlineKeyboardButton(
+                text="删除图片",
+                callback_data=callback_token(chat_id, "pimgdeleteconfirm", payload),
+            ),
+        ], [
+            types.InlineKeyboardButton(
+                text="✖️ 关闭预览",
+                callback_data=callback_token(chat_id, "pimgclose", payload),
+            ),
+        ]]
+
+    async def _edit_persona_image_origin(
+        self,
+        query: Any,
+        reference: dict[str, Any],
+        text: str,
+        *,
+        reply_markup: Any,
+    ) -> bool:
+        """Edit the text menu that opened a standalone photo preview."""
+        if not bool(reference.get("preview")):
+            return False
+        origin_message_id = int(reference.get("origin_message_id") or 0)
+        current_message_id = int(getattr(query.message, "message_id", 0) or 0)
+        if origin_message_id <= 0 or origin_message_id == current_message_id:
+            return False
+        await query.message.bot.edit_message_text(
+            chat_id=int(query.message.chat.id),
+            message_id=origin_message_id,
+            text=text,
+            reply_markup=reply_markup,
+        )
+        return True
 
     @staticmethod
     async def _edit_message_text(
@@ -3367,6 +3439,7 @@ class NativeTweetBotController:
         persona_id: str,
         page: int = 0,
         notice: str = "",
+        target_message_id: int = 0,
     ) -> None:
         """Render the Web-equivalent persona image form and image library.
 
@@ -3427,6 +3500,7 @@ class NativeTweetBotController:
                     text="设为当前" if not item.get("is_reference") else "当前使用中",
                     callback_data=callback_token(chat_id, "pimgapply", {
                         "persona_id": persona_id, "image_id": image_id, "page": safe_page,
+                        "is_reference": bool(item.get("is_reference")),
                     }),
                 ),
                 types.InlineKeyboardButton(
@@ -3506,13 +3580,16 @@ class NativeTweetBotController:
             f"当前选项：{selected_options or '全部自动（保持原有人设生成链路）'}\n"
             f"补充提示词：{supplement_prompt[:220] if supplement_prompt else '未填写'}"
         )
-        # A preview is a media message.  Returning keeps the same message and
-        # updates its caption/keyboard instead of consuming another message.
-        await self._edit_callback_text(
-            query,
-            text,
-            reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
-        )
+        markup = types.InlineKeyboardMarkup(inline_keyboard=rows)
+        if target_message_id and target_message_id != int(getattr(query.message, "message_id", 0) or 0):
+            await query.message.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=int(target_message_id),
+                text=text,
+                reply_markup=markup,
+            )
+        else:
+            await self._edit_callback_text(query, text, reply_markup=markup)
 
     async def _render_persona_image_field(
         self,
@@ -5958,30 +6035,53 @@ class NativeTweetBotController:
                     "persona_image_options": dict(prior_payload.get("persona_image_options") or {}) if isinstance(prior_payload.get("persona_image_options"), dict) else {},
                     "supplement_prompt": str(prior_payload.get("supplement_prompt") or ""),
                 })
-                await self._edit_callback_text(
-                    query,
+                prompt_text = (
                     "人设图库 · 替换图片\n"
-                    "请发送用于替换的 JPG、PNG、WebP 或 GIF 图片；只替换当前选中的图库记录，其他图片和人设简介保持不变。",
-                    reply_markup=self._step_navigation_markup(
-                        types,
-                        back_callback=callback_token(chat_id, "personaimage", {
-                            "persona_id": persona_id, "page": int(reference.get("page") or 0),
-                        }),
-                        back_text="返回人设图库",
-                    ),
+                    "请发送用于替换的 JPG、PNG、WebP 或 GIF 图片；只替换当前选中的图库记录，其他图片和人设简介保持不变。"
                 )
+                prompt_markup = self._step_navigation_markup(
+                    types,
+                    back_callback=callback_token(chat_id, "personaimage", {
+                        "persona_id": persona_id, "page": int(reference.get("page") or 0),
+                    }),
+                    back_text="返回人设图库",
+                )
+                if await self._edit_persona_image_origin(
+                    query, reference, prompt_text, reply_markup=prompt_markup,
+                ):
+                    await query.message.delete()
+                else:
+                    await self._edit_callback_text(
+                        query, prompt_text, reply_markup=prompt_markup,
+                    )
             elif action == "pimgapply" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pimgapply", parts[2], consume=True)
-                result = await self._call(user_id, "persona_image.apply", {
-                    "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
-                    "image_id": str(reference.get("image_id") or ""),
-                })
+                persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"])
+                already_current = bool(reference.get("is_reference"))
+                if not already_current:
+                    await self._call(user_id, "persona_image.apply", {
+                        "persona_id": persona_id,
+                        "image_id": str(reference.get("image_id") or ""),
+                    })
+                apply_notice = "这张图片已是当前人设参考图。" if already_current else "已设为当前人设参考图。"
                 await self._render_persona_image_options(
                     query, types, member,
-                    persona_id=str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
+                    persona_id=persona_id,
                     page=int(reference.get("page") or 0),
-                    notice="已设为当前人设参考图。",
+                    notice=apply_notice,
+                    target_message_id=int(reference.get("origin_message_id") or 0),
                 )
+                if bool(reference.get("preview")):
+                    updated_reference = dict(reference)
+                    updated_reference["is_reference"] = True
+                    await query.message.edit_caption(
+                        caption=self._persona_image_preview_caption(
+                            updated_reference, apply_notice
+                        ),
+                        reply_markup=types.InlineKeyboardMarkup(
+                            inline_keyboard=self._persona_image_preview_rows(types, chat_id, updated_reference)
+                        ),
+                    )
             elif action == "pimgavatar" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pimgavatar", parts[2], consume=True)
                 persona_id = str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"] or "")
@@ -5997,19 +6097,41 @@ class NativeTweetBotController:
                 await self._render_persona_image_options(
                     query, types, member, persona_id=persona_id,
                     page=int(reference.get("page") or 0), notice="已设为人设头像。",
+                    target_message_id=int(reference.get("origin_message_id") or 0),
                 )
+                if bool(reference.get("preview")):
+                    await query.message.edit_caption(
+                        caption=self._persona_image_preview_caption(reference, "已设为人设头像。"),
+                        reply_markup=types.InlineKeyboardMarkup(
+                            inline_keyboard=self._persona_image_preview_rows(types, chat_id, reference)
+                        ),
+                    )
             elif action == "pimgdeleteconfirm" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pimgdeleteconfirm", parts[2])
-                await self._edit_callback_text(
-                    query,
-                    "确认删除这张人设图？如果它是当前参考图，系统会自动切换到最近的剩余图片。",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text="确认删除", callback_data=callback_token(chat_id, "pimgdelete", reference)),
-                        types.InlineKeyboardButton(text="取消", callback_data=callback_token(chat_id, "personaimage", {
+                confirm_markup = types.InlineKeyboardMarkup(inline_keyboard=[[
+                    types.InlineKeyboardButton(text="确认删除", callback_data=callback_token(chat_id, "pimgdelete", reference)),
+                    types.InlineKeyboardButton(
+                        text="取消删除",
+                        callback_data=callback_token(chat_id, "pimgdeletecancel", reference)
+                        if bool(reference.get("preview"))
+                        else callback_token(chat_id, "personaimage", {
                             "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
                             "page": int(reference.get("page") or 0),
-                        })),
-                    ]]),
+                        }),
+                    ),
+                ]])
+                confirm_text = "确认删除这张人设图？如果它是当前参考图，系统会自动切换到最近的剩余图片。"
+                if bool(reference.get("preview")):
+                    await query.message.edit_caption(caption=confirm_text, reply_markup=confirm_markup)
+                else:
+                    await self._edit_callback_text(query, confirm_text, reply_markup=confirm_markup)
+            elif action == "pimgdeletecancel" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "pimgdeletecancel", parts[2], consume=True)
+                await query.message.edit_caption(
+                    caption=self._persona_image_preview_caption(reference),
+                    reply_markup=types.InlineKeyboardMarkup(
+                        inline_keyboard=self._persona_image_preview_rows(types, chat_id, reference)
+                    ),
                 )
             elif action == "pimgdelete" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pimgdelete", parts[2], consume=True)
@@ -6021,7 +6143,10 @@ class NativeTweetBotController:
                 await self._render_persona_image_options(
                     query, types, member, persona_id=persona_id,
                     page=int(reference.get("page") or 0), notice="人设图已删除。",
+                    target_message_id=int(reference.get("origin_message_id") or 0),
                 )
+                if bool(reference.get("preview")):
+                    await query.message.delete()
             elif action == "createmenu":
                 # Keep the legacy callback as a strict alias of the current
                 # module renderer.  Previously this branch duplicated the

@@ -1448,12 +1448,16 @@ class TelegramTweetAdminTests(unittest.TestCase):
         # preview without changing the original Settings message into media.
         asyncio.run(controller.handle_callback(_Query("tt:pimgview", message), _Types))
         legacy_preview_callbacks = {
-            button.callback_data
+            str(button.text): button.callback_data
             for row in message.photos[-1][1]["reply_markup"].inline_keyboard
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertTrue(all(str(item).startswith("tt:pimgclose:") for item in legacy_preview_callbacks))
+        self.assertEqual(
+            set(legacy_preview_callbacks),
+            {"✅ 当前使用中", "设为头像", "替换图片", "删除图片", "✖️ 关闭预览"},
+        )
+        self.assertTrue(str(legacy_preview_callbacks["✖️ 关闭预览"]).startswith("tt:pimgclose:"))
         self.assertEqual(message.media_edits, [])
 
         asyncio.run(controller.handle_callback(_Query("tt:personaimage", message), _Types))
@@ -1474,7 +1478,10 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertEqual(set(preview_buttons), {"✖️ 关闭预览"})
+        self.assertEqual(
+            set(preview_buttons),
+            {"✅ 当前使用中", "设为头像", "替换图片", "删除图片", "✖️ 关闭预览"},
+        )
         self.assertTrue(str(preview_buttons["✖️ 关闭预览"]).startswith("tt:pimgclose:"))
         photo_message = _PhotoMessage()
         photo_query = _Query(preview_buttons["✖️ 关闭预览"], photo_message)
@@ -1553,11 +1560,15 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for row in gallery_message.photos[-1][1]["reply_markup"].inline_keyboard
             for button in row
         ]
-        self.assertEqual([button.text for button in preview_buttons], ["✖️ 关闭预览"])
-        self.assertTrue(str(preview_buttons[0].callback_data).startswith("tt:pimgclose:"))
+        self.assertEqual(
+            [button.text for button in preview_buttons],
+            ["✅ 当前使用中", "设为头像", "替换图片", "删除图片", "✖️ 关闭预览"],
+        )
+        close_button = next(button for button in preview_buttons if button.text == "✖️ 关闭预览")
+        self.assertTrue(str(close_button.callback_data).startswith("tt:pimgclose:"))
 
         temporary_photo = _PhotoMessage()
-        close_query = _Query(preview_buttons[0].callback_data, temporary_photo)
+        close_query = _Query(close_button.callback_data, temporary_photo)
         asyncio.run(controller.handle_callback(close_query, _Types))
         self.assertEqual(temporary_photo.deletes, 1)
         self.assertEqual(temporary_photo.answers, [])
@@ -1574,6 +1585,103 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("人设设置", legacy_photo.answers[-1][0])
         self.assertEqual(legacy_photo.caption_edits, [])
         self.assertFalse(any(kwargs.get("show_alert") for _text, kwargs in legacy_query.answers))
+
+    def test_persona_image_preview_actions_mutate_backend_and_refresh_origin_menu(self):
+        image_path = Path(self.tmpdir.name) / "operable-persona-preview.png"
+        image_path.write_bytes(b"operable-persona-preview")
+        calls = []
+        image_exists = True
+        is_reference = False
+
+        def dispatch(_user_id, action, payload):
+            nonlocal image_exists, is_reference
+            calls.append((action, payload))
+            if action == "persona_image.list":
+                return {"items": [{
+                    "id": "img-operable",
+                    "image_url": str(image_path),
+                    "created_at": "2026-09-27T17:30:00",
+                    "source": "portrait",
+                    "is_reference": is_reference,
+                }]} if image_exists else {"items": []}
+            if action == "persona_image.apply":
+                is_reference = True
+            if action == "persona_image.delete":
+                image_exists = False
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+
+        def open_preview():
+            gallery = _Message(text="人设图与图库", message_id=41)
+            view_callback = callback_token(101, "pimgview", {
+                "persona_id": "persona-a", "image_id": "img-operable", "page": 0,
+            })
+            asyncio.run(controller.handle_callback(_Query(view_callback, gallery), _Types))
+            return {
+                str(button.text): button.callback_data
+                for row in gallery.photos[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+            }
+
+        async def origin_edit(**kwargs):
+            origin_edits.append(kwargs)
+
+        origin_edits = []
+        buttons = open_preview()
+        apply_photo = _PhotoMessage(message_id=51)
+        apply_photo.bot.edit_message_text = origin_edit
+        asyncio.run(controller.handle_callback(_Query(buttons["设为当前"], apply_photo), _Types))
+        self.assertIn(("persona_image.apply", {
+            "persona_id": "persona-a", "image_id": "img-operable",
+        }), calls)
+        self.assertTrue(origin_edits)
+        self.assertEqual(origin_edits[-1]["message_id"], 41)
+        self.assertIn("已设为当前人设参考图", origin_edits[-1]["text"])
+        self.assertIn("当前使用中", apply_photo.caption_edits[-1][0])
+        self.assertEqual(apply_photo.deletes, 0)
+
+        buttons = open_preview()
+        avatar_photo = _PhotoMessage(message_id=52)
+        avatar_photo.bot.edit_message_text = origin_edit
+        asyncio.run(controller.handle_callback(_Query(buttons["设为头像"], avatar_photo), _Types))
+        avatar_calls = [payload for action, payload in calls if action == "profile.update"]
+        self.assertEqual(avatar_calls[-1]["avatar"]["image_id"], "img-operable")
+        self.assertIn("已设为人设头像", avatar_photo.caption_edits[-1][0])
+        self.assertEqual(avatar_photo.deletes, 0)
+
+        buttons = open_preview()
+        replace_photo = _PhotoMessage(message_id=53)
+        replace_photo.bot.edit_message_text = origin_edit
+        asyncio.run(controller.handle_callback(_Query(buttons["替换图片"], replace_photo), _Types))
+        self.assertEqual(load_state(101)["mode"], "persona_image_upload")
+        self.assertEqual(load_state(101)["payload"]["replace_image_id"], "img-operable")
+        self.assertIn("替换图片", origin_edits[-1]["text"])
+        self.assertEqual(replace_photo.deletes, 1)
+
+        save_state(101, selected_persona_id="persona-a")
+        buttons = open_preview()
+        delete_photo = _PhotoMessage(message_id=54)
+        delete_photo.bot.edit_message_text = origin_edit
+        asyncio.run(controller.handle_callback(_Query(buttons["删除图片"], delete_photo), _Types))
+        self.assertIn("确认删除", delete_photo.caption_edits[-1][0])
+        confirm_button = next(
+            button
+            for row in delete_photo.caption_edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if button.text == "确认删除"
+        )
+        asyncio.run(controller.handle_callback(_Query(confirm_button.callback_data, delete_photo), _Types))
+        self.assertIn(("persona_image.delete", {
+            "persona_id": "persona-a", "image_id": "img-operable",
+        }), calls)
+        self.assertIn("人设图已删除", origin_edits[-1]["text"])
+        self.assertEqual(delete_photo.deletes, 1)
 
     def test_legacy_persona_memory_callbacks_redirect_to_generation_without_deleting(self):
         calls = []
