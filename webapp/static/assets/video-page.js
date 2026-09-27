@@ -65,15 +65,15 @@
       { label: "图片素材", items: MODULES.slice(4) },
       { label: "视频资产", items: [STUDIO_MODULE] },
     ];
-    host.innerHTML = groups.map((group) => `<section class="video-primary-nav-group" aria-label="${group.label}">
+    host.innerHTML = groups.map((group) => `<div class="module-accordion video-module-group" aria-label="${group.label}">
       <div class="video-module-group-label">${group.label}</div>
       ${group.items.map((item) => `
-        <div class="video-primary-nav-item">
-          <button type="button" class="module-trigger video-primary-nav-button" data-video-module="${item.id}">
+        <div class="module-accordion-item">
+          <button type="button" class="module-trigger" data-video-module="${item.id}">
             <span class="module-trigger-text"><span>${item.label}</span></span>
           </button>
         </div>`).join("")}
-    </section>`).join("");
+    </div>`).join("");
     syncActive();
   }
 

@@ -116,26 +116,11 @@
   gap: 12px;
 }
 
-.video-primary-nav-group {
-  display: grid;
-  gap: 0;
-}
-
-.video-primary-nav-group + .video-primary-nav-group {
-  border-top: 1px solid #d1dae0;
-  padding-top: 9px;
-}
-
-.video-primary-nav-item + .video-primary-nav-item {
-  border-top: 1px solid #d7dfe4;
-  padding-top: 5px;
-}
-
 .video-module-menu--primary .video-module-group-label {
   padding: 3px 10px 6px;
 }
 
-.video-module-menu--primary .video-primary-nav-button {
+.video-module-menu--primary .module-trigger {
   border-radius: 8px;
   font-size: 13px;
   min-height: 40px;

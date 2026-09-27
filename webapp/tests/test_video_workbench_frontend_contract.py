@@ -13,6 +13,7 @@ CONSOLE_CSS = STATIC_ROOT / "assets" / "console.css"
 PROFILE_HTML = STATIC_ROOT / "profile.html"
 WORKBENCH_JS = STATIC_ROOT / "assets" / "video-workbench.js"
 WORKBENCH_CSS = STATIC_ROOT / "assets" / "video-workbench.css"
+EDITOR_CSS = STATIC_ROOT / "assets" / "video-editor.css"
 VIDEO_PAGE_JS = STATIC_ROOT / "assets" / "video-page.js"
 
 VIDEO_MODULES = (
@@ -37,6 +38,7 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         cls.profile_html = PROFILE_HTML.read_text(encoding="utf-8")
         cls.workbench_js = WORKBENCH_JS.read_text(encoding="utf-8")
         cls.workbench_css = WORKBENCH_CSS.read_text(encoding="utf-8")
+        cls.editor_css = EDITOR_CSS.read_text(encoding="utf-8")
         cls.video_page_js = VIDEO_PAGE_JS.read_text(encoding="utf-8")
 
     def test_console_loads_native_video_workspace_assets_and_panel(self):
@@ -251,6 +253,19 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertNotIn("grid-template-columns: repeat(2, minmax(0, 1fr))", self.workbench_css.split(".video-workbench-shell", 1)[0])
         self.assertNotIn(".video-module-menu .module-trigger {\n  min-height: 34px", self.workbench_css)
         self.assertIn('class="module-trigger" data-video-module=', self.console_js)
+
+    def test_standalone_video_sidebar_reuses_shared_module_navigation(self):
+        render_menu = self.video_page_js.split("function renderMenu()", 1)[1].split("function isGenerationModule", 1)[0]
+        self.assertIn('class="module-accordion video-module-group"', render_menu)
+        self.assertIn('class="module-accordion-item"', render_menu)
+        self.assertIn('class="module-trigger" data-video-module=', render_menu)
+        self.assertNotIn("video-primary-nav-group", render_menu)
+        self.assertNotIn("video-primary-nav-item", render_menu)
+        self.assertNotIn("video-primary-nav-button", render_menu)
+        self.assertIn(".video-module-menu--primary .module-trigger", self.editor_css)
+        self.assertNotIn(".video-primary-nav-group", self.editor_css)
+        self.assertNotIn(".video-primary-nav-item", self.editor_css)
+        self.assertNotIn(".video-primary-nav-button", self.editor_css)
 
     def test_visible_fields_follow_original_frontend_allowlist(self):
         for field_name in (
