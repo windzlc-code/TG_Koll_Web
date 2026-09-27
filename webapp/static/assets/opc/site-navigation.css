@@ -504,18 +504,7 @@ html {
 .site-header[data-site-page="crm"],
 .site-header[data-site-page="video-login"],
 .site-header[data-site-page="crm-login"] {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.site-header[data-site-page="video"] > .site-nav,
-.site-header[data-site-page="crm"] > .site-nav,
-.site-header[data-site-page="video-login"] > .site-nav,
-.site-header[data-site-page="crm-login"] > .site-nav,
-.site-header[data-site-page="video"] .site-mobile-menu,
-.site-header[data-site-page="crm"] .site-mobile-menu,
-.site-header[data-site-page="video-login"] .site-mobile-menu,
-.site-header[data-site-page="crm-login"] .site-mobile-menu {
-  display: none !important;
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
 .site-header[data-site-page="video"][data-site-mode="public"][data-site-auth-state="pending"] .header-actions,

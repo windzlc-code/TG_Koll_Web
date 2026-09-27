@@ -630,11 +630,15 @@
   }
 
   function pageKeepsProductMenu(page) {
-    return ["", "home"].includes(String(page || ""));
+    // Keep the product switcher on every public surface.  The workbench
+    // pages use the same shared header, so hiding it there made it
+    // impossible to move back to the tweet workbench without editing the
+    // URL manually.
+    return !["admin", "adminProfile"].includes(String(page || ""));
   }
 
   function publicPageKeepsTweetWorkbench(page) {
-    return ["", "home", "aboutVecto", "pricing", "caseStudies", "console", "console-login"].includes(String(page || ""));
+    return ["", "home", "aboutVecto", "pricing", "caseStudies", "console", "console-login", "video", "video-login", "crm", "crm-login"].includes(String(page || ""));
   }
 
   function pageKeepsCaseStudies(page) {
@@ -646,7 +650,12 @@
   }
 
   function navigationLinks(page, current) {
-    if (isolatedWorkspacePage(page)) return "";
+    if (isolatedWorkspacePage(page)) {
+      return [
+        navLink({ key: "console", href: "/console.html", current }),
+        productMenuMarkup(),
+      ].join("");
+    }
     const links = [
       navLink({ key: "solution", href: navHref(page, "#solution"), current }),
     ];
@@ -659,6 +668,27 @@
     }
     if (pageKeepsProductMenu(page)) links.push(productMenuMarkup());
     return links.join("");
+  }
+
+  function ensureDesktopNavigation(header, page, current) {
+    if (!header) return null;
+    const markup = navigationLinks(page, current);
+    let nav = header.querySelector(":scope > .site-nav");
+    if (!markup) {
+      nav?.remove();
+      return null;
+    }
+    if (!nav) {
+      nav = document.createElement("nav");
+      nav.className = "site-nav";
+      const actions = header.querySelector(":scope > .header-actions");
+      if (actions) header.insertBefore(nav, actions);
+      else header.appendChild(nav);
+    }
+    nav.setAttribute("aria-label", copy[currentLanguage()].navigationLabel);
+    nav.dataset.siteNavigation = "";
+    nav.innerHTML = markup;
+    return nav;
   }
 
   function setProductMenuOpen(menu, active, { restoreFocus = false } = {}) {
@@ -919,13 +949,14 @@
   }
 
   function mobileNavigationLinks(page, current) {
-    if (isolatedWorkspacePage(page)) return "";
-    const items = [
-      { group: "mobileExplore", key: "solution", href: navHref(page, "#solution") },
-      { group: "mobileExplore", key: "aboutVecto", href: "/about-vecto.html" },
-      { group: "mobileServices", key: "pricing", href: "/subscription.html" },
-    ];
-    if (publicPageKeepsTweetWorkbench(page)) {
+    const items = isolatedWorkspacePage(page)
+      ? [{ group: "mobileWorkspace", key: "console", href: "/console.html" }]
+      : [
+        { group: "mobileExplore", key: "solution", href: navHref(page, "#solution") },
+        { group: "mobileExplore", key: "aboutVecto", href: "/about-vecto.html" },
+        { group: "mobileServices", key: "pricing", href: "/subscription.html" },
+      ];
+    if (!isolatedWorkspacePage(page) && publicPageKeepsTweetWorkbench(page)) {
       items.push({ group: "mobileWorkspace", key: "console", href: "/console.html" });
     }
     if (pageKeepsCaseStudies(page)) {
@@ -2541,12 +2572,9 @@
     }
     installVideoDesktopEntry(header, current);
     installCrmDesktopEntry(header, current);
+    ensureDesktopNavigation(header, page, current);
     installCaseStudiesDesktopEntry(header, current);
-    if (isolatedWorkspacePage(page)) {
-      header.querySelectorAll("[data-site-mobile-menu]").forEach((node) => node.remove());
-    } else {
-      installMobileMenu(header, page, current);
-    }
+    installMobileMenu(header, page, current);
     installLanguageControls(header);
     if (mode === "authenticated") {
       installUnifiedAccountMenu(header, page);

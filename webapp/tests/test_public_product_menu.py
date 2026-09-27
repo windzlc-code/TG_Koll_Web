@@ -21,7 +21,8 @@ def test_home_header_exposes_product_menu_with_real_workspace_targets():
 def test_shared_navigation_generates_and_binds_home_product_menu():
     assert "function productMenuMarkup" in NAVIGATION
     assert "function pageKeepsProductMenu" in NAVIGATION
-    assert 'return ["", "home"].includes(String(page || ""));' in NAVIGATION
+    assert 'return !["admin", "adminProfile"].includes(String(page || ""));' in NAVIGATION
+    assert "function ensureDesktopNavigation" in NAVIGATION
     assert "function setProductMenuOpen" in NAVIGATION
     assert "function bindProductMenus" in NAVIGATION
     assert "function navigationIconPaths" in NAVIGATION
@@ -47,3 +48,13 @@ def test_product_menu_has_keyboard_and_mobile_styles():
     assert "aria-expanded" in NAVIGATION
     assert 'event.key === "ArrowDown"' in NAVIGATION
     assert 'event.key === "Escape"' in NAVIGATION
+
+
+def test_product_navigation_is_shared_by_public_pages_and_workbenches():
+    for name in ("index.html", "about-vecto.html", "case-studies.html", "console.html", "video.html", "crm.html", "product-login.html"):
+        markup = (ROOT / "static" / name).read_text(encoding="utf-8")
+        assert 'site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__' in markup
+        assert 'site-navigation.css?v=__SITE_NAVIGATION_CSS_VERSION__' in markup
+    assert 'navLink({ key: "console", href: "/console.html", current })' in NAVIGATION
+    assert 'return !["admin", "adminProfile"].includes(String(page || ""));' in NAVIGATION
+    assert 'items = isolatedWorkspacePage(page)' in NAVIGATION

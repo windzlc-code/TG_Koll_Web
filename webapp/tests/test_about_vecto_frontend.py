@@ -51,12 +51,13 @@ class AboutVectoFrontendContractTests(unittest.TestCase):
             self.navigation_script,
         )
         self.assertIn(
-            'return ["", "home", "aboutVecto", "pricing", "caseStudies", "console", "console-login"].includes(String(page || ""));',
+            'return ["", "home", "aboutVecto", "pricing", "caseStudies", "console", "console-login", "video", "video-login", "crm", "crm-login"].includes(String(page || ""));',
             self.navigation_script,
         )
         self.assertIn('if (pageKeepsCaseStudies(page)) {', self.navigation_script)
         self.assertIn('key: "caseStudies", href: "/case-studies.html"', self.navigation_script)
         self.assertIn('if (!header || isolatedWorkspacePage(header.dataset.sitePage || "")) return null;', self.navigation_script)
+        self.assertIn("function ensureDesktopNavigation", self.navigation_script)
 
     def test_about_page_covers_product_story_and_marks_roadmap_features(self):
         self.assertIn('data-site-page="aboutVecto"', self.about_markup)

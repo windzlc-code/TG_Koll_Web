@@ -96,7 +96,7 @@ def test_server_routes_product_login_by_return_url():
     assert '@app.get("/admin-video.html"' in SERVER
 
 
-def test_shared_navigation_keeps_workspaces_off_the_public_bar():
+def test_shared_navigation_keeps_product_switching_and_tweet_return_available():
     links = NAVIGATION[NAVIGATION.index("function navigationLinks"):NAVIGATION.index("function stripPublicWorkspaceSwitcher")]
     assert "function publicPageKeepsTweetWorkbench" in NAVIGATION
     assert "function isolatedWorkspacePage" in NAVIGATION
@@ -104,16 +104,16 @@ def test_shared_navigation_keeps_workspaces_off_the_public_bar():
     assert "publicPageKeepsTweetWorkbench(page)" in links
     assert 'key: "console", href: "/console.html"' in links
     assert 'key: "aboutVecto", href: "/about-vecto.html"' in links
-    assert 'key: "video", href: "/video.html"' not in links
-    assert 'key: "crm", href: "/crm.html"' not in links
+    assert 'productMenuMarkup()' in links
+    assert 'key: "console", href: "/console.html", current' in links
     assert 'console: "推文工作台"' in NAVIGATION
     assert "function stripPublicWorkspaceSwitcher" in NAVIGATION
     assert '[data-site-nav-key="console"]' in NAVIGATION[NAVIGATION.index("function stripPublicWorkspaceSwitcher"):NAVIGATION.index("function installCrmDesktopEntry")]
     assert "function syncVideoEntryTargets" in NAVIGATION
     mobile = NAVIGATION[NAVIGATION.index("function mobileNavigationLinks"):NAVIGATION.index("function renderMobileMenu")]
     assert 'key: "console", href: "/console.html"' in mobile
-    assert 'key: "video", href: "/video.html"' not in mobile
-    assert 'key: "crm", href: "/crm.html"' not in mobile
+    assert 'items = isolatedWorkspacePage(page)' in mobile
+    assert 'productMenuMarkup({ mobile: true })' in mobile
 
 
 class ProductWorkspaceSplitHttpTests(unittest.TestCase):
@@ -197,11 +197,12 @@ class ProductWorkspaceSplitHttpTests(unittest.TestCase):
             self.assertIn('id="productLoginForm"', response.text)
             self.assertIn("Vecto", response.text)
 
-    def test_only_console_login_renders_the_static_case_studies_entry(self):
+    def test_all_product_login_pages_keep_a_tweet_return_and_product_menu_contract(self):
         console = self.client.get("/console-login.html")
         video = self.client.get("/video-login.html")
         crm = self.client.get("/crm-login.html")
 
         self.assertIn('data-site-nav-key="caseStudies"', console.text)
-        self.assertNotIn('data-site-nav-key="caseStudies"', video.text)
-        self.assertNotIn('data-site-nav-key="caseStudies"', crm.text)
+        for response in (video, crm):
+            self.assertIn('data-site-nav-key="console"', response.text)
+            self.assertIn('site-navigation.js', response.text)
