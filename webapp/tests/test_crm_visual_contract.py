@@ -12,7 +12,7 @@ def test_crm_shell_loads_desktop_visual_overrides_after_bundle():
     for shell_path in (STATIC / "crm.html", STATIC / "assets" / "crm" / "index.html"):
         shell = shell_path.read_text(encoding="utf-8")
         bundle_link = 'href="/assets/crm/assets/index-C_WLJXL7.css"'
-        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-nav-visual11"'
+        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-nav-visual12"'
         assert bundle_link in shell
         assert override_link in shell
         assert shell.index(bundle_link) < shell.index(override_link)
@@ -49,7 +49,10 @@ def test_crm_visual_overrides_are_desktop_scoped_and_use_shared_brand_assets():
     assert "flex-basis: 100%" in css
     assert ".crm-account-platforms, .crm-member-platforms, .crm-wizard-fieldset.crm-platform-fieldset" in css
     assert ".crm-account-platforms" in css
-    assert "grayscale(1) saturate(0.15)" in css
+    assert "opacity: 0.48" in css
+    assert "var(--instagram-platform-gradient)" in css
+    assert "var(--instagram-brand-gradient)" in css
+    assert "grayscale(1) saturate(0.15)" not in css
     assert "@media (max-width:" not in css
 
 
@@ -188,25 +191,22 @@ def test_crm_desktop_collect_platform_tabs_are_horizontal_and_mobile_is_unchange
             assert hint["y"] > first["y"] + first["height"]
             instagram = buttons.nth(0)
             threads = buttons.nth(1)
-            assert instagram.evaluate("el => ({background: getComputedStyle(el).backgroundColor, image: getComputedStyle(el).backgroundImage, color: getComputedStyle(el).color, border: getComputedStyle(el).borderColor})") == {
-                "background": "rgb(240, 242, 244)",
-                "image": "none",
-                "color": "rgb(51, 65, 85)",
-                "border": "rgb(185, 194, 204)",
-            }
-            assert instagram.locator("strong").evaluate("el => ({color: getComputedStyle(el).color, fill: getComputedStyle(el).webkitTextFillColor})") == {
-                "color": "rgb(51, 65, 85)",
-                "fill": "rgb(51, 65, 85)",
-            }
+            instagram_style = instagram.evaluate("el => ({background: getComputedStyle(el).backgroundColor, image: getComputedStyle(el).backgroundImage, color: getComputedStyle(el).color, border: getComputedStyle(el).borderColor, opacity: getComputedStyle(el).opacity, filter: getComputedStyle(el).filter})")
+            assert instagram_style["background"] == "rgba(0, 0, 0, 0)"
+            assert "linear-gradient(rgb(255, 255, 255)" in instagram_style["image"]
+            assert instagram_style["color"] == "rgb(193, 53, 132)"
+            assert instagram_style["opacity"] == "0.48"
+            assert instagram_style["filter"] == "none"
+            instagram_text = instagram.locator("strong").evaluate("el => ({color: getComputedStyle(el).color, fill: getComputedStyle(el).webkitTextFillColor})")
+            assert instagram_text["fill"] == "rgba(0, 0, 0, 0)"
             assert threads.evaluate("el => ({background: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color})") == {
                 "background": "rgb(0, 0, 0)",
                 "color": "rgb(255, 255, 255)",
             }
-            assert account_buttons.nth(0).evaluate("el => ({background: getComputedStyle(el).backgroundColor, image: getComputedStyle(el).backgroundImage, color: getComputedStyle(el).color})") == {
-                "background": "rgb(240, 242, 244)",
-                "image": "none",
-                "color": "rgb(51, 65, 85)",
-            }
+            account_style = account_buttons.nth(0).evaluate("el => ({background: getComputedStyle(el).backgroundColor, image: getComputedStyle(el).backgroundImage, opacity: getComputedStyle(el).opacity})")
+            assert account_style["background"] == "rgba(0, 0, 0, 0)"
+            assert "linear-gradient(rgb(255, 255, 255)" in account_style["image"]
+            assert account_style["opacity"] == "0.48"
 
             page.set_viewport_size({"width": 390, "height": 844})
             # The desktop-only rule must not leak into the compact/mobile
