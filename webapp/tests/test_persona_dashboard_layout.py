@@ -766,6 +766,16 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertIn("tweet_generation: '<path d=\"M12 5v14M5 12h14\"></path>'", self.console_script)
 
+    def test_normal_desktop_module_menu_omits_browser_shortcut_but_keeps_admin_boundary(self):
+        self.assertIn(
+            'return ADMIN_CONSOLE_SESSION ? modules : modules.filter((item) => item.id !== "browser_list");',
+            self.console_script,
+        )
+        self.assertIn(
+            '$("moduleMenu").innerHTML = `<div class="module-accordion">${consoleModules().map((item) => {',
+            self.console_script,
+        )
+
     def test_mobile_task_queue_uses_compact_persona_and_task_rows(self):
         marker = "/* Mobile task queue density: align queue cards with the compact persona list. */"
         self.assertIn(marker, self.styles)
