@@ -590,8 +590,9 @@ function consumeGoogleAccountSessionResult() {
 
 const COLLECTOR_CONSOLE_MODULES = new Set(["tweet_generation", "accounts", "browser_list"]);
 function consoleModules() {
-  if (COLLECTOR_DEPLOYMENT) return modules.filter((item) => COLLECTOR_CONSOLE_MODULES.has(item.id));
-  return ADMIN_CONSOLE_SESSION ? modules : modules.filter((item) => item.id !== "browser_list");
+  const apiModules = modules.filter((item) => item.id !== "browser_list");
+  if (COLLECTOR_DEPLOYMENT) return apiModules.filter((item) => COLLECTOR_CONSOLE_MODULES.has(item.id));
+  return apiModules;
 }
 const collectorSafeInitialView = COLLECTOR_DEPLOYMENT && ["persona_dashboard", "billing", "video_workspace"].includes(initialConsoleView)
   ? "accounts"

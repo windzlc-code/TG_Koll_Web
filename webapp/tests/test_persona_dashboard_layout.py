@@ -766,11 +766,16 @@ class PersonaDashboardLayoutContractTests(unittest.TestCase):
         )
         self.assertIn("tweet_generation: '<path d=\"M12 5v14M5 12h14\"></path>'", self.console_script)
 
-    def test_normal_desktop_module_menu_omits_browser_shortcut_but_keeps_admin_boundary(self):
+    def test_desktop_module_menu_omits_browser_shortcut_for_api_workbench(self):
         self.assertIn(
-            'return ADMIN_CONSOLE_SESSION ? modules : modules.filter((item) => item.id !== "browser_list");',
+            'const apiModules = modules.filter((item) => item.id !== "browser_list");',
             self.console_script,
         )
+        self.assertIn(
+            'if (COLLECTOR_DEPLOYMENT) return apiModules.filter((item) => COLLECTOR_CONSOLE_MODULES.has(item.id));',
+            self.console_script,
+        )
+        self.assertIn("return apiModules;", self.console_script)
         self.assertIn(
             '$("moduleMenu").innerHTML = `<div class="module-accordion">${consoleModules().map((item) => {',
             self.console_script,
