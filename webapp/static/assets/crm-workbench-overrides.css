@@ -70,7 +70,7 @@
   body.crm-page .crm-nav {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: 0;
+    gap: 6px;
     padding: 12px 0 0;
     border-top: 0;
   }
@@ -78,27 +78,30 @@
   body.crm-page .crm-nav button {
     grid-template-columns: 22px minmax(0, 1fr);
     gap: 10px;
-    min-height: 44px;
+    min-height: 40px;
     margin-bottom: 0;
     padding: 8px 10px;
+    border: 1px solid transparent;
     border-color: transparent;
-    border-bottom-color: var(--crm-line);
-    border-radius: 0;
-  }
-
-  body.crm-page .crm-nav button:first-child {
-    margin-bottom: 4px;
-    border-bottom-color: transparent;
     border-radius: 8px;
+    background: transparent;
   }
 
-  body.crm-page .crm-nav button:last-child { border-bottom-color: transparent; }
+  /* Match the shared module-accordion rhythm used by the video/tweet rails:
+     separators sit in the gap between options instead of changing the
+     button's shape or stealing content space. */
+  body.crm-page .crm-nav button + button {
+    position: relative;
+  }
 
-  /* Keep the desktop rail readable like the video/tweet workbenches: the
-     active item is a dark pill, while the remaining items use quiet rules.
-     The header rule above is the only separator immediately below the logo. */
-  body.crm-page .crm-nav button:not(.is-active):not(:last-child) {
-    border-bottom-color: var(--crm-line);
+  body.crm-page .crm-nav button + button::before {
+    position: absolute;
+    top: -4px;
+    right: 0;
+    left: 0;
+    height: 1px;
+    content: "";
+    background: var(--crm-line);
   }
 
   body.crm-page .crm-nav button.is-active {
@@ -119,7 +122,7 @@
   }
 
   body.crm-page .crm-nav button > span {
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 780;
     line-height: 1.25;
   }

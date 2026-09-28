@@ -12,7 +12,7 @@ def test_crm_shell_loads_desktop_visual_overrides_after_bundle():
     for shell_path in (STATIC / "crm.html", STATIC / "assets" / "crm" / "index.html"):
         shell = shell_path.read_text(encoding="utf-8")
         bundle_link = 'href="/assets/crm/assets/index-C_WLJXL7.css"'
-        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260927-crm-visual6"'
+        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-nav-visual7"'
         assert bundle_link in shell
         assert override_link in shell
         assert shell.index(bundle_link) < shell.index(override_link)
@@ -37,6 +37,10 @@ def test_crm_visual_overrides_are_desktop_scoped_and_use_shared_brand_assets():
     assert ".crm-member-platforms, .crm-platform-fieldset" in css
     assert ".crm-detail-pane > *" in css
     assert "body.crm-page" in css
+    assert "gap: 6px" in css
+    assert "min-height: 40px" in css
+    assert "border-radius: 8px" in css
+    assert "body.crm-page .crm-nav button + button::before" in css
     assert "@media (max-width:" not in css
 
 
@@ -80,6 +84,9 @@ def test_crm_visual_overrides_keep_desktop_chart_bounded_and_mobile_unchanged():
             title = page.locator(".crm-sidebar-head strong").evaluate("el => getComputedStyle(el).fontSize")
             nav_row = page.locator(".crm-nav button").first.bounding_box()
             nav_text = page.locator(".crm-nav button > span").first.evaluate("el => getComputedStyle(el).fontSize")
+            nav_gap = page.locator(".crm-nav").evaluate("el => getComputedStyle(el).rowGap")
+            nav_radius = page.locator(".crm-nav button").first.evaluate("el => getComputedStyle(el).borderRadius")
+            active_radius = page.locator(".crm-nav button.is-active").evaluate("el => getComputedStyle(el).borderRadius")
             subtitle = page.locator(".crm-sidebar-head strong").evaluate("el => getComputedStyle(el, '::after').content")
             active_background = page.locator(".crm-nav button.is-active").evaluate("el => getComputedStyle(el).backgroundColor")
             header_border = page.locator(".crm-sidebar-head").evaluate("el => getComputedStyle(el).borderBottomColor")
@@ -88,8 +95,11 @@ def test_crm_visual_overrides_keep_desktop_chart_bounded_and_mobile_unchanged():
             assert sidebar["width"] == 264 and sidebar["height"] == 800
             assert logo is not None and logo["width"] == 42 and logo["height"] == 42
             assert title == "18px"
-            assert nav_row is not None and nav_row["height"] == 44
-            assert nav_text == "15px"
+            assert nav_row is not None and nav_row["height"] == pytest.approx(40, abs=0.5)
+            assert nav_text == "13px"
+            assert nav_gap == "6px"
+            assert nav_radius == "8px"
+            assert active_radius == "8px"
             assert subtitle == '"Vecto OS 采集与数据素材"'
             assert active_background != "rgba(0, 0, 0, 0)"
             assert header_border != "rgba(0, 0, 0, 0)"
