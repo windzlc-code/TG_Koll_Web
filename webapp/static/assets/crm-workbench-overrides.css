@@ -198,6 +198,26 @@
     min-width: 180px;
   }
 
+  /* Collection wizard platform choices are a compact two-tab control on
+     desktop.  Keep the shared fieldset component and its hint row, but give
+     the two platform buttons a deterministic row so intrinsic flex sizing
+     cannot stack them vertically.  The mobile bundle keeps its own layout. */
+  body.crm-page .crm-wizard-fieldset.crm-platform-fieldset {
+    width: min(100%, 604px);
+    max-width: 100%;
+    flex-wrap: wrap;
+    margin-inline: auto;
+  }
+
+  body.crm-page .crm-wizard-fieldset.crm-platform-fieldset > button {
+    flex: 1 1 calc(50% - 2px);
+    min-width: 0;
+  }
+
+  body.crm-page .crm-wizard-fieldset.crm-platform-fieldset > .crm-wizard-hint {
+    flex-basis: 100%;
+  }
+
   body.crm-page .crm-account-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;

@@ -12,7 +12,7 @@ def test_crm_shell_loads_desktop_visual_overrides_after_bundle():
     for shell_path in (STATIC / "crm.html", STATIC / "assets" / "crm" / "index.html"):
         shell = shell_path.read_text(encoding="utf-8")
         bundle_link = 'href="/assets/crm/assets/index-C_WLJXL7.css"'
-        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-nav-visual8"'
+        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-nav-visual9"'
         assert bundle_link in shell
         assert override_link in shell
         assert shell.index(bundle_link) < shell.index(override_link)
@@ -44,6 +44,9 @@ def test_crm_visual_overrides_are_desktop_scoped_and_use_shared_brand_assets():
     assert "body.crm-page :is(.crm-nav-strip, .crm-panel-strip)" in css
     assert "transition: none !important" in css
     assert "will-change: auto" in css
+    assert ".crm-wizard-fieldset.crm-platform-fieldset" in css
+    assert "flex: 1 1 calc(50% - 2px)" in css
+    assert "flex-basis: 100%" in css
     assert "@media (max-width:" not in css
 
 
@@ -132,5 +135,50 @@ def test_crm_visual_overrides_keep_desktop_chart_bounded_and_mobile_unchanged():
             assert mobile_chart["height"] >= 180
             assert mobile_nav_transition == {"duration": "0.18s", "willChange": "transform"}
             assert mobile_panel_transition == {"duration": "0.18s", "willChange": "transform"}
+        finally:
+            browser.close()
+
+
+def test_crm_desktop_collect_platform_tabs_are_horizontal_and_mobile_is_unchanged():
+    sync_api = pytest.importorskip("playwright.sync_api")
+    css = OVERRIDES.read_text(encoding="utf-8")
+    base_css = """
+      body { margin: 0; }
+      body.crm-page { --crm-line: #b9c2cc; --crm-surface-soft: #f0f2f4; --crm-ink-soft: #334155; --crm-muted: #4b5563; }
+      * { box-sizing: border-box; }
+      .crm-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 900px; }
+      .crm-field--wide { grid-column: 1 / -1; }
+      .crm-wizard-fieldset { display: flex; flex-wrap: wrap; min-width: 0; margin: 0; padding: 6px 8px; gap: 4px; background: var(--crm-surface-soft); border: 1px solid var(--crm-line); }
+      .crm-platform-fieldset > button { flex: 1 1 0; min-width: 0; min-height: 44px; }
+      .crm-wizard-hint { flex: 1 1 100%; margin: 2px 0 0; color: var(--crm-muted); }
+    """
+    fixture = """
+      <div class="crm-form-grid">
+        <fieldset class="crm-wizard-fieldset crm-platform-fieldset crm-field--wide">
+          <legend>采集平台</legend>
+          <button type="button" data-account-platform="instagram">Instagram</button>
+          <button type="button" data-account-platform="threads">Threads</button>
+          <p class="crm-wizard-hint">仅采集已选择的平台。</p>
+        </fieldset>
+      </div>
+    """
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_browser(playwright)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            page.set_content(f"<style>{base_css}{css}</style><body class='crm-page'>{fixture}</body>")
+            buttons = page.locator(".crm-platform-fieldset > button")
+            first = buttons.nth(0).bounding_box()
+            second = buttons.nth(1).bounding_box()
+            hint = page.locator(".crm-platform-fieldset > .crm-wizard-hint").bounding_box()
+            assert first is not None and second is not None and hint is not None
+            assert second["x"] > first["x"]
+            assert second["y"] == pytest.approx(first["y"], abs=0.5)
+            assert hint["y"] > first["y"] + first["height"]
+
+            page.set_viewport_size({"width": 390, "height": 844})
+            # The desktop-only rule must not leak into the compact/mobile
+            # stylesheet: the shared component keeps its original flex basis.
+            assert buttons.nth(0).evaluate("el => getComputedStyle(el).flexBasis") == "0px"
         finally:
             browser.close()
