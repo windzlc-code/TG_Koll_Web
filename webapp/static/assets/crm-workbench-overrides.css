@@ -30,8 +30,16 @@
     gap: 12px;
     min-height: 42px;
     padding: 0;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--crm-line);
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+
+  /* Desktop navigation changes pages directly.  The horizontal strip is
+     retained for the compact/mobile layout, where the swipe-like transition
+     is part of the interaction model. */
+  body.crm-page :is(.crm-nav-strip, .crm-panel-strip) {
+    will-change: auto;
+    transition: none !important;
   }
 
   body.crm-page .crm-monogram {
