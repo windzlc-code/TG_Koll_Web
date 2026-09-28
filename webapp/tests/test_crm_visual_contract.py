@@ -12,7 +12,7 @@ def test_crm_shell_loads_desktop_visual_overrides_after_bundle():
     for shell_path in (STATIC / "crm.html", STATIC / "assets" / "crm" / "index.html"):
         shell = shell_path.read_text(encoding="utf-8")
         bundle_link = 'href="/assets/crm/assets/index-C_WLJXL7.css"'
-        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-nav-visual10"'
+        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-nav-visual11"'
         assert bundle_link in shell
         assert override_link in shell
         assert shell.index(bundle_link) < shell.index(override_link)
@@ -47,7 +47,8 @@ def test_crm_visual_overrides_are_desktop_scoped_and_use_shared_brand_assets():
     assert ".crm-wizard-fieldset.crm-platform-fieldset" in css
     assert "flex: 1 1 calc(50% - 2px)" in css
     assert "flex-basis: 100%" in css
-    assert ".crm-platform-fieldset > button:not(.is-active)" in css
+    assert ".crm-account-platforms, .crm-member-platforms, .crm-wizard-fieldset.crm-platform-fieldset" in css
+    assert ".crm-account-platforms" in css
     assert "grayscale(1) saturate(0.15)" in css
     assert "@media (max-width:" not in css
 
@@ -159,6 +160,10 @@ def test_crm_desktop_collect_platform_tabs_are_horizontal_and_mobile_is_unchange
     """
     fixture = """
       <div class="crm-form-grid">
+        <div class="crm-account-platforms">
+          <button type="button" data-account-platform="instagram"><svg class="platform-outline-icon--instagram"></svg><strong>Instagram</strong></button>
+          <button type="button" class="is-active" data-account-platform="threads"><strong>Threads</strong></button>
+        </div>
         <fieldset class="crm-wizard-fieldset crm-platform-fieldset crm-field--wide">
           <legend>采集平台</legend>
           <button type="button" data-account-platform="instagram"><svg class="platform-outline-icon--instagram"></svg><strong>Instagram</strong></button>
@@ -173,6 +178,7 @@ def test_crm_desktop_collect_platform_tabs_are_horizontal_and_mobile_is_unchange
             page = browser.new_page(viewport={"width": 1440, "height": 900})
             page.set_content(f"<style>{base_css}{css}</style><body class='crm-page'>{fixture}</body>")
             buttons = page.locator(".crm-platform-fieldset > button")
+            account_buttons = page.locator(".crm-account-platforms > button")
             first = buttons.nth(0).bounding_box()
             second = buttons.nth(1).bounding_box()
             hint = page.locator(".crm-platform-fieldset > .crm-wizard-hint").bounding_box()
@@ -195,6 +201,11 @@ def test_crm_desktop_collect_platform_tabs_are_horizontal_and_mobile_is_unchange
             assert threads.evaluate("el => ({background: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color})") == {
                 "background": "rgb(0, 0, 0)",
                 "color": "rgb(255, 255, 255)",
+            }
+            assert account_buttons.nth(0).evaluate("el => ({background: getComputedStyle(el).backgroundColor, image: getComputedStyle(el).backgroundImage, color: getComputedStyle(el).color})") == {
+                "background": "rgb(240, 242, 244)",
+                "image": "none",
+                "color": "rgb(51, 65, 85)",
             }
 
             page.set_viewport_size({"width": 390, "height": 844})
