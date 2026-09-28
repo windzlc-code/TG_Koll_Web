@@ -13907,6 +13907,53 @@ label.account-pool-add-button.upload-add-chip:focus-visible {
   background: var(--panel-solid);
 }
 
+.persona-compose-desktop-link-settings {
+  display: none;
+}
+
+/* Draft editing keeps the link control with the editable copy on desktop.
+   The mobile layout continues to use the existing media-stack placement. */
+@media (min-width: 761px) {
+  .console-page .persona-generate-panel.is-editing-draft .persona-compose-media-stack > .publish-link-settings {
+    display: none;
+  }
+
+  .console-page .persona-generate-panel.is-editing-draft .persona-compose-desktop-link-settings {
+    display: block;
+  }
+
+  .console-page .persona-compose-desktop-link-settings > .publish-link-settings {
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--panel-solid);
+  }
+
+  .console-page .persona-generate-actions--editing {
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .console-page .persona-generate-actions--editing > [data-persona-stash-draft-edit],
+  .console-page .persona-generate-actions--editing > [data-persona-create-post] {
+    flex: 0 0 auto;
+    margin-right: auto;
+  }
+
+  .console-page .persona-generate-actions--editing > .persona-writing-locale {
+    flex: 0 0 132px;
+    margin: 0;
+  }
+
+  .console-page .persona-generate-actions--editing > .persona-generate-ai-action {
+    flex: 0 0 auto;
+    margin: 0;
+    white-space: nowrap;
+  }
+}
+
 .persona-compose-media-stack .persona-generated-preview-grid {
   grid-template-columns: minmax(0, 1fr);
 }

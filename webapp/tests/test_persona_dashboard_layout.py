@@ -2711,6 +2711,32 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn('personaLinkEndingContent(item)', self.console_script)
         self.assertIn('.persona-link-content {', self.styles)
 
+    def test_desktop_draft_editor_keeps_link_settings_left_and_actions_aligned(self):
+        generation_start = self.console_script.index("function renderPersonaContentPanel")
+        generation_end = self.console_script.index('\n  if (panel === "media")', generation_start)
+        generation_panel = self.console_script[generation_start:generation_end]
+
+        link_slot = generation_panel.index('class="persona-compose-desktop-link-settings"')
+        compose_side_end = generation_panel.index('</section>', link_slot)
+        self.assertLess(link_slot, compose_side_end)
+        self.assertIn(
+            '${isEditingDraft ? `<div class="persona-compose-desktop-link-settings">${renderPublishLinkSettings(persona)}</div>` : ""}',
+            generation_panel,
+        )
+        self.assertIn(
+            'class="row-actions persona-generate-actions ${isEditingDraft ? "persona-generate-actions--editing" : ""}"',
+            generation_panel,
+        )
+
+        desktop_start = self.styles.index('@media (min-width: 761px)', self.styles.index('.persona-compose-desktop-link-settings'))
+        desktop_rules = self.styles[desktop_start:self.styles.index('.persona-compose-media-stack .persona-generated-preview-grid', desktop_start)]
+        self.assertIn('.persona-generate-panel.is-editing-draft .persona-compose-media-stack > .publish-link-settings', desktop_rules)
+        self.assertIn('display: none;', desktop_rules)
+        self.assertIn('.persona-compose-desktop-link-settings', desktop_rules)
+        self.assertIn('.persona-generate-actions--editing', desktop_rules)
+        self.assertIn('flex-wrap: nowrap;', desktop_rules)
+        self.assertIn('margin-right: auto;', desktop_rules)
+
     def test_mobile_publish_source_stays_above_content_without_a_link_panel(self):
         responsive_start = self.styles.index("@media (max-width: 1180px)")
         responsive_styles = self.styles[responsive_start:]

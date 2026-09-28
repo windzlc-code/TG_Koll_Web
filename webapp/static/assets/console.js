@@ -29848,12 +29848,13 @@ function renderPersonaContentPanel(persona, account, profile, step) {
           <label>可选人设记忆（已识别 ${esc(memoryRows.length)} 条）</label>
           ${renderPersonaMemoryOptions(persona, generateForm.selectedMemoryIds || [])}
           ${renderPersonaPostDirectionPicker(persona, generateForm, generationControlsLocked)}
-          <div class="row-actions persona-generate-actions">
+          <div class="row-actions persona-generate-actions ${isEditingDraft ? "persona-generate-actions--editing" : ""}">
             ${isEditingDraft ? `<button type="button" data-persona-create-post>保存修改</button>` : ""}
             ${renderPersonaWritingLocaleSelect(generateForm.writingLocale, generationControlsLocked)}
             <button type="button" class="primary persona-generate-ai-action" data-persona-generate-posts aria-label="${directionState.selectedKeywords.length ? "按已选方向生成推文" : (directionState.keywords.length ? "重新生成一批推文方向关键词" : "生成推文方向关键词")}" ${preflight.ready && !generationControlsLocked ? "" : "disabled"}>${generateBusy ? renderBusyButtonContent("正在生成草稿", true, actionLockStartedAt("persona", persona.id, "generate_posts")) : (postDirectionsLocked ? renderBusyButtonContent("正在生成方向", true, actionLockStartedAt("persona", persona.id, "post_directions")) : directionButtonContent)}</button>
           </div>
         `}
+            ${isEditingDraft ? `<div class="persona-compose-desktop-link-settings">${renderPublishLinkSettings(persona)}</div>` : ""}
           </section>
           ${hasComposeAside ? `
             <div class="persona-compose-media-stack">
