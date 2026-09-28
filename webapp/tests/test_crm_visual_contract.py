@@ -12,7 +12,7 @@ def test_crm_shell_loads_desktop_visual_overrides_after_bundle():
     for shell_path in (STATIC / "crm.html", STATIC / "assets" / "crm" / "index.html"):
         shell = shell_path.read_text(encoding="utf-8")
         bundle_link = 'href="/assets/crm/assets/index-C_WLJXL7.css"'
-        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-nav-visual9"'
+        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-nav-visual10"'
         assert bundle_link in shell
         assert override_link in shell
         assert shell.index(bundle_link) < shell.index(override_link)
@@ -47,6 +47,8 @@ def test_crm_visual_overrides_are_desktop_scoped_and_use_shared_brand_assets():
     assert ".crm-wizard-fieldset.crm-platform-fieldset" in css
     assert "flex: 1 1 calc(50% - 2px)" in css
     assert "flex-basis: 100%" in css
+    assert ".crm-platform-fieldset > button:not(.is-active)" in css
+    assert "grayscale(1) saturate(0.15)" in css
     assert "@media (max-width:" not in css
 
 
@@ -150,14 +152,17 @@ def test_crm_desktop_collect_platform_tabs_are_horizontal_and_mobile_is_unchange
       .crm-field--wide { grid-column: 1 / -1; }
       .crm-wizard-fieldset { display: flex; flex-wrap: wrap; min-width: 0; margin: 0; padding: 6px 8px; gap: 4px; background: var(--crm-surface-soft); border: 1px solid var(--crm-line); }
       .crm-platform-fieldset > button { flex: 1 1 0; min-width: 0; min-height: 44px; }
+      .crm-platform-fieldset > button[data-account-platform="instagram"] { color: #c13584; background: linear-gradient(#fff, #fff) padding-box, linear-gradient(45deg, #feda75, #d62976, #4f5bd5) border-box; border: 1px solid transparent; }
+      .crm-platform-fieldset > button[data-account-platform="instagram"]:not(.is-active) > strong { color: transparent; background: linear-gradient(45deg, #feda75, #d62976, #4f5bd5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+      .crm-platform-fieldset > button[data-account-platform="threads"].is-active { color: #fff; background: #000; border: 1px solid #000; }
       .crm-wizard-hint { flex: 1 1 100%; margin: 2px 0 0; color: var(--crm-muted); }
     """
     fixture = """
       <div class="crm-form-grid">
         <fieldset class="crm-wizard-fieldset crm-platform-fieldset crm-field--wide">
           <legend>采集平台</legend>
-          <button type="button" data-account-platform="instagram">Instagram</button>
-          <button type="button" data-account-platform="threads">Threads</button>
+          <button type="button" data-account-platform="instagram"><svg class="platform-outline-icon--instagram"></svg><strong>Instagram</strong></button>
+          <button type="button" class="is-active" data-account-platform="threads"><strong>Threads</strong></button>
           <p class="crm-wizard-hint">仅采集已选择的平台。</p>
         </fieldset>
       </div>
@@ -175,6 +180,22 @@ def test_crm_desktop_collect_platform_tabs_are_horizontal_and_mobile_is_unchange
             assert second["x"] > first["x"]
             assert second["y"] == pytest.approx(first["y"], abs=0.5)
             assert hint["y"] > first["y"] + first["height"]
+            instagram = buttons.nth(0)
+            threads = buttons.nth(1)
+            assert instagram.evaluate("el => ({background: getComputedStyle(el).backgroundColor, image: getComputedStyle(el).backgroundImage, color: getComputedStyle(el).color, border: getComputedStyle(el).borderColor})") == {
+                "background": "rgb(240, 242, 244)",
+                "image": "none",
+                "color": "rgb(51, 65, 85)",
+                "border": "rgb(185, 194, 204)",
+            }
+            assert instagram.locator("strong").evaluate("el => ({color: getComputedStyle(el).color, fill: getComputedStyle(el).webkitTextFillColor})") == {
+                "color": "rgb(51, 65, 85)",
+                "fill": "rgb(51, 65, 85)",
+            }
+            assert threads.evaluate("el => ({background: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color})") == {
+                "background": "rgb(0, 0, 0)",
+                "color": "rgb(255, 255, 255)",
+            }
 
             page.set_viewport_size({"width": 390, "height": 844})
             # The desktop-only rule must not leak into the compact/mobile

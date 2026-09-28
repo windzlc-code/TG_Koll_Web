@@ -218,6 +218,28 @@
     flex-basis: 100%;
   }
 
+  /* Keep an idle platform tab neutral, like the account selectors in the
+     tweet workbench.  The bundle's brand treatment is reserved for an active
+     choice; this is deliberately desktop-scoped so the compact/mobile CRM
+     controls keep their existing interaction styling. */
+  body.crm-page .crm-wizard-fieldset.crm-platform-fieldset > button:not(.is-active) {
+    color: var(--crm-ink-soft);
+    background: var(--crm-surface-soft);
+    border-color: var(--crm-line);
+  }
+
+  body.crm-page .crm-wizard-fieldset.crm-platform-fieldset > button[data-account-platform="instagram"]:not(.is-active) > strong {
+    color: inherit;
+    background: none;
+    background-clip: initial;
+    -webkit-background-clip: initial;
+    -webkit-text-fill-color: currentColor;
+  }
+
+  body.crm-page .crm-wizard-fieldset.crm-platform-fieldset > button[data-account-platform="instagram"]:not(.is-active) .platform-outline-icon--instagram {
+    filter: grayscale(1) saturate(0.15);
+  }
+
   body.crm-page .crm-account-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
