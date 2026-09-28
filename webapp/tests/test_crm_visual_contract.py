@@ -12,7 +12,7 @@ def test_crm_shell_loads_desktop_visual_overrides_after_bundle():
     for shell_path in (STATIC / "crm.html", STATIC / "assets" / "crm" / "index.html"):
         shell = shell_path.read_text(encoding="utf-8")
         bundle_link = 'href="/assets/crm/assets/index-C_WLJXL7.css"'
-        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-nav-visual12"'
+        override_link = 'href="/assets/crm-workbench-overrides.css?v=20260928-crm-dashboard-compact1"'
         assert bundle_link in shell
         assert override_link in shell
         assert shell.index(bundle_link) < shell.index(override_link)
@@ -82,7 +82,7 @@ def test_crm_visual_overrides_keep_desktop_chart_bounded_and_mobile_unchanged():
       <aside class="crm-sidebar"><div class="crm-sidebar-head"><div class="crm-monogram">CRM</div><strong>采集工作台</strong></div><nav class="crm-nav"><button class="is-active"><svg viewBox="0 0 24 24"></svg><span>总览</span></button><button><svg viewBox="0 0 24 24"></svg><span>采集</span></button></nav></aside>
       <div class="crm-nav-strip" style="transform: translate3d(-100%, 0, 0)"></div>
       <div class="crm-panel-strip" style="transform: translate3d(-100%, 0, 0)"></div>
-      <main class="crm-main"><svg class="crm-line-chart" viewBox="0 0 720 250"><text x="52" y="30">任务数</text></svg></main>
+      <main class="crm-main"><header class="crm-overview-title"><h1>总览</h1></header><svg class="crm-line-chart" viewBox="0 0 720 250"><text x="52" y="30">任务数</text></svg></main>
     """
     with sync_api.sync_playwright() as playwright:
         browser = _launch_browser(playwright)
@@ -93,7 +93,9 @@ def test_crm_visual_overrides_keep_desktop_chart_bounded_and_mobile_unchanged():
                 "el => ({sidebar: getComputedStyle(el).getPropertyValue('--crm-sidebar-width').trim(), font: getComputedStyle(el).fontSize})"
             )
             chart = page.locator(".crm-line-chart").bounding_box()
+            overview_title_display = page.locator(".crm-overview-title").evaluate("el => getComputedStyle(el).display")
             assert desktop == {"sidebar": "264px", "font": "14px"}
+            assert overview_title_display == "none"
             sidebar = page.locator(".crm-sidebar").bounding_box()
             logo = page.locator(".crm-monogram").bounding_box()
             title = page.locator(".crm-sidebar-head strong").evaluate("el => getComputedStyle(el).fontSize")
@@ -133,12 +135,14 @@ def test_crm_visual_overrides_keep_desktop_chart_bounded_and_mobile_unchanged():
                 "el => ({sidebar: getComputedStyle(el).getPropertyValue('--crm-sidebar-width').trim(), font: getComputedStyle(el).fontSize})"
             )
             mobile_chart = page.locator(".crm-line-chart").bounding_box()
+            mobile_overview_title_display = page.locator(".crm-overview-title").evaluate("el => getComputedStyle(el).display")
             mobile_nav_transition = page.locator(".crm-nav-strip").evaluate("el => ({duration: getComputedStyle(el).transitionDuration, willChange: getComputedStyle(el).willChange})")
             mobile_panel_transition = page.locator(".crm-panel-strip").evaluate("el => ({duration: getComputedStyle(el).transitionDuration, willChange: getComputedStyle(el).willChange})")
             assert mobile == {"sidebar": "188px", "font": "14px"}
             assert mobile_chart is not None
             assert mobile_chart["width"] < 980.5
             assert mobile_chart["height"] >= 180
+            assert mobile_overview_title_display != "none"
             assert mobile_nav_transition == {"duration": "0.18s", "willChange": "transform"}
             assert mobile_panel_transition == {"duration": "0.18s", "willChange": "transform"}
         finally:

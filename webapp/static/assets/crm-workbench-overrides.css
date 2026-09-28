@@ -284,10 +284,17 @@
     font-size: 24px;
   }
 
+  /* The compact/mobile workbench keeps the overview heading.  Desktop uses
+     the sidebar identity and the metric/chart cards as the page context, so
+     do not reserve a second title row above the data. */
+  body.crm-page .crm-overview-title {
+    display: none;
+  }
+
   body.crm-page .crm-metrics,
   body.crm-page .crm-chart-grid,
   body.crm-page .crm-overview-grid {
-    max-width: 1320px;
+    max-width: 1180px;
   }
 
   body.crm-page .crm-metric {
@@ -305,13 +312,15 @@
   }
 
   body.crm-page .crm-chart-grid {
-    gap: 14px;
+    grid-template-columns: minmax(0, 1.4fr) minmax(280px, .8fr);
+    gap: 10px;
+    margin-bottom: 10px;
   }
 
   body.crm-page .crm-chart-panel {
-    gap: 12px;
-    padding: 16px 18px;
-    border-radius: 12px;
+    gap: 8px;
+    padding: 12px 14px;
+    border-radius: 10px;
   }
 
   body.crm-page .crm-chart-head h3 {
@@ -326,6 +335,7 @@
      the whole left column several screens tall on wide monitors. */
   body.crm-page .crm-line-chart {
     width: min(100%, 980px);
+    height: 220px;
     min-height: 0;
     max-height: 300px;
     margin-inline: auto;
@@ -340,25 +350,32 @@
   }
 
   body.crm-page .crm-donut-wrap {
-    grid-template-columns: minmax(0, 1fr) 116px;
-    gap: 12px;
-    min-height: 140px;
+    grid-template-columns: minmax(0, 1fr) 104px;
+    gap: 10px;
+    min-height: 116px;
   }
 
   body.crm-page .crm-donut {
-    width: 116px;
-    height: 116px;
+    width: 104px;
+    height: 104px;
   }
 
   body.crm-page .crm-donut > div {
-    inset: 19px;
+    inset: 17px;
   }
 
   body.crm-page .crm-donut strong {
-    font-size: 20px;
+    font-size: 18px;
   }
 
   body.crm-page .crm-donut-legend > div {
     font-size: 12px;
   }
+
+  body.crm-page .crm-donut-legend { gap: 5px; }
+  body.crm-page .crm-line-legend { gap: 6px 12px; }
+  body.crm-page .crm-line-legend span { font-size: 12px; }
+  body.crm-page .crm-trend-footer { gap: 5px; }
+  body.crm-page .crm-trend-range button { min-height: 28px; font-size: 12px; }
+  body.crm-page .crm-analytics-bars { gap: 7px; }
 }
