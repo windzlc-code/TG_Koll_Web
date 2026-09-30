@@ -842,7 +842,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             if getattr(button, "callback_data", None) and not button.callback_data.startswith("tt:p:")
         }
         self.assertEqual(content_module_callbacks, {
-            "tt:postsmenu", "tt:favorites:0", "tt:imageposts:0",
+            "tt:drafts:0", "tt:favorites:0",
         })
         asyncio.run(controller.handle_callback(_Query("tt:pmod:publish", message), _Types))
         publish_module_callbacks = {
@@ -1003,7 +1003,9 @@ class TelegramTweetAdminTests(unittest.TestCase):
 
         asyncio.run(controller.handle_callback(_Query("tt:pmod:content", message), _Types))
         self.assertIn("查看推文", message.edits[-1][0])
-        self.assertIn("草稿、收藏和推文配图", message.edits[-1][0])
+        self.assertIn("待发布推文与收藏", message.edits[-1][0])
+        self.assertNotIn("草稿与推文", message.edits[-1][0])
+        self.assertNotIn("推文配图", message.edits[-1][0])
 
         save_state(101, mode="persona_group_create", payload={})
         stale_group_input = _Message(text="旧分组输入")
@@ -1300,14 +1302,60 @@ class TelegramTweetAdminTests(unittest.TestCase):
         )
         save_state(101, selected_persona_id="persona-a")
         message = _Message()
-        post_button = callback_token(101, "d", {
-            "persona_id": "persona-a", "post_id": "post-a", "source": "posts", "intent": "image",
-        })
+
+        # Historical image-list buttons remain usable, but now converge on
+        # the canonical post list instead of exposing a duplicate image-only
+        # branch. Image generation lives on the selected post's detail page.
+        asyncio.run(controller.handle_callback(_Query("tt:imageposts:0", message), _Types))
+        self.assertIn("草稿（1，第 1/1 页）", message.edits[-1][0])
+        self.assertNotIn("请选择要生成图片", message.edits[-1][0])
+        self.assertNotIn(
+            "tt:draft_new",
+            {
+                button.callback_data
+                for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+                for button in row
+                if getattr(button, "callback_data", None)
+            },
+        )
+        post_button = next(
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if str(getattr(button, "callback_data", "")).startswith("tt:d:")
+        )
         with mock.patch.object(asyncio, "create_task", side_effect=lambda coro: (coro.close(), None)[1]):
             asyncio.run(controller.handle_callback(_Query(post_button, message), _Types))
+        self.assertIn("请选择下一步", message.edits[-1][0])
+        image_button = next(
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "生成推文配图" in str(getattr(button, "text", ""))
+        )
+        asyncio.run(controller.handle_callback(_Query(image_button, message), _Types))
         self.assertIn("推文配图设置", message.edits[-1][0])
         self.assertIn("自动比例会结合正文主体", message.edits[-1][0])
         self.assertIn("原有风格是默认人设风格", message.edits[-1][0])
+
+        # Leaving the image editor must return to the post detail instead of
+        # resolving the image intent back into the same editor again.
+        detail_back = next(
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "返回推文详情" in str(getattr(button, "text", ""))
+        )
+        asyncio.run(controller.handle_callback(_Query(detail_back, message), _Types))
+        self.assertIn("请选择下一步", message.edits[-1][0])
+        self.assertNotIn("推文配图设置", message.edits[-1][0])
+        image_button = next(
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if "生成推文配图" in str(getattr(button, "text", ""))
+        )
+        asyncio.run(controller.handle_callback(_Query(image_button, message), _Types))
         style_button = next(
             button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
             for button in row if "写实摄影" in str(button.text)

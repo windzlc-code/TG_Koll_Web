@@ -2098,13 +2098,12 @@ class NativeTweetBotController:
         if module == "content":
             return (
                 "📝 查看推文\n\n" + persona_context
-                + "查看当前人设的草稿、收藏和推文配图；编辑只影响当前内容，不会覆盖人设资料。",
+                + "查看当前人设的待发布推文与收藏；打开具体推文后，可继续编辑正文、管理媒体、生成配图或发布。",
                 types.InlineKeyboardMarkup(inline_keyboard=[
                     [
-                        button(text="📝 草稿与推文", callback_data="tt:postsmenu"),
+                        button(text="📝 推文列表", callback_data="tt:drafts:0"),
                         button(text="⭐ 收藏", callback_data="tt:favorites:0"),
                     ],
-                    [button(text="🖼 推文配图", callback_data="tt:imageposts:0")],
                     back,
                 ]),
             )
@@ -3095,7 +3094,7 @@ class NativeTweetBotController:
                 },
             ),
         )] for index, post in enumerate(posts[start:start + PAGE_SIZE])]
-        target = "imageposts" if intent == "image" else ("publishposts" if intro and source == "posts" else ("favorites" if source == "favorites" else "drafts"))
+        target = "publishposts" if intent == "publish" and source == "posts" else ("favorites" if source == "favorites" else "drafts")
         nav, page, total_pages = _pagination_rows(
             types,
             page=page,
@@ -3103,14 +3102,12 @@ class NativeTweetBotController:
             callback_for_page=lambda target_page: f"tt:{target}:{target_page}",
         )
         rows.extend(nav)
-        # Creating a draft belongs to the dedicated “新建推文” module.  Keep
-        # it on the plain draft list only; contextual publish/image pickers
-        # should not grow a second, unrelated action.
-        if source == "posts" and not intro:
-            rows.append([types.InlineKeyboardButton(text="➕ 手工新建草稿", callback_data="tt:draft_new")])
-        # Draft/favorite/image lists are part of the content module.  Only a
+        # Creation belongs to the sibling “新建推文” module. The R18-style
+        # viewer stays focused on choosing an existing post, so the same
+        # create action is not repeated inside this list.
+        # Draft and favorite lists are part of the content module. Only a
         # list opened from the publish flow returns to publish management.
-        module = "publish" if intro and source == "posts" and "发布" in intro else "content"
+        module = "publish" if intent == "publish" and source == "posts" else "content"
         rows.append(self._persona_module_back_row(types, int(query.message.chat.id), persona_id, module))
         list_text = (
             f"{'收藏' if source == 'favorites' else '草稿'}（{len(posts)}，第 {page + 1}/{total_pages} 页）\n"
@@ -3208,7 +3205,7 @@ class NativeTweetBotController:
             [types.InlineKeyboardButton(text="🚀 提交配图任务", callback_data=callback_token(chat_id, "imggenerate", payload))],
             [types.InlineKeyboardButton(text=_back_label("返回推文详情"), callback_data=callback_token(chat_id, "d", {
                 "persona_id": persona_id, "post_id": post_id, "source": source,
-                "page": current_page, "intent": "image",
+                "page": current_page, "intent": "",
             }))],
         ])
         selected = (
@@ -5820,28 +5817,24 @@ class NativeTweetBotController:
                     await self._persona_list(query, types, member, 0)
                     return
                 clear_pending_state(chat_id)
-                rows = [[
-                    types.InlineKeyboardButton(text="📝 查看草稿", callback_data="tt:drafts:0"),
-                    types.InlineKeyboardButton(text="⭐ 查看收藏", callback_data="tt:favorites:0"),
-                ], self._persona_module_back_row(types, chat_id, state["selected_persona_id"], "content")]
-                await self._edit_callback_text(query,
-                    "推文内容",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
-                )
+                # Saved keyboards from the former intermediate menu converge
+                # on the same canonical post list used by the visible entry.
+                await self._post_list(query, types, member, source="posts", page=0)
             elif action == "imageposts":
                 state = load_state(chat_id)
                 if not state["selected_persona_id"]:
                     await self._persona_list(query, types, member, 0)
                     return
                 clear_pending_state(chat_id)
+                # Keep historical callbacks usable without maintaining a
+                # second image-only copy of the post list. Image actions are
+                # available after selecting a post, matching the R18 flow.
                 await self._post_list(
                     query,
                     types,
                     member,
                     source="posts",
                     page=int(parts[2]) if len(parts) > 2 else 0,
-                    intro="推文配图 · 请选择要生成图片的草稿。\n点击条目后可逐项设置数量、比例、构图、风格和提示词。",
-                    intent="image",
                 )
             elif action == "personaimage":
                 state = load_state(chat_id)
@@ -7164,27 +7157,16 @@ class NativeTweetBotController:
                 clear_pending_state(chat_id)
                 if reference_persona_id:
                     save_state(chat_id, selected_persona_id=reference_persona_id)
-                # The image-focused list uses the same compact post buttons as
-                # drafts/favorites.  Preserve its intent when the user taps a
-                # post, otherwise the click would drop into the generic detail
-                # view and hide the image controls behind an extra step.
-                if str(reference.get("intent") or "") == "image":
-                    await self._render_image_options(
-                        query,
-                        types,
-                        member,
-                        persona_id=reference_persona_id,
-                        post_id=str(reference.get("post_id") or ""),
-                        source=str(reference.get("source") or "posts"),
-                        page=int(reference.get("page") or 0),
-                    )
-                else:
-                    await self._post_detail(
-                        query, types, member, str(reference.get("post_id") or ""),
-                        str(reference.get("source") or "posts"),
-                        page=int(reference.get("page") or 0),
-                        intent=str(reference.get("intent") or ""),
-                    )
+                # A post callback always means “open this post”.  Normalize
+                # the retired image-list intent so old messages and every
+                # “return to detail” button cannot loop into image settings.
+                reference_intent = str(reference.get("intent") or "")
+                await self._post_detail(
+                    query, types, member, str(reference.get("post_id") or ""),
+                    str(reference.get("source") or "posts"),
+                    page=int(reference.get("page") or 0),
+                    intent="" if reference_intent == "image" else reference_intent,
+                )
             elif action == "gendrafts" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "gendrafts", parts[2])
                 reference_persona_id = str(reference.get("persona_id") or "")
