@@ -1932,7 +1932,6 @@ class NativeTweetBotController:
         button = types.InlineKeyboardButton
         rows = [
             [button(text="➕ 新建人设", callback_data="tt:persona_ai_new")],
-            [button(text="📝 手工新建资料", callback_data="tt:persona_new")],
             [button(text="🔗 复制公开人设", callback_data="tt:persona_copy_new")],
             [button(text=_back_label("返回人设列表"), callback_data=f"tt:personas:{max(0, int(page or 0))}")],
         ]

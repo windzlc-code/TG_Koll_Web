@@ -777,9 +777,16 @@ class TelegramTweetAdminTests(unittest.TestCase):
             if getattr(button, "callback_data", None)
         }
         self.assertEqual(management_callbacks, {
-            "tt:persona_new", "tt:persona_ai_new", "tt:persona_copy_new",
+            "tt:persona_ai_new", "tt:persona_copy_new",
             "tt:personas:0",
         })
+        management_labels = {
+            str(button.text)
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+        }
+        self.assertIn("➕ 新建人设", management_labels)
+        self.assertNotIn("📝 手工新建资料", management_labels)
         self.assertIn("新建或复制人设资料", message.edits[-1][0])
         self.assertNotIn("人设分组", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:personagroups:0", message), _Types))
