@@ -887,7 +887,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
         asyncio.run(controller.handle_callback(_Query("tt:pmod:settings", message), _Types))
         self.assertIn("人设设置", message.edits[-1][0])
         self.assertIn("待发布推文：2 篇", message.edits[-1][0])
-        self.assertIn("按业务模块整理", message.edits[-1][0])
+        self.assertIn("人设：科技观察员", message.edits[-1][0])
+        self.assertNotIn("按业务模块整理", message.edits[-1][0])
         self.assertNotIn("人设记忆", message.edits[-1][0])
         self.assertNotIn("加入分组", message.edits[-1][0])
         settings_markup = message.edits[-1][1]["reply_markup"]
@@ -984,7 +985,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
         # Older profile/media category callbacks remain meaningful: profile
         # returns to the settings modules, media opens the canonical image flow.
         asyncio.run(controller.handle_callback(_Query("tt:psettings:profile", message), _Types))
-        self.assertIn("按业务模块整理", message.edits[-1][0])
+        self.assertIn("人设：科技观察员", message.edits[-1][0])
+        self.assertNotIn("按业务模块整理", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:psettings:media", message), _Types))
         self.assertIn("人设图与图库", message.edits[-1][0])
 
@@ -1796,6 +1798,90 @@ class TelegramTweetAdminTests(unittest.TestCase):
                 ("❌ 取消", expected_parent),
             ])
             self.assertNotIn("tt:stepcancel", {button.callback_data for button in buttons})
+
+    def test_tweet_style_uses_r18_sample_analysis_flow_and_can_reset(self):
+        calls = []
+        profile = {
+            "id": "persona-a",
+            "name": "科技观察员",
+            "tweet_style_sample": "今天分享一个科技观察。大家怎么看？",
+            "tweet_style_profile": "第一人称、亲近口吻；分段短句排版；结尾使用互动提问。",
+        }
+
+        def dispatch(_user_id, action, payload):
+            calls.append((action, payload))
+            if action == "profile.get":
+                return dict(profile)
+            if action == "profile.update":
+                if payload.get("tweet_style_sample"):
+                    return {
+                        **profile,
+                        "tweet_style_sample": payload["tweet_style_sample"],
+                        "tweet_style_profile": "短句表达；亲近口吻；结尾使用互动提问。",
+                    }
+                return {
+                    **profile,
+                    "tweet_style_sample": "",
+                    "tweet_style_profile": "",
+                }
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        message = _Message()
+
+        asyncio.run(controller.handle_callback(_Query("tt:style", message), _Types))
+        style_text, style_kwargs = message.edits[-1]
+        self.assertIn("🧵 推文风格", style_text)
+        self.assertIn("人设：科技观察员", style_text)
+        self.assertIn("当前风格：第一人称、亲近口吻", style_text)
+        self.assertIn("发送一篇完整的案例推文正文", style_text)
+        self.assertIn("篇幅、语气、换行、标点和表情习惯", style_text)
+        self.assertEqual(load_state(101)["mode"], "profile_style")
+        style_buttons = [
+            (button.text, button.callback_data)
+            for row in style_kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        self.assertEqual(style_buttons[0][0], "♻️ 恢复默认风格")
+        self.assertTrue(str(style_buttons[0][1]).startswith("tt:stylereset:"))
+        self.assertEqual(style_buttons[1], ("❌ 取消", "tt:pmod:settings"))
+
+        short_message = _Message(text="太短", message_id=7)
+        asyncio.run(controller.handle_text(short_message, _Types))
+        self.assertIn("案例推文太短", short_message.answers[-1][0])
+        self.assertEqual(load_state(101)["mode"], "profile_style")
+        self.assertFalse(any(action == "profile.update" for action, _payload in calls))
+
+        sample = "今天分享一个完整的科技观察。你们怎么看这个变化？"
+        sample_message = _Message(text=sample, message_id=8)
+        asyncio.run(controller.handle_text(sample_message, _Types))
+        saved_text, saved_kwargs = sample_message.answers[-1]
+        self.assertIn("推文风格已保存", saved_text)
+        self.assertIn("已提取风格：短句表达", saved_text)
+        self.assertEqual(load_state(101)["mode"], "")
+        self.assertIn(
+            ("profile.update", {"persona_id": "persona-a", "tweet_style_sample": sample}),
+            calls,
+        )
+        self.assertEqual(
+            [(button.text, button.callback_data) for row in saved_kwargs["reply_markup"].inline_keyboard for button in row],
+            [("✍️ 生成推文", "tt:pmod:create"), ("◀️ 返回人设设置", "tt:pmod:settings")],
+        )
+
+        save_state(101, selected_persona_id="persona-a", mode="profile_style")
+        reset_message = _Message()
+        asyncio.run(controller.handle_callback(_Query(style_buttons[0][1], reset_message), _Types))
+        self.assertIn("已恢复默认推文风格", reset_message.edits[-1][0])
+        self.assertEqual(load_state(101)["mode"], "")
+        self.assertIn(
+            ("profile.update", {"persona_id": "persona-a", "tweet_style_sample": ""}),
+            calls,
+        )
 
     def test_generation_resumes_after_persona_and_confirms_before_enqueue(self):
         calls = []

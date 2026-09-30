@@ -2028,11 +2028,11 @@ class NativeTweetBotController:
             counts = persona.get("counts") if isinstance(persona, dict) and isinstance(persona.get("counts"), dict) else {}
             platform_accounts = counts.get("platform_accounts") if isinstance(counts.get("platform_accounts"), list) else []
             settings_context = (
-                f"{persona_context}"
+                f"人设：{persona_name}\n"
                 f"平台账号：{'、'.join(str(item).strip() for item in platform_accounts if str(item).strip()) or '未绑定'}\n"
                 f"待发布推文：{counts.get('posts', 0)} 篇\n"
                 f"已发布：{counts.get('published', 0)} 篇\n"
-                f"人设图：{counts.get('images', 0)} 张\n\n"
+                f"人设图：{counts.get('images', 0)} 张"
                 if persona_name
                 else ""
             )
@@ -2053,8 +2053,7 @@ class NativeTweetBotController:
             ]
             settings_rows.append(back)
             return (
-                "⚙️ 人设设置\n\n" + settings_context
-                + "推文工作台功能已按业务模块整理；先选择模块，再在模块内完成具体操作：",
+                "⚙️ 人设设置\n\n" + settings_context,
                 types.InlineKeyboardMarkup(inline_keyboard=settings_rows),
             )
         settings_back = [button(text="◀️ 返回人设设置", callback_data="tt:pmod:settings")]
@@ -8229,17 +8228,74 @@ class NativeTweetBotController:
                         [types.InlineKeyboardButton(text="◀️ 返回人设设置", callback_data="tt:pmod:settings")],
                     ]),
                 )
-            elif action in {"bio", "style"}:
-                save_state(chat_id, mode="profile_content" if action == "bio" else "profile_style", payload={})
+            elif action == "bio":
+                save_state(chat_id, mode="profile_content", payload={})
                 await self._edit_callback_text(query,
-                    "人设设置 · " + ("修改简介" if action == "bio" else "修改推文风格") + "\n"
+                    "人设设置 · 修改简介\n"
                     "请发送新的完整内容；只更新当前字段，名称、记忆、链接模板、图库和账号绑定保持不变。",
                     reply_markup=self._step_navigation_markup(
                         types,
-                        back_callback="tt:profile" if action == "bio" else "tt:pmod:settings",
+                        back_callback="tt:profile",
                         back_text="❌ 取消",
                         include_cancel=False,
                     ),
+                )
+            elif action == "style":
+                clear_pending_state(chat_id, retain_keys=("persona_list_page",))
+                persona_id = str(load_state(chat_id)["selected_persona_id"] or "")
+                if not persona_id:
+                    raise HTTPException(status_code=400, detail="请先选择人设")
+                profile = await self._call(user_id, "profile.get", {"persona_id": persona_id})
+                current_style = str(profile.get("tweet_style_profile") or "").strip()
+                has_style = bool(current_style or str(profile.get("tweet_style_sample") or "").strip())
+                save_state(chat_id, mode="profile_style", payload={})
+                rows = []
+                if has_style:
+                    rows.append([types.InlineKeyboardButton(
+                        text="♻️ 恢复默认风格",
+                        callback_data=callback_token(chat_id, "stylereset", {"persona_id": persona_id}),
+                    )])
+                rows.append([types.InlineKeyboardButton(
+                    text="❌ 取消",
+                    callback_data="tt:pmod:settings",
+                )])
+                await self._edit_callback_text(
+                    query,
+                    "🧵 推文风格\n\n"
+                    f"人设：{str(profile.get('name') or '当前人设')}\n"
+                    f"当前风格：{current_style[:500] or '未设置'}\n\n"
+                    "请直接发送一篇完整的案例推文正文。\n"
+                    "系统会分析它的篇幅、语气、换行、标点和表情习惯；保存后，此人设生成的新推文会优先沿用这套表达风格。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
+                )
+            elif action == "stylereset" and len(parts) > 2:
+                reference = resolve_callback_token(chat_id, "stylereset", parts[2], consume=True)
+                persona_id = str(reference.get("persona_id") or "")
+                if not persona_id:
+                    raise HTTPException(status_code=400, detail="请先选择人设")
+                await self._call(user_id, "profile.update", {
+                    "persona_id": persona_id,
+                    "tweet_style_sample": "",
+                })
+                clear_pending_state(chat_id, retain_keys=("persona_list_page",))
+                audit_action(
+                    chat_id,
+                    user_id,
+                    "profile.update",
+                    status="success",
+                    resource_type="persona",
+                    resource_id=persona_id,
+                    detail="tweet_style_sample:reset",
+                )
+                await self._edit_callback_text(
+                    query,
+                    "✅ 已恢复默认推文风格。\n\n后续生成将使用通用人设推文规则。",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(
+                            text=_back_label("返回人设设置"),
+                            callback_data="tt:pmod:settings",
+                        ),
+                    ]]),
                 )
             elif action == "profilename":
                 save_state(chat_id, mode="profile_name", payload={})
@@ -9149,17 +9205,54 @@ class NativeTweetBotController:
                         ),
                     ]]),
                 )
-            elif mode in {"profile_content", "profile_style"}:
-                key = "content" if mode == "profile_content" else "tweet_style_sample"
+            elif mode == "profile_content":
+                key = "content"
                 await self._call(user_id, "profile.update", {"persona_id": persona_id, key: text})
                 clear_pending_state(chat_id)
                 audit_action(chat_id, user_id, "profile.update", status="success", resource_type="persona", resource_id=persona_id, detail=key)
-                return_callback = "tt:profile" if mode == "profile_content" else "tt:pmod:settings"
-                return_text = "返回人设简介" if mode == "profile_content" else "返回人设设置"
                 await message.answer(
                     "基础资料已保存。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text=_back_label(return_text), callback_data=return_callback),
+                        types.InlineKeyboardButton(text=_back_label("返回人设简介"), callback_data="tt:profile"),
+                    ]]),
+                )
+            elif mode == "profile_style":
+                if len(text) < 12:
+                    await message.answer(
+                        "❌ 案例推文太短，无法分析风格。\n"
+                        "请发送一篇至少 12 个字符的完整案例推文。",
+                        reply_markup=self._step_navigation_markup(
+                            types,
+                            back_callback="tt:pmod:settings",
+                            back_text="❌ 取消",
+                            include_cancel=False,
+                        ),
+                    )
+                    return
+                result = await self._call(user_id, "profile.update", {
+                    "persona_id": persona_id,
+                    "tweet_style_sample": text,
+                })
+                if not isinstance(result, dict) or not str(result.get("tweet_style_profile") or "").strip():
+                    result = await self._call(user_id, "profile.get", {"persona_id": persona_id})
+                extracted_style = str((result or {}).get("tweet_style_profile") or "").strip()
+                clear_pending_state(chat_id)
+                audit_action(
+                    chat_id,
+                    user_id,
+                    "profile.update",
+                    status="success",
+                    resource_type="persona",
+                    resource_id=persona_id,
+                    detail="tweet_style_sample",
+                )
+                await message.answer(
+                    "✅ 推文风格已保存\n\n"
+                    f"已提取风格：{extracted_style[:500] or '已保存案例，后续生成会优先参考其表达方式。'}",
+                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
+                        types.InlineKeyboardButton(text="✍️ 生成推文", callback_data="tt:pmod:create"),
+                    ], [
+                        types.InlineKeyboardButton(text=_back_label("返回人设设置"), callback_data="tt:pmod:settings"),
                     ]]),
                 )
             elif mode == "profile_name":
