@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
-import secrets
 import sqlite3
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
-import requests
 from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from .auth import require_admin
+from .collector_proxy_admin import allocate_runtime_account_proxy
 from .db import db
 
 COLLECTOR_LOGIN_PLATFORMS = {"threads", "instagram"}
@@ -231,39 +229,6 @@ def _upsert_totp(conn, account_id: str, secret: str, now: int) -> None:
     )
 
 
-def _signed_worker(method: str, path: str, body: bytes = b"") -> dict[str, Any]:
-    from .remote_fetch_protocol import signed_headers
-
-    keys_path = Path(os.getenv("TG_FETCH_WORKER_KEYS_FILE", "/data/internal/remote-fetch-keys.json"))
-    keys = json.loads(keys_path.read_text(encoding="utf-8"))
-    key_id = sorted(keys)[0]
-    secret = str(keys[key_id])
-    headers = signed_headers(
-        secret=secret,
-        key_id=key_id,
-        method=method,
-        path=path,
-        body=body,
-        timestamp=_now(),
-        nonce=secrets.token_urlsafe(24),
-    )
-    base = str(os.getenv("TG_FETCH_WORKER_INTERNAL_URL") or "http://tg-koll-capture-worker:8092").rstrip("/")
-    response = requests.request(method, base + path, headers=headers, data=body or None, timeout=20)
-    if response.status_code >= 400:
-        detail = "采集代理分配失败"
-        try:
-            payload = response.json()
-            if isinstance(payload, dict) and payload.get("detail"):
-                detail = str(payload.get("detail"))
-        except Exception:
-            detail = response.text[:200] or detail
-        raise HTTPException(status_code=response.status_code if response.status_code in {400, 404, 409, 422} else 502, detail=detail)
-    payload = response.json()
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=502, detail="采集代理返回无效")
-    return payload
-
-
 def register_fingerprint_login_admin_routes(app: FastAPI) -> None:
     from .social_automation_api import close_live_browser_session, create_account_task, _live_browser_sessions
 
@@ -325,9 +290,10 @@ def register_fingerprint_login_admin_routes(app: FastAPI) -> None:
         _admin: dict[str, Any] = Depends(require_admin),
     ):
         account = _require_collector_login_account(account_id)
-        body = json.dumps({"account_id": str(account["id"])}).encode("utf-8")
-        payload = _signed_worker("POST", "/internal/worker/v1/account-proxy/allocate", body)
-        proxy = payload.get("proxy") if isinstance(payload.get("proxy"), dict) else {}
+        try:
+            proxy = allocate_runtime_account_proxy(str(account["id"]))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail="本机粘性代理暂不可用，请先配置并检测代理产品") from exc
         server = str(proxy.get("server") or "").strip()
         rest = server.split("://", 1)[-1]
         host = rest.rsplit(":", 1)[0].strip() if ":" in rest else rest.strip()

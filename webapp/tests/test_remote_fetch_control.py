@@ -374,11 +374,11 @@ class RemoteFetchControlTests(unittest.TestCase):
             "posts": [],
         })
 
-    def test_crm_collector_mode_defaults_only_for_remote_required_and_can_be_overridden(self) -> None:
+    def test_crm_live_search_never_reenables_retired_collector_mode(self) -> None:
         with patch.dict(os.environ, {"TG_REMOTE_FETCH_MODE": "local"}, clear=True):
             self.assertFalse(server._crm_collector_live_search_enabled())
         with patch.dict(os.environ, {"TG_REMOTE_FETCH_MODE": "remote_required"}, clear=True):
-            self.assertTrue(server._crm_collector_live_search_enabled())
+            self.assertFalse(server._crm_collector_live_search_enabled())
         with patch.dict(
             os.environ,
             {"TG_REMOTE_FETCH_MODE": "remote_required", "TG_CRM_COLLECTOR_MODE": "false"},

@@ -47,7 +47,7 @@ class PersonaHotKeywordModeVersionTests(unittest.TestCase):
         server._write_persona_hot_keyword_batch_state(state)
         generated = [f"new-normal-{index}" for index in range(20)]
 
-        with mock.patch.object(server, "_remote_fetch_archive_snapshot", return_value=None), mock.patch.object(
+        with mock.patch.object(server, "_persona_archive_snapshot", return_value=None), mock.patch.object(
             server,
             "_run_persona_hot_workflow_cli",
             return_value={

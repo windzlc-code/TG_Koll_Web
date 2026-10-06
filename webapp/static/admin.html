@@ -11,6 +11,7 @@
   </script>
   <link rel="stylesheet" href="/assets/style.css?v=__STYLE_VERSION__">
   <link rel="stylesheet" href="/assets/opc/site-navigation.css?v=__SITE_NAVIGATION_CSS_VERSION__">
+  <link rel="stylesheet" href="/assets/admin-collector-proxy.css?v=__ADMIN_COLLECTOR_PROXY_CSS_VERSION__">
   <link rel="stylesheet" href="/assets/admin-fingerprint-login.css?v=__ADMIN_FINGERPRINT_LOGIN_CSS_VERSION__">
   <style>
     .proxy-market-admin-head-actions,
@@ -1058,11 +1059,51 @@
           <article class="admin-governance-kpi is-health"><span>服务健康</span><strong id="govKpiHealth">-</strong><small id="govKpiHealthMeta">正在检查</small></article>
         </div>
 
+        <article class="admin-governance-panel collector-proxy-traffic-card" id="collectorProxyTrafficCard" aria-labelledby="collectorProxyTrafficTitle">
+          <header>
+            <div><strong id="collectorProxyTrafficTitle">代理产品流量</strong><span>自动识别 Proxy-Cheap 产品，按动态 IP 与粘性 IP 合并流量；5 分钟自动同步</span></div>
+            <button id="btnRefreshCollectorProxyTraffic" type="button" class="ghost">刷新流量</button>
+          </header>
+          <div class="collector-proxy-traffic-body">
+            <div class="collector-proxy-traffic-groups">
+              <section class="collector-proxy-traffic-group" data-traffic-group="rotating" aria-labelledby="collectorProxyTrafficRotatingTitle">
+                <h3 id="collectorProxyTrafficRotatingTitle">动态 IP</h3>
+                <div class="collector-proxy-donut" id="collectorProxyTrafficRotatingDonut" role="img" aria-label="动态 IP 剩余流量 0%">
+                  <div><strong id="collectorProxyTrafficRotatingPercent">0%</strong><span>剩余</span></div>
+                </div>
+                <dl class="collector-proxy-traffic-metrics">
+                  <div><dt>总流量</dt><dd id="collectorProxyTrafficRotatingTotal">0 GB</dd></div>
+                  <div><dt>剩余流量</dt><dd id="collectorProxyTrafficRotatingRemaining">0 GB</dd></div>
+                  <div><dt>已用流量</dt><dd id="collectorProxyTrafficRotatingUsed">0 GB</dd></div>
+                  <div><dt>有效产品</dt><dd id="collectorProxyTrafficRotatingProducts">0 / 0</dd></div>
+                </dl>
+              </section>
+              <section class="collector-proxy-traffic-group" data-traffic-group="sticky" aria-labelledby="collectorProxyTrafficStickyTitle">
+                <h3 id="collectorProxyTrafficStickyTitle">粘性 IP</h3>
+                <div class="collector-proxy-donut" id="collectorProxyTrafficStickyDonut" role="img" aria-label="粘性 IP 剩余流量 0%">
+                  <div><strong id="collectorProxyTrafficStickyPercent">0%</strong><span>剩余</span></div>
+                </div>
+                <dl class="collector-proxy-traffic-metrics">
+                  <div><dt>总流量</dt><dd id="collectorProxyTrafficStickyTotal">0 GB</dd></div>
+                  <div><dt>剩余流量</dt><dd id="collectorProxyTrafficStickyRemaining">0 GB</dd></div>
+                  <div><dt>已用流量</dt><dd id="collectorProxyTrafficStickyUsed">0 GB</dd></div>
+                  <div><dt>有效产品</dt><dd id="collectorProxyTrafficStickyProducts">0 / 0</dd></div>
+                </dl>
+              </section>
+            </div>
+            <p id="collectorProxyTrafficWarning" class="collector-proxy-traffic-warning" data-level="warning" hidden></p>
+            <div class="collector-proxy-traffic-sync">
+              <span id="collectorProxyTrafficStatus">等待同步</span>
+              <small id="collectorProxyTrafficUpdatedAt">-</small>
+            </div>
+          </div>
+        </article>
+
         <article class="hot-dataset-overview" aria-labelledby="hotDatasetOverviewTitle">
           <header>
             <div><strong id="hotDatasetOverviewTitle">热点候选数据集</strong><span>全局数据集与人设数据集分开显示，人设列表和补充记录均可翻页</span></div>
             <div class="hot-dataset-overview-actions">
-              <span id="hotDatasetOverviewTime" class="hot-dataset-overview-time">正在读取旧机数据…</span>
+              <span id="hotDatasetOverviewTime" class="hot-dataset-overview-time">正在读取本机热点数据…</span>
               <button id="btnRefreshHotDatasets" type="button" class="ghost hot-dataset-refresh" aria-label="立即刷新热点候选数据集">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5"></path><path d="M18.5 9A7.5 7.5 0 1 0 19 16"></path></svg>
                 <span>刷新数据集</span>
@@ -2229,6 +2270,33 @@
                       </div>
                     </form>
                     <div id="proxyProviderCredentialMsg" class="msg" role="status" aria-live="polite"></div>
+                    <div class="collector-proxy-config-panel" id="collectorProxyMergedPanel">
+                  <input id="rtCollectorProxyProvider" type="hidden" value="proxycheap">
+                  <input id="rtCollectorProxyApiKey" type="hidden">
+                  <input id="rtCollectorProxyApiSecret" type="hidden">
+                  <div class="collector-proxy-config-head">
+                    <div>
+                      <div class="admin-config-card-title">已购产品与公开 Reader</div>
+                      <div class="small">密钥以上方「第三方代理 IP」为准。这里识别产品、填写连接串、设置粘性/动态和公开 Reader。</div>
+                    </div>
+                    <span id="collectorProxyStateChip" class="collector-proxy-state-chip">等待同步</span>
+                  </div>
+                  <div class="collector-proxy-product-picker">
+                    <label for="rtCollectorProxyProductSelect">代理产品</label>
+                    <div class="collector-proxy-product-row">
+                      <select id="rtCollectorProxyProductSelect" aria-label="已识别代理产品">
+                        <option value="">自动识别产品...</option>
+                      </select>
+                      <button id="btnDiscoverCollectorProxyProducts" class="ghost collector-proxy-compact-action" type="button">识别</button>
+                      <button id="btnApplyCollectorProxyManual" class="ghost collector-proxy-compact-action" type="button">手动添加</button>
+                    </div>
+                  <div class="small">先识别供应商产品，选择当前产品后点击手动添加；添加结果会进入下方标签列表。</div>
+                  </div>
+                  <div id="collectorProxyProductCards" class="collector-proxy-product-workspace" aria-live="polite"></div>
+                  <div class="small" id="collectorProxyReaderBoundaryNote">本页管理公开 Reader 产品池；账号代理由本机账号与登录工作区统一分配。</div>
+                  <div id="collectorProxyProductSummary" class="collector-proxy-product-summary small" aria-live="polite"></div>
+                  <div id="collectorProxyConfigMsg" class="msg" role="status" aria-live="polite"></div>
+                    </div>
                   </div>
                 </div>
             </div>
@@ -3122,6 +3190,7 @@
   <script src="/assets/vendor/opencc-js/st-characters.js?v=1.4.1"></script>
   <script src="/assets/opc/site-navigation.js?v=__SITE_NAVIGATION_JS_VERSION__"></script>
   <script src="/assets/admin.js?v=__ADMIN_JS_VERSION__"></script>
+  <script src="/assets/admin-collector-proxy.js?v=__ADMIN_COLLECTOR_PROXY_JS_VERSION__"></script>
   <script src="/assets/admin-fingerprint-login.js?v=__ADMIN_FINGERPRINT_LOGIN_JS_VERSION__"></script>
 </body>
 </html>

@@ -1584,8 +1584,8 @@ def _hot_media_dir() -> Path:
 
 
 def _hot_shared_media_dir() -> Path:
-    """Media written by the new-host capture worker's shared mount."""
-    return DATA_DIR / "collector-proxy" / "sentiment-hot-media"
+    """Media written by the application-owned hotspot workflow."""
+    return DATA_DIR / "sentiment-hot-media"
 
 
 def _hot_preview_cache_dir() -> Path:
@@ -1600,10 +1600,6 @@ def _safe_hot_media_stem(value: str) -> str:
 def _existing_hot_media_file(path: Path | str) -> str:
     try:
         raw = str(path or "").strip()
-        # The worker sees the shared host mount as /collector-proxy while the
-        # console sees the same mount below /data/collector-proxy.
-        if raw.startswith("/collector-proxy/"):
-            raw = str(_hot_shared_media_dir().parent / raw[len("/collector-proxy/"):])
         resolved = Path(raw).expanduser().resolve()
     except Exception:
         return ""
@@ -16086,18 +16082,18 @@ def _terminate_persona_hot_process(process: subprocess.Popen[str] | None) -> Non
 def _normalize_persona_hot_workflow_error_detail(value: Any, *, action: str = "") -> str:
     detail = str(value or "").strip()
     lowered = detail.lower()
-    # The old collector validates the keyword plan before it starts a search.
-    # Its internal exception must never leak into the user-facing hot-topic UI.
-    if "persona hot keywords must use the current new-host strategy" in lowered:
+    # Validate the keyword plan before the local search starts. Internal
+    # exceptions must never leak into the user-facing hot-topic UI.
+    if "persona hot keywords must use the current application strategy" in lowered:
         return "热点关键词配置未同步，请重新生成关键词后再试。"
     if re.search(r"<\s*(?:!doctype|html|head|body|title)\b|\b(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable", detail, re.IGNORECASE):
         if action == "prepare-hot-keywords":
             return "热点关键词服务暂时不可用，请稍后重试。"
         return "热点服务暂时不可用，请稍后重试。"
-    if re.search(r"\b(?:remote fetch|worker|collector|timeout|timed out|connection|protocol error)\b", detail, re.IGNORECASE):
+    if re.search(r"\b(?:timeout|timed out|connection|protocol error)\b", detail, re.IGNORECASE):
         return "热点抓取服务暂时不可用，请稍后重试。"
     # Preserve existing Chinese guidance, but do not expose an arbitrary raw
-    # English exception from a remote collector or subprocess.
+    # English exception from the local subprocess.
     if re.search(r"[A-Za-z]", detail) and not re.search(r"[\u4e00-\u9fff]", detail):
         return "热点抓取服务返回异常，请稍后重试。"
     if detail:
@@ -16191,10 +16187,10 @@ _REMOTE_PERSONA_HOT_REQUEST_FIELDS = frozenset({
 
 
 def _remote_fetch_persona_hot_request(payload: dict[str, Any]) -> dict[str, Any]:
-    """Send archiveId, new-host keywords, and a sanitized persona snapshot.
+    """Send current keyword context and a sanitized persona snapshot.
 
-    The old collector does not store every new-host persona. The snapshot is
-    the only way an arbitrary newly created persona can be scraped.
+    The compatibility runtime may not store every newly created persona. The
+    snapshot is the only way an arbitrary persona can be scraped.
     """
 
     remote_payload: dict[str, Any] = {}
@@ -16480,6 +16476,21 @@ def _run_remote_persona_hot_workflow(
             with _PERSONA_HOT_PROCESS_LOCK:
                 if _PERSONA_HOT_REMOTE_JOB_IDS.get(remote_job_key) == remote_job["id"]:
                     _PERSONA_HOT_REMOTE_JOB_IDS.pop(remote_job_key, None)
+# The current server owns execution. These aliases retain the sanitized
+# compatibility helpers for callers that still import the historical names;
+# the active workflow below does not dispatch through the remote client.
+_PERSONA_SAFE_SETUP_FIELDS = _REMOTE_FETCH_SAFE_SETUP_FIELDS
+_persona_safe_setup_value = _remote_fetch_safe_setup_value
+_persona_safe_archive_value = _remote_fetch_safe_archive_value
+
+def _persona_archive_snapshot(archive_id: str) -> dict[str, Any] | None:
+    return _remote_fetch_archive_snapshot(archive_id)
+
+
+def _crm_collector_live_search_enabled() -> bool:
+    return False
+
+
 
 
 def _run_persona_hot_workflow_subprocess(payload: dict[str, Any], timeout_seconds: int = 180) -> dict[str, Any]:
@@ -16542,13 +16553,11 @@ def _run_persona_hot_workflow_cli(
     global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_INTERACTIVE_PROCESS, _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID, _PERSONA_HOT_LAST_INTERACTIVE_AT
     _sync_tool_r18_api_config_for_persona_workflow()
     timeout = min(max(30, int(timeout_seconds)), 120)
-    remote_result = _run_remote_persona_hot_workflow(
-        payload,
-        timeout_seconds=timeout,
-        on_progress=progress_callback,
-    )
-    if remote_result is not None:
-        return remote_result
+    # Hot capture is owned by this application. A stale deployment setting
+    # must not redirect this request to another runtime.
+    if progress_callback is not None:
+        with contextlib.suppress(Exception):
+            progress_callback({"status": "running", "queue": {"phase": "fetching", "queue_ahead": 0}})
     command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
     deadline = time.monotonic() + timeout
     process: subprocess.Popen[str] | None = None
@@ -17019,7 +17028,7 @@ def _prepare_persona_hot_keywords(archive_id: str, payload: PersonaDashboardHotC
             and bool(existing_keywords)
             and not normal_prompt_is_current
         )
-        archive_snapshot = _remote_fetch_archive_snapshot(clean_id)
+        archive_snapshot = _persona_archive_snapshot(clean_id)
         prepare_payload: dict[str, Any] = {
             "action": "prepare-hot-keywords",
             "archiveId": clean_id,
@@ -17390,7 +17399,7 @@ def _fetch_persona_hot_candidates(
                 status_code=503,
                 detail=detail or "热点关键词模型暂时不可用，请稍后重试。",
             )
-    archive_snapshot = _remote_fetch_archive_snapshot(clean_id)
+    archive_snapshot = _persona_archive_snapshot(clean_id)
     if archive_snapshot is None:
         raise HTTPException(status_code=404, detail="人设不存在。")
     fetch_payload: dict[str, Any] = {
@@ -17399,10 +17408,10 @@ def _fetch_persona_hot_candidates(
             "archiveSnapshot": archive_snapshot,
             "prompt": str(payload.prompt or "").strip(),
             # A foreground click must always execute one public Reader search.
-            # The old host may merge its candidate pool, but a full pool must
-            # never suppress the current keyword batch.
+            # The local application may merge its own candidate pool, but a
+            # full pool must never suppress the current keyword batch.
             "refresh": True,
-            # Ask the old host for an overscan batch. It persists the complete
+            # Ask the local workflow for an overscan batch. It persists the
             # qualified pool; this endpoint still returns only the requested
             # display count below.
             "limit": min(20, max(limit + 2, 12)),
@@ -17416,14 +17425,13 @@ def _fetch_persona_hot_candidates(
             "keywordDigest": _persona_hot_keyword_digest(keywords),
             "platform": target_platform,
             # Only this billable, user-facing route may activate scheduled
-            # low-watermark refill on the old collector host.
+            # low-watermark refill for the local candidate pool.
             "userInitiated": True,
             # This is the user-facing display batch. Recording it enables the
-            # old worker's short rotation cooldown; background pool refills
-            # still explicitly send false and never consume display history.
+            # local short rotation cooldown; background pool refills still
+            # explicitly send false and never consume display history.
             "recordShown": bool(payload.record_shown),
-            # The new application owns keyword generation. The old collector
-            # searches public pages with those keywords and may merge its pool.
+            # The application owns keyword generation and public-page search.
             # /data/hot-public-probe forces a public-page-only request for live
             # verification and must not stay enabled in normal product traffic.
             "liveOnly": _hot_public_probe_enabled(),
@@ -17437,8 +17445,7 @@ def _fetch_persona_hot_candidates(
     )
     _consume_persona_hot_keyword_batch(clean_id, payload, keywords)
 
-    # Collector-account health is an old-host implementation detail. Never
-    # expose or infer account Cookie state through the product-facing route.
+    # Account-session health is not part of the public Reader product route.
     cookie_rows: list[dict[str, Any]] = []
 
     candidates = []
@@ -19134,10 +19141,10 @@ def _list_persona_archive_publish_history(archive_id: str) -> list[dict[str, Any
 
 
 def _persona_publish_history_public_media(record: dict[str, Any]) -> list[dict[str, str]]:
-    """Return only public media URLs that are safe to send to the hot worker.
+    """Return only public media URLs safe for the local hot runtime.
 
     Publish history also contains console-local paths and proxy URLs used for
-    dashboard previews.  Those paths do not exist in the capture worker's
+    dashboard previews. Those paths do not exist in the local runtime's
     /data mount, so they must never become global-pool media URLs.
     """
     published_meta = record.get("publishedMeta") if isinstance(record.get("publishedMeta"), dict) else {}
@@ -20803,7 +20810,7 @@ def _copy_safe_json_value(value: Any, *, depth: int = 0) -> Any:
 
 
 _PERSONA_COPY_SETUP_FIELDS = frozenset({
-    *_REMOTE_FETCH_SAFE_SETUP_FIELDS,
+    *_PERSONA_SAFE_SETUP_FIELDS,
     "personaGender",
     "gender",
     "isGirlPersona",
@@ -25180,12 +25187,12 @@ def _persona_dashboard_failed_profile_metrics(platform: str, username: str, erro
     }
 
 
-def _fetch_one_persona_dashboard_remote_metrics(target: dict[str, str]) -> tuple[str, dict[str, Any] | None]:
+def _fetch_one_persona_dashboard_profile_metrics(target: dict[str, str]) -> tuple[str, dict[str, Any] | None]:
     platform = str(target.get("platform") or "").strip().lower()
     username = str(target.get("username") or "").strip().lstrip("@")
     key = f"{platform}:{username.lower()}"
     try:
-        result = _run_remote_persona_hot_workflow(
+        result = _run_persona_hot_workflow_cli(
             {
                 "action": "refresh-profile-metrics",
                 "archiveId": target["archive_id"],
@@ -25207,7 +25214,7 @@ def _fetch_one_persona_dashboard_remote_metrics(target: dict[str, str]) -> tuple
     )
 
 
-def _prefetch_persona_dashboard_remote_metrics(
+def _prefetch_persona_dashboard_profile_metrics(
     *,
     user_id: int = 0,
     archive_id: str = "",
@@ -25215,8 +25222,6 @@ def _prefetch_persona_dashboard_remote_metrics(
     task_id: str = "",
     platform: str = "",
 ) -> dict[str, Any]:
-    if configured_remote_fetch_client() is None:
-        return {}
     prefetched: dict[str, Any] = {}
     targets = _persona_dashboard_bound_refresh_targets(
         user_id=user_id,
@@ -25226,7 +25231,7 @@ def _prefetch_persona_dashboard_remote_metrics(
     )
     workers = _persona_dashboard_profile_metrics_concurrency(len(targets))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="persona-profile-metrics") as pool:
-        futures = [pool.submit(_fetch_one_persona_dashboard_remote_metrics, target) for target in targets]
+        futures = [pool.submit(_fetch_one_persona_dashboard_profile_metrics, target) for target in targets]
         for index, future in enumerate(as_completed(futures), start=1):
             if task_id and _persona_dashboard_refresh_cancel_requested(task_id):
                 for pending in futures:
@@ -25243,6 +25248,12 @@ def _prefetch_persona_dashboard_remote_metrics(
                         "message": f"正在并行读取已绑定账号资料（{index}/{len(targets)}）...",
                     })
     return prefetched
+
+
+# Preserve the historical import names for compatibility. The implementations
+# above now execute through the current application-owned workflow.
+_fetch_one_persona_dashboard_remote_metrics = _fetch_one_persona_dashboard_profile_metrics
+_prefetch_persona_dashboard_remote_metrics = _prefetch_persona_dashboard_profile_metrics
 
 
 def _persona_dashboard_refresh_user_message(
@@ -25355,7 +25366,7 @@ def _persona_dashboard_refresh_worker_v2(
             logger.warning("official homepage overlay skipped: task=%s", task_id)
         if _persona_dashboard_refresh_cancel_requested(task_id):
             raise _PersonaDashboardRefreshCancelled("刷新已取消。")
-        prefetched_metrics = _prefetch_persona_dashboard_remote_metrics(
+        prefetched_metrics = _prefetch_persona_dashboard_profile_metrics(
             user_id=refresh_user_id,
             archive_id=archive_id,
             archive_ids=archive_ids,
@@ -26790,6 +26801,202 @@ VIDEO_WORKBENCH_INTEGRATION = inject_video_workbench(sys.modules[__name__])
 VIDEO_EDITOR_DEPENDENCIES = server_video_editor_dependencies(sys.modules[__name__])
 
 
+_LOCAL_HOT_DATASET_LOCK = threading.RLock()
+_LOCAL_HOT_DATASET_CACHE: dict[str, Any] = {"payload": {}, "cached_at": 0.0}
+_LOCAL_HOT_DATASET_DEFAULT_SETTINGS = {
+    "event_page_size": 20,
+    "event_max": 200,
+    "persona_page_size": 10,
+}
+
+
+def _local_hot_dataset_path(name: str) -> Path:
+    configured = str(os.getenv("WEBAPP_HOT_DATASET_DIR") or "").strip()
+    root = Path(configured).expanduser().resolve() if configured else DATA_DIR
+    return root / name
+
+
+def _local_hot_dataset_settings() -> dict[str, int]:
+    raw = _read_json_file(_local_hot_dataset_path("hot-dataset-ui.json"))
+    source = raw if isinstance(raw, dict) else {}
+    defaults = _LOCAL_HOT_DATASET_DEFAULT_SETTINGS
+    try:
+        event_page_size = int(source.get("event_page_size") or defaults["event_page_size"])
+    except (TypeError, ValueError):
+        event_page_size = defaults["event_page_size"]
+    try:
+        event_max = int(source.get("event_max") or defaults["event_max"])
+    except (TypeError, ValueError):
+        event_max = defaults["event_max"]
+    try:
+        persona_page_size = int(source.get("persona_page_size") or defaults["persona_page_size"])
+    except (TypeError, ValueError):
+        persona_page_size = defaults["persona_page_size"]
+    return {
+        "event_page_size": max(5, min(event_page_size, 100)),
+        "event_max": max(50, min(event_max, 2000)),
+        "persona_page_size": max(5, min(persona_page_size, 50)),
+    }
+
+
+def _save_local_hot_dataset_settings(payload: dict[str, Any] | None = None) -> dict[str, int]:
+    current = _local_hot_dataset_settings()
+    source = payload if isinstance(payload, dict) else {}
+    for key, low, high in (
+        ("event_page_size", 5, 100),
+        ("event_max", 50, 2000),
+        ("persona_page_size", 5, 50),
+    ):
+        if key not in source:
+            continue
+        try:
+            current[key] = max(low, min(int(source.get(key) or current[key]), high))
+        except (TypeError, ValueError):
+            continue
+    _write_json_file(_local_hot_dataset_path("hot-dataset-ui.json"), current)
+    return current
+
+
+def _local_hot_dataset_events() -> list[dict[str, Any]]:
+    raw = _read_json_file(_local_hot_dataset_path("hot-dataset-events.json"))
+    return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+def _record_local_hot_dataset_changes(previous: Any, current: dict[str, Any]) -> None:
+    previous = previous if isinstance(previous, dict) else {}
+    previous_rows: dict[str, dict[str, Any]] = {}
+    previous_global = previous.get("global") if isinstance(previous.get("global"), dict) else {}
+    previous_rows["global"] = previous_global
+    for item in previous.get("personas") if isinstance(previous.get("personas"), list) else []:
+        if isinstance(item, dict) and str(item.get("archive_id") or "").strip():
+            previous_rows[str(item.get("archive_id"))] = item
+    current_rows: dict[str, dict[str, Any]] = {}
+    current_global = current.get("global") if isinstance(current.get("global"), dict) else {}
+    current_rows["global"] = current_global
+    for item in current.get("personas") if isinstance(current.get("personas"), list) else []:
+        if isinstance(item, dict) and str(item.get("archive_id") or "").strip():
+            current_rows[str(item.get("archive_id"))] = item
+    events = _local_hot_dataset_events()
+    now = int(current.get("generated_at") or _now_ts())
+    for dataset_id, item in current_rows.items():
+        before = max(0, int(previous_rows.get(dataset_id, {}).get("count") or 0))
+        after = max(0, int(item.get("count") or 0))
+        if dataset_id not in previous_rows or before == after:
+            continue
+        events.append({
+            "id": uuid.uuid4().hex,
+            "dataset_id": dataset_id,
+            "dataset_name": str(item.get("name") or ("全局数据集" if dataset_id == "global" else "未命名人设")),
+            "delta": after - before,
+            "count_before": before,
+            "count_after": after,
+            "reason": "local_refresh",
+            "source": "application",
+            "created_at": now,
+        })
+    limit = _local_hot_dataset_settings()["event_max"]
+    _write_json_file(_local_hot_dataset_path("hot-dataset-events.json"), events[-limit:])
+
+
+def _local_hot_dataset_overview(*, force: bool = False) -> dict[str, Any]:
+    now_mono = time.monotonic()
+    with _LOCAL_HOT_DATASET_LOCK:
+        cached = _LOCAL_HOT_DATASET_CACHE.get("payload")
+        cached_at = float(_LOCAL_HOT_DATASET_CACHE.get("cached_at") or 0.0)
+        if not force and isinstance(cached, dict) and cached and now_mono - cached_at < 15:
+            return copy.deepcopy(cached)
+    overview_path = _local_hot_dataset_path("hot-dataset-overview.json")
+    previous = _read_json_file(overview_path)
+    try:
+        stats = _run_persona_hot_workflow_subprocess({"action": "pool-stats"}, timeout_seconds=60)
+        limits = stats.get("limits") if isinstance(stats.get("limits"), dict) else {}
+        ready_target = max(1, int(limits.get("readyTarget") or 2000))
+        global_limit = max(1, int(limits.get("globalLimit") or 100000))
+        pools = stats.get("pools") if isinstance(stats.get("pools"), list) else []
+        archives, _ = _read_tool_r18_persona_archives()
+        names = {
+            str(item.get("id") or "").strip(): str(item.get("name") or "未命名人设")
+            for item in archives
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in pools:
+            if not isinstance(row, dict):
+                continue
+            archive_id = str(row.get("archiveId") or "").strip()
+            if not archive_id:
+                continue
+            item = grouped.setdefault(archive_id, {
+                "archive_id": archive_id,
+                "name": names.get(archive_id) or "未命名人设",
+                "count": 0,
+                "capacity": ready_target * 2,
+                "active": False,
+                "refilling": False,
+                "newest_at": "",
+            })
+            item["count"] += max(0, int(row.get("readyCount") or 0))
+            item["active"] = bool(item["active"] or row.get("strategyReady"))
+            newest_at = str(row.get("newestAt") or "")
+            if newest_at > str(item.get("newest_at") or ""):
+                item["newest_at"] = newest_at
+        global_pool = stats.get("globalPool") if isinstance(stats.get("globalPool"), dict) else {}
+        payload = {
+            "configured": True,
+            "stale": False,
+            "generated_at": _now_ts(),
+            "global": {
+                "name": "全局数据集",
+                "count": max(0, int(global_pool.get("readyCount") or 0)),
+                "capacity": global_limit,
+            },
+            "personas": sorted(grouped.values(), key=lambda item: (str(item["name"]).casefold(), str(item["archive_id"]))),
+        }
+        with _LOCAL_HOT_DATASET_LOCK:
+            _record_local_hot_dataset_changes(previous, payload)
+            _write_json_file(overview_path, payload)
+            _LOCAL_HOT_DATASET_CACHE.update({"payload": copy.deepcopy(payload), "cached_at": time.monotonic()})
+        return payload
+    except Exception:
+        if isinstance(previous, dict) and isinstance(previous.get("global"), dict):
+            fallback = dict(previous)
+            fallback["stale"] = True
+            fallback["configured"] = True
+            with _LOCAL_HOT_DATASET_LOCK:
+                _LOCAL_HOT_DATASET_CACHE.update({"payload": copy.deepcopy(fallback), "cached_at": time.monotonic()})
+            return fallback
+        return {"configured": False, "stale": True, "generated_at": 0, "global": {}, "personas": []}
+
+
+def _local_hot_dataset_event_page(page: int, page_size: int, scope: str) -> dict[str, Any]:
+    settings = _local_hot_dataset_settings()
+    safe_page_size = max(5, min(int(page_size or settings["event_page_size"]), 100))
+    clean_scope = str(scope or "all").strip().lower()
+    if clean_scope not in {"all", "global", "persona"}:
+        clean_scope = "all"
+    events = _local_hot_dataset_events()
+    if clean_scope == "global":
+        events = [item for item in events if str(item.get("dataset_id") or "") == "global"]
+    elif clean_scope == "persona":
+        events = [item for item in events if str(item.get("dataset_id") or "") != "global"]
+    events = list(reversed(events))
+    safe_page = max(1, int(page or 1))
+    pages = max(1, (len(events) + safe_page_size - 1) // safe_page_size)
+    safe_page = min(safe_page, pages)
+    start = (safe_page - 1) * safe_page_size
+    return {
+        "ok": True,
+        "events": events[start:start + safe_page_size],
+        "total": len(events),
+        "page": safe_page,
+        "page_size": safe_page_size,
+        "pages": pages,
+        "scope": clean_scope,
+        "max_events": settings["event_max"],
+        "persona_page_size": settings["persona_page_size"],
+    }
+
+
 def create_app() -> FastAPI:
     boundary = deployment_boundary()
     _ensure_dirs()
@@ -27615,6 +27822,8 @@ def create_app() -> FastAPI:
             replacements={
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__ADMIN_JS_VERSION__": _asset_version("assets", "admin.js"),
+                "__ADMIN_COLLECTOR_PROXY_CSS_VERSION__": _asset_version("assets", "admin-collector-proxy.css"),
+                "__ADMIN_COLLECTOR_PROXY_JS_VERSION__": _asset_version("assets", "admin-collector-proxy.js"),
                 "__ADMIN_FINGERPRINT_LOGIN_CSS_VERSION__": _asset_version("assets", "admin-fingerprint-login.css"),
                 "__ADMIN_FINGERPRINT_LOGIN_JS_VERSION__": _asset_version("assets", "admin-fingerprint-login.js"),
                 "__SITE_NAVIGATION_CSS_VERSION__": _asset_version("assets", "opc", "site-navigation.css"),
@@ -32452,7 +32661,7 @@ def create_app() -> FastAPI:
                 "refreshing": True,
                 "candidates": [],
             }
-        body = json.dumps({
+        workflow_payload = {
             "action": "read-hot-candidates-cache",
             "archiveId": clean_id,
             "keywords": keywords,
@@ -32463,8 +32672,8 @@ def create_app() -> FastAPI:
             "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
             "recordShown": bool(payload.record_shown),
             "platform": target_platform,
-        }, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-        result = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-candidates/cache", body=body)
+        }
+        result = _run_persona_hot_workflow_subprocess(workflow_payload, timeout_seconds=60)
         candidates: list[dict[str, Any]] = []
         for item in result.get("candidates") if isinstance(result.get("candidates"), list) else []:
             normalized = _normalize_persona_hot_candidate(item)
@@ -34730,105 +34939,13 @@ def create_app() -> FastAPI:
         _invalidate_admin_dashboard_cache()
         return {"ok": True, "email_delivery": overview}
 
-    def _hot_dataset_worker_base_url() -> str:
-        env_url = str(os.getenv("TG_FETCH_WORKER_INTERNAL_URL") or "").strip().rstrip("/")
-        if env_url:
-            return env_url
-        settings_path = Path(os.getenv("TG_COLLECTOR_WORKER_ENDPOINT_FILE", "/collector-proxy/worker-endpoint.json"))
-        try:
-            settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            file_url = str(dict(settings or {}).get("base_url") or "").strip().rstrip("/")
-            if file_url:
-                return file_url
-        except Exception:
-            pass
-        return "http://tg-koll-capture-worker:8092"
-
-    def _hot_dataset_worker_request(method: str, path: str, *, query: str = "", body: bytes = b"") -> dict[str, Any]:
-        try:
-            keys_path = Path(os.getenv("TG_FETCH_WORKER_KEYS_FILE", "/data/internal/remote-fetch-keys.json"))
-            keys = json.loads(keys_path.read_text(encoding="utf-8"))
-            key_id = sorted(keys)[0]
-            secret = str(keys[key_id])
-            headers = signed_headers(
-                secret=secret,
-                key_id=key_id,
-                method=method,
-                path=path,
-                body=body,
-                timestamp=int(time.time()),
-                nonce=secrets.token_urlsafe(24),
-            )
-            base_url = _hot_dataset_worker_base_url()
-            url = base_url + path
-            if query:
-                url = f"{url}?{query.lstrip('?')}"
-            response = requests.request(method, url, headers=headers, data=body or None, timeout=(3, 12))
-            response.raise_for_status()
-            payload = response.json()
-            if not isinstance(payload, dict):
-                raise ValueError("invalid worker response")
-            return payload
-        except (OSError, IndexError, KeyError, ValueError, requests.RequestException) as exc:
-            raise HTTPException(status_code=502, detail="旧机热点数据 worker 暂不可用") from exc
-
     @app.get("/api/admin/hot-datasets")
     def api_admin_hot_datasets(_user: dict[str, Any] = Depends(require_admin)):
-        # The worker owns the dataset state.  The collector admin container has
-        # a separate /collector-proxy mount, so reading its local snapshot
-        # here can resurrect stale/generated persona names after a refresh.
-        try:
-            worker_payload = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")
-            overview = worker_payload.get("overview") if isinstance(worker_payload, dict) else None
-            if isinstance(overview, dict):
-                generated_at = int(overview.get("generated_at") or 0)
-                return {
-                    "configured": True,
-                    "stale": False,
-                    "generated_at": generated_at,
-                    "global": overview.get("global") if isinstance(overview.get("global"), dict) else {},
-                    "personas": overview.get("personas") if isinstance(overview.get("personas"), list) else [],
-                }
-        except HTTPException:
-            # Keep the existing local snapshot as a degraded fallback when
-            # the old worker is temporarily unavailable.
-            pass
-        path = Path(os.getenv("TG_HOT_DATASET_OVERVIEW_PATH", "/collector-proxy/hot-dataset-overview.json"))
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {"configured": False, "generated_at": 0, "global": {}, "personas": []}
-        except (OSError, json.JSONDecodeError) as exc:
-            raise HTTPException(status_code=503, detail="热点数据集概览暂不可用") from exc
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=503, detail="热点数据集概览格式无效")
-        generated_at = int(payload.get("generated_at") or 0)
-        return {
-            "configured": True,
-            "stale": not generated_at or _now_ts() - generated_at > 90,
-            "generated_at": generated_at,
-            "global": payload.get("global") if isinstance(payload.get("global"), dict) else {},
-            "personas": payload.get("personas") if isinstance(payload.get("personas"), list) else [],
-        }
+        return _local_hot_dataset_overview(force=False)
 
     @app.post("/api/admin/hot-datasets/refresh")
     def api_admin_refresh_hot_datasets(user: dict[str, Any] = Depends(require_admin)):
-        # The worker is the source of truth.  The old implementation discarded
-        # the worker response and read the console's local snapshot again,
-        # which kept stale/generated persona names visible after refresh.
-        worker_payload = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")
-        overview = worker_payload.get("overview") if isinstance(worker_payload, dict) else None
-        if isinstance(overview, dict):
-            generated_at = int(overview.get("generated_at") or 0)
-            return {
-                "ok": True,
-                "configured": True,
-                "stale": False,
-                "generated_at": generated_at,
-                "global": overview.get("global") if isinstance(overview.get("global"), dict) else {},
-                "personas": overview.get("personas") if isinstance(overview.get("personas"), list) else [],
-            }
-        return {"ok": True, **api_admin_hot_datasets(user)}
+        return {"ok": True, **_local_hot_dataset_overview(force=True)}
 
     @app.get("/api/admin/hot-datasets/events")
     def api_admin_hot_dataset_events(
@@ -34837,40 +34954,23 @@ def create_app() -> FastAPI:
         scope: str = "all",
         _user: dict[str, Any] = Depends(require_admin),
     ):
-        query = f"page={max(1, int(page or 1))}&scope={str(scope or 'all').strip() or 'all'}"
-        if int(page_size or 0) > 0:
-            query += f"&page_size={max(5, min(int(page_size), 100))}"
-        payload = _hot_dataset_worker_request("GET", "/internal/worker/v1/hot-datasets/events", query=query)
-        events = payload.get("events")
-        return {
-            "ok": True,
-            "events": events if isinstance(events, list) else [],
-            "total": int(payload.get("total") or 0),
-            "page": int(payload.get("page") or 1),
-            "page_size": int(payload.get("page_size") or 20),
-            "pages": int(payload.get("pages") or 1),
-            "scope": str(payload.get("scope") or "all"),
-            "max_events": int(payload.get("max_events") or 200),
-            "persona_page_size": int(payload.get("persona_page_size") or 10),
-        }
+        return _local_hot_dataset_event_page(page, page_size, scope)
 
     @app.get("/api/admin/hot-datasets/settings")
     def api_admin_hot_dataset_settings(_user: dict[str, Any] = Depends(require_admin)):
-        payload = _hot_dataset_worker_request("GET", "/internal/worker/v1/hot-datasets/settings")
-        return {"ok": True, **{key: payload.get(key) for key in ("event_page_size", "event_max", "persona_page_size")}}
+        return {"ok": True, **_local_hot_dataset_settings()}
 
     @app.post("/api/admin/hot-datasets/settings")
     def api_admin_save_hot_dataset_settings(payload: dict[str, Any], _user: dict[str, Any] = Depends(require_admin)):
-        body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
-        result = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/settings", body=body)
-        return {"ok": True, **{key: result.get(key) for key in ("event_page_size", "event_max", "persona_page_size", "pruned")}}
+        return {"ok": True, **_save_local_hot_dataset_settings(payload)}
 
     @app.delete("/api/admin/hot-datasets/events/{event_id}")
     def api_admin_delete_hot_dataset_event(event_id: str, _user: dict[str, Any] = Depends(require_admin)):
         clean_id = str(event_id or "").strip().lower()
         if not re.fullmatch(r"[0-9a-f]{32}", clean_id):
             raise HTTPException(status_code=400, detail="热点数据集记录 ID 无效")
-        _hot_dataset_worker_request("DELETE", f"/internal/worker/v1/hot-datasets/events/{clean_id}")
+        events = [item for item in _local_hot_dataset_events() if str(item.get("id") or "").lower() != clean_id]
+        _write_json_file(_local_hot_dataset_path("hot-dataset-events.json"), events)
         return {"ok": True, "deleted": True}
 
     @app.delete("/api/admin/hot-datasets/{dataset_id}")
@@ -34882,21 +34982,17 @@ def create_app() -> FastAPI:
                     raise ValueError
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail="热点数据集 ID 无效") from exc
-        result = _hot_dataset_worker_request("DELETE", f"/internal/worker/v1/hot-datasets/{clean_id}")
-        overview = result.get("overview") if isinstance(result, dict) else None
-        if isinstance(overview, dict):
-            generated_at = int(overview.get("generated_at") or 0)
-            return {
-                "ok": True,
-                "deleted_count": int(result.get("deleted_count") or 0),
-                "moved_count": int(result.get("moved_count") or 0),
-                "configured": True,
-                "stale": False,
-                "generated_at": generated_at,
-                "global": overview.get("global") if isinstance(overview.get("global"), dict) else {},
-                "personas": overview.get("personas") if isinstance(overview.get("personas"), list) else [],
-            }
-        return {"ok": True, "deleted_count": int(result.get("deleted_count") or 0), **api_admin_hot_datasets(user)}
+        overview = _local_hot_dataset_overview(force=True)
+        if clean_id == "global":
+            overview["global"] = {**(overview.get("global") or {}), "count": 0}
+        else:
+            for item in overview.get("personas") if isinstance(overview.get("personas"), list) else []:
+                if str(item.get("archive_id") or "").lower() == clean_id:
+                    item["count"] = 0
+        _write_json_file(_local_hot_dataset_path("hot-dataset-overview.json"), overview)
+        with _LOCAL_HOT_DATASET_LOCK:
+            _LOCAL_HOT_DATASET_CACHE.update({"payload": copy.deepcopy(overview), "cached_at": time.monotonic()})
+        return {"ok": True, "deleted_count": 0, "moved_count": 0, **overview}
 
     @app.get("/api/admin/dashboard")
     def api_admin_dashboard(

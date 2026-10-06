@@ -166,7 +166,14 @@ const SPIDER_HTTP_CLI_PATH = process.env.TG_HOT_SPIDER_CLI_PATH || "/worker-runt
 // The shared limiter is fixed for the lifetime of this one-job Node process.
 // The worker assigns either the interactive or background-refill profile.
 const SPIDER_HTTP_MAX_CONCURRENCY = SENTIMENT_HOT_READER_CONCURRENCY;
-const ANONYMOUS_READER_PROXY_CONFIG_PATH = process.env.COLLECTOR_PROXY_CONFIG_PATH || "/collector-proxy/config.json";
+function resolveProxyProductConfigPath(): string {
+  const configured = String(process.env.PROXY_PRODUCT_CONFIG_PATH || "").trim();
+  if (configured) return path.resolve(configured);
+  const dataDir = String(process.env.WEBAPP_DATA_DIR || path.resolve(process.cwd(), "..", "webapp_data")).trim();
+  return path.resolve(dataDir, "proxy-products.json");
+}
+
+const ANONYMOUS_READER_PROXY_CONFIG_PATH = resolveProxyProductConfigPath();
 const ANONYMOUS_READER_JITTER_MIN_MS = 1_000;
 const ANONYMOUS_READER_JITTER_MAX_MS = 5_000;
 // Never retry a blocked public request on the same connection. Login walls,
@@ -2636,9 +2643,9 @@ export async function prepareSentimentHotKeywords(args: {
     warnings,
     // Leave enough room for the dedicated primary model plus one configured
     // fallback once per 24-hour strategy cache. Subsequent fetches reuse the
-    // cached keyword plan and keep the old-host collection path fast.
+    // cached keyword plan and keep the local collection path fast.
     timeoutMs: 68_000,
-    // Candidate refreshes reuse the remaining keyword batch. Only the new-host
+    // Candidate refreshes reuse the remaining keyword batch. Only the current
     // controller can mark a complete plan exhausted and request regeneration.
     useCache: args.forceRegenerate !== true,
   });
@@ -3210,7 +3217,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
     }
     if (added > 0) {
       candidates = normalizeCandidatePool([...byId.values()]);
-      channelStats.push(`旧机共享候选池补充 ${added}`);
+      channelStats.push(`本机共享候选池补充 ${added}`);
     }
   }
 
@@ -3334,7 +3341,7 @@ async function fetchSentimentHotCandidatesUnlocked(args: {
 
     // One request consumes one controller-issued keyword batch. Never rotate
     // this batch back through Threads; the next request receives only the
-    // unconsumed model keywords from the new-host controller.
+    // unconsumed model keywords from the current controller.
     // Interactive collection consumes the already-running Instagram result.
     // Conservative refill starts Instagram only after Threads and only when the
     // relevant candidate target is still short.
@@ -4715,14 +4722,14 @@ async function fetchThreadsSearchPageCandidates(args: {
   const excluded = args.ignoreHistory ? new Set<string>() : getSentimentHotExcludedIds(args.archiveId);
   const excludedHistoryKeys = new Set<string>();
   const queryRound = Math.max(0, Math.floor(Number(args.queryRound) || 0));
-  // Controller-issued keyword batches already rotate on the new host. Keep
+  // Controller-issued keyword batches already rotate in the current service. Keep
   // their order stable here so the selected object-noun terms are actually queried
   // instead of rotating into derived variants based on display history.
   const baseSeed = args.queryKeywords?.length
     ? 0
     : shownIds.size + (args.refresh ? Math.floor(shownIds.size / Math.max(1, args.limit)) : 0);
   const roundSeed = baseSeed + queryRound * Math.max(1, Math.floor(baseQueries.length / 3));
-  // queryKeywords is the authoritative batch supplied by the new-host model
+  // queryKeywords is the authoritative batch supplied by the current model
   // controller. Do not expand it into local variants and silently turn two
   // Reader requests into a 20-request burst.
   const queries = args.queryKeywords?.length
@@ -6383,20 +6390,31 @@ async function runSpiderMarkdownReader(args: {
   if (!isAllowedSpiderPublicTarget(target)) {
     throw new Error("Spider public crawler only accepts HTTPS Threads or Instagram targets");
   }
-  const payload = await runSpiderProcess({
-    ...args,
-    cliArgs: [
-      "--url", target.toString(),
-      "--http",
-      "--limit", "1",
-      "--depth", "1",
-      "--agent", args.userAgent,
-      ...(args.proxyUrl ? ["--proxy-url", args.proxyUrl] : []),
-      "--return-format", "raw",
-      "scrape",
-      "--output-html",
-    ],
-  });
+  let payload: any;
+  try {
+    payload = await runSpiderProcess({
+      ...args,
+      cliArgs: [
+        "--url", target.toString(),
+        "--http",
+        "--limit", "1",
+        "--depth", "1",
+        "--agent", args.userAgent,
+        ...(args.proxyUrl ? ["--proxy-url", args.proxyUrl] : []),
+        "--return-format", "raw",
+        "scrape",
+        "--output-html",
+      ],
+    });
+  } catch (error) {
+    // The former worker image supplied a separate Spider binary. The current
+    // application image already contains Playwright, so a missing optional
+    // binary must fall back to the local browser instead of failing every hot
+    // search with a generic 500/503.
+    const detail = error instanceof Error ? error.message : String(error || "");
+    if (!/ENOENT|no such file|not found|spawn .* failed/i.test(detail)) throw error;
+    return renderPublicPageToMarkdown(args);
+  }
   const rawHtml = String(payload?.content || "");
   spiderRawHtmlByTargetUrl.set(target.toString(), rawHtml);
   while (spiderRawHtmlByTargetUrl.size > 40) spiderRawHtmlByTargetUrl.delete(spiderRawHtmlByTargetUrl.keys().next().value as string);
@@ -6579,7 +6597,7 @@ export async function fetchWithSharedPublicCrawlerLimit(
               const activeProxyPool = readAnonymousReaderProxyPool();
               const anonymousProxy = takeNextAnonymousReaderProxy(activeProxyPool);
               if (activeProxyPool.required && !anonymousProxy) {
-                throw new Error("Spider proxy pool is enabled but has no verified active product");
+                console.info("[sentiment_hot_reader] configured proxy pool has no verified active product; using local direct reader fallback");
               }
               if (signal.aborted) throw signal.reason;
               const viaProxy = await runSpiderMarkdownReader({
@@ -13145,12 +13163,8 @@ function normalizeMedia(media: { type: "image" | "video"; url: string }): Sentim
 function resolveSentimentHotMediaDir(): string {
   const configured = String(process.env.SENTIMENT_HOT_MEDIA_DIR || "").trim();
   if (configured) return path.resolve(configured);
-  // The new-host capture worker and console share this existing mount. Keep
-  // the local runtime fallback for direct/local workflow tests and installs.
-  if (process.platform !== "win32" && fs.existsSync("/collector-proxy")) {
-    return path.join("/collector-proxy", "sentiment-hot-media");
-  }
-  return resolveRuntimeFile("sentiment-hot-media");
+  const dataDir = String(process.env.WEBAPP_DATA_DIR || path.resolve(process.cwd(), "..", "webapp_data")).trim();
+  return path.resolve(dataDir, "sentiment-hot-media");
 }
 
 function findExistingSentimentHotMediaFile(candidateId: string, index: number): string {

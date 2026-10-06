@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import contextlib
 import os
 import re
 import socket
@@ -26,14 +27,20 @@ except ImportError:  # collector worker runtime does not ship webapp.auth
         raise RuntimeError("admin auth is unavailable on the collector worker")
 
 
-_DEFAULT_COLLECTOR_PROXY_PATHS = (
-    "/collector-proxy/config.json",
-    "/data/collector-proxy/config.json",
+_PROXY_PRODUCT_DATA_DIR = Path(
+    os.getenv("WEBAPP_DATA_DIR") or str(Path(__file__).resolve().parent.parent / "webapp_data")
+).expanduser().resolve()
+_PROXY_PRODUCT_CONFIG_PATH = Path(
+    os.getenv("PROXY_PRODUCT_CONFIG_PATH") or str(_PROXY_PRODUCT_DATA_DIR / "proxy-products.json")
+).expanduser().resolve()
+# Read an existing data volume once when the new application-owned file is
+# absent. All subsequent writes use CONFIG_PATH, so the live product state is
+# detached from any legacy volume layout.
+_LEGACY_PROXY_PRODUCT_CONFIG_PATHS = (
+    _PROXY_PRODUCT_DATA_DIR / "collector-proxy" / "config.json",
+    Path("/data/collector-proxy/config.json"),
 )
-CONFIG_PATH = Path(
-    os.getenv("COLLECTOR_PROXY_CONFIG_PATH")
-    or next((item for item in _DEFAULT_COLLECTOR_PROXY_PATHS if Path(item).exists()), _DEFAULT_COLLECTOR_PROXY_PATHS[0])
-)
+CONFIG_PATH = _PROXY_PRODUCT_CONFIG_PATH
 WEBHOOK_SECRET_PATH = Path(os.getenv("PROXYCHEAP_WEBHOOK_SECRET_PATH", str(CONFIG_PATH.with_name("webhook-secret"))))
 WEBHOOK_EVENTS_PATH = Path(os.getenv("PROXYCHEAP_WEBHOOK_EVENTS_PATH", str(CONFIG_PATH.with_name("webhook-events.jsonl"))))
 PROXYCHEAP_API_BASE = "https://api.proxy-cheap.com"
@@ -80,14 +87,28 @@ class CollectorProxyReaderTogglePayload(BaseModel):
     enabled: bool = False
 
 
+class CollectorProxyTrafficRolePayload(BaseModel):
+    role: str = Field(default="dynamic", max_length=20)
+
+
 def _now() -> int:
     return int(time.time())
 
 
 def _load_config() -> dict[str, Any]:
+    source_path = CONFIG_PATH
+    if not source_path.exists():
+        source_path = next((item for item in _LEGACY_PROXY_PRODUCT_CONFIG_PATHS if item.exists()), CONFIG_PATH)
     try:
-        value = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        return value if isinstance(value, dict) else {}
+        value = json.loads(source_path.read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            return {}
+        if source_path != CONFIG_PATH and not CONFIG_PATH.exists():
+            # Migrate an existing volume exactly once. Runtime reads after
+            # this point use only the application-owned product file.
+            with contextlib.suppress(OSError):
+                _write_config(value)
+        return value
     except FileNotFoundError:
         return {}
     except Exception as exc:
@@ -1399,6 +1420,12 @@ def _public_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def register_collector_proxy_admin_routes(app: FastAPI) -> None:
+    # Materialise the product state before any local hot-capture subprocess can
+    # read it.  This is a one-time data-volume migration; the application
+    # startup path uses only the current server's local runtime.
+    with contextlib.suppress(Exception):
+        _load_config()
+
     @app.post("/api/integrations/proxy-cheap/webhook/{token}", status_code=202)
     async def receive_proxycheap_webhook(token: str, request: Request):
         if not hmac.compare_digest(str(token or ""), _webhook_secret()):
@@ -1655,6 +1682,47 @@ def register_collector_proxy_admin_routes(app: FastAPI) -> None:
             config = _apply_products(config, products)
             _write_config(config)
         return {"ok": True, "config": _public_config(config)}
+
+    @app.patch("/api/admin/collector-proxy/products/{proxy_id}/traffic-role")
+    def set_collector_proxy_product_traffic_role(
+        proxy_id: str,
+        payload: CollectorProxyTrafficRolePayload,
+        _admin: dict[str, Any] = Depends(require_admin),
+    ):
+        clean_id = _clean_proxy_id(proxy_id)
+        role = str(payload.role or "").strip().lower()
+        if role not in {"dynamic", "sticky"}:
+            raise HTTPException(status_code=422, detail="代理流量角色必须是 dynamic 或 sticky")
+        with _CONFIG_LOCK:
+            config = _load_config()
+            products = _normalise_products(config)
+            item = _find_product(products, clean_id)
+            item["traffic_role"] = role
+            item["mode"] = "sticky" if role == "sticky" else "rotating"
+            item["user_set_traffic_role"] = True
+            item["updated_at"] = _now()
+            # A sticky product is reserved for account sessions and must never
+            # remain in the anonymous Reader pool.  Switching back to dynamic
+            # does not silently enable Reader; the administrator still has to
+            # pass the connection check and explicitly enable it.
+            if role == "sticky":
+                item["public_reader_enabled"] = False
+                item["state"] = "ready" if _product_verified(item) else "needs_connection"
+            elif item.get("public_reader_enabled"):
+                item["state"] = "active" if _product_verified(item) else "check_failed"
+                if item["state"] != "active":
+                    item["public_reader_enabled"] = False
+            else:
+                item["state"] = "ready" if _product_verified(item) else "needs_connection"
+            config = _apply_products(config, products)
+            _write_config(config)
+        traffic = config.get("traffic_cache") if isinstance(config.get("traffic_cache"), dict) else {}
+        return {
+            "ok": True,
+            "role": role,
+            "traffic": _attach_traffic_groups(traffic, config),
+            "config": _public_config(config),
+        }
 
     @app.get("/api/admin/collector-proxy/traffic")
     def get_collector_proxy_traffic(force: bool = False, _admin: dict[str, Any] = Depends(require_admin)):

@@ -547,8 +547,8 @@ describe("sentiment hot importer", () => {
     expect(sentimentHotKeywordModelInstructionForMode("strict")).toContain("严格垂直");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("泛垂直");
     expect(sentimentHotKeywordModelInstructionForMode("strict")).toContain("不得截断");
-    expect(sentimentHotSearchStrategyCacheVersionForMode("strict")).toBe(53);
-    expect(sentimentHotSearchStrategyCacheVersionForMode("normal")).toBe("53-normal-lifestyle-v6");
+    expect(sentimentHotSearchStrategyCacheVersionForMode("strict")).toBe(54);
+    expect(sentimentHotSearchStrategyCacheVersionForMode("normal")).toBe("54-normal-lifestyle-v7");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("自然生活场景");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("正文中自然提到一嘴");
     expect(sentimentHotKeywordModelInstructionForMode("normal")).toContain("必须由模型直接生成");
@@ -566,9 +566,18 @@ describe("sentiment hot importer", () => {
     expect(sentimentHotKeywordModelInstructionForMode("normal")).not.toContain("核心领域；domainExpansion");
     expect(sentimentHotKeywordModelInstructionForMode("strict")).toBe([
       "当前模式：严格垂直。必须独立生成本模式自己的 20 个搜索词，不得复用泛垂直模式的关键词计划。",
-      "primaryQueries 和 domainExpansion 的全部词都必须直接指向人设的核心行业、核心对象或核心服务。",
+      "primaryQueries 和 domainExpansion 的全部词都必须直接指向当前这个人设的核心行业、核心对象或核心服务，让人一眼能看出属于该人设，而不是可套到任何人的生活词或蔬菜词。",
+      "若人设有两个核心职业，两个领域都要出具体对象；仍禁止用双关词把领域糊在一起。",
       "禁止单独输出资产配置、理财、家族传承、生活、职场等上位宽词；若确属核心业务，必须和具体行业对象组合成可搜索词。",
       "每个词必须是平台用户会自然输入的完整高流量词，优先 2-4 个汉字，最多 5 个汉字；不得截断、造简称或输出東京宅、豪宅貸、傳承策这类残缺词。",
+      "程序会丢掉不合格词；被丢掉就会少过 20 个。请一次直出 20 个都能过关的词，不要依赖事后过滤。",
+      "每个词必须是单一明确含义的可搜索对象：行业物件、服务、场所、工具、产品、作品或具体交易动作。",
+      "禁止双关或歧义词：搜索时既可能是普通蔬菜/生活词，又可能是黑话或情绪词。尤其禁止：韭菜、割韭菜、接盘、躺平、收割。股市语境请改用散戶、當沖、套牢、融資、停損等单一含义的交易词。",
+      "禁止空词与模板词：日常、生活、搞笑、分享、心得、攻略、教程、教學、评测、推荐、經驗、好物、气氛、爱好者、大叔、便宜、烟火气。",
+      "禁止截断残缺：東京宅、豪宅貸、傳承策、收益算、物件檢、股市碎。完整词超过 5 字时改写成完整常用上位短词，不要砍最后一个字。",
+      "禁止外貌、穿著、体型、姿势、道具、图片视觉描述：T恤、白T、牛仔褲、眼鏡、站姿、背景。",
+      "禁止在词尾加攻略、教程、分享、心得、评测、推荐、經驗。",
+      "2-5 个汉字，互不重复；同一个词不要繁简各写一遍。",
     ].join("\n"));
   });
 

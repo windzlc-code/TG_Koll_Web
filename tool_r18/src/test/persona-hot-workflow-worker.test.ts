@@ -132,7 +132,7 @@ describe("persona hot workflow remote worker snapshots", () => {
     const downloaded = [{
       type: "image",
       url: "https://cdn.example/hot.png",
-      localPath: "/collector-proxy/sentiment-hot-media/hot-media-1-1.png",
+      localPath: "/data/webapp_data/sentiment-hot-media/hot-media-1-1.png",
     }];
     mocks.fetchSentimentHotCandidates.mockResolvedValueOnce({
       keywords: ["current"],

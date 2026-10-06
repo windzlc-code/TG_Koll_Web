@@ -691,6 +691,11 @@ function setActiveAdminPage(page, updateHash = true) {
     void loadProxyProviderCredentialStatus().catch((error) => {
       setMsg("proxyProviderCredentialMsg", `供应商凭据状态读取失败：${getErrorMessage(error)}`, false);
     });
+    if (typeof loadCollectorProxyConfig === "function") {
+      void loadCollectorProxyConfig().catch((error) => {
+        setMsg("collectorProxyConfigMsg", `代理产品读取失败：${getErrorMessage(error)}`, false);
+      });
+    }
   }
   if (nextPage === "fingerprintLogin") {
     if (typeof loadFingerprintLoginAccounts === "function") {
@@ -8427,14 +8432,14 @@ function renderHotDatasetOverview(payload = {}) {
   if (globalList) globalList.replaceChildren();
   if (personaList) personaList.replaceChildren();
   if (!payload.configured) {
-    const empty = createEmptyState("旧机候选池汇总尚未生成");
+    const empty = createEmptyState("本机候选池汇总尚未生成");
     if (globalList) globalList.appendChild(empty);
     else if (fallback) {
       fallback.replaceChildren();
       fallback.appendChild(empty);
     }
-    setText("hotDatasetOverviewTime", "等待 worker 汇总");
-    setText("hotDatasetPersonaMeta", "等待 worker 汇总");
+    setText("hotDatasetOverviewTime", "等待本机汇总");
+    setText("hotDatasetPersonaMeta", "等待本机汇总");
     return;
   }
   const globalDataset = payload.global && typeof payload.global === "object" ? payload.global : {};

@@ -251,12 +251,9 @@ class CollectorProxyTrafficSwitchTests(unittest.TestCase):
             "bandwidth_remaining_gb": 0,
         }))
 
-    def test_worker_exposes_signed_sticky_allocate_route(self) -> None:
-        from pathlib import Path
-
-        worker = (Path(__file__).resolve().parents[1] / "worker_server.py").read_text(encoding="utf-8")
-        self.assertIn('"/internal/worker/v1/account-proxy/allocate"', worker)
-        self.assertIn("allocate_runtime_account_proxy", worker)
+    def test_application_owns_sticky_proxy_allocation(self) -> None:
+        self.assertTrue(callable(admin.allocate_runtime_account_proxy))
+        self.assertTrue(callable(admin.runtime_account_proxy_url))
 
 
 class CollectorProxyOnboardTests(unittest.TestCase):

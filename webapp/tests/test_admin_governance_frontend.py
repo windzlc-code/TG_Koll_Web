@@ -103,8 +103,7 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('{ method: "DELETE" }', self.script)
         self.assertIn('requestAdminPublicAction({', self.script)
         self.assertIn('确认删除数据集', self.script)
-        self.assertIn('全局数据集派生分类缓存', self.script)
-        self.assertIn('派生分类缓存', self.script)
+        self.assertIn('本机候选池汇总尚未生成', self.script)
         self.assertIn('function renderHotDatasetOverview(', self.script)
         self.assertIn('function renderHotDatasetEvents(', self.script)
         self.assertIn('function renderHotDatasetEventsError(', self.script)
@@ -112,14 +111,13 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('if (payload?.stale) void refreshHotDatasets({ force: true });', self.script)
         self.assertIn('候选已使用或清理', self.script)
 
-    def test_hot_dataset_initial_read_uses_worker_source_of_truth(self):
+    def test_hot_dataset_initial_read_uses_current_application_source_of_truth(self):
         route = SERVER_SOURCE[
             SERVER_SOURCE.index('@app.get("/api/admin/hot-datasets")')
             : SERVER_SOURCE.index('@app.post("/api/admin/hot-datasets/refresh")')
         ]
-        self.assertIn('_hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")', route)
-        self.assertIn('except HTTPException:', route)
-        self.assertIn('local snapshot as a degraded fallback', route)
+        self.assertIn('_local_hot_dataset_overview(force=False)', route)
+        self.assertNotIn('_hot_dataset_worker_request', route)
 
     def test_social_automation_limits_are_managed_in_admin_runtime(self):
         for element_id in (

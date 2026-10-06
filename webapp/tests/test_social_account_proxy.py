@@ -1233,7 +1233,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             )
         )
         responses = [
-            self._json_response({"ip": "47.243.99.2"}),
+            self._json_response({"ip": "1.1.1.1"}),
             self._json_response({"ip": "208.113.11.225"}),
             self._json_response({
                 "success": True,
@@ -1275,7 +1275,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             social_api.SocialProxyPayload(host="market-datacenter.example", port=1080)
         )
         responses = [
-            self._json_response({"ip": "47.243.99.2"}),
+            self._json_response({"ip": "8.8.8.8"}),
             self._json_response({"ip": "1.1.1.1"}),
             self._json_response({"success": True, "ip": "1.1.1.1", "country_code": "JP"}),
             self._json_response({
@@ -1308,7 +1308,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             social_api.SocialProxyPayload(host="exit.example", port=8080)
         )
         responses = [
-            self._json_response({"ip": "47.243.99.2"}),
+            self._json_response({"ip": "1.1.1.1"}),
             self._json_response({"ip": "8.8.8.8"}),
             self._json_response({"success": True, "ip": "8.8.8.8", "country_code": "US"}),
             self._json_response({
@@ -1343,7 +1343,7 @@ class SocialAccountResidentialProxyTests(unittest.TestCase):
             )
         )
         encoded_url = "socks5://user%40region:p%40ss%3A%2F%3F%23@proxy.example:1080"
-        direct = self._json_response({"ip": "47.243.99.2"})
+        direct = self._json_response({"ip": "1.1.1.1"})
         with mock.patch.object(
             social_api.requests,
             "get",

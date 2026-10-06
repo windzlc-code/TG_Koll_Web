@@ -5277,11 +5277,11 @@ class PersonaDashboardApiTests(unittest.TestCase):
         import inspect
 
         worker_source = inspect.getsource(server._persona_dashboard_refresh_worker_v2)
-        prefetch_source = inspect.getsource(server._prefetch_persona_dashboard_remote_metrics)
-        fetch_one_source = inspect.getsource(server._fetch_one_persona_dashboard_remote_metrics)
+        prefetch_source = inspect.getsource(server._prefetch_persona_dashboard_profile_metrics)
+        fetch_one_source = inspect.getsource(server._fetch_one_persona_dashboard_profile_metrics)
         self.assertNotIn("refresh-global-hot-pool", worker_source)
         self.assertNotIn("_refresh_persona_hot_global_pool", worker_source)
-        self.assertIn("_prefetch_persona_dashboard_remote_metrics", worker_source)
+        self.assertIn("_prefetch_persona_dashboard_profile_metrics", worker_source)
         self.assertIn("refresh-profile-metrics", fetch_one_source)
         self.assertIn("PERSONA_DASHBOARD_PREFETCHED_METRICS_B64", worker_source)
         self.assertNotIn("PERSONA_DASHBOARD_COLLECTOR_HTTP_ONLY", worker_source)
@@ -5296,9 +5296,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("NOT IN ('banned', 'disabled')", target_source)
         self.assertNotIn("IN ('ready', 'active')", target_source)
         self.assertIn("lower(account.platform) = ?", target_source)
-        self.assertNotIn("旧机", worker_source)
-        self.assertNotIn("旧机", prefetch_source)
-        self.assertNotIn("旧机", fetch_one_source)
 
     def test_bound_refresh_targets_include_cookie_expired_bound_accounts(self):
         self._insert_social_account(
@@ -6107,12 +6104,8 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in resp.json()["candidates"]], ["hot-threads"])
         self.assertEqual(mocked.call_args.args[0]["platform"], "threads")
 
-    def test_hot_keyword_strategy_version_matches_old_host_worker(self):
-        from webapp import worker_server
-        self.assertEqual(
-            server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
-            worker_server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
-        )
+    def test_hot_keyword_strategy_version_is_application_owned(self):
+        self.assertEqual(server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION, 67)
 
     def test_hot_keyword_prompt_keeps_full_generation_spec(self):
         importer = (
@@ -6657,7 +6650,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(repeated["keywords"], keywords[:10])
         mocked.assert_not_called()
 
-    def test_fetch_persona_hot_candidates_prepares_missing_keywords_on_new_host(self):
+    def test_fetch_persona_hot_candidates_prepares_missing_keywords_locally(self):
         self._write_archives()
         prepared_keywords = [f"history-keyword-{index}" for index in range(20)]
         prepared = {
@@ -6700,7 +6693,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         )
         self.assertRegex(mocked.call_args_list[1].args[0]["keywordDigest"], r"^[0-9a-f]{64}$")
 
-    def test_fetch_persona_hot_candidates_sends_new_host_keywords_in_remote_mode(self):
+    def test_fetch_persona_hot_candidates_sends_current_keywords_to_local_runtime(self):
         self._write_archives()
         fetched = {
             "ok": True,
@@ -6711,10 +6704,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             "candidates": [],
         }
 
-        with (
-            mock.patch.object(server, "configured_remote_fetch_mode", return_value="remote_required"),
-            mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fetched) as mocked,
-        ):
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fetched) as mocked:
             body = server._fetch_persona_hot_candidates(
                 "persona-1",
                 server.PersonaDashboardHotCandidatesFetchPayload(
@@ -6745,10 +6735,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
             "candidates": [],
         }
 
-        with (
-            mock.patch.object(server, "configured_remote_fetch_mode", return_value="remote_required"),
-            mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fetched) as mocked,
-        ):
+        with mock.patch.object(server, "_run_persona_hot_workflow_cli", return_value=fetched) as mocked:
             body = server._fetch_persona_hot_candidates(
                 "persona-1",
                 server.PersonaDashboardHotCandidatesFetchPayload(
@@ -6777,20 +6764,6 @@ class PersonaDashboardApiTests(unittest.TestCase):
             )
         self.assertEqual(mocked.call_args.args[0]["allKeywords"], ["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"])
 
-    def test_remote_hot_request_keeps_full_keyword_table_for_old_worker_relevance(self):
-        payload = server._remote_fetch_persona_hot_request({
-            "action": "fetch-hot-candidates",
-            "archiveId": "persona-1",
-            "keywords": ["海外置產", "白金台"],
-            "allKeywords": ["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"],
-            "keywordStrategyVersion": server.PERSONA_HOT_KEYWORD_STRATEGY_VERSION,
-            "keywordDigest": "digest",
-            "archiveSnapshot": {"id": "persona-1", "name": "History Teacher", "content": "", "setup": {}},
-        })
-
-        self.assertEqual(payload["keywords"], ["海外置產", "白金台"])
-        self.assertEqual(payload["allKeywords"], ["日本豪宅", "一戶建", "海外置產", "白金台", "高級物件"])
-
     def test_hot_keyword_gateway_html_error_is_not_exposed(self):
         detail = server._normalize_persona_hot_workflow_error_detail(
             "<html><head><title>502 Bad Gateway</title></head></html>",
@@ -6801,7 +6774,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
 
     def test_hot_keyword_strategy_error_is_not_exposed_in_english(self):
         detail = server._normalize_persona_hot_workflow_error_detail(
-            "persona hot keywords must use the current new-host strategy",
+            "persona hot keywords must use the current application strategy",
             action="fetch-hot-candidates",
         )
 

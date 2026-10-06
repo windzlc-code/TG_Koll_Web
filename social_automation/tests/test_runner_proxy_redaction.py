@@ -151,7 +151,7 @@ class RunnerProxyRedactionTests(unittest.TestCase):
     def test_direct_network_locale_uses_live_public_ip_not_leftover_proxy_country(self):
         runner._NETWORK_LOCALE_CACHE.clear()
         with (
-            mock.patch.object(runner, "_live_exit_ip", return_value="47.243.99.2"),
+            mock.patch.object(runner, "_live_exit_ip", return_value="8.8.8.8"),
             mock.patch.object(runner, "_lookup_ip_country", return_value="HK"),
         ):
             locale = runner._current_network_locale(None)
