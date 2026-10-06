@@ -63,6 +63,28 @@ class AdminVideoRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(merged["image_model_priority_order"], "nano banana 2, gpt image 2")
         self.assertEqual(merged["image_model_default_model"], "nano banana 2")
 
+    def test_digital_human_create_video_uses_video_owned_standard_image_provider(self):
+        merged = video_workbench.apply_video_runtime_defaults(
+            "create_video",
+            {},
+            {
+                "image_generate_mode_default": "closed_model_api",
+                "image_model_provider_base_url": "https://generic.invalid/v1",
+                "image_model_default_model": "gemini-3-pro-image-preview",
+                "image_model_priority_order": "generic-image-model",
+                "runninghub_enterprise_api_key": "rh-enterprise",
+                "video_image_model_priority_order": "nano banana 2, gpt image 2",
+            },
+        )
+
+        self.assertEqual(merged["image_generate_provider"], "standard_image_api")
+        self.assertEqual(merged["image_generate_mode_default"], "standard_image_api")
+        self.assertEqual(merged["image_model_provider_base_url"], "https://www.runninghub.ai")
+        self.assertEqual(merged["image_model_priority_order"], "nano banana 2, gpt image 2")
+        self.assertEqual(merged["image_model_default_model"], "nano banana 2")
+        self.assertEqual(merged["image_model_provider_api_key_gemini"], "rh-enterprise")
+        self.assertEqual(merged["image_model_provider_api_key_gpt"], "rh-enterprise")
+
     def test_video_tasks_use_runninghub_speech_instead_of_official_minimax(self):
         merged = video_workbench.apply_video_runtime_defaults(
             "create_video",

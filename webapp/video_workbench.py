@@ -498,7 +498,7 @@ def apply_video_runtime_defaults(
         source.get("minimax_tts_voice_id") or source.get("video_default_voice_id")
     )
     source["video_default_voice_id"] = source["minimax_tts_voice_id"]
-    if typ == "image_generate":
+    if typ in {"image_generate", "create_video"}:
         video_image_models = [
             item.strip()
             for item in str(source.get("video_image_model_priority_order") or "").split(",")
@@ -511,23 +511,31 @@ def apply_video_runtime_defaults(
         source["image_model_provider_base_url"] = "https://www.runninghub.ai"
         source["image_model_provider_api_key_gemini"] = enterprise_runninghub_key
         source["image_model_provider_api_key_gpt"] = enterprise_runninghub_key
-        video_image_modes = {
-            "product_only",
-            "model_product",
-            "scene_image",
-            "subject_replace",
-            "poster_translate",
-            "digital_human_character",
-            "three_view",
-        }
-        current_mode = str(
-            merged.get("video_image_mode") or merged.get("image_mode") or merged.get("mode") or ""
-        ).strip()
-        if current_mode in video_image_modes:
-            merged["video_image_mode"] = current_mode
-            merged["mode"] = (
-                "dual_reference" if current_mode in {"model_product", "subject_replace"} else "single_reference"
-            )
+        if typ == "image_generate":
+            video_image_modes = {
+                "product_only",
+                "model_product",
+                "scene_image",
+                "subject_replace",
+                "poster_translate",
+                "digital_human_character",
+                "three_view",
+            }
+            current_mode = str(
+                merged.get("video_image_mode") or merged.get("image_mode") or merged.get("mode") or ""
+            ).strip()
+            if current_mode in video_image_modes:
+                merged["video_image_mode"] = current_mode
+                merged["mode"] = (
+                    "dual_reference" if current_mode in {"model_product", "subject_replace"} else "single_reference"
+                )
+        else:
+            # Telegram digital-human steps are persisted as create_video, but the
+            # fusion preview calls the same image dispatcher internally. Keep that
+            # path on the video-owned RunningHub Standard Image API instead of
+            # inheriting the generic closed-model runtime defaults.
+            source["image_generate_provider"] = "standard_image_api"
+            source["image_generate_mode_default"] = "standard_image_api"
 
     common_keys = [
         "video_runninghub_base_url",
@@ -554,7 +562,20 @@ def apply_video_runtime_defaults(
         "upload_file_api_key",
     ]
     task_keys = {
-        "create_video": ["video_create_audio_app_id", "video_create_video_app_id", "oral_digital_human_workflow_ids", "create_video_app_id", "video_app_id"],
+        "create_video": [
+            "video_create_audio_app_id",
+            "video_create_video_app_id",
+            "oral_digital_human_workflow_ids",
+            "create_video_app_id",
+            "video_app_id",
+            "image_generate_provider",
+            "image_generate_mode_default",
+            "image_model_provider_base_url",
+            "image_model_provider_api_key_gemini",
+            "image_model_provider_api_key_gpt",
+            "image_model_default_model",
+            "image_model_priority_order",
+        ],
         "ecommerce_short_video": [
             "ecommerce_short_video_workflow_ids",
             "video_ecommerce_app_id",
