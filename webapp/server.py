@@ -35089,17 +35089,16 @@ def create_app() -> FastAPI:
                     raise ValueError
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail="热点数据集 ID 无效") from exc
-        overview = _local_hot_dataset_overview(force=True)
-        if clean_id == "global":
-            overview["global"] = {**(overview.get("global") or {}), "count": 0}
-        else:
-            for item in overview.get("personas") if isinstance(overview.get("personas"), list) else []:
-                if str(item.get("archive_id") or "").lower() == clean_id:
-                    item["count"] = 0
-        _write_json_file(_local_hot_dataset_path("hot-dataset-overview.json"), overview)
-        with _LOCAL_HOT_DATASET_LOCK:
-            _LOCAL_HOT_DATASET_CACHE.update({"payload": copy.deepcopy(overview), "cached_at": time.monotonic()})
-        return {"ok": True, "deleted_count": 0, "moved_count": 0, **overview}
+        result = _hot_dataset_worker_request("DELETE", f"/internal/worker/v1/hot-datasets/{clean_id}")
+        overview = _hot_dataset_overview_from_worker(result)
+        if overview is None:
+            raise HTTPException(status_code=502, detail="采集 worker 返回的热点数据集概览无效")
+        return {
+            "ok": True,
+            "deleted_count": int(result.get("deleted_count") or 0),
+            "moved_count": int(result.get("moved_count") or 0),
+            **overview,
+        }
 
     @app.get("/api/admin/dashboard")
     def api_admin_dashboard(
