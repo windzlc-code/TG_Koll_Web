@@ -16553,11 +16553,16 @@ def _run_persona_hot_workflow_cli(
     global _PERSONA_HOT_BACKGROUND_PROCESS, _PERSONA_HOT_INTERACTIVE_PROCESS, _PERSONA_HOT_INTERACTIVE_ARCHIVE_ID, _PERSONA_HOT_LAST_INTERACTIVE_AT
     _sync_tool_r18_api_config_for_persona_workflow()
     timeout = min(max(30, int(timeout_seconds)), 120)
-    # Hot capture is owned by this application. A stale deployment setting
-    # must not redirect this request to another runtime.
-    if progress_callback is not None:
-        with contextlib.suppress(Exception):
-            progress_callback({"status": "running", "queue": {"phase": "fetching", "queue_ahead": 0}})
+    # The capture worker is the single owner of the hot candidate pools. Keep
+    # interactive and background requests on the same runtime as the dataset
+    # overview and change-event APIs below.
+    remote_result = _run_remote_persona_hot_workflow(
+        payload,
+        timeout_seconds=timeout,
+        on_progress=progress_callback,
+    )
+    if remote_result is not None:
+        return remote_result
     command = [*_tool_r18_node_command("scripts/skills/persona-hot-workflow.ts"), json.dumps(payload, ensure_ascii=True)]
     deadline = time.monotonic() + timeout
     process: subprocess.Popen[str] | None = None
@@ -32661,7 +32666,7 @@ def create_app() -> FastAPI:
                 "refreshing": True,
                 "candidates": [],
             }
-        workflow_payload = {
+        body = json.dumps({
             "action": "read-hot-candidates-cache",
             "archiveId": clean_id,
             "keywords": keywords,
@@ -32672,8 +32677,8 @@ def create_app() -> FastAPI:
             "freshnessPolicy": "strict" if str(payload.freshness_policy or "").strip().lower() == "strict" else "legacy",
             "recordShown": bool(payload.record_shown),
             "platform": target_platform,
-        }
-        result = _run_persona_hot_workflow_subprocess(workflow_payload, timeout_seconds=60)
+        }, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        result = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-candidates/cache", body=body)
         candidates: list[dict[str, Any]] = []
         for item in result.get("candidates") if isinstance(result.get("candidates"), list) else []:
             normalized = _normalize_persona_hot_candidate(item)
@@ -34939,13 +34944,98 @@ def create_app() -> FastAPI:
         _invalidate_admin_dashboard_cache()
         return {"ok": True, "email_delivery": overview}
 
+    def _hot_dataset_worker_base_url() -> str:
+        env_url = str(os.getenv("TG_FETCH_WORKER_INTERNAL_URL") or "").strip().rstrip("/")
+        if env_url:
+            return env_url
+        settings_path = Path(os.getenv("TG_COLLECTOR_WORKER_ENDPOINT_FILE", "/data/collector-proxy/worker-endpoint.json"))
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            file_url = str(dict(settings or {}).get("base_url") or "").strip().rstrip("/")
+            if file_url:
+                return file_url
+        except Exception:
+            pass
+        return "http://tg-koll-capture-worker:8092"
+
+    def _hot_dataset_worker_request(method: str, path: str, *, query: str = "", body: bytes = b"") -> dict[str, Any]:
+        try:
+            keys_path = Path(os.getenv("TG_FETCH_WORKER_KEYS_FILE", "/data/internal/remote-fetch-keys.json"))
+            keys = json.loads(keys_path.read_text(encoding="utf-8"))
+            key_id = sorted(keys)[0]
+            secret = str(keys[key_id])
+            headers = signed_headers(
+                secret=secret,
+                key_id=key_id,
+                method=method,
+                path=path,
+                body=body,
+                timestamp=int(time.time()),
+                nonce=secrets.token_urlsafe(24),
+            )
+            base_url = _hot_dataset_worker_base_url()
+            url = base_url + path
+            if query:
+                url = f"{url}?{query.lstrip('?')}"
+            response = requests.request(method, url, headers=headers, data=body or None, timeout=(3, 12))
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("invalid worker response")
+            return payload
+        except (OSError, IndexError, KeyError, ValueError, requests.RequestException) as exc:
+            raise HTTPException(status_code=502, detail="采集 worker 暂不可用") from exc
+
+    def _hot_dataset_overview_fallback() -> dict[str, Any]:
+        path = Path(os.getenv("TG_HOT_DATASET_OVERVIEW_PATH", "/data/collector-proxy/hot-dataset-overview.json"))
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {"configured": False, "generated_at": 0, "global": {}, "personas": []}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=503, detail="热点数据集概览暂不可用") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=503, detail="热点数据集概览格式无效")
+        generated_at = int(payload.get("generated_at") or 0)
+        return {
+            "configured": True,
+            "stale": not generated_at or _now_ts() - generated_at > 90,
+            "generated_at": generated_at,
+            "global": payload.get("global") if isinstance(payload.get("global"), dict) else {},
+            "personas": payload.get("personas") if isinstance(payload.get("personas"), list) else [],
+        }
+
+    def _hot_dataset_overview_from_worker(payload: dict[str, Any]) -> dict[str, Any] | None:
+        overview = payload.get("overview") if isinstance(payload, dict) else None
+        if not isinstance(overview, dict):
+            return None
+        return {
+            "configured": True,
+            "stale": False,
+            "generated_at": int(overview.get("generated_at") or 0),
+            "global": overview.get("global") if isinstance(overview.get("global"), dict) else {},
+            "personas": overview.get("personas") if isinstance(overview.get("personas"), list) else [],
+        }
+
     @app.get("/api/admin/hot-datasets")
     def api_admin_hot_datasets(_user: dict[str, Any] = Depends(require_admin)):
-        return _local_hot_dataset_overview(force=False)
+        try:
+            overview = _hot_dataset_overview_from_worker(
+                _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")
+            )
+            if overview is not None:
+                return overview
+        except HTTPException:
+            pass
+        return _hot_dataset_overview_fallback()
 
     @app.post("/api/admin/hot-datasets/refresh")
-    def api_admin_refresh_hot_datasets(user: dict[str, Any] = Depends(require_admin)):
-        return {"ok": True, **_local_hot_dataset_overview(force=True)}
+    def api_admin_refresh_hot_datasets(_user: dict[str, Any] = Depends(require_admin)):
+        worker_payload = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/refresh")
+        overview = _hot_dataset_overview_from_worker(worker_payload)
+        if overview is None:
+            raise HTTPException(status_code=502, detail="采集 worker 返回的热点数据集概览无效")
+        return {"ok": True, **overview}
 
     @app.get("/api/admin/hot-datasets/events")
     def api_admin_hot_dataset_events(
@@ -34954,27 +35044,44 @@ def create_app() -> FastAPI:
         scope: str = "all",
         _user: dict[str, Any] = Depends(require_admin),
     ):
-        return _local_hot_dataset_event_page(page, page_size, scope)
+        query = f"page={max(1, int(page or 1))}&scope={str(scope or 'all').strip() or 'all'}"
+        if int(page_size or 0) > 0:
+            query += f"&page_size={max(5, min(int(page_size), 100))}"
+        payload = _hot_dataset_worker_request("GET", "/internal/worker/v1/hot-datasets/events", query=query)
+        events = payload.get("events")
+        return {
+            "ok": True,
+            "events": events if isinstance(events, list) else [],
+            "total": int(payload.get("total") or 0),
+            "page": int(payload.get("page") or 1),
+            "page_size": int(payload.get("page_size") or 20),
+            "pages": int(payload.get("pages") or 1),
+            "scope": str(payload.get("scope") or "all"),
+            "max_events": int(payload.get("max_events") or 200),
+            "persona_page_size": int(payload.get("persona_page_size") or 10),
+        }
 
     @app.get("/api/admin/hot-datasets/settings")
     def api_admin_hot_dataset_settings(_user: dict[str, Any] = Depends(require_admin)):
-        return {"ok": True, **_local_hot_dataset_settings()}
+        payload = _hot_dataset_worker_request("GET", "/internal/worker/v1/hot-datasets/settings")
+        return {"ok": True, **{key: payload.get(key) for key in ("event_page_size", "event_max", "persona_page_size")}}
 
     @app.post("/api/admin/hot-datasets/settings")
     def api_admin_save_hot_dataset_settings(payload: dict[str, Any], _user: dict[str, Any] = Depends(require_admin)):
-        return {"ok": True, **_save_local_hot_dataset_settings(payload)}
+        body = json.dumps(payload or {}, ensure_ascii=False).encode("utf-8")
+        result = _hot_dataset_worker_request("POST", "/internal/worker/v1/hot-datasets/settings", body=body)
+        return {"ok": True, **{key: result.get(key) for key in ("event_page_size", "event_max", "persona_page_size", "pruned")}}
 
     @app.delete("/api/admin/hot-datasets/events/{event_id}")
     def api_admin_delete_hot_dataset_event(event_id: str, _user: dict[str, Any] = Depends(require_admin)):
         clean_id = str(event_id or "").strip().lower()
         if not re.fullmatch(r"[0-9a-f]{32}", clean_id):
             raise HTTPException(status_code=400, detail="热点数据集记录 ID 无效")
-        events = [item for item in _local_hot_dataset_events() if str(item.get("id") or "").lower() != clean_id]
-        _write_json_file(_local_hot_dataset_path("hot-dataset-events.json"), events)
+        _hot_dataset_worker_request("DELETE", f"/internal/worker/v1/hot-datasets/events/{clean_id}")
         return {"ok": True, "deleted": True}
 
     @app.delete("/api/admin/hot-datasets/{dataset_id}")
-    def api_admin_delete_hot_dataset(dataset_id: str, user: dict[str, Any] = Depends(require_admin)):
+    def api_admin_delete_hot_dataset(dataset_id: str, _user: dict[str, Any] = Depends(require_admin)):
         clean_id = str(dataset_id or "").strip().lower()
         if clean_id != "global":
             try:

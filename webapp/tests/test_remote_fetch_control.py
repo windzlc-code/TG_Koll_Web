@@ -261,6 +261,28 @@ class RemoteFetchControlTests(unittest.TestCase):
                         self.assertEqual(client.calls[-1]["payload"].get("archiveId"), "persona-a")
         self.assertEqual(server._PERSONA_HOT_REMOTE_JOB_IDS, {})
 
+    def test_persona_hot_workflow_dispatches_to_worker_before_local_subprocess(self) -> None:
+        client = _FakeRemoteFetchClient()
+        payload = {
+            "action": "fetch-hot-candidates",
+            "archiveId": "persona-a",
+            "liveOnly": True,
+            "recordShown": False,
+        }
+        with (
+            patch.object(server, "configured_remote_fetch_client", return_value=client),
+            patch.object(server, "_sync_tool_r18_api_config_for_persona_workflow"),
+            patch.object(
+                server,
+                "_run_persona_hot_workflow_subprocess",
+                side_effect=AssertionError("hot candidate fetch fell back to the local subprocess"),
+            ),
+            patch.dict(os.environ, {"TG_REMOTE_FETCH_MODE": "remote_required"}),
+        ):
+            result = server._run_persona_hot_workflow_cli(payload, timeout_seconds=60)
+        self.assertTrue(result["ok"])
+        self.assertEqual(client.calls[-1]["capability"], "persona.hot_candidates.v1")
+
     def test_remote_hot_fetch_sends_new_host_keywords_without_archive_snapshot(self) -> None:
         client = _FakeRemoteFetchClient()
         with (

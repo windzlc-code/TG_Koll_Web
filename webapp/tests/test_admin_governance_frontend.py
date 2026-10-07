@@ -111,13 +111,31 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('if (payload?.stale) void refreshHotDatasets({ force: true });', self.script)
         self.assertIn('候选已使用或清理', self.script)
 
-    def test_hot_dataset_initial_read_uses_current_application_source_of_truth(self):
-        route = SERVER_SOURCE[
-            SERVER_SOURCE.index('@app.get("/api/admin/hot-datasets")')
-            : SERVER_SOURCE.index('@app.post("/api/admin/hot-datasets/refresh")')
+    def test_hot_dataset_routes_use_capture_worker_source_of_truth(self):
+        routes = SERVER_SOURCE[
+            SERVER_SOURCE.index('def _hot_dataset_worker_base_url()')
+            : SERVER_SOURCE.index('@app.get("/api/admin/dashboard")')
         ]
-        self.assertIn('_local_hot_dataset_overview(force=False)', route)
-        self.assertNotIn('_hot_dataset_worker_request', route)
+        self.assertIn('_hot_dataset_worker_request', routes)
+        self.assertNotIn('_local_hot_dataset_overview', routes)
+        for endpoint in (
+            '/internal/worker/v1/hot-datasets/refresh',
+            '/internal/worker/v1/hot-datasets/events',
+            '/internal/worker/v1/hot-datasets/settings',
+            '/internal/worker/v1/hot-datasets/events/{clean_id}',
+            '/internal/worker/v1/hot-datasets/{clean_id}',
+        ):
+            self.assertIn(endpoint, routes)
+        self.assertIn('采集 worker', routes)
+        self.assertNotIn('旧机', routes)
+
+    def test_hot_candidate_cache_reads_from_capture_worker_pool(self):
+        route = SERVER_SOURCE[
+            SERVER_SOURCE.index('@app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/cache")')
+            : SERVER_SOURCE.index('@app.post("/api/persona_dashboard/personas/{archive_id}/hot_keywords")')
+        ]
+        self.assertIn('_hot_dataset_worker_request("POST", "/internal/worker/v1/hot-candidates/cache"', route)
+        self.assertNotIn('_run_persona_hot_workflow_subprocess(workflow_payload', route)
 
     def test_social_automation_limits_are_managed_in_admin_runtime(self):
         for element_id in (
