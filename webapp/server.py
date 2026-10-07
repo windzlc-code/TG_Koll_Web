@@ -152,11 +152,6 @@ from .crm_integration import (
     ensure_crm_runtime_started,
     stop_crm_runtime,
 )
-from .proxy_ip_admin import (
-    ensure_proxy_market_health_monitor_started,
-    register_proxy_ip_admin_routes,
-    stop_proxy_market_health_monitor,
-)
 from .collector_proxy_admin import register_collector_proxy_admin_routes
 from .fingerprint_login_admin import register_fingerprint_login_admin_routes
 from .proxy_purchase_api import (
@@ -27027,7 +27022,6 @@ def create_app() -> FastAPI:
         _ensure_persona_dashboard_monitor_started()
         ensure_social_automation_worker_started()
         ensure_crm_runtime_started()
-        ensure_proxy_market_health_monitor_started()
         if not boundary.collector:
             start_proxy_purchase_worker()
         try:
@@ -27036,7 +27030,6 @@ def create_app() -> FastAPI:
             stop_proxy_purchase_worker()
             stop_crm_runtime()
             stop_social_automation_worker()
-            stop_proxy_market_health_monitor()
             stop_telegram_bot_worker()
             stop_tweet_telegram_bot_worker()
 
@@ -27956,7 +27949,6 @@ def create_app() -> FastAPI:
         live_search_executor=_crm_live_search_executor,
         collector_live_search=_crm_collector_live_search_enabled(),
     )
-    register_proxy_ip_admin_routes(app)
     register_collector_proxy_admin_routes(app)
     register_proxy_purchase_routes(
         app,
