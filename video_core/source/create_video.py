@@ -31,10 +31,10 @@ _DEFAULT_VIDEO_WORKFLOW_CAPABILITIES: dict[str, Any] = {
 }
 _VIDEO_WORKFLOW_CAPABILITIES: dict[str, dict[str, Any]] = {
     DIGITAL_HUMAN_VIDEO_APP_ID: {
-        "node_mapping": "ltx23_duration",
-        "supports_prompt": False,
+        "node_mapping": "digital_human_lipsync_v2",
+        "supports_prompt": True,
         "supports_camera_video": False,
-        "supports_max_resolution": False,
+        "supports_max_resolution": True,
         "supports_low_motion_prompt_retry": False,
     },
     LEGACY_INFINITETALK_VIDEO_APP_ID: dict(_DEFAULT_VIDEO_WORKFLOW_CAPABILITIES),
@@ -127,12 +127,20 @@ def _build_node_info_list(
     except Exception:
         duration_number = 0.0
     duration_seconds_text = str(int(math.ceil(max(duration_number, 0.0))) if duration_number else duration_seconds)
-    if capabilities.get("node_mapping") == "ltx23_duration":
+    if capabilities.get("node_mapping") == "digital_human_lipsync_v2":
+        try:
+            resolution_text = str(normalize_video_max_resolution(max_resolution))
+        except Exception:
+            resolution_text = str(CURRENT_VIDEO_MAX_RESOLUTION)
+        prompt_value = str(prompt_text or DIGITAL_HUMAN_ACTION_PROMPT).strip()
         return [
             {"nodeId": "269", "fieldName": "image", "fieldValue": f"{image_url}", "description": "上传数字人图片"},
             {"nodeId": "332", "fieldName": "audio", "fieldValue": f"{audio_url}", "description": "上传口播音频"},
-            {"nodeId": "331", "fieldName": "duration", "fieldValue": duration_seconds_text, "description": "视频时长（秒）"},
-            {"nodeId": "394", "fieldName": "duration", "fieldValue": duration_seconds_text, "description": "视频时长（秒）"},
+            {"nodeId": "349", "fieldName": "value", "fieldValue": duration_seconds_text, "description": "视频时长（秒；0 表示整段音频）"},
+            {"nodeId": "392", "fieldName": "value", "fieldValue": "0", "description": "音频起始秒数"},
+            {"nodeId": "303", "fieldName": "value", "fieldValue": prompt_value, "description": "动作提示词"},
+            {"nodeId": "347", "fieldName": "value", "fieldValue": resolution_text, "description": "视频分辨率最长边"},
+            {"nodeId": "346", "fieldName": "value", "fieldValue": str(CURRENT_VIDEO_FRAME_RATE), "description": "视频帧率"},
         ]
     return [
         {"nodeId": "133", "fieldName": "image", "fieldValue": f"{image_url}", "description": "上传图像"},
