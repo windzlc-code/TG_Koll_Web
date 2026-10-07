@@ -1409,7 +1409,7 @@ def _ensure_bundle_social_config_schema(conn: sqlite3.Connection) -> None:
         ("webhook_secret_fingerprint", "TEXT NOT NULL DEFAULT ''"),
         ("homepage_overlay_enabled", "INTEGER NOT NULL DEFAULT 1"),
         ("allow_force_refresh", "INTEGER NOT NULL DEFAULT 0"),
-        ("homepage_read_interval_hours", "INTEGER NOT NULL DEFAULT 12"),
+        ("homepage_read_interval_hours", "INTEGER NOT NULL DEFAULT 24"),
         ("collect_offset_hours", "INTEGER NOT NULL DEFAULT 12"),
         ("webhook_last_event_type", "TEXT NOT NULL DEFAULT ''"),
         ("webhook_last_event_at", "INTEGER NOT NULL DEFAULT 0"),

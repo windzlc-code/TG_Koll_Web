@@ -16326,7 +16326,7 @@ function publishHistoryMetricEntries(record = {}) {
     || source.views === undefined
     || (Number(source.views || 0) === 0 && interactions > 0);
   const views = viewUnavailable
-    ? null
+    ? 0
     : source.views;
   return [
     ["浏览", views],

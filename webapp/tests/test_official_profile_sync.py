@@ -321,7 +321,7 @@ def test_refresh_worker_calls_homepage_overlay_before_http_first():
     worker = Path(server.__file__).read_text(encoding="utf-8")
     v2 = worker[worker.index("def _persona_dashboard_refresh_worker_v2"):]
     overlay_at = v2.index("sync_official_homepage_metrics")
-    prefetch_at = v2.index("_prefetch_persona_dashboard_remote_metrics")
+    prefetch_at = v2.index("_prefetch_persona_dashboard_profile_metrics")
     assert overlay_at < prefetch_at
     assert "analytics/social-account/force" not in worker
     client_source = Path(server.ROOT_DIR / "webapp" / "bundle_social.py").read_text(encoding="utf-8")

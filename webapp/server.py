@@ -13782,7 +13782,7 @@ class BundleSocialConfigPayload(BaseModel):
     api_key: str = Field(default="", max_length=512)
     webhook_secret: str = Field(default="", max_length=512)
     homepage_overlay_enabled: bool | None = True
-    homepage_read_interval_hours: int | None = Field(default=12, ge=6, le=24)
+    homepage_read_interval_hours: int | None = Field(default=24, ge=6, le=24)
     collect_offset_hours: int | None = Field(default=12, ge=8, le=18)
 
 
@@ -25674,15 +25674,15 @@ def _matrix_publish_browser_pressure_active() -> bool:
 
 
 def _persona_dashboard_monitor_interval_seconds() -> int:
-    raw = os.getenv("PERSONA_DASHBOARD_RSSHUB_POLL_SECONDS") or os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_SECONDS") or "43200"
+    raw = os.getenv("PERSONA_DASHBOARD_RSSHUB_POLL_SECONDS") or os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_SECONDS") or "86400"
     try:
         return max(60, int(float(raw)))
     except Exception:
-        return 43200
+        return 86400
 
 
 def _persona_dashboard_monitor_enabled() -> bool:
-    # Dashboard data refresh is a low-frequency (12-hour by default) task.
+    # Dashboard data refresh is a low-frequency (24-hour by default) task.
     # It must not start a persona-level hot-capture workflow.
     return str(os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
 

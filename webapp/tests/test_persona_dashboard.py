@@ -1427,7 +1427,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
         archives = json.loads((self.tool_runtime_dir / "persona_archives.json").read_text(encoding="utf-8"))
         self.assertEqual(archives[0]["setup"].get("hotMetrics") or {}, {})
 
-    def test_dashboard_auto_refresh_defaults_to_twelve_hours(self):
+    def test_dashboard_auto_refresh_defaults_to_24_hours(self):
         with mock.patch.dict(
             os.environ,
             {
@@ -1435,7 +1435,7 @@ class PersonaDashboardApiTests(unittest.TestCase):
                 "PERSONA_DASHBOARD_AUTO_REFRESH_SECONDS": "",
             },
         ):
-            self.assertEqual(server._persona_dashboard_monitor_interval_seconds(), 12 * 60 * 60)
+            self.assertEqual(server._persona_dashboard_monitor_interval_seconds(), 24 * 60 * 60)
 
     def test_successful_dashboard_refresh_runs_publish_history_recognition(self):
         self._write_archives()
