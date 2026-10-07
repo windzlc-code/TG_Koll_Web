@@ -4140,8 +4140,14 @@ Log in to see more replies.
 
   it("keeps only Chinese sentiment copy candidates", () => {
     expect(isChineseSentimentCandidate("公路車的世界裡有兩種人是最強的，邊騎邊自拍的人真的很厲害。")).toBe(true);
+    expect(isChineseSentimentCandidate("台灣交通安全議題值得討論，這個案例也提醒大家注意路口安全。한국어 한두 단어 #交通安全")).toBe(true);
+    expect(isChineseSentimentCandidate("台灣交通安全議題值得討論，少しだけ補充。#交通安全")).toBe(true);
     expect(isChineseSentimentCandidate("palantir vulnerability 原文")).toBe(false);
     expect(isChineseSentimentCandidate("gpt 爆料")).toBe(false);
+    expect(isChineseSentimentCandidate("대만 국민으로서 한국 뉴스에 대해 깊은 유감을 표합니다. #高雄 #計程車 #韓國新聞 #대만택시")).toBe(false);
+    expect(isChineseSentimentCandidate("これは日本語の投稿です。きょうのニュースについて、みなさんにお知らせします。どうぞよろしくお願いします。#台灣 #交通安全 #新聞")).toBe(false);
+    expect(isChineseSentimentCandidate("This is a long English post about traffic safety and current events. #台灣 #交通安全 #新聞")).toBe(false);
+    expect(isChineseSentimentCandidate("Это длинный русский текст о дорожной безопасности и новостях. #台灣 #交通安全 #新聞")).toBe(false);
   });
 
   it("parses Traditional Chinese Threads search page text as fallback candidates", () => {
