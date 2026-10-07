@@ -2592,27 +2592,27 @@ class ArchivedSourceBackend:
             1,
         )
         app_id = _text(payload.get("video_create_video_app_id") or payload.get("create_video_app_id") or payload.get("video_app_id")) or DIGITAL_HUMAN_VIDEO_APP_ID
-        if app_id == DIGITAL_HUMAN_VIDEO_APP_ID:
-            nodes = [
-                {"nodeId": "269", "fieldName": "image", "fieldValue": image_url, "description": "上传数字人图片"},
-                {"nodeId": "332", "fieldName": "audio", "fieldValue": audio_url, "description": "上传口播音频"},
-                {"nodeId": "331", "fieldName": "duration", "fieldValue": str(duration), "description": "视频时长（秒）"},
-                {"nodeId": "394", "fieldName": "duration", "fieldValue": str(duration), "description": "视频时长（秒）"},
-            ]
-        else:
-            nodes = [
-                {"nodeId": "133", "fieldName": "image", "fieldValue": image_url, "description": "上传图像"},
-                {"nodeId": "218", "fieldName": "audio", "fieldValue": audio_url, "description": "上传音频"},
-                {"nodeId": "230", "fieldName": "value", "fieldValue": "0", "description": "音频开始时间"},
-                {"nodeId": "231", "fieldName": "value", "fieldValue": str(duration), "description": "音频结束时间"},
-            ]
+        nodes = source_create_video._build_node_info_list(
+            app_id=app_id,
+            image_url=image_url,
+            audio_url=audio_url,
+            duration_seconds=duration,
+            prompt_text=_text(payload.get("prompt_text") or payload.get("prompt")) or source_create_video.DIGITAL_HUMAN_ACTION_PROMPT,
+            max_resolution=source_create_video.CURRENT_VIDEO_MAX_RESOLUTION,
+        )
         output_path = workdir / "digital_human.mp4"
         result = self._submit_and_poll(
             task_id=task_id,
             payload=payload,
             context=context,
             submit_url=self._workflow_submit_url(payload, app_id),
-            submit_payload={"nodeInfoList": nodes, "instanceType": "plus", "usePersonalQueue": False},
+            submit_payload={
+                "nodeInfoList": nodes,
+                "instanceType": source_create_video.resolve_instance_type_for_workflow(
+                    app_id, _text(payload.get("instance_type") or "default")
+                ),
+                "usePersonalQueue": False,
+            },
             output_path=output_path,
             label="数字人口播视频",
         )
