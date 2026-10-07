@@ -403,6 +403,7 @@ run_worker() {
     -e COLLECTOR_DB_PATH=/collector/collector.db
     -e COLLECTOR_VAULT_KEY_FILE=/collector/collector_vault.key
     -e TG_COLLECTOR_POOL_REQUIRED=1
+    -e TG_HOT_POOL_AUTO_REFILL=1
     -e TG_HOT_POOL_REFILL_SECONDS=21600
     -e TG_HOT_DISABLE_KEYWORD_MODEL=1
     -e TG_HOT_READER_INCLUDE_INSTAGRAM=0
