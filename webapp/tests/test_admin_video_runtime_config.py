@@ -105,6 +105,19 @@ class AdminVideoRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(merged["minimax_tts_voice_id"], "male-qn-qingse")
         self.assertEqual(merged["video_default_voice_id"], "male-qn-qingse")
 
+    def test_video_tts_prefers_enterprise_shared_key_for_standard_speech(self):
+        merged = video_workbench.apply_video_runtime_defaults(
+            "create_video",
+            {},
+            {
+                "runninghub_personal_api_key": "rh-personal",
+                "runninghub_enterprise_api_key": "rh-enterprise",
+            },
+        )
+
+        self.assertEqual(merged["video_runninghub_api_key"], "rh-personal")
+        self.assertEqual(merged["video_tts_api_key"], "rh-enterprise")
+
     def test_partial_admin_save_only_contains_source_visible_settings(self):
         payload = server.RuntimeConfigPayload(
             runninghub_personal_api_key="personal-key",

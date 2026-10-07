@@ -485,7 +485,10 @@ def apply_video_runtime_defaults(
     source["runninghub_api_key"] = workflow_runninghub_key
     client_tts_model = str((payload or {}).get("minimax_tts_model") or (payload or {}).get("video_tts_model") or "").strip()
     source["video_tts_provider"] = "runninghub"
-    source["video_tts_api_key"] = workflow_runninghub_key
+    # RunningHub Standard Speech, like Standard Image, only accepts the
+    # enterprise-shared key. Keep the personal key for workflow APIs below,
+    # but route TTS through the enterprise key whenever it is configured.
+    source["video_tts_api_key"] = enterprise_runninghub_key
     source["video_tts_base_url"] = runninghub_speech.speech_base_url(
         source.get("video_runninghub_base_url") or source.get("video_tts_base_url"),
         fallback=runninghub_speech.RUNNINGHUB_SPEECH_BASE_URL,
