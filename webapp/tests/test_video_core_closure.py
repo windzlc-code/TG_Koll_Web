@@ -14,7 +14,7 @@ def _context() -> VideoTaskContext:
     return VideoTaskContext(task_id="task-closure", task_type="create_video")
 
 
-def test_digital_human_video_image_upload_uses_runninghub_file_name_contract(tmp_path: Path, monkeypatch) -> None:
+def test_digital_human_video_media_upload_uses_runninghub_file_name_contract(tmp_path: Path, monkeypatch) -> None:
     image = tmp_path / "fusion.png"
     image.write_bytes(b"fake-png")
 
@@ -30,15 +30,15 @@ def test_digital_human_video_image_upload_uses_runninghub_file_name_contract(tmp
 
     monkeypatch.setattr(server.requests, "post", lambda *_args, **_kwargs: Response())
 
-    resolved = server._resolve_media_url(
-        task_id="task-closure",
-        media_kind="digital_human_segment_1_image",
-        api_key="test-key",
-        local_path=str(image),
-        remote_url="",
-    )
-
-    assert resolved == "openapi/fusion.png"
+    for media_kind in ("digital_human_segment_1_image", "digital_human_segment_1_audio_1", "digital_human_segment_1_audio_1_step_1_video"):
+        resolved = server._resolve_media_url(
+            task_id="task-closure",
+            media_kind=media_kind,
+            api_key="test-key",
+            local_path=str(image),
+            remote_url="",
+        )
+        assert resolved == "openapi/fusion.png"
 
 
 def test_all_eight_workbench_modules_resolve_to_registered_core_runners() -> None:

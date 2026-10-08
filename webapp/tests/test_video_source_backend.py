@@ -389,6 +389,62 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
         self.assertEqual(result["provider_task_id"], "provider-existing-42")
         self.assertTrue(result["resumed"])
 
+    def test_submit_and_poll_closes_provider_submit_poll_and_output(self):
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"code": 0, "data": {"taskId": "provider-new-42"}}
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.posts: list[dict] = []
+
+            def post(self, url, **kwargs):
+                self.posts.append({"url": url, **kwargs})
+                return FakeResponse()
+
+        session = FakeSession()
+        registered: list[str] = []
+        checkpoints: list[str] = []
+
+        def fake_query_task(**kwargs):
+            output_path = Path(kwargs["video_output_path"])
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"provider-video")
+            return {"status": "success", "progress": 100, "video_path": str(output_path)}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "generated.mp4"
+            with patch(
+                "video_core.source_backend.runninghub_common.query_task",
+                side_effect=fake_query_task,
+            ) as query_task:
+                result = ArchivedSourceBackend(http_session=session)._submit_and_poll(
+                    task_id="task-submit-poll",
+                    payload={
+                        "video_runninghub_api_key": "test-key",
+                        "video_poll_interval_seconds": 0.01,
+                        "_register_runninghub_task": lambda **values: registered.append(values["runninghub_task_id"]),
+                        "_checkpoint_video_progress": lambda **values: checkpoints.append(values["stage"]),
+                    },
+                    context=self._context("create_video"),
+                    submit_url="https://provider.invalid/openapi/v2/run/ai-app/app-1",
+                    submit_payload={"nodeInfoList": [{"nodeId": "269", "fieldValue": "openapi/fusion.png"}]},
+                    output_path=output_path,
+                    label="digital human contract",
+                )
+
+            self.assertEqual(len(session.posts), 1)
+            self.assertEqual(session.posts[0]["url"], "https://provider.invalid/openapi/v2/run/ai-app/app-1")
+            self.assertEqual(query_task.call_count, 1)
+            self.assertEqual(registered, ["provider-new-42"])
+            self.assertEqual(checkpoints, ["provider_submitting", "provider_running", "provider_success"])
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["runninghub_task_id"], "provider-new-42")
+            self.assertEqual(output_path.read_bytes(), b"provider-video")
+
     def test_subtitle_cues_are_rendered_locally_without_provider_calls(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workdir = Path(tmpdir)

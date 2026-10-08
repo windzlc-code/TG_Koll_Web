@@ -7137,9 +7137,11 @@ def _resolve_media_url(
             file_path=path,
             media_kind=media_kind,
             # RunningHub AI App upload nodes consume the provider's fileName
-            # identifier. Public download URLs are valid for model APIs but
-            # are rejected by the digital-human workflow as error 1007.
-            prefer_file_name=kind.startswith("digital_human") and kind.endswith("_image"),
+            # identifier for digital-human media inputs. Public download URLs
+            # are valid for model APIs but are rejected by this workflow as
+            # error 1007. This covers both the reference image and the
+            # segmented audio/video inputs used by the final AI App call.
+            prefer_file_name=kind.startswith("digital_human"),
         )
     server_ip = str(upload_server_ip or "").strip()
     server_port_text = str(upload_server_port or "").strip()
