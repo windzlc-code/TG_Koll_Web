@@ -12,8 +12,8 @@ from video_core.source import runninghub_common, runninghub_speech
 class RunningHubSpeechTests(unittest.TestCase):
     def test_normalize_rejects_official_only_and_music_models(self):
         self.assertEqual(runninghub_speech.normalize_speech_model("speech-2.8-turbo"), "speech-2.8-turbo")
-        self.assertEqual(runninghub_speech.normalize_speech_model("speech-01-hd"), "speech-2.8-turbo")
-        self.assertEqual(runninghub_speech.normalize_speech_model("music-2.5"), "speech-2.8-turbo")
+        self.assertEqual(runninghub_speech.normalize_speech_model("speech-01-hd"), "speech-2.8-hd")
+        self.assertEqual(runninghub_speech.normalize_speech_model("music-2.5"), "speech-2.8-hd")
         self.assertEqual(runninghub_speech.normalize_speech_voice("male-qn-qingse"), "Wise_Woman")
         self.assertEqual(runninghub_speech.normalize_speech_voice(""), "Wise_Woman")
         self.assertEqual(runninghub_speech.normalize_speech_voice("Wise_Woman"), "Wise_Woman")
@@ -96,6 +96,7 @@ class RunningHubSpeechTests(unittest.TestCase):
         body = json.loads(captured["data"])
         self.assertEqual(body["text"], "你好")
         self.assertEqual(body["voice_id"], "Wise_Woman")
+        self.assertEqual(body["pronunciation_dict"], ["ASAP/As soon as possible"])
         self.assertEqual(captured["query"]["task_id"], "speech-1")
 
     def test_hd_1007_falls_back_to_turbo(self):

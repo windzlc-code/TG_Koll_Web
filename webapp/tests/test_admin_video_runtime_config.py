@@ -26,8 +26,8 @@ class AdminVideoRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(normalized["minimax_api_key"], "minimax-key")
         self.assertEqual(normalized["video_tts_provider"], "runninghub")
         self.assertEqual(normalized["video_tts_base_url"], "https://www.runninghub.cn")
-        self.assertEqual(normalized["minimax_tts_model"], "speech-2.8-turbo")
-        self.assertEqual(normalized["video_tts_model"], "speech-2.8-turbo")
+        self.assertEqual(normalized["minimax_tts_model"], "speech-2.8-hd")
+        self.assertEqual(normalized["video_tts_model"], "speech-2.8-hd")
         self.assertEqual(normalized["minimax_tts_voice_id"], "Wise_Woman")
         self.assertEqual(normalized["video_default_voice_id"], "Wise_Woman")
 

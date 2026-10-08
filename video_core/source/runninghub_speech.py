@@ -16,10 +16,11 @@ RUNNINGHUB_SPEECH_MODELS: tuple[str, ...] = (
     "speech-02-hd",
     "speech-02-turbo",
 )
-RUNNINGHUB_SPEECH_DEFAULT_MODEL = "speech-2.8-turbo"
+RUNNINGHUB_SPEECH_DEFAULT_MODEL = "speech-2.8-hd"
 RUNNINGHUB_SPEECH_FALLBACK_MODEL = "speech-2.8-turbo"
 RUNNINGHUB_SPEECH_DEFAULT_VOICE = "Wise_Woman"
 RUNNINGHUB_SPEECH_BASE_URL = "https://www.runninghub.cn"
+_RUNNINGHUB_DEFAULT_PRONUNCIATION_DICT = ["ASAP/As soon as possible"]
 _OFFICIAL_MINIMAX_HOST_MARKERS = ("minimaxi.com", "minimax.io", "minimax.chat")
 _RUNNINGHUB_HOST_MARKERS = ("runninghub.ai", "runninghub.cn")
 _LEGACY_VOICE_ALIASES = {
@@ -87,7 +88,11 @@ def generate_text_to_audio(
     submit_url = f"{root}/openapi/v2/rhart-audio/text-to-audio/{model_slug}"
     body = {
         "text": speech_text,
-        "pronunciation_dict": [],
+        # RunningHub currently rejects an empty pronunciation_dict at task
+        # execution time with provider error 1007, while its documented
+        # request shape includes at least one mapping. Keep the mapping
+        # provider-side only; it does not alter the user script text.
+        "pronunciation_dict": list(_RUNNINGHUB_DEFAULT_PRONUNCIATION_DICT),
         "voice_id": resolved_voice,
         "speed": float(speed or 1.0),
         "volume": float(volume or 1.0),
