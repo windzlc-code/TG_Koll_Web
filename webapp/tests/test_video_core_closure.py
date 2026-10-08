@@ -7,11 +7,38 @@ import pytest
 
 from video_core.contracts import VideoTaskContext
 from video_core.source_backend import ArchivedSourceBackend
-from webapp import video_workbench
+from webapp import server, video_workbench
 
 
 def _context() -> VideoTaskContext:
     return VideoTaskContext(task_id="task-closure", task_type="create_video")
+
+
+def test_digital_human_video_image_upload_uses_runninghub_file_name_contract(tmp_path: Path, monkeypatch) -> None:
+    image = tmp_path / "fusion.png"
+    image.write_bytes(b"fake-png")
+
+    class Response:
+        def json(self):
+            return {
+                "code": 0,
+                "data": {
+                    "fileName": "openapi/fusion.png",
+                    "download_url": "https://www.runninghub.ai/api/fusion.png",
+                },
+            }
+
+    monkeypatch.setattr(server.requests, "post", lambda *_args, **_kwargs: Response())
+
+    resolved = server._resolve_media_url(
+        task_id="task-closure",
+        media_kind="digital_human_segment_1_image",
+        api_key="test-key",
+        local_path=str(image),
+        remote_url="",
+    )
+
+    assert resolved == "openapi/fusion.png"
 
 
 def test_all_eight_workbench_modules_resolve_to_registered_core_runners() -> None:

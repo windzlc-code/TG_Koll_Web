@@ -624,6 +624,8 @@ def _simple_failure_reason(error: str, status: str) -> str:
         or "企业级-共享api key" in text.lower()
     ):
         return "当前服务密钥不能调用标准模型 API。广告短视频多图参考接口需要企业级共享 API Key，请更换对应 Key 后重试。"
+    if re.search(r"\b1007\b", combined) or "invalid parameters in request" in lowered:
+        return "数字人参考图未被上游识别，请重新生成或上传清晰的人物融合图后重试。"
     if (
         "runninghub_api_key" in lowered
         or "runninghub api key" in lowered

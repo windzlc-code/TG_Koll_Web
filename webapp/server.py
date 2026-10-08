@@ -7024,7 +7024,13 @@ def _apply_runtime_defaults(task_type: str, payload: dict[str, Any]) -> dict[str
     return _attach_workflow_meta_to_payload(task_type, merged)
 
 
-def _upload_binary_to_runninghub(*, api_key: str, file_path: Path, media_kind: str) -> str:
+def _upload_binary_to_runninghub(
+    *,
+    api_key: str,
+    file_path: Path,
+    media_kind: str,
+    prefer_file_name: bool = False,
+) -> str:
     url = f"{str(runninghub_common.BASE_URL).rstrip('/')}/openapi/v2/media/upload/binary"
     headers = {"Authorization": f"Bearer {api_key}"}
     with file_path.open("rb") as f:
@@ -7039,6 +7045,8 @@ def _upload_binary_to_runninghub(*, api_key: str, file_path: Path, media_kind: s
     file_name = str(data.get("fileName") or "").strip()
     download_url = str(data.get("download_url") or "").strip()
     kind = str(media_kind or "").strip().lower()
+    if prefer_file_name and file_name:
+        return file_name
     if suffix in IMAGE_EXTS and download_url:
         if download_url.startswith("http"):
             return download_url
@@ -7123,7 +7131,16 @@ def _resolve_media_url(
         raise FileNotFoundError(f"本地文件不存在: {path}")
     upload_api_key = str(upload_file_api_key or "").strip() or str(api_key or "").strip()
     if path.suffix.lower() in IMAGE_EXTS:
-        return _upload_binary_to_runninghub(api_key=upload_api_key, file_path=path, media_kind=media_kind)
+        kind = str(media_kind or "").strip().lower()
+        return _upload_binary_to_runninghub(
+            api_key=upload_api_key,
+            file_path=path,
+            media_kind=media_kind,
+            # RunningHub AI App upload nodes consume the provider's fileName
+            # identifier. Public download URLs are valid for model APIs but
+            # are rejected by the digital-human workflow as error 1007.
+            prefer_file_name=kind.startswith("digital_human") and kind.endswith("_image"),
+        )
     server_ip = str(upload_server_ip or "").strip()
     server_port_text = str(upload_server_port or "").strip()
     if server_ip and server_port_text:
