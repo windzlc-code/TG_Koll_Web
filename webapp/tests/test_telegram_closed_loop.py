@@ -105,6 +105,12 @@ def _video_callback_route(dispatcher, name: str):
 
 
 class TelegramClosedLoopTests(unittest.TestCase):
+    def test_startup_notice_is_opt_in_to_avoid_repeat_broadcasts(self):
+        with mock.patch.dict(os.environ, {"TG_NOTIFY_ON_STARTUP": ""}, clear=False):
+            self.assertFalse(tg_bot._startup_notice_enabled())
+        with mock.patch.dict(os.environ, {"TG_NOTIFY_ON_STARTUP": "1"}, clear=False):
+            self.assertTrue(tg_bot._startup_notice_enabled())
+
     def test_video_task_1007_failure_has_actionable_reference_image_reason(self):
         reason = tg_bot._simple_failure_reason(
             "Error Code: 1007 Invalid parameters in request",

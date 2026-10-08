@@ -287,6 +287,11 @@ _WEBAPP_SUCCESS_STATUSES = {"success", "completed"}
 _WEBAPP_RESULT_WATCHERS: set[asyncio.Task] = set()
 
 
+def _startup_notice_enabled() -> bool:
+    """Keep service restarts quiet unless an operator explicitly opts in."""
+    return str(os.getenv("TG_NOTIFY_ON_STARTUP") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _webapp_task_db_path() -> Path:
     explicit = str(os.getenv("WEBAPP_DB_PATH") or "").strip()
     if explicit:
@@ -6393,25 +6398,29 @@ class TelegramWorkbenchBot:
             sum(1 for member in self.service.list_members() if member.enabled),
         )
         self.polling_task = asyncio.create_task(self._polling_loop(), name="workspace-bot-polling")
-        for member in self.service.list_members():
-            if member.enabled:
-                try:
-                    await self.bot.send_message(
-                        member.chat_id,
-                        "\n".join(
-                            [
-                                f"{self.service.get_app_title()} 已上線。",
-                                f"首次使用可按「{DIGITAL_HUMAN_VIDEO_MENU_BUTTON}」，再依序傳人像圖、克隆音頻和口播文稿（必填）。",
-                                f"廣告短視頻按「{ECOMMERCE_SHORT_VIDEO_MENU_BUTTON}」；圖片任務按「{IMAGE_GENERATION_MENU_BUTTON_DISPLAY}」後選擇子工作流；視頻替換任務按「{VIDEO_EDIT_MENU_BUTTON}」。",
-                                f"首次使用或切换账号可按「{ACCOUNT_MANAGEMENT_BUTTON}」，在网页中登录/退出 VECTO。",
-                                "也可以直接描述任務並附上素材，Bot 會用後台文字模型理解需求並生成提示詞。",
-                                f"提交後任務會進入後台隊列；可按「{STATUS_MENU_BUTTON}」，並在 Web 任務詳情查看進度與成品。",
-                            ]
-                        ),
-                        reply_markup=_menu_keyboard(),
-                    )
-                except (asyncio.CancelledError, Exception):
-                    continue
+        # Do not broadcast a long welcome message on every process restart or
+        # deployment. Users can still receive the same menu from /start; an
+        # operator may explicitly opt in for a one-off rollout announcement.
+        if _startup_notice_enabled():
+            for member in self.service.list_members():
+                if member.enabled:
+                    try:
+                        await self.bot.send_message(
+                            member.chat_id,
+                            "\n".join(
+                                [
+                                    f"{self.service.get_app_title()} 已上線。",
+                                    f"首次使用可按「{DIGITAL_HUMAN_VIDEO_MENU_BUTTON}」，再依序傳人像圖、克隆音頻和口播文稿（必填）。",
+                                    f"廣告短視頻按「{ECOMMERCE_SHORT_VIDEO_MENU_BUTTON}」；圖片任務按「{IMAGE_GENERATION_MENU_BUTTON_DISPLAY}」後選擇子工作流；視頻替換任務按「{VIDEO_EDIT_MENU_BUTTON}」。",
+                                    f"首次使用或切换账号可按「{ACCOUNT_MANAGEMENT_BUTTON}」，在网页中登录/退出 VECTO。",
+                                    "也可以直接描述任務並附上素材，Bot 會用後台文字模型理解需求並生成提示詞。",
+                                    f"提交後任務會進入後台隊列；可按「{STATUS_MENU_BUTTON}」，並在 Web 任務詳情查看進度與成品。",
+                                ]
+                            ),
+                            reply_markup=_menu_keyboard(),
+                        )
+                    except (asyncio.CancelledError, Exception):
+                        continue
 
     async def stop(self) -> None:
         if self.polling_task is not None:
