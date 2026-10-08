@@ -3484,7 +3484,7 @@ def build_dispatcher(
             "账号管理\n\n"
             f"VECTO 网页账号：{username or '未登录'}\n"
             f"状态：{status}\n\n"
-            "点击「🌐 网页登录/切换」打开 VECTO 官方网页，再选择 VECTO 账号登录或 Google 官方授权；完成后 Bot 会发送结果反馈。\n"
+            "点击「🌐 网页登录/切换」打开 VECTO 官方网页；已绑定账号会自动识别并进入，未绑定或会话失效时再选择 VECTO 账号登录或 Google 官方授权。\n"
             "首次私聊会自动登记，不需要手工填写 Chat ID。",
             _account_management_keyboard(chat_id=chat_id, include_logout=bool(web_user_id and active)),
         )

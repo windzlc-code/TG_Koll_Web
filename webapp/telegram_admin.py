@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from .auth import (
     ADMIN_SESSION_COOKIE,
     SESSION_COOKIE,
+    create_session,
     get_current_user_for_session,
     session_storage_token,
 )
@@ -584,6 +585,7 @@ def is_video_chat_authorized(chat_id: int, runtime: dict[str, Any] | None = None
 
 
 VIDEO_LINK_TTL_SECONDS = 180
+VIDEO_SSO_SESSION_DEFAULT_HOURS = 12
 
 
 def configure_video_chat_login(handler: VideoChatLoginHandler | None) -> None:
@@ -1094,6 +1096,179 @@ def video_member_bound_to_user(chat_id: int, web_user_id: int) -> bool:
     return bool(row is not None and int(row["enabled"] or 0) == 1 and int(row["web_user_id"] or 0) == user_id)
 
 
+def _video_sso_session_ttl_seconds(runtime: dict[str, Any] | None) -> int:
+    config = runtime if isinstance(runtime, dict) else {}
+    try:
+        hours = int(config.get("auth_session_hours") or VIDEO_SSO_SESSION_DEFAULT_HOURS)
+    except (TypeError, ValueError):
+        hours = VIDEO_SSO_SESSION_DEFAULT_HOURS
+    return max(1, min(hours, 72)) * 3600
+
+
+def _video_sso_cookie_secure(request: Request) -> bool:
+    configured = os.getenv("SESSION_COOKIE_SECURE")
+    if configured is not None:
+        return str(configured or "").strip().lower() not in {"0", "false", "no", "off"}
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+    if forwarded_proto:
+        return forwarded_proto == "https"
+    if str(request.url.scheme or "").lower() == "https":
+        return True
+    return str(os.getenv("FORCE_HTTPS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _set_video_sso_cookie(response: JSONResponse, request: Request, token: str, *, is_admin: bool) -> None:
+    cookie_name = ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE
+    other_cookie_name = SESSION_COOKIE if is_admin else ADMIN_SESSION_COOKIE
+    response.set_cookie(
+        key=cookie_name,
+        value=str(token or ""),
+        httponly=True,
+        max_age=None,
+        path="/",
+        samesite="lax",
+        secure=_video_sso_cookie_secure(request),
+    )
+    response.delete_cookie(other_cookie_name, path="/")
+
+
+def _try_video_browser_sso(
+    ticket: str,
+    runtime: dict[str, Any] | None,
+    request: Request,
+) -> tuple[dict[str, Any], str, bool] | None:
+    """Issue a normal browser session for an already-bound Telegram member.
+
+    The browser URL is a short-lived bearer hand-off issued by the Bot.  It is
+    only upgraded to a Web session when the ticket's Telegram member already
+    has a live, previously-linked VECTO session.  First-time or expired
+    bindings return ``None`` so the caller can keep the normal password/Google
+    login flow.
+    """
+    clean = str(ticket or "").strip()
+    digest = _video_ticket_digest(clean)
+    now = int(time.time())
+    if not clean or len(clean) > 256:
+        raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
+
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        ensure_telegram_schema(conn)
+        ticket_row = conn.execute(
+            "SELECT chat_id, expires_at, used_at FROM telegram_video_link_tickets WHERE token_hash = ?",
+            (digest,),
+        ).fetchone()
+        if (
+            ticket_row is None
+            or int(ticket_row["used_at"] or 0) > 0
+            or float(ticket_row["expires_at"] or 0) < now
+        ):
+            raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
+        chat_id = int(ticket_row["chat_id"] or 0)
+        member = conn.execute(
+            """
+            SELECT chat_id, enabled, web_user_id, linked_session_token_hash
+            FROM telegram_trusted_users
+            WHERE chat_id = ?
+            """,
+            (chat_id,),
+        ).fetchone()
+        if member is None or not int(member["enabled"] or 0):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "telegram_binding_not_authorized",
+                    "message": "该 Telegram 账号已被管理员停用，请联系管理员重新启用。",
+                },
+            )
+        web_user_id = int(member["web_user_id"] or 0)
+        linked_hash = str(member["linked_session_token_hash"] or "").strip()
+        if web_user_id <= 0:
+            return None
+
+        if linked_hash:
+            linked_session = conn.execute(
+                """
+                SELECT token, is_admin_session
+                FROM sessions
+                WHERE token = ? AND user_id = ? AND revoked_at = 0 AND expires_at > ?
+                LIMIT 1
+                """,
+                (linked_hash, web_user_id, now),
+            ).fetchone()
+        else:
+            linked_session = conn.execute(
+                """
+                SELECT token, is_admin_session
+                FROM sessions
+                WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?
+                ORDER BY last_seen_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                (web_user_id, now),
+            ).fetchone()
+        if linked_session is None:
+            return None
+
+        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (web_user_id,)).fetchone()
+        if user_row is None:
+            return None
+        web_user = dict(user_row)
+        is_admin = bool(int(web_user.get("is_admin") or 0))
+        if (
+            int(web_user.get("is_disabled") or 0) == 1
+            or int(web_user.get("deleted_at") or 0) > 0
+            or str(web_user.get("lifecycle_status") or "active") != "active"
+            or (
+                not is_admin
+                and str(web_user.get("approval_status") or "") != "approved"
+            )
+        ):
+            raise HTTPException(status_code=403, detail="当前 VECTO 账号不可用于 Telegram 视频工作台")
+        if bool(int(linked_session["is_admin_session"] or 0)) != is_admin:
+            return None
+
+        # Admin accounts keep the existing one-session boundary.  A deliberate
+        # click on the private Bot entry is treated as a controlled takeover;
+        # customer accounts retain the normal parallel-session behavior.
+        if is_admin:
+            conn.execute(
+                """
+                UPDATE sessions
+                SET revoked_at = ?, revoke_reason = 'telegram_video_sso_takeover'
+                WHERE user_id = ? AND revoked_at = 0
+                """,
+                (now, web_user_id),
+            )
+        raw_session_token = create_session(
+            conn,
+            web_user_id,
+            ttl_seconds=_video_sso_session_ttl_seconds(runtime),
+            request=request,
+            is_admin_session=is_admin,
+        )
+        session_hash = session_storage_token(raw_session_token)
+        updated_ticket = conn.execute(
+            """
+            UPDATE telegram_video_link_tickets
+            SET used_at = ?, linked_web_user_id = ?, session_token_hash = ?
+            WHERE token_hash = ? AND used_at = 0 AND expires_at > ?
+            """,
+            (time.time(), web_user_id, session_hash, digest, now),
+        )
+        if int(updated_ticket.rowcount or 0) != 1:
+            raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已使用")
+        conn.execute(
+            """
+            UPDATE telegram_trusted_users
+            SET linked_session_token_hash = ?, linked_at = ?, updated_at = ?
+            WHERE chat_id = ? AND enabled = 1 AND web_user_id = ?
+            """,
+            (session_hash, time.time(), time.time(), chat_id, web_user_id),
+        )
+        return web_user, raw_session_token, is_admin
+
+
 def logout_video_member(chat_id: int) -> dict[str, Any]:
     member_id = int(chat_id or 0)
     if member_id <= 0:
@@ -1356,7 +1531,7 @@ def inject_telegram_admin(
 
     @router.get("/telegram/video/open")
     def open_video_workbench(ticket: str = ""):
-        """Bridge the Telegram browser ticket into the normal video login page."""
+        """Bridge the Telegram ticket into SSO or the normal video login page."""
         try:
             _video_ticket_chat_id(ticket)
         except HTTPException as exc:
@@ -1492,10 +1667,34 @@ def inject_telegram_admin(
         if not bool(runtime.get("telegram_bot_enabled")) or not bot_token:
             raise HTTPException(status_code=403, detail="视频工作台 Bot 当前未启用")
         expected_chat_id = _video_ticket_chat_id(payload.ticket)
-        # Resolve the normal browser session first. An unauthenticated browser
-        # is redirected to the standard website login page, including Google
-        # OAuth, rather than receiving a second credential flow in Telegram.
-        web_user, session_hash = _authenticated_video_web_session(request)
+        # Reuse a normal browser session when present. If it is absent, an
+        # already-bound Bot ticket may issue a one-time browser SSO session;
+        # first-time or expired bindings still fall back to the standard
+        # website login page, including Google OAuth.
+        try:
+            web_user, session_hash = _authenticated_video_web_session(request)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            can_try_sso = (
+                exc.status_code == 401
+                and detail.get("code") == "web_login_required"
+                and bool(payload.browser)
+                and not str(payload.init_data or "").strip()
+            )
+            if not can_try_sso:
+                raise
+            validate_video_browser_login_context(payload.ticket, runtime)
+            sso_result = _try_video_browser_sso(payload.ticket, runtime, request)
+            if sso_result is None:
+                raise
+            web_user, raw_session_token, is_admin = sso_result
+            target = "/admin-video.html" if is_admin else DEFAULT_VIDEO_ENTRY
+            response = JSONResponse({"ok": True, "target": target, "sso": True})
+            _set_video_sso_cookie(response, request, raw_session_token, is_admin=is_admin)
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
         init_data = str(payload.init_data or "").strip()
         if init_data:
             tg_profile = _validate_video_init_data(init_data, bot_token, expected_chat_id)
