@@ -31,6 +31,14 @@ _LEGACY_VOICE_ALIASES = {
 }
 
 
+def _provider_number(value: Any, fallback: float) -> int | float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = float(fallback)
+    return int(number) if number.is_integer() else number
+
+
 def normalize_speech_model(value: Any) -> str:
     text = str(value or "").strip()
     if text in RUNNINGHUB_SPEECH_MODELS:
@@ -94,9 +102,9 @@ def generate_text_to_audio(
         # provider-side only; it does not alter the user script text.
         "pronunciation_dict": list(_RUNNINGHUB_DEFAULT_PRONUNCIATION_DICT),
         "voice_id": resolved_voice,
-        "speed": float(speed or 1.0),
-        "volume": float(volume or 1.0),
-        "pitch": float(pitch or 0),
+        "speed": _provider_number(speed or 1.0, 1.0),
+        "volume": _provider_number(volume or 1.0, 1.0),
+        "pitch": _provider_number(pitch or 0, 0),
         "emotion": str(emotion or "").strip() or "happy",
         "enable_base64_output": False,
         "english_normalization": False,

@@ -97,7 +97,49 @@ class RunningHubSpeechTests(unittest.TestCase):
         self.assertEqual(body["text"], "你好")
         self.assertEqual(body["voice_id"], "Wise_Woman")
         self.assertEqual(body["pronunciation_dict"], ["ASAP/As soon as possible"])
+        self.assertEqual(body["speed"], 1)
+        self.assertEqual(body["volume"], 1)
+        self.assertEqual(body["pitch"], 0)
         self.assertEqual(captured["query"]["task_id"], "speech-1")
+
+    def test_generate_text_to_audio_preserves_fractional_speed(self):
+        captured = {}
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"taskId": "speech-fractional", "status": "RUNNING"}
+
+        def fake_post(_url, **kwargs):
+            captured["data"] = kwargs.get("data")
+            return FakeResponse()
+
+        def fake_query(**kwargs):
+            Path(kwargs["video_output_path"]).write_bytes(b"audio")
+            return {"status": "success"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "fractional.mp3"
+            with patch.object(runninghub_common, "rh_post", side_effect=fake_post), patch.object(
+                runninghub_common,
+                "query_task",
+                side_effect=fake_query,
+            ):
+                runninghub_speech.generate_text_to_audio(
+                    api_key="rh-key",
+                    base_url="https://www.runninghub.ai",
+                    model="speech-2.8-hd",
+                    text="你好",
+                    output_path=output,
+                    voice_id="Wise_Woman",
+                    speed=1.08,
+                )
+        body = json.loads(captured["data"])
+        self.assertEqual(body["speed"], 1.08)
+        self.assertEqual(body["volume"], 1)
+        self.assertEqual(body["pitch"], 0)
 
     def test_hd_1007_falls_back_to_turbo(self):
         calls = []
