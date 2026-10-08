@@ -9,7 +9,7 @@ from video_core.contracts import VideoTaskContext
 from video_core.source_backend import ArchivedSourceBackend
 
 
-def test_current_digital_human_app_uses_live_editable_node_contract() -> None:
+def test_current_digital_human_app_uses_verified_duration_node_contract() -> None:
     nodes = create_video._build_node_info_list(
         app_id=create_video.DIGITAL_HUMAN_VIDEO_APP_ID,
         image_url="api/presenter.png",
@@ -21,17 +21,11 @@ def test_current_digital_human_app_uses_live_editable_node_contract() -> None:
     assert [(item["nodeId"], item["fieldName"]) for item in nodes] == [
         ("269", "image"),
         ("332", "audio"),
-        ("349", "value"),
-        ("392", "value"),
-        ("303", "value"),
-        ("347", "value"),
-        ("346", "value"),
+        ("331", "duration"),
+        ("394", "duration"),
     ]
     assert nodes[2]["fieldValue"] == "15"
-    assert nodes[3]["fieldValue"] == "0"
-    assert nodes[4]["fieldValue"]
-    assert nodes[5]["fieldValue"] == str(create_video.CURRENT_VIDEO_MAX_RESOLUTION)
-    assert nodes[6]["fieldValue"] == str(create_video.CURRENT_VIDEO_FRAME_RATE)
+    assert nodes[3]["fieldValue"] == "15"
 
 
 def test_digital_human_segment_closes_over_current_contract_without_provider_call() -> None:
@@ -79,11 +73,8 @@ def test_digital_human_segment_closes_over_current_contract_without_provider_cal
     assert [(item["nodeId"], item["fieldName"]) for item in submit_payload["nodeInfoList"]] == [
         ("269", "image"),
         ("332", "audio"),
-        ("349", "value"),
-        ("392", "value"),
-        ("303", "value"),
-        ("347", "value"),
-        ("346", "value"),
+        ("331", "duration"),
+        ("394", "duration"),
     ]
     assert submit_payload["instanceType"] == "plus"
     assert submissions[0]["submit_url"].endswith(f"/openapi/v2/run/ai-app/{create_video.DIGITAL_HUMAN_VIDEO_APP_ID}")
