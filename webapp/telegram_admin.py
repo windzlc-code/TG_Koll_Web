@@ -887,6 +887,15 @@ def _authenticated_video_web_session(request: Request) -> tuple[dict[str, Any], 
     )
 
 
+def _video_bot_reauthorization_url() -> str:
+    """Return the live Bot deep link without accepting any user-controlled URL."""
+    with _BOT_LOCK:
+        username = str(_BOT_STATUS.get("bot_username") or "").strip().lstrip("@")
+    if not username:
+        return ""
+    return f"https://t.me/{urllib.parse.quote(username, safe='')}"
+
+
 def _video_authorization_error_page(message: str, *, status_code: int = 410) -> HTMLResponse:
     """Render a useful browser page when a Telegram hand-off link is stale.
 
@@ -894,15 +903,23 @@ def _video_authorization_error_page(message: str, *, status_code: int = 410) -> 
     dead ticket, but users should not be left with a raw FastAPI JSON error.
     """
     clean_message = html.escape(str(message or "Telegram 视频工作台授权入口已失效。"))
+    bot_url = _video_bot_reauthorization_url()
+    bot_action = (
+        f'<a class="recover" href="{html.escape(bot_url, quote=True)}">返回 Telegram Bot，重新授权</a>'
+        if bot_url
+        else '<p class="hint">请打开 Telegram Bot，重新点击「账号管理」获取新的授权链接。</p>'
+    )
     content = f"""<!doctype html><html lang=\"zh-Hans\"><head><meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <meta name=\"robots\" content=\"noindex,nofollow,noarchive\"><title>Telegram 视频工作台授权</title>
 <style>body{{font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}}
 main{{max-width:560px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}}
 h1{{font-size:22px;margin:0 0 12px}}p{{line-height:1.65;color:#52697a}}.error{{color:#b42318;font-weight:700}}
-.hint{{margin-top:18px;padding:14px 16px;border-radius:10px;background:#fff4ed;color:#8a3518}}</style></head>
+.hint{{margin-top:18px;padding:14px 16px;border-radius:10px;background:#fff4ed;color:#8a3518}}
+.recover{{display:block;margin-top:18px;padding:13px 16px;border-radius:10px;background:#193247;color:#fff;text-align:center;font-weight:700;text-decoration:none}}</style></head>
 <body><main><h1>Telegram 视频工作台授权</h1><p class=\"error\">{clean_message}</p>
-<p class=\"hint\">请返回 Telegram Bot，重新点击「账号管理」获取新的授权链接。旧链接不会再次使用。</p></main></body></html>"""
+<p class=\"hint\">请返回 Telegram Bot，重新点击「账号管理」获取新的授权链接。此授权链接是一次性的，系统会再次检查网页登录状态；如网页登录会话也失效，会要求重新登录。</p>
+{bot_action}</main></body></html>"""
     response = HTMLResponse(content=content, status_code=int(status_code or 410))
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"

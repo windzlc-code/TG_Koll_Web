@@ -213,10 +213,14 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertIn("确认授权并打开视频工作台", response.text)
         self.assertNotIn("telegram/tweet/open", response.text)
 
-        expired = TestClient(app).get("/telegram/video/open", params={"ticket": "expired-or-invalid"})
+        with mock.patch.dict(telegram_admin._BOT_STATUS, {"bot_username": "vecto_video_bot"}, clear=False):
+            expired = TestClient(app).get("/telegram/video/open", params={"ticket": "expired-or-invalid"})
         self.assertEqual(expired.status_code, 410)
         self.assertIn("请返回 Telegram Bot", expired.text)
         self.assertIn("重新点击", expired.text)
+        self.assertIn("重新授权", expired.text)
+        self.assertIn("https://t.me/vecto_video_bot", expired.text)
+        self.assertIn("一次性", expired.text)
 
     def test_video_webapp_ticket_requires_live_admin_authorization(self):
         self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
