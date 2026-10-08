@@ -12,15 +12,19 @@ from video_core.source import runninghub_common, runninghub_speech
 class RunningHubSpeechTests(unittest.TestCase):
     def test_normalize_rejects_official_only_and_music_models(self):
         self.assertEqual(runninghub_speech.normalize_speech_model("speech-2.8-turbo"), "speech-2.8-turbo")
-        self.assertEqual(runninghub_speech.normalize_speech_model("speech-01-hd"), "speech-2.8-hd")
-        self.assertEqual(runninghub_speech.normalize_speech_model("music-2.5"), "speech-2.8-hd")
-        self.assertEqual(runninghub_speech.normalize_speech_voice("male-qn-qingse"), "male-qn-qingse")
-        self.assertEqual(runninghub_speech.normalize_speech_voice(""), "male-qn-qingse")
-        self.assertEqual(runninghub_speech.normalize_speech_voice("Wise_Woman"), "male-qn-qingse")
+        self.assertEqual(runninghub_speech.normalize_speech_model("speech-01-hd"), "speech-2.8-turbo")
+        self.assertEqual(runninghub_speech.normalize_speech_model("music-2.5"), "speech-2.8-turbo")
+        self.assertEqual(runninghub_speech.normalize_speech_voice("male-qn-qingse"), "Wise_Woman")
+        self.assertEqual(runninghub_speech.normalize_speech_voice(""), "Wise_Woman")
+        self.assertEqual(runninghub_speech.normalize_speech_voice("Wise_Woman"), "Wise_Woman")
         self.assertEqual(runninghub_speech.normalize_speech_voice("Elegant_Man"), "Elegant_Man")
         self.assertEqual(
             runninghub_speech.speech_base_url("https://api.minimaxi.com"),
-            "https://www.runninghub.ai",
+            "https://www.runninghub.cn",
+        )
+        self.assertEqual(
+            runninghub_speech.speech_base_url("https://www.runninghub.ai"),
+            "https://www.runninghub.cn",
         )
 
     def test_query_task_downloads_mp3_results(self):
@@ -79,20 +83,62 @@ class RunningHubSpeechTests(unittest.TestCase):
                 result = runninghub_speech.generate_text_to_audio(
                     api_key="rh-key",
                     base_url="https://www.runninghub.ai",
-                    model="speech-02-hd",
+                    model="speech-2.8-turbo",
                     text="你好",
                     output_path=output,
-                    voice_id="male-qn-qingse",
+                    voice_id="Wise_Woman",
                 )
             self.assertEqual(result.read_bytes(), b"audio")
         self.assertEqual(
             captured["url"],
-            "https://www.runninghub.ai/openapi/v2/rhart-audio/text-to-audio/speech-02-hd",
+            "https://www.runninghub.cn/openapi/v2/rhart-audio/text-to-audio/speech-2.8-turbo",
         )
         body = json.loads(captured["data"])
         self.assertEqual(body["text"], "你好")
-        self.assertEqual(body["voice_id"], "male-qn-qingse")
+        self.assertEqual(body["voice_id"], "Wise_Woman")
         self.assertEqual(captured["query"]["task_id"], "speech-1")
+
+    def test_hd_1007_falls_back_to_turbo(self):
+        calls = []
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"taskId": f"speech-{len(calls)}", "status": "RUNNING"}
+
+        def fake_post(url, **kwargs):
+            calls.append(url)
+            return FakeResponse()
+
+        def fake_query(**kwargs):
+            if kwargs["task_id"] == "speech-1":
+                return {
+                    "status": "failed",
+                    "message": "[*] Failed, there is a problem with the workflow！ Error Code: 1007",
+                }
+            Path(kwargs["video_output_path"]).write_bytes(b"audio")
+            return {"status": "success"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "fallback.mp3"
+            with patch.object(runninghub_common, "rh_post", side_effect=fake_post), patch.object(
+                runninghub_common, "query_task", side_effect=fake_query
+            ):
+                result = runninghub_speech.generate_text_to_audio(
+                    api_key="rh-key",
+                    base_url="https://www.runninghub.ai",
+                    model="speech-2.8-hd",
+                    text="Schweppes",
+                    output_path=output,
+                    voice_id="male-qn-qingse",
+                )
+            self.assertEqual(result.read_bytes(), b"audio")
+            self.assertEqual(calls, [
+                "https://www.runninghub.cn/openapi/v2/rhart-audio/text-to-audio/speech-2.8-hd",
+                "https://www.runninghub.cn/openapi/v2/rhart-audio/text-to-audio/speech-2.8-turbo",
+            ])
 
 
 if __name__ == "__main__":

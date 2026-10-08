@@ -16,10 +16,18 @@ RUNNINGHUB_SPEECH_MODELS: tuple[str, ...] = (
     "speech-02-hd",
     "speech-02-turbo",
 )
-RUNNINGHUB_SPEECH_DEFAULT_MODEL = "speech-2.8-hd"
-RUNNINGHUB_SPEECH_DEFAULT_VOICE = "male-qn-qingse"
-RUNNINGHUB_SPEECH_BASE_URL = "https://www.runninghub.ai"
+RUNNINGHUB_SPEECH_DEFAULT_MODEL = "speech-2.8-turbo"
+RUNNINGHUB_SPEECH_FALLBACK_MODEL = "speech-2.8-turbo"
+RUNNINGHUB_SPEECH_DEFAULT_VOICE = "Wise_Woman"
+RUNNINGHUB_SPEECH_BASE_URL = "https://www.runninghub.cn"
 _OFFICIAL_MINIMAX_HOST_MARKERS = ("minimaxi.com", "minimax.io", "minimax.chat")
+_RUNNINGHUB_HOST_MARKERS = ("runninghub.ai", "runninghub.cn")
+_LEGACY_VOICE_ALIASES = {
+    # This is a MiniMax OpenAI-compatible voice id, not a stable RunningHub
+    # Standard Speech voice id. Keep old persisted settings usable by mapping
+    # the legacy default to the provider's documented voice.
+    "male-qn-qingse": RUNNINGHUB_SPEECH_DEFAULT_VOICE,
+}
 
 
 def normalize_speech_model(value: Any) -> str:
@@ -31,9 +39,9 @@ def normalize_speech_model(value: Any) -> str:
 
 def normalize_speech_voice(value: Any) -> str:
     text = str(value or "").strip()
-    if not text or text == "Wise_Woman":
+    if not text:
         return RUNNINGHUB_SPEECH_DEFAULT_VOICE
-    return text
+    return _LEGACY_VOICE_ALIASES.get(text, text)
 
 
 def speech_base_url(value: Any, *, fallback: str = RUNNINGHUB_SPEECH_BASE_URL) -> str:
@@ -41,6 +49,12 @@ def speech_base_url(value: Any, *, fallback: str = RUNNINGHUB_SPEECH_BASE_URL) -
     lowered = text.lower()
     if not text or any(marker in lowered for marker in _OFFICIAL_MINIMAX_HOST_MARKERS):
         return str(fallback or RUNNINGHUB_SPEECH_BASE_URL).strip().rstrip("/") or RUNNINGHUB_SPEECH_BASE_URL
+    # The account's Standard Speech route is currently served by the .cn
+    # endpoint. The .ai endpoint accepts the task but later returns provider
+    # error 1007 for the same request, so do not inherit the video workflow's
+    # .ai base URL for speech.
+    if any(marker in lowered for marker in _RUNNINGHUB_HOST_MARKERS):
+        return RUNNINGHUB_SPEECH_BASE_URL
     return text
 
 
@@ -59,6 +73,7 @@ def generate_text_to_audio(
     timeout_seconds: float = 180,
     poll_interval_seconds: float = 2.0,
     check_cancelled: Callable[[], Any] | None = None,
+    _allow_model_fallback: bool = True,
 ) -> Path:
     api_key_text = str(api_key or "").strip()
     speech_text = str(text or "").strip()
@@ -127,6 +142,28 @@ def generate_text_to_audio(
                 return output
             raise RuntimeError(f"Speech 任务成功但未写出音频: {runninghub_common._safe_json_preview(last)}")
         if status == "failed":
-            raise RuntimeError(str((last or {}).get("message") or "Speech 任务失败"))
+            message = str((last or {}).get("message") or "Speech 任务失败")
+            if (
+                _allow_model_fallback
+                and model_slug != RUNNINGHUB_SPEECH_FALLBACK_MODEL
+                and "1007" in message
+            ):
+                return generate_text_to_audio(
+                    api_key=api_key_text,
+                    base_url=root,
+                    model=RUNNINGHUB_SPEECH_FALLBACK_MODEL,
+                    text=speech_text,
+                    output_path=output,
+                    voice_id=resolved_voice,
+                    speed=speed,
+                    volume=volume,
+                    pitch=pitch,
+                    emotion=emotion,
+                    timeout_seconds=timeout_seconds,
+                    poll_interval_seconds=poll_interval_seconds,
+                    check_cancelled=check_cancelled,
+                    _allow_model_fallback=False,
+                )
+            raise RuntimeError(message)
         time.sleep(interval)
     raise RuntimeError(str((last or {}).get("message") or "Speech 任务超时"))

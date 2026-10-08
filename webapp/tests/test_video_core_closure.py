@@ -52,6 +52,7 @@ def test_digital_human_video_media_upload_uses_runninghub_file_name_contract(tmp
             remote_url="",
             upload_server_ip="192.0.2.10",
             upload_server_port=8080,
+            runninghub_base_url="https://www.runninghub.ai",
         )
         assert resolved == "openapi/fusion.png"
 
