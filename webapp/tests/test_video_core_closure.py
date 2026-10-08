@@ -16,7 +16,11 @@ def _context() -> VideoTaskContext:
 
 def test_digital_human_video_media_upload_uses_runninghub_file_name_contract(tmp_path: Path, monkeypatch) -> None:
     image = tmp_path / "fusion.png"
+    audio = tmp_path / "speech.mp3"
+    video = tmp_path / "previous.mp4"
     image.write_bytes(b"fake-png")
+    audio.write_bytes(b"fake-mp3")
+    video.write_bytes(b"fake-mp4")
 
     class Response:
         def json(self):
@@ -30,13 +34,24 @@ def test_digital_human_video_media_upload_uses_runninghub_file_name_contract(tmp
 
     monkeypatch.setattr(server.requests, "post", lambda *_args, **_kwargs: Response())
 
-    for media_kind in ("digital_human_segment_1_image", "digital_human_segment_1_audio_1", "digital_human_segment_1_audio_1_step_1_video"):
+    monkeypatch.setattr(
+        server,
+        "_upload_file_to_public_server",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("digital-human media must use RunningHub upload")),
+    )
+    for media_kind, local_path in (
+        ("digital_human_segment_1_image", image),
+        ("digital_human_segment_1_audio_1", audio),
+        ("digital_human_segment_1_audio_1_step_1_video", video),
+    ):
         resolved = server._resolve_media_url(
             task_id="task-closure",
             media_kind=media_kind,
             api_key="test-key",
-            local_path=str(image),
+            local_path=str(local_path),
             remote_url="",
+            upload_server_ip="192.0.2.10",
+            upload_server_port=8080,
         )
         assert resolved == "openapi/fusion.png"
 
