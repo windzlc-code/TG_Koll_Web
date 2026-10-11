@@ -12,7 +12,7 @@ from unittest import mock
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from webapp import telegram_admin
+from webapp import telegram_admin, telegram_tweet_admin
 from webapp.auth import create_session, hash_password, session_storage_token
 from webapp.db import init_db
 from webapp.telegram_admin import TgEnvPayload, TgTrustedUserPayload
@@ -46,7 +46,7 @@ class TelegramAdminTests(unittest.TestCase):
 
     def _create_web_user_with_session(self, *, is_admin=False, session_ttl=3600):
         now = int(time.time())
-        username = f"video_sso_{'admin' if is_admin else 'user'}_{now}_{id(self)}"
+        username = f"video_sso_{'admin' if is_admin else 'user'}_{time.time_ns()}_{id(self)}"
         with telegram_admin.db() as conn:
             inserted = conn.execute(
                 """
@@ -348,6 +348,73 @@ class TelegramAdminTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401, response.text)
         self.assertEqual(response.json().get("detail", {}).get("code"), "web_login_required")
+
+    def test_video_browser_sso_reuses_tweet_binding_and_repairs_both_rows(self):
+        self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
+        tweet_user_id, _tweet_token, tweet_session_hash, tweet_username = self._create_web_user_with_session()
+        stale_video_user_id, _stale_token, stale_video_hash, stale_video_username = self._create_web_user_with_session()
+        with telegram_admin.db() as conn:
+            telegram_tweet_admin.ensure_tweet_telegram_schema(conn)
+            telegram_admin.ensure_telegram_schema(conn)
+            now = time.time()
+            conn.execute(
+                """
+                INSERT INTO telegram_tweet_members(
+                  chat_id, web_user_id, label, enabled, linked_session_token_hash,
+                  linked_at, created_at, updated_at
+                ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+                """,
+                (731, tweet_user_id, "推文当前绑定", tweet_session_hash, now, now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO telegram_trusted_users(
+                  chat_id, web_user_id, label, tg_username, enabled,
+                  linked_session_token_hash, linked_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+                """,
+                (731, stale_video_user_id, "视频旧绑定", stale_video_username, stale_video_hash, now, now, now),
+            )
+            conn.execute(
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'test_stale_binding' WHERE token = ?",
+                (int(now), stale_video_hash),
+            )
+
+        second_ticket = telegram_admin.create_video_link_ticket(731)
+        app = FastAPI()
+        with mock.patch.object(telegram_admin, "start_telegram_bot_worker"):
+            telegram_admin.inject_telegram_admin(
+                app,
+                require_admin=lambda: {"is_admin": 1},
+                get_runtime=self._get,
+                save_runtime=self._save,
+            )
+        client = TestClient(app)
+        response = client.post(
+            "/telegram/video/exchange",
+            json={"ticket": second_ticket, "browser": True, "preview": True},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json().get("sso"))
+        self.assertEqual(response.json().get("target"), "/video.html")
+        self.assertTrue(client.cookies.get("session_token"))
+        with telegram_admin.db() as conn:
+            tweet_row = conn.execute(
+                "SELECT web_user_id, linked_session_token_hash FROM telegram_tweet_members WHERE chat_id = ?",
+                (731,),
+            ).fetchone()
+            video_row = conn.execute(
+                "SELECT web_user_id, linked_session_token_hash FROM telegram_trusted_users WHERE chat_id = ?",
+                (731,),
+            ).fetchone()
+        self.assertEqual(int(tweet_row["web_user_id"]), tweet_user_id)
+        self.assertEqual(int(video_row["web_user_id"]), tweet_user_id)
+        self.assertEqual(
+            str(tweet_row["linked_session_token_hash"]),
+            str(video_row["linked_session_token_hash"]),
+        )
+        self.assertNotEqual(str(video_row["linked_session_token_hash"]), stale_video_hash)
+        self.assertEqual(telegram_admin.load_video_member(731)["web_username"], tweet_username)
 
     def test_video_browser_sso_admin_takes_over_and_relinks_session(self):
         self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})

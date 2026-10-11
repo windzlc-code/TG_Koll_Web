@@ -201,7 +201,8 @@ class TelegramTweetChatLoginTests(unittest.TestCase):
         )
         markup = controller._binding_markup(_Types, 731)
         button = markup.inline_keyboard[0][0]
-        self.assertEqual(button.callback_data, "tt:chatlogin")
+        self.assertEqual(button.url, "https://example.test/legacy")
+        self.assertFalse(hasattr(button, "callback_data"))
         self.assertFalse(hasattr(button, "web_app"))
 
 

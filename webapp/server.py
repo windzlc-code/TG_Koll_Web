@@ -180,6 +180,7 @@ from .telegram_tweet_admin import (
     _create_link_ticket,
     inject_tweet_telegram_admin,
     start_tweet_telegram_bot_worker,
+    validate_tweet_browser_login_context,
     stop_tweet_telegram_bot_worker,
     validate_tweet_webapp_login_context,
 )
@@ -13691,6 +13692,7 @@ class LoginPayload(BaseModel):
     # before it permits an additional session.
     telegram_tweet_ticket: str = Field(default="", max_length=256)
     telegram_init_data: str = Field(default="", max_length=8192)
+    telegram_tweet_browser: bool = False
     # Video Bot uses the same normal login policy, but keeps its Bot token and
     # one-time binding tickets isolated from the Tweet Bot. ``browser`` is
     # true only for the external HTTPS URL-button flow, where Telegram cannot
@@ -28067,16 +28069,21 @@ def create_app() -> FastAPI:
             chat_id = max(0, int(payload.get("chat_id") or 0))
             if chat_id <= 0:
                 raise HTTPException(status_code=400, detail="Telegram 会话标识无效")
+            from .telegram_account_session import binding_rows
+
             with db() as conn:
-                member = conn.execute(
-                    "SELECT web_user_id, enabled FROM telegram_tweet_members WHERE chat_id = ?",
-                    (chat_id,),
-                ).fetchone()
-                if (
-                    member is None
-                    or not int(member["enabled"] or 0)
-                    or int(member["web_user_id"] or 0) != user_id
-                ):
+                members = binding_rows(conn, chat_id)
+                member = next(
+                    (
+                        row
+                        for row in members.values()
+                        if row is not None
+                        and int(row.get("enabled") or 0) == 1
+                        and int(row.get("web_user_id") or 0) == user_id
+                    ),
+                    None,
+                )
+                if member is None:
                     raise HTTPException(status_code=404, detail="Telegram 会话绑定不存在")
                 now_ts = _now_ts()
                 result = conn.execute(
@@ -28084,6 +28091,23 @@ def create_app() -> FastAPI:
                     "WHERE user_id = ? AND revoked_at = 0",
                     (now_ts, user_id),
                 )
+                for table in ("telegram_tweet_members", "telegram_trusted_users"):
+                    try:
+                        conn.execute(
+                            f"UPDATE {table} SET linked_session_token_hash = '', linked_at = 0, updated_at = ? "
+                            "WHERE chat_id = ? AND enabled = 1 AND web_user_id = ?",
+                            (now_ts, chat_id, user_id),
+                        )
+                    except sqlite3.OperationalError:
+                        continue
+                for table in ("telegram_tweet_link_tickets", "telegram_video_link_tickets"):
+                    try:
+                        conn.execute(
+                            f"UPDATE {table} SET used_at = ? WHERE chat_id = ? AND used_at = 0",
+                            (now_ts, chat_id),
+                        )
+                    except sqlite3.OperationalError:
+                        continue
             return {"ok": True, "revoked_sessions": max(0, int(result.rowcount or 0))}
 
         if action == "personas.list":
@@ -30971,18 +30995,24 @@ def create_app() -> FastAPI:
 
             telegram_ticket = str(payload.telegram_tweet_ticket or "").strip()
             telegram_init_data = str(payload.telegram_init_data or "").strip()
+            telegram_tweet_browser = bool(payload.telegram_tweet_browser)
             telegram_video_ticket = str(payload.telegram_video_ticket or "").strip()
             telegram_video_init_data = str(payload.telegram_video_init_data or "").strip()
             telegram_video_browser = bool(payload.telegram_video_browser)
-            if telegram_ticket or telegram_init_data:
-                if not telegram_ticket or not telegram_init_data:
+            if telegram_ticket or telegram_init_data or telegram_tweet_browser:
+                if not telegram_ticket:
                     raise HTTPException(status_code=400, detail="Telegram 登录上下文不完整，请回到 Bot 重新打开绑定入口")
-                validate_tweet_webapp_login_context(
-                    telegram_ticket,
-                    telegram_init_data,
-                    runtime,
-                    conn=conn,
-                )
+                if telegram_init_data:
+                    validate_tweet_webapp_login_context(
+                        telegram_ticket,
+                        telegram_init_data,
+                        runtime,
+                        conn=conn,
+                    )
+                elif telegram_tweet_browser:
+                    validate_tweet_browser_login_context(telegram_ticket, runtime, conn=conn)
+                else:
+                    raise HTTPException(status_code=400, detail="Telegram 登录上下文不完整，请回到 Bot 重新打开绑定入口")
                 # Administrators retain the stricter single-session boundary;
                 # customer accounts may add the authenticated Telegram WebView
                 # without revoking an existing browser session.

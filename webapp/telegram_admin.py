@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import secrets
+import sqlite3
 import threading
 import time
 import urllib.error
@@ -28,6 +29,12 @@ from .auth import (
     session_storage_token,
 )
 from .db import db, get_db_path
+from .telegram_account_session import (
+    active_session_row,
+    binding_rows,
+    resolve_binding,
+    sync_binding_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -983,13 +990,7 @@ def consume_video_link_ticket(
         old_user_id = int(existing["web_user_id"] or 0) if existing else 0
         if existing and old_user_id and old_user_id != web_user_id:
             linked_hash = str(existing["linked_session_token_hash"] or "").strip()
-            active_old = conn.execute(
-                "SELECT 1 FROM sessions WHERE token = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
-                (linked_hash, int(now)),
-            ).fetchone() if linked_hash else conn.execute(
-                "SELECT 1 FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
-                (old_user_id, int(now)),
-            ).fetchone()
+            active_old = active_session_row(conn, old_user_id, linked_hash, now=int(now))
             if active_old is not None:
                 raise HTTPException(
                     status_code=409,
@@ -1004,6 +1005,26 @@ def consume_video_link_ticket(
                     "WHERE token = ? AND revoked_at = 0",
                     (int(now), linked_hash),
                 )
+        tweet_binding = binding_rows(conn, chat_id).get("tweet")
+        if (
+            tweet_binding is not None
+            and int(tweet_binding.get("enabled") or 0) == 1
+            and int(tweet_binding.get("web_user_id") or 0) > 0
+            and int(tweet_binding.get("web_user_id") or 0) != web_user_id
+            and active_session_row(
+                conn,
+                int(tweet_binding.get("web_user_id") or 0),
+                str(tweet_binding.get("linked_session_token_hash") or ""),
+                now=int(now),
+            ) is not None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "telegram_already_bound",
+                    "message": "该 Telegram 账号已绑定其他 VECTO 账号，请先退出原账号后再切换。",
+                },
+            )
         conn.execute(
             "UPDATE telegram_video_link_tickets SET used_at = ? WHERE chat_id = ? AND used_at = 0 AND token_hash != ?",
             (now, chat_id, digest),
@@ -1041,31 +1062,49 @@ def consume_video_link_ticket(
         )
         if int(updated.rowcount or 0) != 1:
             raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已使用")
+        sync_binding_identity(conn, chat_id, web_user_id, session_hash, now=now)
 
 
 def load_video_member(chat_id: int):
     with db() as conn:
         ensure_telegram_schema(conn)
-        row = conn.execute(
-            """
-            SELECT m.*, u.username AS web_username, u.is_admin, u.is_disabled,
-                   u.approval_status, u.lifecycle_status, u.deleted_at
-            FROM telegram_trusted_users AS m
-            LEFT JOIN users AS u ON u.id = m.web_user_id
-            WHERE m.chat_id = ? AND m.enabled = 1
-            """,
-            (int(chat_id),),
-        ).fetchone()
-    if row is None:
-        return None
-    if int(row["web_user_id"] or 0) and row["web_username"] is not None:
-        if int(row["is_disabled"] or 0) or int(row["deleted_at"] or 0):
+        rows = binding_rows(conn, int(chat_id))
+        video_row = rows.get("video")
+        # An explicit Video-side disable is authoritative.  A missing Video
+        # row can reuse a valid Tweet-side account binding for the same chat.
+        if video_row is not None and not int(video_row.get("enabled") or 0):
             return None
-        if str(row["lifecycle_status"] or "active") != "active":
+        if video_row is not None and int(video_row.get("web_user_id") or 0) <= 0:
+            # A legacy Video allowlist row may have no VECTO user yet. If the
+            # same Telegram chat has already authenticated through Tweet,
+            # prefer that live shared identity; otherwise preserve the legacy
+            # row so the existing unbound/migration flow remains available.
+            shared = resolve_binding(conn, int(chat_id), preferred_source="video")
+            if not (
+                shared is not None
+                and str(shared.get("binding_source") or "") == "tweet"
+                and shared.get("active_session") is not None
+            ):
+                return video_row
+            resolved = shared
+        else:
+            resolved = resolve_binding(conn, int(chat_id), preferred_source="video")
+        if resolved is None:
             return None
-        if not int(row["is_admin"] or 0) and str(row["approval_status"] or "") != "approved":
-            return None
-    return row
+        # Keep legacy rows with no matching user visible to the Bot's existing
+        # migration guard, while rejecting explicitly unavailable VECTO users.
+        if resolved.get("web_username") is not None:
+            if (
+                int(resolved.get("is_disabled") or 0)
+                or int(resolved.get("deleted_at") or 0)
+                or str(resolved.get("lifecycle_status") or "active") != "active"
+                or (
+                    not int(resolved.get("is_admin") or 0)
+                    and str(resolved.get("approval_status") or "") != "approved"
+                )
+            ):
+                return None
+        return resolved
 
 
 def video_member_has_active_web_session(member: Any) -> bool:
@@ -1077,19 +1116,12 @@ def video_member_has_active_web_session(member: Any) -> bool:
         # Legacy administrator whitelist rows are migration metadata only; a
         # real VECTO web user/session is required to unlock the video Bot.
         return False
-    linked_hash = str(member["linked_session_token_hash"] or "").strip()
-    now = int(time.time())
     with db() as conn:
-        if linked_hash:
-            row = conn.execute(
-                "SELECT 1 FROM sessions WHERE token = ? AND user_id = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
-                (linked_hash, user_id, now),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT 1 FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
-                (user_id, now),
-            ).fetchone()
+        try:
+            linked_hash = str(member["linked_session_token_hash"] or "").strip()
+        except (KeyError, TypeError, IndexError):
+            linked_hash = ""
+        row = active_session_row(conn, user_id, linked_hash)
     return row is not None
 
 
@@ -1106,11 +1138,13 @@ def video_member_bound_to_user(chat_id: int, web_user_id: int) -> bool:
         return False
     with db() as conn:
         ensure_telegram_schema(conn)
-        row = conn.execute(
-            "SELECT web_user_id, enabled FROM telegram_trusted_users WHERE chat_id = ?",
-            (member_id,),
-        ).fetchone()
-    return bool(row is not None and int(row["enabled"] or 0) == 1 and int(row["web_user_id"] or 0) == user_id)
+        rows = binding_rows(conn, member_id)
+    return any(
+        row is not None
+        and int(row.get("enabled") or 0) == 1
+        and int(row.get("web_user_id") or 0) == user_id
+        for row in rows.values()
+    )
 
 
 def _video_sso_session_ttl_seconds(runtime: dict[str, Any] | None) -> int:
@@ -1182,15 +1216,9 @@ def _try_video_browser_sso(
         ):
             raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
         chat_id = int(ticket_row["chat_id"] or 0)
-        member = conn.execute(
-            """
-            SELECT chat_id, enabled, web_user_id, linked_session_token_hash
-            FROM telegram_trusted_users
-            WHERE chat_id = ?
-            """,
-            (chat_id,),
-        ).fetchone()
-        if member is None or not int(member["enabled"] or 0):
+        rows = binding_rows(conn, chat_id)
+        video_row = rows.get("video")
+        if video_row is not None and not int(video_row.get("enabled") or 0):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -1198,32 +1226,11 @@ def _try_video_browser_sso(
                     "message": "该 Telegram 账号已被管理员停用，请联系管理员重新启用。",
                 },
             )
-        web_user_id = int(member["web_user_id"] or 0)
-        linked_hash = str(member["linked_session_token_hash"] or "").strip()
-        if web_user_id <= 0:
+        binding = resolve_binding(conn, chat_id, preferred_source="video", now=now)
+        if binding is None:
             return None
-
-        if linked_hash:
-            linked_session = conn.execute(
-                """
-                SELECT token, is_admin_session
-                FROM sessions
-                WHERE token = ? AND user_id = ? AND revoked_at = 0 AND expires_at > ?
-                LIMIT 1
-                """,
-                (linked_hash, web_user_id, now),
-            ).fetchone()
-        else:
-            linked_session = conn.execute(
-                """
-                SELECT token, is_admin_session
-                FROM sessions
-                WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?
-                ORDER BY last_seen_at DESC, created_at DESC
-                LIMIT 1
-                """,
-                (web_user_id, now),
-            ).fetchone()
+        web_user_id = int(binding.get("web_user_id") or 0)
+        linked_session = binding.get("active_session")
         if linked_session is None:
             return None
 
@@ -1276,13 +1283,11 @@ def _try_video_browser_sso(
         if int(updated_ticket.rowcount or 0) != 1:
             raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已使用")
         conn.execute(
-            """
-            UPDATE telegram_trusted_users
-            SET linked_session_token_hash = ?, linked_at = ?, updated_at = ?
-            WHERE chat_id = ? AND enabled = 1 AND web_user_id = ?
-            """,
+            "UPDATE telegram_trusted_users SET linked_session_token_hash = ?, linked_at = ?, updated_at = ? "
+            "WHERE chat_id = ? AND enabled = 1 AND web_user_id = ?",
             (session_hash, time.time(), time.time(), chat_id, web_user_id),
         )
+        sync_binding_identity(conn, chat_id, web_user_id, session_hash)
         return web_user, raw_session_token, is_admin
 
 
@@ -1294,33 +1299,41 @@ def logout_video_member(chat_id: int) -> dict[str, Any]:
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         ensure_telegram_schema(conn)
-        row = conn.execute(
-            "SELECT web_user_id, linked_session_token_hash, enabled FROM telegram_trusted_users WHERE chat_id = ?",
-            (member_id,),
-        ).fetchone()
-        if row is None:
+        rows = binding_rows(conn, member_id)
+        video_row = rows.get("video")
+        if video_row is None:
             return {"ok": True, "bound": False}
-        web_user_id = int(row["web_user_id"] or 0)
+        binding = resolve_binding(conn, member_id, preferred_source="video")
+        if binding is None:
+            binding = video_row
+        web_user_id = int(binding.get("web_user_id") or 0)
         if web_user_id <= 0:
-            return {"ok": True, "bound": False, "legacy_authorized": bool(int(row["enabled"] or 0))}
+            return {"ok": True, "bound": False, "legacy_authorized": bool(int(video_row.get("enabled") or 0))}
         # Match the Tweet workbench: leaving the VECTO account revokes all
         # active sessions for that user, so browser and Telegram state cannot
-        # drift apart.  The Telegram member row stays as a re-login marker.
+        # drift apart.  Both workbench binding rows stay as re-login markers.
         conn.execute(
             "UPDATE sessions SET revoked_at = ?, revoke_reason = 'telegram_video_logout' "
             "WHERE user_id = ? AND revoked_at = 0",
             (int(now), web_user_id),
         )
-        conn.execute(
-            "UPDATE telegram_video_link_tickets SET used_at = ? WHERE chat_id = ? AND used_at = 0",
-            (now, member_id),
-        )
-        conn.execute(
-            "UPDATE telegram_trusted_users "
-            "SET linked_session_token_hash = '', linked_at = 0, updated_at = ? "
-            "WHERE chat_id = ?",
-            (now, member_id),
-        )
+        for table in ("telegram_tweet_members", "telegram_trusted_users"):
+            try:
+                conn.execute(
+                    f"UPDATE {table} SET linked_session_token_hash = '', linked_at = 0, updated_at = ? "
+                    "WHERE chat_id = ? AND enabled = 1 AND web_user_id = ?",
+                    (now, member_id, web_user_id),
+                )
+            except sqlite3.OperationalError:
+                continue
+        for table in ("telegram_tweet_link_tickets", "telegram_video_link_tickets"):
+            try:
+                conn.execute(
+                    f"UPDATE {table} SET used_at = ? WHERE chat_id = ? AND used_at = 0",
+                    (now, member_id),
+                )
+            except sqlite3.OperationalError:
+                continue
     return {"ok": True, "bound": True, "web_user_id": web_user_id}
 
 
