@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any
 
 MINIMAX_CN_BASE_URL = "https://api.minimaxi.com"
-RUNNINGHUB_SPEECH_BASE_URL = "https://www.runninghub.ai"
+RUNNINGHUB_SPEECH_BASE_URL = "https://www.runninghub.cn"
 RUNNINGHUB_SPEECH_DEFAULT_MODEL = "speech-2.8-hd"
-RUNNINGHUB_SPEECH_DEFAULT_VOICE = "male-qn-qingse"
+RUNNINGHUB_SPEECH_DEFAULT_VOICE = "Wise_Woman"
 RUNNINGHUB_SPEECH_MODELS = {
     "speech-2.8-hd",
     "speech-2.8-turbo",
@@ -132,7 +132,7 @@ def load_runtime_config() -> dict[str, Any]:
     speech_voice = str(merged.get("minimax_tts_voice_id") or "").strip()
     merged["minimax_tts_voice_id"] = (
         RUNNINGHUB_SPEECH_DEFAULT_VOICE
-        if not speech_voice or speech_voice == "Wise_Woman"
+        if not speech_voice or speech_voice == "male-qn-qingse"
         else speech_voice
     )
     merged["minimax_base_url"] = RUNNINGHUB_SPEECH_BASE_URL

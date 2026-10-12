@@ -49,13 +49,13 @@ class AdminVideoRuntimeFrontendContractTests(unittest.TestCase):
         for field_id in unsupported_ids:
             self.assertNotIn(f'id="{field_id}"', self.html)
 
-    def test_source_labels_and_fixed_minimax_url_are_preserved(self):
+    def test_source_labels_and_runninghub_speech_defaults_are_preserved(self):
         for label in (
             "个人 API Key",
             "企业级共享 API Key",
             "口播热点模式",
             "图片模型优先级",
-            "MiniMax Speech",
+            "RunningHub Speech",
             "TTS 模型 ID",
             "默认音色 ID",
         ):
@@ -68,9 +68,9 @@ class AdminVideoRuntimeFrontendContractTests(unittest.TestCase):
         self.assertNotIn("speech-01-hd", self.html)
         self.assertNotIn("MiniMax API Key", self.html)
         self.assertNotIn("https://api.minimaxi.com", self.html)
-        self.assertIn('value="male-qn-qingse"', self.html)
-        self.assertIn('VIDEO_SPEECH_VOICE_DEFAULT = "male-qn-qingse"', self.javascript)
-        self.assertIn('text === "Wise_Woman"', self.javascript)
+        self.assertIn('value="Wise_Woman"', self.html)
+        self.assertIn('VIDEO_SPEECH_VOICE_DEFAULT = "Wise_Woman"', self.javascript)
+        self.assertIn('text === "male-qn-qingse"', self.javascript)
         self.assertIn("文字模型沿用系统文字模型配置", self.html)
 
     def test_source_runtime_keys_are_serialized_and_restored(self):

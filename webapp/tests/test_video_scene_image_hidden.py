@@ -20,6 +20,7 @@ def test_scene_image_is_internal_only_and_needs_no_reference_image() -> None:
         "video_language_replace",
         "replace_model",
         "replace_product",
+        "replace_productANDmodel",
         "image_generate",
     }
 

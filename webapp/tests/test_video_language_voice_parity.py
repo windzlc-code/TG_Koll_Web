@@ -249,45 +249,60 @@ def test_without_reference_audio_uses_configured_voice_directly(tmp_path: Path) 
     assert result["voice_cloned"] is False
 
 
-def test_source_module_clone_and_tts_are_the_default_providers(monkeypatch, tmp_path: Path) -> None:
+def test_runninghub_speech_is_the_default_provider(monkeypatch, tmp_path: Path) -> None:
     from video_core import language_voice_pipeline
 
     reference_audio = tmp_path / "reference.mp3"
     reference_audio.write_bytes(b"reference")
     observed = {}
 
-    def fake_source_clone(*, reference_audio_path, settings, logger=None):
-        observed["clone"] = (Path(reference_audio_path), settings, logger)
-        return "source-clone"
+    def unexpected_legacy_clone(**_kwargs):
+        pytest.fail("RunningHub Speech must not invoke the legacy MiniMax voice-clone provider")
 
-    def fake_source_tts(*, speech_text, settings, output_path, logger=None):
-        observed["tts"] = (speech_text, settings, logger)
+    def fake_runninghub_speech(*, api_key, base_url, model, text, output_path, voice_id, **_kwargs):
+        observed["speech"] = {
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model,
+            "text": text,
+            "voice_id": voice_id,
+        }
         Path(output_path).write_bytes(b"source-tts")
         return Path(output_path)
 
     monkeypatch.setattr(
         language_voice_pipeline.commerce_video_generator,
         "clone_minimax_voice_from_reference",
-        fake_source_clone,
+        unexpected_legacy_clone,
+    )
+    monkeypatch.setattr(
+        language_voice_pipeline.commerce_video_generator.runninghub_speech,
+        "generate_text_to_audio",
+        fake_runninghub_speech,
     )
     monkeypatch.setattr(
         language_voice_pipeline.commerce_video_generator,
-        "_generate_minimax_audio",
-        fake_source_tts,
+        "_postprocess_generated_audio",
+        lambda *, input_path, **_kwargs: input_path,
     )
 
     result = prepare_language_voice(
         {
             "audio_local_path": str(reference_audio),
             "target_script": "Use archived providers",
+            "video_tts_api_key": "runninghub-test-key",
         },
         _context(),
         tmp_path / "work",
     )
 
-    assert observed["clone"][0] == reference_audio.resolve()
-    assert observed["tts"][0] == "Use archived providers"
-    assert observed["tts"][1].minimax_voice_id == "source-clone"
+    assert observed["speech"] == {
+        "api_key": "runninghub-test-key",
+        "base_url": "https://www.runninghub.cn",
+        "model": "speech-2.8-hd",
+        "text": "Use archived providers",
+        "voice_id": "Wise_Woman",
+    }
     assert Path(result["target_audio_path"]).read_bytes() == b"source-tts"
 
 

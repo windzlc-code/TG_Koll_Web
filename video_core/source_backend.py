@@ -2502,13 +2502,29 @@ class ArchivedSourceBackend:
         for path in resolved_paths:
             inputs.extend(["-i", str(path)])
         filter_parts: list[str] = []
+        # RunningHub can occasionally return a video container whose video
+        # stream is longer than its audio stream.  Feeding those raw audio
+        # streams directly into ``acrossfade`` makes ffmpeg stop the final
+        # output at the shorter audio timeline, which presents as a silent or
+        # missing latter half in the generated video.  Normalize each audio
+        # input to its probed video duration before joining so the audio/video
+        # timelines stay closed even when a provider response is imperfect.
+        padded_audio_labels: list[str] = []
+        for index, duration in enumerate(durations):
+            padded_label = f"[adpad{index}]"
+            padded_duration = max(float(duration or 0.0), 0.1)
+            filter_parts.append(
+                f"[{index}:a:0]aformat=sample_rates=48000:channel_layouts=stereo,"
+                f"apad,atrim=0:{padded_duration:.3f},asetpts=N/SR/TB{padded_label}"
+            )
+            padded_audio_labels.append(padded_label)
         video_label = "[0:v:0]"
-        audio_label = "[0:a:0]"
+        audio_label = padded_audio_labels[0]
         elapsed = float(durations[0])
         for idx in range(1, len(resolved_paths)):
             context.check_cancelled()
             next_video_label = f"[{idx}:v:0]"
-            next_audio_label = f"[{idx}:a:0]"
+            next_audio_label = padded_audio_labels[idx]
             video_out = f"[vxf{idx}]"
             audio_out = f"[axf{idx}]"
             offset = max(elapsed - crossfade_seconds, 0.0)

@@ -503,7 +503,7 @@ const VIDEO_SPEECH_MODEL_OPTIONS = [
   "speech-02-turbo",
 ];
 const VIDEO_SPEECH_MODEL_DEFAULT = "speech-2.8-hd";
-const VIDEO_SPEECH_VOICE_DEFAULT = "male-qn-qingse";
+const VIDEO_SPEECH_VOICE_DEFAULT = "Wise_Woman";
 
 function normalizeVideoSpeechModel(value) {
   const text = String(value || "").trim();
@@ -512,7 +512,7 @@ function normalizeVideoSpeechModel(value) {
 
 function normalizeVideoSpeechVoice(value) {
   const text = String(value || "").trim();
-  return !text || text === "Wise_Woman" ? VIDEO_SPEECH_VOICE_DEFAULT : text;
+  return !text || text === "male-qn-qingse" ? VIDEO_SPEECH_VOICE_DEFAULT : text;
 }
 const SENSITIVE_EYE_ICON_SVG = `
   <svg class="sensitive-eye-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none">
