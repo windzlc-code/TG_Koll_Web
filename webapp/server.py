@@ -7131,16 +7131,30 @@ def _resolve_media_url(
     if not path.exists():
         raise FileNotFoundError(f"本地文件不存在: {path}")
     upload_api_key = str(upload_file_api_key or "").strip() or str(api_key or "").strip()
+    kind = str(media_kind or "").strip().lower()
+    prefer_file_name = kind.startswith("digital_human")
     if path.suffix.lower() in IMAGE_EXTS:
-        kind = str(media_kind or "").strip().lower()
         return _upload_binary_to_runninghub(
             api_key=upload_api_key,
             file_path=path,
             media_kind=media_kind,
             # RunningHub AI App upload nodes consume the provider's fileName
-            # identifier. Public download URLs are valid for model APIs but
-            # are rejected by the digital-human workflow as error 1007.
-            prefer_file_name=kind.startswith("digital_human") and kind.endswith("_image"),
+            # identifier for digital-human media inputs. Public download URLs
+            # are valid for model APIs but are rejected by this workflow as
+            # error 1007. This covers both the reference image and the
+            # segmented audio/video inputs used by the final AI App call.
+            prefer_file_name=prefer_file_name,
+        )
+    if prefer_file_name:
+        # Digital-human AI App nodes consume RunningHub's uploaded fileName
+        # for audio and chained video inputs as well. Do not route these
+        # through the generic public-file URL fallback.
+        return _upload_binary_to_runninghub(
+            api_key=upload_api_key,
+            file_path=path,
+            media_kind=media_kind,
+            prefer_file_name=True,
+        )
         )
     server_ip = str(upload_server_ip or "").strip()
     server_port_text = str(upload_server_port or "").strip()
