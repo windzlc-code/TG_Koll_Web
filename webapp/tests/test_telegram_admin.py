@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from urllib.parse import urlencode
@@ -11,7 +12,8 @@ from unittest import mock
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from webapp import telegram_admin
+from webapp import telegram_admin, telegram_tweet_admin
+from webapp.auth import create_session, hash_password, session_storage_token
 from webapp.db import init_db
 from webapp.telegram_admin import TgEnvPayload, TgTrustedUserPayload
 
@@ -41,6 +43,28 @@ class TelegramAdminTests(unittest.TestCase):
 
     def _save(self, updates):
         self.runtime.update(updates)
+
+    def _create_web_user_with_session(self, *, is_admin=False, session_ttl=3600):
+        now = int(time.time())
+        username = f"video_sso_{'admin' if is_admin else 'user'}_{time.time_ns()}_{id(self)}"
+        with telegram_admin.db() as conn:
+            inserted = conn.execute(
+                """
+                INSERT INTO users(
+                  username, password_hash, is_admin, is_disabled, balance_cents,
+                  account_type, approval_status, created_at, updated_at
+                ) VALUES (?, ?, ?, 0, 0, 'managed', 'approved', ?, ?)
+                """,
+                (username, hash_password("video-sso-password"), 1 if is_admin else 0, now, now),
+            )
+            user_id = int(inserted.lastrowid)
+            raw_token = create_session(
+                conn,
+                user_id,
+                ttl_seconds=session_ttl,
+                is_admin_session=bool(is_admin),
+            )
+        return user_id, raw_token, session_storage_token(raw_token), username
 
     def test_trusted_user_roundtrip(self):
         telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=6258005891, label="客户A"))
@@ -189,10 +213,14 @@ class TelegramAdminTests(unittest.TestCase):
         self.assertIn("确认授权并打开视频工作台", response.text)
         self.assertNotIn("telegram/tweet/open", response.text)
 
-        expired = TestClient(app).get("/telegram/video/open", params={"ticket": "expired-or-invalid"})
+        with mock.patch.dict(telegram_admin._BOT_STATUS, {"bot_username": "vecto_video_bot"}, clear=False):
+            expired = TestClient(app).get("/telegram/video/open", params={"ticket": "expired-or-invalid"})
         self.assertEqual(expired.status_code, 410)
         self.assertIn("请返回 Telegram Bot", expired.text)
         self.assertIn("重新点击", expired.text)
+        self.assertIn("重新授权", expired.text)
+        self.assertIn("https://t.me/vecto_video_bot", expired.text)
+        self.assertIn("一次性", expired.text)
 
     def test_video_webapp_ticket_requires_live_admin_authorization(self):
         self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
@@ -236,6 +264,196 @@ class TelegramAdminTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json().get("detail", {}).get("code"), "web_login_required")
+
+    def test_video_browser_exchange_auto_signs_in_existing_bound_member(self):
+        self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
+        user_id, _old_token, old_session_hash, username = self._create_web_user_with_session()
+        telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=731, label="视频用户"))
+        first_ticket = telegram_admin.create_video_link_ticket(731)
+        telegram_admin.consume_video_link_ticket(
+            first_ticket,
+            {"id": 731, "username": "video_user"},
+            {"id": user_id, "username": username},
+            old_session_hash,
+        )
+        second_ticket = telegram_admin.create_video_link_ticket(731)
+
+        app = FastAPI()
+        with mock.patch.object(telegram_admin, "start_telegram_bot_worker"):
+            telegram_admin.inject_telegram_admin(
+                app,
+                require_admin=lambda: {"is_admin": 1},
+                get_runtime=self._get,
+                save_runtime=self._save,
+            )
+        client = TestClient(app)
+        response = client.post(
+            "/telegram/video/exchange",
+            json={"ticket": second_ticket, "browser": True, "preview": True},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json().get("sso"))
+        self.assertEqual(response.json().get("target"), "/video.html")
+        self.assertTrue(client.cookies.get("session_token"))
+        self.assertIn("HttpOnly", response.headers.get("set-cookie", ""))
+
+        with telegram_admin.db() as conn:
+            member = conn.execute(
+                "SELECT web_user_id, linked_session_token_hash FROM telegram_trusted_users WHERE chat_id = ?",
+                (731,),
+            ).fetchone()
+            ticket = conn.execute(
+                "SELECT used_at, linked_web_user_id, session_token_hash FROM telegram_video_link_tickets WHERE token_hash = ?",
+                (telegram_admin._video_ticket_digest(second_ticket),),
+            ).fetchone()
+        self.assertEqual(int(member["web_user_id"]), user_id)
+        self.assertNotEqual(str(member["linked_session_token_hash"]), old_session_hash)
+        self.assertGreater(float(ticket["used_at"]), 0)
+        self.assertEqual(int(ticket["linked_web_user_id"]), user_id)
+        self.assertEqual(str(ticket["session_token_hash"]), str(member["linked_session_token_hash"]))
+
+        follow_up_ticket = telegram_admin.create_video_link_ticket(731)
+        follow_up = client.post(
+            "/telegram/video/exchange",
+            json={"ticket": follow_up_ticket, "browser": True, "preview": True},
+        )
+        self.assertEqual(follow_up.status_code, 200, follow_up.text)
+        self.assertTrue(follow_up.json().get("already_authorized"))
+        self.assertFalse(follow_up.json().get("authorization_required"))
+
+    def test_video_browser_sso_falls_back_when_bound_session_expired(self):
+        self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
+        user_id, _old_token, old_session_hash, username = self._create_web_user_with_session(session_ttl=-1)
+        telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=731, label="视频用户"))
+        first_ticket = telegram_admin.create_video_link_ticket(731)
+        telegram_admin.consume_video_link_ticket(
+            first_ticket,
+            {"id": 731, "username": "video_user"},
+            {"id": user_id, "username": username},
+            old_session_hash,
+        )
+        second_ticket = telegram_admin.create_video_link_ticket(731)
+
+        app = FastAPI()
+        with mock.patch.object(telegram_admin, "start_telegram_bot_worker"):
+            telegram_admin.inject_telegram_admin(
+                app,
+                require_admin=lambda: {"is_admin": 1},
+                get_runtime=self._get,
+                save_runtime=self._save,
+            )
+        response = TestClient(app).post(
+            "/telegram/video/exchange",
+            json={"ticket": second_ticket, "browser": True, "preview": True},
+        )
+        self.assertEqual(response.status_code, 401, response.text)
+        self.assertEqual(response.json().get("detail", {}).get("code"), "web_login_required")
+
+    def test_video_browser_sso_reuses_tweet_binding_and_repairs_both_rows(self):
+        self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
+        tweet_user_id, _tweet_token, tweet_session_hash, tweet_username = self._create_web_user_with_session()
+        stale_video_user_id, _stale_token, stale_video_hash, stale_video_username = self._create_web_user_with_session()
+        with telegram_admin.db() as conn:
+            telegram_tweet_admin.ensure_tweet_telegram_schema(conn)
+            telegram_admin.ensure_telegram_schema(conn)
+            now = time.time()
+            conn.execute(
+                """
+                INSERT INTO telegram_tweet_members(
+                  chat_id, web_user_id, label, enabled, linked_session_token_hash,
+                  linked_at, created_at, updated_at
+                ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+                """,
+                (731, tweet_user_id, "推文当前绑定", tweet_session_hash, now, now, now),
+            )
+            conn.execute(
+                """
+                INSERT INTO telegram_trusted_users(
+                  chat_id, web_user_id, label, tg_username, enabled,
+                  linked_session_token_hash, linked_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+                """,
+                (731, stale_video_user_id, "视频旧绑定", stale_video_username, stale_video_hash, now, now, now),
+            )
+            conn.execute(
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'test_stale_binding' WHERE token = ?",
+                (int(now), stale_video_hash),
+            )
+
+        second_ticket = telegram_admin.create_video_link_ticket(731)
+        app = FastAPI()
+        with mock.patch.object(telegram_admin, "start_telegram_bot_worker"):
+            telegram_admin.inject_telegram_admin(
+                app,
+                require_admin=lambda: {"is_admin": 1},
+                get_runtime=self._get,
+                save_runtime=self._save,
+            )
+        client = TestClient(app)
+        response = client.post(
+            "/telegram/video/exchange",
+            json={"ticket": second_ticket, "browser": True, "preview": True},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json().get("sso"))
+        self.assertEqual(response.json().get("target"), "/video.html")
+        self.assertTrue(client.cookies.get("session_token"))
+        with telegram_admin.db() as conn:
+            tweet_row = conn.execute(
+                "SELECT web_user_id, linked_session_token_hash FROM telegram_tweet_members WHERE chat_id = ?",
+                (731,),
+            ).fetchone()
+            video_row = conn.execute(
+                "SELECT web_user_id, linked_session_token_hash FROM telegram_trusted_users WHERE chat_id = ?",
+                (731,),
+            ).fetchone()
+        self.assertEqual(int(tweet_row["web_user_id"]), tweet_user_id)
+        self.assertEqual(int(video_row["web_user_id"]), tweet_user_id)
+        self.assertEqual(
+            str(tweet_row["linked_session_token_hash"]),
+            str(video_row["linked_session_token_hash"]),
+        )
+        self.assertNotEqual(str(video_row["linked_session_token_hash"]), stale_video_hash)
+        self.assertEqual(telegram_admin.load_video_member(731)["web_username"], tweet_username)
+
+    def test_video_browser_sso_admin_takes_over_and_relinks_session(self):
+        self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})
+        user_id, old_token, old_session_hash, username = self._create_web_user_with_session(is_admin=True)
+        telegram_admin.upsert_trusted_user(TgTrustedUserPayload(chat_id=731, label="视频管理员"))
+        first_ticket = telegram_admin.create_video_link_ticket(731)
+        telegram_admin.consume_video_link_ticket(
+            first_ticket,
+            {"id": 731, "username": "video_admin"},
+            {"id": user_id, "username": username},
+            old_session_hash,
+        )
+        second_ticket = telegram_admin.create_video_link_ticket(731)
+
+        app = FastAPI()
+        with mock.patch.object(telegram_admin, "start_telegram_bot_worker"):
+            telegram_admin.inject_telegram_admin(
+                app,
+                require_admin=lambda: {"is_admin": 1},
+                get_runtime=self._get,
+                save_runtime=self._save,
+            )
+        client = TestClient(app)
+        response = client.post(
+            "/telegram/video/exchange",
+            json={"ticket": second_ticket, "browser": True, "preview": True},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json().get("sso"))
+        self.assertEqual(response.json().get("target"), "/admin-video.html")
+        self.assertTrue(client.cookies.get("admin_session_token"))
+
+        with telegram_admin.db() as conn:
+            old_row = conn.execute(
+                "SELECT revoked_at, revoke_reason FROM sessions WHERE token = ?",
+                (old_session_hash,),
+            ).fetchone()
+        self.assertGreater(int(old_row["revoked_at"]), 0)
+        self.assertEqual(str(old_row["revoke_reason"]), "telegram_video_sso_takeover")
 
     def test_video_browser_exchange_accepts_external_url_context_after_web_login(self):
         self.runtime.update({"telegram_bot_token": "123456:video", "telegram_bot_enabled": True})

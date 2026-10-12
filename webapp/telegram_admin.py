@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import secrets
+import sqlite3
 import threading
 import time
 import urllib.error
@@ -23,10 +24,17 @@ from pydantic import BaseModel, Field
 from .auth import (
     ADMIN_SESSION_COOKIE,
     SESSION_COOKIE,
+    create_session,
     get_current_user_for_session,
     session_storage_token,
 )
 from .db import db, get_db_path
+from .telegram_account_session import (
+    active_session_row,
+    binding_rows,
+    resolve_binding,
+    sync_binding_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -584,6 +592,7 @@ def is_video_chat_authorized(chat_id: int, runtime: dict[str, Any] | None = None
 
 
 VIDEO_LINK_TTL_SECONDS = 180
+VIDEO_SSO_SESSION_DEFAULT_HOURS = 12
 
 
 def configure_video_chat_login(handler: VideoChatLoginHandler | None) -> None:
@@ -885,6 +894,15 @@ def _authenticated_video_web_session(request: Request) -> tuple[dict[str, Any], 
     )
 
 
+def _video_bot_reauthorization_url() -> str:
+    """Return the live Bot deep link without accepting any user-controlled URL."""
+    with _BOT_LOCK:
+        username = str(_BOT_STATUS.get("bot_username") or "").strip().lstrip("@")
+    if not username:
+        return ""
+    return f"https://t.me/{urllib.parse.quote(username, safe='')}"
+
+
 def _video_authorization_error_page(message: str, *, status_code: int = 410) -> HTMLResponse:
     """Render a useful browser page when a Telegram hand-off link is stale.
 
@@ -892,15 +910,23 @@ def _video_authorization_error_page(message: str, *, status_code: int = 410) -> 
     dead ticket, but users should not be left with a raw FastAPI JSON error.
     """
     clean_message = html.escape(str(message or "Telegram 视频工作台授权入口已失效。"))
+    bot_url = _video_bot_reauthorization_url()
+    bot_action = (
+        f'<a class="recover" href="{html.escape(bot_url, quote=True)}">返回 Telegram Bot，重新授权</a>'
+        if bot_url
+        else '<p class="hint">请打开 Telegram Bot，重新点击「账号管理」获取新的授权链接。</p>'
+    )
     content = f"""<!doctype html><html lang=\"zh-Hans\"><head><meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <meta name=\"robots\" content=\"noindex,nofollow,noarchive\"><title>Telegram 视频工作台授权</title>
 <style>body{{font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}}
 main{{max-width:560px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}}
 h1{{font-size:22px;margin:0 0 12px}}p{{line-height:1.65;color:#52697a}}.error{{color:#b42318;font-weight:700}}
-.hint{{margin-top:18px;padding:14px 16px;border-radius:10px;background:#fff4ed;color:#8a3518}}</style></head>
+.hint{{margin-top:18px;padding:14px 16px;border-radius:10px;background:#fff4ed;color:#8a3518}}
+.recover{{display:block;margin-top:18px;padding:13px 16px;border-radius:10px;background:#193247;color:#fff;text-align:center;font-weight:700;text-decoration:none}}</style></head>
 <body><main><h1>Telegram 视频工作台授权</h1><p class=\"error\">{clean_message}</p>
-<p class=\"hint\">请返回 Telegram Bot，重新点击「账号管理」获取新的授权链接。旧链接不会再次使用。</p></main></body></html>"""
+<p class=\"hint\">请返回 Telegram Bot，重新点击「账号管理」获取新的授权链接。此授权链接是一次性的，系统会再次检查网页登录状态；如网页登录会话也失效，会要求重新登录。</p>
+{bot_action}</main></body></html>"""
     response = HTMLResponse(content=content, status_code=int(status_code or 410))
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -964,13 +990,7 @@ def consume_video_link_ticket(
         old_user_id = int(existing["web_user_id"] or 0) if existing else 0
         if existing and old_user_id and old_user_id != web_user_id:
             linked_hash = str(existing["linked_session_token_hash"] or "").strip()
-            active_old = conn.execute(
-                "SELECT 1 FROM sessions WHERE token = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
-                (linked_hash, int(now)),
-            ).fetchone() if linked_hash else conn.execute(
-                "SELECT 1 FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
-                (old_user_id, int(now)),
-            ).fetchone()
+            active_old = active_session_row(conn, old_user_id, linked_hash, now=int(now))
             if active_old is not None:
                 raise HTTPException(
                     status_code=409,
@@ -985,6 +1005,26 @@ def consume_video_link_ticket(
                     "WHERE token = ? AND revoked_at = 0",
                     (int(now), linked_hash),
                 )
+        tweet_binding = binding_rows(conn, chat_id).get("tweet")
+        if (
+            tweet_binding is not None
+            and int(tweet_binding.get("enabled") or 0) == 1
+            and int(tweet_binding.get("web_user_id") or 0) > 0
+            and int(tweet_binding.get("web_user_id") or 0) != web_user_id
+            and active_session_row(
+                conn,
+                int(tweet_binding.get("web_user_id") or 0),
+                str(tweet_binding.get("linked_session_token_hash") or ""),
+                now=int(now),
+            ) is not None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "telegram_already_bound",
+                    "message": "该 Telegram 账号已绑定其他 VECTO 账号，请先退出原账号后再切换。",
+                },
+            )
         conn.execute(
             "UPDATE telegram_video_link_tickets SET used_at = ? WHERE chat_id = ? AND used_at = 0 AND token_hash != ?",
             (now, chat_id, digest),
@@ -1022,31 +1062,49 @@ def consume_video_link_ticket(
         )
         if int(updated.rowcount or 0) != 1:
             raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已使用")
+        sync_binding_identity(conn, chat_id, web_user_id, session_hash, now=now)
 
 
 def load_video_member(chat_id: int):
     with db() as conn:
         ensure_telegram_schema(conn)
-        row = conn.execute(
-            """
-            SELECT m.*, u.username AS web_username, u.is_admin, u.is_disabled,
-                   u.approval_status, u.lifecycle_status, u.deleted_at
-            FROM telegram_trusted_users AS m
-            LEFT JOIN users AS u ON u.id = m.web_user_id
-            WHERE m.chat_id = ? AND m.enabled = 1
-            """,
-            (int(chat_id),),
-        ).fetchone()
-    if row is None:
-        return None
-    if int(row["web_user_id"] or 0) and row["web_username"] is not None:
-        if int(row["is_disabled"] or 0) or int(row["deleted_at"] or 0):
+        rows = binding_rows(conn, int(chat_id))
+        video_row = rows.get("video")
+        # An explicit Video-side disable is authoritative.  A missing Video
+        # row can reuse a valid Tweet-side account binding for the same chat.
+        if video_row is not None and not int(video_row.get("enabled") or 0):
             return None
-        if str(row["lifecycle_status"] or "active") != "active":
+        if video_row is not None and int(video_row.get("web_user_id") or 0) <= 0:
+            # A legacy Video allowlist row may have no VECTO user yet. If the
+            # same Telegram chat has already authenticated through Tweet,
+            # prefer that live shared identity; otherwise preserve the legacy
+            # row so the existing unbound/migration flow remains available.
+            shared = resolve_binding(conn, int(chat_id), preferred_source="video")
+            if not (
+                shared is not None
+                and str(shared.get("binding_source") or "") == "tweet"
+                and shared.get("active_session") is not None
+            ):
+                return video_row
+            resolved = shared
+        else:
+            resolved = resolve_binding(conn, int(chat_id), preferred_source="video")
+        if resolved is None:
             return None
-        if not int(row["is_admin"] or 0) and str(row["approval_status"] or "") != "approved":
-            return None
-    return row
+        # Keep legacy rows with no matching user visible to the Bot's existing
+        # migration guard, while rejecting explicitly unavailable VECTO users.
+        if resolved.get("web_username") is not None:
+            if (
+                int(resolved.get("is_disabled") or 0)
+                or int(resolved.get("deleted_at") or 0)
+                or str(resolved.get("lifecycle_status") or "active") != "active"
+                or (
+                    not int(resolved.get("is_admin") or 0)
+                    and str(resolved.get("approval_status") or "") != "approved"
+                )
+            ):
+                return None
+        return resolved
 
 
 def video_member_has_active_web_session(member: Any) -> bool:
@@ -1058,19 +1116,12 @@ def video_member_has_active_web_session(member: Any) -> bool:
         # Legacy administrator whitelist rows are migration metadata only; a
         # real VECTO web user/session is required to unlock the video Bot.
         return False
-    linked_hash = str(member["linked_session_token_hash"] or "").strip()
-    now = int(time.time())
     with db() as conn:
-        if linked_hash:
-            row = conn.execute(
-                "SELECT 1 FROM sessions WHERE token = ? AND user_id = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
-                (linked_hash, user_id, now),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT 1 FROM sessions WHERE user_id = ? AND revoked_at = 0 AND expires_at > ? LIMIT 1",
-                (user_id, now),
-            ).fetchone()
+        try:
+            linked_hash = str(member["linked_session_token_hash"] or "").strip()
+        except (KeyError, TypeError, IndexError):
+            linked_hash = ""
+        row = active_session_row(conn, user_id, linked_hash)
     return row is not None
 
 
@@ -1087,11 +1138,157 @@ def video_member_bound_to_user(chat_id: int, web_user_id: int) -> bool:
         return False
     with db() as conn:
         ensure_telegram_schema(conn)
-        row = conn.execute(
-            "SELECT web_user_id, enabled FROM telegram_trusted_users WHERE chat_id = ?",
-            (member_id,),
+        rows = binding_rows(conn, member_id)
+    return any(
+        row is not None
+        and int(row.get("enabled") or 0) == 1
+        and int(row.get("web_user_id") or 0) == user_id
+        for row in rows.values()
+    )
+
+
+def _video_sso_session_ttl_seconds(runtime: dict[str, Any] | None) -> int:
+    config = runtime if isinstance(runtime, dict) else {}
+    try:
+        hours = int(config.get("auth_session_hours") or VIDEO_SSO_SESSION_DEFAULT_HOURS)
+    except (TypeError, ValueError):
+        hours = VIDEO_SSO_SESSION_DEFAULT_HOURS
+    return max(1, min(hours, 72)) * 3600
+
+
+def _video_sso_cookie_secure(request: Request) -> bool:
+    configured = os.getenv("SESSION_COOKIE_SECURE")
+    if configured is not None:
+        return str(configured or "").strip().lower() not in {"0", "false", "no", "off"}
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+    if forwarded_proto:
+        return forwarded_proto == "https"
+    if str(request.url.scheme or "").lower() == "https":
+        return True
+    return str(os.getenv("FORCE_HTTPS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _set_video_sso_cookie(response: JSONResponse, request: Request, token: str, *, is_admin: bool) -> None:
+    cookie_name = ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE
+    other_cookie_name = SESSION_COOKIE if is_admin else ADMIN_SESSION_COOKIE
+    response.set_cookie(
+        key=cookie_name,
+        value=str(token or ""),
+        httponly=True,
+        max_age=None,
+        path="/",
+        samesite="lax",
+        secure=_video_sso_cookie_secure(request),
+    )
+    response.delete_cookie(other_cookie_name, path="/")
+
+
+def _try_video_browser_sso(
+    ticket: str,
+    runtime: dict[str, Any] | None,
+    request: Request,
+) -> tuple[dict[str, Any], str, bool] | None:
+    """Issue a normal browser session for an already-bound Telegram member.
+
+    The browser URL is a short-lived bearer hand-off issued by the Bot.  It is
+    only upgraded to a Web session when the ticket's Telegram member already
+    has a live, previously-linked VECTO session.  First-time or expired
+    bindings return ``None`` so the caller can keep the normal password/Google
+    login flow.
+    """
+    clean = str(ticket or "").strip()
+    digest = _video_ticket_digest(clean)
+    now = int(time.time())
+    if not clean or len(clean) > 256:
+        raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
+
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        ensure_telegram_schema(conn)
+        ticket_row = conn.execute(
+            "SELECT chat_id, expires_at, used_at FROM telegram_video_link_tickets WHERE token_hash = ?",
+            (digest,),
         ).fetchone()
-    return bool(row is not None and int(row["enabled"] or 0) == 1 and int(row["web_user_id"] or 0) == user_id)
+        if (
+            ticket_row is None
+            or int(ticket_row["used_at"] or 0) > 0
+            or float(ticket_row["expires_at"] or 0) < now
+        ):
+            raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
+        chat_id = int(ticket_row["chat_id"] or 0)
+        rows = binding_rows(conn, chat_id)
+        video_row = rows.get("video")
+        if video_row is not None and not int(video_row.get("enabled") or 0):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "telegram_binding_not_authorized",
+                    "message": "该 Telegram 账号已被管理员停用，请联系管理员重新启用。",
+                },
+            )
+        binding = resolve_binding(conn, chat_id, preferred_source="video", now=now)
+        if binding is None:
+            return None
+        web_user_id = int(binding.get("web_user_id") or 0)
+        linked_session = binding.get("active_session")
+        if linked_session is None:
+            return None
+
+        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (web_user_id,)).fetchone()
+        if user_row is None:
+            return None
+        web_user = dict(user_row)
+        is_admin = bool(int(web_user.get("is_admin") or 0))
+        if (
+            int(web_user.get("is_disabled") or 0) == 1
+            or int(web_user.get("deleted_at") or 0) > 0
+            or str(web_user.get("lifecycle_status") or "active") != "active"
+            or (
+                not is_admin
+                and str(web_user.get("approval_status") or "") != "approved"
+            )
+        ):
+            raise HTTPException(status_code=403, detail="当前 VECTO 账号不可用于 Telegram 视频工作台")
+        if bool(int(linked_session["is_admin_session"] or 0)) != is_admin:
+            return None
+
+        # Admin accounts keep the existing one-session boundary.  A deliberate
+        # click on the private Bot entry is treated as a controlled takeover;
+        # customer accounts retain the normal parallel-session behavior.
+        if is_admin:
+            conn.execute(
+                """
+                UPDATE sessions
+                SET revoked_at = ?, revoke_reason = 'telegram_video_sso_takeover'
+                WHERE user_id = ? AND revoked_at = 0
+                """,
+                (now, web_user_id),
+            )
+        raw_session_token = create_session(
+            conn,
+            web_user_id,
+            ttl_seconds=_video_sso_session_ttl_seconds(runtime),
+            request=request,
+            is_admin_session=is_admin,
+        )
+        session_hash = session_storage_token(raw_session_token)
+        updated_ticket = conn.execute(
+            """
+            UPDATE telegram_video_link_tickets
+            SET used_at = ?, linked_web_user_id = ?, session_token_hash = ?
+            WHERE token_hash = ? AND used_at = 0 AND expires_at > ?
+            """,
+            (time.time(), web_user_id, session_hash, digest, now),
+        )
+        if int(updated_ticket.rowcount or 0) != 1:
+            raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已使用")
+        conn.execute(
+            "UPDATE telegram_trusted_users SET linked_session_token_hash = ?, linked_at = ?, updated_at = ? "
+            "WHERE chat_id = ? AND enabled = 1 AND web_user_id = ?",
+            (session_hash, time.time(), time.time(), chat_id, web_user_id),
+        )
+        sync_binding_identity(conn, chat_id, web_user_id, session_hash)
+        return web_user, raw_session_token, is_admin
 
 
 def logout_video_member(chat_id: int) -> dict[str, Any]:
@@ -1102,33 +1299,41 @@ def logout_video_member(chat_id: int) -> dict[str, Any]:
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         ensure_telegram_schema(conn)
-        row = conn.execute(
-            "SELECT web_user_id, linked_session_token_hash, enabled FROM telegram_trusted_users WHERE chat_id = ?",
-            (member_id,),
-        ).fetchone()
-        if row is None:
+        rows = binding_rows(conn, member_id)
+        video_row = rows.get("video")
+        if video_row is None:
             return {"ok": True, "bound": False}
-        web_user_id = int(row["web_user_id"] or 0)
+        binding = resolve_binding(conn, member_id, preferred_source="video")
+        if binding is None:
+            binding = video_row
+        web_user_id = int(binding.get("web_user_id") or 0)
         if web_user_id <= 0:
-            return {"ok": True, "bound": False, "legacy_authorized": bool(int(row["enabled"] or 0))}
+            return {"ok": True, "bound": False, "legacy_authorized": bool(int(video_row.get("enabled") or 0))}
         # Match the Tweet workbench: leaving the VECTO account revokes all
         # active sessions for that user, so browser and Telegram state cannot
-        # drift apart.  The Telegram member row stays as a re-login marker.
+        # drift apart.  Both workbench binding rows stay as re-login markers.
         conn.execute(
             "UPDATE sessions SET revoked_at = ?, revoke_reason = 'telegram_video_logout' "
             "WHERE user_id = ? AND revoked_at = 0",
             (int(now), web_user_id),
         )
-        conn.execute(
-            "UPDATE telegram_video_link_tickets SET used_at = ? WHERE chat_id = ? AND used_at = 0",
-            (now, member_id),
-        )
-        conn.execute(
-            "UPDATE telegram_trusted_users "
-            "SET linked_session_token_hash = '', linked_at = 0, updated_at = ? "
-            "WHERE chat_id = ?",
-            (now, member_id),
-        )
+        for table in ("telegram_tweet_members", "telegram_trusted_users"):
+            try:
+                conn.execute(
+                    f"UPDATE {table} SET linked_session_token_hash = '', linked_at = 0, updated_at = ? "
+                    "WHERE chat_id = ? AND enabled = 1 AND web_user_id = ?",
+                    (now, member_id, web_user_id),
+                )
+            except sqlite3.OperationalError:
+                continue
+        for table in ("telegram_tweet_link_tickets", "telegram_video_link_tickets"):
+            try:
+                conn.execute(
+                    f"UPDATE {table} SET used_at = ? WHERE chat_id = ? AND used_at = 0",
+                    (now, member_id),
+                )
+            except sqlite3.OperationalError:
+                continue
     return {"ok": True, "bound": True, "web_user_id": web_user_id}
 
 
@@ -1356,7 +1561,7 @@ def inject_telegram_admin(
 
     @router.get("/telegram/video/open")
     def open_video_workbench(ticket: str = ""):
-        """Bridge the Telegram browser ticket into the normal video login page."""
+        """Bridge the Telegram ticket into SSO or the normal video login page."""
         try:
             _video_ticket_chat_id(ticket)
         except HTTPException as exc:
@@ -1492,10 +1697,34 @@ def inject_telegram_admin(
         if not bool(runtime.get("telegram_bot_enabled")) or not bot_token:
             raise HTTPException(status_code=403, detail="视频工作台 Bot 当前未启用")
         expected_chat_id = _video_ticket_chat_id(payload.ticket)
-        # Resolve the normal browser session first. An unauthenticated browser
-        # is redirected to the standard website login page, including Google
-        # OAuth, rather than receiving a second credential flow in Telegram.
-        web_user, session_hash = _authenticated_video_web_session(request)
+        # Reuse a normal browser session when present. If it is absent, an
+        # already-bound Bot ticket may issue a one-time browser SSO session;
+        # first-time or expired bindings still fall back to the standard
+        # website login page, including Google OAuth.
+        try:
+            web_user, session_hash = _authenticated_video_web_session(request)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            can_try_sso = (
+                exc.status_code == 401
+                and detail.get("code") == "web_login_required"
+                and bool(payload.browser)
+                and not str(payload.init_data or "").strip()
+            )
+            if not can_try_sso:
+                raise
+            validate_video_browser_login_context(payload.ticket, runtime)
+            sso_result = _try_video_browser_sso(payload.ticket, runtime, request)
+            if sso_result is None:
+                raise
+            web_user, raw_session_token, is_admin = sso_result
+            target = "/admin-video.html" if is_admin else DEFAULT_VIDEO_ENTRY
+            response = JSONResponse({"ok": True, "target": target, "sso": True})
+            _set_video_sso_cookie(response, request, raw_session_token, is_admin=is_admin)
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
         init_data = str(payload.init_data or "").strip()
         if init_data:
             tg_profile = _validate_video_init_data(init_data, bot_token, expected_chat_id)

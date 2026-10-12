@@ -1250,6 +1250,7 @@ class ArchivedSourceBackend:
                     upload_server_ip=payload.get("upload_server_ip"),
                     upload_server_port=payload.get("upload_server_port"),
                     upload_file_api_key=payload.get("upload_file_api_key"),
+                    runninghub_base_url=self._base_url(payload),
                 )
             )
         if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}:

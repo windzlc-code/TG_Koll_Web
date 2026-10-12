@@ -7031,8 +7031,10 @@ def _upload_binary_to_runninghub(
     file_path: Path,
     media_kind: str,
     prefer_file_name: bool = False,
+    base_url: str | None = None,
 ) -> str:
-    url = f"{str(runninghub_common.BASE_URL).rstrip('/')}/openapi/v2/media/upload/binary"
+    provider_base_url = str(base_url or runninghub_common.BASE_URL).rstrip("/")
+    url = f"{provider_base_url}/openapi/v2/media/upload/binary"
     headers = {"Authorization": f"Bearer {api_key}"}
     with file_path.open("rb") as f:
         response = requests.post(url, headers=headers, files={"file": f}, timeout=120)
@@ -7051,7 +7053,7 @@ def _upload_binary_to_runninghub(
     if suffix in IMAGE_EXTS and download_url:
         if download_url.startswith("http"):
             return download_url
-        return f"{str(runninghub_common.BASE_URL).rstrip('/')}/{download_url.lstrip('/')}"
+        return f"{provider_base_url}/{download_url.lstrip('/')}"
     if kind in {"video", "audio", "camera_video"} and file_name:
         return file_name
     if not download_url and file_name:
@@ -7060,7 +7062,7 @@ def _upload_binary_to_runninghub(
         raise RuntimeError(f"上传媒体失败: {runninghub_common._safe_json_preview(payload)}")
     if download_url.startswith("http"):
         return download_url
-    return f"{str(runninghub_common.BASE_URL).rstrip('/')}/{download_url.lstrip('/')}"
+    return f"{provider_base_url}/{download_url.lstrip('/')}"
 
 
 def _parse_upload_port(port_value: Any) -> int:
@@ -7120,6 +7122,7 @@ def _resolve_media_url(
     upload_server_ip: str | None = None,
     upload_server_port: str | int | None = None,
     upload_file_api_key: str | None = None,
+    runninghub_base_url: str | None = None,
 ) -> str:
     remote = str(remote_url or "").strip()
     if remote:
@@ -7144,6 +7147,7 @@ def _resolve_media_url(
             # error 1007. This covers both the reference image and the
             # segmented audio/video inputs used by the final AI App call.
             prefer_file_name=prefer_file_name,
+            base_url=runninghub_base_url,
         )
     if prefer_file_name:
         # Digital-human AI App nodes consume RunningHub's uploaded fileName
@@ -7154,7 +7158,7 @@ def _resolve_media_url(
             file_path=path,
             media_kind=media_kind,
             prefer_file_name=True,
-        )
+            base_url=runninghub_base_url,
         )
     server_ip = str(upload_server_ip or "").strip()
     server_port_text = str(upload_server_port or "").strip()
@@ -7166,7 +7170,12 @@ def _resolve_media_url(
             server_ip=server_ip,
             server_port=_parse_upload_port(server_port_text),
         )
-    return _upload_binary_to_runninghub(api_key=upload_api_key, file_path=path, media_kind=media_kind)
+    return _upload_binary_to_runninghub(
+        api_key=upload_api_key,
+        file_path=path,
+        media_kind=media_kind,
+        base_url=runninghub_base_url,
+    )
 
 
 def _download_to_file(url: str, output_path: Path) -> None:
@@ -28060,16 +28069,21 @@ def create_app() -> FastAPI:
             chat_id = max(0, int(payload.get("chat_id") or 0))
             if chat_id <= 0:
                 raise HTTPException(status_code=400, detail="Telegram 会话标识无效")
+            from .telegram_account_session import binding_rows
+
             with db() as conn:
-                member = conn.execute(
-                    "SELECT web_user_id, enabled FROM telegram_tweet_members WHERE chat_id = ?",
-                    (chat_id,),
-                ).fetchone()
-                if (
-                    member is None
-                    or not int(member["enabled"] or 0)
-                    or int(member["web_user_id"] or 0) != user_id
-                ):
+                members = binding_rows(conn, chat_id)
+                member = next(
+                    (
+                        row
+                        for row in members.values()
+                        if row is not None
+                        and int(row.get("enabled") or 0) == 1
+                        and int(row.get("web_user_id") or 0) == user_id
+                    ),
+                    None,
+                )
+                if member is None:
                     raise HTTPException(status_code=404, detail="Telegram 会话绑定不存在")
                 now_ts = _now_ts()
                 result = conn.execute(
@@ -28077,6 +28091,23 @@ def create_app() -> FastAPI:
                     "WHERE user_id = ? AND revoked_at = 0",
                     (now_ts, user_id),
                 )
+                for table in ("telegram_tweet_members", "telegram_trusted_users"):
+                    try:
+                        conn.execute(
+                            f"UPDATE {table} SET linked_session_token_hash = '', linked_at = 0, updated_at = ? "
+                            "WHERE chat_id = ? AND enabled = 1 AND web_user_id = ?",
+                            (now_ts, chat_id, user_id),
+                        )
+                    except sqlite3.OperationalError:
+                        continue
+                for table in ("telegram_tweet_link_tickets", "telegram_video_link_tickets"):
+                    try:
+                        conn.execute(
+                            f"UPDATE {table} SET used_at = ? WHERE chat_id = ? AND used_at = 0",
+                            (now_ts, chat_id),
+                        )
+                    except sqlite3.OperationalError:
+                        continue
             return {"ok": True, "revoked_sessions": max(0, int(result.rowcount or 0))}
 
         if action == "personas.list":

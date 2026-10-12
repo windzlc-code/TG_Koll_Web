@@ -7,6 +7,7 @@ import hmac
 import html
 import json
 import logging
+import os
 import secrets
 import sqlite3
 import threading
@@ -23,10 +24,24 @@ from pydantic import BaseModel, Field
 from .auth import (
     ADMIN_SESSION_COOKIE,
     SESSION_COOKIE,
+    create_session,
     get_current_user_for_session,
     session_storage_token,
 )
 from .db import db
+from .telegram_account_session import (
+    active_session_row,
+    binding_rows,
+    resolve_binding,
+    sync_binding_identity,
+    user_is_available,
+)
+from .telegram_admin import TELEGRAM_API_ROOT, fetch_telegram_chat_profile, verify_bot_token
+from .telegram_auth_ui import (
+    account_avatar_url,
+    render_telegram_authorization_error_page,
+    render_telegram_authorization_page,
+)
 from .telegram_admin import TELEGRAM_API_ROOT, fetch_telegram_chat_profile, verify_bot_token
 from .telegram_tweet_bot import (
     ChatLoginHandler,
@@ -39,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PUBLIC_BASE_URL = "https://www.vecto-ai.cn"
 TICKET_TTL_SECONDS = 180
+TWEET_SSO_SESSION_DEFAULT_HOURS = 12
 # Telegram profile lookup is enrichment only.  Keep it out of the request's
 # critical path when Telegram is slow/unavailable; the underlying helper has a
 # longer network timeout and runs in a daemon thread after this bound expires.
@@ -668,42 +684,133 @@ def _authenticated_web_session(request: Request) -> tuple[dict[str, Any], str]:
     )
 
 
+def _tweet_sso_session_ttl_seconds(runtime: dict[str, Any] | None) -> int:
+    config = runtime if isinstance(runtime, dict) else {}
+    try:
+        hours = int(config.get("auth_session_hours") or TWEET_SSO_SESSION_DEFAULT_HOURS)
+    except (TypeError, ValueError):
+        hours = TWEET_SSO_SESSION_DEFAULT_HOURS
+    return max(1, min(hours, 72)) * 3600
+
+
+def _tweet_sso_cookie_secure(request: Request) -> bool:
+    configured = os.getenv("SESSION_COOKIE_SECURE")
+    if configured is not None:
+        return str(configured or "").strip().lower() not in {"0", "false", "no", "off"}
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+    if forwarded_proto:
+        return forwarded_proto == "https"
+    if str(request.url.scheme or "").lower() == "https":
+        return True
+    return str(os.getenv("FORCE_HTTPS") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _set_tweet_sso_cookie(response: JSONResponse, request: Request, token: str, *, is_admin: bool) -> None:
+    cookie_name = ADMIN_SESSION_COOKIE if is_admin else SESSION_COOKIE
+    other_cookie_name = SESSION_COOKIE if is_admin else ADMIN_SESSION_COOKIE
+    response.set_cookie(
+        key=cookie_name,
+        value=str(token or ""),
+        httponly=True,
+        max_age=None,
+        path="/",
+        samesite="lax",
+        secure=_tweet_sso_cookie_secure(request),
+    )
+    response.delete_cookie(other_cookie_name, path="/")
+
+
+def _try_tweet_browser_sso(
+    ticket: str,
+    runtime: dict[str, Any] | None,
+    request: Request,
+) -> tuple[dict[str, Any], str, bool] | None:
+    """Reuse a live shared account when a Tweet Bot URL opens without cookies."""
+    clean = str(ticket or "").strip()
+    digest = hashlib.sha256(clean.encode("utf-8")).hexdigest()
+    now = int(time.time())
+    if not clean or len(clean) > 256:
+        raise HTTPException(status_code=410, detail="Telegram 推文工作台登录已失效，请回到 Bot 重新开始")
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        ensure_tweet_telegram_schema(conn)
+        ticket_row = conn.execute(
+            "SELECT chat_id, expires_at, used_at FROM telegram_tweet_link_tickets WHERE token_hash = ?",
+            (digest,),
+        ).fetchone()
+        if (
+            ticket_row is None
+            or int(ticket_row["used_at"] or 0) > 0
+            or float(ticket_row["expires_at"] or 0) < now
+        ):
+            raise HTTPException(status_code=410, detail="Telegram 推文工作台登录已失效，请回到 Bot 重新开始")
+        chat_id = int(ticket_row["chat_id"] or 0)
+        rows = binding_rows(conn, chat_id)
+        tweet_row = rows.get("tweet")
+        if tweet_row is not None and not int(tweet_row.get("enabled") or 0):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "telegram_binding_not_authorized",
+                    "message": "该 Telegram 账号已被管理员停用，请联系管理员重新启用。",
+                },
+            )
+        binding = resolve_binding(conn, chat_id, preferred_source="tweet", now=now)
+        if binding is None:
+            return None
+        web_user_id = int(binding.get("web_user_id") or 0)
+        linked_session = binding.get("active_session")
+        if web_user_id <= 0 or linked_session is None:
+            return None
+        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (web_user_id,)).fetchone()
+        if user_row is None:
+            return None
+        web_user = dict(user_row)
+        if not user_is_available(web_user):
+            raise HTTPException(status_code=403, detail="当前 VECTO 账号不可用于 Telegram 推文工作台")
+        is_admin = bool(int(web_user.get("is_admin") or 0))
+        if bool(int(linked_session["is_admin_session"] or 0)) != is_admin:
+            return None
+        if is_admin:
+            conn.execute(
+                "UPDATE sessions SET revoked_at = ?, revoke_reason = 'telegram_tweet_sso_takeover' "
+                "WHERE user_id = ? AND revoked_at = 0",
+                (now, web_user_id),
+            )
+        raw_session_token = create_session(
+            conn,
+            web_user_id,
+            ttl_seconds=_tweet_sso_session_ttl_seconds(runtime),
+            request=request,
+            is_admin_session=is_admin,
+        )
+        session_hash = session_storage_token(raw_session_token)
+        updated_ticket = conn.execute(
+            """
+            UPDATE telegram_tweet_link_tickets
+            SET used_at = ?, linked_web_user_id = ?, session_token_hash = ?
+            WHERE token_hash = ? AND used_at = 0 AND expires_at > ?
+            """,
+            (time.time(), web_user_id, session_hash, digest, now),
+        )
+        if int(updated_ticket.rowcount or 0) != 1:
+            raise HTTPException(status_code=410, detail="Telegram 推文工作台登录已使用")
+        sync_binding_identity(conn, chat_id, web_user_id, session_hash)
+        return web_user, raw_session_token, is_admin
+
+
 def _member_has_active_web_session(member: Any) -> bool:
-    """Require the browser session used for binding to remain active."""
+    """Accept a rotated session owned by the same shared VECTO account."""
     try:
         user_id = int(member["web_user_id"])
     except (KeyError, TypeError, ValueError):
         return False
-    linked_hash = ""
-    if member is not None:
+    with db() as conn:
         try:
             linked_hash = str(member["linked_session_token_hash"] or "").strip()
         except (KeyError, TypeError, IndexError):
             linked_hash = ""
-    now = int(time.time())
-    with db() as conn:
-        if linked_hash:
-            row = conn.execute(
-                """
-                SELECT 1 FROM sessions
-                WHERE token = ? AND user_id = ? AND revoked_at = 0 AND expires_at > ?
-                LIMIT 1
-                """,
-                (linked_hash, user_id, now),
-            ).fetchone()
-        else:
-            # Legacy admin-created rows predate self-service linking.  They
-            # remain usable only while the mapped VECTO account has a live web
-            # session, preserving the new authentication boundary during the
-            # migration.
-            row = conn.execute(
-                """
-                SELECT 1 FROM sessions
-                WHERE user_id = ? AND revoked_at = 0 AND expires_at > ?
-                LIMIT 1
-                """,
-                (user_id, now),
-            ).fetchone()
+        row = active_session_row(conn, user_id, linked_hash)
     return row is not None
 
 
@@ -722,11 +829,13 @@ def tweet_member_bound_to_user(chat_id: int, web_user_id: int) -> bool:
         return False
     with db() as conn:
         ensure_tweet_telegram_schema(conn)
-        row = conn.execute(
-            "SELECT 1 FROM telegram_tweet_members WHERE chat_id = ? AND web_user_id = ? AND enabled = 1",
-            (member_id, user_id),
-        ).fetchone()
-    return row is not None
+        rows = binding_rows(conn, member_id)
+    return any(
+        row is not None
+        and int(row.get("enabled") or 0) == 1
+        and int(row.get("web_user_id") or 0) == user_id
+        for row in rows.values()
+    )
 
 
 def _send_tweet_authorization_notice(
@@ -770,16 +879,12 @@ def _send_tweet_authorization_notice(
 
 def _tweet_authorization_error_page(message: str, *, status_code: int = 410) -> HTMLResponse:
     """Render a useful browser page when a Tweet Bot link is stale."""
-    clean_message = html.escape(str(message or "Telegram 推文工作台授权入口已失效。"))
-    content = f"""<!doctype html><html lang=\"zh-Hans\"><head><meta charset=\"utf-8\">
-<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
-<meta name=\"robots\" content=\"noindex,nofollow,noarchive\"><title>Telegram 推文工作台授权</title>
-<style>body{{font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}}
-main{{max-width:560px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}}
-h1{{font-size:22px;margin:0 0 12px}}p{{line-height:1.65;color:#52697a}}.error{{color:#b42318;font-weight:700}}
-.hint{{margin-top:18px;padding:14px 16px;border-radius:10px;background:#fff4ed;color:#8a3518}}</style></head>
-<body><main><h1>Telegram 推文工作台授权</h1><p class=\"error\">{clean_message}</p>
-<p class=\"hint\">请返回 Telegram Bot，重新点击「账号管理」获取新的授权链接。旧链接不会再次使用。</p></main></body></html>"""
+    content = render_telegram_authorization_error_page(
+        message,
+        page_title="Telegram 推文工作台授权",
+        workbench_label="推文工作台",
+        status_code=status_code,
+    )
     response = HTMLResponse(content=content, status_code=int(status_code or 410))
     response.headers["Cache-Control"] = "no-store, max-age=0"
     response.headers["Pragma"] = "no-cache"
@@ -792,25 +897,18 @@ h1{{font-size:22px;margin:0 0 12px}}p{{line-height:1.65;color:#52697a}}.error{{c
 def _load_enabled_member(chat_id: int):
     with db() as conn:
         ensure_tweet_telegram_schema(conn)
-        row = conn.execute(
-            """
-            SELECT m.*, u.username AS web_username, u.is_admin, u.is_disabled,
-                   u.approval_status, u.lifecycle_status, u.deleted_at
-            FROM telegram_tweet_members AS m
-            JOIN users AS u ON u.id = m.web_user_id
-            WHERE m.chat_id = ? AND m.enabled = 1
-            """,
-            (int(chat_id),),
-        ).fetchone()
-    if not row:
-        return None
-    if int(row["is_disabled"] or 0) or int(row["deleted_at"] or 0):
-        return None
-    if str(row["lifecycle_status"] or "active") != "active":
-        return None
-    if not int(row["is_admin"] or 0) and str(row["approval_status"] or "") != "approved":
-        return None
-    return row
+        rows = binding_rows(conn, int(chat_id))
+        tweet_row = rows.get("tweet")
+        # An explicit Tweet-side disable is authoritative.  A missing Tweet
+        # row, however, is allowed to reuse the Video-side account binding.
+        if tweet_row is not None and not int(tweet_row.get("enabled") or 0):
+            return None
+        resolved = resolve_binding(conn, int(chat_id), preferred_source="tweet")
+        if resolved is None or resolved.get("web_username") is None:
+            return None
+        if not user_is_available(resolved):
+            return None
+        return resolved
 
 
 def load_tweet_tg_settings(get_runtime: GetRuntime) -> dict[str, Any]:
@@ -1069,11 +1167,34 @@ def _consume_link_ticket(
                     },
                 )
             # A stale binding can be reclaimed by the account that is now
-            # signing in.  Active bindings still require an explicit logout,
+            # signing in. Active bindings still require an explicit logout,
             # preventing a second account from silently taking over a live Bot.
             _revoke_member_sessions(conn, chat_id, "telegram_tweet_member_rebound")
             _invalidate_pending_link_tickets(conn, chat_id, preserve_token_hash=digest)
             _clear_member_native_state(conn, chat_id)
+        # The two Bot tables are compatibility records for one shared
+        # Telegram identity.  Do not let a fresh Tweet login silently take
+        # over an actively logged-in Video account.
+        video_binding = binding_rows(conn, chat_id).get("video")
+        if (
+            video_binding is not None
+            and int(video_binding.get("enabled") or 0) == 1
+            and int(video_binding.get("web_user_id") or 0) > 0
+            and int(video_binding.get("web_user_id") or 0) != web_user_id
+            and active_session_row(
+                conn,
+                int(video_binding.get("web_user_id") or 0),
+                str(video_binding.get("linked_session_token_hash") or ""),
+                now=int(now),
+            ) is not None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "telegram_already_bound",
+                    "message": "该 Telegram 账号已绑定其他 VECTO 账号，请先退出原账号后再切换。",
+                },
+            )
         current_label = str(existing["label"] or "").strip() if existing else ""
         current_username = str(existing["tg_username"] or "").strip().lstrip("@") if existing else ""
         current_display = str(existing["tg_display_name"] or "").strip() if existing else ""
@@ -1126,6 +1247,7 @@ def _consume_link_ticket(
         )
         if int(updated.rowcount or 0) != 1:
             raise HTTPException(status_code=410, detail="Telegram 绑定入口已使用")
+        sync_binding_identity(conn, chat_id, web_user_id, session_hash, now=now)
 
 
 def _lease_name(token: str) -> str:
@@ -1365,111 +1487,18 @@ def inject_tweet_telegram_admin(
             if isinstance(detail, dict):
                 detail = detail.get("message") or detail.get("detail") or "Telegram 推文工作台授权入口已失效。"
             return _tweet_authorization_error_page(str(detail), status_code=exc.status_code)
-        encoded_ticket = json.dumps(str(ticket or ""), ensure_ascii=False)
         response = HTMLResponse(
-            """<!doctype html><html lang="zh-Hans"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow,noarchive">
-<title>绑定 Telegram 推文工作台</title>
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<style>body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;padding:32px;background:#f3f7fa;color:#193247}main{max-width:520px;margin:10vh auto;padding:28px;border:1px solid #cbd8e2;border-radius:16px;background:#fff;box-shadow:0 12px 32px #19324718}h1{font-size:22px;margin:0 0 12px}p{line-height:1.65;color:#52697a}#status{min-height:1.8em}.account{padding:14px 16px;border-radius:10px;background:#eef5f8;color:#193247;font-weight:600}.error{color:#b42318;font-weight:700}.hint{margin-top:18px;padding:14px 16px;border-radius:10px;background:#fff4ed;color:#8a3518}.authorize{width:100%;border:0;border-radius:10px;padding:13px 16px;background:#193247;color:#fff;font-size:16px;font-weight:700;cursor:pointer}.authorize:disabled{opacity:.6;cursor:wait}</style></head>
-<body><main><h1>Telegram 推文工作台授权</h1><p id="status">正在绑定 Telegram 推文工作台，检查网页登录状态，请稍候…</p><div id="actions"></div></main>
-<script>
-(async () => {
-  const status = document.getElementById("status");
-  const actions = document.getElementById("actions");
-  const ticket = TICKET;
-  const loginContextKey = "vecto-telegram-tweet-login-context";
-  const loginReturn = "/telegram/tweet/open?ticket=" + encodeURIComponent(ticket);
-  const requestedProvider = new URLSearchParams(window.location.search).get("provider") === "google" ? "google" : "";
-  const loginPage = "/console-login.html?return_url=" + encodeURIComponent(loginReturn) + "&telegram_tweet=1" + (requestedProvider ? "&auth_provider=" + requestedProvider : "");
-  const webApp = window.Telegram?.WebApp;
-  const initData = webApp?.initData || "";
-  const browser = !initData;
-  if (!browser) webApp.ready();
-
-  function showAuthorizationPrompt(payload, authorize) {
-    const account = payload?.web_user || {};
-    const username = String(account.username || account.display_name || "当前 VECTO 账号");
-    const provider = payload?.auth_method === "google" ? "Google 账号" : "VECTO 网页账号";
-    status.textContent = "已检测到 " + provider + " 登录状态，请确认将此账号授权给当前 Telegram 推文工作台。";
-    actions.replaceChildren();
-    const accountLine = document.createElement("p");
-    accountLine.className = "account";
-    accountLine.textContent = provider + "：" + username;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "authorize";
-    button.textContent = "确认授权并打开推文工作台";
-    button.addEventListener("click", () => {
-      button.disabled = true;
-      authorize(true);
-    });
-    actions.append(accountLine, button);
-  }
-
-  function showFailure(message, expired = false) {
-    status.className = "error";
-    status.textContent = message || "Telegram 推文工作台授权失败，请重试。";
-    actions.replaceChildren();
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = expired
-      ? "请返回 Telegram Bot，重新点击「账号管理」获取新的授权链接。"
-      : "请返回 Telegram Bot 重试；如问题持续，请联系管理员。";
-    actions.append(hint);
-  }
-
-  async function exchange(confirm) {
-    try {
-      status.textContent = confirm ? "正在确认授权，请稍候…" : "正在检查网页登录状态…";
-      const response = await fetch("/telegram/tweet/exchange", {
-        method: "POST", credentials: "same-origin",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ticket, init_data: initData, browser, preview: !confirm}),
-      });
-      const payload = await response.json().catch(() => ({}));
-      const detail = payload?.detail;
-      if (response.status === 401 && detail?.code === "web_login_required") {
-        try {
-          sessionStorage.setItem(loginContextKey, JSON.stringify({
-            ticket,
-            initData,
-            browser,
-            provider: requestedProvider,
-            expiresAt: Date.now() + 150000,
-          }));
-        } catch (_) {
-          throw new Error("当前浏览器不支持安全登录续接，请重新打开授权入口");
-        }
-        window.location.replace(loginPage);
-        return;
-      }
-      if (!response.ok) {
-        const message = detail?.message || detail || "Telegram 推文工作台授权失败，请重试。";
-        showFailure(String(message), response.status === 410);
-        return;
-      }
-      if (!confirm && payload.already_authorized) {
-        status.textContent = "已检测到当前 Telegram 已绑定此 VECTO 账号，跳过重复授权，正在打开推文工作台…";
-        await exchange(true);
-        return;
-      }
-      if (!confirm && payload.authorization_required) {
-        showAuthorizationPrompt(payload, exchange);
-        return;
-      }
-      try { sessionStorage.removeItem(loginContextKey); } catch (_) {}
-      status.textContent = "授权成功，正在打开推文工作台…";
-      window.location.replace(payload.target || "/console.html?view=persona_dashboard");
-    } catch (error) {
-      showFailure(error?.message || String(error));
-    }
-  }
-
-  exchange(false);
-})();
-</script></body></html>""".replace("TICKET", encoded_ticket),
+            render_telegram_authorization_page(
+                ticket=ticket,
+                workbench_label="推文工作台",
+                page_title="绑定 Telegram 推文工作台",
+                login_path="/console-login.html",
+                return_path="/telegram/tweet/open",
+                context_key="vecto-telegram-tweet-login-context",
+                context_flag="telegram_tweet",
+                exchange_path="/telegram/tweet/exchange",
+                fallback_target=WEBAPP_TARGET,
+            ),
             status_code=200,
         )
         response.headers["Cache-Control"] = "no-store, max-age=0"
@@ -1493,7 +1522,30 @@ def inject_tweet_telegram_admin(
         # Check the normal VECTO browser session before processing Telegram
         # identity data.  A regular HTTPS URL button has no WebApp initData;
         # its one-time ticket is validated below instead.
-        web_user, session_hash = _authenticated_web_session(request)
+        try:
+            web_user, session_hash = _authenticated_web_session(request)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            can_try_sso = (
+                exc.status_code == 401
+                and detail.get("code") == "web_login_required"
+                and bool(payload.browser)
+                and not str(payload.init_data or "").strip()
+            )
+            if not can_try_sso:
+                raise
+            validate_tweet_browser_login_context(payload.ticket, runtime)
+            sso_result = _try_tweet_browser_sso(payload.ticket, runtime, request)
+            if sso_result is None:
+                raise
+            web_user, raw_session_token, is_admin = sso_result
+            target = WEBAPP_ADMIN_TARGET if is_admin else WEBAPP_TARGET
+            response = JSONResponse({"ok": True, "target": target, "sso": True})
+            _set_tweet_sso_cookie(response, request, raw_session_token, is_admin=is_admin)
+            response.headers["Cache-Control"] = "no-store, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
         init_data = str(payload.init_data or "").strip()
         if init_data:
             tg_profile = _validate_telegram_init_data(init_data, bot_token, expected_chat_id)
@@ -1513,6 +1565,9 @@ def inject_tweet_telegram_admin(
                         "id": int(web_user.get("id") or 0),
                         "username": str(web_user.get("username") or ""),
                         "display_name": str(web_user.get("display_name") or ""),
+                        "full_name": str(web_user.get("full_name") or ""),
+                        "email": str(web_user.get("email") or ""),
+                        "avatar_url": account_avatar_url(web_user),
                     },
                     "auth_method": (
                         "google"
