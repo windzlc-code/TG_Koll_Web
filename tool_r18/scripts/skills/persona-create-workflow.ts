@@ -507,6 +507,9 @@ function personaPostDirectionError(error: unknown): Error {
   if (/402|insufficient_funds|余额不足|餘額不足|quota/.test(message)) {
     return new Error("推文方向生成失败：上游模型余额不足，请充值后重试。");
   }
+  if (/401|403|unauthorized|forbidden|invalid api key|api key|token|鉴权|权限|缺少文字模型/.test(message)) {
+    return new Error("接口鉴权失败：当前 API Key、Token 或账号权限不足，请检查后台配置。");
+  }
   if (/timeout|timed out|超时|逾時|請求超時|请求超时/.test(message)) {
     return new Error("推文方向生成超时，请重新生成。");
   }

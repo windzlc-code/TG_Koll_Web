@@ -360,6 +360,17 @@ def test_model_prompt_requires_ten_distinct_directions_and_input_decomposition()
     assert "推文方向生成超时，请重新生成。" in source
 
 
+def test_post_direction_auth_failures_are_not_reported_as_empty_model_results():
+    source = PERSONA_WORKFLOW.read_text(encoding="utf-8")
+    error_handler = source.split("function personaPostDirectionError", 1)[1].split(
+        "async function derivePersonaDirectionKeywordsWithCodex", 1
+    )[0]
+
+    assert "401|403|unauthorized|forbidden|invalid api key|api key|token|鉴权|权限|缺少文字模型" in error_handler
+    assert "接口鉴权失败：当前 API Key、Token 或账号权限不足，请检查后台配置。" in error_handler
+    assert error_handler.index("接口鉴权失败") < error_handler.index("模型未返回 10 个有效方向")
+
+
 def test_image_style_helper_requires_tweet_content(monkeypatch):
     archive = {
         "id": "persona-1",
