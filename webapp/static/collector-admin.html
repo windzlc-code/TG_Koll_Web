@@ -51,19 +51,19 @@
 
         <section class="collector-view is-active" data-collector-panel="overview">
           <header class="collector-page-heading">
-            <div><p>OLD NODE / OPERATIONS</p><h1>采集节点总览</h1></div>
+            <div><p>APPLICATION NODE / OPERATIONS</p><h1>采集节点总览</h1></div>
             <div class="collector-heading-stamp"><small>AUTHORITY</small><strong>ADMIN CAPTURE ONLY</strong></div>
           </header>
 
           <div class="collector-boundary-map" aria-label="服务器职责边界">
             <div class="collector-boundary-node is-old">
-              <span>旧机 · 当前节点</span>
+              <span>新服务器 · 8.211.183.190</span>
               <strong>采集执行与管理员账号池</strong>
-              <p>完整 CRM、完整热点抓取、Cookie、代理、任务证据</p>
+              <p>CRM、热点抓取、Cookie、代理、任务证据与本地结果</p>
             </div>
             <div class="collector-boundary-flow"><i></i><span>签名任务 / 结果回传</span></div>
             <div class="collector-boundary-node is-new">
-              <span>新机 · 用户产品站</span>
+              <span>同一服务 · 用户产品能力</span>
               <strong>用户数据与内容生产</strong>
               <p>用户自有账号、人设全量刷新、生成、发布与展示</p>
             </div>
@@ -89,15 +89,15 @@
               <div class="collector-panel-index">CORE MODULE / B</div>
               <span class="collector-module-tag is-preserved">完整保留</span>
               <h2>热点抓取模块</h2>
-              <p>执行热点候选搜索、公开指标刷新，并将经过边界过滤的结果返回新机。</p>
+              <p>执行热点候选搜索、公开指标刷新，并将经过边界过滤的结果写回当前服务器。</p>
               <div id="overviewHotStatus" class="collector-inline-status"><i></i><span>正在检查抓取配置…</span></div>
               <button type="button" class="collector-link-button" data-collector-view-jump="hot">查看抓取能力 <b>↗</b></button>
             </article>
             <article class="collector-panel collector-module-panel is-boundary">
               <div class="collector-panel-index">BOUNDARY / NEW NODE</div>
-              <span class="collector-module-tag is-remote">新机执行</span>
+              <span class="collector-module-tag is-remote">当前服务器执行</span>
               <h2>人设全量刷新</h2>
-              <p>本节点不保存完整用户人设。新机按钮触发旧机采集号读取指定用户资料，人设全量刷新的写入仍在新机执行。</p>
+              <p>用户人设、账号刷新、生成、发布与展示统一由当前服务器负责。</p>
               <div class="collector-inline-status is-locked"><i></i><span>边界已锁定</span></div>
             </article>
           </div>
@@ -107,7 +107,7 @@
           <header class="collector-page-heading"><div><p>MODULE / CRM</p><h1>CRM 采集中心</h1></div><span class="collector-module-tag is-preserved">完整保留</span></header>
           <div class="collector-action-banner">
             <div><strong>完整 CRM 工作台继续保留</strong><p>业务资源、搜索、客户池、任务、证据与分析均由现有 CRM 页面承载。</p></div>
-            <a class="collector-primary-link" href="https://www.vecto-ai.cn/crm.html?admin_console=1">打开新机 CRM 获客工作台 <span>↗</span></a>
+            <a class="collector-primary-link" href="https://www.vecto-ai.cn/crm.html?admin_console=1">打开 CRM 获客工作台 <span>↗</span></a>
           </div>
           <div id="collectorCrmChecks" class="collector-check-grid" aria-live="polite"></div>
         </section>
@@ -115,17 +115,17 @@
         <section class="collector-view" data-collector-panel="hot">
           <header class="collector-page-heading"><div><p>MODULE / HOT CAPTURE</p><h1>热点抓取</h1></div><span class="collector-module-tag is-preserved">完整保留</span></header>
           <div class="collector-capability-grid">
-            <article><small>CAP-01</small><strong>热点候选抓取</strong><code>persona.hot_candidates.v1</code><p>接收新机关键词请求，公开页抓取后返回合格热点。</p></article>
+            <article><small>CAP-01</small><strong>热点候选抓取</strong><code>persona.hot_candidates.v1</code><p>接收当前服务器关键词请求，公开页抓取后返回合格热点。</p></article>
             <article><small>CAP-02</small><strong>帖子指标刷新</strong><code>persona.hot_post_metrics.v1</code><p>只读取公开指标，不修改用户内容。</p></article>
             <article><small>CAP-03</small><strong>CRM 实时搜索</strong><code>crm.threads_live_search.v1</code><p>为 CRM 返回实时平台数据与证据。</p></article>
-            <article><small>CAP-04</small><strong>人设资料全量读取</strong><code>persona.profile_metrics.v1</code><p>用采集号登录态读取指定绑定用户的帖子与浏览量，结果写回仍在新机执行。</p></article>
+            <article><small>CAP-04</small><strong>人设资料全量读取</strong><code>persona.profile_metrics.v1</code><p>用采集号登录态读取指定绑定用户的帖子与浏览量，结果写回当前服务器。</p></article>
           </div>
           <div class="collector-panel collector-hot-summary">
             <div><div class="collector-panel-index">AUTH PROFILES</div><h2>抓取登录态摘要</h2></div>
             <div id="collectorHotProfiles" class="collector-mini-list">正在读取…</div>
             <button type="button" class="collector-secondary-button" data-collector-view-jump="cookies">检查 Cookie 状态</button>
           </div>
-          <div class="collector-boundary-warning"><strong>写入仍在新机执行</strong><span>人设全量刷新的缓存写入、内容生成、用户账号发布与用户数据展示不落在旧机；旧机只提供采集号登录态读取。</span></div>
+          <div class="collector-boundary-warning"><strong>统一由当前服务器写入</strong><span>人设全量刷新、缓存写入、内容生成、用户账号发布与用户数据展示均在当前服务器完成，不依赖其他服务器。</span></div>
         </section>
 
         <section class="collector-view" data-collector-panel="accounts">
@@ -161,8 +161,8 @@
           <header class="collector-page-heading"><div><p>SYSTEM / BOUNDARY</p><h1>系统状态与边界</h1></div><span id="collectorSystemBadge" class="collector-system-badge">CHECKING</span></header>
           <div id="collectorSystemChecks" class="collector-check-grid"></div>
           <div class="collector-responsibility-matrix">
-            <div><span>旧机负责</span><strong>管理员采集账号池</strong><strong>完整 CRM</strong><strong>完整热点抓取</strong><strong>Cookie / 代理 / 任务证据</strong></div>
-            <div><span>新机负责</span><strong>用户自有账号</strong><strong>人设全量刷新</strong><strong>内容生成与发布</strong><strong>用户数据展示与商业功能</strong></div>
+            <div><span>当前服务器负责</span><strong>管理员采集账号池</strong><strong>完整 CRM</strong><strong>完整热点抓取</strong><strong>Cookie / 代理 / 任务证据</strong></div>
+            <div><span>当前产品能力</span><strong>用户自有账号</strong><strong>人设全量刷新</strong><strong>内容生成与发布</strong><strong>用户数据展示与商业功能</strong></div>
           </div>
         </section>
       </main>

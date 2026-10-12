@@ -105,6 +105,13 @@ def _video_callback_route(dispatcher, name: str):
 
 
 class TelegramClosedLoopTests(unittest.TestCase):
+    def test_video_task_1007_failure_has_actionable_reference_image_reason(self):
+        reason = tg_bot._simple_failure_reason(
+            "Error Code: 1007 Invalid parameters in request",
+            "failed",
+        )
+        self.assertIn("参考图未被上游识别", reason)
+
     def test_video_main_menu_keeps_original_controls_and_adds_account_entry(self):
         """The account entry is additive; the original video controls stay unchanged."""
         self.assertEqual(tg_bot.VIDEO_EDIT_MENU_BUTTON, "🎞️ 视频编辑")

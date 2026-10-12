@@ -379,7 +379,6 @@ const ADMIN_PAGE_LABELS = {
   users: "客户账号",
   tasks: "生成记录",
   security: "安全告警",
-  proxyMarket: "代理 IP",
   pricing: "套餐与客户额度",
   redemptionCodes: "兑换邀请",
   telegram: "Telegram",
@@ -683,7 +682,6 @@ function setActiveAdminPage(page, updateHash = true) {
     void loadCollectorProxyTraffic().catch(() => null);
   }
   if (nextPage === "security") void loadSecurityAlerts();
-  if (nextPage === "proxyMarket") void loadProxyMarketWorkspace({ silent: adminState.proxyMarketLoaded });
   if (nextPage === "runtime") {
     void loadBundleSocialConfig().catch((error) => {
       setMsg("bundleSocialConfigMsg", `平台授权配置读取失败：${getErrorMessage(error)}`, false);
@@ -1815,7 +1813,6 @@ const TASK_POLL_INTERVAL_MS = 10000;
 const GOVERNANCE_POLL_INTERVAL_MS = 30000;
 const COLLECTOR_PROXY_TRAFFIC_POLL_INTERVAL_MS = 300000;
 const SENTIMENT_COOKIE_POLL_INTERVAL_MS = 300000;
-const PROXY_PURCHASE_FX_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const EMAIL_DELIVERY_MANUAL_LIMIT_MAX = 10000000;
 const EMAIL_DELIVERY_POLICY_SAVE_TIMEOUT_MS = 30000;
 const taskState = {
@@ -1971,13 +1968,12 @@ const TASK_TYPE_LABELS = {
   persona_post_image: "推文生成配图",
   persona_post_generation: "AI 推文草稿生成",
 };
-const ADMIN_PAGES = new Set(["overview", "users", "tasks", "security", "proxyMarket", "pricing", "redemptionCodes", "telegram", "runtime", "fingerprintLogin", "sentimentCookies", "account"]);
+const ADMIN_PAGES = new Set(["overview", "users", "tasks", "security", "pricing", "redemptionCodes", "telegram", "runtime", "fingerprintLogin", "sentimentCookies", "account"]);
 const ADMIN_PAGE_ALIASES = {
   secOverview: "overview",
   secUsers: "users",
   secTasks: "tasks",
   secSecurity: "security",
-  secProxyMarket: "proxyMarket",
   secPricing: "pricing",
   secRedemptionCodes: "redemptionCodes",
   secTelegram: "telegram",
@@ -13031,13 +13027,6 @@ window.addEventListener("DOMContentLoaded", async () => {
   setInterval(() => {
     void refreshSentimentCookieProfilesIfActive({ force: true });
   }, SENTIMENT_COOKIE_POLL_INTERVAL_MS);
-  setInterval(() => {
-    if (document.hidden || adminState.activePage !== "proxyMarket") return;
-    if (!el("proxyPurchaseAdminWorkspace")) return;
-    void loadProxyPurchaseExchangeRate({ refresh: true }).catch((error) => {
-      setText("proxyPurchaseFxMeta", `自动刷新失败：${getErrorMessage(error)}`);
-    });
-  }, PROXY_PURCHASE_FX_REFRESH_INTERVAL_MS);
 });
 
 window.addEventListener("hashchange", () => {

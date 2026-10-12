@@ -160,10 +160,10 @@ def _collector_search_archive(
 ) -> tuple[str, dict[str, Any]]:
     """Build an ephemeral search context without tenant/account identity.
 
-    The old-host collector only needs enough persona-shaped context to reuse the
-    hot-search strategy.  The digest deliberately excludes ``tenant.user_id``;
-    account selection and credential ownership belong exclusively to the
-    collector host.
+    The local collector path only needs enough persona-shaped context to reuse
+    the hot-search strategy.  The digest deliberately excludes
+    ``tenant.user_id``; account selection and credential ownership stay inside
+    the current application runtime.
     """
 
     request_id = _clean(tenant.request_id, 160)

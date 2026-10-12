@@ -1,0 +1,1274 @@
+webapp/telegram_admin.py:367:            raise HTTPException(status_code=400, detail="视频工作台入口必须是站内路径，例如 /video.html")
+webapp/telegram_admin.py:570:        raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
+webapp/telegram_admin.py:590:        raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
+webapp/telegram_admin.py:653:        raise HTTPException(status_code=403, detail="视频工作台 Bot 当前未启用")
+webapp/telegram_admin.py:699:            raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已失效，请回到 Bot 重新开始")
+webapp/telegram_admin.py:769:            raise HTTPException(status_code=410, detail="Telegram 视频工作台登录已使用")
+webapp/telegram_admin.py:839:        # Match the Tweet workbench: leaving the VECTO account revokes all
+webapp/telegram_admin.py:902:        app_title=str(runtime.get("app_title") or "视频工作台").strip() or "视频工作台",
+webapp/telegram_internal.py:27:from .video_workbench import _server_payload_enricher, cancel_video_remote_tasks
+webapp/telegram_internal.py:1244:def _cancel_latest_tg_webapp_task(chat_id: int, *, requested_by: str = "TG") -> dict[str, Any]:
+webapp/telegram_internal.py:1265:            cancel_user = getattr(_S(), "_cancel_task_record_for_user", None)
+webapp/telegram_internal.py:1266:            if callable(cancel_user):
+webapp/telegram_internal.py:1267:                result = cancel_user(
+webapp/telegram_internal.py:1275:                remote = cancel_video_remote_tasks(
+webapp/telegram_internal.py:1284:                result["runninghub_cancel_results"] = remote
+webapp/telegram_internal.py:1286:    return {"ok": True, "cancelled": False, "message": "目前没有可取消的后台队列任务"}
+webapp/telegram_internal.py:1530:    @router.post("/api/internal/tg/cancel_active")
+webapp/telegram_internal.py:1531:    def api_internal_tg_cancel_active(payload: InternalTgCancelPayload, request: Request):
+webapp/telegram_internal.py:1533:        return _cancel_latest_tg_webapp_task(
+webapp/telegram_tweet_bot.py:32:ACCOUNT_CONTROL_BUTTON = "🔐 账号管理"
+webapp/telegram_tweet_bot.py:33:LEGACY_ACCOUNT_CONTROL_BUTTON = "🔐 账号与浏览器"
+webapp/telegram_tweet_bot.py:35:CONTROL_BUTTONS = frozenset({
+webapp/telegram_tweet_bot.py:46:    "• 登录后会为该 Telegram 账号建立独立会话，不会退出其他浏览器设备。\n"
+webapp/telegram_tweet_bot.py:50:    "• 首次发布前需已有可用的 Threads 或 Instagram 账号；可从“账号管理”逐步完成授权、登录检测和人设绑定。\n"
+webapp/telegram_tweet_bot.py:227:CHAT_LOGIN_BACK_BUTTON = "返回账号管理"
+webapp/telegram_tweet_bot.py:518:            types.InlineKeyboardButton(text="⏮ 首页", callback_data=callback_for_page(0)),
+webapp/telegram_tweet_bot.py:519:            types.InlineKeyboardButton(text="◀️ 上一页", callback_data=callback_for_page(safe_page - 1)),
+webapp/telegram_tweet_bot.py:522:        types.InlineKeyboardButton(text=f"{safe_page + 1}/{total_pages}", callback_data=callback_for_page(safe_page)),
+webapp/telegram_tweet_bot.py:526:            types.InlineKeyboardButton(text="下一页 ▶️", callback_data=callback_for_page(safe_page + 1)),
+webapp/telegram_tweet_bot.py:527:            types.InlineKeyboardButton(text="尾页 ⏭", callback_data=callback_for_page(total_pages - 1)),
+webapp/telegram_tweet_bot.py:589:    if status in {"cancelled", "canceled"}:
+webapp/telegram_tweet_bot.py:590:        return "cancelled"
+webapp/telegram_tweet_bot.py:617:    account = str(
+webapp/telegram_tweet_bot.py:618:        task.get("account_display_name")
+webapp/telegram_tweet_bot.py:619:        or task.get("account_username")
+webapp/telegram_tweet_bot.py:624:    context = " / ".join(item for item in (platform, account or persona) if item)
+webapp/telegram_tweet_bot.py:716:                    callback_data="tt:chatlogin",
+webapp/telegram_tweet_bot.py:728:        keeps the FSM active while exposing explicit cancel/back controls.
+webapp/telegram_tweet_bot.py:741:    async def _finish_chat_login_cancel(
+webapp/telegram_tweet_bot.py:746:        return_to_account: bool = False,
+webapp/telegram_tweet_bot.py:751:        bound, return to the account-management page; for a first-time login,
+webapp/telegram_tweet_bot.py:760:                page_text, markup = await self._account_management_payload(types, member)
+webapp/telegram_tweet_bot.py:761:                prefix = "已返回账号管理。" if return_to_account else "已取消推文工作台登录。"
+webapp/telegram_tweet_bot.py:765:                logger.debug("Unable to render tweet account menu after login cancel", exc_info=True)
+webapp/telegram_tweet_bot.py:767:        prefix = "已返回账号管理。" if return_to_account else "已取消推文工作台登录。"
+webapp/telegram_tweet_bot.py:835:            "如需退出，请点击下方“❌ 取消登录”或“返回账号管理”。",
+webapp/telegram_tweet_bot.py:862:        if clean_text in {CHAT_LOGIN_CANCEL_BUTTON, "/cancel"}:
+webapp/telegram_tweet_bot.py:863:            await self._finish_chat_login_cancel(message, types)
+webapp/telegram_tweet_bot.py:870:            await self._finish_chat_login_cancel(message, types, return_to_account=True)
+webapp/telegram_tweet_bot.py:919:                "如需退出，请点击下方“❌ 取消登录”或“返回账号管理”。",
+webapp/telegram_tweet_bot.py:984:                    "如需退出，请点击下方“❌ 取消登录”或“返回账号管理”。",
+webapp/telegram_tweet_bot.py:1007:                    "登录失败，请检查账号或密码后重新发送。\n"
+webapp/telegram_tweet_bot.py:1008:                    "如需退出，请点击下方“❌ 取消登录”或“返回账号管理”。",
+webapp/telegram_tweet_bot.py:1019:        await message.answer("✅ 登录并绑定成功，已进入推文工作台。")
+webapp/telegram_tweet_bot.py:1042:            "请点击下方“一键登录并绑定”，在 Telegram 内安全登录 VECTO。登录后即可使用推文工作台。",
+webapp/telegram_tweet_bot.py:1057:            await reply("推文工作台仅支持与 Bot 私聊使用。")
+webapp/telegram_tweet_bot.py:1075:                    "网页登录会话已失效。请点击下方按钮，在聊天中重新输入账号和密码完成绑定。",
+webapp/telegram_tweet_bot.py:1108:            input_field_placeholder="请选择推文工作台功能",
+webapp/telegram_tweet_bot.py:1114:            types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
+webapp/telegram_tweet_bot.py:1120:            types.InlineKeyboardButton(text="1 篇", callback_data="tt:gcount:1"),
+webapp/telegram_tweet_bot.py:1121:            types.InlineKeyboardButton(text="3 篇", callback_data="tt:gcount:3"),
+webapp/telegram_tweet_bot.py:1122:            types.InlineKeyboardButton(text="5 篇", callback_data="tt:gcount:5"),
+webapp/telegram_tweet_bot.py:1123:        ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]])
+webapp/telegram_tweet_bot.py:1129:            [button(text="📋 待发布", callback_data="tt:tasks:0:pending"), button(text="❌ 失败任务", callback_data="tt:tasks:0:failed")],
+webapp/telegram_tweet_bot.py:1130:            [button(text="⏰ 定时任务", callback_data="tt:tasks:0:scheduled"), button(text="⚡ 立即任务", callback_data="tt:tasks:0:immediate")],
+webapp/telegram_tweet_bot.py:1131:            [button(text="🔄 执行中", callback_data="tt:tasks:0:running"), button(text="🛠 待人工", callback_data="tt:tasks:0:manual")],
+webapp/telegram_tweet_bot.py:1132:            [button(text="✅ 已完成", callback_data="tt:tasks:0:completed"), button(text="⏸ 已暂停", callback_data="tt:tasks:0:paused")],
+webapp/telegram_tweet_bot.py:1133:            [button(text="🚫 已取消", callback_data="tt:tasks:0:cancelled"), button(text="📚 全部任务", callback_data="tt:tasks:0:all")],
+webapp/telegram_tweet_bot.py:1134:            [button(text="🧵 按平台筛选", callback_data="tt:taskfilter:platform"), button(text="👤 按人设筛选", callback_data="tt:taskfilter:persona")],
+webapp/telegram_tweet_bot.py:1135:            [button(text="返回总控菜单", callback_data="tt:menu")],
+webapp/telegram_tweet_bot.py:1171:        if text not in CONTROL_BUTTONS:
+webapp/telegram_tweet_bot.py:1185:                page_text, markup = await self._account_management_payload(types, member)
+webapp/telegram_tweet_bot.py:1233:                    callback_data=callback_token(chat_id, "hotstatus", {
+webapp/telegram_tweet_bot.py:1239:                    callback_data=callback_token(chat_id, "hotcancel", {
+webapp/telegram_tweet_bot.py:1244:        rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
+webapp/telegram_tweet_bot.py:1272:        rows = [[types.InlineKeyboardButton(text="🛠 人设管理", callback_data=management_callback)]]
+webapp/telegram_tweet_bot.py:1280:                callback_data=callback_token(chat_id, "p", {
+webapp/telegram_tweet_bot.py:1292:        rows.append([types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")])
+webapp/telegram_tweet_bot.py:1334:            [button(text="➕ 手工新建人设", callback_data="tt:persona_new")],
+webapp/telegram_tweet_bot.py:1335:            [button(text="✨ AI 生成人设", callback_data="tt:persona_ai_new")],
+webapp/telegram_tweet_bot.py:1336:            [button(text="🔗 复制公开人设", callback_data="tt:persona_copy_new")],
+webapp/telegram_tweet_bot.py:1337:            [button(text="返回人设列表", callback_data=f"tt:personas:{max(0, int(page or 0))}")],
+webapp/telegram_tweet_bot.py:1349:        platform_accounts = counts.get("platform_accounts") if isinstance(counts.get("platform_accounts"), list) else []
+webapp/telegram_tweet_bot.py:1350:        platform_text = "、".join(str(item).strip() for item in platform_accounts if str(item).strip()) or "未绑定"
+webapp/telegram_tweet_bot.py:1364:                button(text="✍️ 新建推文", callback_data="tt:pmod:create"),
+webapp/telegram_tweet_bot.py:1365:                button(text="📝 推文内容", callback_data="tt:pmod:content"),
+webapp/telegram_tweet_bot.py:1368:                button(text="🚀 发布管理", callback_data="tt:pmod:publish"),
+webapp/telegram_tweet_bot.py:1369:                button(text="⚙️ 人设设置", callback_data="tt:pmod:settings"),
+webapp/telegram_tweet_bot.py:1371:            [button(text="返回我的人设", callback_data=f"tt:personas:{max(0, int(page or 0))}")],
+webapp/telegram_tweet_bot.py:1383:            return [types.InlineKeyboardButton(text="上一步", callback_data=f"tt:pmod:{module}")]
+webapp/telegram_tweet_bot.py:1386:            callback_data=callback_token(chat_id, "p", {
+webapp/telegram_tweet_bot.py:1417:            platform_accounts = counts.get("platform_accounts") if isinstance(counts.get("platform_accounts"), list) else []
+webapp/telegram_tweet_bot.py:1420:                f"平台账号：{'、'.join(str(item).strip() for item in platform_accounts if str(item).strip()) or '未绑定'}\n"
+webapp/telegram_tweet_bot.py:1432:                        button(text="⚙️ 基础资料", callback_data="tt:profile"),
+webapp/telegram_tweet_bot.py:1433:                        button(text="🧑‍🎨 人设图与图库", callback_data="tt:personaimage"),
+webapp/telegram_tweet_bot.py:1436:                        button(text="🔗 平台账号绑定", callback_data="tt:persona_accounts"),
+webapp/telegram_tweet_bot.py:1437:                        button(text="🔄 刷新数据", callback_data=callback_token(chat_id, "prefresh", {
+webapp/telegram_tweet_bot.py:1443:                        button(text="📄 复制当前人设", callback_data=callback_token(chat_id, "pduplicate", {
+webapp/telegram_tweet_bot.py:1447:                        button(text="🗑 删除人设", callback_data=callback_token(chat_id, "pdeleteask", {
+webapp/telegram_tweet_bot.py:1460:                    [button(text="✨ AI 生成推文", callback_data="tt:generate")],
+webapp/telegram_tweet_bot.py:1461:                    [button(text="🔥 热点创作", callback_data="tt:hot")],
+webapp/telegram_tweet_bot.py:1462:                    [button(text="📝 手工新建草稿", callback_data="tt:draft_new")],
+webapp/telegram_tweet_bot.py:1472:                        button(text="📝 草稿与推文", callback_data="tt:postsmenu"),
+webapp/telegram_tweet_bot.py:1473:                        button(text="⭐ 收藏", callback_data="tt:favorites:0"),
+webapp/telegram_tweet_bot.py:1475:                    [button(text="🖼 推文配图", callback_data="tt:imageposts:0")],
+webapp/telegram_tweet_bot.py:1484:                    [button(text="🚀 发布推文（立即/定时）", callback_data="tt:publish_one")],
+webapp/telegram_tweet_bot.py:1486:                        button(text="🧩 矩阵发布", callback_data="tt:matrix"),
+webapp/telegram_tweet_bot.py:1487:                        button(text="🕘 发布历史", callback_data="tt:persona_history:0"),
+webapp/telegram_tweet_bot.py:1573:                callback_data=callback_token(chat_id, "group", {
+webapp/telegram_tweet_bot.py:1579:        rows.append([types.InlineKeyboardButton(text="➕ 新建分组", callback_data="tt:groupnew")])
+webapp/telegram_tweet_bot.py:1580:        rows.append([types.InlineKeyboardButton(text="返回我的人设", callback_data="tt:personas:0")])
+webapp/telegram_tweet_bot.py:1634:                callback_data=callback_token(chat_id, "groupremove", {
+webapp/telegram_tweet_bot.py:1645:                callback_data=callback_token(chat_id, "groupadd", {
+webapp/telegram_tweet_bot.py:1652:            [types.InlineKeyboardButton(text="✏️ 重命名", callback_data=callback_token(chat_id, "grouprename", {
+webapp/telegram_tweet_bot.py:1657:            [types.InlineKeyboardButton(text="🗑 删除分组", callback_data=callback_token(chat_id, "groupdeleteask", {
+webapp/telegram_tweet_bot.py:1662:            [types.InlineKeyboardButton(text="返回人设分组", callback_data=f"tt:personagroups:{max(0, int(groups_page or 0))}")],
+webapp/telegram_tweet_bot.py:1717:                callback_data=callback_token(chat_id, "groupaddselect", {
+webapp/telegram_tweet_bot.py:1725:        rows.append([types.InlineKeyboardButton(text="返回分组", callback_data=callback_token(chat_id, "group", {
+webapp/telegram_tweet_bot.py:1760:                callback_data=callback_token(chat_id, "groupassignselect", {
+webapp/telegram_tweet_bot.py:1779:    async def _accounts_payload(
+webapp/telegram_tweet_bot.py:1790:        accounts = await self._call(int(member["web_user_id"]), "accounts.list")
+webapp/telegram_tweet_bot.py:1792:            accounts = [
+webapp/telegram_tweet_bot.py:1793:                item for item in accounts
+webapp/telegram_tweet_bot.py:1806:            logger.debug("Failed to load persona names for Telegram account list", exc_info=True)
+webapp/telegram_tweet_bot.py:1810:            total_items=len(accounts),
+webapp/telegram_tweet_bot.py:1813:                "accountspage",
+webapp/telegram_tweet_bot.py:1829:        for item in accounts[start:start + PAGE_SIZE]:
+webapp/telegram_tweet_bot.py:1830:            account_id = str(item.get("id") or "").strip()
+webapp/telegram_tweet_bot.py:1831:            if not account_id:
+webapp/telegram_tweet_bot.py:1840:                "account_id": account_id,
+webapp/telegram_tweet_bot.py:1849:                callback_data=token,
+webapp/telegram_tweet_bot.py:1856:            text += f"\n第 {page + 1}/{total_pages} 页，共 {len(accounts)} 个账号。"
+webapp/telegram_tweet_bot.py:1867:                url=f"{base}/console.html?view=accounts&authorize_platform=threads",
+webapp/telegram_tweet_bot.py:1870:                url=f"{base}/console.html?view=accounts&authorize_platform=instagram",
+webapp/telegram_tweet_bot.py:1873:                text="📂 打开平台账号管理",
+webapp/telegram_tweet_bot.py:1874:                url=f"{base}/console.html?view=accounts",
+webapp/telegram_tweet_bot.py:1876:        rows.append([types.InlineKeyboardButton(text="返回", callback_data=return_callback)])
+webapp/telegram_tweet_bot.py:1887:        """Show accounts detected for the selected persona and bind actions.
+webapp/telegram_tweet_bot.py:1889:        R18 presents the current persona/account state first and then exposes
+webapp/telegram_tweet_bot.py:1890:        the platform action buttons.  The Web account API is the source of
+webapp/telegram_tweet_bot.py:1901:        accounts_raw = await self._call(user_id, "accounts.list")
+webapp/telegram_tweet_bot.py:1902:        accounts = [item for item in (accounts_raw if isinstance(accounts_raw, list) else []) if isinstance(item, dict)]
+webapp/telegram_tweet_bot.py:1919:        for account in accounts:
+webapp/telegram_tweet_bot.py:1920:            platform_raw = str(account.get("platform") or "未知平台").strip()
+webapp/telegram_tweet_bot.py:1925:            if str(account.get("persona_id") or "").strip() != persona_id:
+webapp/telegram_tweet_bot.py:1927:            username = str(account.get("username") or "未设置账号").strip().lstrip("@")
+webapp/telegram_tweet_bot.py:1934:        for item in accounts:
+webapp/telegram_tweet_bot.py:1951:        for account in bindable[start:start + PAGE_SIZE]:
+webapp/telegram_tweet_bot.py:1952:            account_id = str(account.get("id") or "").strip()
+webapp/telegram_tweet_bot.py:1953:            platform_raw = str(account.get("platform") or "未知平台").strip()
+webapp/telegram_tweet_bot.py:1957:            username = str(account.get("username") or "未设置账号").strip().lstrip("@")
+webapp/telegram_tweet_bot.py:1958:            bound_persona_id = str(account.get("persona_id") or "").strip()
+webapp/telegram_tweet_bot.py:1960:            account_reference = callback_token(chat_id, "ac", {
+webapp/telegram_tweet_bot.py:1961:                "account_id": account_id,
+webapp/telegram_tweet_bot.py:1962:                "return_callback": "tt:persona_accounts",
+webapp/telegram_tweet_bot.py:1970:                    callback_data=account_reference,
+webapp/telegram_tweet_bot.py:1974:                    "account_id": account_id,
+webapp/telegram_tweet_bot.py:1981:                    callback_data=rebind_reference,
+webapp/telegram_tweet_bot.py:1985:                    "account_id": account_id,
+webapp/telegram_tweet_bot.py:1991:                    callback_data=bind_reference,
+webapp/telegram_tweet_bot.py:1994:        rows.append([types.InlineKeyboardButton(text="📂 查看全部平台账号", callback_data="tt:platformaccounts")])
+webapp/telegram_tweet_bot.py:1995:        rows.append([types.InlineKeyboardButton(text="上一步", callback_data="tt:pmod:settings")])
+webapp/telegram_tweet_bot.py:2008:        """Show VECTO web-session controls separately from platform accounts."""
+webapp/telegram_tweet_bot.py:2011:            [types.InlineKeyboardButton(text="🔁 登录/切换 VECTO 账号", callback_data="tt:chatlogin")],
+webapp/telegram_tweet_bot.py:2012:            [types.InlineKeyboardButton(text="🚪 退出 VECTO 账号", callback_data="tt:aclogout")],
+webapp/telegram_tweet_bot.py:2013:            [types.InlineKeyboardButton(text="返回账号管理", callback_data="tt:accountmenu")],
+webapp/telegram_tweet_bot.py:2018:            "当前 Telegram 推文工作台使用的是这次绑定的 VECTO 网页会话。\n"
+webapp/telegram_tweet_bot.py:2021:            "这里的登录/退出只管理 VECTO 账号，不会登录或退出 Threads、Instagram 等平台账号。",
+webapp/telegram_tweet_bot.py:2025:    async def _account_management_payload(self, types: Any, member: dict[str, Any]) -> tuple[str, Any]:
+webapp/telegram_tweet_bot.py:2026:        """Build the account-management second level without exposing secrets.
+webapp/telegram_tweet_bot.py:2028:        VECTO login is the existing private-chat flow.  Platform account
+webapp/telegram_tweet_bot.py:2032:        accounts = await self._call(int(member["web_user_id"]), "accounts.list")
+webapp/telegram_tweet_bot.py:2034:            [types.InlineKeyboardButton(text="🔐 VECTO 网页账号（登录/退出）", callback_data="tt:vectosession")],
+webapp/telegram_tweet_bot.py:2035:            [types.InlineKeyboardButton(text=f"🌐 平台授权账号（{len(accounts)}）", callback_data="tt:platformaccounts")],
+webapp/telegram_tweet_bot.py:2036:            [types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")],
+webapp/telegram_tweet_bot.py:2039:            "账号管理\n\n"
+webapp/telegram_tweet_bot.py:2041:            f"平台授权账号：{len(accounts)}",
+webapp/telegram_tweet_bot.py:2045:    async def _account_detail_payload(
+webapp/telegram_tweet_bot.py:2049:        account_id: str,
+webapp/telegram_tweet_bot.py:2051:        return_callback: str = "tt:platformaccounts",
+webapp/telegram_tweet_bot.py:2056:        accounts = await self._call(int(member["web_user_id"]), "accounts.list")
+webapp/telegram_tweet_bot.py:2057:        account = next((item for item in accounts if str(item.get("id") or "") == str(account_id)), None)
+webapp/telegram_tweet_bot.py:2058:        if not account:
+webapp/telegram_tweet_bot.py:2062:            "account_id": str(account_id),
+webapp/telegram_tweet_bot.py:2064:            # fields are not forwarded to account APIs.
+webapp/telegram_tweet_bot.py:2068:            "return_callback": str(return_callback or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:2070:        platform = str(account.get("platform") or "未知平台")
+webapp/telegram_tweet_bot.py:2071:        username = str(account.get("username") or "未设置账号").lstrip("@")
+webapp/telegram_tweet_bot.py:2072:        persona_id = str(account.get("persona_id") or "").strip()
+webapp/telegram_tweet_bot.py:2081:        provider = str(account.get("auth_provider") or "browser").strip().lower()
+webapp/telegram_tweet_bot.py:2083:        account_action_note = (
+webapp/telegram_tweet_bot.py:2092:                    callback_data=callback_token(chat_id, "accheck", token_payload),
+webapp/telegram_tweet_bot.py:2096:                    callback_data=callback_token(chat_id, "aclogin", token_payload),
+webapp/telegram_tweet_bot.py:2101:            # Bundle accounts are OAuth-managed.  Do not expose the browser
+webapp/telegram_tweet_bot.py:2109:                        f"{base}/console.html?view=accounts"
+webapp/telegram_tweet_bot.py:2111:                        f"&authorize_account_id={quote(str(account_id), safe='')}"
+webapp/telegram_tweet_bot.py:2118:                    callback_data=callback_token(chat_id, "acbind", token_payload),
+webapp/telegram_tweet_bot.py:2122:                    callback_data=callback_token(chat_id, "acunbind", token_payload),
+webapp/telegram_tweet_bot.py:2128:                callback_data=callback_token(chat_id, "acbind", token_payload),
+webapp/telegram_tweet_bot.py:2132:            callback_data=callback_token(chat_id, "acremove", token_payload),
+webapp/telegram_tweet_bot.py:2136:            callback_data=(
+webapp/telegram_tweet_bot.py:2137:                callback_token(chat_id, "accountspage", {
+webapp/telegram_tweet_bot.py:2141:                    "return_callback": str(return_callback or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:2144:                else str(return_callback or "tt:platformaccounts")
+webapp/telegram_tweet_bot.py:2149:            f"登录方式：{provider_label}\n状态：{account.get('status') or 'unknown'}\n"
+webapp/telegram_tweet_bot.py:2150:            f"健康：{account.get('health_status') or 'unknown'}\n人设：{persona_name}\n\n"
+webapp/telegram_tweet_bot.py:2151:            f"{account_action_note}解绑只改变人设对应关系，不会删除账号。",
+webapp/telegram_tweet_bot.py:2155:    async def _account_persona_picker(
+webapp/telegram_tweet_bot.py:2160:        account_id: str,
+webapp/telegram_tweet_bot.py:2166:        return_callback: str = "tt:platformaccounts",
+webapp/telegram_tweet_bot.py:2178:                    "account_id": str(account_id),
+webapp/telegram_tweet_bot.py:2183:                    "return_callback": str(return_callback or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:2194:                "account_id": str(account_id),
+webapp/telegram_tweet_bot.py:2199:                "return_callback": str(return_callback or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:2204:                callback_data=token,
+webapp/telegram_tweet_bot.py:2209:            callback_data=callback_token(chat_id, "ac", {
+webapp/telegram_tweet_bot.py:2210:                "account_id": str(account_id),
+webapp/telegram_tweet_bot.py:2214:                "return_callback": str(return_callback or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:2253:            "cancelled": sum(1 for item in tasks if _task_bucket(item, now=now) == "cancelled"),
+webapp/telegram_tweet_bot.py:2276:            f"🚫 已取消：{count('cancelled', local_counts['cancelled'])}",
+webapp/telegram_tweet_bot.py:2300:            [button(text="📋 查看待发布", callback_data="tt:tasks:0:pending"), button(text="❌ 查看失败", callback_data="tt:tasks:0:failed")],
+webapp/telegram_tweet_bot.py:2301:            [button(text="⏰ 仅看定时任务", callback_data="tt:tasks:0:scheduled"), button(text="⚡ 查看立即任务", callback_data="tt:tasks:0:immediate")],
+webapp/telegram_tweet_bot.py:2302:            [button(text="🔄 查看执行中", callback_data="tt:tasks:0:running")],
+webapp/telegram_tweet_bot.py:2303:            [button(text="🛠 待人工", callback_data="tt:tasks:0:manual"), button(text="⏸ 已暂停", callback_data="tt:tasks:0:paused")],
+webapp/telegram_tweet_bot.py:2304:            [button(text="✅ 已完成", callback_data="tt:tasks:0:completed"), button(text="🚫 已取消", callback_data="tt:tasks:0:cancelled")],
+webapp/telegram_tweet_bot.py:2305:            [button(text="📚 查看全部任务", callback_data="tt:tasks:0:all")],
+webapp/telegram_tweet_bot.py:2306:            [button(text="🧵 按平台筛选", callback_data="tt:taskfilter:platform"), button(text="👤 按人设筛选", callback_data="tt:taskfilter:persona")],
+webapp/telegram_tweet_bot.py:2311:                button(text=f"🧱 普通生成（{int(queue_counts.get('normal') or 0)}）", callback_data="tt:tasks:0:all:normal"),
+webapp/telegram_tweet_bot.py:2312:                button(text=f"⚙️ 自动化队列（{int(queue_counts.get('automation') or 0)}）", callback_data="tt:tasks:0:all:automation"),
+webapp/telegram_tweet_bot.py:2314:            rows.append([button(text="🗓 自动化计划", callback_data="tt:automationplans:0")])
+webapp/telegram_tweet_bot.py:2316:            rows.append([button(text="🔄 处理失败任务", callback_data="tt:tasks:0:failed")])
+webapp/telegram_tweet_bot.py:2317:        rows.append([button(text="返回总控菜单", callback_data="tt:menu")])
+webapp/telegram_tweet_bot.py:2345:                result = await self._call(user_id, "tasks.cancel", {"task_id": task_id})
+webapp/telegram_tweet_bot.py:2347:                if result_status and result_status not in {"cancelled", "canceled"} and not bool(result.get("cancelled")):
+webapp/telegram_tweet_bot.py:2402:            callback_data=callback_token(
+webapp/telegram_tweet_bot.py:2425:            rows.append([types.InlineKeyboardButton(text="➕ 手工新建草稿", callback_data="tt:draft_new")])
+webapp/telegram_tweet_bot.py:2484:                callback_data=callback_token(chat_id, "imgopt", next_payload),
+webapp/telegram_tweet_bot.py:2516:                    callback_data=callback_token(chat_id, "imgopt", composition_payload),
+webapp/telegram_tweet_bot.py:2520:            [types.InlineKeyboardButton(text="🧭 生成构图方向", callback_data=callback_token(chat_id, "imgstyles", payload))],
+webapp/telegram_tweet_bot.py:2521:            [types.InlineKeyboardButton(text="✍️ 补充提示词", callback_data=callback_token(chat_id, "imgprompt", payload))],
+webapp/telegram_tweet_bot.py:2522:            [types.InlineKeyboardButton(text="🚀 提交配图任务", callback_data=callback_token(chat_id, "imggenerate", payload))],
+webapp/telegram_tweet_bot.py:2523:            [types.InlineKeyboardButton(text="返回推文详情", callback_data=callback_token(chat_id, "d", {
+webapp/telegram_tweet_bot.py:2603:                callback_data=callback_token(chat_id, "pimgnoop", {"persona_id": persona_id}),
+webapp/telegram_tweet_bot.py:2608:                    callback_data=callback_token(chat_id, "pimgapply", {
+webapp/telegram_tweet_bot.py:2614:                    callback_data=callback_token(chat_id, "pimgreplace", {
+webapp/telegram_tweet_bot.py:2620:                    callback_data=callback_token(chat_id, "pimgdeleteconfirm", {
+webapp/telegram_tweet_bot.py:2626:                    callback_data=callback_token(chat_id, "pimgavatar", {
+webapp/telegram_tweet_bot.py:2644:                callback_data=callback_token(chat_id, "pimgfield", {
+webapp/telegram_tweet_bot.py:2651:                callback_data=callback_token(chat_id, "pimgprompt", {"persona_id": persona_id, "page": safe_page}),
+webapp/telegram_tweet_bot.py:2654:                types.InlineKeyboardButton(text="🚀 直接生成", callback_data=callback_token(chat_id, "personaimmediate", {
+webapp/telegram_tweet_bot.py:2658:                types.InlineKeyboardButton(text="⬆️ 上传自定义图", callback_data=callback_token(chat_id, "pimgupload", {
+webapp/telegram_tweet_bot.py:2718:                    callback_data=callback_token(chat_id, "pimgopt", {
+webapp/telegram_tweet_bot.py:2724:        rows.append([types.InlineKeyboardButton(text="返回人设图设置", callback_data=callback_token(chat_id, "personaimage", {"persona_id": persona_id, "page": page}))])
+webapp/telegram_tweet_bot.py:2763:            [types.InlineKeyboardButton(text="✏️ 编辑", callback_data=callback_token(int(query.message.chat.id), "edit", context)),
+webapp/telegram_tweet_bot.py:2764:             types.InlineKeyboardButton(text="📎 添加媒体", callback_data=callback_token(int(query.message.chat.id), "media", context))],
+webapp/telegram_tweet_bot.py:2765:            [types.InlineKeyboardButton(text="🖼 生成推文配图", callback_data=callback_token(int(query.message.chat.id), "image", context))],
+webapp/telegram_tweet_bot.py:2766:            [types.InlineKeyboardButton(text="立即发布", callback_data=callback_token(int(query.message.chat.id), "pub", context)),
+webapp/telegram_tweet_bot.py:2767:             types.InlineKeyboardButton(text="定时发布", callback_data=callback_token(int(query.message.chat.id), "sched", context))],
+webapp/telegram_tweet_bot.py:2771:                types.InlineKeyboardButton(text="♻️ 替换首个媒体", callback_data=callback_token(int(query.message.chat.id), "mediareplace", {**context, "index": 0})),
+webapp/telegram_tweet_bot.py:2772:                types.InlineKeyboardButton(text="移除最后媒体", callback_data=callback_token(int(query.message.chat.id), "mediadel", {**context, "index": len(media) - 1})),
+webapp/telegram_tweet_bot.py:2775:            rows.append([types.InlineKeyboardButton(text="⭐ 加入收藏", callback_data=callback_token(int(query.message.chat.id), "favadd", context))])
+webapp/telegram_tweet_bot.py:2777:            [types.InlineKeyboardButton(text="🗑 删除", callback_data=callback_token(int(query.message.chat.id), "delask", context))],
+webapp/telegram_tweet_bot.py:2780:                callback_data=(
+webapp/telegram_tweet_bot.py:2801:    async def _publish_account_picker(
+webapp/telegram_tweet_bot.py:2815:        accounts = await self._call(int(member["web_user_id"]), "accounts.list")
+webapp/telegram_tweet_bot.py:2817:            account for account in accounts
+webapp/telegram_tweet_bot.py:2818:            if str(account.get("persona_id") or "") == state["selected_persona_id"]
+webapp/telegram_tweet_bot.py:2819:            and str(account.get("platform") or "").lower() in {"threads", "instagram"}
+webapp/telegram_tweet_bot.py:2842:        for account in eligible[start:start + PAGE_SIZE]:
+webapp/telegram_tweet_bot.py:2843:            account_id = str(account.get("id") or "")
+webapp/telegram_tweet_bot.py:2844:            label = str(account.get("display_name") or account.get("username") or account_id)[:32]
+webapp/telegram_tweet_bot.py:2845:            platform = str(account.get("platform") or "threads").strip().lower()
+webapp/telegram_tweet_bot.py:2848:                callback_data=callback_token(chat_id, "pa", {
+webapp/telegram_tweet_bot.py:2852:                    "account_id": account_id,
+webapp/telegram_tweet_bot.py:2862:            callback_data=(
+webapp/telegram_tweet_bot.py:2920:        elif status_filter == "cancelled":
+webapp/telegram_tweet_bot.py:2921:            tasks = [item for item in tasks if _task_bucket(item, now=now) == "cancelled"]
+webapp/telegram_tweet_bot.py:2944:                callback_data=callback_token(
+webapp/telegram_tweet_bot.py:2973:        rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
+webapp/telegram_tweet_bot.py:2984:            "cancelled": "已取消",
+webapp/telegram_tweet_bot.py:3029:                    callback_data=callback_token(chat_id, "taskview", {
+webapp/telegram_tweet_bot.py:3060:                    callback_data=callback_token(chat_id, "taskview", {
+webapp/telegram_tweet_bot.py:3071:        rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
+webapp/telegram_tweet_bot.py:3114:                callback_data=callback_token(
+webapp/telegram_tweet_bot.py:3128:                callback_data="tt:matrixnext",
+webapp/telegram_tweet_bot.py:3130:        rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:personas:0")])
+webapp/telegram_tweet_bot.py:3145:            types.InlineKeyboardButton(text="📝 草稿", callback_data="tt:mxsource:posts"),
+webapp/telegram_tweet_bot.py:3146:            types.InlineKeyboardButton(text="⭐ 收藏", callback_data="tt:mxsource:favorites"),
+webapp/telegram_tweet_bot.py:3147:        ], [types.InlineKeyboardButton(text="上一步", callback_data="tt:matrixback")]]
+webapp/telegram_tweet_bot.py:3167:        accounts = await self._call(int(member["web_user_id"]), "accounts.list")
+webapp/telegram_tweet_bot.py:3170:            for item in accounts
+webapp/telegram_tweet_bot.py:3176:            rows.append([types.InlineKeyboardButton(text="Threads", callback_data="tt:mxplatform:threads")])
+webapp/telegram_tweet_bot.py:3178:            rows.append([types.InlineKeyboardButton(text="Instagram", callback_data="tt:mxplatform:instagram")])
+webapp/telegram_tweet_bot.py:3179:        rows.append([types.InlineKeyboardButton(text="上一步", callback_data="tt:mxbacksource")])
+webapp/telegram_tweet_bot.py:3218:                callback_data=callback_token(chat_id, "gdirpick", {"direction": direction}),
+webapp/telegram_tweet_bot.py:3223:                callback_data=callback_token(chat_id, "gdirconfirm", {}),
+webapp/telegram_tweet_bot.py:3227:                callback_data=callback_token(chat_id, "gdirclear", {}),
+webapp/telegram_tweet_bot.py:3231:            types.InlineKeyboardButton(text="换一批", callback_data=callback_token(chat_id, "gdir", {"refresh": True})),
+webapp/telegram_tweet_bot.py:3232:            types.InlineKeyboardButton(text="返回确认", callback_data=callback_token(chat_id, "gdirback", {})),
+webapp/telegram_tweet_bot.py:3234:        rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
+webapp/telegram_tweet_bot.py:3297:                callback_data=callback_token(chat_id, "gsubmit", {}),
+webapp/telegram_tweet_bot.py:3299:            types.InlineKeyboardButton(text="修改参数", callback_data="tt:generate"),
+webapp/telegram_tweet_bot.py:3303:                callback_data=callback_token(chat_id, "gplatform", {}),
+webapp/telegram_tweet_bot.py:3307:                callback_data=callback_token(chat_id, "glocale", {}),
+webapp/telegram_tweet_bot.py:3312:                callback_data=callback_token(chat_id, "gslot", {}),
+webapp/telegram_tweet_bot.py:3317:                callback_data=callback_token(chat_id, "gdir", {}),
+webapp/telegram_tweet_bot.py:3322:                callback_data=callback_token(chat_id, "gmem", {"page": 0}),
+webapp/telegram_tweet_bot.py:3324:        ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]
+webapp/telegram_tweet_bot.py:3403:                callback_data=callback_token(chat_id, "gmempick", {
+webapp/telegram_tweet_bot.py:3411:                callback_data=callback_token(chat_id, "gmemconfirm", {}),
+webapp/telegram_tweet_bot.py:3415:                callback_data=callback_token(chat_id, "gmemclear", {}),
+webapp/telegram_tweet_bot.py:3421:            callback_data=callback_token(chat_id, "gmemback", {}),
+webapp/telegram_tweet_bot.py:3458:                callback_data=callback_token(chat_id, "pmemnoop", {}),
+webapp/telegram_tweet_bot.py:3461:                callback_data=callback_token(chat_id, "pmemdelete", {"memory_id": memory_id, "page": safe_page}),
+webapp/telegram_tweet_bot.py:3466:            callback_data=callback_token(chat_id, "pmemadd", {"page": safe_page}),
+webapp/telegram_tweet_bot.py:3468:        rows.append([types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile")])
+webapp/telegram_tweet_bot.py:3504:                callback_data=callback_token(chat_id, "plinkactivate", {"preset_id": preset_id, "page": safe_page}),
+webapp/telegram_tweet_bot.py:3507:                callback_data=callback_token(chat_id, "plinkdelete", {"preset_id": preset_id, "page": safe_page}),
+webapp/telegram_tweet_bot.py:3512:            callback_data=callback_token(chat_id, "plinkadd", {"page": safe_page}),
+webapp/telegram_tweet_bot.py:3514:        rows.append([types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile")])
+webapp/telegram_tweet_bot.py:3548:                callback_data=callback_token(chat_id, "automationplan", {
+webapp/telegram_tweet_bot.py:3556:            callback_data=callback_token(chat_id, "automationplannew", {"page": safe_page}),
+webapp/telegram_tweet_bot.py:3558:        rows.append([types.InlineKeyboardButton(text="返回排程状态", callback_data="tt:taskmenu")])
+webapp/telegram_tweet_bot.py:3597:            rows.append([types.InlineKeyboardButton(text=title, callback_data="tt:persona_ai_noop")])
+webapp/telegram_tweet_bot.py:3607:                        callback_data=callback_token(chat_id, "persona_ai_keyword", {
+webapp/telegram_tweet_bot.py:3617:                callback_data=callback_token(chat_id, "persona_ai_confirm", {}),
+webapp/telegram_tweet_bot.py:3621:                callback_data=callback_token(chat_id, "persona_ai_clear", {}),
+webapp/telegram_tweet_bot.py:3627:                callback_data=callback_token(chat_id, "persona_ai_back", {}),
+webapp/telegram_tweet_bot.py:3631:                callback_data=callback_token(chat_id, "persona_ai_direct", {}),
+webapp/telegram_tweet_bot.py:3634:        rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
+webapp/telegram_tweet_bot.py:3709:                    callback_data=callback_token(chat_id, "p", {"persona_id": new_id}),
+webapp/telegram_tweet_bot.py:3711:                types.InlineKeyboardButton(text="查看我的人设", callback_data="tt:personas:0"),
+webapp/telegram_tweet_bot.py:3716:    async def handle_callback(self, query: Any, types: Any) -> None:
+webapp/telegram_tweet_bot.py:3733:            # CallbackQuery.answer cannot carry reply_markup.  Send the
+webapp/telegram_tweet_bot.py:3764:                await query.message.edit_text("已返回推文工作台总控菜单。")
+webapp/telegram_tweet_bot.py:3784:            elif action == "accountmenu":
+webapp/telegram_tweet_bot.py:3786:                page_text, markup = await self._account_management_payload(types, member)
+webapp/telegram_tweet_bot.py:3791:            elif action == "platformaccounts":
+webapp/telegram_tweet_bot.py:3792:                page_text, markup = await self._accounts_payload(
+webapp/telegram_tweet_bot.py:3793:                    types, member, return_callback="tt:accountmenu",
+webapp/telegram_tweet_bot.py:3796:            elif action == "accountspage" and len(parts) > 2:
+webapp/telegram_tweet_bot.py:3797:                reference = resolve_callback_token(chat_id, "accountspage", parts[2])
+webapp/telegram_tweet_bot.py:3798:                page_text, markup = await self._accounts_payload(
+webapp/telegram_tweet_bot.py:3801:                    return_callback=str(reference.get("return_callback") or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:3807:            elif action == "persona_accounts":
+webapp/telegram_tweet_bot.py:3825:                account_id = str(reference.get("account_id") or "").strip()
+webapp/telegram_tweet_bot.py:3827:                if not account_id or not persona_id:
+webapp/telegram_tweet_bot.py:3829:                accounts = await self._call(user_id, "accounts.list")
+webapp/telegram_tweet_bot.py:3830:                account = next(
+webapp/telegram_tweet_bot.py:3831:                    (item for item in (accounts if isinstance(accounts, list) else [])
+webapp/telegram_tweet_bot.py:3832:                     if isinstance(item, dict) and str(item.get("id") or "") == account_id),
+webapp/telegram_tweet_bot.py:3835:                if not account:
+webapp/telegram_tweet_bot.py:3838:                    str(account.get("status") or "").strip().lower() in {"disabled", "removed", "revoked", "expired", "error", "failed"}
+webapp/telegram_tweet_bot.py:3839:                    or str(account.get("health_status") or "").strip().lower() in {"disabled", "removed", "revoked", "expired", "error", "failed"}
+webapp/telegram_tweet_bot.py:3842:                bound_persona_id = str(account.get("persona_id") or "").strip()
+webapp/telegram_tweet_bot.py:3845:                        "account_id": account_id,
+webapp/telegram_tweet_bot.py:3850:                    platform = str(account.get("platform") or "未知平台").strip()
+webapp/telegram_tweet_bot.py:3851:                    username = str(account.get("username") or "未设置账号").strip().lstrip("@")
+webapp/telegram_tweet_bot.py:3857:                            [types.InlineKeyboardButton(text="确认改绑", callback_data=confirm_token)],
+webapp/telegram_tweet_bot.py:3858:                            [types.InlineKeyboardButton(text="取消", callback_data="tt:persona_accounts")],
+webapp/telegram_tweet_bot.py:3862:                    await self._call(user_id, "accounts.bind_persona", {
+webapp/telegram_tweet_bot.py:3863:                        "account_id": account_id,
+webapp/telegram_tweet_bot.py:3867:                    audit_action(chat_id, user_id, "accounts.bind_persona", status="success", resource_type="account", resource_id=account_id)
+webapp/telegram_tweet_bot.py:3874:                account_id = str(reference.get("account_id") or "").strip()
+webapp/telegram_tweet_bot.py:3876:                if not account_id or not persona_id:
+webapp/telegram_tweet_bot.py:3878:                accounts = await self._call(user_id, "accounts.list")
+webapp/telegram_tweet_bot.py:3879:                account = next(
+webapp/telegram_tweet_bot.py:3880:                    (item for item in (accounts if isinstance(accounts, list) else [])
+webapp/telegram_tweet_bot.py:3881:                     if isinstance(item, dict) and str(item.get("id") or "") == account_id),
+webapp/telegram_tweet_bot.py:3884:                if not account:
+webapp/telegram_tweet_bot.py:3887:                    str(account.get("status") or "").strip().lower() in {"disabled", "removed", "revoked", "expired", "error", "failed"}
+webapp/telegram_tweet_bot.py:3888:                    or str(account.get("health_status") or "").strip().lower() in {"disabled", "removed", "revoked", "expired", "error", "failed"}
+webapp/telegram_tweet_bot.py:3891:                await self._call(user_id, "accounts.bind_persona", {
+webapp/telegram_tweet_bot.py:3892:                    "account_id": account_id,
+webapp/telegram_tweet_bot.py:3896:                audit_action(chat_id, user_id, "accounts.bind_persona", status="success", resource_type="account", resource_id=account_id)
+webapp/telegram_tweet_bot.py:3901:            elif action == "accounts":
+webapp/telegram_tweet_bot.py:3903:                # point at tt:accounts. Platform accounts now have their own
+webapp/telegram_tweet_bot.py:3905:                page_text, markup = await self._accounts_payload(
+webapp/telegram_tweet_bot.py:3906:                    types, member, return_callback="tt:accountmenu",
+webapp/telegram_tweet_bot.py:3909:            elif action == "accountadd":
+webapp/telegram_tweet_bot.py:3915:                        url=f"{base}/console.html?view=accounts&authorize_platform=threads",
+webapp/telegram_tweet_bot.py:3918:                        url=f"{base}/console.html?view=accounts&authorize_platform=instagram",
+webapp/telegram_tweet_bot.py:3921:                        text="📂 打开平台账号管理",
+webapp/telegram_tweet_bot.py:3922:                        url=f"{base}/console.html?view=accounts",
+webapp/telegram_tweet_bot.py:3925:                    [types.InlineKeyboardButton(text="📋 查看已授权账号", callback_data="tt:platformaccounts")],
+webapp/telegram_tweet_bot.py:3926:                    [types.InlineKeyboardButton(text="返回账号管理", callback_data="tt:accountmenu")],
+webapp/telegram_tweet_bot.py:3935:            elif action in {"accountswitch", "accountbind", "accountunbind"}:
+webapp/telegram_tweet_bot.py:3937:                    "accountswitch": "switch",
+webapp/telegram_tweet_bot.py:3938:                    "accountbind": "bind",
+webapp/telegram_tweet_bot.py:3939:                    "accountunbind": "unbind",
+webapp/telegram_tweet_bot.py:3941:                page_text, markup = await self._accounts_payload(
+webapp/telegram_tweet_bot.py:3944:                    return_callback="tt:platformaccounts",
+webapp/telegram_tweet_bot.py:3950:                account_id = str(reference.get("account_id") or "").strip()
+webapp/telegram_tweet_bot.py:3951:                if not account_id:
+webapp/telegram_tweet_bot.py:3955:                    await self._account_persona_picker(
+webapp/telegram_tweet_bot.py:3956:                        query, types, member, account_id,
+webapp/telegram_tweet_bot.py:3960:                        return_callback=str(reference.get("return_callback") or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:3963:                    detail_text, detail_markup = await self._account_detail_payload(
+webapp/telegram_tweet_bot.py:3964:                        types, member, account_id,
+webapp/telegram_tweet_bot.py:3965:                        return_callback=str(reference.get("return_callback") or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:3978:                    f"已撤销 {revoked} 个登录会话；Telegram 推文工作台也已停止使用。\n"
+webapp/telegram_tweet_bot.py:3985:                account_id = str(reference.get("account_id") or "").strip()
+webapp/telegram_tweet_bot.py:3986:                dispatch_action = "accounts.check_login" if action == "accheck" else "accounts.open_login"
+webapp/telegram_tweet_bot.py:3987:                result = await self._call(user_id, dispatch_action, {"account_id": account_id})
+webapp/telegram_tweet_bot.py:4000:                audit_action(chat_id, user_id, dispatch_action, status="success", resource_type="account", resource_id=account_id)
+webapp/telegram_tweet_bot.py:4001:                detail_text, detail_markup = await self._account_detail_payload(
+webapp/telegram_tweet_bot.py:4002:                    types, member, account_id,
+webapp/telegram_tweet_bot.py:4003:                    return_callback=str(reference.get("return_callback") or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:4011:                account_id = str(reference.get("account_id") or "").strip()
+webapp/telegram_tweet_bot.py:4012:                await self._account_persona_picker(
+webapp/telegram_tweet_bot.py:4013:                    query, types, member, account_id,
+webapp/telegram_tweet_bot.py:4017:                    return_callback=str(reference.get("return_callback") or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:4021:                await self._account_persona_picker(
+webapp/telegram_tweet_bot.py:4025:                    str(reference.get("account_id") or "").strip(),
+webapp/telegram_tweet_bot.py:4030:                    return_callback=str(reference.get("return_callback") or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:4034:                await self._publish_account_picker(
+webapp/telegram_tweet_bot.py:4046:                account_id = str(reference.get("account_id") or "").strip()
+webapp/telegram_tweet_bot.py:4048:                result = await self._call(user_id, "accounts.bind_persona", {
+webapp/telegram_tweet_bot.py:4049:                    "account_id": account_id,
+webapp/telegram_tweet_bot.py:4053:                audit_action(chat_id, user_id, "accounts.bind_persona", status="success", resource_type="account", resource_id=account_id)
+webapp/telegram_tweet_bot.py:4054:                detail_text, detail_markup = await self._account_detail_payload(
+webapp/telegram_tweet_bot.py:4055:                    types, member, account_id,
+webapp/telegram_tweet_bot.py:4056:                    return_callback=str(reference.get("return_callback") or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:4064:                account_id = str(reference.get("account_id") or "").strip()
+webapp/telegram_tweet_bot.py:4065:                await self._call(user_id, "accounts.unbind_persona", {"account_id": account_id})
+webapp/telegram_tweet_bot.py:4066:                audit_action(chat_id, user_id, "accounts.unbind_persona", status="success", resource_type="account", resource_id=account_id)
+webapp/telegram_tweet_bot.py:4067:                page_text, markup = await self._accounts_payload(
+webapp/telegram_tweet_bot.py:4069:                    return_callback=str(reference.get("return_callback") or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:4077:                account_id = str(reference.get("account_id") or "").strip()
+webapp/telegram_tweet_bot.py:4079:                    "account_id": account_id,
+webapp/telegram_tweet_bot.py:4083:                    "return_callback": str(reference.get("return_callback") or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:4089:                        types.InlineKeyboardButton(text="确认移除", callback_data=confirm_token)
+webapp/telegram_tweet_bot.py:4093:                            callback_data=callback_token(chat_id, "ac", remove_context),
+webapp/telegram_tweet_bot.py:4099:                account_id = str(reference.get("account_id") or "").strip()
+webapp/telegram_tweet_bot.py:4100:                result = await self._call(user_id, "accounts.disable", {"account_id": account_id})
+webapp/telegram_tweet_bot.py:4102:                audit_action(chat_id, user_id, "accounts.disable", status="success", resource_type="account", resource_id=account_id)
+webapp/telegram_tweet_bot.py:4108:                            callback_data=callback_token(chat_id, "accountspage", {
+webapp/telegram_tweet_bot.py:4112:                                "return_callback": str(reference.get("return_callback") or "tt:platformaccounts"),
+webapp/telegram_tweet_bot.py:4115:                        types.InlineKeyboardButton(text="返回账号管理", callback_data="tt:accountmenu"),
+webapp/telegram_tweet_bot.py:4168:                        types.InlineKeyboardButton(text="返回", callback_data=return_callback),
+webapp/telegram_tweet_bot.py:4188:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:4253:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:4262:                            callback_data=callback_token(chat_id, "groupdelete", {
+webapp/telegram_tweet_bot.py:4267:                        types.InlineKeyboardButton(text="取消", callback_data=callback_token(chat_id, "group", {
+webapp/telegram_tweet_bot.py:4296:                        types.InlineKeyboardButton(text="打开副本人设", callback_data=callback_token(chat_id, "p", {
+webapp/telegram_tweet_bot.py:4300:                        types.InlineKeyboardButton(text="返回我的人设", callback_data=f"tt:personas:{persona_page}"),
+webapp/telegram_tweet_bot.py:4314:                        types.InlineKeyboardButton(text="确认删除人设", callback_data=callback_token(chat_id, "pdelete", {
+webapp/telegram_tweet_bot.py:4318:                        types.InlineKeyboardButton(text="取消", callback_data=callback_token(chat_id, "p", {
+webapp/telegram_tweet_bot.py:4348:                        callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:4354:                    callback_data="tt:pmod:settings",
+webapp/telegram_tweet_bot.py:4393:                        "手工新建草稿 · 输入正文\n请发送草稿正文。\n发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:4423:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:4432:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:4514:                        "修改后会重新生成候选关键词；发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:4557:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:4585:                        types.InlineKeyboardButton(text="打开人设", callback_data=callback_token(chat_id, "p", {"persona_id": new_id})),
+webapp/telegram_tweet_bot.py:4586:                        types.InlineKeyboardButton(text="查看我的人设", callback_data="tt:personas:0"),
+webapp/telegram_tweet_bot.py:4608:                    types.InlineKeyboardButton(text="📝 查看草稿", callback_data="tt:drafts:0"),
+webapp/telegram_tweet_bot.py:4609:                    types.InlineKeyboardButton(text="⭐ 查看收藏", callback_data="tt:favorites:0"),
+webapp/telegram_tweet_bot.py:4663:                        callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:4669:                    callback_data=callback_token(chat_id, "personaimage", {
+webapp/telegram_tweet_bot.py:4730:                await query.message.edit_text("请发送人设图补充提示词；发送 /cancel 取消。\n未填写的选项将继续沿用原有人设简介。")
+webapp/telegram_tweet_bot.py:4745:                    "不会覆盖现有图片；发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:4762:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:4797:                        types.InlineKeyboardButton(text="确认删除", callback_data=callback_token(chat_id, "pimgdelete", reference)),
+webapp/telegram_tweet_bot.py:4798:                        types.InlineKeyboardButton(text="取消", callback_data=callback_token(chat_id, "personaimage", {
+webapp/telegram_tweet_bot.py:4855:                    callback_data = (
+webapp/telegram_tweet_bot.py:4873:                        callback_data=callback_data,
+webapp/telegram_tweet_bot.py:4886:                            callback_data=callback_token(chat_id, "phrecognizeauto", {
+webapp/telegram_tweet_bot.py:4893:                            callback_data=callback_token(chat_id, "phrecognize", {
+webapp/telegram_tweet_bot.py:4917:                    types.InlineKeyboardButton(text="重新加入草稿", callback_data=callback_token(chat_id, "phrequeue", {
+webapp/telegram_tweet_bot.py:4920:                    types.InlineKeyboardButton(text="删除记录", callback_data=callback_token(chat_id, "phdelete", {
+webapp/telegram_tweet_bot.py:4923:                ], [types.InlineKeyboardButton(text="返回发布历史", callback_data=f"tt:persona_history:{history_page}")]]
+webapp/telegram_tweet_bot.py:4925:                    f"发布记录\n\n平台：{record.get('platform') or '—'}\n账号：{record.get('account_username') or record.get('username') or '—'}\n"
+webapp/telegram_tweet_bot.py:4943:                            callback_data=f"tt:drafts:{max(0, int(reference.get('page') or 0))}",
+webapp/telegram_tweet_bot.py:4947:                            callback_data=f"tt:persona_history:{max(0, int(reference.get('page') or 0))}",
+webapp/telegram_tweet_bot.py:4962:                            callback_data=f"tt:persona_history:{max(0, int(reference.get('page') or 0))}",
+webapp/telegram_tweet_bot.py:4980:                            callback_data=f"tt:persona_history:{max(0, int(reference.get('page') or 0))}",
+webapp/telegram_tweet_bot.py:4992:                    "请发送已发布帖子链接；如需补充正文，可发送：链接｜正文。\n发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:5003:                    types.InlineKeyboardButton(text="精简 80 字", callback_data="tt:gwords:80"),
+webapp/telegram_tweet_bot.py:5004:                    types.InlineKeyboardButton(text="标准 120 字", callback_data="tt:gwords:120"),
+webapp/telegram_tweet_bot.py:5006:                    types.InlineKeyboardButton(text="长文 200 字", callback_data="tt:gwords:200"),
+webapp/telegram_tweet_bot.py:5008:                    types.InlineKeyboardButton(text="上一步", callback_data="tt:generate"),
+webapp/telegram_tweet_bot.py:5009:                    types.InlineKeyboardButton(text="取消", callback_data="tt:menu"),
+webapp/telegram_tweet_bot.py:5044:                        callback_data=callback_token(chat_id, "gplatformpick", {"platform": value}),
+webapp/telegram_tweet_bot.py:5046:                    rows.append([types.InlineKeyboardButton(text="返回生成确认", callback_data=callback_token(chat_id, "gplatformback", {}))])
+webapp/telegram_tweet_bot.py:5059:                                callback_data=callback_token(chat_id, "glocalepick", {"locale": value}),
+webapp/telegram_tweet_bot.py:5063:                    locale_rows.append([types.InlineKeyboardButton(text="返回生成确认", callback_data=callback_token(chat_id, "glocaleback", {}))])
+webapp/telegram_tweet_bot.py:5073:                        callback_data=callback_token(chat_id, "gslotpick", {"slot": value}),
+webapp/telegram_tweet_bot.py:5075:                    rows.append([types.InlineKeyboardButton(text="返回生成确认", callback_data=callback_token(chat_id, "gslotback", {}))])
+webapp/telegram_tweet_bot.py:5278:                        types.InlineKeyboardButton(text="查看生成草稿", callback_data=callback_token(chat_id, "gendrafts", {
+webapp/telegram_tweet_bot.py:5281:                        types.InlineKeyboardButton(text="查看任务", callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:5316:                                callback_data=callback_token(chat_id, "gsubmit", {}),
+webapp/telegram_tweet_bot.py:5318:                            types.InlineKeyboardButton(text="修改参数", callback_data="tt:generate"),
+webapp/telegram_tweet_bot.py:5330:                        types.InlineKeyboardButton(text="查看任务", callback_data="tt:tasks:0:active"),
+webapp/telegram_tweet_bot.py:5435:                    "提示词只追加到当前配图任务，不会修改推文正文或人设简介；发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:5457:                        callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:5463:                    callback_data=callback_token(chat_id, "d", {
+webapp/telegram_tweet_bot.py:5501:                        callback_data=callback_token(chat_id, "d", {
+webapp/telegram_tweet_bot.py:5554:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:5572:                        "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:5584:                        "发送 /done 完成并返回详情，发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:5597:                        "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:5614:                    await self._publish_account_picker(
+webapp/telegram_tweet_bot.py:5619:                    await self._publish_account_picker(
+webapp/telegram_tweet_bot.py:5625:                        types.InlineKeyboardButton(text="确认删除", callback_data=callback_token(chat_id, "delok", {
+webapp/telegram_tweet_bot.py:5634:                            callback_data=(
+webapp/telegram_tweet_bot.py:5664:                        callback_data=callback_token(chat_id, "f", {
+webapp/telegram_tweet_bot.py:5672:                    callback_data=callback_token(chat_id, "d", {
+webapp/telegram_tweet_bot.py:5686:                account_id = str(reference.get("account_id") or "")
+webapp/telegram_tweet_bot.py:5692:                        "source": source, "post_id": post_id, "account_id": account_id,
+webapp/telegram_tweet_bot.py:5700:                        "下一步会展示平台、账号、正文和计划时间供最终确认；发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:5706:                            callback_data=callback_token(chat_id, "pubok", {
+webapp/telegram_tweet_bot.py:5708:                                "source": source, "post_id": post_id, "account_id": account_id,
+webapp/telegram_tweet_bot.py:5716:                            callback_data=(
+webapp/telegram_tweet_bot.py:5755:                        "account_id": str(reference.get("account_id") or ""),
+webapp/telegram_tweet_bot.py:5767:                                    callback_data=callback_token(chat_id, action, {
+webapp/telegram_tweet_bot.py:5771:                                        "account_id": publish_request["account_id"],
+webapp/telegram_tweet_bot.py:5780:                                    callback_data=callback_token(chat_id, "d" if source == "posts" else "f", {
+webapp/telegram_tweet_bot.py:5800:                            callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:5807:                    rows.append([types.InlineKeyboardButton(text="继续发布", callback_data="tt:publish_one")])
+webapp/telegram_tweet_bot.py:5850:                                callback_data=callback_token(chat_id, "hotsubmit", {}),
+webapp/telegram_tweet_bot.py:5852:                            types.InlineKeyboardButton(text="修改主题", callback_data="tt:hot"),
+webapp/telegram_tweet_bot.py:5867:                        callback_data=callback_token(chat_id, "hotstatus", {
+webapp/telegram_tweet_bot.py:5873:                        callback_data=callback_token(chat_id, "hotcancel", {
+webapp/telegram_tweet_bot.py:5887:            elif action in {"hotstatus", "hotcancel"} and len(parts) > 2:
+webapp/telegram_tweet_bot.py:5889:                    chat_id, action, parts[2], consume=(action == "hotcancel"),
+webapp/telegram_tweet_bot.py:5893:                if action == "hotcancel":
+webapp/telegram_tweet_bot.py:5894:                    result = await self._call(user_id, "hot.cancel", {
+webapp/telegram_tweet_bot.py:5899:                        chat_id, user_id, "hot.cancel", status="success",
+webapp/telegram_tweet_bot.py:5905:                            if result.get("cancelled")
+webapp/telegram_tweet_bot.py:5911:                                callback_data=callback_token(chat_id, "hotagain", {"persona_id": persona_id}),
+webapp/telegram_tweet_bot.py:5915:                                callback_data="tt:pmod:create",
+webapp/telegram_tweet_bot.py:5938:                                    callback_data=callback_token(chat_id, "hotpick", {
+webapp/telegram_tweet_bot.py:5944:                                    callback_data=callback_token(chat_id, "hotrewrite", {
+webapp/telegram_tweet_bot.py:5951:                            callback_data="tt:pmod:create",
+webapp/telegram_tweet_bot.py:5962:                                callback_data=callback_token(chat_id, "hotstatus", {
+webapp/telegram_tweet_bot.py:5968:                                callback_data=callback_token(chat_id, "hotcancel", {
+webapp/telegram_tweet_bot.py:5983:                                    callback_data=callback_token(chat_id, "hotagain", {"persona_id": persona_id}),
+webapp/telegram_tweet_bot.py:5987:                                    callback_data="tt:pmod:create",
+webapp/telegram_tweet_bot.py:6019:                    "如果只按当前人设正常改写，请发送 /auto。\n发送 /cancel 取消。\n\n"
+webapp/telegram_tweet_bot.py:6038:                            callback_data=callback_token(chat_id, "hotpick", {
+webapp/telegram_tweet_bot.py:6044:                            callback_data=callback_token(chat_id, "hotrewrite", {
+webapp/telegram_tweet_bot.py:6051:                    callback_data="tt:pmod:create",
+webapp/telegram_tweet_bot.py:6083:                        callback_data=callback_token(chat_id, "d", {
+webapp/telegram_tweet_bot.py:6087:                rows.append([types.InlineKeyboardButton(text="查看全部草稿", callback_data="tt:drafts:0")])
+webapp/telegram_tweet_bot.py:6202:                        callback_data=callback_token(chat_id, "matrixok", {
+webapp/telegram_tweet_bot.py:6209:                    types.InlineKeyboardButton(text="上一步", callback_data="tt:mxbackplatform"),
+webapp/telegram_tweet_bot.py:6264:                                callback_data=callback_token(chat_id, "matrixok", {
+webapp/telegram_tweet_bot.py:6271:                            types.InlineKeyboardButton(text="修改平台", callback_data="tt:mxbackplatform"),
+webapp/telegram_tweet_bot.py:6288:                            types.InlineKeyboardButton(text="重新选择人设", callback_data="tt:matrix"),
+webapp/telegram_tweet_bot.py:6289:                            types.InlineKeyboardButton(text="账号状态", callback_data="tt:accounts"),
+webapp/telegram_tweet_bot.py:6299:                            types.InlineKeyboardButton(text="查看进行中任务", callback_data="tt:tasks:0:active"),
+webapp/telegram_tweet_bot.py:6300:                            types.InlineKeyboardButton(text="继续矩阵发布", callback_data="tt:matrix"),
+webapp/telegram_tweet_bot.py:6315:                    types.InlineKeyboardButton(text="停止计划", callback_data=callback_token(chat_id, "automationplanstop", {
+webapp/telegram_tweet_bot.py:6319:                    types.InlineKeyboardButton(text="删除计划", callback_data=callback_token(chat_id, "automationplandelete", {
+webapp/telegram_tweet_bot.py:6323:                ], [types.InlineKeyboardButton(text="返回自动化计划", callback_data=f"tt:automationplans:{plan_page}")]]
+webapp/telegram_tweet_bot.py:6336:                    await self._call(user_id, "automation.plans.cancel", {"plan_id": plan_id})
+webapp/telegram_tweet_bot.py:6342:                    types.InlineKeyboardButton(text="返回自动化计划", callback_data=f"tt:automationplans:{plan_page}"),
+webapp/telegram_tweet_bot.py:6351:                    '{"account_id":"账号ID","platform":"instagram","mode":"list",'
+webapp/telegram_tweet_bot.py:6353:                    "账号必须已授权并绑定人设；发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:6396:                    rows.append([types.InlineKeyboardButton(text="取消任务", callback_data=callback_token(chat_id, "tcancel", {
+webapp/telegram_tweet_bot.py:6406:                    rows.append([types.InlineKeyboardButton(text="重试任务", callback_data=callback_token(chat_id, "tretry", {
+webapp/telegram_tweet_bot.py:6416:                    rows.append([types.InlineKeyboardButton(text="重新生成", callback_data="tt:generate")])
+webapp/telegram_tweet_bot.py:6433:                rows.append([types.InlineKeyboardButton(text="返回任务", callback_data=back_data)])
+webapp/telegram_tweet_bot.py:6436:                account = str(
+webapp/telegram_tweet_bot.py:6437:                    task.get("account_display_name")
+webapp/telegram_tweet_bot.py:6438:                    or task.get("account_username")
+webapp/telegram_tweet_bot.py:6439:                    or task.get("account_id")
+webapp/telegram_tweet_bot.py:6447:                    f"账号：{account}",
+webapp/telegram_tweet_bot.py:6465:            elif action in {"tcancel", "tretry"} and len(parts) > 2:
+webapp/telegram_tweet_bot.py:6466:                task_action = "tasks.cancel" if action == "tcancel" else "tasks.retry"
+webapp/telegram_tweet_bot.py:6492:                        types.InlineKeyboardButton(text="返回任务", callback_data=back_data),
+webapp/telegram_tweet_bot.py:6501:                    types.InlineKeyboardButton(text="编辑简介", callback_data="tt:bio"),
+webapp/telegram_tweet_bot.py:6502:                    types.InlineKeyboardButton(text="编辑推文风格", callback_data="tt:style"),
+webapp/telegram_tweet_bot.py:6505:                    callback_data="tt:profilename",
+webapp/telegram_tweet_bot.py:6508:                    callback_data="tt:profileai",
+webapp/telegram_tweet_bot.py:6511:                    callback_data="tt:pmemories:0",
+webapp/telegram_tweet_bot.py:6514:                    callback_data="tt:plinks",
+webapp/telegram_tweet_bot.py:6517:                    callback_data="tt:pthreads",
+webapp/telegram_tweet_bot.py:6534:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:6541:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:6548:                    "AI 只会更新简介字段，不会覆盖名称、链接模板或图库。发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:6563:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:6585:                    "发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:6616:                    "发送 /unbind 解除绑定，发送 /cancel 取消。"
+webapp/telegram_tweet_bot.py:6618:            elif action == "accounts":
+webapp/telegram_tweet_bot.py:6620:                page_text, markup = await self._accounts_payload(
+webapp/telegram_tweet_bot.py:6648:        if text in {"/cancel", "/done"}:
+webapp/telegram_tweet_bot.py:6660:                            callback_data=callback_token(chat_id, action, {
+webapp/telegram_tweet_bot.py:6714:                            types.InlineKeyboardButton(text="新建草稿", callback_data="tt:draft_new"),
+webapp/telegram_tweet_bot.py:6816:                        types.InlineKeyboardButton(text="确认并创建", callback_data="tt:persona_copy_confirm"),
+webapp/telegram_tweet_bot.py:6817:                        types.InlineKeyboardButton(text="重新分析", callback_data="tt:persona_copy_new"),
+webapp/telegram_tweet_bot.py:6818:                    ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]),
+webapp/telegram_tweet_bot.py:6827:                        text="返回人设", callback_data="tt:personas:0",
+webapp/telegram_tweet_bot.py:6878:                            callback_data=callback_token(chat_id, "image", {
+webapp/telegram_tweet_bot.py:6899:                            callback_data=callback_token(chat_id, "d", {
+webapp/telegram_tweet_bot.py:6917:                            callback_data=callback_token(chat_id, action, {
+webapp/telegram_tweet_bot.py:6933:                    "account_id": str(payload.get("account_id") or ""),
+webapp/telegram_tweet_bot.py:6944:                        callback_data=callback_token(chat_id, "schedok", next_payload),
+webapp/telegram_tweet_bot.py:6946:                    types.InlineKeyboardButton(text="修改时间", callback_data=callback_token(chat_id, "pa", {
+webapp/telegram_tweet_bot.py:6950:                        "account_id": next_payload["account_id"],
+webapp/telegram_tweet_bot.py:6958:                    callback_data=(
+webapp/telegram_tweet_bot.py:6995:                            callback_data=f"tt:persona_history:{history_page}",
+webapp/telegram_tweet_bot.py:7007:                        types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile"),
+webapp/telegram_tweet_bot.py:7014:                    types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile"),
+webapp/telegram_tweet_bot.py:7032:                        types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile"),
+webapp/telegram_tweet_bot.py:7042:                        callback_data=callback_token(chat_id, "pmemories", {"page": memory_page}),
+webapp/telegram_tweet_bot.py:7069:                        callback_data=callback_token(chat_id, "plinks", {"page": links_page}),
+webapp/telegram_tweet_bot.py:7081:                    types.InlineKeyboardButton(text="返回基础资料", callback_data="tt:profile"),
+webapp/telegram_tweet_bot.py:7099:                            callback_data=f"tt:automationplans:{automation_page}",
+webapp/telegram_tweet_bot.py:7137:                        callback_data=callback_token(chat_id, "hotpick", {
+webapp/telegram_tweet_bot.py:7143:                        callback_data=callback_token(chat_id, "hotrewrite", {
+webapp/telegram_tweet_bot.py:7149:                    callback_data=callback_token(chat_id, "hotlist", {
+webapp/telegram_tweet_bot.py:7170:                        callback_data=callback_token(chat_id, "hotsubmit", {}),
+webapp/telegram_tweet_bot.py:7172:                    types.InlineKeyboardButton(text="修改主题", callback_data="tt:hot"),
+webapp/telegram_tweet_bot.py:7173:                ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]
+webapp/telegram_tweet_bot.py:7185:            await message.answer(f"操作失败：{_error_text(exc)}\n状态已保留，可修正后重试，或发送 /cancel。")
+webapp/telegram_tweet_bot.py:7251:                        callback_data=callback_token(chat_id, "personaimage", {
+webapp/telegram_tweet_bot.py:7276:                            callback_data=callback_token(chat_id, action, {
+webapp/telegram_tweet_bot.py:7328:                            callback_data=callback_token(chat_id, "gresolve", {
+webapp/telegram_tweet_bot.py:7336:                        callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:7366:                            callback_data=callback_token(chat_id, "gendrafts", {"persona_id": persona_id}),
+webapp/telegram_tweet_bot.py:7370:                            callback_data=callback_token(chat_id, "gagain", {"persona_id": persona_id}),
+webapp/telegram_tweet_bot.py:7383:                            callback_data=callback_token(chat_id, "gagain", {"persona_id": persona_id}),
+webapp/telegram_tweet_bot.py:7387:                            callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:7401:                        callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:7467:                        callback_data=callback_token(chat_id, "imgattach", {
+webapp/telegram_tweet_bot.py:7480:                        callback_data=callback_token(chat_id, "personaimage", {
+webapp/telegram_tweet_bot.py:7487:                    callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:7505:                            callback_data=(callback_token(chat_id, "personaimage", {
+webapp/telegram_tweet_bot.py:7518:                    callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:7555:                        callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:7560:                    types.InlineKeyboardButton(text="继续发布", callback_data="tt:publish_one"),
+webapp/telegram_tweet_bot.py:7571:                        callback_data=callback_token(chat_id, "t", {
+webapp/telegram_tweet_bot.py:7606:                            callback_data=callback_token(chat_id, "hotpick", {
+webapp/telegram_tweet_bot.py:7612:                            callback_data=callback_token(chat_id, "hotrewrite", {
+webapp/telegram_tweet_bot.py:7619:                    callback_data="tt:pmod:create",
+webapp/telegram_tweet_bot.py:7623:                # so a stale watcher cannot notify the newly bound account.
+webapp/telegram_tweet_bot.py:7640:                            callback_data=callback_token(chat_id, "hotagain", {"persona_id": persona_id}),
+webapp/telegram_tweet_bot.py:7644:                            callback_data="tt:pmod:create",
+webapp/telegram_tweet_bot.py:7656:                        callback_data=callback_token(chat_id, "hotstatus", {
+webapp/telegram_tweet_bot.py:7662:                        callback_data="tt:pmod:create",
+webapp/telegram_tweet_bot.py:7712:    async def callback(query: types.CallbackQuery) -> None:
+webapp/telegram_tweet_bot.py:7713:        await controller.handle_callback(query, types)
+webapp/telegram_tweet_bot.py:7727:        types.BotCommand(command="menu", description="打开推文工作台"),
+webapp/telegram_tweet_bot.py:7729:        types.BotCommand(command="cancel", description="取消当前操作"),
+webapp/telegram_tweet_bot.py:7741:        cancelled_before_start = False
+webapp/telegram_tweet_bot.py:7751:                # cancel the not-yet-started task and let the gather below
+webapp/telegram_tweet_bot.py:7755:                cancelled_before_start = True
+webapp/telegram_tweet_bot.py:7756:                polling.cancel()
+webapp/telegram_tweet_bot.py:7760:            if not (cancelled_before_start and isinstance(result, asyncio.CancelledError)):
+webapp/server.py:119:    cancel_all_social_tasks,
+webapp/server.py:192:    cancel_video_remote_tasks,
+webapp/server.py:1207:        raise HTTPException(status_code=404, detail="customer account does not exist")
+webapp/server.py:1289:        ("PATCH", r"^/api/persona_dashboard/automation/accounts/[^/]+$", "workspace.social_account.update"),
+webapp/server.py:1391:def _require_social_account_access(account_id: str, user: dict[str, Any]) -> None:
+webapp/server.py:1393:        row = conn.execute("SELECT user_id FROM social_accounts WHERE id = ?", (str(account_id or "").strip(),)).fetchone()
+webapp/server.py:1470:        raise RuntimeError("task owner account is disabled or missing")
+webapp/server.py:1976:            "SELECT DISTINCT profile_dir FROM social_accounts WHERE trim(profile_dir) <> ''"
+webapp/server.py:1990:    # Default profiles are stored as <root>/<platform>/<account>. Include
+webapp/server.py:1991:    # unreferenced account directories left after interrupted account cleanup,
+webapp/server.py:2003:                account_dirs = list(platform_dir.iterdir())
+webapp/server.py:2006:            for account_dir in account_dirs:
+webapp/server.py:2007:                if not account_dir.is_dir() or account_dir.is_symlink():
+webapp/server.py:2009:                profile = allowed_profile(account_dir)
+webapp/server.py:3096:            "liveAuthMessage": "Threads sessionid 未授权；请登录可用账号后等待授权助手自动同步，或点击同步当前标签页。",
+webapp/server.py:3137:        login_wall = bool(re.search(r"accounts/login|log in or sign up for Threads|log in with Instagram|登入或註冊 Threads|使用 Instagram 帳號|使用 Instagram 账号", f"{final_url}\n{text_sample}", re.I))
+webapp/server.py:3143:                "liveAuthMessage": "Threads sessionid 已保存，但实时检测不可用；请退出受限/失效账号，重新登录可用账号并等待授权助手自动同步。",
+webapp/server.py:3156:                    "liveAuthMessage": "Threads sessionid 已通过真实浏览器登录态检测；后台可以用该账号进行真实抓取。",
+webapp/server.py:3606:    profile["authUrls"] = ["https://www.threads.com/", "https://www.threads.net/", "https://www.instagram.com/accounts/login/"]
+webapp/server.py:3972:def _read_managed_threads_account_cookies() -> list[dict[str, Any]]:
+webapp/server.py:3975:            accounts = conn.execute(
+webapp/server.py:3978:                FROM social_accounts
+webapp/server.py:3992:    for account in accounts:
+webapp/server.py:3993:        cookie_db_path = Path(str(account["profile_dir"] or "").strip()) / "cookies.sqlite"
+webapp/server.py:4039:    managed = _read_managed_threads_account_cookies()
+webapp/server.py:4366:def _check_runninghub_account_key(api_key: str) -> dict[str, Any]:
+webapp/server.py:4367:    """Read RunningHub account status without making a billable generation request."""
+webapp/server.py:4373:            "https://www.runninghub.cn/uc/openapi/accountStatus",
+webapp/server.py:6246:        "page_title": "推文工作台登录 · Vecto",
+webapp/server.py:6247:        "kicker": "VECTO / 推文工作台",
+webapp/server.py:6248:        "stage_title": "推文工作台",
+webapp/server.py:6250:        "heading": "登录推文工作台",
+webapp/server.py:6251:        "copy": "使用 Vecto 账号登录。登录后只会进入推文工作台，不会打开视频工作台或采集工作台。",
+webapp/server.py:6252:        "submit": "登录并进入推文工作台",
+webapp/server.py:6262:        "page_title": "视频工作台登录 · Vecto",
+webapp/server.py:6263:        "kicker": "VECTO / 视频工作台",
+webapp/server.py:6264:        "stage_title": "视频工作台",
+webapp/server.py:6266:        "heading": "登录视频工作台",
+webapp/server.py:6267:        "copy": "使用同一套 Vecto 账号登录。登录后只会进入视频工作台。",
+webapp/server.py:6268:        "submit": "登录并进入视频工作台",
+webapp/server.py:12603:    cancel_event = threading.Event()
+webapp/server.py:12607:        _NORMAL_TASK_CONTROLS[clean_task_id] = cancel_event
+webapp/server.py:12609:        _task_worker_with_control(clean_task_id, user_id, task_type, payload, cancel_event)
+webapp/server.py:12612:            if _NORMAL_TASK_CONTROLS.get(clean_task_id) is cancel_event:
+webapp/server.py:12621:    cancel_event: threading.Event,
+webapp/server.py:12677:        if cancel_event.is_set():
+webapp/server.py:12678:            raise RuntimeError("task cancelled before execution")
+webapp/server.py:12685:        if cancel_event.is_set():
+webapp/server.py:12686:            raise RuntimeError("task cancelled during execution")
+webapp/server.py:12728:        elif str(current_row["status"] or "").strip().lower() == "cancelled":
+webapp/server.py:12736:                    "status": "cancelled",
+webapp/server.py:12737:                    "stage": "cancelled_late_result",
+webapp/server.py:12968:            if current_status in {"success", "failed", "cancelled"}:
+webapp/server.py:12973:def _cancel_task_record_for_user(
+webapp/server.py:12997:                "cancelled": False,
+webapp/server.py:13017:            ("cancelled", reason, now, tid),
+webapp/server.py:13029:                "status": "cancelled",
+webapp/server.py:13030:                "stage": "cancel",
+webapp/server.py:13039:        cancel_event = _NORMAL_TASK_CONTROLS.get(tid)
+webapp/server.py:13040:    if cancel_event is not None:
+webapp/server.py:13041:        cancel_event.set()
+webapp/server.py:13042:    remote_cancellation: list[dict[str, Any]] = []
+webapp/server.py:13048:            remote_cancellation = cancel_video_remote_tasks(
+webapp/server.py:13056:            remote_cancellation = [{"ok": False, "task_id": "", "message": str(exc)}]
+webapp/server.py:13057:        if remote_cancellation:
+webapp/server.py:13066:                        "status": "cancelled",
+webapp/server.py:13067:                        "stage": "remote_cancel",
+webapp/server.py:13070:                        "results": remote_cancellation,
+webapp/server.py:13075:        "cancelled": True,
+webapp/server.py:13076:        "state": "cancelled",
+webapp/server.py:13079:        "status": "cancelled",
+webapp/server.py:13081:        "remote_cancellation": remote_cancellation,
+webapp/server.py:13126:        "account_id": "",
+webapp/server.py:13127:        "account_username": "",
+webapp/server.py:13128:        "account_display_name": "",
+webapp/server.py:13132:        "finished_at": int(item.get("updated_at") or 0) if str(item.get("status") or "").lower() in {"success", "failed", "cancelled"} else 0,
+webapp/server.py:13141:def _cancel_normal_tasks_for_deleted_user(user_id: int) -> list[str]:
+webapp/server.py:13150:            _cancel_task_record_for_user(
+webapp/server.py:13153:                requested_by="account deletion",
+webapp/server.py:13194:        if task_status in {"success", "failed", "cancelled"} and kind in {"progress", "running", "queued"}:
+webapp/server.py:14103:    account_id: str = ""
+webapp/server.py:14271:PERSONA_DASHBOARD_REFRESH_ACTIVE_STATUSES = {"queued", "running", "cancelling"}
+webapp/server.py:14419:def _account_purge_workspace_paths() -> tuple[Path, ...]:
+webapp/server.py:14432:def _account_purge_journal_dir(user_id: int) -> Path:
+webapp/server.py:14433:    return DATA_DIR / "account_purge_journal" / str(int(user_id))
+webapp/server.py:14436:def _create_account_purge_journal(user_id: int) -> Path:
+webapp/server.py:14437:    journal_dir = _account_purge_journal_dir(user_id)
+webapp/server.py:14448:                for index, path in enumerate(_account_purge_workspace_paths()):
+webapp/server.py:14467:def _stage_account_purge_paths(user_id: int, paths: list[Path]) -> None:
+webapp/server.py:14468:    journal_dir = _account_purge_journal_dir(user_id)
+webapp/server.py:14502:def _restore_account_purge_journal(user_id: int) -> None:
+webapp/server.py:14503:    journal_dir = _account_purge_journal_dir(user_id)
+webapp/server.py:14505:    paths = _account_purge_workspace_paths()
+webapp/server.py:14550:def _discard_account_purge_journal(user_id: int) -> None:
+webapp/server.py:14551:    journal_dir = _account_purge_journal_dir(user_id)
+webapp/server.py:16024:    # account-login lanes are never delayed by candidate collection.
+webapp/server.py:16144:    "accountScope",
+webapp/server.py:16301:    # Never copy account management, tokens, metrics, drafts, or publish history.
+webapp/server.py:16415:        unit_descriptor["accountId"] = str(payload.get("accountId") or "")
+webapp/server.py:16635:def _cancel_persona_hot_workflow(
+webapp/server.py:16653:    remote_cancelled = False
+webapp/server.py:16659:                    client.cancel(remote_job_id)
+webapp/server.py:16660:                    remote_cancelled = True
+webapp/server.py:16669:    if remote_cancelled:
+webapp/server.py:16731:        specific_message = "Threads 账号尚未授权登录，请先到账号管理完成登录。"
+webapp/server.py:17415:    # Collector-account health is an old-host implementation detail. Never
+webapp/server.py:17416:    # expose or infer account Cookie state through the product-facing route.
+webapp/server.py:17508:        "cancelable": True,
+webapp/server.py:17530:        if not task or task.get("status") == "cancelled":
+webapp/server.py:17537:            "cancelable": True,
+webapp/server.py:17549:            if task and task.get("status") != "cancelled":
+webapp/server.py:17562:            if task and task.get("status") != "cancelled":
+webapp/server.py:17577:        if not task or task.get("status") == "cancelled":
+webapp/server.py:17581:        if task and task.get("status") != "cancelled":
+webapp/server.py:17642:            "cancelable": True,
+webapp/server.py:17711:def _cancel_persona_hot_candidate_tasks(archive_id: str, user_id: int) -> bool:
+webapp/server.py:17714:    cancelled = False
+webapp/server.py:17724:                    "status": "cancelled",
+webapp/server.py:17728:                cancelled = True
+webapp/server.py:17729:    return cancelled
+webapp/server.py:19086:    current_accounts = _persona_bound_account_identities(clean_id, archive, include_legacy=False)
+webapp/server.py:19092:            current_accounts,
+webapp/server.py:19328:        for key in ("username", "author", "accountUsername", "account_username")
+webapp/server.py:19617:                _persona_bound_account_identities(clean_id, archive),
+webapp/server.py:19620:    identities = _persona_bound_account_identities(clean_id, archive)
+webapp/server.py:19628:        "accountId": str(identity.get("account_id") or ""),
+webapp/server.py:19686:        "accountId": str((identity or {}).get("account_id") or ""),
+webapp/server.py:19771:    metric_account_id = str(platform_metric.get("accountId") or platform_metric.get("account_id") or "").strip()
+webapp/server.py:19772:    metric_username = str(platform_metric.get("username") or platform_metric.get("accountUsername") or platform_metric.get("account_username") or "").strip().lstrip("@")
+webapp/server.py:19773:    current_account_id = str(identity.get("account_id") or "").strip()
+webapp/server.py:19775:    has_current_identity = bool(current_account_id or current_username)
+webapp/server.py:19778:    elif current_account_id and metric_account_id:
+webapp/server.py:19779:        matches = current_account_id == metric_account_id
+webapp/server.py:19781:        matches = not has_current_identity or not (metric_account_id or metric_username)
+webapp/server.py:19790:    record_platform, record_account_id, record_username = _publish_record_account_identity(record)
+webapp/server.py:19793:    current_account_id = str(identity.get("account_id") or "").strip()
+webapp/server.py:19801:    return bool(current_account_id and record_account_id and current_account_id == record_account_id)
+webapp/server.py:19813:    identities = _persona_bound_account_identities(clean_id, archive)
+webapp/server.py:19877:                "account_id": str(platform_metric.get("accountId") or platform_metric.get("account_id") or "").strip(),
+webapp/server.py:19895:                item_platform, _, _ = _publish_record_account_identity(item)
+webapp/server.py:19976:        "accountManagement": {"threads": {}},
+webapp/server.py:19983:    setup["accountManagement"] = {"threads": {}}
+webapp/server.py:20018:    setup["accountManagement"] = {"threads": {}}
+webapp/server.py:20265:    """Read PTT's public hot-board page without an account or browser session."""
+webapp/server.py:20789:    # image route.  It is deliberately separate from the source account bio.
+webapp/server.py:21283:def _persona_publish_account_for_archive(
+webapp/server.py:21285:    requested_account_id: str = "",
+webapp/server.py:21290:    clean_account_id = str(requested_account_id or "").strip()
+webapp/server.py:21295:        if clean_account_id:
+webapp/server.py:21297:                row = conn.execute("SELECT * FROM social_accounts WHERE id = ?", (clean_account_id,)).fetchone()
+webapp/server.py:21299:                row = conn.execute("SELECT * FROM social_accounts WHERE id = ? AND user_id = ?", (clean_account_id, int(owner_user_id))).fetchone()
+webapp/server.py:21302:            account = dict(row)
+webapp/server.py:21303:            if str(account.get("persona_id") or "").strip() != clean_archive_id:
+webapp/server.py:21309:                f"SELECT * FROM social_accounts WHERE persona_id = ? AND platform = ?{owner_clause} ORDER BY updated_at DESC, created_at DESC LIMIT 1",
+webapp/server.py:21314:            account = dict(row)
+webapp/server.py:21315:    if str(account.get("platform") or "").strip().lower() not in {"instagram", "threads"}:
+webapp/server.py:21317:    return account
+webapp/server.py:21320:def _latest_successful_social_task_for_account(account_id: str, task_types: list[str]) -> dict[str, Any] | None:
+webapp/server.py:21321:    clean_account_id = str(account_id or "").strip()
+webapp/server.py:21323:    if not clean_account_id or not wanted:
+webapp/server.py:21326:    params = [clean_account_id, *wanted]
+webapp/server.py:21332:            WHERE account_id = ?
+webapp/server.py:21343:def _active_social_task_for_account(account_id: str, task_types: list[str]) -> dict[str, Any] | None:
+webapp/server.py:21344:    clean_account_id = str(account_id or "").strip()
+webapp/server.py:21346:    if not clean_account_id or not wanted:
+webapp/server.py:21349:    params = [clean_account_id, *wanted]
+webapp/server.py:21355:            WHERE account_id = ?
+webapp/server.py:21726:    account = _persona_publish_account_for_archive(clean_archive_id, payload.account_id, payload.platform, owner_user_id)
+webapp/server.py:21727:    platform = str(account.get("platform") or "instagram").strip().lower() or "instagram"
+webapp/server.py:21742:        account_id=str(account.get("id") or ""),
+webapp/server.py:21783:            account_id=str(account.get("id") or ""),
+webapp/server.py:21891:def _active_publish_task_for_post(*, persona_id: str, account_id: str, post_id: str) -> dict[str, Any] | None:
+webapp/server.py:21893:    clean_account_id = str(account_id or "").strip()
+webapp/server.py:21895:    if not clean_persona_id or not clean_account_id or not clean_post_id:
+webapp/server.py:21903:              AND account_id = ?
+webapp/server.py:21909:            (clean_persona_id, clean_account_id),
+webapp/server.py:21959:            account = _persona_publish_account_for_archive(persona_id, "", platform, owner_user_id)
+webapp/server.py:21982:                    account_id=str(account.get("id") or ""),
+webapp/server.py:22006:                        account_id=str(account.get("id") or ""),
+webapp/server.py:22029:                    "account_id": str(account.get("id") or ""),
+webapp/server.py:22032:                    "account": account,
+webapp/server.py:22036:            # A missing or disabled account only affects this persona. Keep the
+webapp/server.py:22045:    pending_by_account: dict[str, list[dict[str, Any]]] = {}
+webapp/server.py:22047:        pending_by_account.setdefault(str(item.get("account_id") or ""), []).append(item)
+webapp/server.py:22048:    over_limit_accounts = [
+webapp/server.py:22049:        account_id
+webapp/server.py:22050:        for account_id, account_items in pending_by_account.items()
+webapp/server.py:22051:        if len(account_items) > platform_batch_limit
+webapp/server.py:22053:    if over_limit_accounts:
+webapp/server.py:22061:                    "account_id": account_id,
+webapp/server.py:22064:                for account_id in over_limit_accounts
+webapp/server.py:22067:    for account_id, account_items in pending_by_account.items():
+webapp/server.py:22068:        targets = [f"发布第{index + 1}篇" for index, _item in enumerate(account_items)]
+webapp/server.py:22069:        for index, item in enumerate(account_items):
+webapp/server.py:22074:                "publish_batch_id": f"{batch_id}:{account_id}",
+webapp/server.py:22076:                "publish_sequence_total": len(account_items),
+webapp/server.py:22137:                if key not in {"task_payload", "trusted_task_id", "reservation_id", "account"}
+webapp/server.py:22161:                        "UPDATE social_automation_tasks SET status = 'cancelled', finished_at = ?, error = ?, updated_at = ? WHERE id = ? AND status = 'preparing'",
+webapp/server.py:22264:        account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+webapp/server.py:22265:        threads = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+webapp/server.py:22276:            "accountManagement": {
+webapp/server.py:22277:                **account_management,
+webapp/server.py:22306:        account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+webapp/server.py:22307:        threads = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+webapp/server.py:22321:            "accountManagement": {
+webapp/server.py:22322:                **account_management,
+webapp/server.py:22342:    identities = _persona_bound_account_identities(
+webapp/server.py:22382:    account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+webapp/server.py:22383:    threads = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+webapp/server.py:23322:    for path in _account_purge_workspace_paths():
+webapp/server.py:23678:def _persona_bound_account_identities(
+webapp/server.py:23684:    """Return the currently bound account identity for each supported platform."""
+webapp/server.py:23693:                FROM social_accounts
+webapp/server.py:23706:                "account_id": str(row["id"] or "").strip(),
+webapp/server.py:23711:    # read-only identity fallback without overriding the current account pool.
+webapp/server.py:23713:    account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+webapp/server.py:23714:    threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+webapp/server.py:23715:    legacy_threads_handle = _normalize_threads_username(threads_account.get("handle"))
+webapp/server.py:23717:        identities["threads"] = {"account_id": "", "username": legacy_threads_handle}
+webapp/server.py:23721:def _publish_record_account_identity(record: dict[str, Any]) -> tuple[str, str, str]:
+webapp/server.py:23741:    account_id = next((
+webapp/server.py:23742:        str(source.get("accountId") or source.get("account_id") or "").strip()
+webapp/server.py:23744:        if str(source.get("accountId") or source.get("account_id") or "").strip()
+webapp/server.py:23746:    account_username = next((
+webapp/server.py:23747:        str(source.get("username") or source.get("accountUsername") or source.get("account_username") or "").strip().lstrip("@")
+webapp/server.py:23749:        if str(source.get("username") or source.get("accountUsername") or source.get("account_username") or "").strip()
+webapp/server.py:23753:        # whose metadata says "current account" but whose URL is a hot post or
+webapp/server.py:23754:        # a post published by a previously bound account.
+webapp/server.py:23757:            account_username = published_username
+webapp/server.py:23758:    return platform, account_id, account_username
+webapp/server.py:23761:def _is_internal_social_account_username(value: Any) -> bool:
+webapp/server.py:23766:def _historical_social_account_username(account_id: str, archived_username: str) -> str:
+webapp/server.py:23767:    """Prefer the username captured at publish time, then resolve legacy account ids."""
+webapp/server.py:23769:    if clean_username and not _is_internal_social_account_username(clean_username):
+webapp/server.py:23771:    clean_account_id = str(account_id or "").strip()
+webapp/server.py:23772:    if clean_account_id:
+webapp/server.py:23775:                "SELECT username FROM social_accounts WHERE id = ? LIMIT 1",
+webapp/server.py:23776:                (clean_account_id,),
+webapp/server.py:23779:        if stored_username and not _is_internal_social_account_username(stored_username):
+webapp/server.py:23787:    current_accounts: dict[str, dict[str, str]] | str | None = None,
+webapp/server.py:23845:    platform, source_account_id, archived_account_username = _publish_record_account_identity(record)
+webapp/server.py:23846:    source_account_username = _historical_social_account_username(
+webapp/server.py:23847:        source_account_id,
+webapp/server.py:23848:        archived_account_username,
+webapp/server.py:23850:    if isinstance(current_accounts, str):
+webapp/server.py:23851:        current_account_map = {
+webapp/server.py:23852:            "threads": {"account_id": "", "username": _normalize_threads_username(current_accounts)}
+webapp/server.py:23855:        current_account_map = current_accounts if isinstance(current_accounts, dict) else {}
+webapp/server.py:23856:    current_identity = current_account_map.get(platform) if isinstance(current_account_map.get(platform), dict) else {}
+webapp/server.py:23857:    current_account_id = str(current_identity.get("account_id") or "").strip()
+webapp/server.py:23858:    current_account_username = str(current_identity.get("username") or "").strip().lstrip("@")
+webapp/server.py:23859:    has_current_identity = bool(current_account_id or current_account_username)
+webapp/server.py:23860:    if source_account_id and current_account_id:
+webapp/server.py:23861:        account_matches_current = source_account_id == current_account_id
+webapp/server.py:23862:    elif source_account_username and current_account_username:
+webapp/server.py:23863:        account_matches_current = source_account_username.lower() == current_account_username.lower()
+webapp/server.py:23865:        account_matches_current = False
+webapp/server.py:23867:        account_matches_current = True
+webapp/server.py:23868:    account_match_warning = ""
+webapp/server.py:23869:    if not account_matches_current:
+webapp/server.py:23870:        source_label = f"@{source_account_username}" if source_account_username else ("已解绑账号" if not has_current_identity else "系统授权账号")
+webapp/server.py:23871:        account_match_warning = (
+webapp/server.py:23880:        "account_id": source_account_id,
+webapp/server.py:23881:        "account_username": source_account_username,
+webapp/server.py:23898:        "account_match": {
+webapp/server.py:23899:            "matches_current": account_matches_current,
+webapp/server.py:23900:            "source_account_id": source_account_id,
+webapp/server.py:23901:            "current_account_id": current_account_id,
+webapp/server.py:23902:            "source_handle": source_account_username,
+webapp/server.py:23903:            "current_handle": current_account_username,
+webapp/server.py:23904:            "warning": account_match_warning,
+webapp/server.py:24468:    record_platform, record_account_id, record_account_username = _publish_record_account_identity(record)
+webapp/server.py:24481:        metric_account_id = str(platform_metric.get("accountId") or platform_metric.get("account_id") or "").strip()
+webapp/server.py:24482:        metric_username = str(platform_metric.get("username") or platform_metric.get("accountUsername") or platform_metric.get("account_username") or "").strip().lstrip("@")
+webapp/server.py:24483:        if record_account_id and metric_account_id and record_account_id != metric_account_id:
+webapp/server.py:24485:        if record_account_username and metric_username and record_account_username.lower() != metric_username.lower():
+webapp/server.py:24517:    record_platform, record_account_id, record_account_username = _publish_record_account_identity(record)
+webapp/server.py:24530:        metric_account_id = str(platform_metric.get("accountId") or platform_metric.get("account_id") or "").strip()
+webapp/server.py:24531:        metric_username = str(platform_metric.get("username") or platform_metric.get("accountUsername") or platform_metric.get("account_username") or "").strip().lstrip("@")
+webapp/server.py:24532:        if record_account_id and metric_account_id and record_account_id != metric_account_id:
+webapp/server.py:24534:        if record_account_username and metric_username and record_account_username.lower() != metric_username.lower():
+webapp/server.py:24580:        platform, _, _ = _publish_record_account_identity(resolved)
+webapp/server.py:24611:    record_platform, record_account_id, record_account_username = _publish_record_account_identity(record)
+webapp/server.py:24621:        metric_account_id = str(platform_metric.get("accountId") or platform_metric.get("account_id") or "").strip()
+webapp/server.py:24622:        metric_account_username = str(platform_metric.get("username") or platform_metric.get("accountUsername") or platform_metric.get("account_username") or "").strip().lstrip("@")
+webapp/server.py:24623:        if record_account_id and metric_account_id and record_account_id != metric_account_id:
+webapp/server.py:24626:            record_account_username
+webapp/server.py:24627:            and metric_account_username
+webapp/server.py:24628:            and record_account_username.lower() != metric_account_username.lower()
+webapp/server.py:24787:    account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+webapp/server.py:24788:    threads = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+webapp/server.py:24992:        pool_identities = _persona_bound_account_identities(
+webapp/server.py:24997:        all_identities = _persona_bound_account_identities(str(archive_id).strip(), include_legacy=False)
+webapp/server.py:25040:    clauses = ["trim(account.proxy_id) <> ''"]
+webapp/server.py:25048:        clauses.append("account.user_id = ?")
+webapp/server.py:25051:        clauses.append("account.persona_id = ?")
+webapp/server.py:25056:        clauses.append(f"account.persona_id IN ({','.join('?' for _ in clean_archive_ids)})")
+webapp/server.py:25059:        SELECT proxy.*, account.id AS account_id,
+webapp/server.py:25060:               account.user_id AS account_owner_user_id
+webapp/server.py:25061:        FROM social_accounts AS account
+webapp/server.py:25062:        JOIN social_proxies AS proxy ON proxy.id = account.proxy_id
+webapp/server.py:25071:                owner_user_id=int(row["account_owner_user_id"] or 0),
+webapp/server.py:25073:            resolved_urls[str(row["account_id"])] = _social_automation_proxy_url(
+webapp/server.py:25088:        "trim(account.username) <> ''",
+webapp/server.py:25089:        "lower(account.status) NOT IN ('banned', 'disabled')",
+webapp/server.py:25099:        clauses.append("account.user_id = ?")
+webapp/server.py:25102:        clauses.append("lower(account.platform) = ?")
+webapp/server.py:25105:        clauses.append("account.persona_id = ?")
+webapp/server.py:25110:        clauses.append(f"account.persona_id IN ({','.join('?' for _ in clean_archive_ids)})")
+webapp/server.py:25113:        SELECT account.persona_id, account.platform, account.username
+webapp/server.py:25114:        FROM social_accounts AS account
+webapp/server.py:25116:        ORDER BY account.updated_at DESC, account.created_at DESC
+webapp/server.py:25206:            if task_id and _persona_dashboard_refresh_cancel_requested(task_id):
+webapp/server.py:25208:                    pending.cancel()
+webapp/server.py:25331:        if _persona_dashboard_refresh_cancel_requested(task_id):
+webapp/server.py:25340:        if _persona_dashboard_refresh_cancel_requested(task_id):
+webapp/server.py:25364:                if _persona_dashboard_refresh_cancel_requested(task_id):
+webapp/server.py:25415:            if bool((PERSONA_DASHBOARD_REFRESH_TASKS.get(task_id) or {}).get("cancel_requested")):
+webapp/server.py:25418:            if _persona_dashboard_refresh_cancel_requested(task_id):
+webapp/server.py:25441:        if _persona_dashboard_refresh_cancel_requested(task_id):
+webapp/server.py:25541:                "status": "cancelled",
+webapp/server.py:25587:def _persona_dashboard_refresh_cancel_requested(task_id: str) -> bool:
+webapp/server.py:25590:        return bool(task.get("cancel_requested")) or str(task.get("status") or "") in {"cancelling", "cancelled"}
+webapp/server.py:25593:def _cancel_persona_dashboard_refresh(task_id: str, user_id: int) -> dict[str, Any]:
+webapp/server.py:25604:            "cancel_requested": True,
+webapp/server.py:25605:            "status": "cancelling",
+webapp/server.py:25612:                "status": "cancelled",
+webapp/server.py:25680:        account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+webapp/server.py:25681:        threads = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+webapp/server.py:25845:        """Add one confirmed account snapshot to the global and platform trend buckets."""
+webapp/server.py:25893:        current_accounts = _persona_bound_account_identities(archive_id, archive)
+webapp/server.py:25937:            metric_account_id = str(metric_value.get("accountId") or metric_value.get("account_id") or "").strip()
+webapp/server.py:25938:            metric_account_username = str(metric_value.get("username") or "").strip().lstrip("@")
+webapp/server.py:25939:            current_identity = current_accounts.get(platform_name) if isinstance(current_accounts.get(platform_name), dict) else {}
+webapp/server.py:25940:            current_account_id = str(current_identity.get("account_id") or "").strip()
+webapp/server.py:25941:            current_account_username = str(current_identity.get("username") or "").strip().lstrip("@")
+webapp/server.py:25942:            has_current_identity = bool(current_account_id or current_account_username)
+webapp/server.py:25943:            if current_account_username and metric_account_username:
+webapp/server.py:25944:                matches_current_account = current_account_username.lower() == metric_account_username.lower()
+webapp/server.py:25945:            elif current_account_id and metric_account_id:
+webapp/server.py:25946:                matches_current_account = current_account_id == metric_account_id
+webapp/server.py:25948:                matches_current_account = False
+webapp/server.py:25949:            if has_current_identity and not matches_current_account:
+webapp/server.py:26019:                    compact["account_id"] = metric_account_id
+webapp/server.py:26020:                    compact["account_username"] = metric_account_username
+webapp/server.py:26021:                    compact["is_published_post"] = bool(has_current_identity and matches_current_account)
+webapp/server.py:26036:                "account_id": metric_account_id,
+webapp/server.py:26037:                "username": metric_account_username,
+webapp/server.py:26146:        account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+webapp/server.py:26147:        threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+webapp/server.py:26148:        threads_identity = current_accounts.get("threads") if isinstance(current_accounts.get("threads"), dict) else {}
+webapp/server.py:26170:            "threads_account": {
+webapp/server.py:26173:                "auth_profile_key": threads_account.get("authProfileKey"),
+webapp/server.py:26174:                "updated_at": threads_account.get("updatedAt"),
+webapp/server.py:26189:                "platform_accounts": sorted(current_accounts.keys()),
+webapp/server.py:26199:                    current_accounts,
+webapp/server.py:26293:                FROM social_accounts
+webapp/server.py:26331:                SELECT persona_id, account_id, platform, status, COUNT(*) AS count
+webapp/server.py:26337:                GROUP BY persona_id, account_id, platform, status
+webapp/server.py:26346:        account_id = str(row["account_id"] or "").strip()
+webapp/server.py:26351:        bucket = result.setdefault(persona_id, {"success": 0, "failed": 0, "total": 0, "by_platform": {}, "by_account": {}})
+webapp/server.py:26358:        if account_id:
+webapp/server.py:26359:            account_bucket = bucket["by_account"].setdefault(account_id, {"platform": platform, "success": 0, "failed": 0, "total": 0})
+webapp/server.py:26360:            account_bucket[status] += count
+webapp/server.py:26361:            account_bucket["total"] += count
+webapp/server.py:26471:        account_management = setup.get("accountManagement") if isinstance(setup.get("accountManagement"), dict) else {}
+webapp/server.py:26472:        threads_account = account_management.get("threads") if isinstance(account_management.get("threads"), dict) else {}
+webapp/server.py:26473:        threads_handle = _normalize_threads_username(threads_account.get("handle"))
+webapp/server.py:26477:        automation_publish = copy.deepcopy(automation_publish_counts.get(archive_id) or {"success": 0, "failed": 0, "total": 0, "by_platform": {}, "by_account": {}})
+webapp/server.py:26491:            "threads_account": {
+webapp/server.py:26494:                "auth_profile_key": threads_account.get("authProfileKey"),
+webapp/server.py:26495:                "updated_at": threads_account.get("updatedAt"),
+webapp/server.py:26901:                    "/service-accounts",
+webapp/server.py:27361:        # Authenticated approved accounts can open CRM directly. The shared
+webapp/server.py:27779:                    "message": "请先登录 VECTO 网页后再使用 Telegram 推文工作台",
+webapp/server.py:27811:                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'telegram_account_logout' "
+webapp/server.py:28000:            "hot.import", "hot.rewrite", "hot.cancel", "media.delete", "post_directions", "image.styles", "image.options",
+webapp/server.py:28219:                account_id=str(payload.get("account_id") or "").strip(),
+webapp/server.py:28223:            if publish_payload.account_id:
+webapp/server.py:28224:                _require_social_account_access(publish_payload.account_id, user)
+webapp/server.py:28254:        if action == "accounts.list":
+webapp/server.py:28259:                    "FROM social_accounts WHERE user_id = ? ORDER BY updated_at DESC LIMIT 1000",
+webapp/server.py:28263:        if action == "accounts.detail":
+webapp/server.py:28264:            account_id = str(payload.get("account_id") or "").strip()
+webapp/server.py:28265:            if not account_id:
+webapp/server.py:28267:            social_api._require_account_access(account_id, user)
+webapp/server.py:28268:            return social_api.get_social_account(account_id)
+webapp/server.py:28275:            account_id = str(payload.get("account_id") or "").strip()
+webapp/server.py:28276:            if not account_id:
+webapp/server.py:28288:                account_id=account_id,
+webapp/server.py:28297:        if action == "automation.plans.cancel":
+webapp/server.py:28300:                "plan": social_api.cancel_social_automation_plan(
+webapp/server.py:28317:                    account_id=str(payload.get("account_id") or "").strip(),
+webapp/server.py:28322:        if action in {"automation.tasks.get", "automation.tasks.cancel", "automation.tasks.retry"}:
+webapp/server.py:28327:            if action == "automation.tasks.cancel":
+webapp/server.py:28328:                return {"ok": True, "task": social_api.cancel_social_task(task_id, "Telegram 用户取消")}
+webapp/server.py:28337:            "accounts.bind_persona",
+webapp/server.py:28338:            "accounts.bind",
+webapp/server.py:28339:            "accounts.unbind_persona",
+webapp/server.py:28340:            "accounts.unbind",
+webapp/server.py:28341:            "accounts.check_login",
+webapp/server.py:28342:            "accounts.open_login",
+webapp/server.py:28343:            "accounts.disable",
+webapp/server.py:28344:            "accounts.delete",
+webapp/server.py:28346:            account_id = str(payload.get("account_id") or "").strip()
+webapp/server.py:28347:            if not account_id:
+webapp/server.py:28349:            account = social_api._require_account_access(account_id, user)
+webapp/server.py:28350:            account_provider = str(dict(account).get("auth_provider") or "browser").strip().lower()
+webapp/server.py:28351:            if action in {"accounts.bind_persona", "accounts.bind"}:
+webapp/server.py:28356:                return social_api.update_social_account(
+webapp/server.py:28357:                    account_id,
+webapp/server.py:28364:            if action in {"accounts.unbind_persona", "accounts.unbind"}:
+webapp/server.py:28365:                return social_api.update_social_account(
+webapp/server.py:28366:                    account_id,
+webapp/server.py:28370:            if action == "accounts.check_login":
+webapp/server.py:28371:                if account_provider == "bundle":
+webapp/server.py:28372:                    account_row = dict(account)
+webapp/server.py:28373:                    team_id = str(account_row.get("external_team_id") or "").strip()
+webapp/server.py:28374:                    platform = str(account_row.get("platform") or "").strip().lower()
+webapp/server.py:28379:                            "account": social_api.get_social_account(account_id),
+webapp/server.py:28385:                        inspection = BundleSocialClient().inspect_social_account(
+webapp/server.py:28392:                        logger.exception("Bundle account login check failed for %s", account_id)
+webapp/server.py:28398:                            "account": social_api.get_social_account(account_id),
+webapp/server.py:28409:                        "account": social_api.get_social_account(account_id),
+webapp/server.py:28414:                    "task": social_api.create_account_task(
+webapp/server.py:28415:                        account_id,
+webapp/server.py:28421:            if action == "accounts.open_login":
+webapp/server.py:28422:                if account_provider == "bundle":
+webapp/server.py:28426:                    "task": social_api.create_account_task(
+webapp/server.py:28427:                        account_id,
+webapp/server.py:28434:            # stops active tasks and removes the account record only after the
+webapp/server.py:28438:                "deleted": social_api.delete_social_account(account_id),
+webapp/server.py:28479:                "manual": 0, "paused": 0, "failed": 0, "completed": 0, "cancelled": 0,
+webapp/server.py:28500:                elif status in {"cancelled", "canceled"}:
+webapp/server.py:28501:                    bucket = "cancelled"
+webapp/server.py:28532:        if action in {"tasks.get", "tasks.cancel", "tasks.retry"}:
+webapp/server.py:28547:                if action == "tasks.cancel":
+webapp/server.py:28548:                    return _cancel_task_record_for_user(
+webapp/server.py:28555:            if action == "tasks.cancel":
+webapp/server.py:28556:                return social_api.cancel_social_task(task_id, "Telegram 用户取消")
+webapp/server.py:28611:        if action == "hot.cancel":
+webapp/server.py:28612:            task_cancelled = _cancel_persona_hot_candidate_tasks(persona_id, user_id)
+webapp/server.py:28613:            process_cancelled = _cancel_persona_hot_workflow(persona_id)
+webapp/server.py:28614:            return {"ok": True, "cancelled": bool(task_cancelled or process_cancelled)}
+webapp/server.py:28820:        account lockout, MFA/email verification, session conflict handling and
+webapp/server.py:29000:        account state checks, MFA/email verification and session governance are
+webapp/server.py:29011:            raise HTTPException(status_code=503, detail="视频工作台 Bot 当前未启用")
+webapp/server.py:29129:                      account_type, approval_status, full_name, email, phone, company,
+webapp/server.py:29246:                    raise HTTPException(status_code=403, detail="verified account email is required")
+webapp/server.py:29359:                    action="account.email_binding_changed",
+webapp/server.py:29482:                      account_type, approval_status, full_name, email, phone, company,
+webapp/server.py:29658:            raise HTTPException(status_code=403, detail="account is not approved")
+webapp/server.py:29660:            raise HTTPException(status_code=403, detail="account is disabled")
+webapp/server.py:29826:    @app.get("/api/auth/google/account-session/start")
+webapp/server.py:29827:    def api_google_account_session_start(
+webapp/server.py:29831:        """Authorize the signed-in console account without reading browser secrets.
+webapp/server.py:29841:            "google_oauth_account_session_start_ip",
+webapp/server.py:29867:            return_params = {"view": "accounts", "admin_console": "1"}
+webapp/server.py:29872:            console_return_path = "/console.html?view=accounts"
+webapp/server.py:29874:            {"purpose": "social_account_session", "user_id": owner_user_id},
+webapp/server.py:29996:        if str(flow_context.get("purpose") or "") == "social_account_session":
+webapp/server.py:30003:                    return _oauth_error_redirect("account_unavailable")
+webapp/server.py:30036:                return_params["google_account_session"] = result_code
+webapp/server.py:30085:                    return _oauth_error_redirect("account_unavailable")
+webapp/server.py:30128:                    return _oauth_error_redirect("account_unavailable")
+webapp/server.py:30221:                      account_type, approval_status, full_name, email,
+webapp/server.py:30629:                and str(user.get("account_type") or "").strip().lower() == "managed"
+webapp/server.py:30660:                # customer accounts may add the authenticated Telegram WebView
+webapp/server.py:30880:                                    "检测到新设备和新网络登录，验证码已发送到账号邮箱。"
+webapp/server.py:30924:                # or survive the move to one-session-per-account semantics.
+webapp/server.py:31173:                        "UPDATE sessions SET revoked_at = ?, revoke_reason = 'account_logout' "
+webapp/server.py:31194:            raise HTTPException(status_code=403, detail="customer account required")
+webapp/server.py:31209:                raise HTTPException(status_code=409, detail="verified account email is required")
+webapp/server.py:31338:    DEFAULT_ACCOUNT_AVATAR_URL = "/assets/opc/account-avatar-mascot.png"
+webapp/server.py:31362:    def _effective_user_avatar_url(account: dict[str, Any]) -> str:
+webapp/server.py:31365:            avatar_cleared = bool(int(account.get("avatar_cleared") or 0))
+webapp/server.py:31372:        stored = str(account.get("avatar_url") or "").strip()
+webapp/server.py:31375:        account_id = int(account.get("id") or 0)
+webapp/server.py:31376:        if account_id:
+webapp/server.py:31385:                    (account_id,),
+webapp/server.py:31474:    def _me_auth_metadata(account: dict[str, Any]) -> dict[str, Any]:
+webapp/server.py:31475:        account_id = int(account.get("id") or 0)
+webapp/server.py:31484:                (account_id,),
+webapp/server.py:31493:                (account_id,),
+webapp/server.py:31496:            "password_configured": 1 if str(account.get("password_hash") or "") else 0,
+webapp/server.py:31497:            "password_login_enabled": int(account.get("password_login_enabled", 1) or 0),
+webapp/server.py:31513:            "email_2fa_enabled": bool(int(account.get("email_2fa_enabled") or 0)),
+webapp/server.py:31683:                action="admin.mfa_enabled" if _is_admin(user) else "account.mfa_enabled",
+webapp/server.py:31722:                action="account.mfa_disabled",
+webapp/server.py:31762:                action="account.email_2fa_changed",
+webapp/server.py:31772:    @app.delete("/api/auth/account")
+webapp/server.py:31773:    def api_delete_own_account(
+webapp/server.py:31790:                account_ids = [
+webapp/server.py:31792:                    for row in conn.execute("SELECT id FROM social_accounts WHERE user_id = ?", (user_id,)).fetchall()
+webapp/server.py:31813:                    reason="self service account deletion",
+webapp/server.py:31818:            cancel_all_social_tasks("所属用户已删除账户", user_id=user_id, account_ids=account_ids)
+webapp/server.py:31819:            _cancel_normal_tasks_for_deleted_user(user_id)
+webapp/server.py:31825:    @app.get("/api/account/sessions")
+webapp/server.py:31826:    def api_account_sessions(
+webapp/server.py:31867:    @app.delete("/api/account/sessions/{session_id}")
+webapp/server.py:31868:    def api_account_revoke_session(
+webapp/server.py:32449:    @app.post("/api/persona_dashboard/personas/{archive_id}/hot_candidates/cancel")
+webapp/server.py:32450:    def api_persona_dashboard_cancel_hot_candidates(archive_id: str, _user: dict[str, Any] = Depends(require_persona_owner)):
+webapp/server.py:32451:        task_cancelled = _cancel_persona_hot_candidate_tasks(archive_id, _workspace_user_id(_user))
+webapp/server.py:32452:        process_cancelled = _cancel_persona_hot_workflow(archive_id)
+webapp/server.py:32453:        keyword_cancelled = _cancel_persona_hot_workflow(archive_id, "persona.hot_keywords.v1")
+webapp/server.py:32454:        return {"ok": True, "cancelled": task_cancelled or process_cancelled or keyword_cancelled}
+webapp/server.py:32634:        if payload.account_id:
+webapp/server.py:32635:            _require_social_account_access(payload.account_id, user)
+webapp/server.py:32652:        if payload.account_id:
+webapp/server.py:32653:            _require_social_account_access(payload.account_id, user)
+webapp/server.py:32768:    @app.post("/api/persona_dashboard/refresh/{task_id}/cancel")
+webapp/server.py:32769:    def api_persona_dashboard_refresh_cancel(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
+webapp/server.py:32770:        return _cancel_persona_dashboard_refresh(task_id, _workspace_user_id(user))
+webapp/server.py:32822:    @app.post("/api/tasks/{task_id}/cancel")
+webapp/server.py:32823:    def api_task_cancel(task_id: str, user: dict[str, Any] = Depends(get_current_user)):
+webapp/server.py:32824:        return _cancel_task_record_for_user(
+webapp/server.py:32985:                    if status in {"success", "failed", "cancelled"}:
+webapp/server.py:33152:    @app.post("/api/billing/orders/{order_id}/cancel")
+webapp/server.py:33153:    def api_billing_order_cancel(order_id: str, user: dict[str, Any] = Depends(get_current_user)):
+webapp/server.py:33156:            order = commercial_billing.cancel_order(conn, order_id, user_id=_workspace_user_id(user))
+webapp/server.py:33452:        if clean_status not in {"", "pending", "approved", "rejected", "cancelled", "refunded"}:
+webapp/server.py:34446:        """Check account status and model-directory access as separate, non-billable results."""
+webapp/server.py:34471:                key_status = _check_runninghub_account_key(api_key)
+webapp/server.py:34509:            return {"ok": True, **_check_runninghub_account_key(api_key)}
+webapp/server.py:34859:            elif task_status in {"completed", "success", "cancelled", "canceled"}:
+webapp/server.py:35292:                            message = "pending or rejected accounts must use approve"
+webapp/server.py:35297:                            message = "account lifecycle is already active"
+webapp/server.py:35302:                            message = f"account lifecycle is {lifecycle}, expected active"
+webapp/server.py:35438:                raise HTTPException(status_code=404, detail="customer account does not exist")
+webapp/server.py:35469:                raise HTTPException(status_code=404, detail="customer account does not exist")
+webapp/server.py:35473:                raise HTTPException(status_code=409, detail="account changed; refresh and retry")
+webapp/server.py:35676:    @app.get("/api/admin/service-accounts")
+webapp/server.py:35677:    def api_admin_service_accounts(user: dict[str, Any] = Depends(require_admin)):
+webapp/server.py:35680:                "SELECT id, name, purpose, allowed_scopes_json, status, expires_at, last_used_at, last_used_ip, created_by, created_at, updated_at, revoked_at FROM service_accounts ORDER BY created_at DESC"
+webapp/server.py:35692:    @app.post("/api/admin/service-accounts")
+webapp/server.py:35693:    def api_admin_create_service_account(
+webapp/server.py:35714:                    INSERT INTO service_accounts(
+webapp/server.py:35732:                raise HTTPException(status_code=409, detail="service account name already exists") from exc
+webapp/server.py:35736:                action="service_account.create",
+webapp/server.py:35737:                resource_type="service_account",
+webapp/server.py:35749:    @app.patch("/api/admin/service-accounts/{service_id}")
+webapp/server.py:35750:    def api_admin_update_service_account(
+webapp/server.py:35759:            raise HTTPException(status_code=400, detail="invalid service account status")
+webapp/server.py:35770:            before = conn.execute("SELECT * FROM service_accounts WHERE id = ?", (str(service_id),)).fetchone()
+webapp/server.py:35772:                raise HTTPException(status_code=404, detail="service account not found")
+webapp/server.py:35774:                raise HTTPException(status_code=409, detail="revoked service accounts cannot be re-enabled")
+webapp/server.py:35776:                "UPDATE service_accounts SET purpose = ?, allowed_scopes_json = ?, status = ?, expires_at = ?, revoked_at = ?, updated_at = ? WHERE id = ?",
+webapp/server.py:35790:                action="service_account.update",
+webapp/server.py:35791:                resource_type="service_account",
+webapp/server.py:35801:    @app.post("/api/admin/service-accounts/{service_id}/rotate")
+webapp/server.py:35802:    def api_admin_rotate_service_account(
+webapp/server.py:35819:                "SELECT id, name, status, expires_at, allowed_scopes_json FROM service_accounts WHERE id = ?",
+webapp/server.py:35823:                raise HTTPException(status_code=404, detail="service account not found")
+webapp/server.py:35825:                raise HTTPException(status_code=409, detail="revoked service account cannot be rotated")
+webapp/server.py:35827:                "UPDATE service_accounts SET credential_hash = ?, status = 'active', revoked_at = 0, updated_at = ? WHERE id = ?",
+webapp/server.py:35833:                action="service_account.rotate",
+webapp/server.py:35834:                resource_type="service_account",
+webapp/server.py:35972:            account_counts = conn.execute(
+webapp/server.py:35978:            customer_count = int(account_counts["customer_count"] or 0)
+webapp/server.py:35979:            admin_count = int(account_counts["admin_count"] or 0)
+webapp/server.py:35994:                SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
+webapp/server.py:36091:                      account_type, approval_status, lifecycle_status, source_channel,
+webapp/server.py:36134:                    reason=str(payload.reason or "admin created customer account"),
+webapp/server.py:36144:                """SELECT id, username, is_admin, is_disabled, balance_cents, account_type,
+webapp/server.py:36160:                          target.balance_cents, target.account_type, target.approval_status,
+webapp/server.py:36194:                "social_accounts": int(conn.execute("SELECT COUNT(*) AS c FROM social_accounts WHERE user_id = ?", (int(target_user_id),)).fetchone()["c"]),
+webapp/server.py:36263:                raise HTTPException(status_code=404, detail="customer account does not exist")
+webapp/server.py:36280:                raise HTTPException(status_code=409, detail="this account has no configured password")
+webapp/server.py:36282:                raise HTTPException(status_code=409, detail="this account has no linked Google identity")
+webapp/server.py:36289:                raise HTTPException(status_code=409, detail="an active account must keep at least one login method")
+webapp/server.py:36360:                raise HTTPException(status_code=404, detail="customer account does not exist")
+webapp/server.py:36429:            raise HTTPException(status_code=404, detail="customer account does not exist")
+webapp/server.py:36572:                raise HTTPException(status_code=409, detail="account changed; refresh and retry")
+webapp/server.py:36581:                raise HTTPException(status_code=409, detail="account changed; refresh and retry")
+webapp/server.py:36814:                account_ids = [
+webapp/server.py:36815:                    str(account_row["id"] or "").strip()
+webapp/server.py:36816:                    for account_row in conn.execute(
+webapp/server.py:36817:                        "SELECT id FROM social_accounts WHERE user_id = ?",
+webapp/server.py:36820:                    if str(account_row["id"] or "").strip()
+webapp/server.py:36830:                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'account_archived' WHERE user_id = ? AND revoked_at = 0",
+webapp/server.py:36846:            cancel_all_social_tasks("所属用户已归档", user_id=target_id, account_ids=account_ids)
+webapp/server.py:36847:            cancelled_normal_task_ids = _cancel_normal_tasks_for_deleted_user(target_id)
+webapp/server.py:36849:                cancelled_normal_task_ids,
+webapp/server.py:36877:                if _account_purge_journal_dir(target_id).exists():
+webapp/server.py:36917:                raise HTTPException(status_code=404, detail="customer account does not exist")
+webapp/server.py:36919:                raise HTTPException(status_code=400, detail="administrator accounts cannot use customer purge")
+webapp/server.py:36923:                "social_accounts": int(conn.execute("SELECT COUNT(*) AS count FROM social_accounts WHERE user_id = ?", (target_id,)).fetchone()["count"]),
+webapp/server.py:36969:                if row is None and _account_purge_journal_dir(target_id).exists():
+webapp/server.py:36971:                        _discard_account_purge_journal(target_id)
+webapp/server.py:36985:                if _account_purge_journal_dir(target_id).exists():
+webapp/server.py:36987:                        _restore_account_purge_journal(target_id)
+webapp/server.py:36988:                        _discard_account_purge_journal(target_id)
+webapp/server.py:37001:                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'account_status_changed' WHERE user_id = ? AND revoked_at = 0",
+webapp/server.py:37004:                account_ids = [
+webapp/server.py:37005:                    str(account_row["id"] or "").strip()
+webapp/server.py:37006:                    for account_row in conn.execute(
+webapp/server.py:37007:                        "SELECT id FROM social_accounts WHERE user_id = ?",
+webapp/server.py:37010:                    if str(account_row["id"] or "").strip()
+webapp/server.py:37013:            cancel_all_social_tasks("所属用户已删除", user_id=target_id, account_ids=account_ids)
+webapp/server.py:37014:            cancelled_normal_task_ids = _cancel_normal_tasks_for_deleted_user(target_id)
+webapp/server.py:37016:                cancelled_normal_task_ids,
+webapp/server.py:37044:                account_rows = conn.execute(
+webapp/server.py:37045:                    "SELECT id, profile_dir FROM social_accounts WHERE user_id = ?",
+webapp/server.py:37048:                profile_dirs = [str(r["profile_dir"] or "").strip() for r in account_rows if str(r["profile_dir"] or "").strip()]
+webapp/server.py:37049:                if account_ids:
+webapp/server.py:37050:                    account_placeholders = ",".join("?" for _ in account_ids)
+webapp/server.py:37052:                        f"SELECT id FROM social_automation_tasks WHERE user_id = ? OR account_id IN ({account_placeholders})",
+webapp/server.py:37053:                        (target_id, *account_ids),
+webapp/server.py:37139:                _create_account_purge_journal(target_id)
+webapp/server.py:37140:                _stage_account_purge_paths(target_id, staged_paths)
+webapp/server.py:37144:                    if _account_purge_journal_dir(target_id).exists():
+webapp/server.py:37145:                        _restore_account_purge_journal(target_id)
+webapp/server.py:37146:                        _discard_account_purge_journal(target_id)
+webapp/server.py:37210:                    conn.execute("DELETE FROM social_accounts WHERE user_id = ?", (target_id,))
+webapp/server.py:37269:                    # after the user's account and personal billing records
+webapp/server.py:37335:                            "deleted_social_accounts": len(account_ids),
+webapp/server.py:37347:                    _restore_account_purge_journal(target_id)
+webapp/server.py:37348:                    _discard_account_purge_journal(target_id)
+webapp/server.py:37361:                _discard_account_purge_journal(target_id)
+webapp/server.py:37460:                    "UPDATE sessions SET revoked_at = ?, revoke_reason = 'account_disabled' WHERE user_id = ? AND revoked_at = 0",
+webapp/server.py:37470:                reason="administrator account status change",

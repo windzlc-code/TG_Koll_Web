@@ -29,7 +29,7 @@ Optional:
   CAPTURE_WORKER_CONTAINER        Existing/new container name
   CAPTURE_WORKER_CANDIDATE_PORT   Temporary host canary port
 
-The script never packages credentials or runtime databases. The old host must
+The script never packages credentials or runtime databases. The application host must
 already contain a versioned runtime snapshot created by
 sync_capture_worker_runtime.sh. No production action is taken with --build-only.
 EOF
@@ -202,7 +202,7 @@ ssh "${ssh_args[@]}" "$ssh_target" bash -s -- "$release_root" "$release_id" <<'R
 set -euo pipefail
 release_root="$1"
 release_id="$2"
-[[ "$(id -u)" -eq 0 ]] || { echo "old-host deployment requires root" >&2; exit 1; }
+[[ "$(id -u)" -eq 0 ]] || { echo "application-host deployment requires root" >&2; exit 1; }
 [[ "$release_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$ ]] || exit 1
 install -d -m 700 "$release_root/incoming" "$release_root/releases"
 [[ ! -e "$release_root/releases/$release_id" ]] || {
@@ -438,7 +438,7 @@ command -v ss >/dev/null 2>&1 || die "ss is required for candidate port validati
 exec 9>"$lock_file"
 flock -n 9 || die "another capture-worker deployment is running"
 
-[[ "$(id -u)" -eq 0 ]] || die "old-host deployment requires root"
+[[ "$(id -u)" -eq 0 ]] || die "application-host deployment requires root"
 [[ -f "$archive" ]] || die "uploaded archive not found"
 [[ "$(sha256sum "$archive" | awk '{print $1}')" == "$expected_archive_sha" ]] ||
   die "uploaded archive checksum mismatch"

@@ -27,6 +27,8 @@ from webapp.worker_server import (
     _global_available_candidate_count,
     _persona_available_candidate_count,
     _apply_hot_reader_execution_profile,
+    _hot_media_recovery_enabled,
+    _hot_media_recovery_interval_seconds,
     _validate_envelope,
     create_worker_app,
     run_tool_r18_job,
@@ -1241,6 +1243,14 @@ class RemoteFetchStoreTests(unittest.TestCase):
 
 
 class RemoteFetchIsolationTests(unittest.TestCase):
+    def test_hot_media_recovery_is_enabled_by_default_and_can_be_disabled(self) -> None:
+        with patch.dict(os.environ, {"TG_HOT_MEDIA_RECOVERY_ENABLED": "1"}):
+            self.assertTrue(_hot_media_recovery_enabled())
+        with patch.dict(os.environ, {"TG_HOT_MEDIA_RECOVERY_ENABLED": "0"}):
+            self.assertFalse(_hot_media_recovery_enabled())
+        with patch.dict(os.environ, {"TG_HOT_MEDIA_RECOVERY_INTERVAL_SECONDS": "1"}):
+            self.assertEqual(_hot_media_recovery_interval_seconds(), 15)
+
     def test_runtime_sync_contains_only_empty_persona_scaffolds_and_allowlisted_profiles(self) -> None:
         script = (Path(__file__).parents[2] / "scripts" / "sync_capture_worker_runtime.sh").read_text(
             encoding="utf-8"
@@ -1316,10 +1326,10 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                     "liveOnly": False,
                     "recordShown": False,
                     "cookies": ["must-not-cross-control-boundary"],
-                    "accountId": "new-host-account",
-                    "senderUsername": "new-host-user",
+                    "accountId": "current-app-account",
+                    "senderUsername": "current-app-user",
                     "user_id": 42,
-                    "profile_dir": "/new-host/private-profile",
+                    "profile_dir": "/current-app/private-profile",
                 },
             }
         )
@@ -1408,7 +1418,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
                     "username": "sherryjim68",
                     "platform": "threads",
                     "outputOnly": True,
-                    "profile_dir": "/new-host/private-profile",
+                    "profile_dir": "/current-app/private-profile",
                     "accountId": "must-not-cross",
                     "cookies": ["secret"],
                 },
@@ -1864,7 +1874,7 @@ class RemoteFetchIsolationTests(unittest.TestCase):
 
         self.assertEqual(pool.acquired, 2)
         self.assertEqual([item["id"] for item in result["candidates"]], ["two", "three", "four"])
-        self.assertFalse(pool.released[0][1]["succeeded"])
+        self.assertTrue(pool.released[0][1]["succeeded"])
         self.assertTrue(pool.released[1][1]["succeeded"])
 
     def test_capability_requires_current_snapshot_and_hides_unimplemented_dashboard(self) -> None:

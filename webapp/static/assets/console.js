@@ -16326,7 +16326,7 @@ function publishHistoryMetricEntries(record = {}) {
     || source.views === undefined
     || (Number(source.views || 0) === 0 && interactions > 0);
   const views = viewUnavailable
-    ? null
+    ? 0
     : source.views;
   return [
     ["浏览", views],
@@ -24106,7 +24106,7 @@ function personaHotEmptyFetchMessage(platformLabel, result = {}) {
 function personaHotFailureMessage(value, fallback = "热点抓取服务暂时不可用，请稍后重试。") {
   const detail = String(value || "").trim();
   const lowered = detail.toLowerCase();
-  if (lowered.includes("persona hot keywords must use the current new-host strategy")) {
+  if (lowered.includes("persona hot keywords must use the current application strategy")) {
     return "热点关键词配置未同步，请重新生成关键词后再试。";
   }
   if (/<\s*(?:!doctype|html|head|body|title)\b|\b(?:502|503|504)\b|bad gateway|gateway timeout|service unavailable|remote fetch|worker|collector|timeout|timed out|connection|protocol error/i.test(detail)) {
@@ -24545,7 +24545,7 @@ async function fetchPersonaHotCandidates(refresh = false) {
         await liveTaskPromise.catch(() => undefined);
         throw cacheError;
       }
-      // Cache is an acceleration path. A stale/unavailable old-host cache
+      // Cache is an acceleration path. A stale/unavailable local cache
       // must never suppress the required user-triggered live fetch below.
     }
     previousCandidates = personaHotAllCandidates(persona);

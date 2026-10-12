@@ -427,9 +427,9 @@ class TelegramTweetAdminTests(unittest.TestCase):
                 "tt:taskfilter:platform", "tt:taskfilter:persona", "tt:menu",
             },
             "🔐 账号管理": {
-                "tt:vectosession",
+                "tt:chatlogin",
                 "tt:platformaccounts",
-                "tt:menu",
+                "tt:aclogout",
             },
         }
         for label, callbacks in expected_callbacks.items():
@@ -586,6 +586,38 @@ class TelegramTweetAdminTests(unittest.TestCase):
             calls,
         )
 
+    def test_account_return_callback_uses_clicking_user_not_bot_message_sender(self):
+        """A private-chat account return must not fail the chat guard.
+
+        Telegram puts the Bot in ``CallbackQuery.message.from_user`` because
+        the edited message was sent by the Bot.  The user who pressed the
+        button is ``CallbackQuery.from_user``.  Keep those identities
+        different here so this regression cannot be hidden by the test mock.
+        """
+        def dispatch(_user_id, action, _payload):
+            if action == "accounts.list":
+                return []
+            return {}
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {
+                "chat_id": chat_id,
+                "web_user_id": self.alice_id,
+                "web_username": "tweet_alice",
+            },
+        )
+        for callback_data in ("tt:accountmenu", "tt:vectosession"):
+            message = _Message()
+            message.from_user = SimpleNamespace(id=9001)  # Bot message sender.
+            query = _Query(callback_data, message)
+            query.from_user = SimpleNamespace(id=101)  # Human button clicker.
+            asyncio.run(controller.handle_callback(query, _Types))
+            self.assertTrue(message.edits)
+            self.assertIn("账号管理", message.edits[-1][0])
+            self.assertNotIn("只支持与 Bot 私聊", message.edits[-1][0])
+
     def test_vecto_session_and_platform_accounts_are_separate_callback_pages(self):
         calls = []
 
@@ -609,6 +641,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
                 "web_username": "tweet_alice",
             },
             chat_login=chat_login,
+            create_webapp_url=lambda chat_id, route: f"https://console.example.test/telegram/tweet/open?chat={chat_id}&route={route}",
+            has_active_web_session=lambda _member: True,
         )
         message = _Message(text="🔐 账号管理")
         asyncio.run(controller.handle_text(message, _Types))
@@ -622,7 +656,13 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertEqual(callbacks, {"tt:vectosession", "tt:platformaccounts", "tt:menu"})
+        self.assertEqual(callbacks, {"tt:platformaccounts", "tt:aclogout"})
+        url_buttons = [
+            button for row in menu.inline_keyboard for button in row
+            if getattr(button, "url", None)
+        ]
+        self.assertEqual(len(url_buttons), 1)
+        self.assertIsNone(getattr(url_buttons[0], "web_app", None))
 
         asyncio.run(controller.handle_callback(_Query("tt:vectosession", message), _Types))
         vecto_text, vecto_kwargs = message.edits[-1]
@@ -633,7 +673,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             for button in row
             if getattr(button, "callback_data", None)
         }
-        self.assertEqual(vecto_callbacks, {"tt:chatlogin", "tt:aclogout", "tt:accountmenu"})
+        self.assertEqual(vecto_callbacks, {"tt:platformaccounts", "tt:aclogout"})
 
         asyncio.run(controller.handle_callback(_Query("tt:platformaccounts", message), _Types))
         platform_text, platform_kwargs = message.edits[-1]
@@ -1241,7 +1281,7 @@ class TelegramTweetAdminTests(unittest.TestCase):
             button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
             for button in row if str(getattr(button, "text", "")).startswith("◀️")
         )
-        self.assertEqual(image_back.callback_data, "tt:pmod:settings")
+        self.assertEqual(image_back.callback_data, "tt:psettings:media")
         region = next(
             button for row in message.edits[-1][1]["reply_markup"].inline_keyboard
             for button in row if str(button.text).startswith("地区特征")
@@ -1818,6 +1858,50 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertEqual(str(member["linked_session_token_hash"]), session_storage_token(session))
         self.assertTrue(tweet_tg._member_has_active_web_session(member))
 
+    def test_external_browser_ticket_previews_and_binds_without_webapp_init_data(self):
+        self.runtime.update({
+            "telegram_tweet_bot_token": "123456:tweet-token",
+            "telegram_tweet_bot_enabled": True,
+        })
+        session = self._session(self.alice_id)
+        ticket_url = tweet_tg._create_link_ticket(707, self._get)
+        ticket = parse_qsl(urlsplit(ticket_url).query, keep_blank_values=True)[0][1]
+        with mock.patch.object(tweet_tg, "_send_tweet_authorization_notice"):
+            with TestClient(self._app()) as client:
+                client.cookies.set("session_token", session)
+                landing = client.get(ticket_url)
+                preview = client.post(
+                    "/telegram/tweet/exchange",
+                    json={"ticket": ticket, "init_data": "", "browser": True, "preview": True},
+                )
+                exchange = client.post(
+                    "/telegram/tweet/exchange",
+                    json={"ticket": ticket, "init_data": "", "browser": True},
+                )
+        self.assertEqual(landing.status_code, 200, landing.text)
+        self.assertIn("browser", landing.text)
+        self.assertIn("console-login.html", landing.text)
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertTrue(preview.json()["authorization_required"])
+        self.assertEqual(exchange.status_code, 200, exchange.text)
+        self.assertEqual(exchange.json()["target"], tweet_tg.WEBAPP_TARGET)
+        member = tweet_tg._load_enabled_member(707)
+        self.assertIsNotNone(member)
+        self.assertEqual(int(member["web_user_id"]), self.alice_id)
+
+        # A new ticket for the same selected VECTO account skips the second
+        # confirmation even when the browser session has been rotated.
+        next_ticket_url = tweet_tg._create_link_ticket(707, self._get)
+        next_ticket = parse_qsl(urlsplit(next_ticket_url).query, keep_blank_values=True)[0][1]
+        with TestClient(self._app()) as client:
+            client.cookies.set("session_token", session)
+            repeated = client.post(
+                "/telegram/tweet/exchange",
+                json={"ticket": next_ticket, "init_data": "", "browser": True, "preview": True},
+            )
+        self.assertEqual(repeated.status_code, 200, repeated.text)
+        self.assertTrue(repeated.json()["already_authorized"])
+
     def test_login_context_requires_signed_webapp_data_and_live_ticket(self):
         self.runtime.update({
             "telegram_tweet_bot_token": "123456:tweet-token",
@@ -2107,7 +2191,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("尚未绑定", message.answers[-1][0])
         markup = message.answers[-1][1]["reply_markup"]
         button = markup.inline_keyboard[0][0]
-        self.assertEqual(button.web_app.url, "https://console.example.test/telegram/tweet/open?chat=404&route=home")
+        self.assertEqual(button.url, "https://console.example.test/telegram/tweet/open?chat=404&route=home")
+        self.assertIsNone(getattr(button, "web_app", None))
 
     def test_unauthorized_callback_acknowledges_spinner_before_binding_prompt(self):
         controller = NativeTweetBotController(
@@ -2167,7 +2252,8 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn('F.photo | F.video | F.document', bot_source)
         self.assertIn('remember_member_profile', bot_source)
         self.assertIn('remember_tweet_member_profile', admin_source)
-        self.assertIn("WebAppInfo", bot_source)
+        self.assertNotIn("WebAppInfo", bot_source)
+        self.assertIn("TWEET_WEB_ACCOUNT_BUTTON", bot_source)
         self.assertIn("create_webapp_url", bot_source)
         self.assertIn("has_active_web_session", bot_source)
         self.assertNotIn("create_session(", admin_source)
@@ -2918,6 +3004,38 @@ class TelegramTweetAdminTests(unittest.TestCase):
         self.assertIn("简介", message.edits[-1][0])
         asyncio.run(controller.handle_callback(_Query("tt:bio", message), _Types))
         self.assertEqual(load_state(101)["mode"], "profile_content")
+
+    def test_legacy_profile_callback_uses_grouped_settings_profile(self):
+        def dispatch(_user_id, action, _payload):
+            if action == "personas.list":
+                return [{"id": "persona-a", "name": "科技观察员", "counts": {}}]
+            return []
+
+        controller = NativeTweetBotController(
+            ops=TweetWorkbenchOps(dispatch=dispatch, dispatch_async=_unused_async_dispatch),
+            get_runtime=self._get,
+            load_member=lambda chat_id: {"chat_id": chat_id, "web_user_id": self.alice_id},
+        )
+        save_state(101, selected_persona_id="persona-a")
+        message = _Message()
+        # Old Telegram messages can still contain tt:profile.  It must no
+        # longer reopen the removed flat settings page.
+        asyncio.run(controller.handle_callback(_Query("tt:profile", message), _Types))
+        self.assertIn("基础资料", message.edits[-1][0])
+        self.assertNotIn("平台账号绑定", message.edits[-1][0])
+        callbacks = {
+            button.callback_data
+            for row in message.edits[-1][1]["reply_markup"].inline_keyboard
+            for button in row
+            if getattr(button, "callback_data", None)
+        }
+        self.assertEqual(
+            callbacks,
+            {
+                "tt:profilename", "tt:bio", "tt:style", "tt:plinks",
+                "tt:pmemories:0", "tt:profileai", "tt:pmod:settings",
+            },
+        )
 
     def test_help_keeps_account_prerequisites_inside_telegram(self):
         controller = NativeTweetBotController(

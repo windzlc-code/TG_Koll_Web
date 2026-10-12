@@ -51,29 +51,18 @@ class ProxyMarketRemovalTests(unittest.TestCase):
         ):
             self.assertNotIn(fragment, combined)
 
-    def test_admin_proxy_inventory_workspace_is_retained(self):
-        self.assertIn('data-page="proxyMarket"', self.admin_markup)
-        self.assertIn('data-page-view="proxyMarket"', self.admin_markup)
-        self.assertIn("/api/admin/proxy-market/items", self.admin_script)
-        self.assertIn("/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/purge", self.admin_script)
-        self.assertIn("/api/admin/proxy-market/items/${encodeURIComponent(itemId)}/shares", self.admin_script)
-        self.assertIn("彻底删除", self.admin_script)
-        self.assertIn("共享给用户", self.admin_script)
-        self.assertIn("loadProxyMarketShareUsers", self.admin_script)
-        self.assertIn('api("/api/admin/users?role=admin&limit=500")', self.admin_script)
-        self.assertNotIn("loadProxyMarketShareCustomers", self.admin_script)
-        self.assertNotIn("payload.items.filter((user) => !user.is_admin)", self.admin_script)
-        self.assertIn("没有匹配的账号", self.admin_script)
-        self.assertIn("id=\"proxyMarketShareModal\"", self.admin_markup)
-        self.assertIn("admin-public-action-modal", self.admin_markup)
-        self.assertIn("M12 2v13", self.admin_script)
-        self.assertIn("已购代理", self.admin_markup)
-        self.assertIn("record-tab-count", self.admin_markup)
-        self.assertIn("register_proxy_ip_admin_routes(app)", self.server_source)
+    def test_admin_proxy_inventory_workspace_is_removed(self):
+        self.assertNotIn('data-page="proxyMarket"', self.admin_markup)
+        self.assertIn('id="secProxyMarket" data-page-view="proxyMarket" hidden', self.admin_markup)
+        self.assertNotIn('proxyMarket: "代理 IP"', self.admin_script)
+        self.assertNotIn('nextPage === "proxyMarket"', self.admin_script)
+        self.assertNotIn('register_proxy_ip_admin_routes(app)', self.server_source)
+        self.assertNotIn('ensure_proxy_market_health_monitor_started()', self.server_source)
+        self.assertNotIn('stop_proxy_market_health_monitor()', self.server_source)
+
+        # The old implementation and stored records remain available to
+        # migration/rollback tooling, but are not registered in the app.
         self.assertIn('@app.get("/api/admin/proxy-market/items")', self.proxy_admin_source)
-        self.assertIn("def purge_shared_market_item", self.proxy_admin_source)
-        self.assertIn("def set_owned_market_shares", self.proxy_admin_source)
-        self.assertIn("silent: adminState.proxyMarketLoaded", self.admin_script)
 
     def test_admin_proxy_inventory_uses_automatic_recognition_only(self):
         self.assertIn('id="proxyMarketSmartInput"', self.admin_markup)

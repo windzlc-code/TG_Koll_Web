@@ -376,12 +376,13 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         self.assertIn("meta.source_url", hot_origin)
         self.assertIn("查看原帖", hot_origin)
 
-    def test_publish_history_does_not_render_missing_views_as_zero(self):
+    def test_publish_history_renders_missing_views_as_zero(self):
         entries = function_source("publishHistoryMetricEntries", "formatPublishHistoryMetricUnit")
         metric_text = function_source("publishHistoryMetricText", "renderPublishHistoryMetrics")
 
         self.assertIn('source.views_available === false', entries)
-        self.assertIn('viewUnavailable\n    ? null', entries)
+        self.assertIn('viewUnavailable\n    ? 0', entries)
+        self.assertNotIn('viewUnavailable\n    ? null', entries)
         self.assertNotIn('source.matched === true ? "不适用" : null', entries)
         self.assertIn('["浏览",', entries)
         self.assertNotIn('source.views ?? source.hot_score', entries)
@@ -436,11 +437,19 @@ class ConsolePublishHistoryHotDataTests(unittest.TestCase):
         threads_refresh_end = REFRESH_SCRIPT.index("if (complete) nextMetric.snapshots", threads_refresh_start)
         threads_refresh = REFRESH_SCRIPT[threads_refresh_start:threads_refresh_end]
         self.assertIn("const hasFreshPostMetrics = complete && Array.isArray(metrics.postMetrics);", threads_refresh)
+        self.assertIn(
+            "const hasPartialPostMetrics = !complete\n"
+            "          && Array.isArray(metrics.postMetrics)\n"
+            "          && metrics.postMetrics.length > 0;",
+            threads_refresh,
+        )
         self.assertIn("metrics.postMetrics.map((row: any) => ({ ...row }))", threads_refresh)
-        self.assertNotIn("mergePostMetrics(previousMetrics, metrics.postMetrics)", threads_refresh)
+        self.assertIn("mergePostMetrics(previousMetrics, metrics.postMetrics)", threads_refresh)
+        self.assertIn("const hasPersistablePostMetrics = hasFreshPostMetrics || hasPartialPostMetrics;", threads_refresh)
+        self.assertIn("postMetrics: mergedPostMetrics", threads_refresh)
         self.assertNotIn("await backfillPublishedThreadsPostMetrics", threads_refresh)
         self.assertIn("refreshedAt: metrics.refreshedAt", threads_refresh)
-        self.assertIn("未更新帖子数据", threads_refresh)
+        self.assertIn("本次保留已读取的部分帖子数据", threads_refresh)
         self.assertIn("ok: usable", REFRESH_SCRIPT)
 
     def test_manual_hot_refresh_uses_authenticated_source_and_reloads_history(self):

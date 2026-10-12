@@ -2768,11 +2768,17 @@ function isCompletelyUnrelatedSentimentContent(
 
 export function isChineseSentimentCandidate(value: unknown): boolean {
   const text = cleanText(value);
-  const hanCount = (text.match(/[\u3400-\u9fff]/gu) || []).length;
+  // URLs and domains should not make otherwise Chinese copy look foreign.
+  const languageText = text.replace(/(?:https?:\/\/|www\.)\S+/giu, " ");
+  const hanCount = (languageText.match(/[\u3400-\u9fff]/gu) || []).length;
   if (hanCount < 6) return false;
-  const kanaCount = (text.match(/[\u3040-\u30ff]/gu) || []).length;
-  if (kanaCount >= 3 && kanaCount >= hanCount * 0.08) return false;
-  const latinCount = (text.match(/[A-Za-z]/g) || []).length;
+  // Allow small bilingual fragments, but reject any non-Han script when it
+  // clearly dominates the copy. This covers Korean, Japanese, English, and
+  // other non-current-language content without a one-script special case.
+  const letterCount = (languageText.match(/\p{L}/gu) || []).length;
+  const nonHanLetterCount = Math.max(0, letterCount - hanCount);
+  if (nonHanLetterCount >= 12 && nonHanLetterCount > hanCount * 1.25) return false;
+  const latinCount = (languageText.match(/[A-Za-z]/g) || []).length;
   return hanCount >= 12 || hanCount >= latinCount * 0.3;
 }
 

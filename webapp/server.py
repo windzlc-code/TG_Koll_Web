@@ -152,11 +152,6 @@ from .crm_integration import (
     ensure_crm_runtime_started,
     stop_crm_runtime,
 )
-from .proxy_ip_admin import (
-    ensure_proxy_market_health_monitor_started,
-    register_proxy_ip_admin_routes,
-    stop_proxy_market_health_monitor,
-)
 from .collector_proxy_admin import register_collector_proxy_admin_routes
 from .fingerprint_login_admin import register_fingerprint_login_admin_routes
 from .proxy_purchase_api import (
@@ -185,6 +180,7 @@ from .telegram_tweet_admin import (
     _create_link_ticket,
     inject_tweet_telegram_admin,
     start_tweet_telegram_bot_worker,
+    validate_tweet_browser_login_context,
     stop_tweet_telegram_bot_worker,
     validate_tweet_webapp_login_context,
 )
@@ -7029,7 +7025,13 @@ def _apply_runtime_defaults(task_type: str, payload: dict[str, Any]) -> dict[str
     return _attach_workflow_meta_to_payload(task_type, merged)
 
 
-def _upload_binary_to_runninghub(*, api_key: str, file_path: Path, media_kind: str) -> str:
+def _upload_binary_to_runninghub(
+    *,
+    api_key: str,
+    file_path: Path,
+    media_kind: str,
+    prefer_file_name: bool = False,
+) -> str:
     url = f"{str(runninghub_common.BASE_URL).rstrip('/')}/openapi/v2/media/upload/binary"
     headers = {"Authorization": f"Bearer {api_key}"}
     with file_path.open("rb") as f:
@@ -7044,6 +7046,8 @@ def _upload_binary_to_runninghub(*, api_key: str, file_path: Path, media_kind: s
     file_name = str(data.get("fileName") or "").strip()
     download_url = str(data.get("download_url") or "").strip()
     kind = str(media_kind or "").strip().lower()
+    if prefer_file_name and file_name:
+        return file_name
     if suffix in IMAGE_EXTS and download_url:
         if download_url.startswith("http"):
             return download_url
@@ -7128,7 +7132,16 @@ def _resolve_media_url(
         raise FileNotFoundError(f"本地文件不存在: {path}")
     upload_api_key = str(upload_file_api_key or "").strip() or str(api_key or "").strip()
     if path.suffix.lower() in IMAGE_EXTS:
-        return _upload_binary_to_runninghub(api_key=upload_api_key, file_path=path, media_kind=media_kind)
+        kind = str(media_kind or "").strip().lower()
+        return _upload_binary_to_runninghub(
+            api_key=upload_api_key,
+            file_path=path,
+            media_kind=media_kind,
+            # RunningHub AI App upload nodes consume the provider's fileName
+            # identifier. Public download URLs are valid for model APIs but
+            # are rejected by the digital-human workflow as error 1007.
+            prefer_file_name=kind.startswith("digital_human") and kind.endswith("_image"),
+        )
     server_ip = str(upload_server_ip or "").strip()
     server_port_text = str(upload_server_port or "").strip()
     if server_ip and server_port_text:
@@ -13656,6 +13669,7 @@ class LoginPayload(BaseModel):
     # before it permits an additional session.
     telegram_tweet_ticket: str = Field(default="", max_length=256)
     telegram_init_data: str = Field(default="", max_length=8192)
+    telegram_tweet_browser: bool = False
     # Video Bot uses the same normal login policy, but keeps its Bot token and
     # one-time binding tickets isolated from the Tweet Bot. ``browser`` is
     # true only for the external HTTPS URL-button flow, where Telegram cannot
@@ -13787,7 +13801,7 @@ class BundleSocialConfigPayload(BaseModel):
     api_key: str = Field(default="", max_length=512)
     webhook_secret: str = Field(default="", max_length=512)
     homepage_overlay_enabled: bool | None = True
-    homepage_read_interval_hours: int | None = Field(default=12, ge=6, le=24)
+    homepage_read_interval_hours: int | None = Field(default=24, ge=6, le=24)
     collect_offset_hours: int | None = Field(default=12, ge=8, le=18)
 
 
@@ -16274,7 +16288,7 @@ def _remote_fetch_safe_archive_value(value: Any, archive_id: str) -> dict[str, A
 
 
 def _remote_fetch_crm_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the complete allowlist for an old-host CRM collector request."""
+    """Return the complete allowlist for a compatibility CRM request."""
 
     archive_id = str(payload.get("archiveId") or "").strip()
     remote_payload: dict[str, Any] = {}
@@ -25679,15 +25693,15 @@ def _matrix_publish_browser_pressure_active() -> bool:
 
 
 def _persona_dashboard_monitor_interval_seconds() -> int:
-    raw = os.getenv("PERSONA_DASHBOARD_RSSHUB_POLL_SECONDS") or os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_SECONDS") or "43200"
+    raw = os.getenv("PERSONA_DASHBOARD_RSSHUB_POLL_SECONDS") or os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_SECONDS") or "86400"
     try:
         return max(60, int(float(raw)))
     except Exception:
-        return 43200
+        return 86400
 
 
 def _persona_dashboard_monitor_enabled() -> bool:
-    # Dashboard data refresh is a low-frequency (12-hour by default) task.
+    # Dashboard data refresh is a low-frequency (24-hour by default) task.
     # It must not start a persona-level hot-capture workflow.
     return str(os.getenv("PERSONA_DASHBOARD_AUTO_REFRESH_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
@@ -27027,7 +27041,6 @@ def create_app() -> FastAPI:
         _ensure_persona_dashboard_monitor_started()
         ensure_social_automation_worker_started()
         ensure_crm_runtime_started()
-        ensure_proxy_market_health_monitor_started()
         if not boundary.collector:
             start_proxy_purchase_worker()
         try:
@@ -27036,7 +27049,6 @@ def create_app() -> FastAPI:
             stop_proxy_purchase_worker()
             stop_crm_runtime()
             stop_social_automation_worker()
-            stop_proxy_market_health_monitor()
             stop_telegram_bot_worker()
             stop_tweet_telegram_bot_worker()
 
@@ -27956,7 +27968,6 @@ def create_app() -> FastAPI:
         live_search_executor=_crm_live_search_executor,
         collector_live_search=_crm_collector_live_search_enabled(),
     )
-    register_proxy_ip_admin_routes(app)
     register_collector_proxy_admin_routes(app)
     register_proxy_purchase_routes(
         app,
@@ -30939,18 +30950,24 @@ def create_app() -> FastAPI:
 
             telegram_ticket = str(payload.telegram_tweet_ticket or "").strip()
             telegram_init_data = str(payload.telegram_init_data or "").strip()
+            telegram_tweet_browser = bool(payload.telegram_tweet_browser)
             telegram_video_ticket = str(payload.telegram_video_ticket or "").strip()
             telegram_video_init_data = str(payload.telegram_video_init_data or "").strip()
             telegram_video_browser = bool(payload.telegram_video_browser)
-            if telegram_ticket or telegram_init_data:
-                if not telegram_ticket or not telegram_init_data:
+            if telegram_ticket or telegram_init_data or telegram_tweet_browser:
+                if not telegram_ticket:
                     raise HTTPException(status_code=400, detail="Telegram 登录上下文不完整，请回到 Bot 重新打开绑定入口")
-                validate_tweet_webapp_login_context(
-                    telegram_ticket,
-                    telegram_init_data,
-                    runtime,
-                    conn=conn,
-                )
+                if telegram_init_data:
+                    validate_tweet_webapp_login_context(
+                        telegram_ticket,
+                        telegram_init_data,
+                        runtime,
+                        conn=conn,
+                    )
+                elif telegram_tweet_browser:
+                    validate_tweet_browser_login_context(telegram_ticket, runtime, conn=conn)
+                else:
+                    raise HTTPException(status_code=400, detail="Telegram 登录上下文不完整，请回到 Bot 重新打开绑定入口")
                 # Administrators retain the stricter single-session boundary;
                 # customer accounts may add the authenticated Telegram WebView
                 # without revoking an existing browser session.

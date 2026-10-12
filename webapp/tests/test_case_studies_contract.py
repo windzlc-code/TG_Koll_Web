@@ -11,27 +11,24 @@ def test_added_hot_cases_use_persisted_report_endpoints() -> None:
     assert 'id: "tjs0980"' in script
     assert 'number: "03"' in script
     assert 'username: "tjs0980"' in script
-    assert 'reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwejs0k_bbc154"' in script
     assert 'reportApiUrls: ["/assets/opc/case-studies/tar_mtwejs0k_bbc154.json"]' in script
     assert script.index('id: "gy-zzzzz"') < script.index('id: "tjs0980"')
     assert 'id: "kameoka-yingying"' in script
     assert 'number: "04"' in script
     assert 'username: "kameoka_yingying"' in script
-    assert 'reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwiw9jh_d4c2c7"' in script
     assert 'reportApiUrls: ["/assets/opc/case-studies/tar_mtwiw9jh_d4c2c7.json"]' in script
     assert script.index('id: "tjs0980"') < script.index('id: "kameoka-yingying"')
     assert 'id: "mirahuang-12"' in script
     assert 'number: "05"' in script
     assert 'username: "mirahuang.12"' in script
-    assert 'reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwloux8_ae32f0"' in script
     assert 'reportApiUrls: ["/assets/opc/case-studies/tar_mtwloux8_ae32f0.json"]' in script
     assert script.index('id: "kameoka-yingying"') < script.index('id: "mirahuang-12"')
     assert 'id: "saasaimomo"' in script
     assert 'number: "06"' in script
     assert 'username: "saasaimomo"' in script
-    assert 'reportUrl: "http://47.243.99.2:8094/threads-analysis?report=tar_mtwtcgfx_7a15a3"' in script
     assert 'reportApiUrls: ["/assets/opc/case-studies/tar_mtwtcgfx_7a15a3.json"]' in script
     assert script.index('id: "mirahuang-12"') < script.index('id: "saasaimomo"')
+    assert "threads-analysis?report=" not in script
 
 
 def test_third_hot_case_snapshot_has_complete_report_data() -> None:

@@ -168,7 +168,7 @@ class CRMOPCLiveAdapterTests(unittest.TestCase):
                 {
                     "query": "AI 营销",
                     "accountId": "threads-foreign",
-                    "senderUsername": "must-not-leave-new-host",
+                    "senderUsername": "must-not-leave-current-app",
                     "user_id": 999_999,
                     "cookies": [{"name": "sessionid", "value": "secret"}],
                     "password": "secret",

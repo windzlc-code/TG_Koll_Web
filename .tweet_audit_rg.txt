@@ -1,0 +1,215 @@
+314:def callback_token(chat_id: int, action: str, payload: dict[str, Any], *, ttl_seconds: int = 900) -> str:
+338:def resolve_callback_token(chat_id: int, action: str, token: str, *, consume: bool = False) -> dict[str, Any]:
+1115:            types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
+1122:        back_callback: str = "tt:menu",
+1145:        rows.append([button(text="取消当前步骤", callback_data="tt:stepcancel")])
+1152:        back_callback: str = "tt:pmod:create",
+1163:            types.InlineKeyboardButton(text="取消", callback_data="tt:menu"),
+1176:            [button(text="📝 只生成推文（不配图）", callback_data="tt:genmode:text")],
+1177:            [button(text="🖼 生成推文＋配图", callback_data="tt:genmode:media")],
+1178:            [button(text="🧩 自定义新建（文字/图片/视频素材）", callback_data="tt:genmode:custom")],
+1179:            [button(text="🔥 热点抓取", callback_data="tt:genmode:hot")],
+1180:            [button(text="返回新建推文", callback_data="tt:pmod:create")],
+1209:                query, types, generation_mode="text", back_callback="tt:genmodes", preflight_memory=True,
+1213:                query, types, generation_mode="media", back_callback="tt:genmodes", preflight_memory=True,
+1232:            [button(text="返回总控菜单", callback_data="tt:menu")],
+1313:        back_callback: str = "tt:pmod:create",
+1322:            "generation_back": str(back_callback or "tt:pmod:create"),
+1329:            await self._render_generation_memories(
+1348:                back_callback=str(back_callback or "tt:pmod:create"),
+1349:                back_text="返回生成方式" if str(back_callback) == "tt:genmodes" else "返回新建推文",
+1353:    async def _render_generation_count_step(
+1374:                back_callback=str(payload.get("generation_back") or "tt:genmodes"),
+1375:                back_text="返回生成方式" if str(payload.get("generation_back")) == "tt:genmodes" else "返回新建推文",
+1379:    async def _render_generation_prompt_step(
+1402:                back_callback="tt:genmodes",
+1409:    async def _render_generation_words_step(
+1433:                types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
+1437:    async def _render_generation_ratio_step(
+1464:            types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
+1500:            callback_data="tt:pmod:create",
+1502:        rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
+1525:                back_callback="tt:genmodes",
+1546:            "tt:personamanage"
+1567:            callback_for_page=lambda target: f"tt:personas:{target}",
+1570:        rows.append([types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")])
+1615:            [button(text="➕ 新建人设", callback_data="tt:persona_ai_new")],
+1616:            [button(text="📝 手工新建资料", callback_data="tt:persona_new")],
+1617:            [button(text="🔗 复制公开人设", callback_data="tt:persona_copy_new")],
+1618:            [button(text="返回人设列表", callback_data=f"tt:personas:{max(0, int(page or 0))}")],
+1645:                button(text="✍️ 新建推文", callback_data="tt:pmod:create"),
+1646:                button(text="📝 推文内容", callback_data="tt:pmod:content"),
+1649:                button(text="🚀 发布管理", callback_data="tt:pmod:publish"),
+1650:                button(text="⚙️ 人设设置", callback_data="tt:pmod:settings"),
+1652:            [button(text="返回我的人设", callback_data=f"tt:personas:{max(0, int(page or 0))}")],
+1664:            return [types.InlineKeyboardButton(text="上一步", callback_data=f"tt:pmod:{module}")]
+1673:    def _persona_module_payload(
+1714:                        button(text="🧑‍🎨 人设图与图库", callback_data="tt:personaimage"),
+1717:                        button(text="🔗 平台账号绑定", callback_data="tt:persona_accounts"),
+1741:                    [button(text="✍️ 选择生成方式", callback_data="tt:genmodes")],
+1751:                        button(text="📝 草稿与推文", callback_data="tt:postsmenu"),
+1763:                    [button(text="🚀 发布推文（立即/定时）", callback_data="tt:publish_one")],
+1766:                        button(text="🕘 发布历史", callback_data="tt:persona_history:0"),
+1773:    async def _render_persona_home(
+1788:    async def _render_persona_module(
+1815:        text, markup = self._persona_module_payload(
+1836:            callback_for_page=lambda target: f"tt:personagroups:{target}",
+1859:        rows.append([types.InlineKeyboardButton(text="返回我的人设", callback_data="tt:personas:0")])
+1941:            [types.InlineKeyboardButton(text="返回人设分组", callback_data=f"tt:personagroups:{max(0, int(groups_page or 0))}")],
+2241:                "return_callback": "tt:persona_accounts",
+2274:        rows.append([types.InlineKeyboardButton(text="上一步", callback_data="tt:pmod:settings")])
+2315:            [types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu")],
+2596:        rows.append([button(text="返回总控菜单", callback_data="tt:menu")])
+2718:    async def _render_image_options(
+2751:            "image_render_style": str(current.get("image_render_style") or "original"),
+2777:            "cinematic_cg": "影视 CG", "three_render_two": "3 渲 2", "american_cartoon": "美式卡通",
+2782:            rows.append([option_button(label, "image_render_style", value) for value, label in style_items[index:index + 2]])
+2810:            f"风格 {style_labels.get(payload['image_render_style'], payload['image_render_style'])}"
+2823:    async def _render_persona_image_options(
+2971:    async def _render_persona_image_field(
+3064:                        "tt:publishposts:" + str(context["page"])
+3146:                    "tt:publishposts:" + str(page)
+3236:        def _task_page_callback(target_page: int) -> str:
+3410:        rows.append([types.InlineKeyboardButton(text="返回发布管理", callback_data="tt:pmod:publish")])
+3411:        rows.append([types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")])
+3478:    async def _render_generation_directions(self, query: Any, types: Any, *, notice: str = "") -> None:
+3515:        rows.append([types.InlineKeyboardButton(text="取消", callback_data="tt:menu")])
+3587:                callback_data=str(payload.get("generation_back") or "tt:generate"),
+3613:        ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]
+3616:    async def _render_generation_confirmation(
+3631:    async def _render_generation_memories(
+3725:    async def _render_profile_memories(self, query: Any, types: Any, *, page: int = 0) -> None:
+3769:    async def _render_profile_links(self, query: Any, types: Any, *, page: int = 0) -> None:
+3892:                types.InlineKeyboardButton(text="确认并创建", callback_data="tt:persona_copy_confirm"),
+3893:                types.InlineKeyboardButton(text="重新分析", callback_data="tt:persona_copy_new"),
+3894:            ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]),
+3921:                    callback_data=f"tt:persona_history:{max(0, int(page or 0))}",
+3926:    async def _render_automation_plans(self, query: Any, types: Any, *, page: int = 0) -> None:
+4121:    async def handle_callback(self, query: Any, types: Any) -> None:
+4160:        if data == "tt:stepcancel":
+4242:            elif action == "stepcancel":
+4344:                            [types.InlineKeyboardButton(text="取消", callback_data="tt:persona_accounts")],
+4618:                await self._render_persona_module(query, types, member, "create")
+4621:                await self._render_persona_module(query, types, member, "content")
+4624:                await self._render_persona_module(query, types, member, "publish")
+4652:                    "tt:pmod:settings"
+4654:                    else "tt:personamanage"
+4790:                        types.InlineKeyboardButton(text="返回我的人设", callback_data=f"tt:personas:{persona_page}"),
+4844:                    callback_data="tt:pmod:settings",
+4893:                            types, back_callback="tt:pmod:create", back_text="返回新建推文",
+4907:                await self._render_persona_home(query, types, persona, chat_id, page=persona_page)
+4910:                await self._render_persona_module(query, types, member, module)
+4925:                        types, back_callback="tt:personamanage", back_text="返回人设管理",
+4935:                        types.InlineKeyboardButton(text="◀️ 返回", callback_data="tt:personas:0"),
+5021:                            types.InlineKeyboardButton(text="◀️ 返回重新输入名称", callback_data="tt:persona_ai_name"),
+5064:                        types, back_callback="tt:personamanage", back_text="返回人设管理",
+5074:                        types, back_callback="tt:personamanage", back_text="返回人设管理",
+5122:                        types.InlineKeyboardButton(text="查看我的人设", callback_data="tt:personas:0"),
+5198:                await self._render_persona_image_options(
+5244:                await self._render_persona_image_options(
+5251:                await self._render_persona_image_field(
+5276:                await self._render_persona_image_options(
+5352:                await self._render_persona_image_options(
+5370:                await self._render_persona_image_options(
+5393:                await self._render_persona_image_options(
+5402:                await self._render_persona_module(query, types, member, "create")
+5450:                            "return_callback": f"tt:persona_history:{page}",
+5461:                    callback_for_page=lambda target: f"tt:persona_history:{target}",
+5505:                ], [types.InlineKeyboardButton(text="返回发布历史", callback_data=f"tt:persona_history:{history_page}")]]
+5529:                            callback_data=f"tt:persona_history:{max(0, int(reference.get('page') or 0))}",
+5544:                            callback_data=f"tt:persona_history:{max(0, int(reference.get('page') or 0))}",
+5562:                            callback_data=f"tt:persona_history:{max(0, int(reference.get('page') or 0))}",
+5580:                        back_callback=f"tt:persona_history:{page}",
+5597:                        back_callback=f"tt:persona_history:{page}",
+5629:                            back_callback=str(payload.get("generation_back") or "tt:genmodes"),
+5630:                            back_text="返回生成方式" if str(payload.get("generation_back")) == "tt:genmodes" else "返回生成数量",
+5645:                        await self._render_generation_ratio_step(query, types, payload=payload)
+5647:                        await self._render_generation_prompt_step(query, types, payload=payload)
+5649:                generation_back = str(payload.get("generation_back") or "tt:generate")
+5658:                    types.InlineKeyboardButton(text="取消", callback_data="tt:menu"),
+5671:                    await self._render_generation_count_step(query, types, payload=payload)
+5677:                await self._render_generation_prompt_step(query, types, payload=payload)
+5686:                    await self._render_generation_prompt_step(query, types, payload=payload)
+5690:                    await self._render_generation_words_step(query, types, payload=payload, notice="已跳过额外提示词")
+5709:                    await self._render_generation_confirmation(
+5723:                        "generation_back": str(state["payload"].get("generation_back") or "tt:generate"),
+5726:                generation_back = str(state["payload"].get("generation_back") or "tt:generate")
+5735:                        back_text="返回生成方式" if generation_back == "tt:genmodes" else "重新选择生成参数",
+5812:                await self._render_generation_confirmation(query, types, payload=payload, notice="生成参数已更新。")
+5820:                await self._render_generation_confirmation(query, types, payload=payload)
+5849:                await self._render_generation_directions(query, types, notice="推文方向已生成")
+5867:                await self._render_generation_directions(query, types)
+5878:                await self._render_generation_confirmation(
+5888:                await self._render_generation_confirmation(
+5898:                await self._render_generation_confirmation(query, types, payload=payload)
+5901:                await self._render_generation_memories(
+5934:                await self._render_generation_memories(
+5944:                    await self._render_generation_count_step(
+5952:                await self._render_generation_confirmation(
+5968:                    await self._render_generation_memories(query, types, page=0, notice="已清空本次记忆选择")
+5971:                await self._render_generation_confirmation(
+5982:                await self._render_generation_count_step(
+5996:                await self._render_generation_confirmation(query, types, payload=payload)
+6052:                                callback_data=str(payload.get("generation_back") or "tt:generate"),
+6110:                await self._render_image_options(
+6123:                if field not in {"image_count", "aspect_ratio", "image_mode", "image_render_style", "image_composition_label"}:
+6136:                await self._render_image_options(
+6166:                await self._render_image_options(
+6200:                    "image_render_style": str(reference.get("image_render_style") or "original"),
+6277:                    await self._render_image_options(
+6312:                        types, back_callback="tt:pmod:create", back_text="返回新建推文",
+6436:                                    "tt:publishposts:" + str(max(0, int(reference.get("page") or 0)))
+6529:                                    "tt:publishposts:" + str(max(0, int(reference.get("page") or 0)))
+6616:                    rows.append([types.InlineKeyboardButton(text="继续发布", callback_data="tt:publish_one")])
+6724:                                callback_data="tt:pmod:create",
+6760:                            callback_data="tt:pmod:create",
+6796:                                    callback_data="tt:pmod:create",
+6867:                    callback_data="tt:pmod:create",
+7120:                await self._render_automation_plans(query, types, page=int(parts[2]) if len(parts) > 2 else 0)
+7237:                    rows.append([types.InlineKeyboardButton(text="重新生成", callback_data="tt:generate")])
+7244:                if re.fullmatch(r"tt:persona_history:\d+", return_callback):
+7300:                if re.fullmatch(r"tt:persona_history:\d+", return_callback):
+7380:                await self._render_profile_memories(query, types, page=int(reference.get("page") or 0))
+7403:                await self._render_profile_memories(query, types, page=int(reference.get("page") or 0))
+7406:                await self._render_profile_links(query, types, page=int(reference.get("page") or 0))
+7498:                await self._render_profile_links(
+7519:                    types, member, return_callback="tt:menu",
+7588:                            back_callback="tt:personamanage",
+7609:                        back_callback="tt:persona_new_name",
+7645:                            types, back_callback="tt:pmod:create", back_text="返回新建推文",
+7653:                            types, back_callback="tt:pmod:create", back_text="返回新建推文",
+7679:                            types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
+7691:                                types.InlineKeyboardButton(text="◀️ 返回", callback_data="tt:personas:0"),
+7699:                                types.InlineKeyboardButton(text="◀️ 返回人设列表", callback_data="tt:personas:0"),
+7711:                            types.InlineKeyboardButton(text="◀️ 返回重新输入名称", callback_data="tt:persona_ai_name"),
+7824:                    ], [types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")]]),
+7875:                        types.InlineKeyboardButton(text="确认并创建", callback_data="tt:persona_copy_confirm"),
+7876:                        types.InlineKeyboardButton(text="重新分析", callback_data="tt:persona_copy_new"),
+7877:                    ], [types.InlineKeyboardButton(text="取消", callback_data="tt:menu")]]),
+7886:                        text="返回人设", callback_data="tt:personas:0",
+7898:                            back_callback=str(state["payload"].get("generation_back") or "tt:genmodes"),
+7908:                            back_callback=str(state["payload"].get("generation_back") or "tt:genmodes"),
+7930:                    rows.append([types.InlineKeyboardButton(text="返回生成数量", callback_data="tt:gratio:back"), types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")])
+7946:                            back_callback=str(payload.get("generation_back") or "tt:genmodes"),
+7968:                            types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
+7976:                generation_back = str(payload.get("generation_back") or "tt:generate")
+8135:                            "tt:publishposts:" + str(next_payload["page"])
+8172:                    ], [types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")]]),
+8213:                            callback_data=f"tt:persona_history:{history_page}",
+8323:                    ], [types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel")]]),
+8472:                    types.InlineKeyboardButton(text="返回新建推文", callback_data="tt:pmod:create"),
+8473:                    types.InlineKeyboardButton(text="取消", callback_data="tt:menu"),
+8490:                    types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
+8491:                    types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
+8556:                button(text="返回总控菜单", callback_data="tt:menu"),
+8557:                button(text="取消当前步骤", callback_data="tt:stepcancel"),
+8671:                        types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
+8687:                    types.InlineKeyboardButton(text="取消当前步骤", callback_data="tt:stepcancel"),
+8688:                    types.InlineKeyboardButton(text="返回总控菜单", callback_data="tt:menu"),
+8945:                            }) if persona_task else "tt:pmod:content"),
+8997:                    types.InlineKeyboardButton(text="继续发布", callback_data="tt:publish_one"),
+9056:                    callback_data="tt:pmod:create",
+9081:                            callback_data="tt:pmod:create",
+9099:                        callback_data="tt:pmod:create",
+9149:    async def callback(query: types.CallbackQuery) -> None:
+9162:    dispatcher.callback_query.register(callback, F.data.startswith("tt:"))

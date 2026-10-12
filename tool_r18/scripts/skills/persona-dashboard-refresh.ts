@@ -843,15 +843,21 @@ async function main() {
         const usable = hasUsableMetrics(metrics);
         const complete = refreshAttempt.complete;
         const hasFreshPostMetrics = complete && Array.isArray(metrics.postMetrics);
+        const hasPartialPostMetrics = !complete
+          && Array.isArray(metrics.postMetrics)
+          && metrics.postMetrics.length > 0;
+        const hasPersistablePostMetrics = hasFreshPostMetrics || hasPartialPostMetrics;
         const mergedPostMetrics = hasFreshPostMetrics
           ? metrics.postMetrics.map((row: any) => ({ ...row }))
-          : Array.isArray(previousMetrics.postMetrics) ? previousMetrics.postMetrics : [];
+          : hasPartialPostMetrics
+            ? mergePostMetrics(previousMetrics, metrics.postMetrics)
+            : Array.isArray(previousMetrics.postMetrics) ? previousMetrics.postMetrics : [];
         const mergedRows = Array.isArray(mergedPostMetrics) ? mergedPostMetrics : [];
         const mergedResolvedViews = mergedRows.filter(postViewResolved).length;
         const mergedTotalViews = mergedRows.reduce((sum: number, post: any) => sum + (typeof post?.viewCount === "number" ? post.viewCount : 0), 0);
         const refreshedViews = mergedResolvedViews > 0
           ? mergedTotalViews
-          : typeof metrics.views === "number" ? metrics.views : (hasFreshPostMetrics ? undefined : previousMetrics.views);
+          : typeof metrics.views === "number" ? metrics.views : (hasPersistablePostMetrics ? previousMetrics.views : undefined);
         const nextMetric = complete
           ? {
               ...previousMetrics,
@@ -880,10 +886,32 @@ async function main() {
             }
           : {
               ...previousMetrics,
+              platform: "threads",
+              username: metrics.username || username,
+              accountId: target.accountId,
+              targetSource: target.source,
+              method: metrics.method || previousMetrics.method,
+              feedUrl: metrics.feedUrl || previousMetrics.feedUrl,
+              ...profileIdentityMetricPatch(metrics, mergedTotalViews),
+              ...(hasPersistablePostMetrics ? {
+                posts: mergedRows.length,
+                likes: metrics.likes,
+                comments: metrics.comments,
+                reposts: metrics.reposts,
+                shares: metrics.shares,
+                ...(typeof refreshedViews === "number" ? { views: refreshedViews } : {}),
+                viewResolvedPosts: mergedResolvedViews,
+                viewMissingPosts: Math.max(0, mergedRows.length - mergedResolvedViews),
+                scannedPosts: mergedRows.length,
+                postMetrics: mergedPostMetrics,
+              } : {}),
               complete: false,
-              scope: metrics.scope,
+              scope: metrics.scope || previousMetrics.scope,
+              refreshedAt: metrics.refreshedAt,
               attemptedAt: metrics.refreshedAt,
-              error: metrics.error || (usable ? "未取得完整账号帖子集合，本次未更新帖子数据。" : "未读取到可用热点数据。"),
+              error: metrics.error || (usable
+                ? "本次保留已读取的部分帖子数据，等待下次普通周期补齐浏览量。"
+                : "未读取到可用热点数据。"),
             };
         if (complete) nextMetric.snapshots = mergeCompletedMetricSnapshots(previousMetrics, nextMetric);
         const updatedAt = new Date().toISOString();

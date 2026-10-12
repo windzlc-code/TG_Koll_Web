@@ -352,7 +352,7 @@
       ["SYS-CRM", "CRM 模块", crmResult.ok, crmResult.ok ? "完整 CRM 健康接口可访问" : crmResult.message || "CRM 接口不可用"],
       ["SYS-POOL", "管理员账号池", overviewResult.ok, overviewResult.ok ? "账号与任务安全摘要可读取" : overviewResult.message || "账号池接口不可用"],
       ["SYS-AUTH", "热点登录态", profileResult.ok, profileResult.ok ? "抓取 Cookie 健康摘要可读取" : profileResult.message || "Cookie 接口不可用"],
-      ["BOUNDARY", "人设全量刷新", true, "固定由新机执行；旧机只接收最小抓取快照"],
+      ["BOUNDARY", "人设全量刷新", true, "固定由当前服务器执行，不依赖其他服务器"],
       ["SECURITY", "凭据展示", true, "本页不读取或展示密码、Cookie 值、TOTP 密钥"],
     ];
     const container = $("collectorSystemChecks");

@@ -1946,7 +1946,15 @@ class ArchivedSourceBackend:
             local_values=(source_image_path,),
             remote_values=(),
         )
-        precise_duration = max(float(self._probe_duration(audio_path, segment_payload) or 0), 1.0)
+        # The request-level duration is a video setting and can be a manual/default
+        # value.  It must not override the duration of the TTS media that is about
+        # to be uploaded to the lip-sync workflow.
+        precise_duration = float(self._probe_media_duration_seconds(audio_path, segment_payload) or 0)
+        if precise_duration <= 0:
+            # Keep the existing fallback for environments without ffprobe, while
+            # ensuring a real media probe always wins when it is available.
+            precise_duration = float(self._probe_duration(audio_path, segment_payload) or 0)
+        precise_duration = max(precise_duration, 1.0)
         audio_parts = self._split_digital_human_audio(
             audio_path=audio_path,
             duration_seconds=precise_duration,

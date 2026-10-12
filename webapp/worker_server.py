@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -38,6 +39,7 @@ from .collector_vault import CollectorVault
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+logger = logging.getLogger(__name__)
 ALLOWED_CAPABILITIES = {
     "crm.threads_live_search.v1": "fetch-hot-candidates",
     "persona.hot_candidates.v1": "fetch-hot-candidates",
@@ -826,6 +828,13 @@ class JobStore:
             raise
         finally:
             connection.close()
+
+    def has_queued_or_running_jobs(self) -> bool:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM fetch_jobs WHERE status IN ('queued', 'running') LIMIT 1",
+            ).fetchone()
+        return row is not None
 
     def _initialize(self) -> None:
         with self._connection() as connection:
@@ -2024,7 +2033,7 @@ def _run_tool_r18_job_once(
             runtime_payload.get("allKeywords") or runtime_payload.get("all_keywords"),
         ) or list(runtime_payload["keywords"])
         if capability == "persona.hot_candidates.v1" and not _has_current_hot_keyword_strategy(runtime_payload):
-            raise RuntimeError("persona hot keywords must use the current new-host strategy")
+            raise RuntimeError("persona hot keywords must use the current application strategy")
     for private_field in (
         "accountId", "account_id", "senderUsername", "sender_username",
         "userId", "user_id", "loginUsername", "login_username",
@@ -2204,7 +2213,7 @@ def run_tool_r18_job(
                 **payload,
                 "sourcePolicy": "reader_only",
                 "refresh": True,
-                # User-facing display batches participate in the old-host
+                # User-facing display batches participate in the application
                 # rotation history; scheduled pool refills never do.
                 "recordShown": record_shown,
                 # Trend probes must stay stateless: no persona cache, global
@@ -2232,7 +2241,7 @@ def run_tool_r18_job(
         **payload,
         "sourcePolicy": "authenticated_only",
     }
-    # Two complete 30-second account windows fit the new-host 65-second RPC
+    # Two complete 30-second account windows fit the configured 65-second RPC
     # budget. Three 20-second windows repeatedly expired while the search UI
     # was still loading and never executed the supplied keyword batch.
     attempt_limit = max(1, min(int(os.getenv("TG_AUTH_ACCOUNT_ATTEMPTS", "2") or 2), 3))
@@ -2272,6 +2281,45 @@ def _worker_job_concurrency() -> int:
     return max(1, min(value, 8))
 
 
+def _hot_media_recovery_enabled() -> bool:
+    configured = os.getenv("TG_HOT_MEDIA_RECOVERY_ENABLED")
+    if configured is None or not str(configured).strip():
+        return True
+    return _truthy_environment("TG_HOT_MEDIA_RECOVERY_ENABLED")
+
+
+def _hot_media_recovery_initial_delay_seconds() -> int:
+    try:
+        value = int(os.getenv("TG_HOT_MEDIA_RECOVERY_INITIAL_DELAY_SECONDS", "60") or 60)
+    except (TypeError, ValueError):
+        value = 60
+    return max(5, min(value, 3600))
+
+
+def _hot_media_recovery_interval_seconds() -> int:
+    try:
+        value = int(os.getenv("TG_HOT_MEDIA_RECOVERY_INTERVAL_SECONDS", "60") or 60)
+    except (TypeError, ValueError):
+        value = 60
+    return max(15, min(value, 3600))
+
+
+def _hot_media_recovery_batch_size() -> int:
+    try:
+        value = int(os.getenv("TG_HOT_MEDIA_RECOVERY_BATCH_SIZE", "1") or 1)
+    except (TypeError, ValueError):
+        value = 1
+    return max(1, min(value, 3))
+
+
+def _hot_media_recovery_timeout_seconds() -> int:
+    try:
+        value = int(os.getenv("TG_HOT_MEDIA_RECOVERY_TIMEOUT_SECONDS", "90") or 90)
+    except (TypeError, ValueError):
+        value = 90
+    return max(30, min(value, 180))
+
+
 class WorkerRuntime:
     def __init__(
         self,
@@ -2284,8 +2332,11 @@ class WorkerRuntime:
         self.wake_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.threads: list[threading.Thread] = []
+        self.media_recovery_thread: threading.Thread | None = None
         self._active_lock = threading.Lock()
         self._active_jobs: dict[str, threading.Event] = {}
+        self._media_recovery_process: subprocess.Popen[str] | None = None
+        self._media_recovery_process_lock = threading.Lock()
 
     def start(self) -> None:
         if self.threads and any(thread.is_alive() for thread in self.threads):
@@ -2302,6 +2353,15 @@ class WorkerRuntime:
             thread.start()
             self.threads.append(thread)
         self.thread = self.threads[0]
+        if _hot_media_recovery_enabled() and not (
+            self.media_recovery_thread and self.media_recovery_thread.is_alive()
+        ):
+            self.media_recovery_thread = threading.Thread(
+                target=self._media_recovery_loop,
+                name="tg-fetch-hot-media-recovery",
+                daemon=True,
+            )
+            self.media_recovery_thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -2309,10 +2369,17 @@ class WorkerRuntime:
         with self._active_lock:
             for event in self._active_jobs.values():
                 event.set()
+        with self._media_recovery_process_lock:
+            recovery_process = self._media_recovery_process
+        if recovery_process is not None:
+            _terminate_process(recovery_process)
         for thread in self.threads:
             thread.join(timeout=8)
+        if self.media_recovery_thread is not None:
+            self.media_recovery_thread.join(timeout=8)
         self.threads = []
         self.thread = None
+        self.media_recovery_thread = None
 
     def wake(self) -> None:
         self.wake_event.set()
@@ -2323,6 +2390,89 @@ class WorkerRuntime:
             if event is not None:
                 event.set()
         self.wake()
+
+    def _jobs_busy(self) -> bool:
+        with self._active_lock:
+            if self._active_jobs:
+                return True
+        return self.store.has_queued_or_running_jobs()
+
+    def _run_media_recovery_once(self) -> None:
+        runtime_environment = os.environ.copy()
+        runtime_environment["TOOL_R18_RUNTIME_DIR"] = str(self.store.runtime_dir)
+        runtime_environment["SENTIMENT_HOT_MEDIA_RECOVERY_ENABLED"] = "1"
+        runtime_environment["SENTIMENT_HOT_MEDIA_RECOVERY_BATCH_SIZE"] = str(_hot_media_recovery_batch_size())
+        runtime_environment["SENTIMENT_HOT_READER_CONCURRENCY"] = "1"
+        runtime_environment["SENTIMENT_HOT_READER_SERIAL_PLATFORMS"] = "1"
+        runtime_environment["SENTIMENT_HOT_READER_TOTAL_TIMEOUT_MS"] = "30000"
+        runtime_environment["SENTIMENT_HOT_READER_JITTER_MAX_MS"] = "5000"
+        runtime_environment["SENTIMENT_HOT_READER_MAX_ATTEMPTS"] = "1"
+        runtime_environment["TG_HOT_READER_INCLUDE_INSTAGRAM"] = "1"
+        command = [
+            "node",
+            "--import",
+            "tsx",
+            "scripts/skills/persona-hot-workflow.ts",
+            json.dumps({
+                "action": "recover-hot-media",
+                "batchSize": _hot_media_recovery_batch_size(),
+            }, ensure_ascii=True),
+        ]
+        process: subprocess.Popen[str] | None = None
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=str(ROOT_DIR / "tool_r18"),
+                env=runtime_environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                start_new_session=os.name != "nt",
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            )
+            with self._media_recovery_process_lock:
+                self._media_recovery_process = process
+            deadline = time.monotonic() + _hot_media_recovery_timeout_seconds()
+            while process.poll() is None:
+                if self.stop_event.is_set() or self._jobs_busy():
+                    _terminate_process(process)
+                    return
+                if time.monotonic() >= deadline:
+                    _terminate_process(process)
+                    logger.warning("hot media recovery timed out")
+                    return
+                self.stop_event.wait(0.25)
+            stdout, stderr = process.communicate()
+            parsed = _parse_json_output(stdout)
+            if process.returncode != 0 or not isinstance(parsed, dict) or parsed.get("ok") is False:
+                detail = str((parsed or {}).get("error") or stderr or stdout or "hot media recovery failed").strip()
+                logger.warning("hot media recovery failed: %s", detail[:500])
+                return
+            logger.info(
+                "hot media recovery scanned=%s attempted=%s recovered_candidates=%s recovered_media=%s pending=%s",
+                parsed.get("scanned", 0),
+                parsed.get("attempted", 0),
+                parsed.get("recoveredCandidates", 0),
+                parsed.get("recoveredMedia", 0),
+                parsed.get("pending", 0),
+            )
+        except Exception as exc:
+            logger.warning("hot media recovery process error: %s", str(exc)[:500])
+        finally:
+            with self._media_recovery_process_lock:
+                if self._media_recovery_process is process:
+                    self._media_recovery_process = None
+
+    def _media_recovery_loop(self) -> None:
+        if self.stop_event.wait(_hot_media_recovery_initial_delay_seconds()):
+            return
+        while not self.stop_event.is_set():
+            if self._jobs_busy():
+                self.stop_event.wait(5)
+                continue
+            self._run_media_recovery_once()
+            self.stop_event.wait(_hot_media_recovery_interval_seconds())
 
     def _loop(self) -> None:
         while not self.stop_event.is_set():
@@ -2388,7 +2538,7 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
             raise ProtocolError("remote fetch must set recordShown=false")
         if capability == "persona.hot_candidates.v1" and normalized.get("liveOnly") is not False:
             if not (normalized.get("liveOnly") is True and _hot_public_probe_enabled()):
-                raise ProtocolError("persona hot fetch must use the old-host candidate pool")
+                raise ProtocolError("persona hot fetch must use the application candidate pool")
         if capability == "persona.trend_probe.v1":
             if normalized.get("liveOnly") is not True or normalized.get("transient") is not True:
                 raise ProtocolError("persona trend probe must be live-only and transient")
@@ -2402,7 +2552,7 @@ def _validate_envelope(value: Any) -> tuple[str, str, dict[str, Any]]:
                 normalized.get("allKeywords") or normalized.get("all_keywords"),
             ) or list(normalized["keywords"])
             if not _has_current_hot_keyword_strategy(normalized):
-                raise ProtocolError("persona hot keywords must use the current new-host strategy")
+                raise ProtocolError("persona hot keywords must use the current application strategy")
         if capability == "crm.threads_live_search.v1" and normalized.get("liveOnly") is not True:
             raise ProtocolError("CRM live search must remain live-only")
         normalized.pop("sourcePolicy", None)

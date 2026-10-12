@@ -29,7 +29,7 @@ def test_collector_dashboard_keeps_the_requested_modules_and_boundary_copy() -> 
 
     assert dashboard.count("完整保留") >= 4
     assert "人设全量刷新" in dashboard
-    assert "新机执行" in dashboard
+    assert "当前服务器执行" in dashboard
     assert "用户自有账号" in dashboard
     assert "管理员采集账号池" in dashboard
     assert "进入采集账号管理" in dashboard

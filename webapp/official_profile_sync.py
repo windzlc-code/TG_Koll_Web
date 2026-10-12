@@ -605,11 +605,11 @@ def handle_official_auth_webhook(*, raw_body: bytes, signature_header: str) -> d
 
 def _homepage_monitor_loop() -> None:
     while True:
-        delay = DEFAULT_SLEEP = 12 * 3600
+        delay = DEFAULT_SLEEP = 24 * 3600
         try:
             with db() as conn:
                 status = configuration_status(conn)
-            delay = max(6 * 3600, int(status.get("homepage_read_interval_hours") or 12) * 3600)
+            delay = max(6 * 3600, int(status.get("homepage_read_interval_hours") or 24) * 3600)
             offset = max(8 * 3600, int(status.get("collect_offset_hours") or 12) * 3600)
             if official_homepage_overlay_enabled():
                 from . import server

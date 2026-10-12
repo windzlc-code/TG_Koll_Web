@@ -33,6 +33,8 @@ LEGACY_TASK_CONTROL_BUTTON = "📋 任务中心"
 ACCOUNT_CONTROL_BUTTON = "🔐 账号管理"
 LEGACY_ACCOUNT_CONTROL_BUTTON = "🔐 账号与浏览器"
 STOP_CONTROL_BUTTON = "🛑 停止当前任务"
+TWEET_WEB_ACCOUNT_BUTTON = "🌐 网页登录/切换"
+TWEET_LOGOUT_BUTTON = "🚪 退出登录"
 CONTROL_BUTTONS = frozenset({
     PERSONA_CONTROL_BUTTON,
     TASK_CONTROL_BUTTON,
@@ -53,14 +55,14 @@ def _back_label(label: str) -> str:
 
 HELP_TEXT = (
     "使用提示\n\n"
-    "• 首次使用请点击“在聊天中登录并绑定”，按提示在本私聊中完成登录。\n"
-    "• 登录后会为该 Telegram 账号建立独立会话，不会退出其他浏览器设备。\n"
-    "• 未绑定或会话失效时发送 /bind，可重新开始聊天内登录。\n"
+    "• 首次使用请点击“🌐 网页登录/切换”，在浏览器中选择 VECTO 网页账号登录或 Google 官方授权。\n"
+    "• 网页会自动识别已登录的账号；授权成功后 Bot 会回传状态，不会要求在 Telegram 中输入密码。\n"
+    "• 未绑定或会话失效时发送 /bind，可重新打开独立网页授权入口。\n"
     "• 人设、生成、草稿、收藏、媒体、热点和任务均可直接在 Telegram 内操作。\n"
     "• “我的人设”按人设管理、新建推文、推文内容、发布管理、人设设置分层。\n"
     "• 首次发布前需已有可用的 Threads 或 Instagram 账号；可从“账号管理”逐步完成授权、登录检测和人设绑定。\n"
     "• 在输入流程中点击任一总控按钮，会退出当前未提交的输入并切换模块。\n"
-    "• 旧版网页绑定路径不接收账号密码；聊天内登录仅在私聊临时验证，密码不写入 Bot 状态或审计，请勿在群聊中发送。"
+    "• VECTO 网页账号与平台账号的登录、OAuth、验证码均在安全网页/浏览器中完成，Bot 不接收账号密码或验证码。"
 )
 SUPPORTED_MEDIA_MIME_SUFFIXES = {
     "image/jpeg": ".jpg",
@@ -691,7 +693,13 @@ class NativeTweetBotController:
     async def _call_async(self, user_id: int, action: str, payload: dict[str, Any] | None = None) -> Any:
         return await self.ops.dispatch_async(int(user_id), action, payload or {})
 
-    def _webapp_markup(self, types: Any, chat_id: int) -> Any | None:
+    def _webapp_markup(
+        self,
+        types: Any,
+        chat_id: int,
+        *,
+        button_text: str = TWEET_WEB_ACCOUNT_BUTTON,
+    ) -> Any | None:
         if self.create_webapp_url is None:
             return None
         try:
@@ -708,30 +716,24 @@ class NativeTweetBotController:
         if not url:
             return None
         button = types.InlineKeyboardButton
-        web_app_info_type = getattr(types, "WebAppInfo", None)
-        if web_app_info_type is not None:
-            return types.InlineKeyboardMarkup(inline_keyboard=[[
-                button(text="🔐 一键登录并绑定", web_app=web_app_info_type(url=url)),
-            ]])
         return types.InlineKeyboardMarkup(inline_keyboard=[[
-            button(text="打开绑定页面", url=url),
+            button(text=button_text, url=url),
         ]])
 
     def _binding_markup(self, types: Any, chat_id: int) -> Any | None:
-        """Return the production binding action without opening a WebApp.
+        """Return the browser authorization action used by production.
 
-        The WebApp remains a compatibility fallback for isolated integrations
-        that do not inject ``chat_login``.  The production worker always
-        injects the chat-login callback, so users stay in the Telegram chat.
+        ``tt:chatlogin`` remains only as a compatibility fallback for tests or
+        old integrations that do not provide a signed browser URL factory.
         """
+        browser_markup = self._webapp_markup(types, chat_id)
+        if browser_markup is not None:
+            return browser_markup
         if self.chat_login is not None:
             return types.InlineKeyboardMarkup(inline_keyboard=[[
-                types.InlineKeyboardButton(
-                    text="🔐 在聊天中登录并绑定",
-                    callback_data="tt:chatlogin",
-                ),
+                types.InlineKeyboardButton(text=TWEET_WEB_ACCOUNT_BUTTON, callback_data="tt:chatlogin"),
             ]])
-        return self._webapp_markup(types, chat_id)
+        return None
 
     @staticmethod
     def _chat_login_keyboard(types: Any, placeholder: str) -> Any:
@@ -832,7 +834,14 @@ class NativeTweetBotController:
             or actor is None
             or int(getattr(actor, "id", 0) or 0) != chat_id
         ):
-            await message.answer("聊天内登录绑定只支持与推文 Bot 私聊使用。")
+            await message.answer("网页登录授权只支持与推文 Bot 私聊使用。")
+            return
+        # Production injects a signed HTTPS URL factory.  Always use it so
+        # VECTO-password and Google OAuth choices, browser cookies, MFA, and
+        # provider callbacks stay on the normal website.  The credential FSM
+        # below remains a compatibility fallback for old integrations only.
+        if self.create_webapp_url is not None:
+            await self._start_browser_login(message, types, chat_id=chat_id)
             return
         if self.chat_login is None:
             markup = self._webapp_markup(types, chat_id)
@@ -852,7 +861,25 @@ class NativeTweetBotController:
             reply_markup=self._chat_login_keyboard(types, "VECTO 用户名或邮箱"),
         )
 
+    async def _start_browser_login(self, message: Any, types: Any, *, chat_id: int | None = None) -> None:
+        chat = getattr(message, "chat", None)
+        target_chat_id = int(chat_id or getattr(chat, "id", 0) or 0)
+        markup = self._webapp_markup(types, target_chat_id)
+        if markup is None:
+            await message.answer("暂时无法生成网页登录授权入口，请稍后重试。")
+            return
+        await message.answer(
+            "🌐 网页登录/切换\n\n"
+            "请点击下方按钮打开 VECTO 官方网页。网页中可选择 VECTO 网页账号登录或 Google 官方授权；"
+            "已登录账号会自动识别，确认授权后 Bot 会发送结果反馈。Telegram 不接收或保存账号密码、验证码。",
+            reply_markup=markup,
+        )
+
     async def _handle_chat_login_text(self, message: Any, types: Any) -> bool:
+        if self.create_webapp_url is not None:
+            # Browser flow owns the login continuation; do not consume normal
+            # Telegram text as credentials in production.
+            return False
         if self.chat_login is None:
             return False
         chat = getattr(message, "chat", None)
@@ -1047,17 +1074,13 @@ class NativeTweetBotController:
         ):
             await message.answer("绑定网页只支持与推文 Bot 私聊使用。")
             return
-        if self.chat_login is not None:
+        if self.create_webapp_url is not None:
+            await self._start_browser_login(message, types, chat_id=int(chat.id))
+        else:
+            # Compatibility fallback for integrations that have not yet
+            # injected the signed browser URL factory.  The production worker
+            # always supplies it, so it never receives credentials in chat.
             await self._start_chat_login(message, types)
-            return
-        markup = self._webapp_markup(types, int(chat.id))
-        if markup is None:
-            await message.answer("暂时无法生成绑定入口，请稍后重试。")
-            return
-        await message.answer(
-            "请点击下方“一键登录并绑定”，在 Telegram 内安全登录 VECTO。登录后即可使用推文工作台。",
-            reply_markup=markup,
-        )
 
     async def _authorized(
         self,
@@ -1076,7 +1099,7 @@ class NativeTweetBotController:
         if member is None:
             markup = self._binding_markup(types, chat_id) if show_webapp_link and types is not None else None
             await reply(
-                "当前 Telegram 账号尚未绑定 VECTO 用户。请点击下方按钮，在聊天中依次输入账号和密码完成绑定。",
+                "当前 Telegram 账号尚未绑定 VECTO 用户。请点击下方网页登录按钮，在浏览器中选择 VECTO 网页账号登录或 Google 官方授权。",
                 **({"reply_markup": markup} if markup is not None else {}),
             )
             return None
@@ -1088,7 +1111,7 @@ class NativeTweetBotController:
             if not session_active:
                 markup = self._binding_markup(types, chat_id) if show_webapp_link and types is not None else None
                 await reply(
-                    "网页登录会话已失效。请点击下方按钮，在聊天中重新输入账号和密码完成绑定。",
+                    "网页登录会话已失效。请点击下方网页登录按钮，在浏览器中重新选择 VECTO 网页账号或 Google 官方授权。",
                     **({"reply_markup": markup} if markup is not None else {}),
                 )
                 return None
@@ -1260,7 +1283,7 @@ class NativeTweetBotController:
             back_callback = callback_token(chat_id, "historylink", {"page": page})
             back_text = "返回重新输入链接"
         elif mode in {"profile_content", "profile_style", "profile_name", "profile_ai", "profile_threads"}:
-            back_callback, back_text = "tt:profile", "返回基础资料"
+            back_callback, back_text = "tt:psettings:profile", "返回基础资料"
         elif mode == "profile_memory_create":
             back_callback = callback_token(chat_id, "pmemories", {"page": page})
             back_text = "返回人设记忆"
@@ -2046,6 +2069,7 @@ class NativeTweetBotController:
             refresh_callback = callback_token(chat_id, "prefresh", {
                 "persona_id": persona_id,
                 "persona_page": max(0, int(page or 0)),
+                "return_callback": "tt:psettings:accounts",
             })
             return (
                 "🔗 账号与数据\n\n" + persona_context
@@ -2522,6 +2546,7 @@ class NativeTweetBotController:
         persona_id: str,
         *,
         page: int = 0,
+        return_callback: str = "tt:psettings:accounts",
     ) -> tuple[str, Any]:
         """Show accounts detected for the selected persona and bind actions.
 
@@ -2582,7 +2607,11 @@ class NativeTweetBotController:
             page=page,
             total_items=len(bindable),
             callback_for_page=lambda target: callback_token(
-                chat_id, "pabindpage", {"persona_id": persona_id, "page": target},
+                chat_id, "pabindpage", {
+                    "persona_id": persona_id,
+                    "page": target,
+                    "return_callback": return_callback,
+                },
             ),
         )
         rows: list[list[Any]] = []
@@ -2598,7 +2627,7 @@ class NativeTweetBotController:
             display_name = f"{platform} · @{username}" if username else platform
             account_reference = callback_token(chat_id, "ac", {
                 "account_id": account_id,
-                "return_callback": "tt:persona_accounts",
+                "return_callback": return_callback,
                 "persona_filter": persona_id,
                 "operation": "",
                 "page": safe_page,
@@ -2613,6 +2642,7 @@ class NativeTweetBotController:
                     "account_id": account_id,
                     "persona_id": persona_id,
                     "page": safe_page,
+                    "return_callback": return_callback,
                     "bound_persona_name": persona_names.get(bound_persona_id, "其他人设"),
                 })
                 rows.append([types.InlineKeyboardButton(
@@ -2624,6 +2654,7 @@ class NativeTweetBotController:
                     "account_id": account_id,
                     "persona_id": persona_id,
                     "page": safe_page,
+                    "return_callback": return_callback,
                 })
                 rows.append([types.InlineKeyboardButton(
                     text=f"🔗 {display_name[:38]}（绑定）",
@@ -2631,7 +2662,7 @@ class NativeTweetBotController:
                 )])
         rows.extend(page_rows)
         rows.append([types.InlineKeyboardButton(text="📂 查看全部平台账号", callback_data="tt:platformaccounts")])
-        rows.append([types.InlineKeyboardButton(text=_back_label("上一步"), callback_data="tt:pmod:settings")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("上一步"), callback_data=return_callback)])
         text = (
             "🔗 人设账号绑定\n\n"
             f"人设：{persona_name}\n"
@@ -2644,42 +2675,92 @@ class NativeTweetBotController:
         return text, types.InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def _vecto_session_payload(self, types: Any, member: dict[str, Any]) -> tuple[str, Any]:
-        """Show VECTO web-session controls separately from platform accounts."""
-        username = str(member.get("web_username") or member.get("username") or "").strip()
-        rows = [
-            [types.InlineKeyboardButton(text="🔁 登录/切换 VECTO 账号", callback_data="tt:chatlogin")],
-            [types.InlineKeyboardButton(text="🚪 退出 VECTO 账号", callback_data="tt:aclogout")],
-            [types.InlineKeyboardButton(text=_back_label("返回账号管理"), callback_data="tt:accountmenu")],
-        ]
-        return (
-            "VECTO 网页账号\n\n"
-            f"当前账号：{username or '已绑定账号'}\n"
-            "当前 Telegram 推文工作台使用的是这次绑定的 VECTO 网页会话。\n"
-            "网页端退出会撤销该会话，Telegram 将立即要求重新登录；Telegram 不会独立保持一份永久登录。\n"
-            "退出网页或 Telegram 会撤销该 VECTO 账号的全部活动会话（包括其他设备）。\n"
-            "这里的登录/退出只管理 VECTO 账号，不会登录或退出 Threads、Instagram 等平台账号。",
-            types.InlineKeyboardMarkup(inline_keyboard=rows),
-        )
+        """Compatibility alias: account controls are now one flat page."""
+        return await self._account_management_payload(types, member)
 
     async def _account_management_payload(self, types: Any, member: dict[str, Any]) -> tuple[str, Any]:
-        """Build the account-management second level without exposing secrets.
-
-        VECTO login is the existing private-chat flow.  Platform account
-        credentials/OAuth remain in the secure web/browser automation path;
-        Telegram only starts those jobs and reports their task state.
-        """
+        """Build the flat account page, matching the Video Bot structure."""
         accounts = await self._call(int(member["web_user_id"]), "accounts.list")
-        rows = [
-            [types.InlineKeyboardButton(text="🔐 VECTO 网页账号（登录/退出）", callback_data="tt:vectosession")],
-            [types.InlineKeyboardButton(text=f"🌐 平台授权账号（{len(accounts)}）", callback_data="tt:platformaccounts")],
-            [types.InlineKeyboardButton(text=_back_label("返回总控菜单"), callback_data="tt:menu")],
-        ]
+        chat_id = int(member.get("chat_id") or 0)
+        user_id = int(member.get("web_user_id") or 0)
+        if self.has_active_web_session is None:
+            session_active = bool(user_id)
+        else:
+            session_active = self._member_still_bound(chat_id, user_id)
+        username = str(member.get("web_username") or member.get("username") or "").strip()
+        if session_active:
+            status = "已登录并绑定（已检测，无需重复授权）"
+        else:
+            status = "网页会话已失效，请重新登录授权"
+        rows: list[list[Any]] = []
+        browser_markup = self._webapp_markup(types, chat_id, button_text=TWEET_WEB_ACCOUNT_BUTTON)
+        if browser_markup is not None:
+            rows.extend(browser_markup.inline_keyboard)
+        else:
+            rows.append([types.InlineKeyboardButton(text=TWEET_WEB_ACCOUNT_BUTTON, callback_data="tt:chatlogin")])
+        if session_active:
+            rows.append([types.InlineKeyboardButton(text=f"🌐 平台授权账号（{len(accounts)}）", callback_data="tt:platformaccounts")])
+            rows.append([types.InlineKeyboardButton(text=TWEET_LOGOUT_BUTTON, callback_data="tt:aclogout")])
         return (
             "账号管理\n\n"
-            f"VECTO 网页账号：{str(member.get('web_username') or member.get('username') or '已绑定').strip()}\n"
-            f"平台授权账号：{len(accounts)}",
+            f"VECTO 网页账号：{username or '未识别'}\n"
+            f"状态：{status}\n"
+            f"平台授权账号：{len(accounts) if session_active else 0}\n\n"
+            "登录、切换和 Google 官方授权均在下方网页中选择；已授权账号不会重复绑定。",
             types.InlineKeyboardMarkup(inline_keyboard=rows),
         )
+
+    async def _show_account_management(
+        self,
+        message: Any,
+        types: Any,
+        *,
+        edit_message: bool = False,
+        actor: Any | None = None,
+    ) -> None:
+        """Show account status even when the bound web session is expired.
+
+        Video Bot treats account management as the recovery surface, not as a
+        workbench action gated by an already-live VECTO session.  Keep the
+        Tweet Bot identical: the page can expose the browser login button and
+        status while every other workbench action remains session-protected.
+        """
+        chat = getattr(message, "chat", None)
+        # For a normal incoming message, ``message.from_user`` is the person
+        # who sent it.  For an inline-button callback, however,
+        # ``query.message`` is the Bot's previously sent message and its
+        # ``from_user`` is therefore the Bot.  Callback callers must pass the
+        # actual clicker explicitly via ``query.from_user``.
+        actor = actor if actor is not None else getattr(message, "from_user", None)
+        chat_id = int(getattr(chat, "id", 0) or 0)
+        if (
+            chat is None
+            or str(getattr(chat, "type", "") or "") != "private"
+            or actor is None
+            or int(getattr(actor, "id", 0) or 0) != chat_id
+        ):
+            text = "推文工作台账号管理只支持与 Bot 私聊使用。"
+            if edit_message and getattr(message, "edit_text", None) is not None:
+                await message.edit_text(text)
+            else:
+                await message.answer(text)
+            return
+        member = self._member(chat_id)
+        if member is None:
+            text = "当前 Telegram 账号尚未绑定 VECTO 用户，请点击下方网页登录按钮完成授权。"
+            markup = self._binding_markup(types, chat_id)
+        else:
+            self._clear_pending_state(chat_id)
+            try:
+                text, markup = await self._account_management_payload(types, member)
+            except Exception as exc:
+                logger.exception("Unable to render Tweet account management")
+                text = f"账号管理暂时无法打开：{_error_text(exc)}"
+                markup = self._binding_markup(types, chat_id)
+        if edit_message and getattr(message, "edit_text", None) is not None:
+            await message.edit_text(text, reply_markup=markup)
+        else:
+            await message.answer(text, reply_markup=markup)
 
     async def _account_detail_payload(
         self,
@@ -3189,6 +3270,7 @@ class NativeTweetBotController:
         persona_id: str,
         page: int = 0,
         notice: str = "",
+        return_callback: str = "tt:psettings:media",
     ) -> None:
         """Render the Web-equivalent persona image form and image library.
 
@@ -3205,6 +3287,7 @@ class NativeTweetBotController:
         image_options = current.get("persona_image_options") if isinstance(current.get("persona_image_options"), dict) else {}
         image_options = _reconcile_persona_image_options(image_options)
         supplement_prompt = str(current.get("supplement_prompt") or "")
+        return_callback = str(current.get("return_callback") or return_callback).strip() or "tt:psettings:media"
         result = await self._call(int(member["web_user_id"]), "persona_image.list", {"persona_id": persona_id})
         items = result.get("items") if isinstance(result, dict) and isinstance(result.get("items"), list) else []
         items = [item for item in items if isinstance(item, dict)]
@@ -3214,7 +3297,9 @@ class NativeTweetBotController:
             page=page,
             total_items=total_items,
             callback_for_page=lambda target: callback_token(chat_id, "pimgpage", {
-                "persona_id": persona_id, "page": target,
+                "persona_id": persona_id,
+                "page": target,
+                "return_callback": return_callback,
             }),
         )
         save_state(
@@ -3226,6 +3311,7 @@ class NativeTweetBotController:
                 "persona_image_options": image_options,
                 "supplement_prompt": supplement_prompt,
                 "page": safe_page,
+                "return_callback": return_callback,
             },
         )
         rows: list[list[Any]] = []
@@ -3240,31 +3326,46 @@ class NativeTweetBotController:
             label = f"{marker}{source} · {created or '人设图'}"[:42]
             rows.append([types.InlineKeyboardButton(
                 text=label,
-                callback_data=callback_token(chat_id, "pimgnoop", {"persona_id": persona_id}),
+                callback_data=callback_token(chat_id, "pimgnoop", {
+                    "persona_id": persona_id,
+                    "return_callback": return_callback,
+                }),
             )])
             rows.append([
                 types.InlineKeyboardButton(
                     text="设为当前" if not item.get("is_reference") else "当前使用中",
                     callback_data=callback_token(chat_id, "pimgapply", {
-                        "persona_id": persona_id, "image_id": image_id, "page": safe_page,
+                        "persona_id": persona_id,
+                        "image_id": image_id,
+                        "page": safe_page,
+                        "return_callback": return_callback,
                     }),
                 ),
                 types.InlineKeyboardButton(
                     text="替换",
                     callback_data=callback_token(chat_id, "pimgreplace", {
-                        "persona_id": persona_id, "image_id": image_id, "page": safe_page,
+                        "persona_id": persona_id,
+                        "image_id": image_id,
+                        "page": safe_page,
+                        "return_callback": return_callback,
                     }),
                 ),
                 types.InlineKeyboardButton(
                     text="删除",
                     callback_data=callback_token(chat_id, "pimgdeleteconfirm", {
-                        "persona_id": persona_id, "image_id": image_id, "page": safe_page,
+                        "persona_id": persona_id,
+                        "image_id": image_id,
+                        "page": safe_page,
+                        "return_callback": return_callback,
                     }),
                 ),
                 types.InlineKeyboardButton(
                     text="设为头像",
                     callback_data=callback_token(chat_id, "pimgavatar", {
-                        "persona_id": persona_id, "image_id": image_id, "page": safe_page,
+                        "persona_id": persona_id,
+                        "image_id": image_id,
+                        "page": safe_page,
+                        "return_callback": return_callback,
                     }),
                 ),
             ])
@@ -3282,25 +3383,34 @@ class NativeTweetBotController:
             rows.append([types.InlineKeyboardButton(
                 text=f"{label}：{value_label}",
                 callback_data=callback_token(chat_id, "pimgfield", {
-                    "persona_id": persona_id, "field": field, "page": safe_page,
+                    "persona_id": persona_id,
+                    "field": field,
+                    "page": safe_page,
+                    "return_callback": return_callback,
                 }),
             )])
         rows.extend([
             [types.InlineKeyboardButton(
                 text="✍️ 补充提示词" if not supplement_prompt else "✍️ 修改补充提示词",
-                callback_data=callback_token(chat_id, "pimgprompt", {"persona_id": persona_id, "page": safe_page}),
+                callback_data=callback_token(chat_id, "pimgprompt", {
+                    "persona_id": persona_id,
+                    "page": safe_page,
+                    "return_callback": return_callback,
+                }),
             )],
             [
                 types.InlineKeyboardButton(text="🚀 直接生成", callback_data=callback_token(chat_id, "personaimmediate", {
                     "persona_id": persona_id,
                     "page": safe_page,
+                    "return_callback": return_callback,
                 })),
                 types.InlineKeyboardButton(text="⬆️ 上传自定义图", callback_data=callback_token(chat_id, "pimgupload", {
                     "persona_id": persona_id,
                     "page": safe_page,
+                    "return_callback": return_callback,
                 })),
             ],
-            self._persona_module_back_row(types, chat_id, persona_id, "settings"),
+            [types.InlineKeyboardButton(text=_back_label("返回上一级"), callback_data=return_callback)],
         ])
         selected_labels: list[str] = []
         for field in PERSONA_IMAGE_OPTION_DEFINITIONS:
@@ -3339,6 +3449,10 @@ class NativeTweetBotController:
     ) -> None:
         state = load_state(int(query.message.chat.id))
         state_options = state["payload"].get("persona_image_options") if isinstance(state.get("payload"), dict) else {}
+        return_callback = str(
+            state.get("payload", {}).get("return_callback")
+            if isinstance(state.get("payload"), dict) else ""
+        ).strip() or "tt:psettings:media"
         definition = _persona_image_option_definition(field, state_options if isinstance(state_options, dict) else {})
         if not definition:
             raise HTTPException(status_code=400, detail="人设图选项无效")
@@ -3356,12 +3470,23 @@ class NativeTweetBotController:
                 types.InlineKeyboardButton(
                     text=("✅ " if key == current else "") + caption,
                     callback_data=callback_token(chat_id, "pimgopt", {
-                        "persona_id": persona_id, "field": field, "value": key, "page": page,
+                        "persona_id": persona_id,
+                        "field": field,
+                        "value": key,
+                        "page": page,
+                        "return_callback": return_callback,
                     }),
                 )
                 for key, caption in values[index:index + 2]
             ])
-        rows.append([types.InlineKeyboardButton(text=_back_label("返回人设图设置"), callback_data=callback_token(chat_id, "personaimage", {"persona_id": persona_id, "page": page}))])
+        rows.append([types.InlineKeyboardButton(
+            text=_back_label("返回人设图设置"),
+            callback_data=callback_token(chat_id, "personaimage", {
+                "persona_id": persona_id,
+                "page": page,
+                "return_callback": return_callback,
+            }),
+        )])
         await query.message.edit_text(
             f"人设图设置 · {label}\n"
             f"当前：{next((caption for key, caption in values if key == current), '自动')}\n"
@@ -4165,7 +4290,7 @@ class NativeTweetBotController:
             text="➕ 新增记忆",
             callback_data=callback_token(chat_id, "pmemadd", {"page": safe_page}),
         )])
-        rows.append([types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:psettings:profile")])
         await query.message.edit_text(
             f"人设记忆（{len(memories)} 条）\n第 {safe_page + 1}/{total_pages}\n"
             "生成推文时可将选中的记忆作为上下文，删除只会隐藏该条记忆。",
@@ -4211,7 +4336,7 @@ class NativeTweetBotController:
             text="➕ 新增链接模板",
             callback_data=callback_token(chat_id, "plinkadd", {"page": safe_page}),
         )])
-        rows.append([types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile")])
+        rows.append([types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:psettings:profile")])
         await query.message.edit_text(
             f"链接模板（{len(presets)} 条，第 {safe_page + 1}/{total_pages} 页）\n\n"
             + ("\n".join(
@@ -4559,7 +4684,7 @@ class NativeTweetBotController:
                 else:
                     prefix = "已返回账号管理。" if data == "tt:accountmenu" else "已取消推文工作台登录。"
                     await query.message.edit_text(
-                        prefix + "\n当前 Telegram 尚未绑定 VECTO 用户，请点击下方按钮在聊天中登录。",
+                        prefix + "\n当前 Telegram 尚未绑定 VECTO 用户，请点击下方按钮打开网页登录授权。",
                         reply_markup=self._binding_markup(types, chat_id),
                     )
                 return
@@ -4611,6 +4736,18 @@ class NativeTweetBotController:
                 from_user=getattr(query, "from_user", None),
             )
             return
+        if data in {"tt:accountmenu", "tt:vectosession"}:
+            # Account management is the recovery surface and must remain
+            # reachable after a browser session expires.  Do not run the
+            # normal workbench session gate before rendering it.
+            await query.answer()
+            await self._show_account_management(
+                query.message,
+                types,
+                edit_message=True,
+                actor=getattr(query, "from_user", None),
+            )
+            return
         async def authorization_reply(text: str, **kwargs: Any) -> Any:
             # CallbackQuery.answer cannot carry reply_markup.  Send the
             # self-service binding button as a normal message when the
@@ -4656,14 +4793,8 @@ class NativeTweetBotController:
                     reply_markup=self._return_keyboard(types),
                 )
             elif action == "help":
-                help_text = HELP_TEXT
-                if self.chat_login is not None:
-                    help_text = help_text.replace(
-                        "旧版网页绑定路径不接收账号密码；聊天内登录仅在私聊临时验证，密码不写入 Bot 状态或审计，请勿在群聊中发送。",
-                        "聊天内登录仅限私聊使用；密码只在验证期间短暂使用，不写入 Bot 状态或审计，请勿在群聊中发送。",
-                    )
                 await query.message.edit_text(
-                    help_text,
+                    HELP_TEXT,
                     reply_markup=self._return_keyboard(types),
                 )
             elif action == "taskmenu":
@@ -4700,7 +4831,11 @@ class NativeTweetBotController:
                 state = load_state(chat_id)
                 persona_id = str(state.get("selected_persona_id") or "").strip()
                 page_text, markup = await self._persona_binding_payload(
-                    types, member, persona_id, page=0,
+                    types,
+                    member,
+                    persona_id,
+                    page=0,
+                    return_callback="tt:psettings:accounts",
                 )
                 await query.message.edit_text(page_text, reply_markup=markup)
             elif action == "pabindpage" and len(parts) > 2:
@@ -4710,6 +4845,7 @@ class NativeTweetBotController:
                     member,
                     str(reference.get("persona_id") or ""),
                     page=int(reference.get("page") or 0),
+                    return_callback=str(reference.get("return_callback") or "tt:psettings:accounts"),
                 )
                 await query.message.edit_text(page_text, reply_markup=markup)
             elif action == "pabind" and len(parts) > 2:
@@ -4737,6 +4873,7 @@ class NativeTweetBotController:
                         "account_id": account_id,
                         "persona_id": persona_id,
                         "page": max(0, int(reference.get("page") or 0)),
+                        "return_callback": str(reference.get("return_callback") or "tt:psettings:accounts"),
                         "bound_persona_name": str(reference.get("bound_persona_name") or "其他人设"),
                     })
                     platform = str(account.get("platform") or "未知平台").strip()
@@ -4747,7 +4884,10 @@ class NativeTweetBotController:
                         "确认后该账号将改为绑定当前人设。",
                         reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[
                             [types.InlineKeyboardButton(text="确认改绑", callback_data=confirm_token)],
-                            [types.InlineKeyboardButton(text="取消", callback_data="tt:persona_accounts")],
+                            [types.InlineKeyboardButton(
+                                text="取消",
+                                callback_data=str(reference.get("return_callback") or "tt:psettings:accounts"),
+                            )],
                         ]),
                     )
                 else:
@@ -4758,7 +4898,11 @@ class NativeTweetBotController:
                     })
                     audit_action(chat_id, user_id, "accounts.bind_persona", status="success", resource_type="account", resource_id=account_id)
                     page_text, markup = await self._persona_binding_payload(
-                        types, member, persona_id, page=int(reference.get("page") or 0),
+                        types,
+                        member,
+                        persona_id,
+                        page=int(reference.get("page") or 0),
+                        return_callback=str(reference.get("return_callback") or "tt:psettings:accounts"),
                     )
                     await query.message.edit_text("账号已绑定当前人设。\n\n" + page_text, reply_markup=markup)
             elif action == "pabindconfirm" and len(parts) > 2:
@@ -4787,7 +4931,11 @@ class NativeTweetBotController:
                 })
                 audit_action(chat_id, user_id, "accounts.bind_persona", status="success", resource_type="account", resource_id=account_id)
                 page_text, markup = await self._persona_binding_payload(
-                    types, member, persona_id, page=int(reference.get("page") or 0),
+                    types,
+                    member,
+                    persona_id,
+                    page=int(reference.get("page") or 0),
+                    return_callback=str(reference.get("return_callback") or "tt:psettings:accounts"),
                 )
                 await query.message.edit_text("账号已改绑当前人设。\n\n" + page_text, reply_markup=markup)
             elif action == "accounts":
@@ -5247,7 +5395,7 @@ class NativeTweetBotController:
                     )])
                 refresh_rows.append([types.InlineKeyboardButton(
                     text=_back_label("返回人设设置"),
-                    callback_data="tt:pmod:settings",
+                    callback_data=str(reference.get("return_callback") or "tt:psettings:accounts"),
                 )])
                 await query.message.edit_text(
                     f"人设数据刷新已提交：{task_id or '已排队'}\n"
@@ -5619,16 +5767,23 @@ class NativeTweetBotController:
                 state = load_state(chat_id)
                 persona_id = str((state["selected_persona_id"] or "")).strip()
                 page = 0
+                return_callback = "tt:psettings:media"
                 if len(parts) > 2:
                     reference = resolve_callback_token(chat_id, "personaimage", parts[2])
                     persona_id = str(reference.get("persona_id") or persona_id).strip()
                     page = int(reference.get("page") or 0)
+                    return_callback = str(reference.get("return_callback") or return_callback)
                 if not persona_id:
                     await self._persona_list(query, types, member, 0)
                     return
                 clear_pending_state(chat_id)
                 await self._render_persona_image_options(
-                    query, types, member, persona_id=persona_id, page=page,
+                    query,
+                    types,
+                    member,
+                    persona_id=persona_id,
+                    page=page,
+                    return_callback=return_callback,
                 )
             elif action == "personaimmediate":
                 state = load_state(chat_id)
@@ -5657,7 +5812,9 @@ class NativeTweetBotController:
                 rows.append([types.InlineKeyboardButton(
                     text=_back_label("返回人设图库"),
                     callback_data=callback_token(chat_id, "personaimage", {
-                        "persona_id": persona_id, "page": max(0, int(reference.get("page") or 0)),
+                        "persona_id": persona_id,
+                        "page": max(0, int(reference.get("page") or 0)),
+                        "return_callback": str(reference.get("return_callback") or "tt:psettings:media"),
                     }),
                 )])
                 await query.message.edit_text(
@@ -5677,6 +5834,7 @@ class NativeTweetBotController:
                     query, types, member,
                     persona_id=str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
                     page=int(reference.get("page") or 0),
+                    return_callback=str(reference.get("return_callback") or "tt:psettings:media"),
                 )
             elif action == "pimgfield" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pimgfield", parts[2])
@@ -5716,6 +5874,7 @@ class NativeTweetBotController:
                 payload = dict(state["payload"] if isinstance(state.get("payload"), dict) else {})
                 payload["persona_id"] = str(reference.get("persona_id") or state["selected_persona_id"])
                 payload["page"] = int(reference.get("page") or 0)
+                payload["return_callback"] = str(reference.get("return_callback") or payload.get("return_callback") or "tt:psettings:media")
                 save_state(chat_id, selected_persona_id=payload["persona_id"], mode="persona_image_prompt", payload=payload)
                 await query.message.edit_text(
                     "请发送人设图补充提示词。\n"
@@ -5725,6 +5884,7 @@ class NativeTweetBotController:
                         back_callback=callback_token(chat_id, "personaimage", {
                             "persona_id": payload["persona_id"],
                             "page": payload["page"],
+                            "return_callback": payload["return_callback"],
                         }),
                         back_text="返回人设图库",
                     ),
@@ -5737,6 +5897,7 @@ class NativeTweetBotController:
                 save_state(chat_id, selected_persona_id=persona_id, mode="persona_image_upload", payload={
                     "persona_id": persona_id,
                     "page": int(reference.get("page") or 0),
+                    "return_callback": str(reference.get("return_callback") or "tt:psettings:media"),
                     "persona_image_options": dict(prior_payload.get("persona_image_options") or {}) if isinstance(prior_payload.get("persona_image_options"), dict) else {},
                     "supplement_prompt": str(prior_payload.get("supplement_prompt") or ""),
                 })
@@ -5748,6 +5909,7 @@ class NativeTweetBotController:
                         types,
                         back_callback=callback_token(chat_id, "personaimage", {
                             "persona_id": persona_id, "page": int(reference.get("page") or 0),
+                            "return_callback": str(reference.get("return_callback") or "tt:psettings:media"),
                         }),
                         back_text="返回人设图库",
                     ),
@@ -5761,6 +5923,7 @@ class NativeTweetBotController:
                     "persona_id": persona_id,
                     "replace_image_id": str(reference.get("image_id") or ""),
                     "page": int(reference.get("page") or 0),
+                    "return_callback": str(reference.get("return_callback") or "tt:psettings:media"),
                     "persona_image_options": dict(prior_payload.get("persona_image_options") or {}) if isinstance(prior_payload.get("persona_image_options"), dict) else {},
                     "supplement_prompt": str(prior_payload.get("supplement_prompt") or ""),
                 })
@@ -5771,6 +5934,7 @@ class NativeTweetBotController:
                         types,
                         back_callback=callback_token(chat_id, "personaimage", {
                             "persona_id": persona_id, "page": int(reference.get("page") or 0),
+                            "return_callback": str(reference.get("return_callback") or "tt:psettings:media"),
                         }),
                         back_text="返回人设图库",
                     ),
@@ -5786,6 +5950,7 @@ class NativeTweetBotController:
                     persona_id=str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
                     page=int(reference.get("page") or 0),
                     notice="已设为当前人设参考图。",
+                    return_callback=str(reference.get("return_callback") or "tt:psettings:media"),
                 )
             elif action == "pimgavatar" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pimgavatar", parts[2], consume=True)
@@ -5801,7 +5966,9 @@ class NativeTweetBotController:
                 })
                 await self._render_persona_image_options(
                     query, types, member, persona_id=persona_id,
-                    page=int(reference.get("page") or 0), notice="已设为人设头像。",
+                    page=int(reference.get("page") or 0),
+                    notice="已设为人设头像。",
+                    return_callback=str(reference.get("return_callback") or "tt:psettings:media"),
                 )
             elif action == "pimgdeleteconfirm" and len(parts) > 2:
                 reference = resolve_callback_token(chat_id, "pimgdeleteconfirm", parts[2])
@@ -5812,6 +5979,7 @@ class NativeTweetBotController:
                         types.InlineKeyboardButton(text="取消", callback_data=callback_token(chat_id, "personaimage", {
                             "persona_id": str(reference.get("persona_id") or load_state(chat_id)["selected_persona_id"]),
                             "page": int(reference.get("page") or 0),
+                            "return_callback": str(reference.get("return_callback") or "tt:psettings:media"),
                         })),
                     ]]),
                 )
@@ -5823,8 +5991,13 @@ class NativeTweetBotController:
                     "image_id": str(reference.get("image_id") or ""),
                 })
                 await self._render_persona_image_options(
-                    query, types, member, persona_id=persona_id,
-                    page=int(reference.get("page") or 0), notice="人设图已删除。",
+                    query,
+                    types,
+                    member,
+                    persona_id=persona_id,
+                    page=int(reference.get("page") or 0),
+                    notice="人设图已删除。",
+                    return_callback=str(reference.get("return_callback") or "tt:psettings:media"),
                 )
             elif action == "createmenu":
                 # Keep the legacy callback as a strict alias of the current
@@ -7890,46 +8063,19 @@ class NativeTweetBotController:
                     ]]),
                 )
             elif action == "profile":
-                state = load_state(chat_id)
-                if not state["selected_persona_id"]:
-                    raise HTTPException(status_code=400, detail="请先选择人设")
-                profile = await self._call(user_id, "profile.get", {"persona_id": state["selected_persona_id"]})
-                rows = [[
-                    types.InlineKeyboardButton(text="编辑简介", callback_data="tt:bio"),
-                    types.InlineKeyboardButton(text="编辑推文风格", callback_data="tt:style"),
-                ], [types.InlineKeyboardButton(
-                    text="✏️ 修改人设名称",
-                    callback_data="tt:profilename",
-                ), types.InlineKeyboardButton(
-                    text="🤖 AI 重写简介",
-                    callback_data="tt:profileai",
-                )], [types.InlineKeyboardButton(
-                    text="🧠 人设记忆",
-                    callback_data="tt:pmemories:0",
-                ), types.InlineKeyboardButton(
-                    text="🔗 链接模板",
-                    callback_data="tt:plinks",
-                )], [types.InlineKeyboardButton(
-                    text="🧵 Threads 人设绑定",
-                    callback_data="tt:pthreads",
-                )], self._persona_module_back_row(
-                    types, chat_id, state["selected_persona_id"], "settings",
-                )]
-                await query.message.edit_text(
-                    f"基础资料\n\n"
-                    f"简介：{str(profile.get('content') or '')[:1200]}\n\n"
-                    f"推文风格：{str(profile.get('tweet_style_sample') or '')[:1200]}\n\n"
-                    "可分别修改简介、推文风格和名称；AI 重写只更新简介。\n"
-                    "人设记忆用于生成时按需选择，链接模板用于正文结尾，Threads 绑定只影响对应平台字段。",
-                    reply_markup=types.InlineKeyboardMarkup(inline_keyboard=rows),
-                )
+                # `tt:profile` was the legacy flat settings page.  Keep the
+                # callback valid for old Telegram messages, but render the
+                # same grouped module as the current `tt:pmod:settings`
+                # entry so users never fall back to the scattered menu.
+                clear_pending_state(chat_id, retain_keys=("persona_list_page",))
+                await self._render_persona_module(query, types, member, "settings_profile")
             elif action in {"bio", "style"}:
                 save_state(chat_id, mode="profile_content" if action == "bio" else "profile_style", payload={})
                 await query.message.edit_text(
                     "人设设置 · " + ("修改简介" if action == "bio" else "修改推文风格") + "\n"
                     "请发送新的完整内容；只更新当前字段，名称、记忆、链接模板、图库和账号绑定保持不变。",
                     reply_markup=self._step_navigation_markup(
-                        types, back_callback="tt:profile", back_text="返回基础资料",
+                        types, back_callback="tt:psettings:profile", back_text="返回基础资料",
                     ),
                 )
             elif action == "profilename":
@@ -7938,7 +8084,7 @@ class NativeTweetBotController:
                     "人设设置 · 修改名称\n"
                     "请发送新的人设名称；只修改显示名称，不会影响简介、推文、图库或绑定账号。",
                     reply_markup=self._step_navigation_markup(
-                        types, back_callback="tt:profile", back_text="返回基础资料",
+                        types, back_callback="tt:psettings:profile", back_text="返回基础资料",
                     ),
                 )
             elif action == "profileai":
@@ -7948,7 +8094,7 @@ class NativeTweetBotController:
                     "请发送希望 AI 优化的人设方向或补充要求。\n"
                     "AI 只会更新简介字段，不会覆盖名称、链接模板或图库。",
                     reply_markup=self._step_navigation_markup(
-                        types, back_callback="tt:profile", back_text="返回基础资料",
+                        types, back_callback="tt:psettings:profile", back_text="返回基础资料",
                     ),
                 )
             elif action == "pmemories":
@@ -8086,7 +8232,7 @@ class NativeTweetBotController:
                      "发送 /unbind 解除绑定。",
                     reply_markup=self._step_navigation_markup(
                         types,
-                        back_callback="tt:profile", back_text="返回基础资料",
+                        back_callback="tt:psettings:profile", back_text="返回基础资料",
                     ),
                 )
             elif action == "accounts":
@@ -8122,6 +8268,10 @@ class NativeTweetBotController:
     async def handle_text(self, message: Any, types: Any) -> None:
         if await self._handle_chat_login_text(message, types):
             return
+        requested_text = str(getattr(message, "text", "") or "").strip()
+        if requested_text in {ACCOUNT_CONTROL_BUTTON, LEGACY_ACCOUNT_CONTROL_BUTTON}:
+            await self._show_account_management(message, types)
+            return
         member = await self._authorized(
             message.chat,
             message.from_user,
@@ -8133,7 +8283,7 @@ class NativeTweetBotController:
             return
         chat_id = int(message.chat.id)
         user_id = int(member["web_user_id"])
-        text = str(message.text or "").strip()
+        text = requested_text
         if text in {"/cancel", "/done"}:
             state = load_state(chat_id)
             if text == "/done" and state["mode"] == "media_upload":
@@ -8854,14 +9004,14 @@ class NativeTweetBotController:
                 await message.answer(
                     "基础资料已保存。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
+                        types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:psettings:profile"),
                     ]]),
                 )
             elif mode == "profile_name":
                 await self._call(user_id, "profile.update", {"persona_id": persona_id, "name": text[:120]})
                 clear_pending_state(chat_id)
                 await message.answer("人设名称已更新。", reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                    types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
+                    types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:psettings:profile"),
                 ]]))
             elif mode == "profile_ai":
                 name = str(state["payload"].get("name") or "")
@@ -8879,7 +9029,7 @@ class NativeTweetBotController:
                 await message.answer(
                     "AI 已重写人设简介并保存。",
                     reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                        types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
+                        types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:psettings:profile"),
                     ]]),
                 )
             elif mode == "profile_memory_create":
@@ -9008,7 +9158,7 @@ class NativeTweetBotController:
                     notice = "Threads 人设绑定已更新。"
                 clear_pending_state(chat_id)
                 await message.answer(notice, reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[
-                    types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:profile"),
+                    types.InlineKeyboardButton(text=_back_label("返回基础资料"), callback_data="tt:psettings:profile"),
                 ]]))
             elif mode == "automation_plan_create":
                 try:
@@ -9860,7 +10010,7 @@ async def run_native_tweet_bot(
     dispatcher.callback_query.register(callback, F.data.startswith("tt:"))
     await bot.set_my_commands([
         types.BotCommand(command="menu", description="打开推文工作台"),
-        types.BotCommand(command="bind", description="聊天内登录并绑定"),
+        types.BotCommand(command="bind", description="网页登录/切换账号"),
         types.BotCommand(command="cancel", description="取消当前操作"),
     ])
     polling = asyncio.create_task(dispatcher.start_polling(bot, handle_signals=False))

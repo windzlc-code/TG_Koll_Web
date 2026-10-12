@@ -182,8 +182,6 @@ class AdminProxyPurchaseFrontendTests(unittest.TestCase):
         self.assertIn('service_id: "static-residential-ipv4"', payload)
         self.assertIn('default_country: ""', payload)
         self.assertIn("/api/admin/proxy-purchases/exchange-rate", self.script)
-        self.assertIn("const PROXY_PURCHASE_FX_REFRESH_INTERVAL_MS = 15 * 60 * 1000", self.script)
-        self.assertIn('if (!el("proxyPurchaseAdminWorkspace")) return;', self.script)
         self.assertIn("loadProxyPurchaseExchangeRate({ refresh: true })", self.script)
 
     def test_purchase_sync_status_has_explicit_contrast_colors(self):

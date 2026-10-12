@@ -293,7 +293,7 @@ ssh "${ssh_args[@]}" "$ssh_target" bash -s -- "$runtime_root" "$snapshot_id" <<'
 set -euo pipefail
 runtime_root="$1"
 snapshot_id="$2"
-[[ "$(id -u)" -eq 0 ]] || { echo "old-host runtime sync requires root" >&2; exit 1; }
+[[ "$(id -u)" -eq 0 ]] || { echo "application-host runtime sync requires root" >&2; exit 1; }
 [[ "$snapshot_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$ ]] || exit 1
 install -d -m 700 "$runtime_root/incoming" "$runtime_root/releases"
 [[ ! -e "$runtime_root/releases/$snapshot_id" ]] || {
@@ -482,7 +482,7 @@ command -v curl >/dev/null 2>&1 || die "curl is required"
 exec 9>"$lock_file"
 flock -n 9 || die "another runtime sync is running"
 
-[[ "$(id -u)" -eq 0 ]] || die "old-host runtime sync requires root"
+[[ "$(id -u)" -eq 0 ]] || die "application-host runtime sync requires root"
 [[ -f "$archive" ]] || die "uploaded runtime archive not found"
 [[ "$(sha256sum "$archive" | awk '{print $1}')" == "$expected_archive_sha" ]] ||
   die "runtime archive checksum mismatch"

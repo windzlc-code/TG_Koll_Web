@@ -188,7 +188,7 @@ class TelegramTweetChatLoginTests(unittest.TestCase):
             "tt:chatlogin",
         )
 
-    def test_production_binding_action_stays_in_chat(self):
+    def test_production_binding_action_opens_external_browser(self):
         controller = NativeTweetBotController(
             ops=TweetWorkbenchOps(
                 dispatch=lambda _uid, _action, _payload: {},
@@ -201,7 +201,7 @@ class TelegramTweetChatLoginTests(unittest.TestCase):
         )
         markup = controller._binding_markup(_Types, 731)
         button = markup.inline_keyboard[0][0]
-        self.assertEqual(button.callback_data, "tt:chatlogin")
+        self.assertEqual(button.url, "https://example.test/legacy")
         self.assertFalse(hasattr(button, "web_app"))
 
 
