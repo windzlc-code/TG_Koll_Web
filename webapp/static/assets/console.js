@@ -16020,7 +16020,7 @@ function renderPublishPreviewCard(activePost, sourceRows = [], persona = selecte
         ${renderMediaTypeBadge(activeMediaItems)}
       </div>
       <p>${esc(previewContent || "当前内容为空。")}</p>
-      ${renderPublishPreviewMedia(activeMediaItems)}
+      ${renderPublishPreviewMedia(activeMediaItems, { deferLoad: true })}
     </article>`;
 }
 
@@ -16060,7 +16060,7 @@ function renderPublishPostSelectionList(persona = selectedPersona(), source = st
                 <span class="publish-post-card-snippet">${esc(String(post.content || "").trim() || "当前内容为空。")}</span>
               </span>
             </label>
-            ${mediaItems.length ? `<div class="publish-post-card-media">${renderPublishPreviewMedia(mediaItems)}</div>` : ""}
+            ${mediaItems.length ? `<div class="publish-post-card-media">${renderPublishPreviewMedia(mediaItems, { deferLoad: true })}</div>` : ""}
           </article>`;
       }).join("")}
     </div>
@@ -16475,7 +16475,7 @@ function renderPublishHistoryPreview(persona = selectedPersona()) {
               ${renderPublishHistorySourceLink(publishedUrl, { compact: true, accountId: activeRecord?.account_id || "" })}
               <button type="button" class="publish-history-requeue-button" data-publish-history-requeue="${esc(String(activeRecord?.id || ""))}">${renderRequeueIcon()}<span>重回草稿</span></button>
             </div>
-            ${renderPublishPreviewMedia(activeMediaItems)}
+            ${renderPublishPreviewMedia(activeMediaItems, { deferLoad: true })}
           </article>
         </div>
       ` : renderPersonaPublishHistoryEmptyState()}
@@ -20055,6 +20055,7 @@ function syncPublishPreviewSelectionDom() {
   });
   const card = document.querySelector(".publish-preview-card");
   if (card) card.outerHTML = renderPublishPreviewCard(activePost, sourceRows, persona);
+  scheduleDeferredMediaHydration($("moduleBody"));
   const content = $("simpleContent");
   if (content) content.value = String(activePost?.content || "");
   renderConfirmSummary();
@@ -20074,6 +20075,7 @@ function syncPublishHistorySelectionDom() {
   });
   const preview = document.querySelector(".publish-history-preview");
   if (preview) preview.outerHTML = renderPublishHistoryPreview(persona);
+  scheduleDeferredMediaHydration($("moduleBody"));
   return true;
 }
 

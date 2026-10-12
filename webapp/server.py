@@ -519,6 +519,8 @@ _WORKERS: list[threading.Thread] = []
 _WORKERS_LOCK = threading.Lock()
 _NORMAL_TASK_CONTROLS: dict[str, threading.Event] = {}
 _NORMAL_TASK_CONTROLS_LOCK = threading.Lock()
+_PERSONA_MEDIA_THUMBNAIL_LOCKS: dict[str, threading.Lock] = {}
+_PERSONA_MEDIA_THUMBNAIL_LOCKS_LOCK = threading.Lock()
 _ADMIN_BILLING_WAIVED_TASK_IDS: set[str] = set()
 _ADMIN_BILLING_WAIVED_TASK_IDS_LOCK = threading.Lock()
 _RUNTIME_CONFIG_LOCK = threading.RLock()
@@ -4912,6 +4914,28 @@ def _extract_download_paths(output_data: dict[str, Any]) -> list[str]:
     for candidate in candidates:
         values.extend(candidate if isinstance(candidate, list) else [candidate])
     return _extract_existing_file_paths(values)
+
+
+def _prewarm_task_image_thumbnails(output_data: dict[str, Any], *, task_id: str = "") -> None:
+    for raw_path in _extract_download_paths(output_data):
+        path = Path(str(raw_path)).expanduser()
+        try:
+            path = path.resolve()
+        except Exception:
+            pass
+        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTS:
+            continue
+        try:
+            thumbnail = _ensure_persona_media_thumbnail(path)
+            if thumbnail is None:
+                raise RuntimeError("thumbnail generation returned no cache file")
+        except Exception as exc:
+            logger.warning(
+                "Task image preview prewarm failed for %s (task %s): %s",
+                path,
+                str(task_id or "").strip() or "unknown",
+                exc,
+            )
 
 
 def _task_has_download_file(output_data: dict[str, Any]) -> bool:
@@ -12758,6 +12782,8 @@ def _task_worker_with_control(
             message="生成成功" if status == "success" else "生成失败",
             data={"error": str(task_error or "")},
         )
+        if status == "success":
+            _prewarm_task_image_thumbnails(task_output, task_id=task_id)
     except Exception as exc:
         task_error = str(exc)
         status = "failed"
@@ -18833,7 +18859,7 @@ def _persona_archive_post_media_source(
     post_id: str,
     index: int,
     source: str = "posts",
-) -> tuple[Path | None, str]:
+) -> tuple[Path | None, str, str]:
     clean_archive_id = str(archive_id or "").strip()
     clean_post_id = str(post_id or "").strip()
     if not clean_archive_id or not clean_post_id:
@@ -18854,19 +18880,21 @@ def _persona_archive_post_media_source(
     media_items = _compact_dashboard_media_items(raw_post, published_meta)
     if index < 0 or index >= len(media_items):
         raise HTTPException(status_code=404, detail="媒体文件不存在。")
-    raw_url = str((media_items[index] or {}).get("url") or "").strip()
+    media_item = media_items[index] if isinstance(media_items[index], dict) else {}
+    raw_url = str(media_item.get("url") or "").strip()
     if not raw_url:
         raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    media_type = _guess_media_type(raw_url, media_item.get("type"))
     if re.match(r"^https?://", raw_url, re.I):
-        return None, raw_url
+        return None, raw_url, media_type
     path = Path(raw_url).expanduser().resolve()
     if not path.is_file() or not _is_allowed_dashboard_media_path(path):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
-    return path, ""
+    return path, "", media_type
 
 
 def _persona_archive_post_media_path(archive_id: str, post_id: str, index: int, source: str = "posts") -> Path:
-    local_path, remote_url = _persona_archive_post_media_source(archive_id, post_id, index, source)
+    local_path, remote_url, _media_type = _persona_archive_post_media_source(archive_id, post_id, index, source)
     if local_path:
         return local_path
     raise HTTPException(status_code=404, detail="媒体尚未缓存到本地。")
@@ -18947,6 +18975,33 @@ def _proxy_remote_persona_media(url: str, *, range_header: str = "") -> Response
     raise HTTPException(status_code=404, detail="媒体源文件不存在。") from last_error
 
 
+def _serve_remote_persona_image_thumbnail(url: str) -> Response:
+    cached = _find_hot_local_media(url)
+    proxied_response: Response | None = None
+    if not cached:
+        proxied_response = _proxy_remote_persona_media(url)
+        cached = _find_hot_local_media(url)
+    if not cached:
+        return proxied_response or _proxy_remote_persona_media(url)
+
+    source_path = Path(cached)
+    if source_path.suffix.lower() not in IMAGE_EXTS:
+        return proxied_response or _serve_persona_media_file(source_path)
+    try:
+        thumbnail_path = _ensure_persona_media_thumbnail(source_path)
+    except Exception as exc:
+        logger.warning("Remote image preview thumbnail failed for %s: %s", url, exc)
+        thumbnail_path = None
+    if thumbnail_path is None:
+        logger.warning("Remote image preview thumbnail unavailable for %s", url)
+        return proxied_response or _serve_persona_media_file(source_path)
+    return FileResponse(
+        str(thumbnail_path),
+        media_type="image/jpeg",
+        headers=_immutable_media_headers(),
+    )
+
+
 def _persona_media_cache_token(path: Path) -> str:
     stat = path.stat()
     return hashlib.sha256(f"{path}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")).hexdigest()[:16]
@@ -19006,7 +19061,25 @@ def _extract_video_poster(path: Path, dest: Path) -> bool:
         temp_path.unlink(missing_ok=True)
 
 
+def _persona_media_thumbnail_lock(path: Path) -> threading.Lock:
+    try:
+        key = str(path.resolve())
+    except Exception:
+        key = str(path)
+    with _PERSONA_MEDIA_THUMBNAIL_LOCKS_LOCK:
+        lock = _PERSONA_MEDIA_THUMBNAIL_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PERSONA_MEDIA_THUMBNAIL_LOCKS[key] = lock
+        return lock
+
+
 def _ensure_persona_media_thumbnail(path: Path) -> Path | None:
+    with _persona_media_thumbnail_lock(path):
+        return _ensure_persona_media_thumbnail_unlocked(path)
+
+
+def _ensure_persona_media_thumbnail_unlocked(path: Path) -> Path | None:
     source_key = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
     version = _persona_media_cache_token(path)
     cache_dir = path.parent / ".thumbnails"
@@ -19074,16 +19147,18 @@ def _serve_persona_archive_post_media(
     *,
     range_header: str = "",
 ) -> Response:
-    local_path, remote_url = _persona_archive_post_media_source(archive_id, post_id, index, source)
+    local_path, remote_url, _media_type = _persona_archive_post_media_source(archive_id, post_id, index, source)
     if local_path:
         return _serve_persona_media_file(local_path)
     return _proxy_remote_persona_media(remote_url, range_header=range_header)
 
 
 def _serve_persona_archive_post_media_thumbnail(archive_id: str, post_id: str, index: int, source: str = "posts") -> Response:
-    local_path, remote_url = _persona_archive_post_media_source(archive_id, post_id, index, source)
+    local_path, remote_url, media_type = _persona_archive_post_media_source(archive_id, post_id, index, source)
     if local_path:
         return _serve_persona_media_thumbnail(local_path)
+    if media_type == "image":
+        return _serve_remote_persona_image_thumbnail(remote_url)
     return _proxy_remote_persona_media(remote_url)
 
 
@@ -19091,7 +19166,7 @@ def _persona_archive_publish_history_media_source(
     archive_id: str,
     history_id: str,
     index: int,
-) -> tuple[Path | None, str]:
+) -> tuple[Path | None, str, str]:
     clean_archive_id = str(archive_id or "").strip()
     clean_history_id = str(history_id or "").strip()
     if not clean_archive_id or not clean_history_id:
@@ -19113,26 +19188,28 @@ def _persona_archive_publish_history_media_source(
     media_items = _compact_dashboard_media_items(raw_record, published_meta, source_meta, published_targets)
     if index < 0 or index >= len(media_items):
         raise HTTPException(status_code=404, detail="媒体文件不存在。")
-    raw_url = str((media_items[index] or {}).get("url") or "").strip()
+    media_item = media_items[index] if isinstance(media_items[index], dict) else {}
+    raw_url = str(media_item.get("url") or "").strip()
     if not raw_url:
         raise HTTPException(status_code=404, detail="媒体文件不存在。")
+    media_type = _guess_media_type(raw_url, media_item.get("type"))
     if re.match(r"^https?://", raw_url, re.I):
-        return None, raw_url
+        return None, raw_url, media_type
     path = Path(raw_url).expanduser().resolve()
     if not path.is_file() or not _is_allowed_dashboard_media_path(path):
         raise HTTPException(status_code=404, detail="媒体源文件不存在。")
-    return path, ""
+    return path, "", media_type
 
 
 def _persona_archive_publish_history_media_path(archive_id: str, history_id: str, index: int) -> Path:
-    path, _remote_url = _persona_archive_publish_history_media_source(archive_id, history_id, index)
+    path, _remote_url, _media_type = _persona_archive_publish_history_media_source(archive_id, history_id, index)
     if path:
         return path
     raise HTTPException(status_code=404, detail="媒体尚未缓存到本地。")
 
 
 def _serve_persona_archive_publish_history_media(archive_id: str, history_id: str, index: int) -> Response:
-    path, remote_url = _persona_archive_publish_history_media_source(archive_id, history_id, index)
+    path, remote_url, _media_type = _persona_archive_publish_history_media_source(archive_id, history_id, index)
     if path:
         return _serve_persona_media_file(path)
     return _proxy_remote_persona_media(remote_url)
@@ -19143,9 +19220,11 @@ def _serve_persona_archive_publish_history_media_thumbnail(
     history_id: str,
     index: int,
 ) -> Response:
-    path, remote_url = _persona_archive_publish_history_media_source(archive_id, history_id, index)
+    path, remote_url, media_type = _persona_archive_publish_history_media_source(archive_id, history_id, index)
     if path:
         return _serve_persona_media_thumbnail(path)
+    if media_type == "image":
+        return _serve_remote_persona_image_thumbnail(remote_url)
     return _proxy_remote_persona_media(remote_url)
 
 

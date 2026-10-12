@@ -3627,6 +3627,37 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(str(task["status"]), "failed")
         self.assertTrue(str(task["error"] or ""))
 
+    def test_successful_task_prewarms_local_image_thumbnail_before_persisting_result(self):
+        task_id = "task-prewarm-image-thumbnail"
+        user_id = self._admin_user_id()
+        source_path = self.root / "task-output.png"
+        Image.effect_noise((1200, 900), 100).convert("RGB").save(source_path, format="PNG")
+        server._create_task_record(task_id, user_id, "image_generate", {})
+        observed_statuses = []
+        original_thumbnail = server._ensure_persona_media_thumbnail
+
+        def observe_prewarm(path):
+            with server.db() as conn:
+                row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+            observed_statuses.append(str(row["status"] or "") if row is not None else "missing")
+            return original_thumbnail(path)
+
+        runner = mock.Mock(return_value={"ok": True, "image_paths": [str(source_path)]})
+        with (
+            mock.patch.dict(server.TASK_RUNNERS, {"image_generate": runner}),
+            mock.patch.object(server, "_ensure_persona_media_thumbnail", side_effect=observe_prewarm),
+        ):
+            server._task_worker(task_id, user_id, "image_generate", {})
+
+        runner.assert_called_once()
+        self.assertEqual(observed_statuses, ["running"])
+        cache_files = list((source_path.parent / ".thumbnails").glob("*.jpg"))
+        self.assertEqual(len(cache_files), 1)
+        with server.db() as conn:
+            task = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        self.assertEqual(str(task["status"]), "success")
+
+
     def test_persona_post_image_runner_saves_local_preview_file(self):
         self._write_archives()
         task_id = "task-persona-post-image"
@@ -7018,6 +7049,39 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertIn("immutable", first.headers["cache-control"])
         self.assertIn("immutable", second.headers["cache-control"])
 
+    def test_remote_persona_image_thumbnail_is_cached_separately_from_original(self):
+        image_buffer = BytesIO()
+        Image.new("RGB", (1200, 900), "orange").save(image_buffer, format="JPEG")
+        image_body = image_buffer.getvalue()
+
+        class FakeUpstream:
+            status_code = 200
+            headers = {"Content-Type": "image/jpeg"}
+
+            def iter_content(self, _size):
+                yield image_body
+
+            def close(self):
+                return None
+
+        cdn = "https://scontent-sea5-1.cdninstagram.com/v/t51.82787-15/remote-thumbnail.jpg"
+        with mock.patch.object(server.requests, "get", return_value=FakeUpstream()) as get:
+            first = server._serve_remote_persona_image_thumbnail(cdn)
+            second = server._serve_remote_persona_image_thumbnail(cdn)
+
+        self.assertIsInstance(first, server.FileResponse)
+        self.assertIsInstance(second, server.FileResponse)
+        self.assertEqual(get.call_count, 1)
+        thumbnail_path = Path(first.path)
+        self.assertTrue(thumbnail_path.is_file())
+        self.assertNotEqual(thumbnail_path.suffix.lower(), ".png")
+        with Image.open(thumbnail_path) as thumbnail:
+            self.assertLessEqual(thumbnail.width, 480)
+            self.assertLessEqual(thumbnail.height, 480)
+        originals = list((self.tool_runtime_dir / "sentiment-hot-media" / "preview-cache").glob("*.jpg"))
+        self.assertEqual(len(originals), 1)
+        self.assertNotEqual(thumbnail_path, originals[0])
+
     def test_persona_archive_social_media_uses_hot_preview_cache_proxy(self):
         from webapp import server
 
@@ -9147,6 +9211,42 @@ class PersonaDashboardApiTests(unittest.TestCase):
         self.assertEqual(original_response.status_code, 200)
         self.assertIn("immutable", original_response.headers["cache-control"])
         self.assertEqual(original_response.content, source_path.read_bytes())
+
+    def test_persona_media_thumbnail_generation_is_deduplicated_per_source(self):
+        source_path = self.root / "concurrent-generated.png"
+        Image.effect_noise((1600, 1200), 100).convert("RGB").save(source_path, format="PNG")
+        start = threading.Barrier(3)
+        open_count = 0
+        open_count_lock = threading.Lock()
+        original_open = server.Image.open
+
+        def delayed_open(*args, **kwargs):
+            nonlocal open_count
+            with open_count_lock:
+                open_count += 1
+                first = open_count == 1
+            if first:
+                time.sleep(0.2)
+            return original_open(*args, **kwargs)
+
+        results = []
+
+        def generate_thumbnail():
+            start.wait(timeout=5)
+            results.append(server._ensure_persona_media_thumbnail(source_path))
+
+        with mock.patch.object(server.Image, "open", side_effect=delayed_open):
+            threads = [threading.Thread(target=generate_thumbnail) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            start.wait(timeout=5)
+            for thread in threads:
+                thread.join(timeout=5)
+
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(result is not None for result in results))
+        self.assertEqual(open_count, 1)
+        self.assertEqual(len(list((source_path.parent / ".thumbnails").glob("*.jpg"))), 1)
 
     def test_persona_generation_instruction_uses_native_locale_writing_rules(self):
         japanese = server._build_persona_generate_instruction(

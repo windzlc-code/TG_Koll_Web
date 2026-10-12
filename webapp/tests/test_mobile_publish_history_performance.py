@@ -23,13 +23,13 @@ class MobilePublishHistoryPerformanceTests(unittest.TestCase):
 
     def test_history_media_sources_are_hydrated_after_the_navigation_frame(self):
         media_button = function_source("renderMediaPreviewButton", "personaDraftMediaItems")
-        history_selection = function_source("renderPublishHistorySelectionList", "renderPublishHistoryPreview")
+        history_preview = function_source("renderPublishHistoryPreview", "renderPublishHistoryPanel")
 
         self.assertIn("data-deferred-media-src", media_button)
         self.assertIn("scheduleDeferredMediaHydration", CONSOLE_JS)
         self.assertIn("DEFERRED_MEDIA_HYDRATION_DELAY_MS = 180", CONSOLE_JS)
         self.assertIn("new IntersectionObserver", CONSOLE_JS)
-        self.assertIn("deferLoad: isMobileTweetStreamMode()", history_selection)
+        self.assertIn("deferLoad: true", history_preview)
 
     def test_history_mode_does_not_load_unrelated_draft_posts(self):
         renderer = function_source("renderSimpleFlowModule", "fillSimpleAccounts")
@@ -43,6 +43,7 @@ class MobilePublishHistoryPerformanceTests(unittest.TestCase):
         self.assertIn('document.querySelectorAll("[data-publish-history-card]")', sync)
         self.assertIn('card.classList.toggle("is-selected", active)', sync)
         self.assertIn('preview.outerHTML = renderPublishHistoryPreview(persona)', sync)
+        self.assertIn('scheduleDeferredMediaHydration($("moduleBody"));', sync)
         self.assertIn('if (!syncPublishHistorySelectionDom()) renderPersonaDetail();', CONSOLE_JS)
         self.assertIn('if (!syncPublishHistorySelectionDom()) renderSimpleFlowModule("publishing");', CONSOLE_JS)
 

@@ -4387,7 +4387,7 @@ textarea:focus {
 }
 
 .publish-preview-media-frame.is-media-loading {
-  opacity: 0;
+  opacity: 1;
 }
 
 .publish-preview-media-frame.is-media-ready {
