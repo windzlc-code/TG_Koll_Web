@@ -162,8 +162,9 @@ def test_concat_wires_tail_cleanup_and_archived_micro_crossfade(
         }
     ]
     filter_complex = process_commands[-1][process_commands[-1].index("-filter_complex") + 1]
-    assert "xfade=transition=fade:duration=0.040:offset=0.960" in filter_complex
+    assert "concat=n=2:v=1:a=0" in filter_complex
     assert "acrossfade=d=0.040:c1=tri:c2=tri" in filter_complex
+    assert "apad,atrim=0:" in filter_complex
 
 
 def test_postprocess_cancellation_is_not_swallowed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

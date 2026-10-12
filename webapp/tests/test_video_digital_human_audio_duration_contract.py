@@ -4,12 +4,24 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from video_core.contracts import VideoTaskContext
 from video_core.source import create_video
 from video_core.source_backend import ArchivedSourceBackend
 
 
-def test_digital_human_segment_uses_tts_media_duration_over_request_duration() -> None:
+@pytest.mark.parametrize(
+    ("app_id", "expected_duration_field"),
+    [
+        (create_video.DIGITAL_HUMAN_VIDEO_APP_ID, "0"),
+        (create_video.LEGACY_INFINITETALK_VIDEO_APP_ID, "9"),
+    ],
+)
+def test_digital_human_segment_preserves_workflow_audio_duration_contract(
+    app_id: str,
+    expected_duration_field: str,
+) -> None:
     submissions: list[dict[str, Any]] = []
 
     class MediaDurationBackend(ArchivedSourceBackend):
@@ -41,7 +53,7 @@ def test_digital_human_segment_uses_tts_media_duration_over_request_duration() -
             task_id="task-audio-duration",
             payload={
                 "duration_seconds": 15,
-                "oral_digital_human_workflow_ids": [create_video.DIGITAL_HUMAN_VIDEO_APP_ID],
+                "oral_digital_human_workflow_ids": [app_id],
             },
             context=VideoTaskContext(task_id="task-audio-duration", task_type="create_video"),
             workdir=Path(tmpdir) / "work",
@@ -53,4 +65,6 @@ def test_digital_human_segment_uses_tts_media_duration_over_request_duration() -
         )
 
     assert result["duration_seconds"] == 8.388
-    assert submissions[0]["submit_payload"]["nodeInfoList"][2]["fieldValue"] == "9"
+    node_info = submissions[0]["submit_payload"]["nodeInfoList"]
+    duration_node = next(item for item in node_info if item["nodeId"] in {"349", "231"})
+    assert duration_node["fieldValue"] == expected_duration_field

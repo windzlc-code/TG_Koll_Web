@@ -855,7 +855,13 @@ def _normalize_digital_human_segment_tail_cooldowns(
     run: ProcessRunner | None = None,
 ) -> tuple[list[Path], list[dict[str, Any]]]:
     _check_cancelled(context)
-    if len(segment_paths) <= 1 or not _digital_human_segment_tail_cooldown_enabled(payload):
+    if not segment_paths or not _digital_human_segment_tail_cooldown_enabled(payload):
+        return [Path(path).expanduser().resolve() for path in segment_paths], []
+    # A single provider segment can still contain a long silent tail when the
+    # provider honours its own default video duration instead of the uploaded
+    # TTS duration.  Keep the historical no-op for callers that only want
+    # join cleanup, but allow the explicit final-segment path to normalize it.
+    if len(segment_paths) <= 1 and not include_final:
         return [Path(path).expanduser().resolve() for path in segment_paths], []
     target_quiet = _digital_human_segment_tail_cooldown_seconds(payload)
     max_quiet = _digital_human_segment_tail_max_silence_seconds(payload)

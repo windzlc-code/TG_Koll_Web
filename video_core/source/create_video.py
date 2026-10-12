@@ -19,7 +19,10 @@ CURRENT_DIGITAL_HUMAN_VIDEO_APP_ID = DIGITAL_HUMAN_VIDEO_APP_ID
 CURRENT_VIDEO_MAX_RESOLUTION = 1280
 CURRENT_VIDEO_FRAME_RATE = 25
 DIGITAL_HUMAN_ACTION_PROMPT = "角色面向镜头深情的说话，固定镜头。"
-AUDIO_DURATION_ZERO_WORKFLOW_IDS: set[str] = set()
+# The current lip-sync app treats node 349=0 as "use the complete uploaded
+# audio".  Keep this contract explicit and scoped to that app; legacy
+# InfiniteTalk workflows still require an explicit audio end time.
+AUDIO_DURATION_ZERO_WORKFLOW_IDS: set[str] = {DIGITAL_HUMAN_VIDEO_APP_ID}
 PLUS_INSTANCE_WORKFLOW_IDS = {DIGITAL_HUMAN_VIDEO_APP_ID, LEGACY_INFINITETALK_VIDEO_APP_ID}
 
 _DEFAULT_VIDEO_WORKFLOW_CAPABILITIES: dict[str, Any] = {

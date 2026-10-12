@@ -932,16 +932,22 @@ def run_digital_human_pipeline(
     ordered_paths = [segment_paths[index] for index in range(1, segment_count + 1)]
     final_video = ordered_paths[0]
     concat_meta: dict[str, Any] = {}
-    if len(ordered_paths) > 1:
-        concat_provider = _provider(
-            backend,
-            request,
-            ("_digital_human_concat_provider", "_video_concat_provider"),
-            ("concat_digital_human_segments", "_concat_digital_human_segments"),
-        )
+    concat_provider = _provider(
+        backend,
+        request,
+        ("_digital_human_concat_provider", "_video_concat_provider"),
+        ("concat_digital_human_segments", "_concat_digital_human_segments"),
+    )
+    # The provider can return a fixed-duration container for a single segment
+    # even when its uploaded TTS is shorter.  Run the same final-segment audio
+    # normalization for one segment when the backend exposes the production
+    # concat/cleanup adapter; test adapters without that capability retain the
+    # original single-segment contract.
+    if len(ordered_paths) > 1 or (len(ordered_paths) == 1 and concat_provider is not None):
         if concat_provider is None:
             raise VideoDependencyError("digital human concat provider is not configured for multi-segment output")
-        context.progress(stage="digital_human_merge", status="running", message="Merging digital-human segments", progress=94)
+        if len(ordered_paths) > 1:
+            context.progress(stage="digital_human_merge", status="running", message="Merging digital-human segments", progress=94)
         concat_output = (segment_dir.parent / "digital_human_short_video.mp4").resolve()
         concat_result = _invoke(
             concat_provider,

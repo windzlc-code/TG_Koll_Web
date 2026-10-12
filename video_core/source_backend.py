@@ -1991,7 +1991,17 @@ class ArchivedSourceBackend:
                     app_id=app_id,
                     image_url=image_url,
                     audio_url=audio_url,
-                    duration_seconds=max(_integer(audio_part_duration, 1), 1),
+                    # RunningHub's current digital-human app uses node 349=0
+                    # to consume the complete uploaded TTS file.  Passing a
+                    # ceiled duration (for example 8.388 -> 9) makes the
+                    # provider manufacture a longer video and leaves a
+                    # silent tail.  Keep the explicit end-time contract for
+                    # legacy workflows unchanged.
+                    duration_seconds=(
+                        0
+                        if str(app_id).strip() in source_create_video.AUDIO_DURATION_ZERO_WORKFLOW_IDS
+                        else max(_integer(audio_part_duration, 1), 1)
+                    ),
                     prompt_text=prompt_text,
                     camera_video_url=current_video_url or None,
                     max_resolution=source_create_video.CURRENT_VIDEO_MAX_RESOLUTION,
@@ -2032,6 +2042,30 @@ class ArchivedSourceBackend:
                         remote_values=(),
                     )
             video_parts.append(part_output)
+        audio_tail_cleanup: list[dict[str, Any]] = []
+        if video_parts:
+            def probe_segment(path: Path, **_values: Any) -> float:
+                return self._postprocess_duration(Path(path), segment_payload)
+
+            def run_cleanup_process(
+                command: list[str], timeout_seconds: int = 300, **_values: Any
+            ) -> tuple[int, str, str]:
+                return _run_local_process(
+                    list(command),
+                    timeout_seconds=max(int(timeout_seconds or 300), 1),
+                    payload=segment_payload,
+                    context=context,
+                )
+
+            video_parts, audio_tail_cleanup = digital_human_join_cleanup.normalize_digital_human_segment_joins(
+                video_parts,
+                output_dir=Path(workdir) / "digital_human_segment_tail_cleanup" / str(segment_index),
+                payload=segment_payload,
+                context=context,
+                probe=probe_segment,
+                run=run_cleanup_process,
+                include_final=True,
+            )
         if len(video_parts) > 1:
             self._concat_ecommerce_segments(
                 segment_paths=video_parts,
@@ -2040,6 +2074,9 @@ class ArchivedSourceBackend:
                 context=context,
                 workdir=Path(workdir),
             )
+        elif video_parts and Path(video_parts[0]).resolve() != Path(output_path).resolve():
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(video_parts[0], output_path)
         return {
             "ok": True,
             "status": "success",
@@ -2047,6 +2084,7 @@ class ArchivedSourceBackend:
             "duration_seconds": precise_duration,
             "runninghub_task_id": provider_ids[-1] if provider_ids else "",
             "runninghub_task_ids": provider_ids,
+            "audio_tail_cleanup": audio_tail_cleanup,
         }
 
     def concat_digital_human_segments(
@@ -2090,6 +2128,7 @@ class ArchivedSourceBackend:
             context=context,
             probe=probe_segment,
             run=run_cleanup_process,
+            include_final=True,
         )
         context.check_cancelled()
         requested_crossfade_seconds = self._digital_human_effective_micro_crossfade_seconds(
@@ -2510,7 +2549,11 @@ class ArchivedSourceBackend:
         # input to its probed video duration before joining so the audio/video
         # timelines stay closed even when a provider response is imperfect.
         padded_audio_labels: list[str] = []
+        normalized_video_labels: list[str] = []
         for index, duration in enumerate(durations):
+            video_label = f"[vnorm{index}]"
+            filter_parts.append(f"[{index}:v:0]setpts=PTS-STARTPTS{video_label}")
+            normalized_video_labels.append(video_label)
             padded_label = f"[adpad{index}]"
             padded_duration = max(float(duration or 0.0), 0.1)
             filter_parts.append(
@@ -2518,25 +2561,34 @@ class ArchivedSourceBackend:
                 f"apad,atrim=0:{padded_duration:.3f},asetpts=N/SR/TB{padded_label}"
             )
             padded_audio_labels.append(padded_label)
-        video_label = "[0:v:0]"
+        video_label = normalized_video_labels[0]
         audio_label = padded_audio_labels[0]
-        elapsed = float(durations[0])
+        total_video_duration = float(durations[0])
         for idx in range(1, len(resolved_paths)):
             context.check_cancelled()
-            next_video_label = f"[{idx}:v:0]"
+            next_video_label = normalized_video_labels[idx]
             next_audio_label = padded_audio_labels[idx]
             video_out = f"[vxf{idx}]"
             audio_out = f"[axf{idx}]"
-            offset = max(elapsed - crossfade_seconds, 0.0)
             filter_parts.append(
-                f"{video_label}{next_video_label}xfade=transition=fade:duration={crossfade_seconds:.3f}:offset={offset:.3f}{video_out}"
+                # File-backed provider outputs can make xfade finish at the
+                # first segment's timeline even though acrossfade continues
+                # the audio.  Concatenate normalized video PTS explicitly so
+                # the visual stream covers the same full segment sequence.
+                f"{video_label}{next_video_label}concat=n=2:v=1:a=0{video_out}"
             )
             filter_parts.append(
                 f"{audio_label}{next_audio_label}acrossfade=d={crossfade_seconds:.3f}:c1=tri:c2=tri{audio_out}"
             )
             video_label = video_out
             audio_label = audio_out
-            elapsed += float(durations[idx]) - crossfade_seconds
+            total_video_duration += float(durations[idx])
+        padded_final_audio_label = "[aout]"
+        filter_parts.append(
+            f"{audio_label}apad,atrim=0:{max(total_video_duration, 0.1):.3f},"
+            f"asetpts=N/SR/TB{padded_final_audio_label}"
+        )
+        audio_label = padded_final_audio_label
         command = [
             ffmpeg,
             "-y",
