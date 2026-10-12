@@ -34457,6 +34457,30 @@ def create_app() -> FastAPI:
             value = str(explicit_data.get(key) or "").strip()
             if key in explicit_data and (not value or "***" in value or "•" in value):
                 explicit_data.pop(key, None)
+        text_model_keys = (
+            "llm_default_model_gemini",
+            "llm_default_model_gpt",
+            "llm_default_model",
+            "llm_model_priority_order",
+        )
+        if any(key in explicit_data for key in text_model_keys):
+            incoming_text_models = _ordered_model_list(
+                parse_model_list(explicit_data.get("llm_model_priority_order")),
+                parse_model_list(explicit_data.get("llm_default_model_gpt")),
+                parse_model_list(explicit_data.get("llm_default_model")),
+                fallback=[],
+            )
+            current_text_models = _ordered_model_list(
+                parse_model_list(current_runtime.get("llm_model_priority_order")),
+                parse_model_list(current_runtime.get("llm_default_model_gpt")),
+                parse_model_list(current_runtime.get("llm_default_model")),
+                fallback=[],
+            )
+            if current_text_models and not incoming_text_models:
+                # A stale/partially loaded admin form must not erase the last
+                # working text-model chain (or silently switch its endpoint).
+                for key in (*text_model_keys, "llm_base_url"):
+                    explicit_data.pop(key, None)
         merged = dict(DEFAULT_RUNTIME_CONFIG)
         if isinstance(current_runtime, dict):
             merged.update(current_runtime)

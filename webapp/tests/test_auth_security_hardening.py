@@ -1316,6 +1316,33 @@ class AuthSecurityHardeningTests(unittest.TestCase):
             saved = server._get_runtime_config(conn)
         self.assertEqual(saved["llm_api_key_gpt"], "runtime-secret-key")
 
+    def test_admin_runtime_config_preserves_existing_text_models_on_blank_form_save(self):
+        runtime = dict(server.DEFAULT_RUNTIME_CONFIG)
+        runtime["llm_base_url"] = "https://llm.example.test/v1"
+        runtime["llm_default_model_gpt"] = "google/gemini-3.1-pro-preview, xai/grok-4.3"
+        runtime["llm_default_model"] = runtime["llm_default_model_gpt"]
+        runtime["llm_model_priority_order"] = runtime["llm_default_model_gpt"]
+        server._write_runtime_config_file(runtime)
+        admin, _identity = self._admin_client()
+
+        response = admin.put(
+            "/api/admin/runtime_config",
+            json={
+                "llm_base_url": "http://202.90.21.53:3008",
+                "llm_default_model_gemini": "",
+                "llm_default_model_gpt": "",
+                "llm_default_model": "",
+                "llm_model_priority_order": "",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        with server.db() as conn:
+            saved = server._get_runtime_config(conn)
+        self.assertEqual(saved["llm_base_url"], "https://llm.example.test/v1")
+        self.assertEqual(saved["llm_default_model_gpt"], runtime["llm_default_model_gpt"])
+        self.assertEqual(saved["llm_default_model"], runtime["llm_default_model"])
+        self.assertEqual(saved["llm_model_priority_order"], runtime["llm_model_priority_order"])
+
     def test_admin_runninghub_key_status_uses_saved_key_and_reports_unusable(self):
         runtime = dict(server.DEFAULT_RUNTIME_CONFIG)
         runtime["new_persona_runninghub_api_key"] = "saved-runninghub-key"
