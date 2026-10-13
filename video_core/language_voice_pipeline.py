@@ -115,7 +115,7 @@ def _build_audio_settings(payload: dict[str, Any]) -> commerce_video_generator.A
         language=language,
         model_choice=_text(payload.get("model_choice") or "1.7B"),
         speaker=_text(payload.get("speaker") or "Ryan"),
-        app_id=_text(payload.get("create_audio_app_id")),
+        app_id=_text(payload.get("create_audio_app_id") or payload.get("video_create_audio_app_id")),
         # The original language replacement runner explicitly changes the
         # digital-human default (1.08) to 1.0 when no speed was supplied.
         speed=_float(payload.get("audio_speed"), 1.0),
@@ -330,12 +330,31 @@ def prepare_language_voice(
     output_path = output_dir / f"video_language_target.{output_suffix}"
     context.check_cancelled()
     if tts_provider is None:
-        generated = commerce_video_generator._generate_minimax_audio(
-            speech_text=speech_text,
-            settings=settings,
-            output_path=output_path,
-            logger=context.log,
-        )
+        if reference_path is not None and _text(settings.tts_provider).lower() == "runninghub":
+            workflow_api_key = _text(
+                source.get("video_runninghub_api_key")
+                or source.get("runninghub_personal_api_key")
+                or source.get("runninghub_api_key")
+                or source.get("runninghub_enterprise_api_key")
+                or source.get("video_tts_api_key")
+                or settings.minimax_api_key
+            )
+            generated = commerce_video_generator._generate_audio(
+                api_key=workflow_api_key,
+                speech_text=speech_text,
+                settings=settings,
+                output_path=output_path,
+                reference_audio_path=reference_path,
+                poll_interval_seconds=max(_float(source.get("video_poll_interval_seconds"), 2.0), 0.25),
+                logger=context.log,
+            )
+        else:
+            generated = commerce_video_generator._generate_minimax_audio(
+                speech_text=speech_text,
+                settings=settings,
+                output_path=output_path,
+                logger=context.log,
+            )
     else:
         generated = _invoke_compatible(
             tts_provider,
@@ -360,8 +379,12 @@ def prepare_language_voice(
         "reference_audio_path": str(reference_path) if reference_path else "",
         "cloned_voice_id": cloned_voice_id,
         "tts_emotion": used_emotion,
-        "mode": "cloned_voice_tts" if cloned_voice_id else "preset_voice_tts",
-        "voice_cloned": bool(cloned_voice_id),
+        "mode": (
+            "cloned_voice_tts"
+            if cloned_voice_id
+            else ("reference_voice_tts" if reference_path is not None else "preset_voice_tts")
+        ),
+        "voice_cloned": bool(cloned_voice_id or reference_path is not None),
         "tts_generated": True,
         "settings": asdict(settings),
     }

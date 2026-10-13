@@ -87,3 +87,60 @@ def test_digital_human_segment_closes_over_current_contract_without_provider_cal
     ]
     assert submit_payload["instanceType"] == "plus"
     assert submissions[0]["submit_url"].endswith(f"/openapi/v2/run/ai-app/{create_video.DIGITAL_HUMAN_VIDEO_APP_ID}")
+
+
+def test_digital_human_segment_preserves_runninghub_reference_voice(monkeypatch, tmp_path: Path) -> None:
+    reference_audio = tmp_path / "male-reference.ogg"
+    reference_audio.write_bytes(b"reference-audio")
+    generated_audio = tmp_path / "generated-male-voice.mp3"
+    generated_audio.write_bytes(b"generated-audio")
+    observed: dict[str, Any] = {}
+
+    def fake_prepare_language_voice(payload, _context, workdir):
+        observed["payload"] = dict(payload)
+        observed["workdir"] = Path(workdir)
+        return {"target_audio_path": str(generated_audio), "mode": "reference_voice_tts"}
+
+    monkeypatch.setattr(
+        "video_core.source_backend.language_voice_pipeline.prepare_language_voice",
+        fake_prepare_language_voice,
+    )
+
+    class NoPaidProviderBackend(ArchivedSourceBackend):
+        def _generate_minimax_tts(self, **_kwargs: Any) -> Path:
+            raise AssertionError("RunningHub reference audio must not fall back to the default preset voice")
+
+        @staticmethod
+        def _probe_media_duration_seconds(_path: Path, _payload: dict[str, Any]) -> float:
+            return 4.0
+
+        def _resolve_media(self, **kwargs: Any) -> str:
+            return f"https://media.invalid/{kwargs['media_kind']}"
+
+        def _submit_and_poll(self, **kwargs: Any) -> dict[str, Any]:
+            output_path = Path(kwargs["output_path"])
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(b"fake-video")
+            return {"status": "success", "runninghub_task_id": "mock-video-reference-voice"}
+
+    output_path = tmp_path / "final-reference-voice.mp4"
+    result = NoPaidProviderBackend().generate_digital_human_segment(
+        task_id="task-reference-voice",
+        payload={
+            "video_tts_provider": "runninghub",
+            "audio_local_path": str(reference_audio),
+            "oral_digital_human_workflow_ids": [create_video.DIGITAL_HUMAN_VIDEO_APP_ID],
+        },
+        context=VideoTaskContext(task_id="task-reference-voice", task_type="create_video"),
+        workdir=tmp_path / "work",
+        output_path=output_path,
+        segment_index=1,
+        script_text="这是男性参考音色测试。",
+        prompt_text="角色面向镜头说话，固定镜头。",
+        source_image_path="presenter.png",
+    )
+
+    assert observed["payload"]["audio_local_path"] == str(reference_audio)
+    assert observed["payload"]["speech_text"] == "这是男性参考音色测试。"
+    assert observed["workdir"].name == "segment_1"
+    assert result["video_path"] == str(output_path)

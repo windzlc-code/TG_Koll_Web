@@ -34,6 +34,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Real browser closed-loop smoke test for the video editor.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8778")
     parser.add_argument("--screenshot-dir", default="")
+    parser.add_argument("--delete-only", action="store_true", help="Stop after the isolated asset-delete confirmation flow.")
     args = parser.parse_args()
     base_url = args.base_url.rstrip("/")
     screenshot_dir = Path(args.screenshot_dir).resolve() if args.screenshot_dir else None
@@ -50,8 +51,10 @@ def main() -> None:
             page = context.new_page()
             page_errors: list[str] = []
             native_dialogs: list[str] = []
+            asset_delete_requests: list[str] = []
             page.on("pageerror", lambda error: page_errors.append(str(error)))
             page.on("dialog", lambda dialog: (native_dialogs.append(dialog.type), dialog.dismiss()))
+            page.on("request", lambda request: asset_delete_requests.append(request.url) if request.method == "DELETE" and "/api/video/editor/assets/" in request.url else None)
 
             login = context.request.post(
                 f"{base_url}/api/auth/portal-login",
@@ -109,21 +112,48 @@ def main() -> None:
             page.wait_for_function("document.querySelectorAll('[data-project-select] option').length === 1")
 
             assert page.locator("[data-editor-drop-zone] [data-editor-upload]").count() == 1
-            with page.expect_file_chooser() as chooser_info:
-                page.locator("[data-editor-drop-zone]").click()
-            chooser_info.value.set_files(str(sample))
+            page.locator("[data-editor-upload]").set_input_files(str(sample))
             page.locator(".video-asset-card").wait_for(state="visible", timeout=30_000)
             page.get_by_text("browser-sample", exact=False).first.wait_for(state="visible")
             page.get_by_text("素材容量已超过管理阈值", exact=True).wait_for(state="visible")
             assert page.locator(".video-asset-card").count() == 1, page.locator(".video-asset-card").count()
             page.locator("[data-asset-delete]").click()
-            page.locator(".site-auth-feedback [data-video-action-confirm]").wait_for(state="visible")
-            page.locator(".site-auth-feedback [data-video-action-cancel]").click()
-            assert page.locator(".video-asset-card").count() == 1
+            page.locator(".site-auth-feedback [data-video-delete-confirm]").wait_for(state="visible")
+            assert page.locator(".site-auth-feedback [data-video-delete-confirm]").inner_text() == "确定删除"
+            assert page.get_by_role("button", name="知道了").count() == 0
+            page.locator(".site-auth-feedback [data-video-delete-cancel]").click()
+            page.locator(".site-auth-feedback").wait_for(state="detached")
+            page.wait_for_timeout(250)
+            cancel_state = page.evaluate("""async () => {
+              const response = await fetch('/api/video/editor/assets?page=1&page_size=6&sync_generated=false', { credentials: 'include', headers: { 'X-Admin-Console': '1' } });
+              const payload = await response.json();
+              return {
+                url: window.location.href,
+                cards: document.querySelectorAll('.video-asset-card').length,
+                rootText: document.querySelector('#videoEditorRoot')?.innerText || '',
+                apiOk: response.ok,
+                apiTotal: payload.total,
+                apiNames: (payload.items || []).map((item) => item.name),
+              };
+            }""")
+            assert page.locator(".video-asset-card").count() == 1, {"requests": asset_delete_requests, "state": cancel_state, "errors": page_errors}
+            assert not asset_delete_requests
             assert not native_dialogs
+            page.locator("[data-asset-delete]").click()
+            page.locator(".site-auth-feedback [data-video-delete-confirm]").click()
+            page.locator(".site-auth-feedback").wait_for(state="detached")
+            page.wait_for_function("document.querySelectorAll('.video-asset-card').length === 0")
+            assert len(asset_delete_requests) == 1, asset_delete_requests
+            page.locator("[data-editor-upload]").set_input_files(str(sample))
+            page.locator(".video-asset-card").wait_for(state="visible", timeout=30_000)
             page.wait_for_function(
                 "document.querySelector('.video-asset-card img')?.complete && document.querySelector('.video-asset-card img')?.naturalWidth > 0"
             )
+            if args.delete_only:
+                assert not page_errors, f"uncaught page errors: {page_errors}"
+                browser.close()
+                print("video editor delete confirmation browser smoke: passed")
+                return
             assert page.locator(".video-asset-visual [data-asset-preview]").count() == 0
             assert page.locator(".video-asset-visual[data-asset-preview] .video-asset-play svg").count() == 1
             assert page.locator(".video-asset-actions [data-asset-preview]").count() == 0
@@ -266,8 +296,9 @@ def main() -> None:
             assert page.locator(".video-record-action-menu:not([hidden])").is_visible()
             assert page.locator(".video-record-action-menu:not([hidden]) svg.video-icon").count() == 4
             page.locator("[data-record-delete]").click()
-            page.locator(".site-auth-feedback [data-record-delete-confirm]").wait_for(state="visible")
-            page.locator(".site-auth-feedback [data-record-delete-cancel]").click()
+            page.locator(".site-auth-feedback [data-video-delete-confirm]").wait_for(state="visible")
+            assert page.locator(".site-auth-feedback [data-video-delete-confirm]").inner_text() == "确定删除"
+            page.locator(".site-auth-feedback [data-video-delete-cancel]").click()
             assert page.locator(".video-record-card").count() == 1
             page.locator("[data-record-menu-toggle]").click()
             if screenshot_dir:

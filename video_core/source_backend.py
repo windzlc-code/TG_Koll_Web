@@ -1921,10 +1921,11 @@ class ArchivedSourceBackend:
         segment_payload.setdefault("audio_speed", 1.08)
         cached_voice_id = _text(payload.get("_digital_human_cloned_voice_id"))
         tts_provider = _text(payload.get("video_tts_provider") or "runninghub").lower()
+        reference_audio = _text(payload.get("audio_local_path") or payload.get("voice_audio_local_path"))
         if (
             not cached_voice_id
             and tts_provider == "minimax"
-            and _text(payload.get("audio_local_path") or payload.get("voice_audio_local_path"))
+            and reference_audio
         ):
             prepared = language_voice_pipeline.prepare_language_voice_settings(payload, context, workdir)
             cached_voice_id = _text(prepared.get("cloned_voice_id"))
@@ -1933,12 +1934,22 @@ class ArchivedSourceBackend:
         if cached_voice_id:
             segment_payload["video_default_voice_id"] = cached_voice_id
             segment_payload["minimax_tts_voice_id"] = cached_voice_id
-        audio_path = self._generate_minimax_tts(
-            speech_text=script_text,
-            output_path=(Path(workdir) / "digital_human_short_out" / "audio" / f"{segment_index}.mp3").resolve(),
-            payload=segment_payload,
-            context=context,
-        )
+        if tts_provider == "runninghub" and reference_audio:
+            voice_payload = dict(segment_payload)
+            voice_payload["speech_text"] = script_text
+            prepared_voice = language_voice_pipeline.prepare_language_voice(
+                voice_payload,
+                context,
+                (Path(workdir) / "digital_human_short_out" / "audio" / f"segment_{segment_index}").resolve(),
+            )
+            audio_path = Path(_text(prepared_voice.get("target_audio_path"))).expanduser().resolve()
+        else:
+            audio_path = self._generate_minimax_tts(
+                speech_text=script_text,
+                output_path=(Path(workdir) / "digital_human_short_out" / "audio" / f"{segment_index}.mp3").resolve(),
+                payload=segment_payload,
+                context=context,
+            )
         image_url = self._resolve_media(
             task_id=task_id,
             payload=segment_payload,

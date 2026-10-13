@@ -150,6 +150,37 @@
     return result;
   }
 
+  function confirmDeleteAsset(asset) {
+    return new Promise((resolve) => {
+      const previousFocus = document.activeElement;
+      const modal = document.createElement("div");
+      modal.className = "site-auth-feedback is-error is-no-icon is-form is-confirmation video-editor-action-window";
+      modal.dataset.videoDeleteDialog = "true";
+      modal.innerHTML = `<section class="site-auth-feedback-dialog" role="alertdialog" aria-modal="true" aria-labelledby="videoDeleteAssetTitle" aria-describedby="videoDeleteAssetMessage">
+        <div class="site-auth-feedback-copy"><strong id="videoDeleteAssetTitle">删除视频素材</strong><p id="videoDeleteAssetMessage">确定删除“${escapeHtml(asset.name)}”吗？原始文件和预览文件都会删除，且无法恢复。</p></div>
+        <button type="button" class="site-auth-feedback-close" data-video-delete-close aria-label="关闭">${icon("close")}</button>
+        <div class="site-auth-feedback-content"><div class="site-auth-feedback-actions"><button type="button" class="site-auth-feedback-cancel" data-video-delete-cancel>取消</button><button type="button" class="video-action-confirm is-danger" data-video-delete-confirm>确定删除</button></div></div>
+      </section>`;
+      let settled = false;
+      const close = (confirmed = false) => {
+        if (settled) return;
+        settled = true;
+        modal.remove();
+        if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+        resolve(confirmed);
+      };
+      modal.addEventListener("click", (event) => {
+        if (event.target.closest("[data-video-delete-confirm]")) { close(true); return; }
+        if (event.target === modal || event.target.closest("[data-video-delete-cancel], [data-video-delete-close]")) close(false);
+      });
+      modal.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") close(false);
+      });
+      document.body.append(modal);
+      modal.querySelector("[data-video-delete-cancel]")?.focus({ preventScroll: true });
+    });
+  }
+
   function assetById(assetId) {
     return state.assetCache.get(assetId) || state.assets.find((item) => item.id === assetId) || null;
   }
@@ -893,8 +924,7 @@
   async function deleteAsset(assetId) {
     const asset = assetById(assetId);
     if (!asset) return;
-    const decision = await requestActionDialog({ title: "删除视频素材", message: `确定删除“${asset.name}”吗？原始文件和预览文件都会删除。`, confirmText: "删除素材", danger: true });
-    if (!decision.confirmed) return;
+    if (!(await confirmDeleteAsset(asset))) return;
     await request(`${API}/assets/${encodeURIComponent(assetId)}`, { method: "DELETE" });
     state.assetCache.delete(assetId);
     await loadAssets(false, state.assetPage);

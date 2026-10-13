@@ -138,6 +138,19 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertIn('method: "DELETE"', VIDEO_RECORDS)
         self.assertIn('.video-storage-notice', VIDEO_EDITOR_CSS)
 
+    def test_video_deletions_require_explicit_confirmation(self):
+        editor_delete = VIDEO_EDITOR.split("async function deleteAsset(assetId)", 1)[1].split("function switchProject", 1)[0]
+        records_delete = VIDEO_RECORDS.split("function confirmDelete(item)", 1)[1].split("function formatDuration", 1)[0]
+        for script in (VIDEO_EDITOR, VIDEO_RECORDS):
+            self.assertIn('data-video-delete-confirm', script)
+            self.assertIn('data-video-delete-cancel', script)
+            self.assertIn('确定删除', script)
+            self.assertIn('modal.dataset.videoDeleteDialog = "true"', script)
+            self.assertNotIn('modal.dataset.videoDeleteConfirm', script)
+        self.assertIn('await confirmDeleteAsset(asset)', editor_delete)
+        self.assertNotIn('requestActionDialog(', editor_delete)
+        self.assertNotIn('actionText: false', records_delete)
+
     def test_project_conflicts_and_visual_effect_controls_are_wired(self):
         for contract in (
             "version: Math.max(1", "error?.status !== 409", "另存为新项目",
