@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+TELEGRAM_MEDIA_GROUP_MAX_ITEMS = 10
 ZIP_EXTS = {".zip"}
 AUTO_DURATION_TEXTS = {"跳过", "跳過", "自动", "自動", "auto", "AUTO"}
 ECOMMERCE_SEEDANCE_FAST_BUTTON = "seedance2.0fast"
@@ -1264,41 +1265,81 @@ def _ensure_elevenlabs_preview_audio(config: AppConfig, *, target_language: str,
 
 async def _send_preset_dry_voice_previews(message: Message, config: AppConfig, *, target_language: str = "Chinese") -> None:
     presets = _elevenlabs_voice_presets_for_language(target_language)
-    await message.answer(
-        "可试听以下预设音色，试听后点击下方对应按钮使用；也可以直接上传自己的干音进行克隆。"
-    )
-    if presets:
-        media_group: list[InputMediaAudio] = []
-        failed_labels: list[str] = []
-        for preset in presets:
-            label = _elevenlabs_voice_preset_display_label(preset)
-            try:
-                preview_path = await asyncio.to_thread(
-                    _ensure_elevenlabs_preview_audio,
-                    config,
-                    target_language=target_language,
-                    preset=preset,
-                )
-            except Exception:
-                logger.exception("Failed to prepare preset voice preview.")
-                failed_labels.append(label)
-                continue
-            media_group.append(InputMediaAudio(media=FSInputFile(preview_path), caption=f"试听官方音色：{label}"))
-        if media_group:
-            try:
-                await message.answer_media_group(media=media_group)
-            except Exception:
-                logger.exception("Failed to send preset voice previews as media group; falling back to individual messages.")
-                for item in media_group:
-                    try:
-                        await message.answer_audio(audio=item.media, caption=str(item.caption or ""))
-                    except Exception:
-                        logger.exception("Failed to send preset voice preview audio.")
-                        await message.answer_document(document=item.media, caption=str(item.caption or ""))
-        labels = "、".join(_elevenlabs_voice_preset_display_label(item) for item in presets)
-        suffix = f"\n以下音色试听生成失败，可稍后重试：{'、'.join(failed_labels)}" if failed_labels else ""
-        await message.answer(f"当前语言可选：{labels}{suffix}")
+    try:
+        await message.answer(
+            "可试听以下预设音色，试听后点击下方对应按钮使用；也可以直接上传自己的干音进行克隆。"
+        )
+    except Exception:
+        logger.exception("Failed to send preset voice preview instructions.")
+    if not presets:
         return
+
+    media_group: list[tuple[InputMediaAudio, str]] = []
+    failed_labels: list[str] = []
+    for preset in presets:
+        label = _elevenlabs_voice_preset_display_label(preset)
+        try:
+            preview_path = await asyncio.to_thread(
+                _ensure_elevenlabs_preview_audio,
+                config,
+                target_language=target_language,
+                preset=preset,
+            )
+        except Exception:
+            logger.exception("Failed to prepare preset voice preview.")
+            failed_labels.append(label)
+            continue
+        media_group.append(
+            (
+                InputMediaAudio(media=FSInputFile(preview_path), caption=f"试听官方音色：{label}"),
+                label,
+            )
+        )
+
+    async def _send_single_preview(item: InputMediaAudio, label: str) -> None:
+        try:
+            await message.answer_audio(audio=item.media, caption=str(item.caption or ""))
+            return
+        except Exception:
+            logger.exception("Failed to send preset voice preview audio.")
+        try:
+            await message.answer_document(document=item.media, caption=str(item.caption or ""))
+            return
+        except Exception:
+            logger.exception("Failed to send preset voice preview document fallback.")
+        if label not in failed_labels:
+            failed_labels.append(label)
+
+    for offset in range(0, len(media_group), TELEGRAM_MEDIA_GROUP_MAX_ITEMS):
+        batch = media_group[offset : offset + TELEGRAM_MEDIA_GROUP_MAX_ITEMS]
+        if len(batch) == 1:
+            await _send_single_preview(*batch[0])
+            continue
+        try:
+            await message.answer_media_group(media=[item for item, _label in batch])
+        except Exception:
+            logger.exception("Failed to send preset voice previews as media group; falling back to individual messages.")
+            for item, label in batch:
+                await _send_single_preview(item, label)
+
+    labels = "、".join(_elevenlabs_voice_preset_display_label(item) for item in presets)
+    suffix = f"\n以下音色试听发送失败，可稍后重试：{'、'.join(failed_labels)}" if failed_labels else ""
+    try:
+        await message.answer(f"当前语言可选：{labels}{suffix}")
+    except Exception:
+        logger.exception("Failed to send preset voice preview summary.")
+
+
+async def _send_preset_dry_voice_previews_best_effort(
+    message: Message,
+    config: AppConfig,
+    *,
+    target_language: str = "Chinese",
+) -> None:
+    try:
+        await _send_preset_dry_voice_previews(message, config, target_language=target_language)
+    except Exception:
+        logger.exception("Preset voice previews failed; keeping the voice-selection step available.")
 
 
 def _ecommerce_keyboard_for_state_name(state_name: str) -> ReplyKeyboardMarkup:
@@ -2676,7 +2717,7 @@ def build_dispatcher(
         if current_state.endswith("waiting_for_digital_human_confirm"):
             current_data = await state.get_data()
             target_language = _target_language_code_from_data(current_data)
-            await _send_preset_dry_voice_previews(message, config, target_language=target_language)
+            await _send_preset_dry_voice_previews_best_effort(message, config, target_language=target_language)
             return await go(
                 UploadFlowForm.waiting_for_audio,
                 "已返回上一步。步驟 8/8：請上傳需要克隆的參考音頻，或選擇預設音色。",
@@ -4237,7 +4278,7 @@ def build_dispatcher(
         await state.set_state(UploadFlowForm.waiting_for_audio)
         data = await state.get_data()
         target_language = _target_language_code_from_data(data)
-        await _send_preset_dry_voice_previews(message, config, target_language=target_language)
+        await _send_preset_dry_voice_previews_best_effort(message, config, target_language=target_language)
         await message.answer(
             f"已選擇 {ratio_value}，圖像按 2K 質感生成。步驟 8/8：請上傳需要克隆的參考音頻，或選擇預設音色。",
             reply_markup=_preset_dry_voice_keyboard(target_language=target_language),
@@ -4936,7 +4977,7 @@ def build_dispatcher(
             await state.set_state(ProductionWorkflowForm.ecommerce_waiting_for_voice_audio)
             data = await state.get_data()
             target_language = _target_language_code_from_data(data)
-            await _send_preset_dry_voice_previews(message, config, target_language=target_language)
+            await _send_preset_dry_voice_previews_best_effort(message, config, target_language=target_language)
             await message.answer(
                 "\n".join(
                     [
@@ -4962,7 +5003,7 @@ def build_dispatcher(
         await state.set_state(ProductionWorkflowForm.ecommerce_waiting_for_voice_audio)
         data = await state.get_data()
         target_language = _target_language_code_from_data(data)
-        await _send_preset_dry_voice_previews(message, config, target_language=target_language)
+        await _send_preset_dry_voice_previews_best_effort(message, config, target_language=target_language)
         await message.answer(
             "\n".join(
                 [

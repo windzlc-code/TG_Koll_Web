@@ -39,6 +39,38 @@ class _VideoReplyMessage:
         self.edits.append((str(text), dict(kwargs)))
 
 
+class _VoicePreviewMessage(_VideoReplyMessage):
+    def __init__(
+        self,
+        *,
+        fail_media_group: bool = False,
+        fail_audio: bool = False,
+        fail_document: bool = False,
+    ) -> None:
+        super().__init__()
+        self.fail_media_group = fail_media_group
+        self.fail_audio = fail_audio
+        self.fail_document = fail_document
+        self.media_groups: list[list[object]] = []
+        self.audio_calls: list[object] = []
+        self.document_calls: list[object] = []
+
+    async def answer_media_group(self, media: list[object]) -> None:
+        self.media_groups.append(list(media))
+        if self.fail_media_group:
+            raise RuntimeError("simulated media group failure")
+
+    async def answer_audio(self, *, audio: object, caption: str = "") -> None:
+        self.audio_calls.append((audio, caption))
+        if self.fail_audio:
+            raise RuntimeError("simulated audio failure")
+
+    async def answer_document(self, *, document: object, caption: str = "") -> None:
+        self.document_calls.append((document, caption))
+        if self.fail_document:
+            raise RuntimeError("simulated document failure")
+
+
 class _VideoCallbackQuery:
     def __init__(self, message: _VideoReplyMessage, data: str) -> None:
         self.message = message
@@ -105,6 +137,98 @@ def _video_callback_route(dispatcher, name: str):
 
 
 class TelegramClosedLoopTests(unittest.TestCase):
+    @staticmethod
+    def _voice_preview_presets(count: int) -> list[dict[str, str]]:
+        return [
+            {
+                "button": f"音色 {index}",
+                "key": f"voice-{index}",
+                "voice_id": f"voice-id-{index}",
+                "voice_name": f"Voice {index}",
+            }
+            for index in range(count)
+        ]
+
+    def test_preset_voice_previews_split_media_groups_at_telegram_limit(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        preview_path = Path(tmp.name) / "preview.mp3"
+        preview_path.write_bytes(b"fake mp3")
+        message = _VoicePreviewMessage()
+        presets = self._voice_preview_presets(11)
+        config = SimpleNamespace(project_root=Path(tmp.name))
+
+        with (
+            mock.patch.object(tg_bot, "_elevenlabs_voice_presets_for_language", return_value=presets),
+            mock.patch.object(tg_bot, "_ensure_elevenlabs_preview_audio", return_value=preview_path),
+        ):
+            asyncio.run(
+                tg_bot._send_preset_dry_voice_previews(
+                    message,
+                    config,
+                    target_language="Chinese",
+                )
+            )
+
+        self.assertEqual([len(group) for group in message.media_groups], [10])
+        self.assertEqual(len(message.audio_calls), 1)
+        self.assertTrue(any("当前语言可选" in text for text, _kwargs in message.answers))
+
+    def test_preset_voice_preview_delivery_errors_do_not_escape(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        preview_path = Path(tmp.name) / "preview.mp3"
+        preview_path.write_bytes(b"fake mp3")
+        message = _VoicePreviewMessage(
+            fail_media_group=True,
+            fail_audio=True,
+            fail_document=True,
+        )
+        presets = self._voice_preview_presets(2)
+        config = SimpleNamespace(project_root=Path(tmp.name))
+
+        with (
+            mock.patch.object(tg_bot, "_elevenlabs_voice_presets_for_language", return_value=presets),
+            mock.patch.object(tg_bot, "_ensure_elevenlabs_preview_audio", return_value=preview_path),
+        ):
+            asyncio.run(
+                tg_bot._send_preset_dry_voice_previews(
+                    message,
+                    config,
+                    target_language="Chinese",
+                )
+            )
+
+        self.assertTrue(any("当前语言可选" in text for text, _kwargs in message.answers))
+
+    def test_ratio_step_keeps_audio_keyboard_when_preview_delivery_fails(self):
+        dispatcher = tg_bot.build_dispatcher(SimpleNamespace(), _AuthorizedVideoService())
+        callback = _video_route_callback(dispatcher, "on_upload_ratio")
+        state = _VideoFlowState()
+        state.current = tg_bot.UploadFlowForm.waiting_for_ratio.state
+        state.data["target_language"] = "Chinese"
+        message = _VideoReplyMessage(text="16:9")
+
+        with mock.patch.object(
+            tg_bot,
+            "_send_preset_dry_voice_previews",
+            side_effect=RuntimeError("simulated preview delivery failure"),
+        ):
+            asyncio.run(callback(message, state))
+
+        self.assertEqual(state.current, tg_bot.UploadFlowForm.waiting_for_audio.state)
+        self.assertTrue(message.answers)
+        prompt, kwargs = message.answers[-1]
+        self.assertIn("8/8", prompt)
+        markup = kwargs["reply_markup"]
+        labels = [
+            str(getattr(button, "text", ""))
+            for row in markup.keyboard
+            for button in row
+        ]
+        first_preset = tg_bot._elevenlabs_voice_presets_for_language("Chinese")[0]["button"]
+        self.assertIn(str(first_preset), labels)
+
     def test_startup_notice_is_opt_in_to_avoid_repeat_broadcasts(self):
         with mock.patch.dict(os.environ, {"TG_NOTIFY_ON_STARTUP": ""}, clear=False):
             self.assertFalse(tg_bot._startup_notice_enabled())
