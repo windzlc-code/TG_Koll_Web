@@ -1081,6 +1081,11 @@ def _normalize_digital_human_oral_script_candidates(
 def _server_payload_enricher(server_module: Any) -> Callable[[str, str, dict[str, Any]], dict[str, Any]]:
     def enrich(_task_type: str, _task_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         updated = dict(payload or {})
+
+        def bind_runtime_callback(name: str, callback: Any) -> None:
+            if callable(callback) and not callable(updated.get(name)):
+                updated[name] = callback
+
         media_resolver = getattr(server_module, "_resolve_media_url", None)
         workdir_factory = getattr(server_module, "_build_task_workdir", None)
         db_factory = getattr(server_module, "db", None)
@@ -1088,13 +1093,13 @@ def _server_payload_enricher(server_module: Any) -> Callable[[str, str, dict[str
         json_dumps = getattr(server_module, "_json_dumps", None)
         now_ts = getattr(server_module, "_now_ts", None)
         if callable(media_resolver):
-            updated.setdefault("_video_media_url_resolver", media_resolver)
+            bind_runtime_callback("_video_media_url_resolver", media_resolver)
         if callable(workdir_factory):
-            updated.setdefault("_video_workdir_factory", workdir_factory)
+            bind_runtime_callback("_video_workdir_factory", workdir_factory)
         llm_json_request = getattr(server_module, "_request_llm_json_with_fallback", None)
         if callable(llm_json_request):
-            updated.setdefault("_digital_human_visual_semantic_llm", llm_json_request)
-            updated.setdefault("_digital_human_scene_marker_llm", llm_json_request)
+            bind_runtime_callback("_digital_human_visual_semantic_llm", llm_json_request)
+            bind_runtime_callback("_digital_human_scene_marker_llm", llm_json_request)
             def generate_digital_human_copy(
                 *,
                 payload: dict[str, Any] | None = None,
@@ -1236,7 +1241,7 @@ def _server_payload_enricher(server_module: Any) -> Callable[[str, str, dict[str
                     },
                 }
 
-            updated.setdefault("_digital_human_ai_copy_provider", generate_digital_human_copy)
+            bind_runtime_callback("_digital_human_ai_copy_provider", generate_digital_human_copy)
 
             def transcribe_translate_video(
                 *,
@@ -1343,7 +1348,7 @@ def _server_payload_enricher(server_module: Any) -> Callable[[str, str, dict[str
                     "meta": {"transcription": transcription_meta},
                 }
 
-            updated.setdefault("_video_language_transcribe_translate", transcribe_translate_video)
+            bind_runtime_callback("_video_language_transcribe_translate", transcribe_translate_video)
         if callable(db_factory) and callable(json_loads) and callable(json_dumps):
             def persist_checkpoint(owner_task_id: str, changes: dict[str, Any]) -> None:
                 clean_task_id = str(owner_task_id or _task_id).strip()
@@ -1425,8 +1430,8 @@ def _server_payload_enricher(server_module: Any) -> Callable[[str, str, dict[str
                 }
                 persist_checkpoint(str(task_id or _task_id), safe_changes)
 
-            updated.setdefault("_register_runninghub_task", register_runninghub_task)
-            updated.setdefault("_checkpoint_video_progress", checkpoint_video_progress)
+            bind_runtime_callback("_register_runninghub_task", register_runninghub_task)
+            bind_runtime_callback("_checkpoint_video_progress", checkpoint_video_progress)
         return updated
 
     return enrich

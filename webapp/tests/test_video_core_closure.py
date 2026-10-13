@@ -57,6 +57,68 @@ def test_digital_human_video_media_upload_uses_runninghub_file_name_contract(tmp
         assert resolved == "openapi/fusion.png"
 
 
+def test_server_payload_enricher_rebinds_serialized_runtime_callbacks() -> None:
+    class RuntimeServer:
+        @staticmethod
+        def _resolve_media_url(**_kwargs):
+            return "https://media.invalid/audio.mp3"
+
+        @staticmethod
+        def _build_task_workdir(*_args, **_kwargs):
+            return "/tmp/task-workdir"
+
+    enrich = video_workbench._server_payload_enricher(RuntimeServer())
+    enriched = enrich(
+        "create_video",
+        "task-roundtrip",
+        {
+            "_video_media_url_resolver": {},
+            "_video_workdir_factory": {},
+        },
+    )
+
+    assert callable(enriched["_video_media_url_resolver"])
+    assert callable(enriched["_video_workdir_factory"])
+
+
+def test_video_runner_rebinds_serialized_callbacks_before_backend_execution() -> None:
+    observed: dict[str, Any] = {}
+
+    class RuntimeServer:
+        @staticmethod
+        def _resolve_media_url(**_kwargs):
+            return "https://media.invalid/audio.mp3"
+
+        @staticmethod
+        def _build_task_workdir(*_args, **_kwargs):
+            return "/tmp/task-workdir"
+
+    class Backend:
+        def run_task(self, task_type, task_id, payload, context):
+            assert task_type == "create_video"
+            assert task_id == "task-runner-roundtrip"
+            assert context.task_id == task_id
+            observed["media_resolver"] = payload.get("_video_media_url_resolver")
+            observed["workdir_factory"] = payload.get("_video_workdir_factory")
+            return {"ok": True}
+
+    runners = video_workbench.make_video_task_runners(
+        Backend(),
+        payload_enricher=video_workbench._server_payload_enricher(RuntimeServer()),
+    )
+    result = runners["create_video"](
+        "task-runner-roundtrip",
+        {
+            "_video_media_url_resolver": {},
+            "_video_workdir_factory": {},
+        },
+    )
+
+    assert result["ok"] is True
+    assert callable(observed["media_resolver"])
+    assert callable(observed["workdir_factory"])
+
+
 def test_all_eight_workbench_modules_resolve_to_registered_core_runners() -> None:
     expected = {
         "digital_human_video": "create_video",
