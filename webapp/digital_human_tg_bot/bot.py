@@ -1322,13 +1322,6 @@ async def _send_preset_dry_voice_previews(message: Message, config: AppConfig, *
             for item, label in batch:
                 await _send_single_preview(item, label)
 
-    labels = "、".join(_elevenlabs_voice_preset_display_label(item) for item in presets)
-    suffix = f"\n以下音色试听发送失败，可稍后重试：{'、'.join(failed_labels)}" if failed_labels else ""
-    try:
-        await message.answer(f"当前语言可选：{labels}{suffix}")
-    except Exception:
-        logger.exception("Failed to send preset voice preview summary.")
-
 
 async def _send_preset_dry_voice_previews_best_effort(
     message: Message,

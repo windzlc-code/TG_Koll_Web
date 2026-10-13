@@ -172,7 +172,8 @@ class TelegramClosedLoopTests(unittest.TestCase):
 
         self.assertEqual([len(group) for group in message.media_groups], [10])
         self.assertEqual(len(message.audio_calls), 1)
-        self.assertTrue(any("当前语言可选" in text for text, _kwargs in message.answers))
+        self.assertTrue(any("可试听以下预设音色" in text for text, _kwargs in message.answers))
+        self.assertFalse(any("当前语言可选" in text for text, _kwargs in message.answers))
 
     def test_preset_voice_preview_delivery_errors_do_not_escape(self):
         tmp = tempfile.TemporaryDirectory()
@@ -199,7 +200,8 @@ class TelegramClosedLoopTests(unittest.TestCase):
                 )
             )
 
-        self.assertTrue(any("当前语言可选" in text for text, _kwargs in message.answers))
+        self.assertTrue(any("可试听以下预设音色" in text for text, _kwargs in message.answers))
+        self.assertFalse(any("当前语言可选" in text for text, _kwargs in message.answers))
 
     def test_ratio_step_keeps_audio_keyboard_when_preview_delivery_fails(self):
         dispatcher = tg_bot.build_dispatcher(SimpleNamespace(), _AuthorizedVideoService())
