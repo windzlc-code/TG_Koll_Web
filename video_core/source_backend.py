@@ -1936,6 +1936,10 @@ class ArchivedSourceBackend:
             segment_payload["minimax_tts_voice_id"] = cached_voice_id
         if tts_provider == "runninghub" and reference_audio:
             voice_payload = dict(segment_payload)
+            # prepare_language_voice prefers target_script over speech_text. Force
+            # the current segment here so an original full-script field cannot be
+            # synthesized again for every storyboard segment.
+            voice_payload["target_script"] = script_text
             voice_payload["speech_text"] = script_text
             prepared_voice = language_voice_pipeline.prepare_language_voice(
                 voice_payload,

@@ -129,6 +129,8 @@ def test_digital_human_segment_preserves_runninghub_reference_voice(monkeypatch,
         payload={
             "video_tts_provider": "runninghub",
             "audio_local_path": str(reference_audio),
+            "target_script": "这是不能在每个分段中重复生成的整篇文案。",
+            "script": "这是原始完整脚本。",
             "oral_digital_human_workflow_ids": [create_video.DIGITAL_HUMAN_VIDEO_APP_ID],
         },
         context=VideoTaskContext(task_id="task-reference-voice", task_type="create_video"),
@@ -141,6 +143,7 @@ def test_digital_human_segment_preserves_runninghub_reference_voice(monkeypatch,
     )
 
     assert observed["payload"]["audio_local_path"] == str(reference_audio)
+    assert observed["payload"]["target_script"] == "这是男性参考音色测试。"
     assert observed["payload"]["speech_text"] == "这是男性参考音色测试。"
     assert observed["workdir"].name == "segment_1"
     assert result["video_path"] == str(output_path)
