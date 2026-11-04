@@ -1073,6 +1073,44 @@ class TelegramClosedLoopTests(unittest.TestCase):
         self.assertIn("old prompt", instruction)
         self.assertIn("开场更抓人", instruction)
 
+    def test_ecommerce_preview_returns_structured_error_for_unreadable_material(self):
+        from webapp import telegram_internal
+
+        app = FastAPI()
+        with mock.patch.dict(os.environ, {"TG_INTERNAL_API_TOKEN": "test-token"}, clear=False):
+            inject_telegram_internal_routes(app, object())
+            with mock.patch.object(
+                telegram_internal,
+                "_build_internal_tg_ecommerce_prompt_preview_payload",
+                side_effect=FileNotFoundError("product image missing"),
+            ):
+                response = TestClient(app, raise_server_exceptions=False).post(
+                    "/api/internal/tg/ecommerce_prompt_preview",
+                    json={"task_type": "ecommerce_short_video", "tg_chat_id": 6258005891, "params": {}},
+                    headers={"x-tg-internal-token": "test-token"},
+                )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json().get("detail"), "提示词预览素材不可读取，请重新上传后再试")
+
+    def test_ecommerce_preview_returns_structured_error_for_unexpected_failure(self):
+        from webapp import telegram_internal
+
+        app = FastAPI()
+        with mock.patch.dict(os.environ, {"TG_INTERNAL_API_TOKEN": "test-token"}, clear=False):
+            inject_telegram_internal_routes(app, object())
+            with mock.patch.object(
+                telegram_internal,
+                "_build_internal_tg_ecommerce_prompt_preview_payload",
+                side_effect=ValueError("malformed preview metadata"),
+            ):
+                response = TestClient(app, raise_server_exceptions=False).post(
+                    "/api/internal/tg/ecommerce_prompt_preview",
+                    json={"task_type": "ecommerce_short_video", "tg_chat_id": 6258005891, "params": {}},
+                    headers={"x-tg-internal-token": "test-token"},
+                )
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(response.json().get("detail"), "AI 提示词预览服务异常，请稍后重试")
+
 
 if __name__ == "__main__":
     unittest.main()

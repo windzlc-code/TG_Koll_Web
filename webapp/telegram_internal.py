@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -25,6 +26,9 @@ from video_core.image_mode_prompts import (
 )
 
 from .video_workbench import _server_payload_enricher, cancel_video_remote_tasks
+
+
+logger = logging.getLogger(__name__)
 
 
 TG_AGENT_PRODUCTION_TASK_TYPES = {
@@ -1401,8 +1405,25 @@ def inject_telegram_internal_routes(app, server) -> None:
                 tg_chat_id=int(payload.tg_chat_id),
                 source="telegram-preview",
             )
+        except HTTPException:
+            raise
+        except OSError as exc:
+            logger.warning(
+                "Telegram ecommerce prompt preview material is unavailable (chat_id=%s): %s",
+                int(payload.tg_chat_id),
+                exc,
+            )
+            raise HTTPException(status_code=409, detail="提示词预览素材不可读取，请重新上传后再试") from exc
         except RuntimeError as exc:
+            logger.warning(
+                "Telegram ecommerce prompt preview failed (chat_id=%s): %s",
+                int(payload.tg_chat_id),
+                exc,
+            )
             raise HTTPException(status_code=502, detail=str(exc) or exc.__class__.__name__) from exc
+        except Exception as exc:
+            logger.exception("Telegram ecommerce prompt preview crashed (chat_id=%s)", int(payload.tg_chat_id))
+            raise HTTPException(status_code=503, detail="AI 提示词预览服务异常，请稍后重试") from exc
         return {
             "ok": True,
             "task_type": typ,
