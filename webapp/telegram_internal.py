@@ -1407,7 +1407,7 @@ def inject_telegram_internal_routes(app, server) -> None:
             )
         except HTTPException:
             raise
-        except OSError as exc:
+        except FileNotFoundError as exc:
             logger.warning(
                 "Telegram ecommerce prompt preview material is unavailable (chat_id=%s): %s",
                 int(payload.tg_chat_id),
