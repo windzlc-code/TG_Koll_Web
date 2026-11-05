@@ -1815,6 +1815,7 @@ const COLLECTOR_PROXY_TRAFFIC_POLL_INTERVAL_MS = 300000;
 const SENTIMENT_COOKIE_POLL_INTERVAL_MS = 300000;
 const EMAIL_DELIVERY_MANUAL_LIMIT_MAX = 10000000;
 const EMAIL_DELIVERY_POLICY_SAVE_TIMEOUT_MS = 30000;
+const EMAIL_REGISTRATION_CHECK_TIMEOUT_MS = 15000;
 const taskState = {
   rows: [],
   inspectText: "",
@@ -1931,6 +1932,7 @@ const adminState = {
   emailDeliveryPolicySaveController: null,
   emailDeliveryPolicyAbortReason: "",
   emailDeliveryPolicyReturnFocus: null,
+  emailRegistrationCheckController: null,
   securityRows: [],
   securityListPage: 1,
   securityListPageSize: 20,
@@ -8466,25 +8468,8 @@ function renderHotDatasetOverview(payload = {}) {
   );
 }
 
-function renderGovernanceDashboard(payload = {}) {
-  const summary = payload.summary || {};
-  const health = payload.health || {};
-  const emailDelivery = payload.email_delivery || {};
+function renderEmailDeliveryKpi(emailDelivery = {}) {
   adminState.emailDeliveryOverview = emailDelivery;
-  setText("govKpiCustomers", Number(summary.customers || 0));
-  setText("govKpiCustomersMeta", `${Number(summary.active || 0)} 个活跃 · ${Number(summary.disabled || 0)} 个停用`);
-  setText("govKpiActive", Number(summary.active || 0));
-  setText("govKpiActiveMeta", `停用 ${Number(summary.disabled || 0)} · 锁定 ${Number(summary.locked || 0)}`);
-  setText("govKpiPending", Number(summary.pending || 0));
-  setText("govKpiSessions", Number(summary.active_sessions || 0));
-  setText("govKpiRunning", Number(summary.running_tasks || 0));
-  setText("govKpiSuccess", Number(summary.success_today || 0));
-  setText("govKpiFailed", Number(summary.failed_today || 0));
-  setText("govKpiAlerts", Number(summary.open_alerts || 0));
-  setText("govKpiSubscriptions", Number(summary.active_subscriptions || 0));
-  setText("govKpiWallet", Number(summary.wallet_points || 0));
-  setText("govKpiWalletMeta", `当期消耗 ${Number(summary.consumed_points || 0)} 点`);
-  setText("govKpiConsumedTotal", Number(summary.lifetime_consumed_points || 0));
   const emailRequests = Math.max(0, Number(emailDelivery.requests_today || 0));
   const emailLocalGuard = Math.max(0, Number(emailDelivery.local_guard_units || 0));
   const emailAccountedRequests = emailRequests + emailLocalGuard;
@@ -8506,6 +8491,27 @@ function renderGovernanceDashboard(payload = {}) {
   emailLimitParts.push(emailDelivery.mode === "manual" ? "自定义" : "自动同步");
   if (emailDelivery.stale) emailLimitParts.push("数据延迟");
   setText("govKpiEmailLimitMeta", emailLimitParts.join(" · "));
+}
+
+function renderGovernanceDashboard(payload = {}) {
+  const summary = payload.summary || {};
+  const health = payload.health || {};
+  const emailDelivery = payload.email_delivery || {};
+  renderEmailDeliveryKpi(emailDelivery);
+  setText("govKpiCustomers", Number(summary.customers || 0));
+  setText("govKpiCustomersMeta", `${Number(summary.active || 0)} 个活跃 · ${Number(summary.disabled || 0)} 个停用`);
+  setText("govKpiActive", Number(summary.active || 0));
+  setText("govKpiActiveMeta", `停用 ${Number(summary.disabled || 0)} · 锁定 ${Number(summary.locked || 0)}`);
+  setText("govKpiPending", Number(summary.pending || 0));
+  setText("govKpiSessions", Number(summary.active_sessions || 0));
+  setText("govKpiRunning", Number(summary.running_tasks || 0));
+  setText("govKpiSuccess", Number(summary.success_today || 0));
+  setText("govKpiFailed", Number(summary.failed_today || 0));
+  setText("govKpiAlerts", Number(summary.open_alerts || 0));
+  setText("govKpiSubscriptions", Number(summary.active_subscriptions || 0));
+  setText("govKpiWallet", Number(summary.wallet_points || 0));
+  setText("govKpiWalletMeta", `当期消耗 ${Number(summary.consumed_points || 0)} 点`);
+  setText("govKpiConsumedTotal", Number(summary.lifetime_consumed_points || 0));
   setText("adminAlertCount", Number(summary.open_alerts || 0));
   const healthLabel = governanceLabel(summary.service_health || "unknown");
   setText("govKpiHealth", healthLabel);
@@ -8535,6 +8541,81 @@ function renderGovernanceDashboard(payload = {}) {
   renderGovernanceHealth(health);
   const generatedAt = Number(payload.generated_at || 0);
   setText("governanceUpdatedAt", generatedAt ? `数据时间：${formatTime(generatedAt)}` : `刷新于 ${new Date().toLocaleTimeString("zh-CN", { timeZone: ADMIN_TIME_ZONE, hour12: false })}`);
+}
+
+function setEmailRegistrationCheckState(status, message) {
+  const wrapper = el("govKpiEmailCheckMsg")?.closest(".admin-email-kpi-check");
+  if (wrapper) wrapper.dataset.status = status || "idle";
+  setText("govKpiEmailCheckMsg", message || "注册邮件：尚未检测");
+  const button = el("btnCheckEmailRegistration");
+  if (button) {
+    button.disabled = status === "pending";
+    button.textContent = status === "pending" ? "检测中" : "检测";
+  }
+}
+
+function emailRegistrationCheckMessage(policy = {}, delivery = {}) {
+  if (policy.email_registration_enabled !== true) {
+    return {
+      ok: false,
+      message: "邮箱注册未开启：请检查运行配置与环境开关。",
+    };
+  }
+  if (policy.email_delivery_available !== true) {
+    return {
+      ok: false,
+      message: "检测失败：邮箱发信凭据未配置或不可用。",
+    };
+  }
+  const limit = Number(delivery.effective_daily_limit);
+  if (delivery.stale || !Number.isFinite(limit) || limit <= 0) {
+    return {
+      ok: false,
+      message: delivery.sync_error
+        ? `检测失败：${delivery.sync_error}`
+        : "检测失败：Brevo 配额尚未同步。",
+    };
+  }
+  return {
+    ok: true,
+    message: `邮箱注册已开启 · 发信服务正常 · 今日剩余 ${Math.max(0, Number(delivery.remaining_today || 0))}`,
+  };
+}
+
+async function checkEmailRegistration() {
+  const existing = adminState.emailRegistrationCheckController;
+  if (existing && !existing.signal.aborted) return;
+  const controller = new AbortController();
+  adminState.emailRegistrationCheckController = controller;
+  const timeoutId = window.setTimeout(() => controller.abort(), EMAIL_REGISTRATION_CHECK_TIMEOUT_MS);
+  setEmailRegistrationCheckState("pending", "正在检测注册开关和邮件服务…");
+  try {
+    const [policy, deliveryResponse] = await Promise.all([
+      api("/api/auth/policy", { signal: controller.signal }),
+      api("/api/admin/email-delivery-policy", { signal: controller.signal }),
+    ]);
+    const delivery = deliveryResponse?.email_delivery || {};
+    renderEmailDeliveryKpi(delivery);
+    const result = emailRegistrationCheckMessage(policy || {}, delivery);
+    setEmailRegistrationCheckState(result.ok ? "success" : "error", result.message);
+  } catch (error) {
+    setEmailRegistrationCheckState(
+      "error",
+      error?.name === "AbortError"
+        ? "检测超时：请检查服务器或 Brevo 状态后重试。"
+        : `检测失败：${getErrorMessage(error)}`,
+    );
+  } finally {
+    window.clearTimeout(timeoutId);
+    if (adminState.emailRegistrationCheckController === controller) {
+      adminState.emailRegistrationCheckController = null;
+    }
+    const button = el("btnCheckEmailRegistration");
+    if (button) {
+      button.disabled = false;
+      button.textContent = "检测";
+    }
+  }
 }
 
 function syncEmailDeliveryPolicyFields() {
@@ -11799,6 +11880,7 @@ function bindActions() {
   el("governanceStartDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
   el("governanceEndDate")?.addEventListener("change", () => void loadGovernanceDashboard({ force: true }));
   el("btnEmailDeliveryPolicy")?.addEventListener("click", openEmailDeliveryPolicyModal);
+  el("btnCheckEmailRegistration")?.addEventListener("click", () => void checkEmailRegistration());
   el("btnEmailDeliveryPolicyClose")?.addEventListener("click", closeEmailDeliveryPolicyModal);
   el("btnEmailDeliveryPolicyCancel")?.addEventListener("click", closeEmailDeliveryPolicyModal);
   el("btnEmailDeliveryPolicySave")?.addEventListener("click", () => void saveEmailDeliveryPolicy());

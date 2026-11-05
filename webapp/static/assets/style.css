@@ -9260,6 +9260,56 @@ body.page-admin:has(.modal-overlay[aria-hidden="false"]) {
   color: var(--admin-ink);
 }
 
+.page-admin .admin-email-kpi-check {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.page-admin .admin-email-kpi-check > small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--admin-muted);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-admin .admin-email-kpi-check[data-status="success"] > small {
+  color: #126b3f;
+}
+
+.page-admin .admin-email-kpi-check[data-status="error"] > small {
+  color: #a92934;
+}
+
+.page-admin .admin-kpi-check {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--admin-line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--admin-ink-soft);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.page-admin .admin-kpi-check:hover:not(:disabled) {
+  border-color: var(--gov-blue);
+  color: var(--admin-ink);
+}
+
+.page-admin .admin-kpi-check:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
 .page-admin .admin-email-policy-body {
   display: grid;
   gap: 12px;

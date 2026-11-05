@@ -163,6 +163,8 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
             "govKpiEmailLimit",
             "govKpiEmailLimitMeta",
             "btnEmailDeliveryPolicy",
+            "govKpiEmailCheckMsg",
+            "btnCheckEmailRegistration",
             "emailDeliveryPolicyModal",
             "emailDeliveryLimitMode",
             "emailDeliveryManualLimit",
@@ -175,6 +177,17 @@ class AdminGovernanceFrontendTests(unittest.TestCase):
         self.assertIn('api("/api/admin/email-delivery-policy"', self.script)
         self.assertIn("payload.email_delivery || {}", self.script)
         self.assertIn("summary.lifetime_consumed_points", self.script)
+
+    def test_email_registration_check_shows_server_backed_feedback(self):
+        self.assertIn("EMAIL_REGISTRATION_CHECK_TIMEOUT_MS", self.script)
+        self.assertIn("async function checkEmailRegistration()", self.script)
+        self.assertIn('api("/api/auth/policy"', self.script)
+        self.assertIn('api("/api/admin/email-delivery-policy"', self.script)
+        self.assertIn("邮箱注册未开启：请检查运行配置与环境开关。", self.script)
+        self.assertIn("邮箱注册已开启 · 发信服务正常", self.script)
+        self.assertIn("检测超时：请检查服务器或 Brevo 状态后重试。", self.script)
+        self.assertIn('role="status" aria-live="polite"', self.html)
+        self.assertIn('.admin-email-kpi-check[data-status="success"]', self.styles)
 
     def test_email_delivery_policy_helpers_enforce_limit_and_translate_422_details(self):
         result = self._run_email_policy_helpers(
