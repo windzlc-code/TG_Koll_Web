@@ -100,6 +100,7 @@ class BillingFrontendContractTests(unittest.TestCase):
         self.assertNotIn(".billing-price-pill", self.console_styles)
 
     def test_public_pricing_currency_follows_the_site_language(self):
+        self.assertIn("新註冊贈送 50 點基礎算力", self.pricing_script)
         self.assertIn('const CNY_CREDITS_PER_YUAN = 2.5', self.pricing_script)
         self.assertIn('window.VectoSiteNavigation?.currentLanguage?.() === "zh-Hans"', self.pricing_script)
         self.assertIn('return `NT$${amount.toLocaleString("zh-TW", { maximumFractionDigits: 2 })}`;', self.pricing_script)

@@ -21,7 +21,7 @@ from .password_vault import (
 
 
 POINT_SCALE = 100
-NEW_USER_WELCOME_POINTS = 20
+NEW_USER_WELCOME_POINTS = 50
 LEGACY_R18_ACTION_SKUS = {
     "ad_video_480p_second",
     "ad_video_720p_second",
@@ -88,7 +88,7 @@ LATEST_PDF_SUBSCRIPTION_PLANS: list[dict[str, Any]] = [
         "account_positioning": "以免費初始算力完成基礎體驗，後續可補差額升級並保留資料",
         "features": [
             "AI 人設 1 組",
-            "新註冊贈送 20 點基礎算力，單日最多發布 5 篇",
+            "新註冊贈送 50 點基礎算力，單日最多發布 5 篇",
             "參與 Beta 早期測試",
             "加入 LINE 群組輔導與交流",
             "可補差額升級，原有資料完整保留",

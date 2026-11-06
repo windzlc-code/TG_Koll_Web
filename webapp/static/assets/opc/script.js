@@ -1187,7 +1187,7 @@ applicationForm?.addEventListener("submit", async (event) => {
         ? "帳號建立成功，邀請權限待開通"
       : inviteeRewardPoints > 0
         ? `帳號建立成功，邀請獎勵 ${inviteeRewardPoints.toLocaleString("zh-TW")} 點已結算`
-        : "帳號建立成功，5 點算力已到帳";
+        : "帳號建立成功，50 點算力已到帳";
     const successMessage = registrationPermissionPending && inviteeRewardPoints > 0
       ? "歡迎加入 Vecto。好友邀請積分已結算，權限獎勵正在等待開通，可在個人資料中查看。"
       : registrationPermissionPending

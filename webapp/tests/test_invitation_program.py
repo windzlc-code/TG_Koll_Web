@@ -68,8 +68,8 @@ class InvitationProgramTests(unittest.TestCase):
             ).fetchall()
         self.assertEqual(first["code"], second["code"])
         self.assertEqual(result["status"], "rewarded")
-        self.assertEqual(wallets[self.inviter_id], 40 * commercial_billing.POINT_SCALE)
-        self.assertEqual(wallets[self.invitee_id], 40 * commercial_billing.POINT_SCALE)
+        self.assertEqual(wallets[self.inviter_id], 70 * commercial_billing.POINT_SCALE)
+        self.assertEqual(wallets[self.invitee_id], 70 * commercial_billing.POINT_SCALE)
         self.assertEqual(len(reward_rows), 2)
         self.assertTrue(all(int(row["cash_backed_amount_units"]) == 0 for row in reward_rows))
 

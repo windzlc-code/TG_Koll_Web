@@ -78,7 +78,7 @@ class PublicEmailGoogleAuthFrontendContractTests(unittest.TestCase):
             self.script.index("applicationForm?.addEventListener(\"submit\""):
             self.script.index("googleLoginButton?.addEventListener", self.script.index("applicationForm?.addEventListener(\"submit\""))
         ]
-        self.assertIn("5 點算力已到帳", registration_submit)
+        self.assertIn("50 點算力已到帳", registration_submit)
         self.assertIn("贈送算力已放入你的帳戶", registration_submit)
         self.assertIn("showAuthFeedback", registration_submit)
 

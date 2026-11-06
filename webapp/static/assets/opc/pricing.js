@@ -197,7 +197,7 @@
         ? `<div class="pricing-subscription-price">${catalogPrice(subscription)} <small>/ ${escapeHtml(periodLabel)}</small></div>
         <p class="pricing-subscription-monthly">每月獲得 ${creditPoints.toLocaleString("zh-TW")} ${pointLabel()} · ${discountLabel(subscription)}</p>`
         : `<div class="pricing-subscription-price">${money(0)} <small>/ 免費開通</small></div>
-        <p class="pricing-subscription-monthly">新註冊贈送 20 點基礎算力</p>`;
+        <p class="pricing-subscription-monthly">新註冊贈送 50 點基礎算力</p>`;
       const callToAction = purchasable
         ? `<button class="button button-primary pricing-subscription-cta" type="button" data-purchase-sku="${escapeHtml(skuOf(subscription))}">申請開通或續費</button>`
         : '<a class="button button-primary pricing-subscription-cta" href="/?register=1" data-open-register>免費開通</a>';

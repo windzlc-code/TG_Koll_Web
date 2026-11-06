@@ -91,6 +91,7 @@ class CommercialBillingTests(unittest.TestCase):
             commercial_billing.approve_order(conn, order["id"], actor_user_id=self.admin_id, now=now + 1)
 
     def test_new_user_welcome_credit_is_idempotent(self):
+        self.assertEqual(commercial_billing.NEW_USER_WELCOME_POINTS, 50)
         with db_module.db() as conn:
             first = commercial_billing.initialize_new_user_wallet(
                 conn,
@@ -108,8 +109,8 @@ class CommercialBillingTests(unittest.TestCase):
                 "SELECT COUNT(*) AS count FROM billing_ledger WHERE idempotency_key = ?",
                 (f"welcome-credit-v1:{self.user_id}",),
             ).fetchone()
-        self.assertEqual(first["credit_units"], 20 * commercial_billing.POINT_SCALE)
-        self.assertEqual(second["credit_units"], 20 * commercial_billing.POINT_SCALE)
+        self.assertEqual(first["credit_units"], 50 * commercial_billing.POINT_SCALE)
+        self.assertEqual(second["credit_units"], 50 * commercial_billing.POINT_SCALE)
         self.assertEqual(int(entries["count"]), 1)
 
     def test_billing_enforcement_defaults_to_enabled_and_blocks_zero_point_wallets(self):
