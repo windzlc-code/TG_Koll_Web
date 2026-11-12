@@ -38,6 +38,7 @@ def main() -> None:
             "final_polls": 0,
         }
         record_asset_requests: list[str] = []
+        record_state = {"polls": 0}
 
         def fulfill_json(route, payload, status=200):
             route.fulfill(status=status, content_type="application/json", body=json.dumps(payload, ensure_ascii=False))
@@ -82,6 +83,10 @@ def main() -> None:
         page.route("**/api/tasks", lambda route: fulfill_json(route, {"tasks": []}))
         def handle_record_assets(route):
             record_asset_requests.append(route.request.url)
+            record_state["polls"] += 1
+            if record_state["polls"] < 2:
+                fulfill_json(route, {"items": [], "total": 0, "total_pages": 0})
+                return
             source_task_id = "browser-feedback-final-task" if task_state["finalize_submitted"] else "browser-feedback-task"
             fulfill_json(route, {"items": [{"id": "browser-record", "source_task_id": source_task_id, "source_type": "generated", "name": "浏览器反馈视频", "media_url": "/api/video/editor/assets/browser-record/media", "download_url": "/api/video/editor/assets/browser-record/download"}], "total": 1, "total_pages": 1})
 
@@ -149,6 +154,7 @@ def main() -> None:
         page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
         assert "生成完成" in page.locator(".vecto-public-prompt").inner_text()
         assert "同步到视频记录" in page.locator(".vecto-public-prompt").inner_text()
+        assert record_state["polls"] >= 2, record_state
         assert "继续生成视频" not in page.locator(".vecto-public-prompt").inner_text()
         page.locator(".vecto-public-prompt [data-public-prompt-close]").click()
         record_asset_requests.clear()

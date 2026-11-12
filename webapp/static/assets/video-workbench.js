@@ -662,6 +662,7 @@
       startedAt: Date.now(),
       timer: 0,
       done: false,
+      archiveAttempts: 0,
     };
     submittedTaskMonitors.set(cleanId, monitor);
     const finish = () => {
@@ -765,11 +766,28 @@
         }
         if (["success", "completed", "finished"].includes(status)) {
           const archived = taskExpectsVideoRecord(task) ? await generatedRecordExists(cleanId) : true;
-          if (archived === false) {
+          if (archived !== true) {
+            monitor.archiveAttempts += 1;
+            if (monitor.archiveAttempts <= 5) {
+              monitor.prompt?.update?.({
+                title: "视频已生成，正在同步视频记录",
+                message: "视频已成功返回，系统正在自动同步到视频记录…",
+                detail: `任务编号：${cleanId}。正在进行第 ${monitor.archiveAttempts} 次同步校验，无需人工操作。`,
+                status: "progress",
+                busy: true,
+                messages: ["视频已成功返回，系统正在自动同步到视频记录…"],
+                showClose: false,
+                showConfirm: false,
+                showCancel: false,
+                actions: [],
+              });
+              schedule();
+              return;
+            }
             monitor.prompt?.update?.({
               title: "视频任务已完成，记录同步中",
               message: "视频已成功返回，但暂未出现在视频记录中。",
-              detail: `任务编号：${cleanId}。系统已自动重试归档，请稍后点击“查看视频记录”或刷新记录页。`,
+              detail: `任务编号：${cleanId}。系统已自动重试 ${monitor.archiveAttempts} 次，记录服务仍未返回该视频，请稍后刷新视频记录。`,
               status: "warning",
               busy: false,
               messages: ["视频已成功返回，但暂未出现在视频记录中。"],
