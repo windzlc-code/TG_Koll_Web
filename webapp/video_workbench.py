@@ -3083,7 +3083,14 @@ def register_video_routes(app: Any, dependencies: VideoRouteDependencies) -> dic
     existing_paths = {str(getattr(route, "path", "")) for route in getattr(getattr(app, "router", None), "routes", [])}
     registered: list[str] = []
 
-    async def submit_impl(task_type: str, params_json: str, files: list[UploadFile], user: dict[str, Any]) -> dict[str, Any]:
+    async def submit_impl(
+        task_type: str,
+        params_json: str,
+        files: list[UploadFile],
+        user: dict[str, Any],
+        *,
+        video_module_id: str = "",
+    ) -> dict[str, Any]:
         typ = str(task_type or "").strip()
         if typ not in VIDEO_MODULE_METADATA:
             raise HTTPException(status_code=404, detail="不支持的视频任务类型")
@@ -3116,6 +3123,9 @@ def register_video_routes(app: Any, dependencies: VideoRouteDependencies) -> dic
                 if saved_path:
                     saved.append({"name": str(upload.filename or ""), "path": saved_path, "kind": _upload_kind(upload.filename)})
             payload = build_video_submit_payload(typ, parsed, saved)
+            module_marker = str(video_module_id or "").strip()
+            if module_marker in VIDEO_UI_MODULE_TASKS:
+                payload["_video_module_id"] = module_marker
             payload["source"] = "video_workbench_api"
             dependencies.enqueue_task(
                 task_id,
@@ -4763,13 +4773,18 @@ def register_video_routes(app: Any, dependencies: VideoRouteDependencies) -> dic
                 if isinstance(manifest, list):
                     parsed["file_roles"] = [str(item.get("field") or "") if isinstance(item, dict) else str(item or "") for item in manifest]
             requested = module or module_id or video_module or task_type
-            if requested in VIDEO_UI_MODULE_TASKS:
-                parsed["_video_module_id"] = requested
+            module_marker = requested if requested in VIDEO_UI_MODULE_TASKS else ""
             try:
                 resolved_type, parsed = resolve_video_ui_task(requested, parsed)
             except ValueError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
-            return await submit_impl(resolved_type, json.dumps(parsed, ensure_ascii=False), files, user)
+            return await submit_impl(
+                resolved_type,
+                json.dumps(parsed, ensure_ascii=False),
+                files,
+                user,
+                video_module_id=module_marker,
+            )
 
         app.add_api_route("/api/video/tasks", tasks_get_endpoint, methods=["GET"], name="video_workbench_tasks")
         app.add_api_route("/api/video/tasks", tasks_post_endpoint, methods=["POST"], name="video_workbench_submit")

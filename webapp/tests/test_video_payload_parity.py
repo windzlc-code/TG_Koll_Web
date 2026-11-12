@@ -35,6 +35,53 @@ def test_digital_human_payload_keeps_both_presenters_and_product_slots() -> None
     assert payload["product_image_local_paths"] == ["C:/uploads/product.png"]
 
 
+def test_digital_human_ui_submission_keeps_module_provenance_server_owned() -> None:
+    enqueued: list[dict] = []
+    app = FastAPI()
+
+    def save_upload_file(field_name: str, upload: UploadFile) -> str:
+        return f"/srv/uploads/{field_name}-{upload.filename}"
+
+    dependencies = video_workbench.VideoRouteDependencies(
+        get_current_user=lambda: {"id": 1, "username": "admin"},
+        enqueue_task=lambda task_id, user_id, task_type, payload, user: enqueued.append({
+            "id": task_id,
+            "user_id": user_id,
+            "task_type": task_type,
+            "payload": payload,
+        }),
+        save_upload_file=save_upload_file,
+        new_task_id=lambda: "digital-human-submit",
+        workspace_username=lambda user: str(user["username"]),
+        workspace_user_id=lambda user: int(user["id"]),
+    )
+    video_workbench.register_video_routes(app, dependencies)
+    endpoint = next(
+        route.endpoint
+        for route in app.router.routes
+        if getattr(route, "path", "") == "/api/video/tasks" and "POST" in route.methods
+    )
+
+    result = asyncio.run(endpoint(
+        module="digital_human_video",
+        params_json=json.dumps({
+            "speech_text": "Waterproof warmth for every ride.",
+            "_file_roles": ["model", "product", "audio"],
+        }),
+        files=[
+            UploadFile(filename="presenter.png", file=BytesIO(b"presenter-image")),
+            UploadFile(filename="jacket.jpg", file=BytesIO(b"product-image")),
+            UploadFile(filename="voice.wav", file=BytesIO(b"voice-audio")),
+        ],
+        user={"id": 1, "username": "admin"},
+    ))
+
+    assert result["task_type"] == "create_video"
+    assert enqueued[0]["payload"]["_video_module_id"] == "digital_human_video"
+    assert enqueued[0]["payload"]["model_image_local_path"].endswith("presenter.png")
+    assert enqueued[0]["payload"]["product_image_local_path"].endswith("jacket.jpg")
+
+
 def test_language_upload_is_voice_reference_not_rendered_target_track() -> None:
     payload = video_workbench.build_video_submit_payload(
         "video_language_replace",

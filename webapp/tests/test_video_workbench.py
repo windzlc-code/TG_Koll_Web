@@ -740,6 +740,49 @@ class VideoWorkbenchTests(unittest.TestCase):
         for task_type in video_workbench.VIDEO_TASK_RUNNERS:
             self.assertIn(f"/api/video/{task_type}", paths)
 
+    def test_ui_module_submit_keeps_server_owned_module_marker_after_public_validation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            enqueued: list = []
+            app = FastAPI()
+            dependencies = self._workflow_dependencies(Path(temp_dir) / "tasks.db", enqueued, [])
+            video_workbench.register_video_routes(app, dependencies)
+            submit = self._route_endpoint(app, "/api/video/tasks", "POST")
+
+            result = asyncio.run(submit(
+                module="subject_generate",
+                params_json=json.dumps({"prompt": "studio product portrait"}),
+                files=[],
+                user={"id": 1, "username": "tester"},
+            ))
+
+        self.assertEqual(result["task_type"], "image_generate")
+        self.assertEqual(len(enqueued), 1)
+        self.assertEqual(enqueued[0]["payload"]["_video_module_id"], "subject_generate")
+        self.assertEqual(enqueued[0]["payload"]["video_image_mode"], "digital_human_character")
+
+    def test_ui_module_submit_rejects_client_supplied_internal_marker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            enqueued: list = []
+            app = FastAPI()
+            dependencies = self._workflow_dependencies(Path(temp_dir) / "tasks.db", enqueued, [])
+            video_workbench.register_video_routes(app, dependencies)
+            submit = self._route_endpoint(app, "/api/video/tasks", "POST")
+
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(submit(
+                    module="subject_generate",
+                    params_json=json.dumps({
+                        "prompt": "studio product portrait",
+                        "_video_module_id": "poster_translate",
+                    }),
+                    files=[],
+                    user={"id": 1, "username": "tester"},
+                ))
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("内部参数", str(raised.exception.detail))
+        self.assertEqual(enqueued, [])
+
     def test_prompt_preview_preserves_candidates_and_hidden_ecommerce_analysis(self):
         app = FastAPI()
         dependencies = video_workbench.VideoRouteDependencies(
