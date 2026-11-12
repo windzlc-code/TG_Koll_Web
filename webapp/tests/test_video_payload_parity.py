@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile
 
 from webapp import video_workbench
+from webapp import telegram_internal
 
 
 def test_digital_human_payload_keeps_both_presenters_and_product_slots() -> None:
@@ -33,6 +34,32 @@ def test_digital_human_payload_keeps_both_presenters_and_product_slots() -> None
         "C:/uploads/presenter-b.png",
     ]
     assert payload["product_image_local_paths"] == ["C:/uploads/product.png"]
+
+
+def test_web_and_telegram_resolve_selected_voice_preset_to_the_same_reference_audio() -> None:
+    source = {
+        "target_language": "English",
+        "speech_text": "Keep your ride warm and dry.",
+        "elevenlabs_tts_preset_key": "en_male_viraj_bold_commanding_banking_agent",
+        "elevenlabs_tts_voice_id": "Ock0AL5DBkvTUDePt4Hm",
+        "voice_id": "Ock0AL5DBkvTUDePt4Hm",
+        "speaker": "Viraj - Bold & Commanding Banking Agent",
+    }
+    web_payload = video_workbench.build_video_submit_payload(
+        "create_video",
+        {**source, "file_roles": ["model", "product"]},
+        [
+            {"name": "presenter.png", "path": "C:/uploads/presenter.png", "kind": "image"},
+            {"name": "product.png", "path": "C:/uploads/product.png", "kind": "image"},
+        ],
+    )
+    tg_payload = telegram_internal._apply_elevenlabs_preset_audio_reference(source)
+
+    assert web_payload["audio_local_path"] == tg_payload["audio_local_path"]
+    assert web_payload["elevenlabs_tts_preset_key"] == tg_payload["elevenlabs_tts_preset_key"]
+    assert web_payload["elevenlabs_tts_voice_id"] == "Ock0AL5DBkvTUDePt4Hm"
+    assert "voice_id" not in web_payload
+    assert web_payload["speech_text"] == source["speech_text"]
 
 
 def test_digital_human_ui_submission_keeps_module_provenance_server_owned() -> None:

@@ -59,6 +59,10 @@ assert.match(functionBody("submit"), /applyStoredPromptPreviewForSubmit\(module,
 assert.match(source, /async function submitPreparedVideoTask\(/);
 assert.match(source, /async function submitVisualFinalizeTask\(/);
 assert.match(source, /stage: "auto_finalizing"/);
+assert.match(source, /const VIDEO_PROGRESS_STEP_DEFINITIONS = \[/);
+assert.match(source, /label: "准备"/);
+assert.match(source, /label: "归档"/);
+assert.match(source, /steps: videoProgressSteps\(monitor\.stage\)/);
 assert.doesNotMatch(source, /applyConfirmedPromptPreview\(module, draft\.values, preview\)/);
 const applyConfirmedPromptPreview = Function(
   "requiresPromptPreview",
@@ -78,6 +82,7 @@ assert.deepEqual(confirmedValues.prompt_segments, ["confirmed shot"]);
 const voiceMapping = functionBody("publicSubmitValues");
 assert.match(voiceMapping, /values\.speaker\s*=\s*draft\.values\.voice_name\s*\|\|\s*draft\.values\.speaker\s*\|\|\s*""/);
 assert.match(voiceMapping, /values\.elevenlabs_tts_preset_key\s*=\s*draft\.values\.elevenlabs_tts_preset_key/);
+assert.match(voiceMapping, /values\.elevenlabs_tts_voice_id\s*=\s*draft\.values\.voice_id/);
 assert.match(voiceMapping, /values\.minimax_tts_voice_id\s*=\s*""/);
 assert.doesNotMatch(voiceMapping, /values\.voice_id\s*=/);
 assert.doesNotMatch(voiceMapping, /values\.speaker[^;]*draft\.values\.voice_id/);

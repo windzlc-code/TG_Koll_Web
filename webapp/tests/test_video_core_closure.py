@@ -246,6 +246,7 @@ def test_seeding_image_confirmation_stage_does_not_settle_video_seconds() -> Non
 def test_voice_preset_submission_keeps_original_minimax_fallback_contract() -> None:
     script = (Path(__file__).parents[1] / "static" / "assets" / "video-workbench.js").read_text(encoding="utf-8")
     assert 'values.elevenlabs_tts_preset_key = draft.values.elevenlabs_tts_preset_key || ""' in script
+    assert 'values.elevenlabs_tts_voice_id = draft.values.voice_id || ""' in script
     assert 'values.speaker = draft.values.voice_name || draft.values.speaker || ""' in script
     assert 'values.minimax_tts_voice_id = ""' in script
     assert "values.voice_id = draft.values.voice_id" not in script

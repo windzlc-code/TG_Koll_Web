@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -275,3 +276,73 @@ def ensure_elevenlabs_preview_audio(*, preset: dict[str, str], output_path: Path
         raise RuntimeError("预设音色下载为空文件")
     temp_path.replace(output_path)
     return output_path
+
+
+def _find_elevenlabs_voice_preset(payload: dict[str, Any]) -> dict[str, str] | None:
+    source = payload if isinstance(payload, dict) else {}
+    preset_key = str(
+        source.get("elevenlabs_tts_preset_key")
+        or source.get("preset_dry_voice_key")
+        or ""
+    ).strip()
+    if preset_key:
+        found = elevenlabs_voice_preset_by_key(preset_key)
+        if found:
+            return found
+
+    voice_id = str(
+        source.get("elevenlabs_tts_voice_id")
+        or source.get("voice_id")
+        or ""
+    ).strip()
+    if voice_id:
+        for presets in ELEVENLABS_VOICE_PRESETS.values():
+            for preset in presets:
+                if voice_id == str(preset.get("voice_id") or "").strip():
+                    return preset
+
+    language = str(source.get("target_language") or source.get("language") or "Chinese").strip() or "Chinese"
+    for candidate in (
+        str(source.get("preset_dry_voice") or "").strip(),
+        str(source.get("speaker") or "").strip(),
+    ):
+        if not candidate:
+            continue
+        found = elevenlabs_voice_preset_by_button(candidate, language)
+        if found:
+            return found
+        for preset in elevenlabs_voice_presets_for_language(language):
+            if candidate in {
+                str(preset.get("label") or "").strip(),
+                str(preset.get("voice_name") or "").strip(),
+            }:
+                return preset
+    return None
+
+
+def apply_elevenlabs_preset_audio_reference(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Resolve a selected ElevenLabs preset to the shared TTS reference audio."""
+
+    updated = dict(payload or {})
+    audio_local = str(updated.get("audio_local_path") or updated.get("voice_audio_local_path") or "").strip()
+    if audio_local:
+        return updated
+    preset = _find_elevenlabs_voice_preset(updated)
+    if not preset:
+        return updated
+    target_language = str(updated.get("target_language") or updated.get("language") or "Chinese").strip() or "Chinese"
+    data_dir = Path(str(os.getenv("WEBAPP_DATA_DIR") or "webapp_data")).expanduser()
+    preview_path = ensure_elevenlabs_preview_audio(
+        preset=preset,
+        output_path=data_dir / "elevenlabs_voice_previews" / elevenlabs_preview_cache_name(target_language, preset),
+    )
+    updated["audio_local_path"] = str(preview_path)
+    updated["preset_dry_voice"] = str(
+        updated.get("preset_dry_voice") or elevenlabs_voice_preset_display_label(preset)
+    ).strip()
+    updated["speaker"] = str(updated.get("speaker") or preset.get("voice_name") or "").strip()
+    updated.setdefault("elevenlabs_tts_preset_key", str(preset.get("key") or "").strip())
+    updated.setdefault("elevenlabs_tts_voice_id", str(preset.get("voice_id") or "").strip())
+    if str(updated.get("voice_id") or "").strip() == str(preset.get("voice_id") or "").strip():
+        updated.pop("voice_id", None)
+    return updated

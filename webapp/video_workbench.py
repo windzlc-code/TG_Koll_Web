@@ -25,7 +25,10 @@ from video_core import (
     VideoTaskContext,
     run_video_task,
 )
-from video_core.source.voice_presets import ELEVENLABS_VOICE_PRESETS
+from video_core.source.voice_presets import (
+    ELEVENLABS_VOICE_PRESETS,
+    apply_elevenlabs_preset_audio_reference,
+)
 from video_core.source import runninghub_common, runninghub_speech
 from video_core import ecommerce_material_intelligence
 
@@ -1885,6 +1888,10 @@ def build_video_submit_payload(
         if count < 1 or count > 8:
             raise ValueError("image count must be between 1 and 8")
         payload["count"] = count
+    if typ in {"create_video", "ecommerce_short_video"}:
+        # Match the Telegram Bot path: a selected ElevenLabs preset must be
+        # resolved to reference audio before the shared RunningHub TTS stage.
+        payload = apply_elevenlabs_preset_audio_reference(payload)
     return payload
 
 

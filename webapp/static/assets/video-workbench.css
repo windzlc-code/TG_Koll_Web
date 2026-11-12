@@ -819,7 +819,7 @@
 }
 
 .vecto-public-prompt-dialog {
-  width: min(540px, calc(100vw - 32px));
+  width: min(760px, calc(100vw - 32px));
   gap: 16px;
   border-color: rgba(63, 88, 102, .2);
   box-shadow: 0 24px 70px rgba(22, 42, 48, .22);
@@ -892,6 +892,119 @@
 .vecto-public-prompt-status [data-public-prompt-message] {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.vecto-public-prompt-steps {
+  display: flex;
+  gap: 0;
+  margin: 2px 0 0;
+  padding: 4px 0 2px;
+  overflow: auto;
+  list-style: none;
+  scrollbar-width: thin;
+}
+
+.vecto-public-prompt-step {
+  position: relative;
+  display: grid;
+  flex: 1 0 104px;
+  min-width: 104px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  padding: 0 14px 0 0;
+}
+
+.vecto-public-prompt-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 11px;
+  right: 7px;
+  left: 27px;
+  height: 1px;
+  background: #d8e1e5;
+}
+
+.vecto-public-prompt-step-mark {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  color: #809098;
+  background: #f2f5f6;
+  border: 1px solid #d3dfe3;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.vecto-public-prompt-step-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.vecto-public-prompt-step-copy strong {
+  overflow: hidden;
+  color: #6f7d83;
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vecto-public-prompt-step-copy small {
+  overflow: hidden;
+  color: #9aa6aa;
+  font-size: 9px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vecto-public-prompt-step.is-active .vecto-public-prompt-step-mark {
+  color: var(--video-accent-deep, #335e73);
+  background: #e2f2f8;
+  border-color: #8eb8c8;
+  box-shadow: 0 0 0 3px rgba(63, 132, 159, .1);
+}
+
+.vecto-public-prompt-step.is-active .vecto-public-prompt-step-copy strong {
+  color: var(--video-ink, #17262d);
+}
+
+.vecto-public-prompt-step.is-complete .vecto-public-prompt-step-mark {
+  color: #166534;
+  background: #dcfce7;
+  border-color: #86efac;
+  animation: vecto-public-prompt-step-check 420ms ease-out both;
+}
+
+.vecto-public-prompt-step.is-complete .vecto-public-prompt-step-copy strong {
+  color: #23613d;
+}
+
+.vecto-public-prompt-step.is-error .vecto-public-prompt-step-mark {
+  color: #991b1b;
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.vecto-public-prompt-step-spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(63, 88, 102, .25);
+  border-top-color: var(--video-accent-deep, #335e73);
+  border-radius: 50%;
+  animation: video-spin 700ms linear infinite;
+}
+
+@keyframes vecto-public-prompt-step-check {
+  from { transform: scale(.72); opacity: .35; }
+  to { transform: scale(1); opacity: 1; }
 }
 
 .vecto-public-prompt-dots {
@@ -986,7 +1099,14 @@
 
 @media (prefers-reduced-motion: reduce) {
   .vecto-public-prompt-dots,
-  .vecto-public-prompt-spinner { animation: none; }
+  .vecto-public-prompt-spinner,
+  .vecto-public-prompt-step-spinner,
+  .vecto-public-prompt-step.is-complete .vecto-public-prompt-step-mark { animation: none; }
+}
+
+@media (max-width: 640px) {
+  .vecto-public-prompt-step { flex-basis: 94px; min-width: 94px; }
+  .vecto-public-prompt-step-copy small { display: none; }
 }
 
 .video-inline-error {

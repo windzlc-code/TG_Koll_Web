@@ -489,11 +489,43 @@
     return raw && /[\u4e00-\u9fff]/.test(raw) ? raw : fallback;
   }
 
-  function openVideoProgress(title, messages) {
+  const VIDEO_PROGRESS_STEP_DEFINITIONS = [
+    { key: "prepare", label: "准备", description: "校验素材和参数" },
+    { key: "prompt", label: "文案", description: "确认口播与画面提示" },
+    { key: "submit", label: "提交", description: "创建服务器任务" },
+    { key: "generate", label: "生成", description: "生成画面与语音" },
+    { key: "compose", label: "合成", description: "合成最终视频" },
+    { key: "archive", label: "归档", description: "同步到视频记录" },
+  ];
+
+  function videoProgressSteps(stage = "prepare") {
+    const requested = String(stage || "prepare").trim().toLowerCase();
+    if (requested === "complete") {
+      return VIDEO_PROGRESS_STEP_DEFINITIONS.map((step) => ({ ...step, status: "complete" }));
+    }
+    const errorIndex = requested === "error"
+      ? VIDEO_PROGRESS_STEP_DEFINITIONS.findIndex((step) => step.key === "generate")
+      : -1;
+    const activeIndex = errorIndex >= 0
+      ? errorIndex
+      : Math.max(0, VIDEO_PROGRESS_STEP_DEFINITIONS.findIndex((step) => step.key === requested));
+    return VIDEO_PROGRESS_STEP_DEFINITIONS.map((step, index) => ({
+      ...step,
+      status: errorIndex >= 0
+        ? (index < activeIndex ? "complete" : index === activeIndex ? "error" : "pending")
+        : (index < activeIndex ? "complete" : index === activeIndex ? "active" : "pending"),
+    }));
+  }
+
+  function openVideoProgress(title, messages, options = {}) {
+    const promptOptions = options && typeof options === "object" ? options : {};
+    const stage = String(promptOptions.stage || "prepare");
     return window.VectoPublicPrompt?.open?.({
+      ...promptOptions,
       title,
       message: Array.isArray(messages) ? messages[0] : messages,
       messages,
+      steps: promptOptions.steps || videoProgressSteps(stage),
       status: "progress",
       busy: true,
       rotateMessages: false,
@@ -521,6 +553,7 @@
         status: "error",
         busy: false,
         messages: [message],
+        steps: videoProgressSteps("error"),
         showClose: true,
         showConfirm: false,
         showCancel: false,
@@ -540,6 +573,7 @@
         status: "success",
         busy: false,
         messages: [message],
+        steps: videoProgressSteps("complete"),
         showClose: true,
         showConfirm: false,
         showCancel: false,
@@ -598,6 +632,7 @@
     const progress = Math.max(0, Math.min(100, Number(task?.progress || 0)));
     const statusText = statusCopy(status, task);
     const taskLabel = monitor.taskId ? `任务编号：${monitor.taskId}` : "任务编号正在分配";
+    monitor.stage = status === "queued" || status === "pending" ? "submit" : "generate";
     const messages = status === "queued" || status === "pending"
       ? ["任务已提交，正在排队等待生成服务…", "正在等待服务器接收任务…", "任务开始后会自动更新进度…"]
       : ["生成服务正在处理素材和文案…", "正在生成画面与音频，请保持页面打开…", "完成后会自动同步到视频记录…"];
@@ -608,6 +643,7 @@
       status: "progress",
       busy: true,
       messages,
+      steps: videoProgressSteps(monitor.stage),
       showClose: false,
       showConfirm: false,
       showCancel: false,
@@ -663,6 +699,7 @@
       timer: 0,
       done: false,
       archiveAttempts: 0,
+      stage: "submit",
     };
     submittedTaskMonitors.set(cleanId, monitor);
     const finish = () => {
@@ -684,6 +721,7 @@
           status: "warning",
           busy: false,
           messages: ["任务仍未返回最终状态，后台可能仍在处理。"],
+          steps: videoProgressSteps("error"),
           showClose: true,
           actions: [{ value: "view-workbench", text: "查看任务动态", primary: true, onSelect: () => openVideoTaskWorkbench(monitor.moduleId) }],
           showConfirm: false,
@@ -697,6 +735,7 @@
         const task = state.tasks.find((item) => item.id === cleanId && item.source === "video")
           || state.tasks.find((item) => item.id === cleanId);
         if (!task) {
+          monitor.stage = "submit";
           monitor.prompt?.update?.({
             title: `${monitor.label}任务已提交`,
             message: "任务已提交，正在等待服务器接收…",
@@ -704,6 +743,7 @@
             status: "progress",
             busy: true,
             messages: ["任务已提交，正在等待服务器接收…", "正在同步任务状态…", "完成后会自动同步到视频记录…"],
+            steps: videoProgressSteps(monitor.stage),
             showClose: false,
             showConfirm: false,
             showCancel: false,
@@ -727,6 +767,7 @@
         const reviewKind = taskNeedsVisualConfirmation(task);
         if (["success", "completed", "finished"].includes(status) && reviewKind) {
           const isDigitalHuman = reviewKind === "digital-human";
+          monitor.stage = "compose";
           if (monitor.finalizePromise) {
             await monitor.finalizePromise;
             return;
@@ -741,6 +782,7 @@
             status: "progress",
             busy: true,
             messages: [isDigitalHuman ? "数字人画面已生成，系统正在自动确认并合成最终视频…" : "种草视频分镜图已生成，系统正在自动确认并合成最终视频…"],
+            steps: videoProgressSteps("compose"),
             showClose: false,
             showConfirm: false,
             showCancel: false,
@@ -769,6 +811,7 @@
           if (archived !== true) {
             monitor.archiveAttempts += 1;
             if (monitor.archiveAttempts <= 5) {
+              monitor.stage = "archive";
               monitor.prompt?.update?.({
                 title: "视频已生成，正在同步视频记录",
                 message: "视频已成功返回，系统正在自动同步到视频记录…",
@@ -776,6 +819,7 @@
                 status: "progress",
                 busy: true,
                 messages: ["视频已成功返回，系统正在自动同步到视频记录…"],
+                steps: videoProgressSteps(monitor.stage),
                 showClose: false,
                 showConfirm: false,
                 showCancel: false,
@@ -791,12 +835,17 @@
               status: "warning",
               busy: false,
               messages: ["视频已成功返回，但暂未出现在视频记录中。"],
+              steps: videoProgressSteps("archive").map((step) => ({
+                ...step,
+                status: step.key === "archive" ? "error" : step.status,
+              })),
               showClose: true,
               showConfirm: false,
               showCancel: false,
               actions: [{ value: "view-records", text: "查看视频记录", primary: true, onSelect: openVideoTaskRecords }],
             });
           } else {
+            monitor.stage = "complete";
             monitor.prompt?.update?.({
               title: `${monitor.label}生成完成`,
               message: "视频已生成并同步到视频记录。",
@@ -804,6 +853,7 @@
               status: "success",
               busy: false,
               messages: ["视频已生成并同步到视频记录。"],
+              steps: videoProgressSteps(monitor.stage),
               showClose: true,
               showConfirm: false,
               showCancel: false,
@@ -823,6 +873,7 @@
           status: "progress",
           busy: true,
           messages: ["暂时无法读取最新状态，系统正在自动重试…", "正在重新连接任务服务…", "不会重复扣除本次任务的算力点…"],
+          steps: videoProgressSteps(monitor.stage || "generate"),
           showClose: false,
           showConfirm: false,
           showCancel: false,
@@ -1090,7 +1141,7 @@
       "正在整理产品信息和素材…",
       "正在生成口播文案与画面提示词…",
       "正在检查生成内容，请稍候…",
-    ]);
+    ], { stage: "prompt" });
     try {
       const values = publicSubmitValues(module, draft);
       const preview = await confirmPromptPreview(module, values);
@@ -1111,6 +1162,7 @@
           status: "progress",
           busy: true,
           messages: ["提示词 / 文案已生成，正在自动提交视频任务…"],
+          steps: videoProgressSteps("submit"),
           showClose: false,
           showConfirm: false,
           showCancel: false,
@@ -2983,6 +3035,7 @@
       values.voice_label = draft.values.voice_label || "";
       values.preset_dry_voice = draft.values.voice_label || values.speaker;
       values.elevenlabs_tts_preset_key = draft.values.elevenlabs_tts_preset_key || "";
+      values.elevenlabs_tts_voice_id = draft.values.voice_id || "";
       values.minimax_tts_voice_id = "";
     }
     if (values.minimax_tts_model) {
@@ -3065,7 +3118,8 @@
       "正在校验输入内容和素材…",
       "正在上传素材并创建任务…",
       "正在排入生成队列，请稍候…",
-    ]);
+    ], { stage: "submit" });
+    currentProgress?.update?.({ steps: videoProgressSteps("submit") });
     const fileManifest = [];
     const body = new FormData();
     body.append("module", module.id);
@@ -3108,6 +3162,7 @@
       );
       return "";
     }
+    currentProgress?.update?.({ steps: videoProgressSteps("generate") });
     monitorSubmittedTask(taskId, currentProgress, module.id, label);
     return taskId;
   }
@@ -3165,7 +3220,7 @@
         "正在校验输入内容和素材…",
         "正在上传素材并创建任务…",
         "正在排入生成队列，请稍候…",
-      ]);
+      ], { stage: "submit" });
       await submitPreparedVideoTask(module, draft, submitValues, progress);
     } catch (error) {
       state.submitError = showVideoError(error, "任务提交失败：请检查输入、素材和算力余额后重试。", "生成任务提交失败", progress);

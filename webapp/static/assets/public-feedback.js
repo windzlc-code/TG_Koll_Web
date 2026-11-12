@@ -21,6 +21,24 @@
     return values.length ? values : [message || "正在处理，请稍候…"];
   }
 
+  function normalizeSteps(steps) {
+    if (!Array.isArray(steps)) return [];
+    return steps.map((item, index) => {
+      const source = typeof item === "string" ? { label: item } : (item || {});
+      const status = ["pending", "active", "complete", "error"].includes(String(source.status || "").toLowerCase())
+        ? String(source.status).toLowerCase()
+        : "pending";
+      const label = String(source.label || source.title || `步骤 ${index + 1}`).trim();
+      const description = String(source.description || source.detail || "").trim();
+      return {
+        key: String(source.key || `step-${index + 1}`).trim() || `step-${index + 1}`,
+        label,
+        description,
+        status,
+      };
+    }).filter((item) => item.label);
+  }
+
   function extractError(error, fallback = "操作失败，请稍后重试。") {
     const payload = error?.payload || error?.response || {};
     const detail = payload?.detail;
@@ -84,6 +102,7 @@
       status: "info",
       busy: false,
       messages: [],
+      steps: [],
       rotateMessages: false,
       allowMinimize: false,
       minimizeText: "暂时隐藏",
@@ -143,6 +162,15 @@
       const showClose = Boolean(config.showClose && !config.busy);
       const showMinimize = Boolean(config.allowMinimize && config.busy);
       const actions = actionHtml();
+      const steps = normalizeSteps(config.steps);
+      const stepsHtml = steps.length
+        ? `<ol class="vecto-public-prompt-steps" aria-label="处理进度">${steps.map((step, index) => {
+          const mark = step.status === "complete" ? "✓" : step.status === "error" ? "!" : step.status === "active"
+            ? '<span class="vecto-public-prompt-step-spinner" aria-hidden="true"></span>'
+            : String(index + 1);
+          return `<li class="vecto-public-prompt-step is-${esc(step.status)}" data-public-prompt-step="${esc(step.key)}" data-public-prompt-step-status="${esc(step.status)}"><span class="vecto-public-prompt-step-mark">${mark}</span><span class="vecto-public-prompt-step-copy"><strong>${esc(step.label)}</strong>${step.description ? `<small>${esc(step.description)}</small>` : ""}</span></li>`;
+        }).join("")}</ol>`
+        : "";
       host.dataset.publicPromptBusy = config.busy ? "true" : "false";
       host.dataset.publicPromptStatus = String(config.status || "info");
       host.dataset.publicPromptMinimized = minimized ? "true" : "false";
@@ -162,6 +190,7 @@
           </div>
           <div class="vecto-public-prompt-body" aria-live="${config.busy ? "polite" : "assertive"}">
             <div class="vecto-public-prompt-status">${statusIcon(config.status, config.busy)}<span data-public-prompt-message>${esc(message)}</span><span class="vecto-public-prompt-dots" ${config.busy ? "" : "hidden"}>...</span></div>
+            ${stepsHtml}
             ${config.detail ? `<p class="vecto-public-prompt-detail">${esc(config.detail)}</p>` : ""}
           </div>
           ${actions ? `<div class="console-modal-actions vecto-public-prompt-actions">${actions}</div>` : ""}

@@ -326,26 +326,9 @@ def _resolve_elevenlabs_voice_preset(payload: dict[str, Any]) -> dict[str, str] 
 
 
 def _apply_elevenlabs_preset_audio_reference(payload: dict[str, Any]) -> dict[str, Any]:
-    from video_core.source import voice_presets
+    from video_core.source.voice_presets import apply_elevenlabs_preset_audio_reference
 
-    updated = dict(payload or {})
-    audio_local = str(updated.get("audio_local_path") or updated.get("voice_audio_local_path") or "").strip()
-    if audio_local:
-        return updated
-    preset = _resolve_elevenlabs_voice_preset(updated)
-    if not preset:
-        return updated
-    target_language = str(updated.get("target_language") or updated.get("language") or "Chinese").strip() or "Chinese"
-    preview_path = voice_presets.ensure_elevenlabs_preview_audio(
-        preset=preset,
-        output_path=_voice_preset_preview_cache_path(target_language=target_language, preset=preset),
-    )
-    updated["audio_local_path"] = str(preview_path)
-    updated["preset_dry_voice"] = str(updated.get("preset_dry_voice") or voice_presets.elevenlabs_voice_preset_display_label(preset)).strip()
-    updated["speaker"] = str(updated.get("speaker") or preset.get("voice_name") or "").strip()
-    updated.setdefault("elevenlabs_tts_preset_key", str(preset.get("key") or "").strip())
-    updated.setdefault("elevenlabs_tts_voice_id", str(preset.get("voice_id") or "").strip())
-    return updated
+    return apply_elevenlabs_preset_audio_reference(payload)
 
 
 def _apply_ecommerce_effective_image_selection(payload: dict[str, Any]) -> dict[str, Any]:

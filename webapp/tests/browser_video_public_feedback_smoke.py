@@ -137,6 +137,8 @@ def main() -> None:
         page.locator("#videoWorkbenchRoot button[type='submit']").click()
         busy = page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]')
         busy.wait_for(state="visible")
+        assert busy.locator("[data-public-prompt-step]").count() == 6
+        assert busy.locator('[data-public-prompt-step-status="active"]').count() >= 1
         first_progress = busy.locator("[data-public-prompt-message]").inner_text()
         page.wait_for_timeout(1700)
         second_progress = busy.locator("[data-public-prompt-message]").inner_text()
@@ -154,6 +156,7 @@ def main() -> None:
         page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
         assert "生成完成" in page.locator(".vecto-public-prompt").inner_text()
         assert "同步到视频记录" in page.locator(".vecto-public-prompt").inner_text()
+        assert page.locator('.vecto-public-prompt [data-public-prompt-step-status="complete"]').count() == 6
         assert record_state["polls"] >= 2, record_state
         assert "继续生成视频" not in page.locator(".vecto-public-prompt").inner_text()
         page.locator(".vecto-public-prompt [data-public-prompt-close]").click()
