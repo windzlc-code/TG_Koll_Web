@@ -76,6 +76,9 @@
       status: "info",
       busy: false,
       messages: [],
+      rotateMessages: false,
+      allowMinimize: false,
+      minimizeText: "暂时隐藏",
       showClose: true,
       showConfirm: false,
       showCancel: false,
@@ -94,6 +97,7 @@
     let progressIndex = 0;
     let progressTimer = 0;
     let closed = false;
+    let minimized = false;
     let resolveResult;
     const resultPromise = new Promise((resolve) => { resolveResult = resolve; });
 
@@ -103,7 +107,7 @@
     };
     const startProgress = () => {
       stopProgress();
-      if (!config.busy || progressMessages.length < 2) return;
+      if (!config.busy || !config.rotateMessages || progressMessages.length < 2) return;
       progressTimer = window.setInterval(() => {
         if (closed) return;
         progressIndex = (progressIndex + 1) % progressMessages.length;
@@ -129,22 +133,28 @@
     const render = () => {
       const message = progressMessages[progressIndex] || String(config.message || "");
       const showClose = Boolean(config.showClose && !config.busy);
+      const showMinimize = Boolean(config.allowMinimize && config.busy);
       const actions = actionHtml();
       host.dataset.publicPromptBusy = config.busy ? "true" : "false";
       host.dataset.publicPromptStatus = String(config.status || "info");
+      host.dataset.publicPromptMinimized = minimized ? "true" : "false";
       host.innerHTML = `
-        <div class="console-modal-backdrop" ${config.dismissOnBackdrop && !config.busy ? "data-public-prompt-cancel" : ""}></div>
-        <section class="console-modal-dialog vecto-public-prompt-dialog" role="${config.busy ? "alertdialog" : "dialog"}" aria-modal="true" aria-labelledby="vectoPublicPromptTitle">
+        <div class="console-modal-backdrop" ${minimized ? "hidden" : (config.dismissOnBackdrop && !config.busy ? "data-public-prompt-cancel" : "")}></div>
+        <section class="console-modal-dialog vecto-public-prompt-dialog" role="${config.busy ? "alertdialog" : "dialog"}" aria-modal="true" aria-labelledby="vectoPublicPromptTitle" ${minimized ? "hidden" : ""}>
           <div class="console-modal-head vecto-public-prompt-head">
             <div><span class="vecto-public-prompt-kicker">VECTO 提示</span><strong id="vectoPublicPromptTitle">${esc(config.title)}</strong></div>
-            ${showClose ? '<button type="button" class="console-modal-close" data-public-prompt-close aria-label="关闭提示">×</button>' : ""}
+            <div class="vecto-public-prompt-head-actions">
+              ${showMinimize ? `<button type="button" class="vecto-public-prompt-minimize" data-public-prompt-minimize>${esc(config.minimizeText)}</button>` : ""}
+              ${showClose ? '<button type="button" class="console-modal-close" data-public-prompt-close aria-label="关闭提示">×</button>' : ""}
+            </div>
           </div>
           <div class="vecto-public-prompt-body" aria-live="${config.busy ? "polite" : "assertive"}">
             <div class="vecto-public-prompt-status">${statusIcon(config.status, config.busy)}<span data-public-prompt-message>${esc(message)}</span><span class="vecto-public-prompt-dots" ${config.busy ? "" : "hidden"}>...</span></div>
             ${config.detail ? `<p class="vecto-public-prompt-detail">${esc(config.detail)}</p>` : ""}
           </div>
           ${actions ? `<div class="console-modal-actions vecto-public-prompt-actions">${actions}</div>` : ""}
-        </section>`;
+        </section>
+        ${minimized ? `<button type="button" class="vecto-public-prompt-mini" data-public-prompt-restore aria-label="恢复查看任务进度"><span class="vecto-public-prompt-spinner" aria-hidden="true"></span><span class="vecto-public-prompt-mini-copy"><strong>${esc(config.title)}</strong><small>${esc(message)}</small></span><b>查看进度</b></button>` : ""}`;
       const focusTarget = host.querySelector("[data-public-prompt-confirm], [data-public-prompt-action], [data-public-prompt-cancel], [data-public-prompt-close]");
       if (focusTarget && !config.busy) window.setTimeout(() => focusTarget.focus(), 0);
     };
@@ -155,24 +165,50 @@
       update(patch = {}) {
         if (closed) return handle;
         const wasBusy = Boolean(config.busy);
+        const wasRotateMessages = Boolean(config.rotateMessages);
+        const messagesChanged = Object.prototype.hasOwnProperty.call(patch, "messages") || Object.prototype.hasOwnProperty.call(patch, "message");
         Object.assign(config, patch);
-        if (Object.prototype.hasOwnProperty.call(patch, "messages") || Object.prototype.hasOwnProperty.call(patch, "message")) {
+        if (messagesChanged) {
           progressIndex = 0;
           const nextMessages = Object.prototype.hasOwnProperty.call(patch, "messages")
             ? config.messages
             : [config.message];
           progressMessages.splice(0, progressMessages.length, ...normalizeMessages(nextMessages, config.message));
         }
+        if (wasBusy && !config.busy) minimized = false;
         render();
-        if (wasBusy !== Boolean(config.busy)) {
-          if (config.busy) startProgress();
+        const shouldRotate = Boolean(config.busy && config.rotateMessages);
+        if (wasBusy !== Boolean(config.busy) || wasRotateMessages !== Boolean(config.rotateMessages) || messagesChanged) {
+          if (shouldRotate) startProgress();
           else stopProgress();
         }
+        return handle;
+      },
+      minimize() {
+        if (closed || !config.busy || !config.allowMinimize) return handle;
+        minimized = true;
+        render();
+        return handle;
+      },
+      restore() {
+        if (closed) return handle;
+        minimized = false;
+        render();
         return handle;
       },
       close: finish,
     };
     host.addEventListener("click", (event) => {
+      if (event.target.closest("[data-public-prompt-minimize]")) {
+        minimized = true;
+        render();
+        return;
+      }
+      if (event.target.closest("[data-public-prompt-restore]")) {
+        minimized = false;
+        render();
+        return;
+      }
       if (config.busy) return;
       if (event.target.closest("[data-public-prompt-close], [data-public-prompt-cancel]")) {
         finish(null);

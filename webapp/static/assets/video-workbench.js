@@ -496,6 +496,8 @@
       messages,
       status: "progress",
       busy: true,
+      rotateMessages: false,
+      allowMinimize: true,
       showClose: false,
       showConfirm: false,
       showCancel: false,
@@ -529,7 +531,7 @@
     return message;
   }
 
-  function updateVideoSuccess(prompt, title, message, detail = "") {
+  function updateVideoSuccess(prompt, title, message, detail = "", actions = []) {
     if (prompt?.isOpen?.()) {
       prompt.update({
         title,
@@ -541,6 +543,7 @@
         showClose: true,
         showConfirm: false,
         showCancel: false,
+        actions: Array.isArray(actions) ? actions : [],
       });
     }
   }
@@ -1035,7 +1038,18 @@
       draft.values._prompt_preview = preview;
       draft.values._prompt_preview_ready = true;
       saveDraft(module.id);
-      updateVideoSuccess(progress, "提示词 / 文案已生成", "提示词和文案已生成，请检查内容后再提交视频任务。", "如需调整输入，可重新生成。");
+      updateVideoSuccess(
+        progress,
+        "提示词 / 文案已生成",
+        "提示词和文案已生成，请检查内容后再提交视频任务。",
+        "当前步骤只生成提示词 / 文案，还没有创建最终视频任务。确认内容无误后继续生成视频；如需调整，关闭提示后修改输入。",
+        [{
+          value: "continue-video",
+          text: "继续生成视频",
+          primary: true,
+          onSelect: () => document.getElementById("videoWorkbenchForm")?.requestSubmit?.(),
+        }],
+      );
       return true;
     } catch (error) {
       state.submitError = showVideoError(error, "提示词 / 文案生成失败：请检查输入内容和素材后重试。", "提示词 / 文案生成失败", progress);
@@ -2633,7 +2647,18 @@
       if (childTaskId) {
         monitorSubmittedTask(childTaskId, progress, state.moduleId, "最终视频");
       } else {
-        updateVideoSuccess(progress, "视频任务已提交", "视频生成任务已提交，系统正在处理。", `源任务编号：${id}。请在任务动态查看进度。`);
+        updateVideoSuccess(
+          progress,
+          "视频任务已提交",
+          "视频生成任务已提交，系统正在处理。",
+          `源任务编号：${id}。请在任务动态查看进度。`,
+          [{
+            value: "view-workbench",
+            text: "查看任务动态",
+            primary: true,
+            onSelect: () => openVideoTaskWorkbench(state.moduleId),
+          }],
+        );
       }
     } catch (error) {
       state.taskError = showVideoError(error, "确认画面后创建视频任务失败：请检查素材和余额后重试。", "视频任务提交失败", progress);
@@ -3057,6 +3082,12 @@
           "生成任务已提交",
           `${submitButtonLabel(module, draft.values)}已提交，系统正在后台处理。`,
           "任务编号暂未返回，请在任务动态中刷新查看。",
+          [{
+            value: "view-workbench",
+            text: "查看任务动态",
+            primary: true,
+            onSelect: () => openVideoTaskWorkbench(module.id),
+          }],
         );
       }
     } catch (error) {
