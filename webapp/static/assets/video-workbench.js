@@ -615,6 +615,37 @@
     });
   }
 
+  async function submitVisualFinalizeTask(taskId, kind, progress, moduleId, label = "最终视频", options = {}) {
+    const id = String(taskId || "").trim();
+    if (!id) throw new Error("缺少待确认的源任务编号，无法继续生成视频。");
+    const suffix = kind === "seeding" ? "seeding/finalize" : "digital-human/finalize";
+    const result = await request(`/api/video/tasks/${encodeURIComponent(id)}/${suffix}`, { method: "POST" });
+    await loadTasks({ quiet: true });
+    const childTaskId = taskIdFromResponse(result);
+    if (childTaskId) {
+      monitorSubmittedTask(childTaskId, progress, moduleId, label);
+      return childTaskId;
+    }
+    if (options.requireTaskId) {
+      const missingTaskId = new Error("服务器未返回最终视频任务编号，暂时无法自动追踪生成进度。");
+      missingTaskId.code = "VIDEO_FINAL_TASK_ID_MISSING";
+      throw missingTaskId;
+    }
+    updateVideoSuccess(
+      progress,
+      "视频任务已提交",
+      "视频生成任务已提交，系统正在处理。",
+      `源任务编号：${id}。请在任务动态查看进度。`,
+      [{
+        value: "view-workbench",
+        text: "查看任务动态",
+        primary: true,
+        onSelect: () => openVideoTaskWorkbench(moduleId),
+      }],
+    );
+    return "";
+  }
+
   function monitorSubmittedTask(taskId, prompt, moduleId = "", label = "视频") {
     const cleanId = String(taskId || "").trim();
     if (!cleanId) return;
@@ -695,26 +726,41 @@
         const reviewKind = taskNeedsVisualConfirmation(task);
         if (["success", "completed", "finished"].includes(status) && reviewKind) {
           const isDigitalHuman = reviewKind === "digital-human";
-          const reviewMessage = isDigitalHuman
-            ? "数字人画面已生成，尚未合成最终视频。"
-            : "种草视频分镜图已生成，尚未合成最终视频。";
-          const reviewDetail = isDigitalHuman
-            ? "请返回任务动态确认画面，点击“确认画面并生成视频”后，系统才会继续生成最终视频。"
-            : "请返回任务动态确认分镜图，点击“确认分镜图并生成视频”后，系统才会继续生成最终视频。";
+          if (monitor.finalizePromise) {
+            await monitor.finalizePromise;
+            return;
+          }
+          const finalModuleId = videoModuleForTask(task, monitor.moduleId);
           monitor.prompt?.update?.({
-            title: isDigitalHuman ? "数字人画面待确认" : "分镜图待确认",
-            message: reviewMessage,
-            detail: `${reviewDetail} 任务编号：${cleanId}`,
-            status: "info",
-            busy: false,
-            messages: [reviewMessage],
-            showClose: true,
+            title: isDigitalHuman ? "正在自动合成数字人视频" : "正在自动合成种草视频",
+            message: isDigitalHuman
+              ? "数字人画面已生成，系统正在自动确认并合成最终视频…"
+              : "种草视频分镜图已生成，系统正在自动确认并合成最终视频…",
+            detail: `任务编号：${cleanId}。无需人工点击，系统会自动提交最终视频并继续追踪。`,
+            status: "progress",
+            busy: true,
+            messages: [isDigitalHuman ? "数字人画面已生成，系统正在自动确认并合成最终视频…" : "种草视频分镜图已生成，系统正在自动确认并合成最终视频…"],
+            showClose: false,
             showConfirm: false,
             showCancel: false,
-            actions: [{ value: "view-workbench", text: "查看任务并确认", primary: true, onSelect: () => openVideoTaskWorkbench(videoModuleForTask(task, monitor.moduleId)) }],
+            actions: [],
           });
-          dispatchVideoTaskEvent("vecto:video-task-stage", { taskId: cleanId, status, stage: reviewKind, moduleId: videoModuleForTask(task, monitor.moduleId) });
-          finish();
+          dispatchVideoTaskEvent("vecto:video-task-stage", { taskId: cleanId, status, stage: "auto_finalizing", sourceStage: reviewKind, moduleId: finalModuleId });
+          monitor.finalizePromise = (async () => {
+            try {
+              await submitVisualFinalizeTask(cleanId, reviewKind, monitor.prompt, finalModuleId, "最终视频", { requireTaskId: true });
+              finish();
+            } catch (error) {
+              showVideoError(
+                error,
+                "画面已生成，但自动合成最终视频失败：请检查素材和算力余额后重试。",
+                "自动合成最终视频失败",
+                monitor.prompt,
+              );
+              finish();
+            }
+          })();
+          await monitor.finalizePromise;
           return;
         }
         if (["success", "completed", "finished"].includes(status)) {
@@ -1006,8 +1052,8 @@
     return submitValues;
   }
 
-  async function generatePromptDraft() {
-    if (state.promptGenerating || state.submitting) return false;
+  async function generatePromptDraft({ autoSubmit = false } = {}) {
+    if (state.promptGenerating || (state.submitting && !autoSubmit)) return false;
     const module = currentModule();
     if (!requiresPromptPreview(module)) return false;
     const validationError = validate(module);
@@ -1034,10 +1080,27 @@
         updateVideoSuccess(progress, "已取消生成", "已取消提示词 / 文案生成。", "你仍可以修改输入后再次点击生成。");
         return false;
       }
-      applyConfirmedPromptPreview(module, draft.values, preview);
       draft.values._prompt_preview = preview;
       draft.values._prompt_preview_ready = true;
       saveDraft(module.id);
+      if (autoSubmit) {
+        const submitValues = publicSubmitValues(module, draft);
+        applyStoredPromptPreviewForSubmit(module, submitValues, draft);
+        progress?.update?.({
+          title: "正在提交视频任务",
+          message: "提示词 / 文案已生成，正在自动提交视频任务…",
+          detail: "无需再次点击，系统会继续生成最终视频并同步到视频记录。",
+          status: "progress",
+          busy: true,
+          messages: ["提示词 / 文案已生成，正在自动提交视频任务…"],
+          showClose: false,
+          showConfirm: false,
+          showCancel: false,
+          actions: [],
+        });
+        await submitPreparedVideoTask(module, draft, submitValues, progress, { requireTaskId: true });
+        return true;
+      }
       updateVideoSuccess(
         progress,
         "提示词 / 文案已生成",
@@ -2640,26 +2703,7 @@
       "正在排入处理队列，请稍候…",
     ]);
     try {
-      const suffix = kind === "seeding" ? "seeding/finalize" : "digital-human/finalize";
-      const result = await request(`/api/video/tasks/${encodeURIComponent(id)}/${suffix}`, { method: "POST" });
-      await loadTasks({ quiet: true });
-      const childTaskId = taskIdFromResponse(result);
-      if (childTaskId) {
-        monitorSubmittedTask(childTaskId, progress, state.moduleId, "最终视频");
-      } else {
-        updateVideoSuccess(
-          progress,
-          "视频任务已提交",
-          "视频生成任务已提交，系统正在处理。",
-          `源任务编号：${id}。请在任务动态查看进度。`,
-          [{
-            value: "view-workbench",
-            text: "查看任务动态",
-            primary: true,
-            onSelect: () => openVideoTaskWorkbench(state.moduleId),
-          }],
-        );
-      }
+      await submitVisualFinalizeTask(id, kind, progress, state.moduleId, "最终视频");
     } catch (error) {
       state.taskError = showVideoError(error, "确认画面后创建视频任务失败：请检查素材和余额后重试。", "视频任务提交失败", progress);
     } finally {
@@ -2997,6 +3041,59 @@
     return values;
   }
 
+  async function submitPreparedVideoTask(module, draft, submitValues, progress = null, options = {}) {
+    const label = submitButtonLabel(module, draft.values);
+    const currentProgress = progress || openVideoProgress(`正在${label}`, [
+      "正在校验输入内容和素材…",
+      "正在上传素材并创建任务…",
+      "正在排入生成队列，请稍候…",
+    ]);
+    const fileManifest = [];
+    const body = new FormData();
+    body.append("module", module.id);
+    body.append("module_id", module.id);
+    body.append("video_module", module.id);
+    body.append("task_type", module.task_type || BACKEND_TASK_TYPES[module.id] || module.id);
+    resolvedFields(module, draft.values).filter((field) => field.type === "file").forEach((field) => {
+      selectedFiles(module.id, field.key).forEach((selectedFile) => {
+        body.append(field.upload_name || "files", selectedFile);
+        fileManifest.push({ field: field.key, name: selectedFile.name, size: selectedFile.size, type: selectedFile.type });
+      });
+    });
+    body.append("params_json", JSON.stringify({ ...submitValues, _file_roles: fileManifest }));
+    const result = await request("/api/video/tasks", { method: "POST", body });
+    const createdTask = normalizeTask(result?.task || result, "video");
+    if (createdTask.id || createdTask.moduleId) state.tasks.unshift(createdTask);
+    releaseModuleFilePreviews(module.id);
+    state.files[module.id] = {};
+    void clearPersistedModuleFiles(module.id);
+    saveDraft(module.id);
+    await loadTasks({ quiet: true });
+    const taskId = String(createdTask.id || result?.id || "").trim();
+    if (!taskId) {
+      if (options.requireTaskId) {
+        const missingTaskId = new Error("服务器未返回视频任务编号，暂时无法自动追踪生成进度。");
+        missingTaskId.code = "VIDEO_TASK_ID_MISSING";
+        throw missingTaskId;
+      }
+      updateVideoSuccess(
+        currentProgress,
+        "生成任务已提交",
+        `${label}已提交，系统正在后台处理。`,
+        "任务编号暂未返回，请在任务动态中刷新查看。",
+        [{
+          value: "view-workbench",
+          text: "查看任务动态",
+          primary: true,
+          onSelect: () => openVideoTaskWorkbench(module.id),
+        }],
+      );
+      return "";
+    }
+    monitorSubmittedTask(taskId, currentProgress, module.id, label);
+    return taskId;
+  }
+
   async function submit(event) {
     event.preventDefault();
     if (state.submitting) return;
@@ -3039,8 +3136,7 @@
       }
       if (requiresPromptPreview(module)) {
         if (!draft.values._prompt_preview_ready || !draft.values._prompt_preview) {
-          state.submitting = false;
-          await generatePromptDraft();
+          await generatePromptDraft({ autoSubmit: true });
           return;
         }
         applyStoredPromptPreviewForSubmit(module, submitValues, draft);
@@ -3052,44 +3148,7 @@
         "正在上传素材并创建任务…",
         "正在排入生成队列，请稍候…",
       ]);
-      const fileManifest = [];
-      const body = new FormData();
-      body.append("module", module.id);
-      body.append("module_id", module.id);
-      body.append("video_module", module.id);
-      body.append("task_type", module.task_type || BACKEND_TASK_TYPES[module.id] || module.id);
-      resolvedFields(module, draft.values).filter((field) => field.type === "file").forEach((field) => {
-        selectedFiles(module.id, field.key).forEach((selectedFile) => {
-          body.append(field.upload_name || "files", selectedFile);
-          fileManifest.push({ field: field.key, name: selectedFile.name, size: selectedFile.size, type: selectedFile.type });
-        });
-      });
-      body.append("params_json", JSON.stringify({ ...submitValues, _file_roles: fileManifest }));
-      const result = await request("/api/video/tasks", { method: "POST", body });
-      const createdTask = normalizeTask(result?.task || result, "video");
-      if (createdTask.id || createdTask.moduleId) state.tasks.unshift(createdTask);
-      releaseModuleFilePreviews(module.id);
-      state.files[module.id] = {};
-      void clearPersistedModuleFiles(module.id);
-      saveDraft(module.id);
-      await loadTasks({ quiet: true });
-      const taskId = String(createdTask.id || result?.id || "").trim();
-      if (taskId) {
-        monitorSubmittedTask(taskId, progress, module.id, submitButtonLabel(module, draft.values));
-      } else {
-        updateVideoSuccess(
-          progress,
-          "生成任务已提交",
-          `${submitButtonLabel(module, draft.values)}已提交，系统正在后台处理。`,
-          "任务编号暂未返回，请在任务动态中刷新查看。",
-          [{
-            value: "view-workbench",
-            text: "查看任务动态",
-            primary: true,
-            onSelect: () => openVideoTaskWorkbench(module.id),
-          }],
-        );
-      }
+      await submitPreparedVideoTask(module, draft, submitValues, progress);
     } catch (error) {
       state.submitError = showVideoError(error, "任务提交失败：请检查输入、素材和算力余额后重试。", "生成任务提交失败", progress);
     } finally {

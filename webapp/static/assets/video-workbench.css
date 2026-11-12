@@ -825,6 +825,17 @@
   box-shadow: 0 24px 70px rgba(22, 42, 48, .22);
 }
 
+/* The shared feedback component refreshes its contents while a task is
+   polling. Keep the dialog stable; the spinner/dots communicate activity and
+   the modal must not replay its entrance animation on every refresh. */
+.vecto-public-prompt[data-public-prompt-rendered="true"] .vecto-public-prompt-dialog {
+  animation: none;
+}
+
+.vecto-public-prompt [hidden] {
+  display: none !important;
+}
+
 .vecto-public-prompt-head > div:first-child {
   display: grid;
   gap: 3px;

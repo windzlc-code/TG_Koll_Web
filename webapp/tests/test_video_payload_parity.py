@@ -263,6 +263,10 @@ def test_frontend_submits_the_confirmed_generated_preview() -> None:
     javascript = (Path(__file__).parents[1] / "static" / "assets" / "video-workbench.js").read_text(encoding="utf-8")
 
     assert "if (!draft.values._prompt_preview_ready || !draft.values._prompt_preview)" in javascript
-    assert "await generatePromptDraft();" in javascript
+    assert "await generatePromptDraft({ autoSubmit: true });" in javascript
+    assert "async function submitPreparedVideoTask(" in javascript
+    assert "async function submitVisualFinalizeTask(" in javascript
+    assert 'stage: "auto_finalizing"' in javascript
+    assert "applyConfirmedPromptPreview(module, draft.values, preview)" not in javascript
     assert "applyStoredPromptPreviewForSubmit(module, submitValues, draft);" in javascript
     assert 'body.append("params_json", JSON.stringify({ ...submitValues, _file_roles: fileManifest }));' in javascript

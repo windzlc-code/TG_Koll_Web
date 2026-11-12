@@ -29,7 +29,14 @@ def main() -> None:
         native_dialogs: list[str] = []
         page.on("dialog", lambda dialog: (native_dialogs.append(dialog.message), dialog.dismiss()))
         task_mode = {"value": "success"}
-        task_state = {"submitted": False, "polls": 0}
+        task_state = {
+            "submitted": False,
+            "polls": 0,
+            "task_post_count": 0,
+            "finalize_submitted": False,
+            "finalize_count": 0,
+            "final_polls": 0,
+        }
         record_asset_requests: list[str] = []
 
         def fulfill_json(route, payload, status=200):
@@ -37,6 +44,7 @@ def main() -> None:
 
         def handle_video_tasks(route):
             if route.request.method == "POST":
+                task_state["task_post_count"] += 1
                 if task_mode["value"] == "balance":
                     fulfill_json(route, {"detail": {"code": "INSUFFICIENT_POINTS", "message": "insufficient points"}}, 402)
                 elif task_mode["value"] == "server_error":
@@ -47,6 +55,13 @@ def main() -> None:
                     fulfill_json(route, {"task": {"id": "browser-feedback-task", "type": "create_video", "status": "queued", "title": "浏览器反馈验证任务"}})
                 return
             if task_state["submitted"]:
+                if task_state["finalize_submitted"]:
+                    task_state["final_polls"] += 1
+                    if task_state["final_polls"] >= 2:
+                        fulfill_json(route, {"tasks": [{"id": "browser-feedback-final-task", "type": "create_video", "status": "success", "title": "浏览器最终视频", "has_download": True, "has_video_output": True}]})
+                    else:
+                        fulfill_json(route, {"tasks": [{"id": "browser-feedback-final-task", "type": "create_video", "status": "queued", "title": "浏览器最终视频"}]})
+                    return
                 task_state["polls"] += 1
                 if task_state["polls"] >= 2:
                     review = task_mode["value"] == "review"
@@ -56,11 +71,19 @@ def main() -> None:
                 return
             fulfill_json(route, {"tasks": []})
 
+        def handle_video_finalize(route):
+            task_state["finalize_count"] += 1
+            task_state["finalize_submitted"] = True
+            task_state["final_polls"] = 0
+            fulfill_json(route, {"id": "browser-feedback-final-task", "task_type": "create_video", "status": "queued", "source_task_id": "browser-feedback-task"})
+
         page.route("**/api/video/tasks", handle_video_tasks)
+        page.route("**/api/video/tasks/browser-feedback-task/digital-human/finalize", handle_video_finalize)
         page.route("**/api/tasks", lambda route: fulfill_json(route, {"tasks": []}))
         def handle_record_assets(route):
             record_asset_requests.append(route.request.url)
-            fulfill_json(route, {"items": [{"id": "browser-record", "source_task_id": "browser-feedback-task", "source_type": "generated", "name": "浏览器反馈视频", "media_url": "/api/video/editor/assets/browser-record/media", "download_url": "/api/video/editor/assets/browser-record/download"}], "total": 1, "total_pages": 1})
+            source_task_id = "browser-feedback-final-task" if task_state["finalize_submitted"] else "browser-feedback-task"
+            fulfill_json(route, {"items": [{"id": "browser-record", "source_task_id": source_task_id, "source_type": "generated", "name": "浏览器反馈视频", "media_url": "/api/video/editor/assets/browser-record/media", "download_url": "/api/video/editor/assets/browser-record/download"}], "total": 1, "total_pages": 1})
 
         page.route("**/api/video/editor/assets**", handle_record_assets)
         page.route(
@@ -106,52 +129,50 @@ def main() -> None:
 
         upload_video_sources()
 
-        page.locator("[data-video-generate-prompt]").click()
+        page.locator("#videoWorkbenchRoot button[type='submit']").click()
         busy = page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]')
         busy.wait_for(state="visible")
         first_progress = busy.locator("[data-public-prompt-message]").inner_text()
         page.wait_for_timeout(1700)
         second_progress = busy.locator("[data-public-prompt-message]").inner_text()
         assert first_progress == second_progress, (first_progress, second_progress)
+        assert busy.locator(".vecto-public-prompt-dialog").evaluate("(node) => getComputedStyle(node).animationName === 'none'")
         busy.locator("[data-public-prompt-minimize]").click()
         assert page.locator('.vecto-public-prompt[data-public-prompt-minimized="true"] [data-public-prompt-restore]').is_visible()
-        page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
-        assert "提示词和文案已生成" in page.locator(".vecto-public-prompt").inner_text()
-        assert "继续生成视频" in page.locator(".vecto-public-prompt").inner_text()
-
-        page.locator('.vecto-public-prompt [data-public-prompt-action="continue-video"]').click()
-        submit_busy = page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]')
-        submit_busy.wait_for(state="visible")
-        submit_first = submit_busy.locator("[data-public-prompt-message]").inner_text()
-        page.wait_for_timeout(1700)
-        submit_second = submit_busy.locator("[data-public-prompt-message]").inner_text()
-        assert submit_first == submit_second, (submit_first, submit_second)
+        page.wait_for_timeout(2500)
+        assert task_state["task_post_count"] >= 1, task_state
+        assert page.locator(".vecto-public-prompt").count() == 1
+        assert not page.locator('.vecto-public-prompt[data-public-prompt-minimized="true"] .vecto-public-prompt-dialog').is_visible()
+        assert page.locator('.vecto-public-prompt[data-public-prompt-minimized="true"] .vecto-public-prompt-dialog').get_attribute("hidden") == ""
+        assert page.locator('.vecto-public-prompt[data-public-prompt-minimized="true"] [data-public-prompt-restore]').is_visible()
+        page.locator('.vecto-public-prompt[data-public-prompt-minimized="true"] [data-public-prompt-restore]').click()
         page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
         assert "生成完成" in page.locator(".vecto-public-prompt").inner_text()
         assert "同步到视频记录" in page.locator(".vecto-public-prompt").inner_text()
+        assert "继续生成视频" not in page.locator(".vecto-public-prompt").inner_text()
         page.locator(".vecto-public-prompt [data-public-prompt-close]").click()
         record_asset_requests.clear()
         page.locator('[data-video-module="video_editor"]').click(force=True)
         page.locator("#videoRecordsRoot .video-records-panel").wait_for(state="visible")
         assert any("sync_generated=true" in url for url in record_asset_requests), record_asset_requests
-        page.locator('[data-video-module="digital_human_video"]').click(force=True)
+        page.goto(f"{args.base_url.rstrip('/')}/admin-video.html?video_module=digital_human_video", wait_until="networkidle")
         page.locator('#videoWorkbenchRoot .video-workbench-shell').wait_for(state="visible")
+        page.wait_for_timeout(500)
 
         task_mode["value"] = "review"
+        task_state["finalize_submitted"] = False
+        task_state["finalize_count"] = 0
         upload_video_sources()
-        page.locator("[data-video-generate-prompt]").click()
+        page.locator("#videoWorkbenchRoot button[type='submit']").click()
         page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
-        page.locator('.vecto-public-prompt [data-public-prompt-action="continue-video"]').click()
-        page.locator('.vecto-public-prompt[data-public-prompt-status="info"]').wait_for(state="visible")
         review_text = page.locator(".vecto-public-prompt").inner_text()
-        assert "尚未合成最终视频" in review_text and "查看任务并确认" in review_text
+        assert task_state["finalize_submitted"] is True and task_state["finalize_count"] == 1, task_state
+        assert "尚未合成最终视频" not in review_text and "查看任务并确认" not in review_text
         page.locator(".vecto-public-prompt [data-public-prompt-close]").click()
 
         task_mode["value"] = "balance"
         upload_video_sources()
-        page.locator("[data-video-generate-prompt]").click()
-        page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
-        page.locator('.vecto-public-prompt [data-public-prompt-action="continue-video"]').click()
+        page.locator("#videoWorkbenchRoot button[type='submit']").click()
         page.locator('.vecto-public-prompt[data-public-prompt-status="error"]').wait_for(state="visible")
         balance_text = page.locator(".vecto-public-prompt").inner_text()
         assert "算力点余额不足" in balance_text and "购买算力" in balance_text
@@ -160,9 +181,7 @@ def main() -> None:
 
         task_mode["value"] = "server_error"
         upload_video_sources()
-        page.locator("[data-video-generate-prompt]").click()
-        page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
-        page.locator('.vecto-public-prompt [data-public-prompt-action="continue-video"]').click()
+        page.locator("#videoWorkbenchRoot button[type='submit']").click()
         page.locator('.vecto-public-prompt[data-public-prompt-status="error"]').wait_for(state="visible")
         error_text = page.locator(".vecto-public-prompt").inner_text()
         assert "服务器处理失败" in error_text

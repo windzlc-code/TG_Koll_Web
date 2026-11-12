@@ -64,7 +64,15 @@
   }
 
   function closeCurrent(result = null) {
-    if (state.current?.isOpen?.()) state.current.close(result);
+    const current = state.current;
+    if (current?.isOpen?.()) current.close(result);
+    // A stale prompt can survive if a page script was evaluated twice or a
+    // previous prompt was detached before its handle was cleared. The public
+    // feedback surface is a singleton, so remove such orphaned hosts before
+    // opening the next one instead of allowing two dialogs to fight each other.
+    document.querySelectorAll(".vecto-public-prompt").forEach((host) => {
+      if (host !== current?.element) host.remove();
+    });
   }
 
   function open(options = {}) {
@@ -138,6 +146,10 @@
       host.dataset.publicPromptBusy = config.busy ? "true" : "false";
       host.dataset.publicPromptStatus = String(config.status || "info");
       host.dataset.publicPromptMinimized = minimized ? "true" : "false";
+      // Replacing innerHTML creates a new dialog node. Mark it as already
+      // rendered so the global modal entrance animation cannot replay on
+      // every task poll and look like a new popup.
+      host.dataset.publicPromptRendered = "true";
       host.innerHTML = `
         <div class="console-modal-backdrop" ${minimized ? "hidden" : (config.dismissOnBackdrop && !config.busy ? "data-public-prompt-cancel" : "")}></div>
         <section class="console-modal-dialog vecto-public-prompt-dialog" role="${config.busy ? "alertdialog" : "dialog"}" aria-modal="true" aria-labelledby="vectoPublicPromptTitle" ${minimized ? "hidden" : ""}>
@@ -154,7 +166,7 @@
           </div>
           ${actions ? `<div class="console-modal-actions vecto-public-prompt-actions">${actions}</div>` : ""}
         </section>
-        ${minimized ? `<button type="button" class="vecto-public-prompt-mini" data-public-prompt-restore aria-label="恢复查看任务进度"><span class="vecto-public-prompt-spinner" aria-hidden="true"></span><span class="vecto-public-prompt-mini-copy"><strong>${esc(config.title)}</strong><small>${esc(message)}</small></span><b>查看进度</b></button>` : ""}`;
+        ${minimized ? `<button type="button" class="vecto-public-prompt-mini" data-public-prompt-restore aria-label="恢复查看任务进度">${config.busy ? '<span class="vecto-public-prompt-spinner" aria-hidden="true"></span>' : statusIcon(config.status, false)}<span class="vecto-public-prompt-mini-copy"><strong>${esc(config.title)}</strong><small>${esc(message)}</small></span><b>查看进度</b></button>` : ""}`;
       const focusTarget = host.querySelector("[data-public-prompt-confirm], [data-public-prompt-action], [data-public-prompt-cancel], [data-public-prompt-close]");
       if (focusTarget && !config.busy) window.setTimeout(() => focusTarget.focus(), 0);
     };
@@ -175,7 +187,6 @@
             : [config.message];
           progressMessages.splice(0, progressMessages.length, ...normalizeMessages(nextMessages, config.message));
         }
-        if (wasBusy && !config.busy) minimized = false;
         render();
         const shouldRotate = Boolean(config.busy && config.rotateMessages);
         if (wasBusy !== Boolean(config.busy) || wasRotateMessages !== Boolean(config.rotateMessages) || messagesChanged) {

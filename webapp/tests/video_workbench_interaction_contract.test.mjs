@@ -54,8 +54,12 @@ assert.match(confirmedPreview, /submitValues\.prompt_text\s*=\s*String\(promptPr
 assert.match(confirmedPreview, /submitValues\.copy_text\s*=\s*submitValues\.speech_text/);
 assert.doesNotMatch(confirmedPreview, /!String\(submitValues\.(?:speech_text|prompt_text)/);
 assert.match(functionBody("submit"), /!draft\.values\._prompt_preview_ready\s*\|\|\s*!draft\.values\._prompt_preview/);
-assert.match(functionBody("submit"), /await generatePromptDraft\(\)/);
+assert.match(functionBody("submit"), /await generatePromptDraft\(\{ autoSubmit: true \}\)/);
 assert.match(functionBody("submit"), /applyStoredPromptPreviewForSubmit\(module, submitValues, draft\)/);
+assert.match(source, /async function submitPreparedVideoTask\(/);
+assert.match(source, /async function submitVisualFinalizeTask\(/);
+assert.match(source, /stage: "auto_finalizing"/);
+assert.doesNotMatch(source, /applyConfirmedPromptPreview\(module, draft\.values, preview\)/);
 const applyConfirmedPromptPreview = Function(
   "requiresPromptPreview",
   `return function applyConfirmedPromptPreview(module, submitValues, promptPreview) {${confirmedPreview}}`,
