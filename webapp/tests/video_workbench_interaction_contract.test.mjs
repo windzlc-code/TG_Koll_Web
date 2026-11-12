@@ -37,6 +37,28 @@ function functionBody(name) {
   assert.fail(`unterminated ${name}`);
 }
 
+const authenticatedMediaUrlBody = functionBody("authenticatedMediaUrl");
+const authenticatedMediaUrl = Function(
+  "safeHttpUrl",
+  "window",
+  "ADMIN_CONSOLE_SESSION",
+  "ADMIN_WORKSPACE_USER_ID",
+  `return function authenticatedMediaUrl(value) {${authenticatedMediaUrlBody}}`,
+)(
+  (value) => String(value || ""),
+  { location: { origin: "https://console.test", href: "https://console.test/admin-video.html" } },
+  true,
+  "42",
+);
+assert.equal(
+  authenticatedMediaUrl("/api/tasks/task-1/media/0"),
+  "/api/tasks/task-1/media/0?admin_console=1&admin_workspace_user_id=42",
+);
+assert.equal(
+  authenticatedMediaUrl("https://cdn.example.com/image.png"),
+  "https://cdn.example.com/image.png",
+);
+
 function functionBodyUntil(name, nextName) {
   const start = source.indexOf(`function ${name}(`);
   const end = source.indexOf(`\n  function ${nextName}(`, start);

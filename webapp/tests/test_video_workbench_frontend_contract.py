@@ -155,6 +155,15 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn("navigationSequence", self.video_page_js)
         self.assertIn("页面提示组件加载失败", self.workbench_js)
 
+    def test_history_media_urls_preserve_admin_workspace_context(self):
+        self.assertIn("function authenticatedMediaUrl(value)", self.workbench_js)
+        self.assertIn('url.searchParams.set("admin_console", "1")', self.workbench_js)
+        self.assertIn('url.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID)', self.workbench_js)
+        self.assertIn("authenticatedMediaUrl(source.url", self.workbench_js)
+        self.assertIn("authenticatedMediaUrl(item.thumbnailUrl || item.url)", self.workbench_js)
+        history_loader = self.workbench_js.split("async function useHistoryAsset", 1)[1].split("function statusCopy", 1)[0]
+        self.assertIn("authenticatedMediaUrl(url)", history_loader)
+
     def test_oral_copy_preview_restores_three_candidate_selection(self):
         self.assertIn("function chooseSpeechCandidate(preview)", self.workbench_js)
         self.assertIn("preview?.speech_candidates", self.workbench_js)

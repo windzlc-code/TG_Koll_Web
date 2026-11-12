@@ -128,6 +128,12 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         ):
             self.assertIn(contract, VIDEO_RECORDS)
 
+    def test_records_do_not_render_obsolete_manual_confirmation_banner(self):
+        self.assertNotIn("生成任务动态", VIDEO_RECORDS)
+        self.assertNotIn("data-record-open-workbench", VIDEO_RECORDS)
+        self.assertNotIn("request(TASK_API)", VIDEO_RECORDS)
+        self.assertNotIn("video-records-task-notice", VIDEO_EDITOR_CSS)
+
     def test_editor_materials_use_server_pagination_and_capacity_management(self):
         self.assertIn('page_size: String(state.assetPageSize)', VIDEO_EDITOR)
         self.assertNotIn('page_size=1000', VIDEO_EDITOR)

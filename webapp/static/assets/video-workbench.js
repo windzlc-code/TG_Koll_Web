@@ -1986,6 +1986,20 @@
     }
   }
 
+  function authenticatedMediaUrl(value) {
+    const safe = safeHttpUrl(value);
+    if (!safe) return "";
+    try {
+      const url = new URL(safe, window.location.origin);
+      if (url.origin !== window.location.origin) return url.href;
+      if (ADMIN_CONSOLE_SESSION) url.searchParams.set("admin_console", "1");
+      if (ADMIN_WORKSPACE_USER_ID) url.searchParams.set("admin_workspace_user_id", ADMIN_WORKSPACE_USER_ID);
+      return `${url.pathname}${url.search}${url.hash}`;
+    } catch {
+      return safe;
+    }
+  }
+
   function inferMediaType(value, declaredType = "") {
     const type = String(declaredType || "").trim().toLowerCase();
     if (["image", "video", "audio"].includes(type)) return type;
@@ -2013,9 +2027,9 @@
     const seen = new Set();
     return candidates.map((item, index) => {
       const source = item && typeof item === "object" ? item : { url: item };
-      const url = safeHttpUrl(source.url || source.src || source.download_url || source.output_url);
+      const url = authenticatedMediaUrl(source.url || source.src || source.download_url || source.output_url);
       const type = inferMediaType(url, source.type || source.media_type || source.mediaType);
-      const thumbnailUrl = safeHttpUrl(source.thumbnail_url || source.thumbnailUrl);
+      const thumbnailUrl = authenticatedMediaUrl(source.thumbnail_url || source.thumbnailUrl);
       if (!url || !type || seen.has(url)) return null;
       seen.add(url);
       return {
@@ -2065,9 +2079,9 @@
     if (!mediaItems.length) return "";
     return `<div class="video-task-media" aria-label="任务结果预览">${mediaItems.map((item) => {
       const label = escapeHtml(item.label || "任务结果");
-      const sourceUrl = escapeHtml(item.url);
+      const sourceUrl = escapeHtml(authenticatedMediaUrl(item.url));
       if (item.type === "image") {
-        const previewUrl = escapeHtml(item.thumbnailUrl || item.url);
+        const previewUrl = escapeHtml(authenticatedMediaUrl(item.thumbnailUrl || item.url));
         return `<button type="button" class="video-task-media-item is-image" data-video-image-preview="${sourceUrl}" data-video-image-label="${label}" title="打开高清预览"><img src="${previewUrl}" alt="${label}" loading="lazy" decoding="async" referrerpolicy="no-referrer"><span>${label}</span></button>`;
       }
       if (item.type === "video") {
@@ -2080,7 +2094,7 @@
   function renderImagePreviewModal() {
     const item = state.imagePreview;
     if (!item?.url) return "";
-    const url = escapeHtml(item.url);
+    const url = escapeHtml(authenticatedMediaUrl(item.url));
     const label = escapeHtml(item.label || "图片结果");
     return `<div class="console-modal video-image-preview-modal" data-video-image-modal>
       <div class="console-modal-backdrop" data-video-image-close></div>
@@ -2107,7 +2121,7 @@
       <div class="console-modal-backdrop" data-video-image-history-close></div>
       <section class="console-modal-dialog" role="dialog" aria-modal="true" aria-label="图片生成历史">
         <div class="console-modal-head"><div><strong>图片生成历史</strong><div class="small">当前模块最近任务的生成图片</div></div><button type="button" class="console-modal-close" data-video-image-history-close aria-label="关闭">&times;</button></div>
-        <div class="console-modal-content"><div class="video-task-media">${items.length ? items.map((item) => `<button type="button" class="video-task-media-item is-image" data-video-image-preview="${escapeHtml(item.url)}" data-video-image-label="${escapeHtml(item.label || "历史图片")}"><img src="${escapeHtml(item.thumbnailUrl || item.url)}" alt="${escapeHtml(item.label || "历史图片")}" loading="lazy"><span>${escapeHtml(item.label || "历史图片")} · ${escapeHtml(formatTime(item.createdAt))}</span></button>`).join("") : '<div class="video-workbench-state video-workbench-state--empty"><span>暂无图片历史</span></div>'}</div></div>
+        <div class="console-modal-content"><div class="video-task-media">${items.length ? items.map((item) => `<button type="button" class="video-task-media-item is-image" data-video-image-preview="${escapeHtml(authenticatedMediaUrl(item.url))}" data-video-image-label="${escapeHtml(item.label || "历史图片")}"><img src="${escapeHtml(authenticatedMediaUrl(item.thumbnailUrl || item.url))}" alt="${escapeHtml(item.label || "历史图片")}" loading="lazy"><span>${escapeHtml(item.label || "历史图片")} · ${escapeHtml(formatTime(item.createdAt))}</span></button>`).join("") : '<div class="video-workbench-state video-workbench-state--empty"><span>暂无图片历史</span></div>'}</div></div>
         <div class="console-modal-actions"><button type="button" data-video-image-history-close>关闭</button></div>
       </section>
     </div>`;
@@ -2126,7 +2140,7 @@
       <div class="console-modal-backdrop" data-video-asset-picker-close></div>
       <section class="console-modal-dialog" role="dialog" aria-modal="true" aria-label="选择历史素材">
         <div class="console-modal-head"><div><strong>选择历史素材</strong><div class="small">从当前账号已生成图片中选用</div></div><button type="button" class="console-modal-close" data-video-asset-picker-close aria-label="关闭">&times;</button></div>
-        <div class="console-modal-content"><div class="video-task-media">${items.length ? items.map((item) => `<button type="button" class="video-task-media-item is-image" data-video-asset-use="${escapeHtml(item.url)}" data-video-asset-label="${escapeHtml(item.label || "历史素材")}"><img src="${escapeHtml(item.thumbnailUrl || item.url)}" alt="${escapeHtml(item.label || "历史素材")}" loading="lazy"><span>${escapeHtml(item.label || "历史素材")} · ${escapeHtml(formatTime(item.createdAt))}</span></button>`).join("") : '<div class="video-workbench-state video-workbench-state--empty"><span>暂无可选历史素材</span></div>'}</div></div>
+        <div class="console-modal-content"><div class="video-task-media">${items.length ? items.map((item) => `<button type="button" class="video-task-media-item is-image" data-video-asset-use="${escapeHtml(authenticatedMediaUrl(item.url))}" data-video-asset-label="${escapeHtml(item.label || "历史素材")}"><img src="${escapeHtml(authenticatedMediaUrl(item.thumbnailUrl || item.url))}" alt="${escapeHtml(item.label || "历史素材")}" loading="lazy"><span>${escapeHtml(item.label || "历史素材")} · ${escapeHtml(formatTime(item.createdAt))}</span></button>`).join("") : '<div class="video-workbench-state video-workbench-state--empty"><span>暂无可选历史素材</span></div>'}</div></div>
         <div class="console-modal-actions"><button type="button" data-video-asset-picker-close>关闭</button></div>
       </section>
     </div>`;
@@ -2137,7 +2151,9 @@
     const draft = loadDraft(module);
     const field = resolvedFields(module, draft.values).find((item) => item.key === state.assetPickerField && item.type === "file");
     if (!field) return;
-    const response = await fetch(url, { credentials: "include" });
+    const sourceUrl = authenticatedMediaUrl(url);
+    if (!sourceUrl) throw new Error("历史素材地址无效，请刷新后重试。");
+    const response = await fetch(sourceUrl, { credentials: "include" });
     if (!response.ok) throw new Error(`历史素材读取失败（${response.status}）`);
     const blob = await response.blob();
     const extension = String(blob.type || "").split("/")[1] || "png";
@@ -2490,7 +2506,7 @@
       const busy = Boolean(state.seedingSceneBusy[busyKey]);
       const history = state.seedingHistory[busyKey];
       const sceneMedia = imageMediaForPath(task, image, offset);
-      const scenePreviewUrl = safeHttpUrl(sceneMedia?.thumbnailUrl || sceneMedia?.url);
+      const scenePreviewUrl = authenticatedMediaUrl(sceneMedia?.thumbnailUrl || sceneMedia?.url);
       return `<div class="video-task-seeding-scene">
         <strong>分镜图 ${sceneIndex}</strong>
         ${scenePreviewUrl ? `<figure class="video-task-media-item is-image"><img src="${escapeHtml(scenePreviewUrl)}" alt="分镜图 ${sceneIndex}" loading="lazy" decoding="async"><figcaption>当前分镜图 ${sceneIndex}</figcaption></figure>` : ""}
@@ -2498,7 +2514,7 @@
         <button type="button" data-video-seeding-upload data-video-task-id="${escapeHtml(task.id)}" data-video-scene-index="${sceneIndex}" ${busy ? "disabled" : ""}>上传替换</button>
         <button type="button" data-video-seeding-history data-video-task-id="${escapeHtml(task.id)}" data-video-scene-index="${sceneIndex}" ${busy ? "disabled" : ""}>历史素材</button>
         ${Array.isArray(history) ? `<div class="video-task-seeding-history">${history.map((item, itemIndex) => {
-          const previewUrl = safeHttpUrl(item.previewUrl);
+          const previewUrl = authenticatedMediaUrl(item.previewUrl);
           const label = item.source === "regenerated" ? `重生成 ${itemIndex + 1}` : item.source === "uploaded" ? `上传素材 ${itemIndex + 1}` : `当前/历史 ${itemIndex + 1}`;
           return `<button type="button" data-video-seeding-use data-video-task-id="${escapeHtml(task.id)}" data-video-scene-index="${sceneIndex}" data-video-seeding-path="${escapeHtml(item.path)}">${previewUrl ? `<img src="${escapeHtml(previewUrl)}" alt="${escapeHtml(label)}" width="72" height="72" loading="lazy" decoding="async">` : ""}<span>${escapeHtml(label)}</span></button>`;
         }).join("")}</div>` : ""}
@@ -2531,7 +2547,7 @@
       const reviewKind = taskNeedsVisualConfirmation(task);
       const statusTone = reviewKind ? "review" : status;
       const progress = Math.max(0, Math.min(100, Number.isFinite(task.progress) ? task.progress : 0));
-      const downloadUrl = safeHttpUrl(task.download_url || task.output_url || (task.id ? `/api/tasks/${encodeURIComponent(task.id)}/download` : ""));
+      const downloadUrl = authenticatedMediaUrl(task.download_url || task.output_url || (task.id ? `/api/tasks/${encodeURIComponent(task.id)}/download` : ""));
       const canDownload = Boolean(task.has_download || task.download_url || task.output_url) && Boolean(downloadUrl);
       const canCancel = task.id && ACTIVE_STATUSES.has(status);
       const canResume = task.id && ["failed", "cancelled", "canceled"].includes(status);
@@ -3037,7 +3053,7 @@
         const sourceTaskId = String(item?.source_task_id || taskId);
         const fileName = mediaFileName(item?.path);
         const media = (mediaByTaskId.get(sourceTaskId) || []).find((candidate) => mediaFileName(candidate.label) === fileName);
-        return { ...item, previewUrl: safeHttpUrl(media?.thumbnailUrl || media?.url) };
+        return { ...item, previewUrl: authenticatedMediaUrl(media?.thumbnailUrl || media?.url) };
       });
     } catch (error) {
       state.taskError = showVideoError(error, `分镜图 ${sceneIndex} 历史素材读取失败：请稍后重试。`, "历史素材读取失败");

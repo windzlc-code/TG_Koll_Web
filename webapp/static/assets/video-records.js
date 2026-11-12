@@ -2,8 +2,6 @@
   "use strict";
 
   const API = "/api/video/editor/assets";
-  const TASK_API = "/api/video/tasks";
-  const ACTIVE_TASK_STATUSES = new Set(["queued", "pending", "running", "processing", "submitted"]);
   const ADMIN_WORKSPACE_USER_ID = String(document.querySelector('meta[name="admin-workspace-user-id"]')?.content || "").trim();
   const ADMIN_CONSOLE_SESSION = document.querySelector('meta[name="admin-console-session"]')?.content === "1";
   const state = {
@@ -25,7 +23,6 @@
     shareFile: null,
     shareFilePromise: null,
     storage: null,
-    pendingTasks: [],
     syncTimer: 0,
     eventsBound: false,
   };
@@ -115,42 +112,6 @@
 
   function sourceLabel(type) {
     return ({ generated: "AI 生成", export: "剪辑成品", upload: "本地上传" })[type] || "视频";
-  }
-
-  function taskStatusLabel(status) {
-    return ({ queued: "排队中", pending: "待处理", submitted: "已提交", running: "生成中", processing: "处理中" })[String(status || "").toLowerCase()] || "处理中";
-  }
-
-  function pendingTaskRows(payload) {
-    const rows = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.tasks) ? payload.tasks : [];
-    return rows
-      .map((task) => ({
-        ...task,
-        id: String(task?.id || task?.task_id || ""),
-        status: String(task?.status || "").toLowerCase(),
-        moduleId: String(task?.video_module || task?.module_id || task?.module || ""),
-        stage: String(task?.video_stage || "").toLowerCase(),
-      }))
-      .filter((task) => task.id && (
-        ACTIVE_TASK_STATUSES.has(task.status)
-        || ["visual_review", "digital_human_visual_review", "images_only", "seeding_images_only"].includes(task.stage)
-      ))
-      .slice(0, 4);
-  }
-
-  function renderPendingTasks() {
-    if (!state.pendingTasks.length) return "";
-    return `<div class="video-records-task-notice" role="status" aria-live="polite">
-      <div class="video-records-task-notice-head"><span class="video-records-task-pulse" aria-hidden="true"></span><div><strong>生成任务动态</strong><small>任务完成后会自动归档；数字人画面生成后还需要确认，才会合成最终视频。</small></div></div>
-      <div class="video-records-task-list">${state.pendingTasks.map((task) => {
-        const review = ["visual_review", "digital_human_visual_review", "images_only", "seeding_images_only"].includes(task.stage);
-        const title = review ? "画面已生成，等待确认" : `视频${taskStatusLabel(task.status)}`;
-        const detail = review
-          ? "请返回视频工作台，在任务动态中确认画面并继续生成最终视频。"
-          : "系统正在后台处理，完成后会自动出现在本页。";
-        return `<div class="video-records-task-row"><span class="video-records-task-state ${review ? "is-review" : "is-running"}">${review ? "待确认" : taskStatusLabel(task.status)}</span><div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)} · ${escapeHtml(task.id)}</small></div><button type="button" data-record-open-workbench data-record-module="${escapeHtml(task.moduleId || "digital_human_video")}">${review ? "返回确认" : "查看进度"}</button></div>`;
-      }).join("")}</div>
-    </div>`;
   }
 
   const SHARE_PLATFORMS = {
@@ -248,7 +209,6 @@
           </div>
         </div>
         ${state.storage?.warning ? `<div class="video-storage-notice video-records-storage-notice" data-level="${state.storage.critical ? "critical" : "warning"}" role="status"><span aria-hidden="true">${icon("warning")}</span><div><strong>${state.storage.critical ? "素材容量已超过管理阈值" : "素材容量接近管理阈值"}</strong><small>已使用 ${formatBytes(state.storage.used_bytes)} / ${formatBytes(state.storage.soft_limit_bytes)}（${Math.round(Number(state.storage.usage_ratio || 0) * 100)}%），请删除不再使用的视频。</small></div></div>` : ""}
-        ${renderPendingTasks()}
         ${state.loading ? '<div class="video-records-state"><span class="video-workbench-loader"></span><strong>正在读取视频记录</strong></div>' : ""}
         ${state.error ? `<div class="video-records-state is-error"><strong>记录加载失败</strong><span>${escapeHtml(state.error)}</span><button type="button" data-record-refresh>重试</button></div>` : ""}
         ${!state.loading && !state.error ? `<div class="video-records-grid">${state.items.length ? state.items.map(card).join("") : '<div class="video-records-state"><strong>暂时没有符合条件的视频</strong><span>完成视频生成后，记录会自动保存到这里。</span></div>'}</div>${renderPagination()}` : ""}
@@ -268,19 +228,13 @@
       });
       if (state.sourceType) params.set("source_type", state.sourceType);
       if (state.query.trim()) params.set("q", state.query.trim());
-      const [assetsResult, tasksResult] = await Promise.allSettled([
-        request(`${API}?${params}`),
-        request(TASK_API),
-      ]);
-      if (assetsResult.status === "rejected") throw assetsResult.reason;
-      const payload = assetsResult.value;
+      const payload = await request(`${API}?${params}`);
       if (token !== state.requestToken) return;
       state.items = Array.isArray(payload.items) ? payload.items : [];
       state.page = Number(payload.page) || state.page;
       state.total = Number(payload.total) || 0;
       state.totalPages = Number(payload.total_pages) || 0;
       state.storage = payload.storage && typeof payload.storage === "object" ? payload.storage : null;
-      state.pendingTasks = tasksResult.status === "fulfilled" ? pendingTaskRows(tasksResult.value) : [];
       state.loaded = true;
     } catch (error) {
       if (token !== state.requestToken) return;
@@ -437,12 +391,6 @@
       }
       const item = event.target.closest("[data-record-preview]");
       if (item) { state.openActionId = ""; preview(item.dataset.recordPreview); return; }
-      const openWorkbench = event.target.closest("[data-record-open-workbench]");
-      if (openWorkbench) {
-        state.openActionId = "";
-        void window.VideoPage?.navigate?.(openWorkbench.dataset.recordModule || "digital_human_video");
-        return;
-      }
       const edit = event.target.closest("[data-record-edit]");
       if (edit) { state.openActionId = ""; window.VideoPage?.showStudioTab?.("editor", { assetId: edit.dataset.recordEdit }); return; }
       const remove = event.target.closest("[data-record-delete]");
