@@ -213,6 +213,7 @@ def test_video_task_list_returns_owned_video_tasks_and_segment_metadata(tmp_path
         "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?)",
         [
             ("video-owned", 1, "create_video", "success", json.dumps({"video_path": "out.mp4", "completed_segments": [{"index": 1}]}), 3),
+            ("video-review", 1, "create_video", "success", json.dumps({"video_path": "image_generate.png", "raw_result": {"digital_human_stage": "visual_review"}, "video_checkpoint": {"stage": "digital_human_visual_review"}}), 4),
             ("non-video", 1, "persona_post_generation", "success", "{}", 2),
             ("video-other", 2, "replace_model", "success", "{}", 1),
         ],
@@ -248,9 +249,14 @@ def test_video_task_list_returns_owned_video_tasks_and_segment_metadata(tmp_path
 
     result = asyncio.run(endpoint(user={"id": 1, "username": "admin"}))
 
-    assert [item["id"] for item in result["items"]] == ["video-owned"]
-    assert result["items"][0]["has_download"] is True
-    assert result["items"][0]["completed_segments"] == [{"index": 1}]
+    assert [item["id"] for item in result["items"]] == ["video-review", "video-owned"]
+    review = result["items"][0]
+    assert review["video_stage"] == "visual_review"
+    assert review["has_video_output"] is False
+    owned = result["items"][1]
+    assert owned["has_download"] is True
+    assert owned["has_video_output"] is True
+    assert owned["completed_segments"] == [{"index": 1}]
 
 
 def test_frontend_submits_the_confirmed_generated_preview() -> None:

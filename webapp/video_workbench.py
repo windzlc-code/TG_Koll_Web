@@ -2297,6 +2297,11 @@ _SUBTITLE_TEMPLATE_KEYS = frozenset({"split_hook", "handwritten_quote", "bilingu
 _VIDEO_OUTPUT_SUFFIXES = frozenset({".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"})
 
 
+def _looks_like_video_output(value: Any) -> bool:
+    text = str(value or "").strip().split("?", 1)[0].split("#", 1)[0]
+    return bool(text) and Path(text).suffix.lower() in _VIDEO_OUTPUT_SUFFIXES
+
+
 def _subtitle_template_key(value: Any) -> str:
     key = str(value or "").strip()
     return key if key in _SUBTITLE_TEMPLATE_KEYS else "split_hook"
@@ -4735,6 +4740,19 @@ def register_video_routes(app: Any, dependencies: VideoRouteDependencies) -> dic
                     and any(str(output.get(key) or "").strip() for key in ("download_path", "video_path", "image_path", "result_zip"))
                 )
                 if isinstance(output, dict):
+                    checkpoint = output.get("video_checkpoint") if isinstance(output.get("video_checkpoint"), dict) else {}
+                    stage = str(
+                        (raw_result or {}).get("digital_human_stage")
+                        or (raw_result or {}).get("seeding_stage")
+                        or checkpoint.get("stage")
+                        or ""
+                    ).strip()
+                    task_item["video_stage"] = stage
+                    video_paths = output.get("video_paths") if isinstance(output.get("video_paths"), list) else []
+                    task_item["has_video_output"] = bool(
+                        any(_looks_like_video_output(output.get(key)) for key in ("download_path", "video_path", "output_path", "result_path"))
+                        or any(_looks_like_video_output(value) for value in video_paths)
+                    )
                     task_item["completed_segments"] = output.get("completed_segments") if isinstance(output.get("completed_segments"), list) else []
                     if (
                         not task_item["completed_segments"]

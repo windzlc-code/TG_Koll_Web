@@ -29,6 +29,8 @@ def main() -> None:
         native_dialogs: list[str] = []
         page.on("dialog", lambda dialog: (native_dialogs.append(dialog.message), dialog.dismiss()))
         task_mode = {"value": "success"}
+        task_state = {"submitted": False, "polls": 0}
+        record_asset_requests: list[str] = []
 
         def fulfill_json(route, payload, status=200):
             route.fulfill(status=status, content_type="application/json", body=json.dumps(payload, ensure_ascii=False))
@@ -40,12 +42,27 @@ def main() -> None:
                 elif task_mode["value"] == "server_error":
                     fulfill_json(route, {"detail": "Internal Server Error"}, 500)
                 else:
+                    task_state["submitted"] = True
+                    task_state["polls"] = 0
                     fulfill_json(route, {"task": {"id": "browser-feedback-task", "type": "create_video", "status": "queued", "title": "浏览器反馈验证任务"}})
+                return
+            if task_state["submitted"]:
+                task_state["polls"] += 1
+                if task_state["polls"] >= 2:
+                    review = task_mode["value"] == "review"
+                    fulfill_json(route, {"tasks": [{"id": "browser-feedback-task", "type": "create_video", "status": "success", "title": "浏览器反馈验证任务", "has_download": True, "has_video_output": not review, "video_stage": "visual_review" if review else ""}]})
+                    return
+                fulfill_json(route, {"tasks": [{"id": "browser-feedback-task", "type": "create_video", "status": "queued", "title": "浏览器反馈验证任务"}]})
                 return
             fulfill_json(route, {"tasks": []})
 
         page.route("**/api/video/tasks", handle_video_tasks)
         page.route("**/api/tasks", lambda route: fulfill_json(route, {"tasks": []}))
+        def handle_record_assets(route):
+            record_asset_requests.append(route.request.url)
+            fulfill_json(route, {"items": [{"id": "browser-record", "source_task_id": "browser-feedback-task", "source_type": "generated", "name": "浏览器反馈视频", "media_url": "/api/video/editor/assets/browser-record/media", "download_url": "/api/video/editor/assets/browser-record/download"}], "total": 1, "total_pages": 1})
+
+        page.route("**/api/video/editor/assets**", handle_record_assets)
         page.route(
             "**/api/video/prompt-preview",
             lambda route: fulfill_json(route, {"speech_text": "验证口播文案", "prompt_text": "验证画面提示词"}),
@@ -108,7 +125,25 @@ def main() -> None:
         submit_second = submit_busy.locator("[data-public-prompt-message]").inner_text()
         assert submit_first != submit_second, (submit_first, submit_second)
         page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
-        assert "已提交" in page.locator(".vecto-public-prompt").inner_text()
+        assert "生成完成" in page.locator(".vecto-public-prompt").inner_text()
+        assert "同步到视频记录" in page.locator(".vecto-public-prompt").inner_text()
+        page.locator(".vecto-public-prompt [data-public-prompt-close]").click()
+        record_asset_requests.clear()
+        page.locator('[data-video-module="video_editor"]').click(force=True)
+        page.locator("#videoRecordsRoot .video-records-panel").wait_for(state="visible")
+        assert any("sync_generated=true" in url for url in record_asset_requests), record_asset_requests
+        page.locator('[data-video-module="digital_human_video"]').click(force=True)
+        page.locator('#videoWorkbenchRoot .video-workbench-shell').wait_for(state="visible")
+
+        task_mode["value"] = "review"
+        upload_video_sources()
+        page.locator("[data-video-generate-prompt]").click()
+        page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
+        page.locator(".vecto-public-prompt [data-public-prompt-close]").click()
+        page.locator('#videoWorkbenchRoot button[type="submit"]').click()
+        page.locator('.vecto-public-prompt[data-public-prompt-status="info"]').wait_for(state="visible")
+        review_text = page.locator(".vecto-public-prompt").inner_text()
+        assert "尚未合成最终视频" in review_text and "查看任务并确认" in review_text
         page.locator(".vecto-public-prompt [data-public-prompt-close]").click()
 
         task_mode["value"] = "balance"

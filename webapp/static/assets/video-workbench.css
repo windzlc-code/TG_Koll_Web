@@ -1003,6 +1003,8 @@
 .video-task-status.is-processing i,
 .video-task-status.is-queued i,
 .video-task-status.is-pending i { background: #d19d16; box-shadow: 0 0 0 3px rgba(209, 157, 22, .12); }
+.video-task-status.is-review { color: #8a5a16; }
+.video-task-status.is-review i { background: #d19d16; box-shadow: 0 0 0 3px rgba(209, 157, 22, .12); }
 .video-task-status.is-success i,
 .video-task-status.is-completed i,
 .video-task-status.is-finished i { background: #64a916; box-shadow: 0 0 0 3px rgba(100, 169, 22, .12); }
@@ -1010,7 +1012,23 @@
 .video-task-status.is-error i { background: #c74343; box-shadow: 0 0 0 3px rgba(199, 67, 67, .12); }
 
 .video-task-progress { height: 3px; overflow: hidden; background: var(--panel-2); border-radius: 999px; }
-.video-task-progress span { display: block; height: 100%; min-width: 8%; background: var(--video-accent); border-radius: inherit; transition: width 250ms ease; }
+.video-task-progress span { display: block; height: 100%; min-width: 8%; background: linear-gradient(90deg, var(--video-accent), #8fd0c0, var(--video-accent)); background-size: 200% 100%; border-radius: inherit; transition: width 250ms ease; animation: video-task-progress-flow 1.2s linear infinite; }
+
+@keyframes video-task-progress-flow {
+  from { background-position: 0 0; }
+  to { background-position: 200% 0; }
+}
+
+.video-task-stage-note {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(209, 157, 22, .28);
+  border-radius: 8px;
+  color: #76561f;
+  background: rgba(255, 248, 225, .82);
+  font-size: 11px;
+  line-height: 1.5;
+}
 
 .video-task-download { justify-self: start; color: var(--video-accent-deep); font-size: 11px; font-weight: 750; text-decoration: none; }
 .video-task-download:hover { text-decoration: underline; }
@@ -1565,7 +1583,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .video-workbench-loader,
-  .video-button-spinner { animation: none; }
+  .video-button-spinner,
+  .video-task-progress span { animation: none; }
   .video-file-field,
   .video-button { transition: none; }
   .video-upload-slots [data-video-file-slot],
