@@ -477,6 +477,81 @@
     }[character]));
   }
 
+  function videoErrorMessage(error, fallback = "操作失败，请稍后重试。") {
+    const localized = window.VectoPublicPrompt?.localizeError?.(error, fallback);
+    if (localized) return localized;
+    const raw = String(error?.message || "").trim();
+    if (/failed to fetch|networkerror/i.test(raw)) return "网络连接失败：请检查网络后重试。";
+    if (/timeout|timed out|超时/i.test(raw)) return "处理超时：任务可能仍在后台运行，请稍后查看任务列表。";
+    return raw && /[\u4e00-\u9fff]/.test(raw) ? raw : fallback;
+  }
+
+  function openVideoProgress(title, messages) {
+    return window.VectoPublicPrompt?.open?.({
+      title,
+      message: Array.isArray(messages) ? messages[0] : messages,
+      messages,
+      status: "progress",
+      busy: true,
+      showClose: false,
+      showConfirm: false,
+      showCancel: false,
+      dismissOnBackdrop: false,
+      dismissOnEscape: false,
+    }) || null;
+  }
+
+  function showVideoError(error, fallback, title = "操作失败", existingPrompt = null) {
+    const message = videoErrorMessage(error, fallback);
+    const code = String(error?.payload?.detail?.code || error?.payload?.code || error?.code || "").trim().toUpperCase();
+    if (Number(error?.status) === 402 || code === "INSUFFICIENT_POINTS") {
+      window.VectoPublicPrompt?.showInsufficientPoints?.(existingPrompt);
+      return message;
+    }
+    if (existingPrompt?.isOpen?.()) {
+      existingPrompt.update({
+        title,
+        message,
+        detail: "请根据提示处理后重新尝试。",
+        status: "error",
+        busy: false,
+        messages: [message],
+        showClose: true,
+        showConfirm: false,
+        showCancel: false,
+      });
+    } else {
+      window.VectoPublicPrompt?.showError?.({ title, message, error });
+    }
+    return message;
+  }
+
+  function updateVideoSuccess(prompt, title, message, detail = "") {
+    if (prompt?.isOpen?.()) {
+      prompt.update({
+        title,
+        message,
+        detail,
+        status: "success",
+        busy: false,
+        messages: [message],
+        showClose: true,
+        showConfirm: false,
+        showCancel: false,
+      });
+    }
+  }
+
+  async function confirmVideoSubmit(module) {
+    const message = "请确认当前输入内容无误，确认后系统会提交生成任务并扣除相应算力点。";
+    if (window.VectoPublicPrompt?.confirm) {
+      return window.VectoPublicPrompt.confirm({ title: `确认${submitButtonLabel(module)}吗？`, message });
+    }
+    state.submitError = "页面提示组件加载失败：请刷新页面后再提交生成任务。";
+    render();
+    return false;
+  }
+
   function humanize(value) {
     return String(value || "").replace(/[_-]+/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
   }
@@ -710,6 +785,7 @@
     const validationError = validate(module);
     if (validationError) {
       state.submitError = validationError;
+      showVideoError(null, validationError, "无法生成提示词 / 文案");
       render();
       return false;
     }
@@ -718,17 +794,26 @@
     state.promptGenerating = true;
     state.submitError = "";
     render();
+    const progress = openVideoProgress("正在生成提示词 / 文案", [
+      "正在整理产品信息和素材…",
+      "正在生成口播文案与画面提示词…",
+      "正在检查生成内容，请稍候…",
+    ]);
     try {
       const values = publicSubmitValues(module, draft);
       const preview = await confirmPromptPreview(module, values);
-      if (!preview) return false;
+      if (!preview) {
+        updateVideoSuccess(progress, "已取消生成", "已取消提示词 / 文案生成。", "你仍可以修改输入后再次点击生成。");
+        return false;
+      }
       applyConfirmedPromptPreview(module, draft.values, preview);
       draft.values._prompt_preview = preview;
       draft.values._prompt_preview_ready = true;
       saveDraft(module.id);
+      updateVideoSuccess(progress, "提示词 / 文案已生成", "提示词和文案已生成，请检查内容后再提交视频任务。", "如需调整输入，可重新生成。");
       return true;
     } catch (error) {
-      state.submitError = error?.message || "提示词生成失败";
+      state.submitError = showVideoError(error, "提示词 / 文案生成失败：请检查输入内容和素材后重试。", "提示词 / 文案生成失败", progress);
       return false;
     } finally {
       state.promptGenerating = false;
@@ -738,17 +823,29 @@
 
   async function taskAction(taskId, action) {
     if (!taskId) return;
-    if (action === "cancel") {
-      await request(`/api/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
-    } else {
-      try {
-        await request(`/api/video/tasks/${encodeURIComponent(taskId)}/resume`, { method: "POST" });
-      } catch (resumeError) {
-        if (![404, 405].includes(Number(resumeError?.status))) throw resumeError;
-        await request(`/api/tasks/${encodeURIComponent(taskId)}/retry`, { method: "POST" });
+    const isCancel = action === "cancel";
+    const progress = openVideoProgress(isCancel ? "正在取消视频任务" : "正在重新提交视频任务", isCancel
+      ? ["正在停止当前任务…", "正在同步任务状态…", "正在刷新任务列表…"]
+      : ["正在准备重新提交参数…", "正在恢复视频生成任务…", "正在刷新任务状态，请稍候…"]);
+    try {
+      if (isCancel) {
+        await request(`/api/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
+        await loadTasks({ quiet: true });
+        updateVideoSuccess(progress, "视频任务已取消", "任务已停止，不会继续执行后续生成。", `任务编号：${taskId}`);
+      } else {
+        try {
+          await request(`/api/video/tasks/${encodeURIComponent(taskId)}/resume`, { method: "POST" });
+        } catch (resumeError) {
+          if (![404, 405].includes(Number(resumeError?.status))) throw resumeError;
+          await request(`/api/tasks/${encodeURIComponent(taskId)}/retry`, { method: "POST" });
+        }
+        await loadTasks({ quiet: true });
+        updateVideoSuccess(progress, "视频任务已重新提交", "任务已重新进入生成队列。", `任务编号：${taskId}`);
       }
+    } catch (error) {
+      state.taskError = showVideoError(error, isCancel ? "取消视频任务失败：请稍后重试。" : "重新提交视频任务失败：请检查素材和余额后重试。", isCancel ? "取消任务失败" : "重新提交失败", progress);
+      renderTaskPanelOnly();
     }
-    await loadTasks({ quiet: true });
   }
 
   function invalidateTaskMedia(taskId) {
@@ -790,6 +887,11 @@
     state.subtitleSubmitting = true;
     state.subtitleError = "";
     render();
+    const progress = openVideoProgress("正在添加字幕", [
+      "正在读取视频时间轴…",
+      "正在生成字幕文件，请稍候…",
+      "正在写入视频任务结果…",
+    ]);
     try {
       await request(`/api/tasks/${encodeURIComponent(taskId)}/subtitles`, {
         method: "POST",
@@ -799,8 +901,9 @@
       state.subtitleModalTaskId = "";
       invalidateTaskMedia(taskId);
       await loadTasks({ quiet: true });
+      updateVideoSuccess(progress, "字幕添加完成", "字幕已添加到视频任务。", "请在任务记录中查看或下载最新结果。");
     } catch (error) {
-      state.subtitleError = error?.message || "添加字幕失败";
+      state.subtitleError = showVideoError(error, "添加字幕失败：请确认视频任务已完成后重试。", "添加字幕失败", progress);
     } finally {
       state.subtitleSubmitting = false;
       render();
@@ -1063,7 +1166,7 @@
         state.voiceError = "服务端音色列表暂不可用，已载入本地试听资源。";
       } catch {
         rows = SPEAKER_OPTIONS.map((label) => ({ id: label, label, voice_id: label, language: "Built-in" }));
-        state.voiceError = apiError?.message || "音色列表加载失败";
+        state.voiceError = videoErrorMessage(apiError, "音色列表加载失败：请刷新页面后重试。");
       }
     }
     state.voicePresets = rows.map(normalizeVoicePreset).filter((voice) => voice.voiceId);
@@ -2228,9 +2331,15 @@
       const sourceVideo = selectedFiles(module.id, "video")[0];
       if (!sourceVideo) {
         state.submitError = "请先上传原视频，再解析台词和时间戳";
+        showVideoError(null, state.submitError, "无法解析台词");
         render();
         return false;
       }
+      const progress = openVideoProgress("正在解析台词和时间轴", [
+        "正在读取原视频和脚本内容…",
+        "正在分析台词时间点，请稍候…",
+        "正在整理可编辑时间轴…",
+      ]);
       try {
         const body = new FormData();
         body.append("params_json", JSON.stringify(draft.values || {}));
@@ -2241,14 +2350,16 @@
         draft.values.source_script = draft.values.script_text;
         rows = normalizeTimelineRows(params.video_language_source_segments || []);
         draft.values.video_language_script_step = params.video_language_script_step || "parsed";
+        updateVideoSuccess(progress, "台词解析完成", "已生成可编辑的台词时间轴。", "请检查时间轴后再提交生成任务。");
       } catch (error) {
-        state.submitError = error?.message || "原视频台词解析失败";
+        state.submitError = showVideoError(error, "原视频台词解析失败：请检查视频和音频内容后重试。", "台词解析失败", progress);
         render();
         return false;
       }
     }
     if (!rows.length) {
       state.submitError = "请先填写脚本或口播文案，再解析时间轴";
+      showVideoError(null, state.submitError, "无法解析时间轴");
       render();
       return false;
     } else {
@@ -2270,12 +2381,18 @@
     state.workflowBusy[id] = true;
     state.taskError = "";
     renderTaskPanelOnly();
+    const progress = openVideoProgress("正在创建视频任务", [
+      "正在确认已选画面…",
+      "正在提交视频生成任务…",
+      "正在排入处理队列，请稍候…",
+    ]);
     try {
       const suffix = kind === "seeding" ? "seeding/finalize" : "digital-human/finalize";
       await request(`/api/video/tasks/${encodeURIComponent(id)}/${suffix}`, { method: "POST" });
       await loadTasks({ quiet: true });
+      updateVideoSuccess(progress, "视频任务已提交", "视频生成任务已提交，系统正在处理。", `任务编号：${id}`);
     } catch (error) {
-      state.taskError = error?.message || "确认画面后创建视频任务失败";
+      state.taskError = showVideoError(error, "确认画面后创建视频任务失败：请检查素材和余额后重试。", "视频任务提交失败", progress);
     } finally {
       delete state.workflowBusy[id];
       renderTaskPanelOnly();
@@ -2287,12 +2404,18 @@
     if (state.seedingSceneBusy[key]) return;
     state.seedingSceneBusy[key] = true;
     renderTaskPanelOnly();
+    const progress = openVideoProgress("正在重新生成分镜图", [
+      `正在准备分镜图 ${sceneIndex}…`,
+      "正在调用图片生成服务…",
+      "正在保存新的分镜素材…",
+    ]);
     try {
       await request(`/api/video/tasks/${encodeURIComponent(taskId)}/seeding-images/${encodeURIComponent(sceneIndex)}/regenerate`, { method: "POST" });
       state.taskWarning = `分镜图 ${sceneIndex} 已进入重生成队列，完成后可在历史素材中选用。`;
       await loadTasks({ quiet: true });
+      updateVideoSuccess(progress, "分镜图已提交重生成", state.taskWarning, "生成完成后可在历史素材中选择使用。");
     } catch (error) {
-      state.taskError = error?.message || `分镜图 ${sceneIndex} 重生成失败`;
+      state.taskError = showVideoError(error, `分镜图 ${sceneIndex} 重生成失败：请检查素材和余额后重试。`, "分镜图生成失败", progress);
     } finally {
       delete state.seedingSceneBusy[key];
       renderTaskPanelOnly();
@@ -2309,6 +2432,11 @@
       const key = `${taskId}:${sceneIndex}`;
       state.seedingSceneBusy[key] = true;
       renderTaskPanelOnly();
+      const progress = openVideoProgress("正在上传替换分镜图", [
+        `正在上传分镜图 ${sceneIndex}…`,
+        "正在校验图片内容…",
+        "正在更新任务素材…",
+      ]);
       try {
         const body = new FormData();
         body.append("image", image);
@@ -2316,8 +2444,9 @@
         delete state.seedingHistory[key];
         invalidateTaskMedia(taskId);
         await loadTasks({ quiet: true });
+        updateVideoSuccess(progress, "分镜图替换完成", `分镜图 ${sceneIndex} 已替换成功。`, "可以继续检查或提交后续视频生成。");
       } catch (error) {
-        state.taskError = error?.message || `分镜图 ${sceneIndex} 上传替换失败`;
+        state.taskError = showVideoError(error, `分镜图 ${sceneIndex} 上传替换失败：请重新选择图片后重试。`, "分镜图替换失败", progress);
       } finally {
         delete state.seedingSceneBusy[key];
         renderTaskPanelOnly();
@@ -2353,7 +2482,7 @@
         return { ...item, previewUrl: safeHttpUrl(media?.thumbnailUrl || media?.url) };
       });
     } catch (error) {
-      state.taskError = error?.message || `分镜图 ${sceneIndex} 历史素材读取失败`;
+      state.taskError = showVideoError(error, `分镜图 ${sceneIndex} 历史素材读取失败：请稍后重试。`, "历史素材读取失败");
     } finally {
       delete state.seedingSceneBusy[key];
       renderTaskPanelOnly();
@@ -2374,7 +2503,7 @@
       invalidateTaskMedia(taskId);
       await loadTasks({ quiet: true });
     } catch (error) {
-      state.taskError = error?.message || `分镜图 ${sceneIndex} 历史素材恢复失败`;
+      state.taskError = showVideoError(error, `分镜图 ${sceneIndex} 历史素材恢复失败：请稍后重试。`, "历史素材恢复失败");
     } finally {
       delete state.seedingSceneBusy[key];
       renderTaskPanelOnly();
@@ -2409,8 +2538,20 @@
 
   async function regenerateTaskSegment(taskId, segmentId) {
     if (!taskId || !segmentId) return;
-    await request(`/api/video/tasks/${encodeURIComponent(taskId)}/segments/${encodeURIComponent(segmentId)}/regenerate`, { method: "POST" });
-    await loadTasks({ quiet: true });
+    const progress = openVideoProgress("正在重新生成视频片段", [
+      "正在准备片段参数…",
+      "正在调用视频生成服务…",
+      "正在等待片段进入任务队列…",
+    ]);
+    try {
+      await request(`/api/video/tasks/${encodeURIComponent(taskId)}/segments/${encodeURIComponent(segmentId)}/regenerate`, { method: "POST" });
+      await loadTasks({ quiet: true });
+      updateVideoSuccess(progress, "视频片段已提交重生成", "视频片段已进入重生成队列。", "完成后可在任务记录中查看结果。");
+    } catch (error) {
+      showVideoError(error, "片段重生成失败：请检查素材和余额后重试。", "片段重生成失败", progress);
+      state.taskError = videoErrorMessage(error, "片段重生成失败：请检查素材和余额后重试。");
+      renderTaskPanelOnly();
+    }
   }
 
   async function regenerateTaskFusionView(taskId, requestedViewIndex) {
@@ -2423,6 +2564,11 @@
     state.taskError = "";
     state.taskWarning = "";
     renderTaskPanelOnly();
+    const progress = openVideoProgress(`正在重生成视角 ${viewIndex}`, [
+      `正在准备数字人视角 ${viewIndex}…`,
+      "正在调用图片生成服务…",
+      "正在更新任务画面，请稍候…",
+    ]);
     try {
       await request("/api/video/create-video/step", {
         method: "POST",
@@ -2435,8 +2581,9 @@
       });
       invalidateTaskMedia(taskId);
       await loadTasks({ quiet: true });
+      updateVideoSuccess(progress, "数字人视角已提交重生成", `视角 ${viewIndex} 已进入生成队列。`, "生成完成后可在任务卡片中查看最新画面。");
     } catch (error) {
-      state.taskError = error?.message || `视角 ${viewIndex} 重生成失败`;
+      state.taskError = showVideoError(error, `视角 ${viewIndex} 重生成失败：请检查素材和余额后重试。`, "视角重生成失败", progress);
       state.taskWarning = state.taskError;
     } finally {
       delete state.fusionViewBusy[busyKey];
@@ -2452,6 +2599,11 @@
     state.fusionViewBusy[busyKey] = true;
     state.taskError = "";
     renderTaskPanelOnly();
+    const progress = openVideoProgress(step === "fusion_main" ? "正在重生成数字人主图" : "正在生成数字人分镜图", [
+      "正在准备数字人画面参数…",
+      "正在调用图片生成服务…",
+      "正在保存最新画面，请稍候…",
+    ]);
     try {
       await request("/api/video/create-video/step", {
         method: "POST",
@@ -2460,8 +2612,9 @@
       });
       invalidateTaskMedia(task.id);
       await loadTasks({ quiet: true });
+      updateVideoSuccess(progress, "数字人画面已提交", step === "fusion_main" ? "数字人主图已进入生成队列。" : "数字人分镜图已进入生成队列。", "生成完成后可在任务卡片中查看。");
     } catch (error) {
-      state.taskError = error?.message || (step === "fusion_main" ? "数字人主图重生成失败" : "数字人分镜图生成失败");
+      state.taskError = showVideoError(error, step === "fusion_main" ? "数字人主图重生成失败：请检查素材和余额后重试。" : "数字人分镜图生成失败：请检查素材和余额后重试。", "数字人画面生成失败", progress);
     } finally {
       delete state.fusionViewBusy[busyKey];
       renderTaskPanelOnly();
@@ -2582,12 +2735,14 @@
     const validationError = validate(module);
     if (validationError) {
       state.submitError = validationError;
+      showVideoError(null, validationError, "无法开始生成");
       render();
       return;
     }
     state.submitting = true;
     state.submitError = "";
     render();
+    let progress = null;
     try {
       const draft = loadDraft(module);
       ensureAdvancedValues(module, draft);
@@ -2620,9 +2775,14 @@
           return;
         }
         applyStoredPromptPreviewForSubmit(module, submitValues, draft);
-      } else if (requiresSimpleSubmitConfirmation(module) && !window.confirm("请确认当前输入内容无误，确认后提交生成。")) {
+      } else if (requiresSimpleSubmitConfirmation(module) && !(await confirmVideoSubmit(module))) {
         return;
       }
+      progress = openVideoProgress(`正在${submitButtonLabel(module, draft.values)}`, [
+        "正在校验输入内容和素材…",
+        "正在上传素材并创建任务…",
+        "正在排入生成队列，请稍候…",
+      ]);
       const fileManifest = [];
       const body = new FormData();
       body.append("module", module.id);
@@ -2644,8 +2804,15 @@
       void clearPersistedModuleFiles(module.id);
       saveDraft(module.id);
       await loadTasks({ quiet: true });
+      const taskId = String(createdTask.id || result?.id || "").trim();
+      updateVideoSuccess(
+        progress,
+        "生成任务已提交",
+        `${submitButtonLabel(module, draft.values)}已提交，系统正在后台处理。`,
+        taskId ? `任务编号：${taskId}。你可以在右侧任务列表查看实时进度。` : "你可以在右侧任务列表查看实时进度。",
+      );
     } catch (error) {
-      state.submitError = error?.message || "任务提交失败";
+      state.submitError = showVideoError(error, "任务提交失败：请检查输入、素材和算力余额后重试。", "生成任务提交失败", progress);
     } finally {
       state.submitting = false;
       render();
@@ -2675,7 +2842,7 @@
         }
       });
     } catch (error) {
-      state.moduleError = error?.message || "无法读取模块配置";
+      state.moduleError = videoErrorMessage(error, "无法读取模块配置：请刷新页面后重试。");
       state.modules = MODULE_ORDER.map((id) => FALLBACK_MODULES[id]);
     } finally {
       state.moduleLoading = false;
@@ -2709,7 +2876,7 @@
     }).sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
     await hydrateTaskMedia(state.tasks);
     if (failures.length === results.length) {
-      state.taskError = failures[0]?.reason?.message || "无法读取任务列表";
+      state.taskError = videoErrorMessage(failures[0]?.reason, "无法读取任务列表：请检查网络后重试。");
     } else if (failures.length) {
       state.taskWarning = "部分任务来源暂时不可用，已显示可读取的任务。";
     }
@@ -2736,12 +2903,22 @@
     ));
   }
 
-  function confirmLeave() {
+  async function confirmLeave() {
     if (!hasTransientState()) return true;
     const message = state.submitting
       ? "视频任务正在提交。现在离开可能中断上传，确定继续吗？"
       : "视频工作台中仍有已选文件。素材和文本草稿已保存在当前浏览器，确定离开吗？";
-    return window.confirm(message);
+    if (window.VectoPublicPrompt?.confirm) {
+      return window.VectoPublicPrompt.confirm({
+        title: state.submitting ? "任务正在提交" : "当前页面还有未完成内容",
+        message,
+        confirmText: "继续离开",
+        cancelText: "留在当前页",
+      });
+    }
+    state.submitError = "页面提示组件加载失败：请刷新页面后再离开当前工作台。";
+    render();
+    return false;
   }
 
   function selectModule(moduleId) {
@@ -2842,7 +3019,7 @@
       if (assetUse) {
         event.preventDefault();
         void useHistoryAsset(assetUse.dataset.videoAssetUse, assetUse.dataset.videoAssetLabel).catch((error) => {
-          state.submitError = error?.message || "历史素材载入失败";
+          state.submitError = showVideoError(error, "历史素材载入失败：请稍后重试。", "历史素材载入失败");
           render();
         });
         return;
@@ -2925,7 +3102,7 @@
       if (fusionView) {
         fusionView.disabled = true;
         regenerateTaskFusionView(fusionView.dataset.videoTaskId, fusionView.dataset.videoFusionViewIndex).catch((error) => {
-          state.taskError = error?.message || "数字人视角重生成失败";
+          state.taskError = showVideoError(error, "数字人视角重生成失败：请检查素材和余额后重试。", "视角重生成失败");
           renderTaskPanelOnly();
         });
         return;
@@ -2933,7 +3110,7 @@
       const fusionHistory = event.target.closest?.("[data-video-fusion-history]");
       if (fusionHistory) {
         void loadFusionHistory(fusionHistory.dataset.videoTaskId, fusionHistory.dataset.videoAssetIndex).catch((error) => {
-          state.taskError = error?.message || "数字人素材历史加载失败";
+          state.taskError = showVideoError(error, "数字人素材历史加载失败：请稍后重试。", "历史素材加载失败");
           renderTaskPanelOnly();
         });
         return;
@@ -2941,7 +3118,7 @@
       const fusionHistoryUse = event.target.closest?.("[data-video-fusion-history-use]");
       if (fusionHistoryUse) {
         void useFusionHistory(fusionHistoryUse.dataset.videoTaskId, fusionHistoryUse.dataset.videoAssetIndex, fusionHistoryUse.dataset.videoHistoryPath).catch((error) => {
-          state.taskError = error?.message || "数字人历史素材切换失败";
+          state.taskError = showVideoError(error, "数字人历史素材切换失败：请稍后重试。", "历史素材切换失败");
           renderTaskPanelOnly();
         });
         return;
@@ -2961,7 +3138,7 @@
       if (taskSegment) {
         taskSegment.disabled = true;
         regenerateTaskSegment(taskSegment.dataset.videoTaskId, taskSegment.dataset.videoSegmentId).catch((error) => {
-          state.taskError = error?.message || "片段重生成失败";
+          state.taskError = showVideoError(error, "片段重生成失败：请检查素材和余额后重试。", "片段重生成失败");
           render();
         });
       }
@@ -2989,7 +3166,7 @@
       if (taskButton) {
         taskButton.disabled = true;
         taskAction(taskButton.dataset.videoTaskId, taskButton.dataset.videoTaskAction).catch((error) => {
-          state.taskError = error?.message || "任务操作失败";
+          state.taskError = showVideoError(error, "任务操作失败：请稍后重试。", "任务操作失败");
           render();
         });
       }

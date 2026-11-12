@@ -27651,6 +27651,7 @@ def create_app() -> FastAPI:
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__CONSOLE_CSS_VERSION__": _asset_version("assets", "console.css"),
                 "__CONSOLE_JS_VERSION__": _asset_version("assets", "console.js"),
+                "__PUBLIC_FEEDBACK_JS_VERSION__": _asset_version("assets", "public-feedback.js"),
                 "__VIDEO_WORKBENCH_CSS_VERSION__": _asset_version("assets", "video-workbench.css"),
                 "__VIDEO_WORKBENCH_JS_VERSION__": _asset_version("assets", "video-workbench.js"),
                 "__PERSONA_DASHBOARD_JS_VERSION__": _asset_version("assets", "persona-dashboard.js"),
@@ -27857,6 +27858,7 @@ def create_app() -> FastAPI:
             replacements={
                 "__STYLE_VERSION__": _asset_version("assets", "style.css"),
                 "__CONSOLE_CSS_VERSION__": _asset_version("assets", "console.css"),
+                "__PUBLIC_FEEDBACK_JS_VERSION__": _asset_version("assets", "public-feedback.js"),
                 "__VIDEO_WORKBENCH_CSS_VERSION__": _asset_version("assets", "video-workbench.css"),
                 "__VIDEO_WORKBENCH_JS_VERSION__": _asset_version("assets", "video-workbench.js"),
                 "__VIDEO_EDITOR_CSS_VERSION__": _asset_version("assets", "video-editor.css"),

@@ -237,6 +237,8 @@ const regenerateTaskFusionView = Function(
   "request",
   "invalidateTaskMedia",
   "loadTasks",
+  "openVideoProgress",
+  "updateVideoSuccess",
   `return async function regenerateTaskFusionView(taskId, requestedViewIndex) {${regenerateFusionView}}`,
 )(
   { tasks: [{ id: "task-fusion", fusionImages: ["main.png", "view-2.png"] }], fusionViewBusy: {}, taskError: "" },
@@ -244,6 +246,8 @@ const regenerateTaskFusionView = Function(
   async (url, options) => { fusionRequests.push({ url, options }); return { ok: true }; },
   (taskId) => invalidatedFusionTasks.push(taskId),
   async () => { fusionReloads += 1; },
+  () => ({ isOpen: () => true, update: () => {} }),
+  () => {},
 );
 await regenerateTaskFusionView("task-fusion", 2);
 assert.equal(fusionRequests.length, 1);

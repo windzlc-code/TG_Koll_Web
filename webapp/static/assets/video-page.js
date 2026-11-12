@@ -22,6 +22,7 @@
   let activeModule = requested === "video_records"
     ? STUDIO_MODULE.id
     : (NAV_ITEMS.some((item) => item.id === requested) ? requested : MODULES[0].id);
+  let navigationSequence = 0;
 
   function syncRoute(moduleId, studioTab = activeStudioTab) {
     const url = new URL(window.location.href);
@@ -105,15 +106,19 @@
     return true;
   }
 
-  function navigate(moduleId, options = {}) {
+  async function navigate(moduleId, options = {}) {
     if (moduleId === "video_records") {
       moduleId = STUDIO_MODULE.id;
       options = { ...options, tab: "records" };
     }
     if (!NAV_ITEMS.some((item) => item.id === moduleId)) return false;
+    const navigationId = ++navigationSequence;
     const previous = activeModule;
     const leavingGeneration = isGenerationModule(previous) && !isGenerationModule(moduleId);
-    if (leavingGeneration && window.VideoWorkbench?.confirmLeave && !window.VideoWorkbench.confirmLeave()) return false;
+    if (leavingGeneration && window.VideoWorkbench?.confirmLeave) {
+      const confirmed = await window.VideoWorkbench.confirmLeave();
+      if (navigationId !== navigationSequence || activeModule !== previous || !confirmed) return false;
+    }
     activeModule = moduleId;
     syncActive();
     if (isGenerationModule(moduleId)) {
@@ -149,7 +154,7 @@
       if (!button) return;
       const moduleId = String(button.dataset.videoModule || "");
       if (!NAV_ITEMS.some((item) => item.id === moduleId)) return;
-      navigate(moduleId);
+      void navigate(moduleId);
     });
     document.getElementById("videoStudioTabs")?.addEventListener("click", (event) => {
       const button = event.target.closest("[data-studio-tab]");

@@ -2070,6 +2070,14 @@ function safeExternalHttpUrl(value) {
 let billingInsufficientPrompt = null;
 
 function showBillingInsufficientPrompt() {
+  if (window.VectoPublicPrompt?.showInsufficientPoints) {
+    const publicPrompt = window.VectoPublicPrompt.showInsufficientPoints();
+    billingInsufficientPrompt = publicPrompt;
+    publicPrompt?.promise?.finally(() => {
+      if (billingInsufficientPrompt === publicPrompt) billingInsufficientPrompt = null;
+    }).catch(() => {});
+    return publicPrompt;
+  }
   if (billingInsufficientPrompt) return billingInsufficientPrompt;
   billingInsufficientPrompt = openConsoleModal({
     title: "算力点已用完",

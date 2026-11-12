@@ -15,6 +15,7 @@ WORKBENCH_JS = STATIC_ROOT / "assets" / "video-workbench.js"
 WORKBENCH_CSS = STATIC_ROOT / "assets" / "video-workbench.css"
 EDITOR_CSS = STATIC_ROOT / "assets" / "video-editor.css"
 VIDEO_PAGE_JS = STATIC_ROOT / "assets" / "video-page.js"
+PUBLIC_FEEDBACK_JS = STATIC_ROOT / "assets" / "public-feedback.js"
 
 VIDEO_MODULES = (
     "digital_human_video",
@@ -40,8 +41,11 @@ class VideoWorkbenchFrontendContractTests(unittest.TestCase):
         cls.workbench_css = WORKBENCH_CSS.read_text(encoding="utf-8")
         cls.editor_css = EDITOR_CSS.read_text(encoding="utf-8")
         cls.video_page_js = VIDEO_PAGE_JS.read_text(encoding="utf-8")
+        cls.public_feedback_js = PUBLIC_FEEDBACK_JS.read_text(encoding="utf-8")
 
     def test_console_loads_native_video_workspace_assets_and_panel(self):
+        self.assertIn('/assets/public-feedback.js?v=__PUBLIC_FEEDBACK_JS_VERSION__', self.video_html)
+        self.assertIn('/assets/public-feedback.js?v=__PUBLIC_FEEDBACK_JS_VERSION__', self.html)
         self.assertIn('/assets/video-workbench.css?v=__VIDEO_WORKBENCH_CSS_VERSION__', self.video_html)
         self.assertIn('/assets/video-workbench.js?v=__VIDEO_WORKBENCH_JS_VERSION__', self.video_html)
         self.assertIn('/assets/video-page.js?v=__VIDEO_PAGE_JS_VERSION__', self.video_html)
@@ -127,6 +131,23 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn('code === "INSUFFICIENT_POINTS"', self.workbench_js)
         self.assertIn('new CustomEvent("vecto:billing-insufficient"', self.workbench_js)
         self.assertIn('window.addEventListener("vecto:billing-insufficient"', self.console_js)
+        self.assertIn("window.VectoPublicPrompt?.showInsufficientPoints", self.console_js)
+
+    def test_public_feedback_replaces_native_prompts_with_localized_busy_and_error_states(self):
+        self.assertIn("window.VectoPublicPrompt", self.public_feedback_js)
+        self.assertIn("function showInsufficientPoints", self.public_feedback_js)
+        self.assertIn("购买算力", self.public_feedback_js)
+        self.assertIn("续费 / 购买会员", self.public_feedback_js)
+        self.assertIn("setInterval", self.public_feedback_js)
+        self.assertIn("data-public-prompt-message", self.public_feedback_js)
+        self.assertIn("服务器处理失败", self.public_feedback_js)
+        self.assertIn("function openVideoProgress", self.workbench_js)
+        self.assertIn("function showVideoError", self.workbench_js)
+        self.assertIn("async function confirmVideoSubmit", self.workbench_js)
+        self.assertNotIn("window.confirm(", self.workbench_js)
+        self.assertIn("await window.VideoWorkbench.confirmLeave", self.video_page_js)
+        self.assertIn("navigationSequence", self.video_page_js)
+        self.assertIn("页面提示组件加载失败", self.workbench_js)
 
     def test_oral_copy_preview_restores_three_candidate_selection(self):
         self.assertIn("function chooseSpeechCandidate(preview)", self.workbench_js)
