@@ -223,11 +223,31 @@ def main() -> None:
         assert voice_source.count() == 1
         assert "参考音频/声音" in voice_source.inner_text()
         assert voice_source.locator('[data-video-open-voice]').count() == 1
+        assert voice_source.locator('[data-video-file-state]').get_attribute("data-video-file-state") == "pending"
+        assert "has-files" not in (voice_source.get_attribute("class") or "")
         assert page.locator('[data-video-voice-modal]').count() == 0
         voice_source.locator('[data-video-open-voice]').click()
-        page.locator('[data-video-voice-modal]').wait_for(state="visible")
-        assert page.locator('[data-video-voice-modal] [data-video-field="target_language"]').count() == 1
+        voice_modal = page.locator('[data-video-voice-modal]')
+        voice_modal.wait_for(state="visible")
+        voice_modal_handle = voice_modal.element_handle()
+        form_handle = page.locator("#videoWorkbenchForm").element_handle()
+        target_language = voice_modal.locator('[data-video-field="target_language"]')
+        assert target_language.count() == 1
         assert page.locator('.video-settings-panel [data-video-field="target_language"]').count() == 0
+        next_language = "English" if target_language.input_value() == "Chinese" else "Chinese"
+        target_language.select_option(next_language)
+        page.wait_for_timeout(360)
+        assert page.evaluate(
+            "node => node === document.querySelector('[data-video-voice-modal]')",
+            voice_modal_handle,
+        ), "language switching replaced the voice modal"
+        assert page.evaluate(
+            "node => node === document.querySelector('#videoWorkbenchForm')",
+            form_handle,
+        ), "language switching replaced the workbench form"
+        expected_language_label = "英文" if next_language == "English" else "中文"
+        assert expected_language_label in voice_modal.locator(".video-voice-language-note").inner_text()
+        assert voice_source.locator('[data-video-file-state]').get_attribute("data-video-file-state") == "pending"
         if screenshot_dir:
             page.screenshot(path=str(screenshot_dir / "video-workbench-voice-modal.png"), full_page=False)
         page.locator('[data-video-voice-modal] [data-video-voice-close]').last.click()

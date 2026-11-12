@@ -411,10 +411,36 @@
   gap: 4px;
 }
 
-.video-file-field-copy strong { font-size: 13px; }
+.video-file-field-copy strong { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .video-file-field-copy em,
 .video-form-field > span em { margin-left: 3px; color: #c43b3b; font-style: normal; }
 .video-file-field-copy > span { color: var(--video-muted); font-size: 11px; line-height: 1.45; }
+
+.video-file-field-state {
+  display: inline-grid;
+  width: 19px;
+  height: 19px;
+  flex: 0 0 19px;
+  place-items: center;
+  color: #8a989d;
+  background: #f2f5f6;
+  border: 1px solid #d3dfe3;
+  border-radius: 50%;
+  transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+.video-file-field-state .video-ui-icon { width: 12px; height: 12px; stroke-width: 2.2; }
+.video-file-field-state.is-complete {
+  color: #166534;
+  background: #dcfce7;
+  border-color: #86efac;
+  animation: video-file-state-check 420ms ease-out both;
+}
+
+@keyframes video-file-state-check {
+  from { transform: scale(.72); opacity: .35; }
+  to { transform: scale(1); opacity: 1; }
+}
 
 .video-file-field-action {
   align-self: start;
@@ -1439,6 +1465,26 @@
   border-radius: 7px;
 }
 
+.video-voice-presets {
+  min-height: 294px;
+  overflow: hidden;
+  transition: opacity 180ms ease, transform 180ms ease;
+  will-change: opacity, transform;
+}
+
+.video-voice-presets.is-refreshing {
+  opacity: .34;
+  transform: translateY(4px);
+  pointer-events: none;
+}
+
+.video-voice-presets.is-refreshed { animation: video-voice-presets-enter 240ms ease-out both; }
+
+@keyframes video-voice-presets-enter {
+  from { opacity: .45; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 .video-voice-picker {
   border: 1px solid var(--video-line);
   border-radius: 8px;
@@ -1795,7 +1841,9 @@
   .video-button-spinner,
   .video-task-progress span { animation: none; }
   .video-file-field,
-  .video-button { transition: none; }
+  .video-button,
+  .video-file-field-state,
+  .video-voice-presets { transition: none; animation: none; }
   .video-upload-slots [data-video-file-slot],
   .video-upload-slot-preview,
   .video-upload-slot-action { transition: none; }

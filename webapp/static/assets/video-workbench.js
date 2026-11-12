@@ -365,6 +365,7 @@
     voiceLoaded: false,
     voiceError: "",
     playingVoiceId: "",
+    voiceRefreshToken: 0,
     voiceModalOpen: false,
     subtitleModalTaskId: "",
     subtitleTemplate: "split_hook",
@@ -1625,6 +1626,9 @@
       replace: '<path d="M4 8a7 7 0 0 1 12-3l2 2"></path><path d="M18 3v4h-4"></path><path d="M20 16a7 7 0 0 1-12 3l-2-2"></path><path d="M6 21v-4h4"></path>',
       refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 5v6h-6"></path>',
       play: '<path d="m9 7 8 5-8 5z"></path>',
+      pause: '<path d="M8 6v12"></path><path d="M16 6v12"></path>',
+      check: '<path d="m5 12 4 4L19 6"></path>',
+      pending: '<circle cx="12" cy="12" r="8"></circle>',
       add: '<path d="M12 5v14M5 12h14"></path>',
       alert: '<path d="M10.3 4.3 2.8 17.2A2 2 0 0 0 4.5 20h15a2 2 0 0 0 1.7-2.8L13.7 4.3a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path>',
     };
@@ -1639,6 +1643,31 @@
     return field?.type === "select" && PILL_SELECT_KEYS.has(field.key) && field.options.length >= 2 && field.options.length <= 4;
   }
 
+  function voiceMatchesLanguage(voice, language) {
+    const expected = String(language || "").trim().toLowerCase();
+    const actual = String(voice?.language || "").trim().toLowerCase();
+    return !expected || actual === expected;
+  }
+
+  function selectedVoiceForDraft(draft, language = null) {
+    const values = draft?.values || {};
+    const identifiers = [values.voice_id, values.speaker]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    if (!identifiers.length) return null;
+    const targetLanguage = language == null ? (values.target_language || values.language || "") : language;
+    return state.voicePresets.find((voice) => (
+      identifiers.some((identifier) => identifier === voice.voiceId || identifier === voice.id)
+      && voiceMatchesLanguage(voice, targetLanguage)
+    )) || null;
+  }
+
+  function voiceSourceCopy(field, files, selectedVoice) {
+    if (files.length) return `已选择 ${files.length} 个文件`;
+    if (selectedVoice) return `已选择参考声音：${selectedVoice.label}`;
+    return field.help || (field.previewSlots ? "点击对应素材位选择文件" : "点击选择文件");
+  }
+
   function renderFileField(field) {
     const fileSlots = selectedFileSlots(state.moduleId, field.key);
     const files = selectedFiles(state.moduleId, field.key);
@@ -1648,28 +1677,24 @@
     const previewLabels = Array.isArray(field.previewLabels) ? field.previewLabels : [];
     const isVoiceInput = VOICE_MODULES.has(state.moduleId) && field.key === "audio";
     const draft = isVoiceInput ? loadDraft(currentModule()) : null;
-    const selectedVoiceId = String(draft?.values?.voice_id || draft?.values?.speaker || "");
-    const selectedVoice = isVoiceInput
-      ? state.voicePresets.find((voice) => voice.voiceId === selectedVoiceId || voice.id === selectedVoiceId)
-      : null;
-    const hasSource = files.length > 0 || Boolean(selectedVoiceId);
+    const selectedVoice = isVoiceInput ? selectedVoiceForDraft(draft) : null;
+    const hasSource = files.length > 0 || Boolean(selectedVoice);
     const displayLabel = isVoiceInput ? "参考音频/声音" : field.label;
-    const sourceCopy = files.length
-      ? `已选择 ${files.length} 个文件`
-      : (selectedVoice
-        ? `已选择参考声音：${selectedVoice.label}`
-        : (selectedVoiceId ? `已选择参考声音：${draft?.values?.voice_label || selectedVoiceId}` : (field.help || (previewSlots ? "点击对应素材位选择文件" : "点击选择文件"))));
+    const sourceCopy = voiceSourceCopy(field, files, selectedVoice);
+    const completionState = field.required
+      ? `<span class="video-file-field-state ${hasSource ? "is-complete" : "is-pending"}" data-video-file-state="${hasSource ? "complete" : "pending"}" aria-label="${hasSource ? "已完成" : "待完成"}">${workbenchIcon(hasSource ? "check" : "pending")}</span>`
+      : "";
     return `<div class="video-file-field ${hasSource ? "has-files" : ""} ${isVoiceInput ? "is-voice-source" : ""}" data-video-file-field="${escapeHtml(field.key)}" data-video-file-required="${field.required ? "true" : "false"}">
       <input type="file" data-video-field="${escapeHtml(field.key)}" ${field.accept ? `accept="${escapeHtml(field.accept)}"` : ""} ${field.multiple ? "multiple" : ""} />
       <span class="video-file-field-icon">${moduleIcon(state.moduleId)}</span>
       <span class="video-file-field-copy">
-        <strong>${escapeHtml(displayLabel)}${field.required ? '<em aria-hidden="true">*</em>' : ""}</strong>
-        <span>${escapeHtml(sourceCopy)}</span>
+        <strong>${escapeHtml(displayLabel)}${field.required ? '<em aria-hidden="true">*</em>' : ""}${completionState}</strong>
+        <span data-video-file-source-copy>${escapeHtml(sourceCopy)}</span>
       </span>
       <span class="video-file-field-actions">
         <button type="button" class="video-file-field-action" data-video-file-pick="${escapeHtml(field.key)}">${files.length ? "重新选择" : "选择文件"}</button>
         ${String(field.accept || "").includes("image") ? `<button type="button" class="video-file-field-action" data-video-asset-picker="${escapeHtml(field.key)}">历史素材</button>` : ""}
-        ${isVoiceInput ? `<button type="button" class="video-file-field-action video-file-field-action--voice" data-video-open-voice>${selectedVoiceId ? "更换参考声音" : "声音设置"}</button>` : ""}
+        ${isVoiceInput ? `<button type="button" class="video-file-field-action video-file-field-action--voice" data-video-open-voice>${hasSource ? "更换参考声音" : "声音设置"}</button>` : ""}
       </span>
       ${previewSlots ? `<span class="video-upload-slots">${Array.from({ length: previewSlots }, (_, index) => {
         const fileItem = fileSlots[index] || null;
@@ -1721,19 +1746,132 @@
     </label>`;
   }
 
-  function renderVoiceStudio(module, draft, voiceFields = []) {
-    if (!VOICE_MODULES.has(module.id) || !state.voiceModalOpen) return "";
-    const language = String(draft.values.target_language || draft.values.language || "").trim().toLowerCase();
-    const filtered = state.voicePresets.filter((voice) => !language || voice.language.trim().toLowerCase() === language);
-    const voices = (language ? filtered : state.voicePresets).slice(0, 24);
-    const selectedId = String(draft.values.voice_id || draft.values.speaker || "");
-    const selected = state.voicePresets.find((voice) => voice.voiceId === selectedId || voice.id === selectedId);
-    const languageOption = LANGUAGE_OPTIONS.find((option) => String(option.value).toLowerCase() === language);
-    const languageLabel = languageOption?.label || draft.values.target_language || "当前口播语言";
+  function renderVoiceCurrentSource(module, draft) {
     const uploadedAudio = selectedFiles(module.id, "audio")[0];
+    const selected = selectedVoiceForDraft(draft);
     const currentSource = uploadedAudio
       ? `已上传音频：${uploadedAudio.name}`
       : (selected ? `已选择预设声音：${selected.label}` : "尚未选择参考音频或预设声音");
+    return `<div class="video-voice-current" data-video-voice-current-source><span>当前参考来源</span><strong>${escapeHtml(currentSource)}</strong><small>上传音频会随任务提交；预设声音会保存到当前模块草稿。</small></div>`;
+  }
+
+  function renderVoicePresetList(draft) {
+    const language = String(draft.values.target_language || draft.values.language || "").trim().toLowerCase();
+    const filtered = state.voicePresets.filter((voice) => !language || voice.language.trim().toLowerCase() === language);
+    const voices = (language ? filtered : state.voicePresets).slice(0, 24);
+    const selected = selectedVoiceForDraft(draft);
+    const languageOption = LANGUAGE_OPTIONS.find((option) => String(option.value).toLowerCase() === language);
+    const languageLabel = languageOption?.label || draft.values.target_language || "当前口播语言";
+    return `<div class="video-voice-toolbar">
+      <span class="video-voice-language-note">音色列表已按${escapeHtml(languageLabel)}自动筛选，切换口播语言后立即更新</span>
+    </div>
+    ${state.voiceLoading && !voices.length ? `<div class="video-advanced-loading"><span class="video-workbench-loader"></span>正在加载音色列表</div>` : (!voices.length ? `<div class="video-advanced-loading">当前语言暂无可用预设音色，请上传参考音频或切换语言。</div>` : `
+      <div class="video-voice-list" role="radiogroup" aria-label="可用音色">${voices.map((voice) => {
+        const active = selected && (voice.voiceId === selected.voiceId || voice.id === selected.id);
+        return `<article class="video-voice-item ${active ? "is-selected" : ""}">
+          <button type="button" class="video-voice-select" role="radio" aria-checked="${active ? "true" : "false"}" data-video-voice-select="${escapeHtml(voice.id)}">
+            <strong>${escapeHtml(voice.label)}</strong><small>${escapeHtml([voice.language, voice.gender].filter(Boolean).join(" · "))}</small>
+          </button>
+          ${voice.previewUrl ? `<button type="button" class="video-voice-play" data-video-voice-preview="${escapeHtml(voice.id)}" data-video-voice-playing="false" aria-label="试听 ${escapeHtml(voice.label)}">${workbenchIcon("play")}</button>` : `<span class="video-voice-no-preview">无试听</span>`}
+        </article>`;
+      }).join("")}</div>`)}`;
+  }
+
+  function updateVoicePlaybackButtons() {
+    const audio = document.getElementById("videoVoicePreview");
+    const isPlaying = Boolean(audio && !audio.paused && state.playingVoiceId);
+    document.querySelectorAll("[data-video-voice-preview]").forEach((button) => {
+      const active = isPlaying && button.dataset.videoVoicePreview === state.playingVoiceId;
+      button.dataset.videoVoicePlaying = active ? "true" : "false";
+      button.setAttribute("aria-label", active ? "暂停试听" : "试听音色");
+      button.innerHTML = workbenchIcon(active ? "pause" : "play");
+    });
+  }
+
+  function bindVoiceAudioControls() {
+    const audio = document.getElementById("videoVoicePreview");
+    if (!audio) return;
+    if (audio.dataset.videoVoiceEventsBound !== "1") {
+      audio.dataset.videoVoiceEventsBound = "1";
+      audio.addEventListener("play", () => {
+        state.playingVoiceId = audio.dataset.videoVoiceCurrent || "";
+        updateVoicePlaybackButtons();
+      });
+      audio.addEventListener("pause", () => {
+        state.playingVoiceId = "";
+        updateVoicePlaybackButtons();
+      });
+      audio.addEventListener("ended", () => {
+        state.playingVoiceId = "";
+        updateVoicePlaybackButtons();
+      });
+    }
+    updateVoicePlaybackButtons();
+  }
+
+  function stopVoicePreview() {
+    const audio = document.getElementById("videoVoicePreview");
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.removeAttribute("src");
+      audio.load();
+      delete audio.dataset.videoVoiceCurrent;
+    }
+    state.playingVoiceId = "";
+    updateVoicePlaybackButtons();
+  }
+
+  function syncVoiceFileField(module, draft) {
+    const field = resolvedFields(module, draft.values).find((item) => item.type === "file" && item.key === "audio");
+    const host = document.querySelector('#videoWorkbenchRoot [data-video-file-field="audio"]');
+    if (!field || !host) return;
+    const files = selectedFiles(module.id, field.key);
+    const selected = selectedVoiceForDraft(draft);
+    const hasSource = files.length > 0 || Boolean(selected);
+    host.classList.toggle("has-files", hasSource);
+    const sourceCopy = host.querySelector("[data-video-file-source-copy]");
+    if (sourceCopy) sourceCopy.textContent = voiceSourceCopy(field, files, selected);
+    const stateNode = host.querySelector("[data-video-file-state]");
+    if (stateNode) {
+      stateNode.dataset.videoFileState = hasSource ? "complete" : "pending";
+      stateNode.setAttribute("aria-label", hasSource ? "已完成" : "待完成");
+      stateNode.classList.toggle("is-complete", hasSource);
+      stateNode.classList.toggle("is-pending", !hasSource);
+      stateNode.innerHTML = workbenchIcon(hasSource ? "check" : "pending");
+    }
+    const action = host.querySelector("[data-video-open-voice]");
+    if (action) action.textContent = hasSource ? "更换参考声音" : "声音设置";
+  }
+
+  function refreshVoicePresetListInPlace(module, draft) {
+    const modal = document.querySelector("[data-video-voice-modal]");
+    const host = modal?.querySelector("[data-video-voice-presets]");
+    if (!modal || !host) {
+      render();
+      return;
+    }
+    const refreshToken = ++state.voiceRefreshToken;
+    host.classList.remove("is-refreshed");
+    host.classList.add("is-refreshing");
+    const currentSource = modal.querySelector("[data-video-voice-current-source]");
+    if (currentSource) currentSource.outerHTML = renderVoiceCurrentSource(module, draft);
+    syncVoiceFileField(module, draft);
+    window.requestAnimationFrame(() => {
+      if (refreshToken !== state.voiceRefreshToken || !host.isConnected) return;
+      host.innerHTML = renderVoicePresetList(draft);
+      host.classList.remove("is-refreshing");
+      host.classList.add("is-refreshed");
+      bindVoiceAudioControls();
+      window.setTimeout(() => {
+        if (refreshToken === state.voiceRefreshToken) host.classList.remove("is-refreshed");
+      }, 260);
+    });
+  }
+
+  function renderVoiceStudio(module, draft, voiceFields = []) {
+    if (!VOICE_MODULES.has(module.id) || !state.voiceModalOpen) return "";
+    const selected = selectedVoiceForDraft(draft);
     return `<div class="console-modal video-voice-modal" data-video-voice-modal>
       <div class="console-modal-backdrop" data-video-voice-close></div>
       <section class="console-modal-dialog video-voice-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="videoVoiceModalTitle">
@@ -1742,22 +1880,10 @@
           <button type="button" class="console-modal-close" data-video-voice-close title="关闭" aria-label="关闭参考声音设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12"></path><path d="m18 6-12 12"></path></svg></button>
         </div>
         <div class="console-modal-content video-voice-modal-content">
-          <div class="video-voice-current"><span>当前参考来源</span><strong>${escapeHtml(currentSource)}</strong><small>上传音频会随任务提交；预设声音会保存到当前模块草稿。</small></div>
+          ${renderVoiceCurrentSource(module, draft)}
           ${state.voiceError ? `<div class="video-advanced-notice">${escapeHtml(state.voiceError)}</div>` : ""}
           ${voiceFields.length ? `<div class="video-voice-inline-fields">${voiceFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
-          <div class="video-voice-toolbar">
-            <span class="video-voice-language-note">音色列表已按${escapeHtml(languageLabel)}自动筛选，切换口播语言后立即更新</span>
-          </div>
-          ${state.voiceLoading && !voices.length ? `<div class="video-advanced-loading"><span class="video-workbench-loader"></span>正在加载音色列表</div>` : (!voices.length ? `<div class="video-advanced-loading">当前语言暂无可用预设音色，请上传参考音频或切换语言。</div>` : `
-            <div class="video-voice-list" role="radiogroup" aria-label="可用音色">${voices.map((voice) => {
-              const active = voice.voiceId === selectedId || voice.id === selectedId;
-              return `<article class="video-voice-item ${active ? "is-selected" : ""}">
-                <button type="button" class="video-voice-select" role="radio" aria-checked="${active ? "true" : "false"}" data-video-voice-select="${escapeHtml(voice.id)}">
-                  <strong>${escapeHtml(voice.label)}</strong><small>${escapeHtml([voice.language, voice.gender].filter(Boolean).join(" · "))}</small>
-                </button>
-                ${voice.previewUrl ? `<button type="button" class="video-voice-play" data-video-voice-preview="${escapeHtml(voice.id)}" aria-label="试听 ${escapeHtml(voice.label)}">${workbenchIcon("play")}</button>` : `<span class="video-voice-no-preview">无试听</span>`}
-              </article>`;
-              }).join("")}</div>`)}
+          <div class="video-voice-presets" data-video-voice-presets>${renderVoicePresetList(draft)}</div>
           <audio id="videoVoicePreview" class="video-voice-audio" controls preload="metadata" ${selected?.previewUrl ? `src="${escapeHtml(selected.previewUrl)}"` : ""}>当前浏览器不支持 audio 试听。</audio>
         </div>
         <div class="console-modal-actions"><button type="button" class="primary" data-video-voice-close>完成</button></div>
@@ -2517,6 +2643,7 @@
     }
     const module = currentModule();
     const draft = loadDraft(module);
+    state.playingVoiceId = "";
     const voiceFields = resolvedFields(module, draft.values).filter((field) => field.type !== "file" && field.placement === "voice");
     root.innerHTML = `<div class="video-workbench-shell">
       ${renderWorkbenchHero(module)}
@@ -2532,6 +2659,7 @@
     ${renderAssetPickerModal()}
     ${renderImageHistoryModal()}
     ${renderImagePreviewModal()}`;
+    bindVoiceAudioControls();
   }
 
   function formatBytes(bytes) {
@@ -2649,7 +2777,7 @@
       // A preset is language-bound. Do not let a previously selected voice
       // silently cross into the newly selected language.
       VOICE_PRESET_DRAFT_KEYS.forEach((key) => delete draft.values[key]);
-      state.playingVoiceId = "";
+      stopVoicePreview();
     }
     invalidatePromptPreview(module, draft, field.key);
     if (module.id === "video_language_replace" && field.key === "script_text") {
@@ -2658,7 +2786,12 @@
     }
     reconcileVideoCharacterOptions(draft.values, field.key);
     saveDraft(module.id);
-    if (voiceLanguageChanged || isPillSelectField(field) || DYNAMIC_SELECT_KEYS.has(field.key)) render();
+    if (voiceLanguageChanged) {
+      if (state.voiceModalOpen) refreshVoicePresetListInPlace(module, draft);
+      else render();
+      return;
+    }
+    if (isPillSelectField(field) || DYNAMIC_SELECT_KEYS.has(field.key)) render();
   }
 
   function clearSelectedFiles(moduleId) {
@@ -2681,7 +2814,8 @@
   function selectVoice(voiceId) {
     const { module, draft } = advancedDraft();
     const voice = state.voicePresets.find((item) => item.id === voiceId || item.voiceId === voiceId);
-    if (!voice) return;
+    const language = String(draft.values.target_language || draft.values.language || "").trim().toLowerCase();
+    if (!voice || !voiceMatchesLanguage(voice, language)) return;
     draft.values.voice_id = voice.voiceId;
     draft.values.speaker = voice.voiceName;
     draft.values.voice_label = voice.label;
@@ -2690,6 +2824,7 @@
     draft.values.elevenlabs_tts_voice_id = voice.voiceId;
     draft.values.minimax_tts_voice_id = "";
     replaceFileSlots(module.id, "audio", []);
+    stopVoicePreview();
     saveDraft(module.id);
     render();
   }
@@ -2698,17 +2833,31 @@
     const voice = state.voicePresets.find((item) => item.id === voiceId || item.voiceId === voiceId);
     const audio = document.getElementById("videoVoicePreview");
     if (!voice?.previewUrl || !audio) return;
-    if (audio.src !== new URL(voice.previewUrl, window.location.href).href) audio.src = voice.previewUrl;
+    if (audio.dataset.videoVoiceCurrent === voice.id && !audio.paused) {
+      audio.pause();
+      return;
+    }
+    const previewUrl = new URL(voice.previewUrl, window.location.href).href;
+    if (audio.src !== previewUrl) {
+      audio.src = previewUrl;
+      audio.currentTime = 0;
+    }
+    audio.dataset.videoVoiceCurrent = voice.id;
     state.playingVoiceId = voice.id;
-    audio.play().catch(() => {});
+    updateVoicePlaybackButtons();
+    const playback = audio.play();
+    playback?.catch(() => {
+      if (state.playingVoiceId !== voice.id) return;
+      state.playingVoiceId = "";
+      updateVoicePlaybackButtons();
+    });
   }
 
   function openVoiceStudio() {
     const { draft } = advancedDraft();
     const language = String(draft.values.target_language || draft.values.language || "").trim().toLowerCase();
-    const selectedId = String(draft.values.voice_id || draft.values.speaker || "");
-    const selected = state.voicePresets.find((voice) => voice.voiceId === selectedId || voice.id === selectedId);
-    if (language && selected && selected.language.trim().toLowerCase() !== language) {
+    const selected = selectedVoiceForDraft(draft, "");
+    if (language && selected && !voiceMatchesLanguage(selected, language)) {
       VOICE_PRESET_DRAFT_KEYS.forEach((key) => delete draft.values[key]);
       saveDraft(currentModule().id);
     }
@@ -3036,7 +3185,7 @@
     for (const field of fields) {
       if (!field.required) continue;
       if (field.type === "file" && !selectedFiles(module.id, field.key).length) {
-        if (field.key === "audio" && draft.values.voice_id) continue;
+        if (field.key === "audio" && selectedVoiceForDraft(draft)) continue;
         return `请上传${field.label}`;
       }
       if (field.type !== "file" && String(draft.values[field.key] ?? "").trim() === "") return `请填写${field.label}`;
@@ -3056,7 +3205,8 @@
     const values = Object.fromEntries(resolvedFields(module, draft.values)
       .filter((field) => field.type !== "file")
       .map((field) => [field.key, draft.values[field.key]]));
-    if (draft.values.voice_id) {
+    const selectedVoice = selectedVoiceForDraft(draft);
+    if (selectedVoice) {
       values.speaker = draft.values.voice_name || draft.values.speaker || "";
       values.voice_label = draft.values.voice_label || "";
       values.preset_dry_voice = draft.values.voice_label || values.speaker;
