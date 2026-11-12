@@ -1426,6 +1426,19 @@
   margin-bottom: 10px;
 }
 
+.video-voice-language-note {
+  display: flex;
+  align-items: center;
+  min-height: 35px;
+  padding: 0 10px;
+  color: #77817a;
+  font-size: 10px;
+  font-weight: 720;
+  background: var(--video-soft);
+  border: 1px solid var(--video-line);
+  border-radius: 7px;
+}
+
 .video-voice-picker {
   border: 1px solid var(--video-line);
   border-radius: 8px;

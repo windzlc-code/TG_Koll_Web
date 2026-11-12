@@ -31,6 +31,16 @@
   const VOICE_PRESETS_ENDPOINT = "/api/video/voice-presets";
   const VOICE_PRESETS_MANIFEST_URL = "/assets/voice_presets_manifest.json";
   const VOICE_MODULES = new Set(["digital_human_video", "ecommerce_short_video", "video_language_replace"]);
+  const VOICE_PRESET_DRAFT_KEYS = [
+    "voice_id",
+    "voice_name",
+    "voice_label",
+    "speaker",
+    "preset_dry_voice",
+    "elevenlabs_tts_preset_key",
+    "elevenlabs_tts_voice_id",
+    "minimax_tts_voice_id",
+  ];
   const TIMELINE_MODULES = new Set(["video_language_replace"]);
   const VIDEO_OUTPUT_TASK_TYPES = new Set(["create_video", "ecommerce_short_video", "video_language_replace", "replace_model", "replace_product", "replace_productANDmodel"]);
   const SUBTITLE_TEMPLATE_OPTIONS = [
@@ -354,7 +364,6 @@
     voiceLoading: false,
     voiceLoaded: false,
     voiceError: "",
-    voiceFilter: "",
     playingVoiceId: "",
     voiceModalOpen: false,
     subtitleModalTaskId: "",
@@ -1714,12 +1723,13 @@
 
   function renderVoiceStudio(module, draft, voiceFields = []) {
     if (!VOICE_MODULES.has(module.id) || !state.voiceModalOpen) return "";
-    const language = String(state.voiceFilter || draft.values.target_language || draft.values.language || "").toLowerCase();
-    const filtered = state.voicePresets.filter((voice) => !language || language === "auto" || voice.language.toLowerCase().includes(language));
-    const voices = (filtered.length ? filtered : state.voicePresets).slice(0, 24);
+    const language = String(draft.values.target_language || draft.values.language || "").trim().toLowerCase();
+    const filtered = state.voicePresets.filter((voice) => !language || voice.language.trim().toLowerCase() === language);
+    const voices = (language ? filtered : state.voicePresets).slice(0, 24);
     const selectedId = String(draft.values.voice_id || draft.values.speaker || "");
     const selected = state.voicePresets.find((voice) => voice.voiceId === selectedId || voice.id === selectedId);
-    const languages = [...new Set(state.voicePresets.map((voice) => voice.language).filter(Boolean))].sort();
+    const languageOption = LANGUAGE_OPTIONS.find((option) => String(option.value).toLowerCase() === language);
+    const languageLabel = languageOption?.label || draft.values.target_language || "当前口播语言";
     const uploadedAudio = selectedFiles(module.id, "audio")[0];
     const currentSource = uploadedAudio
       ? `已上传音频：${uploadedAudio.name}`
@@ -1736,10 +1746,9 @@
           ${state.voiceError ? `<div class="video-advanced-notice">${escapeHtml(state.voiceError)}</div>` : ""}
           ${voiceFields.length ? `<div class="video-voice-inline-fields">${voiceFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
           <div class="video-voice-toolbar">
-            <label><span>筛选语言</span><select data-video-voice-filter><option value="">全部语言</option>${languages.map((item) => `<option value="${escapeHtml(item)}" ${item === state.voiceFilter ? "selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
-            <button type="button" class="video-mini-button" data-video-reload-voices ${state.voiceLoading ? "disabled" : ""}>${state.voiceLoading ? "加载中…" : "刷新音色"}</button>
+            <span class="video-voice-language-note">音色列表已按${escapeHtml(languageLabel)}自动筛选，切换口播语言后立即更新</span>
           </div>
-          ${state.voiceLoading && !voices.length ? `<div class="video-advanced-loading"><span class="video-workbench-loader"></span>正在加载音色列表</div>` : `
+          ${state.voiceLoading && !voices.length ? `<div class="video-advanced-loading"><span class="video-workbench-loader"></span>正在加载音色列表</div>` : (!voices.length ? `<div class="video-advanced-loading">当前语言暂无可用预设音色，请上传参考音频或切换语言。</div>` : `
             <div class="video-voice-list" role="radiogroup" aria-label="可用音色">${voices.map((voice) => {
               const active = voice.voiceId === selectedId || voice.id === selectedId;
               return `<article class="video-voice-item ${active ? "is-selected" : ""}">
@@ -1748,7 +1757,7 @@
                 </button>
                 ${voice.previewUrl ? `<button type="button" class="video-voice-play" data-video-voice-preview="${escapeHtml(voice.id)}" aria-label="试听 ${escapeHtml(voice.label)}">${workbenchIcon("play")}</button>` : `<span class="video-voice-no-preview">无试听</span>`}
               </article>`;
-            }).join("")}</div>`}
+              }).join("")}</div>`)}
           <audio id="videoVoicePreview" class="video-voice-audio" controls preload="metadata" ${selected?.previewUrl ? `src="${escapeHtml(selected.previewUrl)}"` : ""}>当前浏览器不支持 audio 试听。</audio>
         </div>
         <div class="console-modal-actions"><button type="button" class="primary" data-video-voice-close>完成</button></div>
@@ -2635,6 +2644,13 @@
       return;
     }
     draft.values[field.key] = readFieldValue(field, input);
+    const voiceLanguageChanged = VOICE_MODULES.has(module.id) && field.key === "target_language";
+    if (voiceLanguageChanged) {
+      // A preset is language-bound. Do not let a previously selected voice
+      // silently cross into the newly selected language.
+      VOICE_PRESET_DRAFT_KEYS.forEach((key) => delete draft.values[key]);
+      state.playingVoiceId = "";
+    }
     invalidatePromptPreview(module, draft, field.key);
     if (module.id === "video_language_replace" && field.key === "script_text") {
       draft.values.video_language_script_analyzed = false;
@@ -2642,7 +2658,7 @@
     }
     reconcileVideoCharacterOptions(draft.values, field.key);
     saveDraft(module.id);
-    if (isPillSelectField(field) || DYNAMIC_SELECT_KEYS.has(field.key)) render();
+    if (voiceLanguageChanged || isPillSelectField(field) || DYNAMIC_SELECT_KEYS.has(field.key)) render();
   }
 
   function clearSelectedFiles(moduleId) {
@@ -2671,6 +2687,8 @@
     draft.values.voice_label = voice.label;
     draft.values.voice_name = voice.voiceName;
     draft.values.elevenlabs_tts_preset_key = voice.id;
+    draft.values.elevenlabs_tts_voice_id = voice.voiceId;
+    draft.values.minimax_tts_voice_id = "";
     replaceFileSlots(module.id, "audio", []);
     saveDraft(module.id);
     render();
@@ -2686,6 +2704,14 @@
   }
 
   function openVoiceStudio() {
+    const { draft } = advancedDraft();
+    const language = String(draft.values.target_language || draft.values.language || "").trim().toLowerCase();
+    const selectedId = String(draft.values.voice_id || draft.values.speaker || "");
+    const selected = state.voicePresets.find((voice) => voice.voiceId === selectedId || voice.id === selectedId);
+    if (language && selected && selected.language.trim().toLowerCase() !== language) {
+      VOICE_PRESET_DRAFT_KEYS.forEach((key) => delete draft.values[key]);
+      saveDraft(currentModule().id);
+    }
     state.voiceModalOpen = true;
     render();
     window.requestAnimationFrame(() => document.querySelector("[data-video-voice-modal] .console-modal-close")?.focus());
@@ -3354,11 +3380,6 @@
     document.addEventListener("change", (event) => {
       const input = event.target.closest?.("#videoWorkbenchRoot [data-video-field]");
       if (input) handleFieldChange(input);
-      const voiceFilter = event.target.closest?.("#videoWorkbenchRoot [data-video-voice-filter]");
-      if (voiceFilter) {
-        state.voiceFilter = voiceFilter.value;
-        render();
-      }
       const subtitleTemplate = event.target.closest?.("#videoWorkbenchRoot [data-video-subtitle-template]");
       if (subtitleTemplate) state.subtitleTemplate = normalizeSubtitleTemplate(subtitleTemplate.value) || "split_hook";
     });
@@ -3500,7 +3521,6 @@
       if (event.target.closest?.("[data-video-generate-prompt]")) void generatePromptDraft();
       if (event.target.closest?.("[data-video-refresh]")) loadTasks().catch(() => {});
       if (event.target.closest?.("[data-video-retry-modules]")) loadModules().catch(() => {});
-      if (event.target.closest?.("[data-video-reload-voices]")) loadVoicePresets({ force: true }).catch(() => {});
       const voiceSelect = event.target.closest?.("[data-video-voice-select]");
       if (voiceSelect) selectVoice(voiceSelect.dataset.videoVoiceSelect);
       const voicePreview = event.target.closest?.("[data-video-voice-preview]");

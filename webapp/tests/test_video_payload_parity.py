@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile
+import pytest
 
 from webapp import video_workbench
 from webapp import telegram_internal
@@ -60,6 +61,44 @@ def test_web_and_telegram_resolve_selected_voice_preset_to_the_same_reference_au
     assert web_payload["elevenlabs_tts_voice_id"] == "Ock0AL5DBkvTUDePt4Hm"
     assert "voice_id" not in web_payload
     assert web_payload["speech_text"] == source["speech_text"]
+
+
+def test_language_replace_web_and_telegram_use_the_same_selected_voice_preset() -> None:
+    source = {
+        "target_language": "Chinese",
+        "target_script": "这是目标语言口播。",
+        "elevenlabs_tts_preset_key": "zh_male_james_gao_calm_friendly_and_warm",
+        "elevenlabs_tts_voice_id": "4VZIsMPtgggwNg7OXbPY",
+        "voice_id": "4VZIsMPtgggwNg7OXbPY",
+        "speaker": "James Gao - Calm, Friendly and Warm",
+    }
+    web_payload = video_workbench.build_video_submit_payload(
+        "video_language_replace",
+        {**source, "file_roles": ["video"]},
+        [{"name": "source.mp4", "path": "C:/uploads/source.mp4", "kind": "video"}],
+    )
+    tg_payload = telegram_internal._apply_elevenlabs_preset_audio_reference(source)
+
+    assert web_payload["audio_local_path"] == tg_payload["audio_local_path"]
+    assert web_payload["elevenlabs_tts_preset_key"] == tg_payload["elevenlabs_tts_preset_key"]
+    assert web_payload["elevenlabs_tts_voice_id"] == "4VZIsMPtgggwNg7OXbPY"
+    assert "voice_id" not in web_payload
+
+
+def test_web_rejects_a_preset_voice_from_the_wrong_target_language() -> None:
+    with pytest.raises(ValueError, match="预设音色与目标语言不匹配"):
+        video_workbench.build_video_submit_payload(
+            "video_language_replace",
+            {
+                "target_language": "Chinese",
+                "target_script": "这是中文口播。",
+                "elevenlabs_tts_preset_key": "en_male_viraj_bold_commanding_banking_agent",
+                "elevenlabs_tts_voice_id": "Ock0AL5DBkvTUDePt4Hm",
+                "voice_id": "Ock0AL5DBkvTUDePt4Hm",
+                "file_roles": ["video"],
+            },
+            [{"name": "source.mp4", "path": "C:/uploads/source.mp4", "kind": "video"}],
+        )
 
 
 def test_digital_human_ui_submission_keeps_module_provenance_server_owned() -> None:

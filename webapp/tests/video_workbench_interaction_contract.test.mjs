@@ -86,6 +86,10 @@ assert.match(voiceMapping, /values\.elevenlabs_tts_voice_id\s*=\s*draft\.values\
 assert.match(voiceMapping, /values\.minimax_tts_voice_id\s*=\s*""/);
 assert.doesNotMatch(voiceMapping, /values\.voice_id\s*=/);
 assert.doesNotMatch(voiceMapping, /values\.speaker[^;]*draft\.values\.voice_id/);
+assert.match(source, /voiceLanguageChanged\s*=\s*VOICE_MODULES\.has\(module\.id\)\s*&&\s*field\.key\s*===\s*"target_language"/);
+assert.match(source, /音色列表已按/);
+assert.doesNotMatch(source, /data-video-voice-filter/);
+assert.doesNotMatch(source, /data-video-reload-voices/);
 
 const segmentMapping = functionBody("taskSegments");
 assert.match(segmentMapping, /task\?\.completed_segments/);

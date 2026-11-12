@@ -1888,7 +1888,7 @@ def build_video_submit_payload(
         if count < 1 or count > 8:
             raise ValueError("image count must be between 1 and 8")
         payload["count"] = count
-    if typ in {"create_video", "ecommerce_short_video"}:
+    if typ in {"create_video", "ecommerce_short_video", "video_language_replace"}:
         # Match the Telegram Bot path: a selected ElevenLabs preset must be
         # resolved to reference audio before the shared RunningHub TTS stage.
         payload = apply_elevenlabs_preset_audio_reference(payload)

@@ -320,6 +320,22 @@ def _find_elevenlabs_voice_preset(payload: dict[str, Any]) -> dict[str, str] | N
     return None
 
 
+def _elevenlabs_voice_preset_language(preset: dict[str, str] | None) -> str:
+    if not isinstance(preset, dict):
+        return ""
+    preset_key = str(preset.get("key") or "").strip()
+    voice_id = str(preset.get("voice_id") or "").strip()
+    for language, presets in ELEVENLABS_VOICE_PRESETS.items():
+        for candidate in presets:
+            if not isinstance(candidate, dict):
+                continue
+            if preset_key and preset_key == str(candidate.get("key") or "").strip():
+                return normalize_voice_preset_language(candidate.get("language") or language, default="")
+            if voice_id and voice_id == str(candidate.get("voice_id") or "").strip():
+                return normalize_voice_preset_language(candidate.get("language") or language, default="")
+    return ""
+
+
 def apply_elevenlabs_preset_audio_reference(payload: dict[str, Any] | None) -> dict[str, Any]:
     """Resolve a selected ElevenLabs preset to the shared TTS reference audio."""
 
@@ -330,7 +346,11 @@ def apply_elevenlabs_preset_audio_reference(payload: dict[str, Any] | None) -> d
     preset = _find_elevenlabs_voice_preset(updated)
     if not preset:
         return updated
-    target_language = str(updated.get("target_language") or updated.get("language") or "Chinese").strip() or "Chinese"
+    raw_target_language = str(updated.get("target_language") or updated.get("language") or "").strip()
+    target_language = normalize_voice_preset_language(raw_target_language or "Chinese")
+    preset_language = _elevenlabs_voice_preset_language(preset)
+    if raw_target_language and preset_language and preset_language != target_language:
+        raise ValueError("预设音色与目标语言不匹配，请重新选择对应语言的音色")
     data_dir = Path(str(os.getenv("WEBAPP_DATA_DIR") or "webapp_data")).expanduser()
     preview_path = ensure_elevenlabs_preview_audio(
         preset=preset,
