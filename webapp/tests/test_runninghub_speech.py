@@ -100,6 +100,7 @@ class RunningHubSpeechTests(unittest.TestCase):
         self.assertEqual(body["speed"], 1)
         self.assertEqual(body["volume"], 1)
         self.assertEqual(body["pitch"], 0)
+        self.assertEqual(body["emotion"], "neutral")
         self.assertEqual(captured["query"]["task_id"], "speech-1")
 
     def test_generate_text_to_audio_preserves_fractional_speed(self):

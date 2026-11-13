@@ -1460,7 +1460,7 @@ def _generate_minimax_audio(
         text=str(speech_text or ""),
         output_path=output_path,
         voice_id=str(getattr(settings, "minimax_voice_id", "") or os.getenv("MINIMAX_TTS_VOICE_ID", "") or ""),
-        emotion=str(getattr(settings, "emotion", "") or "happy").strip() or "happy",
+        emotion=str(getattr(settings, "emotion", "") or "neutral").strip() or "neutral",
     )
     if not output_path.exists() or output_path.stat().st_size <= 0:
         raise RuntimeError("Speech 音频写入失败")

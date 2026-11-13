@@ -91,6 +91,7 @@ class ArchivedVideoSourceBackendTest(unittest.TestCase):
         body = json.loads(captured["data"]) if isinstance(captured["data"], str) else captured["data"]
         self.assertEqual(body["voice_id"], "Elegant_Man")
         self.assertEqual(body["text"], "hello")
+        self.assertEqual(body["emotion"], "neutral")
         self.assertNotIn("/v1/t2a_v2", captured["url"])
         self.assertEqual(output_bytes, b"rh-speech")
 

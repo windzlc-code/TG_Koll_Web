@@ -111,7 +111,10 @@ def _build_audio_settings(payload: dict[str, Any]) -> commerce_video_generator.A
         or payload.get("speaker")
     )
     return commerce_video_generator.AudioSettings(
-        emotion=_text(payload.get("emotion") or "happy"),
+        # Keep the Web default aligned with the TG Bot path.  A voice preset
+        # describes timbre, but must not silently turn the delivery into a
+        # happy/excited performance when no emotion was requested.
+        emotion=_text(payload.get("emotion") or "neutral"),
         language=language,
         model_choice=_text(payload.get("model_choice") or "1.7B"),
         speaker=_text(payload.get("speaker") or "Ryan"),

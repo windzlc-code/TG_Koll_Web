@@ -70,6 +70,7 @@ def test_settings_helper_resolves_config_without_calling_clone_or_tts(tmp_path: 
     assert settings.minimax_model == "speech-2.8-turbo"
     assert settings.minimax_voice_id == "configured-voice"
     assert settings.speed == pytest.approx(1.2)
+    assert settings.emotion == "neutral"
     assert result["cloned_voice_id"] == ""
     assert result["reference_audio_path"] == ""
 

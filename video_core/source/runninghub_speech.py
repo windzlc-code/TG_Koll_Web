@@ -78,7 +78,7 @@ def generate_text_to_audio(
     speed: float = 1.0,
     volume: float = 1.0,
     pitch: float = 0,
-    emotion: str = "happy",
+    emotion: str = "neutral",
     timeout_seconds: float = 180,
     poll_interval_seconds: float = 2.0,
     check_cancelled: Callable[[], Any] | None = None,
@@ -105,7 +105,7 @@ def generate_text_to_audio(
         "speed": _provider_number(speed or 1.0, 1.0),
         "volume": _provider_number(volume or 1.0, 1.0),
         "pitch": _provider_number(pitch or 0, 0),
-        "emotion": str(emotion or "").strip() or "happy",
+        "emotion": str(emotion or "").strip() or "neutral",
         "enable_base64_output": False,
         "english_normalization": False,
     }

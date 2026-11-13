@@ -4065,7 +4065,7 @@ class ArchivedSourceBackend:
             speed=_number(payload.get("audio_speed"), 1.0),
             volume=_number(payload.get("audio_volume"), 1.0),
             pitch=_integer(payload.get("audio_pitch"), 0),
-            emotion=_text(payload.get("emotion") or "happy"),
+            emotion=_text(payload.get("emotion") or "neutral"),
             timeout_seconds=min(max(_integer(payload.get("video_task_timeout_seconds"), 180), 30), 600),
             poll_interval_seconds=max(_number(payload.get("video_poll_interval_seconds"), 2.0), 0.25),
             check_cancelled=context.check_cancelled,

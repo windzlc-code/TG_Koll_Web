@@ -388,6 +388,8 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn(".video-file-field-state.is-complete", self.workbench_css)
         self.assertIn('.video-voice-play .video-ui-icon { display: block;', self.workbench_css)
         self.assertNotIn('transform: translateX(1px)', self.workbench_css)
+        self.assertIn('.video-voice-play:hover', self.workbench_css)
+        self.assertIn('box-shadow: none;', self.workbench_css)
         self.assertIn(".video-voice-play.is-playing", self.workbench_css)
         self.assertIn(".video-voice-audio", self.workbench_css)
         self.assertIn(".video-voice-modal-dialog", self.workbench_css)
