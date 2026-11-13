@@ -1660,13 +1660,13 @@
   border-radius: 8px;
   background: var(--video-panel);
 }
-.video-voice-item.is-selected { border-color: var(--video-accent); box-shadow: none; }
+.video-voice-item.is-selected { border: 2px solid var(--video-accent); box-shadow: none; }
 .video-voice-select { display: grid; min-width: 0; gap: 3px; padding: 9px; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .video-voice-select strong,
 .video-voice-select small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .video-voice-select strong { color: var(--video-ink); font-size: 11px; }
 .video-voice-select small { color: var(--video-muted); font-size: 9px; }
-.video-voice-play { display: grid; align-items: center; justify-items: center; width: 28px; height: 28px; margin-right: 6px; padding: 0; color: var(--accent-ink); line-height: 0; background: var(--video-accent); border: 0; border-radius: 8px; cursor: pointer; }
+.video-voice-play { display: grid; align-items: center; justify-items: center; width: 28px; height: 28px; margin-right: 6px; padding: 0; color: var(--accent-ink); line-height: 0; background: var(--video-accent); border: 0; border-radius: 50%; cursor: pointer; }
 .console-page .console-shell .video-voice-play { width: 28px; min-width: 28px; height: 28px !important; min-height: 28px !important; padding: 0 !important; line-height: 0; }
 .video-voice-play .video-ui-icon { display: block; width: 14px; height: 14px; }
 .video-voice-play:hover,

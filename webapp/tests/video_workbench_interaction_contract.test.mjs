@@ -87,7 +87,10 @@ assert.match(source, /stage: "auto_finalizing"/);
 assert.match(source, /const VIDEO_PROGRESS_STEP_DEFINITIONS = \[/);
 assert.match(source, /label: "准备"/);
 assert.match(source, /label: "归档"/);
-assert.match(source, /steps: videoProgressSteps\(monitor\.stage\)/);
+assert.match(source, /function progressStepsForMonitor\(/);
+assert.match(source, /steps: progressStepsForMonitor\(monitor, monitor\.stage/);
+assert.match(source, /new window\.EventSource\(`/);
+assert.match(source, /key: `segment-\$\{index\}`/);
 assert.doesNotMatch(source, /applyConfirmedPromptPreview\(module, draft\.values, preview\)/);
 const applyConfirmedPromptPreview = Function(
   "requiresPromptPreview",

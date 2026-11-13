@@ -508,34 +508,313 @@
     { key: "archive", label: "归档", description: "同步到视频记录" },
   ];
 
-  function videoProgressSteps(stage = "prepare") {
-    const requested = String(stage || "prepare").trim().toLowerCase();
-    if (requested === "complete") {
-      return VIDEO_PROGRESS_STEP_DEFINITIONS.map((step) => ({ ...step, status: "complete" }));
+  const VIDEO_PROGRESS_MODULE_COPY = {
+    digital_human_video: {
+      name: "数字人口播视频",
+      prepare: ["素材", "校验人物、产品图与参考音频"],
+      prompt: ["口播/分镜", "确认口播文案和分镜方式"],
+      submit: ["提交", "创建数字人口播任务"],
+      generate: ["生成", "生成数字人画面与配音"],
+      compose: ["合成", "合成最终数字人口播视频"],
+      archive: ["归档", "同步数字人视频记录"],
+    },
+    ecommerce_short_video: {
+      name: "广告短视频",
+      prepare: ["素材", "校验商品、人物和参考素材"],
+      prompt: ["脚本/提示词", "确认广告脚本和画面提示"],
+      submit: ["提交", "创建广告短视频任务"],
+      generate: ["生成", "生成画面、音频和分镜片段"],
+      compose: ["合成", "合成最终广告短视频"],
+      archive: ["归档", "同步广告短视频记录"],
+    },
+    video_language_replace: {
+      name: "视频语种更换",
+      prepare: ["准备", "校验源视频和目标语言"],
+      prompt: ["台词", "解析并确认原视频台词"],
+      submit: ["提交", "创建语音替换任务"],
+      generate: ["配音", "生成目标语言音频"],
+      compose: ["替换", "合成替换后的音轨"],
+      archive: ["归档", "同步语种更换结果"],
+    },
+    video_subject_replace: {
+      name: "视频模特/商品替换",
+      prepare: ["素材", "校验源视频和替换素材"],
+      prompt: ["方案", "确认替换对象和处理参数"],
+      submit: ["提交", "创建视频替换任务"],
+      generate: ["处理", "生成替换后的视频片段"],
+      compose: ["合成", "合并替换后的视频"],
+      archive: ["归档", "同步视频替换记录"],
+    },
+    ecommerce_image: {
+      name: "电商广告图",
+      prepare: ["素材", "校验商品和人物参考图"],
+      prompt: ["画面方案", "确认商品广告画面参数"],
+      submit: ["提交", "创建电商广告图任务"],
+      generate: ["生图", "生成商品广告图片"],
+      compose: ["处理", "整理并校验生成图片"],
+      archive: ["归档", "同步图片素材记录"],
+    },
+    subject_replace: {
+      name: "图片主体替换",
+      prepare: ["素材", "校验原图和替换主体"],
+      prompt: ["方案", "确认主体替换参数"],
+      submit: ["提交", "创建图片替换任务"],
+      generate: ["生图", "生成替换后的图片"],
+      compose: ["处理", "整理生成结果"],
+      archive: ["归档", "同步图片记录"],
+    },
+    poster_translate: {
+      name: "海报翻译",
+      prepare: ["素材", "校验海报和目标语言"],
+      prompt: ["版式", "确认翻译文本和版式参数"],
+      submit: ["提交", "创建海报翻译任务"],
+      generate: ["翻译", "生成目标语言海报"],
+      compose: ["处理", "校验翻译后的版式"],
+      archive: ["归档", "同步海报素材记录"],
+    },
+    subject_generate: {
+      name: "主体生成",
+      prepare: ["素材", "校验生成方向和参考素材"],
+      prompt: ["方案", "确认主体生成提示词"],
+      submit: ["提交", "创建主体生成任务"],
+      generate: ["生图", "生成主体图片"],
+      compose: ["处理", "整理生成结果"],
+      archive: ["归档", "同步主体素材记录"],
+    },
+  };
+
+  function videoProgressInput(context = {}) {
+    const taskInput = context?.task?.input && typeof context.task.input === "object" ? context.task.input : {};
+    const values = context?.values && typeof context.values === "object" ? context.values : {};
+    const eventData = context?.progressEvent?.data && typeof context.progressEvent.data === "object" ? context.progressEvent.data : {};
+    return { ...eventData, ...values, ...taskInput };
+  }
+
+  function videoProgressModuleId(context = {}) {
+    const task = context?.task && typeof context.task === "object" ? context.task : {};
+    const fallback = String(context?.moduleId || state.moduleId || "").trim();
+    const candidate = String(
+      context?.moduleId
+      || task.moduleId
+      || task.video_module
+      || task.module
+      || task.module_id
+      || "",
+    ).trim();
+    if (MODULE_ORDER.includes(candidate)) return candidate;
+    if (candidate === "create_video") return "digital_human_video";
+    if (candidate === "image_generate") return fallback === "subject_generate" ? fallback : "ecommerce_image";
+    if (["replace_model", "replace_product", "replace_productANDmodel"].includes(candidate)) return "video_subject_replace";
+    return MODULE_ORDER.includes(fallback) ? fallback : "digital_human_video";
+  }
+
+  function videoProgressModuleCopy(context = {}) {
+    const moduleId = videoProgressModuleId(context);
+    const input = videoProgressInput(context);
+    const source = VIDEO_PROGRESS_MODULE_COPY[moduleId] || VIDEO_PROGRESS_MODULE_COPY.digital_human_video;
+    if (moduleId === "ecommerce_short_video" && String(input.ecommerce_video_mode || "") === "seeding_video") {
+      return {
+        ...source,
+        name: "种草视频",
+        prompt: ["分享脚本", "确认种草口播和分镜方案"],
+        submit: ["提交", "创建种草视频任务"],
+        generate: ["分镜生成", "生成口播音频和种草分镜"],
+        compose: ["合成", "合成最终种草视频"],
+        archive: ["归档", "同步种草视频记录"],
+      };
     }
+    return source;
+  }
+
+  function videoProgressSegments(context = {}) {
+    const task = context?.task && typeof context.task === "object" ? context.task : {};
+    const input = videoProgressInput(context);
+    const progressEvent = context?.progressEvent && typeof context.progressEvent === "object" ? context.progressEvent : {};
+    const eventData = progressEvent.data && typeof progressEvent.data === "object" ? progressEvent.data : {};
+    const output = taskOutput(task);
+    const raw = output?.raw_result && typeof output.raw_result === "object" ? output.raw_result : {};
+    const checkpoint = output?.video_checkpoint && typeof output.video_checkpoint === "object" ? output.video_checkpoint : {};
+    const candidates = [
+      context?.segmentCount,
+      task.segment_count,
+      task.segmentCount,
+      task.input?.segment_count,
+      output.segment_count,
+      raw.segment_count,
+      checkpoint.segment_count,
+      progressEvent.segmentCount,
+      eventData.segment_count,
+      eventData.segmentCount,
+    ];
+    let count = candidates.map((value) => Number(value)).find((value) => Number.isInteger(value) && value > 0) || 0;
+    const planned = [
+      task.segments,
+      task.storyboard?.items,
+      task.segment_scripts,
+      task.prompt_segments,
+      checkpoint.segment_scripts,
+      eventData.segments,
+      eventData.segment_scripts,
+      eventData.prompt_segments,
+    ]
+      .find((value) => Array.isArray(value) && value.length) || [];
+    const completed = [task.completed_segments, eventData.completed_segments, eventData.completedSegments]
+      .find((value) => Array.isArray(value)) || [];
+    if (!count && planned.length > 1) count = planned.length;
+    if (!count && completed.length > 1) count = completed.length;
+    const completedIndices = new Set(
+      completed.map((item, index) => Number(item?.index ?? item?.segment_index ?? index + 1))
+        .filter((value) => Number.isInteger(value) && value > 0),
+    );
+    const moduleId = videoProgressModuleId(context);
+    const inputMode = String(input.digital_human_content_mode || "").trim();
+    const isOral = moduleId === "digital_human_video" && inputMode === "oral_broadcast";
+    return {
+      count,
+      completedIndices,
+      isOral,
+      isMulti: count > 1,
+      mode: String(input.digital_human_short_mode || "").trim().toLowerCase(),
+    };
+  }
+
+  function videoProgressStageFromName(value, fallback = "generate") {
+    const stage = String(value || "").trim().toLowerCase();
+    if (!stage) return fallback;
+    if (["queued", "pending", "submitted", "queue", "start"].includes(stage)) return "submit";
+    if (stage === "finished" || stage === "complete" || stage === "completed") return "compose";
+    if (stage.includes("script") || stage.includes("prompt") || stage.includes("copy") || stage.includes("transcrib")) return "prompt";
+    if (stage.includes("merge") || stage.includes("subtitle") || stage.includes("final") || stage.includes("concat") || stage.includes("compose") || stage.includes("render")) return "compose";
+    if (stage.includes("archive") || stage.includes("record")) return "archive";
+    if (stage.includes("adapter")) return "submit";
+    return "generate";
+  }
+
+  function videoProgressStageFromTask(task, fallback = "generate", progressEvent = null) {
+    const output = taskOutput(task);
+    const raw = output?.raw_result && typeof output.raw_result === "object" ? output.raw_result : {};
+    const checkpoint = output?.video_checkpoint && typeof output.video_checkpoint === "object" ? output.video_checkpoint : {};
+    const eventData = progressEvent?.data && typeof progressEvent.data === "object" ? progressEvent.data : {};
+    const stage = progressEvent?.stage
+      || task?.progress_stage
+      || task?.stage
+      || task?.phase
+      || task?.video_stage
+      || raw.digital_human_stage
+      || raw.seeding_stage
+      || checkpoint.stage
+      || "";
+    if (String(stage).trim().toLowerCase() === "visual_review" || String(stage).trim().toLowerCase() === "images_only") return "compose";
+    if (eventData.stage && !progressEvent?.stage) return videoProgressStageFromName(eventData.stage, fallback);
+    return videoProgressStageFromName(stage, fallback);
+  }
+
+  function videoProgressMessage(monitor, task, stage, status) {
+    const context = { moduleId: monitor?.moduleId, values: monitor?.values, task };
+    const copy = videoProgressModuleCopy(context);
+    const segments = videoProgressSegments(context);
+    const event = monitor?.latestProgress;
+    const eventStage = String(event?.stage || "").toLowerCase();
+    const completedCount = segments.completedIndices.size;
+    const eventIndex = Number(event?.segmentIndex || event?.data?.segment_index || event?.data?.segmentIndex || 0);
+    if (["queued", "pending", "submitted"].includes(String(status || "").toLowerCase())) {
+      return `${copy.name}任务已提交，正在排队等待生成服务…`;
+    }
+    if (segments.isMulti && (eventStage.includes("segment") || eventStage.includes("video") || stage === "generate")) {
+      const current = Math.min(Math.max(eventIndex || completedCount + 1, 1), segments.count);
+      return `${copy.name}正在生成第 ${current}/${segments.count} 段${segments.isOral ? "口播" : "画面与音频"}…`;
+    }
+    if (segments.isOral && stage === "generate") return `${copy.name}正在生成单段口播画面与音频…`;
+    if (stage === "prompt") return `${copy.name}正在整理${segments.isOral ? "口播文案" : "文案和画面提示"}…`;
+    if (stage === "submit") return `${copy.name}正在创建服务器任务…`;
+    if (stage === "compose") return `${copy.name}正在合成最终结果…`;
+    if (stage === "archive") return `${copy.name}已生成，正在同步结果记录…`;
+    return `${copy.name}${copy[stage]?.[0] || "生成"}处理中…`;
+  }
+
+  function videoProgressSteps(stage = "prepare", context = {}) {
+    const requested = String(stage || "prepare").trim().toLowerCase();
+    const copy = videoProgressModuleCopy(context);
+    const definitions = VIDEO_PROGRESS_STEP_DEFINITIONS.map((step) => {
+      const replacement = copy[step.key];
+      return replacement ? { ...step, label: replacement[0], description: replacement[1] } : { ...step };
+    });
+    const forceComplete = requested === "complete";
     const errorIndex = requested === "error"
-      ? VIDEO_PROGRESS_STEP_DEFINITIONS.findIndex((step) => step.key === "generate")
+      ? definitions.findIndex((step) => step.key === "generate")
       : -1;
     const activeIndex = errorIndex >= 0
       ? errorIndex
-      : Math.max(0, VIDEO_PROGRESS_STEP_DEFINITIONS.findIndex((step) => step.key === requested));
-    return VIDEO_PROGRESS_STEP_DEFINITIONS.map((step, index) => ({
+      : Math.max(0, definitions.findIndex((step) => step.key === requested));
+    const steps = definitions.map((step, index) => ({
       ...step,
-      status: errorIndex >= 0
+      status: forceComplete
+        ? "complete"
+        : errorIndex >= 0
         ? (index < activeIndex ? "complete" : index === activeIndex ? "error" : "pending")
         : (index < activeIndex ? "complete" : index === activeIndex ? "active" : "pending"),
     }));
+    const segments = videoProgressSegments(context);
+    if (!segments.isMulti) {
+      if (segments.isOral) {
+        const generate = steps.find((step) => step.key === "generate");
+        if (generate) {
+          generate.label = "单段口播";
+          generate.description = "生成单段口播画面与配音";
+        }
+      }
+      return steps;
+    }
+    const stageIsComplete = ["compose", "archive", "complete"].includes(requested);
+    const nextIndex = Math.min(Math.max(segments.completedIndices.size + 1, 1), segments.count);
+    const segmentLabel = segments.isOral ? "口播" : (videoProgressModuleId(context) === "ecommerce_short_video" ? "分镜" : "片段");
+    const segmentSteps = Array.from({ length: segments.count }, (_, offset) => {
+      const index = offset + 1;
+      const complete = stageIsComplete || segments.completedIndices.has(index);
+      const active = !complete && requested === "generate" && index === nextIndex;
+      return {
+        key: `segment-${index}`,
+        label: `${segmentLabel} ${index}/${segments.count}`,
+        description: complete ? "已完成" : active ? "正在处理" : "等待处理",
+        status: errorIndex >= 0 && active ? "error" : complete ? "complete" : active ? "active" : "pending",
+      };
+    });
+    const generateIndex = steps.findIndex((step) => step.key === "generate");
+    if (generateIndex >= 0) {
+      steps[generateIndex].label = segments.isOral ? "多段口播" : "分段生成";
+      steps[generateIndex].description = segments.isOral
+        ? `按 ${segments.count} 段口播依次生成`
+        : `按 ${segments.count} 个片段依次生成`;
+      steps.splice(generateIndex + 1, 0, ...segmentSteps);
+    }
+    return steps;
+  }
+
+  function progressStepsForMonitor(monitor, stage = monitor?.stage || "generate", task = monitor?.task || null) {
+    return videoProgressSteps(stage, {
+      moduleId: monitor?.moduleId,
+      values: monitor?.values,
+      task,
+      progressEvent: monitor?.latestProgress,
+    });
   }
 
   function openVideoProgress(title, messages, options = {}) {
     const promptOptions = options && typeof options === "object" ? options : {};
     const stage = String(promptOptions.stage || "prepare");
+    const progressContext = promptOptions.progressContext && typeof promptOptions.progressContext === "object"
+      ? promptOptions.progressContext
+      : {};
     return window.VectoPublicPrompt?.open?.({
       ...promptOptions,
       title,
       message: Array.isArray(messages) ? messages[0] : messages,
       messages,
-      steps: promptOptions.steps || videoProgressSteps(stage),
+      steps: promptOptions.steps || videoProgressSteps(stage, {
+        moduleId: promptOptions.moduleId || progressContext.moduleId,
+        values: promptOptions.values || progressContext.values,
+        task: progressContext.task,
+      }),
       status: "progress",
       busy: true,
       rotateMessages: false,
@@ -636,24 +915,48 @@
     }
   }
 
+  function normalizeVideoProgressEvent(payload) {
+    const source = payload && typeof payload === "object" ? payload : {};
+    const data = source.data && typeof source.data === "object" ? source.data : {};
+    const nested = data.data && typeof data.data === "object" ? data.data : {};
+    return {
+      id: Number(source.id || 0),
+      stage: String(data.stage || nested.stage || source.stage || "").trim(),
+      state: String(data.state || nested.state || source.state || data.status || "").trim().toLowerCase(),
+      message: String(source.message || data.status || nested.status || source.status || "").trim(),
+      progress: Number(data.progress ?? nested.progress ?? source.progress ?? 0),
+      segmentIndex: Number(data.segment_index ?? nested.segment_index ?? source.segment_index ?? 0),
+      data: { ...data, ...nested },
+    };
+  }
+
+  function monitorProgressStage(monitor, task) {
+    return videoProgressStageFromTask(task, monitor?.stage || "generate", monitor?.latestProgress);
+  }
+
   function updateSubmittedTaskPrompt(monitor, task) {
     if (!monitor.prompt?.isOpen?.()) return;
     const status = String(task?.status || "queued").toLowerCase();
     const progress = Math.max(0, Math.min(100, Number(task?.progress || 0)));
     const statusText = statusCopy(status, task);
     const taskLabel = monitor.taskId ? `任务编号：${monitor.taskId}` : "任务编号正在分配";
-    monitor.stage = status === "queued" || status === "pending" ? "submit" : "generate";
-    const messages = status === "queued" || status === "pending"
-      ? ["任务已提交，正在排队等待生成服务…", "正在等待服务器接收任务…", "任务开始后会自动更新进度…"]
-      : ["生成服务正在处理素材和文案…", "正在生成画面与音频，请保持页面打开…", "完成后会自动同步到视频记录…"];
+    monitor.stage = status === "queued" || status === "pending" ? "submit" : monitorProgressStage(monitor, task);
+    const context = { moduleId: monitor.moduleId, values: monitor.values, task };
+    const copy = videoProgressModuleCopy(context);
+    const messages = [videoProgressMessage(monitor, task, monitor.stage, status)];
+    const eventMessage = String(monitor.latestProgress?.message || "").trim();
+    const detailMessage = /[\u4e00-\u9fff]/.test(eventMessage) ? eventMessage : "";
+    const stageDescription = copy[monitor.stage]?.[1] || "系统会持续同步任务状态";
+    const segmentInfo = videoProgressSegments(context);
+    monitor.task = task;
     monitor.prompt.update({
-      title: `视频任务${statusText}`,
+      title: `${copy.name}任务${statusText}`,
       message: messages[0],
-      detail: `${taskLabel}${progress > 0 ? ` · 当前进度约 ${progress}%` : ""}。系统会持续查询任务状态。`,
+      detail: `${taskLabel}${progress > 0 ? ` · 当前进度约 ${progress}%` : ""} · ${detailMessage || stageDescription}${segmentInfo.isMulti ? ` · 已完成 ${segmentInfo.completedIndices.size}/${segmentInfo.count} 段` : ""}`,
       status: "progress",
       busy: true,
       messages,
-      steps: videoProgressSteps(monitor.stage),
+      steps: progressStepsForMonitor(monitor, monitor.stage, task),
       showClose: false,
       showConfirm: false,
       showCancel: false,
@@ -669,7 +972,7 @@
     await loadTasks({ quiet: true });
     const childTaskId = taskIdFromResponse(result);
     if (childTaskId) {
-      monitorSubmittedTask(childTaskId, progress, moduleId, label);
+      monitorSubmittedTask(childTaskId, progress, moduleId, label, options.monitorContext || {});
       return childTaskId;
     }
     if (options.requireTaskId) {
@@ -692,7 +995,7 @@
     return "";
   }
 
-  function monitorSubmittedTask(taskId, prompt, moduleId = "", label = "视频") {
+  function monitorSubmittedTask(taskId, prompt, moduleId = "", label = "视频", options = {}) {
     const cleanId = String(taskId || "").trim();
     if (!cleanId) return;
     const existing = submittedTaskMonitors.get(cleanId);
@@ -705,21 +1008,53 @@
       prompt,
       moduleId: String(moduleId || state.moduleId || ""),
       label: String(label || "视频"),
+      values: options?.values && typeof options.values === "object" ? { ...options.values } : {},
       startedAt: Date.now(),
       timer: 0,
       done: false,
       archiveAttempts: 0,
       stage: "submit",
+      task: null,
+      latestProgress: null,
+      eventSource: null,
     };
     submittedTaskMonitors.set(cleanId, monitor);
     const finish = () => {
       monitor.done = true;
       if (monitor.timer) window.clearTimeout(monitor.timer);
       monitor.timer = 0;
+      if (monitor.eventSource) monitor.eventSource.close();
+      monitor.eventSource = null;
       submittedTaskMonitors.delete(cleanId);
     };
     const schedule = () => {
       if (!monitor.done) monitor.timer = window.setTimeout(() => { void poll(); }, TASK_MONITOR_INTERVAL_MS);
+    };
+    const startEventStream = () => {
+      if (monitor.done || monitor.eventSource || typeof window.EventSource !== "function") return;
+      const source = new window.EventSource(`/api/tasks/${encodeURIComponent(cleanId)}/events`);
+      monitor.eventSource = source;
+      source.addEventListener("progress", (event) => {
+        if (monitor.done) return;
+        try {
+          const payload = JSON.parse(String(event.data || "{}"));
+          const progressEvent = normalizeVideoProgressEvent(payload);
+          if (progressEvent.id) monitor.lastEventId = progressEvent.id;
+          monitor.latestProgress = progressEvent;
+          if (progressEvent.state === "failed" || progressEvent.state === "success") {
+            void poll();
+            return;
+          }
+          const task = monitor.task || { id: cleanId, status: "running", moduleId: monitor.moduleId };
+          monitor.stage = monitorProgressStage(monitor, task);
+          updateSubmittedTaskPrompt(monitor, task);
+        } catch (_) {}
+      });
+      source.addEventListener("done", () => { void poll(); });
+      source.onerror = () => {
+        if (monitor.eventSource === source) monitor.eventSource = null;
+        source.close();
+      };
     };
     const poll = async () => {
       if (monitor.done) return;
@@ -731,7 +1066,7 @@
           status: "warning",
           busy: false,
           messages: ["任务仍未返回最终状态，后台可能仍在处理。"],
-          steps: videoProgressSteps("error"),
+          steps: progressStepsForMonitor(monitor, "error"),
           showClose: true,
           actions: [{ value: "view-workbench", text: "查看任务动态", primary: true, onSelect: () => openVideoTaskWorkbench(monitor.moduleId) }],
           showConfirm: false,
@@ -746,14 +1081,15 @@
           || state.tasks.find((item) => item.id === cleanId);
         if (!task) {
           monitor.stage = "submit";
+          const copy = videoProgressModuleCopy({ moduleId: monitor.moduleId, values: monitor.values });
           monitor.prompt?.update?.({
-            title: `${monitor.label}任务已提交`,
-            message: "任务已提交，正在等待服务器接收…",
+            title: `${copy.name}任务已提交`,
+            message: `${copy.name}任务已提交，正在等待服务器接收…`,
             detail: `任务编号：${cleanId}。系统会自动重试查询，不会丢失。`,
             status: "progress",
             busy: true,
-            messages: ["任务已提交，正在等待服务器接收…", "正在同步任务状态…", "完成后会自动同步到视频记录…"],
-            steps: videoProgressSteps(monitor.stage),
+            messages: [`${copy.name}任务已提交，正在等待服务器接收…`],
+            steps: progressStepsForMonitor(monitor, monitor.stage),
             showClose: false,
             showConfirm: false,
             showCancel: false,
@@ -762,6 +1098,7 @@
           schedule();
           return;
         }
+        monitor.task = task;
         const status = String(task.status || "").toLowerCase();
         if (["failed", "error", "cancelled", "canceled"].includes(status)) {
           showVideoError(
@@ -783,16 +1120,15 @@
             return;
           }
           const finalModuleId = videoModuleForTask(task, monitor.moduleId);
+          const finalCopy = videoProgressModuleCopy({ moduleId: finalModuleId, values: monitor.values, task });
           monitor.prompt?.update?.({
-            title: isDigitalHuman ? "正在自动合成数字人视频" : "正在自动合成种草视频",
-            message: isDigitalHuman
-              ? "数字人画面已生成，系统正在自动确认并合成最终视频…"
-              : "种草视频分镜图已生成，系统正在自动确认并合成最终视频…",
+            title: `正在自动合成${finalCopy.name}`,
+            message: `${finalCopy.name}画面已生成，系统正在自动确认并合成最终视频…`,
             detail: `任务编号：${cleanId}。无需人工点击，系统会自动提交最终视频并继续追踪。`,
             status: "progress",
             busy: true,
-            messages: [isDigitalHuman ? "数字人画面已生成，系统正在自动确认并合成最终视频…" : "种草视频分镜图已生成，系统正在自动确认并合成最终视频…"],
-            steps: videoProgressSteps("compose"),
+            messages: [`${finalCopy.name}画面已生成，系统正在自动确认并合成最终视频…`],
+            steps: progressStepsForMonitor(monitor, "compose", task),
             showClose: false,
             showConfirm: false,
             showCancel: false,
@@ -801,7 +1137,10 @@
           dispatchVideoTaskEvent("vecto:video-task-stage", { taskId: cleanId, status, stage: "auto_finalizing", sourceStage: reviewKind, moduleId: finalModuleId });
           monitor.finalizePromise = (async () => {
             try {
-              await submitVisualFinalizeTask(cleanId, reviewKind, monitor.prompt, finalModuleId, "最终视频", { requireTaskId: true });
+              await submitVisualFinalizeTask(cleanId, reviewKind, monitor.prompt, finalModuleId, "最终视频", {
+                requireTaskId: true,
+                monitorContext: { values: monitor.values },
+              });
               finish();
             } catch (error) {
               showVideoError(
@@ -822,14 +1161,15 @@
             monitor.archiveAttempts += 1;
             if (monitor.archiveAttempts <= 5) {
               monitor.stage = "archive";
+              const copy = videoProgressModuleCopy({ moduleId: monitor.moduleId, values: monitor.values, task });
               monitor.prompt?.update?.({
-                title: "视频已生成，正在同步视频记录",
-                message: "视频已成功返回，系统正在自动同步到视频记录…",
+                title: `${copy.name}已生成，正在同步记录`,
+                message: `${copy.name}已成功返回，系统正在自动同步到记录…`,
                 detail: `任务编号：${cleanId}。正在进行第 ${monitor.archiveAttempts} 次同步校验，无需人工操作。`,
                 status: "progress",
                 busy: true,
-                messages: ["视频已成功返回，系统正在自动同步到视频记录…"],
-                steps: videoProgressSteps(monitor.stage),
+                messages: [`${copy.name}已成功返回，系统正在自动同步到记录…`],
+                steps: progressStepsForMonitor(monitor, monitor.stage, task),
                 showClose: false,
                 showConfirm: false,
                 showCancel: false,
@@ -845,7 +1185,7 @@
               status: "warning",
               busy: false,
               messages: ["视频已成功返回，但暂未出现在视频记录中。"],
-              steps: videoProgressSteps("archive").map((step) => ({
+              steps: progressStepsForMonitor(monitor, "archive", task).map((step) => ({
                 ...step,
                 status: step.key === "archive" ? "error" : step.status,
               })),
@@ -856,14 +1196,15 @@
             });
           } else {
             monitor.stage = "complete";
+            const copy = videoProgressModuleCopy({ moduleId: monitor.moduleId, values: monitor.values, task });
             monitor.prompt?.update?.({
-              title: `${monitor.label}生成完成`,
-              message: "视频已生成并同步到视频记录。",
+              title: `${copy.name}生成完成`,
+              message: `${copy.name}已生成并同步到视频记录。`,
               detail: `任务编号：${cleanId}。可在视频记录中预览、下载或继续剪辑。`,
               status: "success",
               busy: false,
-              messages: ["视频已生成并同步到视频记录。"],
-              steps: videoProgressSteps(monitor.stage),
+              messages: [`${copy.name}已生成并同步到视频记录。`],
+              steps: progressStepsForMonitor(monitor, monitor.stage, task),
               showClose: true,
               showConfirm: false,
               showCancel: false,
@@ -883,7 +1224,7 @@
           status: "progress",
           busy: true,
           messages: ["暂时无法读取最新状态，系统正在自动重试…", "正在重新连接任务服务…", "不会重复扣除本次任务的算力点…"],
-          steps: videoProgressSteps(monitor.stage || "generate"),
+          steps: progressStepsForMonitor(monitor, monitor.stage || "generate", monitor.task),
           showClose: false,
           showConfirm: false,
           showCancel: false,
@@ -892,6 +1233,7 @@
       }
       schedule();
     };
+    startEventStream();
     void poll();
   }
 
@@ -1157,7 +1499,7 @@
       "正在整理产品信息和素材…",
       "正在生成口播文案与画面提示词…",
       "正在检查生成内容，请稍候…",
-    ], { stage: "prompt" });
+    ], { stage: "prompt", moduleId: module.id, values: draft.values });
     try {
       const values = publicSubmitValues(module, draft);
       const preview = await confirmPromptPreview(module, values);
@@ -1178,7 +1520,7 @@
           status: "progress",
           busy: true,
           messages: ["提示词 / 文案已生成，正在自动提交视频任务…"],
-          steps: videoProgressSteps("submit"),
+          steps: videoProgressSteps("submit", { moduleId: module.id, values: submitValues }),
           showClose: false,
           showConfirm: false,
           showCancel: false,
@@ -3338,8 +3680,8 @@
       "正在校验输入内容和素材…",
       "正在上传素材并创建任务…",
       "正在排入生成队列，请稍候…",
-    ], { stage: "submit" });
-    currentProgress?.update?.({ steps: videoProgressSteps("submit") });
+    ], { stage: "submit", moduleId: module.id, values: submitValues });
+    currentProgress?.update?.({ steps: videoProgressSteps("submit", { moduleId: module.id, values: submitValues }) });
     const fileManifest = [];
     const body = new FormData();
     body.append("module", module.id);
@@ -3382,8 +3724,8 @@
       );
       return "";
     }
-    currentProgress?.update?.({ steps: videoProgressSteps("generate") });
-    monitorSubmittedTask(taskId, currentProgress, module.id, label);
+    currentProgress?.update?.({ steps: videoProgressSteps("generate", { moduleId: module.id, values: submitValues }) });
+    monitorSubmittedTask(taskId, currentProgress, module.id, label, { values: submitValues });
     return taskId;
   }
 
@@ -3440,7 +3782,7 @@
         "正在校验输入内容和素材…",
         "正在上传素材并创建任务…",
         "正在排入生成队列，请稍候…",
-      ], { stage: "submit" });
+      ], { stage: "submit", moduleId: module.id, values: submitValues });
       await submitPreparedVideoTask(module, draft, submitValues, progress);
     } catch (error) {
       state.submitError = showVideoError(error, "任务提交失败：请检查输入、素材和算力余额后重试。", "生成任务提交失败", progress);
