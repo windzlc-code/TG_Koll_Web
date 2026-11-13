@@ -190,11 +190,11 @@
           file("product", oral ? "场景图" : "产品图", "image/*", { required: true, multiple: !oral, maxFiles: oral ? 1 : 3, previewSlots: oral ? 1 : 3, help: oral ? "上传 1 张口播背景/场景图；口播模式固定单镜头，不生成分镜图" : "点击素材位逐个上传；最多保留 3 个素材位" }),
           file("audio", "参考音频/干音", "audio/*", { required: true }),
           text("product_name", oral ? "口播主题" : "产品/项目名称", { placeholder: oral ? "例如：东京租房避坑 / AI 工具干货 / 职场沟通技巧" : "例如：海景公寓 / 鱼油 / 汽车" }),
-          textarea("product_details", oral ? "文案需求" : "产品相关简介", { placeholder: oral ? "可选：说明口播主题、受众、核心观点、段落方向、语气风格；AI 会据此生成口播文案" : "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情；只用于 AI 生成文案或提示词", wide: true }),
+          textarea("product_details", oral ? "文案需求" : "产品相关简介", { placeholder: oral ? "可选：说明口播主题、受众、核心观点、段落方向、语气风格；AI 会据此生成口播文案" : "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情；只用于 AI 生成文案或提示词", help: oral ? "作为 AI 生成口播文案的主题和方向参考；填写口播文案后，最终配音以口播文案为准，不会自动拼接" : "仅作为 AI 生成口播文案和画面提示词的事实参考；填写口播文案后，最终配音以口播文案为准，不会自动拼接", wide: true }),
           ...(oral ? [number("oral_target_duration_seconds", "目标口播时长（秒）", { default: 30, min: 5, max: 180, step: 1 })] : []),
           select("target_language", "口播语言", LANGUAGE_OPTIONS, { default: "Chinese", placement: "voice" }),
           select("minimax_tts_model", "音频模型", RUNNINGHUB_SPEECH_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
-          textarea("speech_text", "口播文案", { placeholder: oral ? "可手动输入成稿，也可留空让 AI 根据文案需求和场景图生成" : "可手动输入，也可留空让 AI 根据图片生成", wide: true }),
+          textarea("speech_text", "口播文案", { placeholder: oral ? "可手动输入成稿，也可留空让 AI 根据文案需求和场景图生成" : "可手动输入，也可留空让 AI 根据图片生成", help: oral ? "填写后作为最终配音文案；留空时由 AI 根据文案需求和场景图生成" : "填写后作为最终配音文案；留空时由 AI 根据产品简介和图片生成", wide: true }),
           select("ratio", "画面比例", VIDEO_RATIO_OPTIONS, { default: "9:16" }),
           select("image_resolution", "图片分辨率", IMAGE_RESOLUTION_OPTIONS, { default: "2K" }),
           ...(!oral ? [select("digital_human_short_mode", "分镜模式", [{ value: "storyboard", label: "多分镜" }, { value: "single", label: "单镜头" }], { default: "storyboard" })] : []),
@@ -1069,7 +1069,8 @@
   function applyConfirmedPromptPreview(module, submitValues, promptPreview) {
     if (!requiresPromptPreview(module)) return submitValues;
     if (!promptPreview || typeof promptPreview !== "object") return submitValues;
-    if (Object.prototype.hasOwnProperty.call(promptPreview, "speech_text")) {
+    const hasAuthoredSpeech = Boolean(String(submitValues.speech_text || "").trim() || String(submitValues.copy_text || "").trim());
+    if (Object.prototype.hasOwnProperty.call(promptPreview, "speech_text") && !hasAuthoredSpeech) {
       submitValues.speech_text = promptPreview.speech_text;
       submitValues.speech_text = String(submitValues.speech_text || "");
       if (module.id === "ecommerce_short_video") submitValues.copy_text = submitValues.speech_text;
@@ -1078,7 +1079,8 @@
       submitValues.speech_candidates = promptPreview.speech_candidates;
       submitValues.selected_speech_candidate_index = Number(promptPreview.selected_speech_candidate_index) || 0;
     }
-    if (Object.prototype.hasOwnProperty.call(promptPreview, "prompt_text")) {
+    const hasAuthoredPrompt = Boolean(String(submitValues.prompt_text || "").trim() || String(submitValues.prompt || "").trim());
+    if (Object.prototype.hasOwnProperty.call(promptPreview, "prompt_text") && !hasAuthoredPrompt) {
       submitValues.prompt_text = String(promptPreview.prompt_text || "");
       submitValues.prompt = promptPreview.prompt_text;
       submitValues.prompt = String(submitValues.prompt || "");
@@ -1110,7 +1112,6 @@
 
   function invalidatePromptPreview(module, draft, changedKey = "") {
     if (!requiresPromptPreview(module)) return;
-    if (["speech_text", "copy_text", "prompt_text"].includes(String(changedKey || ""))) return;
     delete draft.values._prompt_preview;
     draft.values._prompt_preview_ready = false;
   }
@@ -1121,9 +1122,14 @@
     const editable = Object.fromEntries(
       ["speech_text", "copy_text", "prompt_text", "prompt"].map((key) => [key, submitValues[key]])
     );
+    const shouldRestoreEditableValue = (key, value) => {
+      if (value === undefined) return false;
+      if (["speech_text", "copy_text", "prompt_text", "prompt"].includes(key)) return Boolean(String(value || "").trim());
+      return true;
+    };
     applyConfirmedPromptPreview(module, submitValues, preview);
     for (const [key, value] of Object.entries(editable)) {
-      if (value !== undefined) submitValues[key] = value;
+      if (shouldRestoreEditableValue(key, value)) submitValues[key] = value;
     }
     if (module.id === "ecommerce_short_video" && submitValues.copy_text !== undefined) {
       submitValues.speech_text = submitValues.copy_text;

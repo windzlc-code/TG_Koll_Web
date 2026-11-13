@@ -74,7 +74,10 @@ assert.match(functionBody("confirmPromptPreview"), /body\.append\("files", file\
 assert.match(confirmedPreview, /submitValues\.speech_text\s*=\s*promptPreview\.speech_text/);
 assert.match(confirmedPreview, /submitValues\.prompt_text\s*=\s*String\(promptPreview\.prompt_text/);
 assert.match(confirmedPreview, /submitValues\.copy_text\s*=\s*submitValues\.speech_text/);
-assert.doesNotMatch(confirmedPreview, /!String\(submitValues\.(?:speech_text|prompt_text)/);
+assert.match(confirmedPreview, /const hasAuthoredSpeech = Boolean\(String\(submitValues\.speech_text/);
+assert.match(confirmedPreview, /hasOwnProperty\.call\(promptPreview, "speech_text"\) && !hasAuthoredSpeech/);
+assert.match(confirmedPreview, /const hasAuthoredPrompt = Boolean\(String\(submitValues\.prompt_text/);
+assert.match(confirmedPreview, /hasOwnProperty\.call\(promptPreview, "prompt_text"\) && !hasAuthoredPrompt/);
 assert.match(functionBody("submit"), /!draft\.values\._prompt_preview_ready\s*\|\|\s*!draft\.values\._prompt_preview/);
 assert.match(functionBody("submit"), /await generatePromptDraft\(\{ autoSubmit: true \}\)/);
 assert.match(functionBody("submit"), /applyStoredPromptPreviewForSubmit\(module, submitValues, draft\)/);
@@ -92,7 +95,7 @@ const applyConfirmedPromptPreview = Function(
 )((module) => ["digital_human_video", "ecommerce_short_video"].includes(String(module?.id || module || "")));
 const confirmedValues = applyConfirmedPromptPreview(
   { id: "ecommerce_short_video" },
-  { speech_text: "old speech", copy_text: "old copy", prompt_text: "old prompt", prompt: "old prompt" },
+  { speech_text: "", copy_text: "", prompt_text: "", prompt: "" },
   { speech_text: "confirmed speech", prompt_text: "confirmed prompt", storyboard: [{ prompt: "confirmed shot" }] },
 );
 assert.equal(confirmedValues.speech_text, "confirmed speech");
@@ -100,6 +103,48 @@ assert.equal(confirmedValues.copy_text, "confirmed speech");
 assert.equal(confirmedValues.prompt_text, "confirmed prompt");
 assert.equal(confirmedValues.prompt, "confirmed prompt");
 assert.deepEqual(confirmedValues.prompt_segments, ["confirmed shot"]);
+
+const authoredValues = applyConfirmedPromptPreview(
+  { id: "ecommerce_short_video" },
+  { speech_text: "custom speech", copy_text: "custom copy", prompt_text: "custom prompt", prompt: "custom prompt" },
+  { speech_text: "confirmed speech", prompt_text: "confirmed prompt", storyboard: [{ prompt: "confirmed shot" }] },
+);
+assert.equal(authoredValues.speech_text, "custom speech");
+assert.equal(authoredValues.copy_text, "custom copy");
+assert.equal(authoredValues.prompt_text, "custom prompt");
+assert.equal(authoredValues.prompt, "custom prompt");
+assert.deepEqual(authoredValues.prompt_segments, ["confirmed shot"]);
+
+const storedPreview = functionBody("applyStoredPromptPreviewForSubmit");
+const applyStoredPromptPreviewForSubmit = Function(
+  "applyConfirmedPromptPreview",
+  `return function applyStoredPromptPreviewForSubmit(module, submitValues, draft) {${storedPreview}}`,
+)(applyConfirmedPromptPreview);
+const generatedSubmitValues = applyStoredPromptPreviewForSubmit(
+  { id: "digital_human_video" },
+  { speech_text: "", prompt_text: "", prompt: "" },
+  { values: { _prompt_preview: { speech_text: "generated speech", prompt_text: "generated prompt" } } },
+);
+assert.equal(generatedSubmitValues.speech_text, "generated speech");
+assert.equal(generatedSubmitValues.prompt_text, "generated prompt");
+const customSubmitValues = applyStoredPromptPreviewForSubmit(
+  { id: "digital_human_video" },
+  { speech_text: "custom speech", prompt_text: "custom prompt", prompt: "custom prompt" },
+  { values: { _prompt_preview: { speech_text: "generated speech", prompt_text: "generated prompt" } } },
+);
+assert.equal(customSubmitValues.speech_text, "custom speech");
+assert.equal(customSubmitValues.prompt_text, "custom prompt");
+assert.equal(customSubmitValues.prompt, "custom prompt");
+
+const invalidatePreview = functionBody("invalidatePromptPreview");
+const invalidatePromptPreview = Function(
+  "requiresPromptPreview",
+  `return function invalidatePromptPreview(module, draft, changedKey = "") {${invalidatePreview}}`,
+)((module) => String(module?.id || module) === "digital_human_video");
+const staleDraft = { values: { _prompt_preview: { speech_text: "stale" }, _prompt_preview_ready: true } };
+invalidatePromptPreview({ id: "digital_human_video" }, staleDraft, "speech_text");
+assert.equal(staleDraft.values._prompt_preview, undefined);
+assert.equal(staleDraft.values._prompt_preview_ready, false);
 
 const voiceMapping = functionBody("publicSubmitValues");
 assert.match(voiceMapping, /values\.speaker\s*=\s*draft\.values\.voice_name\s*\|\|\s*draft\.values\.speaker\s*\|\|\s*""/);

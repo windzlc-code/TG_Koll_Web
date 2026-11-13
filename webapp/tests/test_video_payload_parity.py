@@ -336,3 +336,14 @@ def test_frontend_submits_the_confirmed_generated_preview() -> None:
     assert "applyConfirmedPromptPreview(module, draft.values, preview)" not in javascript
     assert "applyStoredPromptPreviewForSubmit(module, submitValues, draft);" in javascript
     assert 'body.append("params_json", JSON.stringify({ ...submitValues, _file_roles: fileManifest }));' in javascript
+
+
+def test_frontend_does_not_discard_or_stale_preview_speech() -> None:
+    javascript = (Path(__file__).parents[1] / "static" / "assets" / "video-workbench.js").read_text(encoding="utf-8")
+
+    assert "const hasAuthoredSpeech = Boolean(String(submitValues.speech_text || \"\").trim() || String(submitValues.copy_text || \"\").trim());" in javascript
+    assert "Object.prototype.hasOwnProperty.call(promptPreview, \"speech_text\") && !hasAuthoredSpeech" in javascript
+    assert "const shouldRestoreEditableValue = (key, value) =>" in javascript
+    assert "if (shouldRestoreEditableValue(key, value)) submitValues[key] = value;" in javascript
+    assert 'if (["speech_text", "copy_text", "prompt_text"].includes(String(changedKey || ""))) return;' not in javascript
+    assert "最终配音以口播文案为准" in javascript
