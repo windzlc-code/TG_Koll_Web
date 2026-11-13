@@ -1631,14 +1631,14 @@
       upload: '<path d="M12 16V5"></path><path d="m8 9 4-4 4 4"></path><path d="M5 15v4h14v-4"></path>',
       replace: '<path d="M4 8a7 7 0 0 1 12-3l2 2"></path><path d="M18 3v4h-4"></path><path d="M20 16a7 7 0 0 1-12 3l-2-2"></path><path d="M6 21v-4h4"></path>',
       refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"></path><path d="M20 5v6h-6"></path>',
-      play: '<path d="m9 7 8 5-8 5z"></path>',
-      pause: '<path d="M8 6v12"></path><path d="M16 6v12"></path>',
+      play: '<path d="M9 6v12l9-6-9-6z" fill="currentColor" stroke="none"></path>',
+      pause: '<path d="M7 5.5h3.5v13H7zM13.5 5.5H17v13h-3.5z" fill="currentColor" stroke="none"></path>',
       check: '<path d="m5 12 4 4L19 6"></path>',
       pending: '<circle cx="12" cy="12" r="8"></circle>',
       add: '<path d="M12 5v14M5 12h14"></path>',
       alert: '<path d="M10.3 4.3 2.8 17.2A2 2 0 0 0 4.5 20h15a2 2 0 0 0 1.7-2.8L13.7 4.3a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path>',
     };
-    return `<svg class="video-ui-icon" viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.add}</svg>`;
+    return `<svg class="video-ui-icon" data-video-icon="${escapeHtml(name)}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${icons[name] || icons.add}</svg>`;
   }
 
   function optionMarkup(field, value) {
@@ -1786,9 +1786,11 @@
   function updateVoicePlaybackButtons() {
     const audio = document.getElementById("videoVoicePreview");
     const isPlaying = Boolean(audio && !audio.paused && state.playingVoiceId);
-    document.querySelectorAll("[data-video-voice-preview]").forEach((button) => {
+    document.querySelectorAll("[data-video-voice-modal] [data-video-voice-preview]").forEach((button) => {
       const active = isPlaying && button.dataset.videoVoicePreview === state.playingVoiceId;
       button.dataset.videoVoicePlaying = active ? "true" : "false";
+      button.classList.toggle("is-playing", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
       button.setAttribute("aria-label", active ? "暂停试听" : "试听音色");
       button.innerHTML = workbenchIcon(active ? "pause" : "play");
     });
@@ -1804,10 +1806,21 @@
         updateVoicePlaybackButtons();
       });
       audio.addEventListener("pause", () => {
+        if (audio.dataset.videoVoiceSwitching === "1") return;
         state.playingVoiceId = "";
         updateVoicePlaybackButtons();
       });
+      audio.addEventListener("playing", () => {
+        delete audio.dataset.videoVoiceSwitching;
+        updateVoicePlaybackButtons();
+      });
       audio.addEventListener("ended", () => {
+        delete audio.dataset.videoVoiceSwitching;
+        state.playingVoiceId = "";
+        updateVoicePlaybackButtons();
+      });
+      audio.addEventListener("error", () => {
+        delete audio.dataset.videoVoiceSwitching;
         state.playingVoiceId = "";
         updateVoicePlaybackButtons();
       });
@@ -1818,6 +1831,7 @@
   function stopVoicePreview() {
     const audio = document.getElementById("videoVoicePreview");
     if (audio) {
+      delete audio.dataset.videoVoiceSwitching;
       audio.pause();
       audio.currentTime = 0;
       audio.removeAttribute("src");
@@ -1890,7 +1904,7 @@
           ${state.voiceError ? `<div class="video-advanced-notice">${escapeHtml(state.voiceError)}</div>` : ""}
           ${voiceFields.length ? `<div class="video-voice-inline-fields">${voiceFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : ""}
           <div class="video-voice-presets" data-video-voice-presets>${renderVoicePresetList(draft)}</div>
-          <audio id="videoVoicePreview" class="video-voice-audio" controls preload="metadata" ${selected?.previewUrl ? `src="${escapeHtml(selected.previewUrl)}"` : ""}>当前浏览器不支持 audio 试听。</audio>
+          <audio id="videoVoicePreview" class="video-voice-audio" controls preload="metadata" data-video-voice-current="${escapeHtml(selected?.id || "")}" ${selected?.previewUrl ? `src="${escapeHtml(selected.previewUrl)}"` : ""}>当前浏览器不支持 audio 试听。</audio>
         </div>
         <div class="console-modal-actions"><button type="button" class="primary" data-video-voice-close>完成</button></div>
       </section>
@@ -2856,9 +2870,16 @@
     const audio = document.getElementById("videoVoicePreview");
     if (!voice?.previewUrl || !audio) return;
     if (audio.dataset.videoVoiceCurrent === voice.id && !audio.paused) {
+      delete audio.dataset.videoVoiceSwitching;
       audio.pause();
+      state.playingVoiceId = "";
+      updateVoicePlaybackButtons();
       return;
     }
+    audio.dataset.videoVoiceSwitching = "1";
+    if (!audio.paused) audio.pause();
+    state.playingVoiceId = "";
+    updateVoicePlaybackButtons();
     const previewUrl = new URL(voice.previewUrl, window.location.href).href;
     if (audio.src !== previewUrl) {
       audio.src = previewUrl;
@@ -2870,6 +2891,7 @@
     const playback = audio.play();
     playback?.catch(() => {
       if (state.playingVoiceId !== voice.id) return;
+      delete audio.dataset.videoVoiceSwitching;
       state.playingVoiceId = "";
       updateVoicePlaybackButtons();
     });
@@ -3696,7 +3718,11 @@
       const voiceSelect = event.target.closest?.("[data-video-voice-select]");
       if (voiceSelect) selectVoice(voiceSelect.dataset.videoVoiceSelect);
       const voicePreview = event.target.closest?.("[data-video-voice-preview]");
-      if (voicePreview) previewVoice(voicePreview.dataset.videoVoicePreview);
+      if (voicePreview) {
+        event.preventDefault();
+        previewVoice(voicePreview.dataset.videoVoicePreview);
+        return;
+      }
       if (event.target.closest?.("[data-video-parse-script]")) void parseCurrentScript();
       if (event.target.closest?.("[data-video-add-timeline]")) addTimelineRow();
       const removeSegment = event.target.closest?.("[data-video-remove-segment]");

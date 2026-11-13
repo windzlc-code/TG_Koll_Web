@@ -125,8 +125,13 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
             'data-record-menu-toggle',
             'data-record-edit',
             'window.VideoPage?.showStudioTab?.("editor"',
+            'const hasStaleItems = state.items.length > 0',
+            'if (sync && state.loading) return',
+            'state.signature',
+            'video-records-sync-status',
         ):
             self.assertIn(contract, VIDEO_RECORDS)
+        self.assertIn('.video-records-sync-status', VIDEO_EDITOR_CSS)
 
     def test_records_do_not_render_obsolete_manual_confirmation_banner(self):
         self.assertNotIn("生成任务动态", VIDEO_RECORDS)

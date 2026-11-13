@@ -23,6 +23,7 @@
     shareFile: null,
     shareFilePromise: null,
     storage: null,
+    signature: "",
     syncTimer: 0,
     eventsBound: false,
   };
@@ -194,10 +195,11 @@
   function render() {
     const host = root();
     if (!host) return;
+    const hasStaleItems = state.items.length > 0;
     const heading = headingRoot();
     if (heading) heading.innerHTML = `<header class="video-records-hero"><div class="video-records-heading"><span class="video-records-mark" aria-hidden="true">${icon("archive")}</span><div><span class="eyebrow">VIDEO ARCHIVE</span><h2>视频生成记录</h2><p>自动归档已经生成的视频，分页查看、预览、下载，并可直接送入剪辑器。</p></div></div></header>`;
     host.innerHTML = `<div class="video-records-app">
-      <section class="video-records-panel" aria-label="视频记录列表">
+      <section class="video-records-panel" aria-label="视频记录列表" ${state.loading ? 'aria-busy="true"' : ""}>
         <div class="video-records-tools">
           <div><strong>视频记录</strong><span>${state.total} 个可用视频</span></div>
           <div class="video-records-filters">
@@ -209,19 +211,25 @@
           </div>
         </div>
         ${state.storage?.warning ? `<div class="video-storage-notice video-records-storage-notice" data-level="${state.storage.critical ? "critical" : "warning"}" role="status"><span aria-hidden="true">${icon("warning")}</span><div><strong>${state.storage.critical ? "素材容量已超过管理阈值" : "素材容量接近管理阈值"}</strong><small>已使用 ${formatBytes(state.storage.used_bytes)} / ${formatBytes(state.storage.soft_limit_bytes)}（${Math.round(Number(state.storage.usage_ratio || 0) * 100)}%），请删除不再使用的视频。</small></div></div>` : ""}
-        ${state.loading ? '<div class="video-records-state"><span class="video-workbench-loader"></span><strong>正在读取视频记录</strong></div>' : ""}
-        ${state.error ? `<div class="video-records-state is-error"><strong>记录加载失败</strong><span>${escapeHtml(state.error)}</span><button type="button" data-record-refresh>重试</button></div>` : ""}
-        ${!state.loading && !state.error ? `<div class="video-records-grid">${state.items.length ? state.items.map(card).join("") : '<div class="video-records-state"><strong>暂时没有符合条件的视频</strong><span>完成视频生成后，记录会自动保存到这里。</span></div>'}</div>${renderPagination()}` : ""}
+        ${state.loading && !hasStaleItems ? '<div class="video-records-state"><span class="video-workbench-loader"></span><strong>正在读取视频记录</strong></div>' : ""}
+        ${state.loading && hasStaleItems ? '<div class="video-records-sync-status" role="status"><span class="video-workbench-loader" aria-hidden="true"></span>正在同步最新视频记录，现有内容保持可用</div>' : ""}
+        ${state.error && !hasStaleItems ? `<div class="video-records-state is-error"><strong>记录加载失败</strong><span>${escapeHtml(state.error)}</span><button type="button" data-record-refresh>重试</button></div>` : ""}
+        ${state.error && hasStaleItems ? `<div class="video-records-sync-status is-error" role="status">同步失败：${escapeHtml(state.error)}，当前已显示最近一次读取的记录。</div>` : ""}
+        ${!state.error || hasStaleItems ? `<div class="video-records-grid">${state.items.length ? state.items.map(card).join("") : '<div class="video-records-state"><strong>暂时没有符合条件的视频</strong><span>完成视频生成后，记录会自动保存到这里。</span></div>'}</div>${renderPagination()}` : ""}
       </section>
     </div>`;
   }
 
   async function load({ sync = false } = {}) {
+    if (sync && state.loading) return;
     const token = ++state.requestToken;
+    const preserveContent = state.loaded;
+    const hadError = Boolean(state.error);
+    let shouldRender = !preserveContent;
     state.openActionId = "";
     state.loading = true;
     state.error = "";
-    render();
+    if (!preserveContent) render();
     try {
       const params = new URLSearchParams({
         page: String(state.page), page_size: String(state.pageSize), sync_generated: sync ? "true" : "false",
@@ -236,12 +244,22 @@
       state.totalPages = Number(payload.total_pages) || 0;
       state.storage = payload.storage && typeof payload.storage === "object" ? payload.storage : null;
       state.loaded = true;
+      const nextSignature = JSON.stringify({ items: state.items, page: state.page, total: state.total, totalPages: state.totalPages, storage: state.storage });
+      const changed = nextSignature !== state.signature;
+      state.signature = nextSignature;
+      state.loading = false;
+      shouldRender = changed || !preserveContent || hadError;
     } catch (error) {
       if (token !== state.requestToken) return;
       state.error = String(error?.message || error || "加载失败");
-      state.items = [];
+      state.loading = false;
+      if (!preserveContent) state.items = [];
+      shouldRender = true;
     } finally {
-      if (token === state.requestToken) { state.loading = false; render(); }
+      if (token === state.requestToken) {
+        state.loading = false;
+        if (shouldRender) render();
+      }
     }
   }
 

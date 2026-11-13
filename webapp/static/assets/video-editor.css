@@ -505,6 +505,19 @@
   color: #8e3d38;
 }
 
+.video-records-sync-status {
+  align-items: center;
+  color: var(--editor-muted);
+  display: flex;
+  font-size: 10px;
+  gap: 7px;
+  margin: -4px 0 10px;
+  min-height: 18px;
+}
+
+.video-records-sync-status.is-error { color: #8e3d38; }
+.video-records-sync-status .video-workbench-loader { height: 12px; margin: 0; width: 12px; }
+
 .video-editor-app {
   min-width: 0;
   padding: 16px;
