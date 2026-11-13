@@ -132,6 +132,19 @@ def main() -> None:
             set_file("product", "product.png", "image/png")
             set_file("audio", "voice.wav", "audio/wav")
 
+        def generate_copy_then_submit() -> None:
+            page.locator("#videoWorkbenchRoot button[type='submit']").click()
+            page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]').wait_for(state="visible")
+            page.locator('[data-video-field="speech_text"]').wait_for(state="visible")
+            page.wait_for_function(
+                """() => String(document.querySelector('[data-video-field="speech_text"]')?.value || '').trim() === '验证口播文案'"""
+            )
+            assert page.locator(".video-speech-modal").count() == 0
+            assert page.locator("[data-video-prompt-preview-prompt]").count() == 0
+            page.wait_for_function("() => document.querySelectorAll('.vecto-public-prompt').length === 0")
+            assert task_state["task_post_count"] == 0, task_state
+            page.locator("#videoWorkbenchRoot button[type='submit']").click()
+
         upload_video_sources()
 
         page.locator("#videoWorkbenchRoot button[type='submit']").click()
@@ -144,6 +157,17 @@ def main() -> None:
         second_progress = busy.locator("[data-public-prompt-message]").inner_text()
         assert first_progress == second_progress, (first_progress, second_progress)
         assert busy.locator(".vecto-public-prompt-dialog").evaluate("(node) => getComputedStyle(node).animationName === 'none'")
+        assert page.locator(".video-speech-modal").count() == 0
+        assert page.locator("[data-video-prompt-preview-prompt]").count() == 0
+        page.wait_for_function(
+            """() => String(document.querySelector('[data-video-field="speech_text"]')?.value || '').trim() === '验证口播文案'"""
+        )
+        page.wait_for_function("() => document.querySelectorAll('.vecto-public-prompt').length === 0")
+        assert task_state["task_post_count"] == 0, task_state
+        page.locator("#videoWorkbenchRoot button[type='submit']").click()
+        busy = page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]')
+        busy.wait_for(state="visible")
+        assert busy.locator("[data-public-prompt-step]").count() == 6
         busy.locator("[data-public-prompt-minimize]").click()
         assert page.locator('.vecto-public-prompt[data-public-prompt-minimized="true"] [data-public-prompt-restore]').is_visible()
         page.wait_for_timeout(2500)
@@ -172,7 +196,7 @@ def main() -> None:
         task_state["finalize_submitted"] = False
         task_state["finalize_count"] = 0
         upload_video_sources()
-        page.locator("#videoWorkbenchRoot button[type='submit']").click()
+        generate_copy_then_submit()
         page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
         review_text = page.locator(".vecto-public-prompt").inner_text()
         assert task_state["finalize_submitted"] is True and task_state["finalize_count"] == 1, task_state
@@ -181,7 +205,7 @@ def main() -> None:
 
         task_mode["value"] = "balance"
         upload_video_sources()
-        page.locator("#videoWorkbenchRoot button[type='submit']").click()
+        generate_copy_then_submit()
         page.locator('.vecto-public-prompt[data-public-prompt-status="error"]').wait_for(state="visible")
         balance_text = page.locator(".vecto-public-prompt").inner_text()
         assert "算力点余额不足" in balance_text and "购买算力" in balance_text
@@ -190,7 +214,7 @@ def main() -> None:
 
         task_mode["value"] = "server_error"
         upload_video_sources()
-        page.locator("#videoWorkbenchRoot button[type='submit']").click()
+        generate_copy_then_submit()
         page.locator('.vecto-public-prompt[data-public-prompt-status="error"]').wait_for(state="visible")
         error_text = page.locator(".vecto-public-prompt").inner_text()
         assert "服务器处理失败" in error_text

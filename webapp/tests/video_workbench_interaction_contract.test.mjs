@@ -70,7 +70,9 @@ function functionBodyUntil(name, nextName) {
 
 const confirmedPreview = functionBody("applyConfirmedPromptPreview");
 assert.match(confirmedPreview, /!requiresPromptPreview\(module\)/);
-assert.match(functionBody("confirmPromptPreview"), /body\.append\("files", file\)/);
+const promptPreviewRequest = functionBody("confirmPromptPreview");
+assert.match(promptPreviewRequest, /body\.append\("files", file\)/);
+assert.match(promptPreviewRequest, /if \(String\(module\?\.id \|\| module \|\| ""\) === "digital_human_video"\) return preview;/);
 assert.match(confirmedPreview, /submitValues\.speech_text\s*=\s*promptPreview\.speech_text/);
 assert.match(confirmedPreview, /submitValues\.prompt_text\s*=\s*String\(promptPreview\.prompt_text/);
 assert.match(confirmedPreview, /submitValues\.copy_text\s*=\s*submitValues\.speech_text/);
@@ -82,8 +84,11 @@ assert.match(source, /function editGeneratedPromptPreview\(/);
 assert.match(source, /data-video-prompt-preview-speech/);
 assert.match(source, /AI 文案预览与确认/);
 assert.match(source, /function requiresPromptPreviewForSubmit\(/);
+assert.match(source, /draft\.values\.speech_text = String\(preview\.speech_text\)\.trim\(\)/);
+assert.match(source, /progress\?\.close\?\.\(\)/);
 assert.match(functionBody("submit"), /!draft\.values\._prompt_preview_ready\s*\|\|\s*!draft\.values\._prompt_preview/);
-assert.match(functionBody("submit"), /await generatePromptDraft\(\{ autoSubmit: true \}\)/);
+assert.match(functionBody("submit"), /await generatePromptDraft\(\{ autoSubmit: false \}\)/);
+assert.doesNotMatch(functionBody("submit"), /await generatePromptDraft\(\{ autoSubmit: true \}\)/);
 assert.match(functionBody("submit"), /applyStoredPromptPreviewForSubmit\(module, submitValues, draft\)/);
 assert.match(source, /async function submitPreparedVideoTask\(/);
 assert.match(source, /async function submitVisualFinalizeTask\(/);
@@ -157,6 +162,7 @@ assert.match(source, /function renderDigitalHumanSettings\(/);
 assert.match(source, /AI 内容参考/);
 assert.match(source, /最终口播输入/);
 assert.match(source, /画面与音频设置/);
+assert.doesNotMatch(functionBody("renderDigitalHumanSettings"), /prompt_text/);
 
 const invalidatePreview = functionBody("invalidatePromptPreview");
 const invalidatePromptPreview = Function(

@@ -193,7 +193,7 @@
           textarea("product_details", oral ? "文案需求" : "产品相关简介", { placeholder: oral ? "可选：说明口播主题、受众、核心观点、段落方向、语气风格；AI 会据此生成口播文案" : "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情；只用于 AI 生成文案或提示词", help: oral ? "仅作为 AI 生成口播文案的方向参考；填写口播文案后不会自动拼接" : "可选的 AI 事实参考；可以留空，已填写口播文案时不会影响最终配音", wide: true }),
           ...(oral ? [number("oral_target_duration_seconds", "目标口播时长（秒）", { default: 30, min: 5, max: 180, step: 1 })] : []),
           select("target_language", "口播语言", LANGUAGE_OPTIONS, { default: "Chinese", placement: "voice" }),
-          textarea("speech_text", "口播文案", { placeholder: oral ? "可手动输入成稿，也可留空让 AI 根据文案需求和场景图生成" : "可手动输入，也可留空让 AI 根据图片生成", help: oral ? "有内容时按此文案直接配音；留空时先生成 AI 文案，预览修改并确认后再提交" : "有内容时按此文案直接配音；留空时根据产品简介和图片生成 AI 文案，预览修改并确认后再提交", wide: true }),
+          textarea("speech_text", "口播文案", { placeholder: oral ? "可手动输入成稿，也可留空让 AI 根据文案需求和场景图生成" : "可手动输入，也可留空让 AI 根据图片生成", help: oral ? "有内容时按此文案直接配音；留空时生成后回填到输入框，可修改确认后再提交" : "有内容时按此文案直接配音；留空时根据产品简介和图片生成，回填到输入框后再提交", wide: true }),
           select("minimax_tts_model", "音频模型", RUNNINGHUB_SPEECH_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
           select("ratio", "画面比例", VIDEO_RATIO_OPTIONS, { default: "9:16" }),
           select("image_resolution", "图片分辨率", IMAGE_RESOLUTION_OPTIONS, { default: "2K" }),
@@ -1432,6 +1432,10 @@
     if (!hasPreviewContent) {
       throw new Error("AI 未返回可预览的文案或提示词，请补充产品简介/口播主题后重试。");
     }
+    // Digital-human copy is shown in the main speech input so the user can
+    // edit it there. Keep the generated visual prompt internal and avoid
+    // mounting a second modal while the public progress prompt is open.
+    if (String(module?.id || module || "") === "digital_human_video") return preview;
     if (Array.isArray(preview?.speech_candidates) && preview.speech_candidates.length) return chooseSpeechCandidate(preview);
     return editGeneratedPromptPreview(preview);
   }
@@ -1586,18 +1590,7 @@
         await submitPreparedVideoTask(module, draft, submitValues, progress, { requireTaskId: true });
         return true;
       }
-      updateVideoSuccess(
-        progress,
-        "提示词 / 文案已生成",
-        "提示词和文案已生成，请检查内容后再提交视频任务。",
-        "当前步骤只生成提示词 / 文案，还没有创建最终视频任务。确认内容无误后继续生成视频；如需调整，关闭提示后修改输入。",
-        [{
-          value: "continue-video",
-          text: "继续生成视频",
-          primary: true,
-          onSelect: () => document.getElementById("videoWorkbenchForm")?.requestSubmit?.(),
-        }],
-      );
+      progress?.close?.();
       return true;
     } catch (error) {
       state.submitError = showVideoError(error, "提示词 / 文案生成失败：请检查输入内容和素材后重试。", "提示词 / 文案生成失败", progress);
@@ -2161,7 +2154,7 @@
         <div class="video-form-grid video-form-grid--content">${renderKeys(["product_name", "product_details"])}</div>
       </section>
       <section class="video-form-subsection video-form-subsection--script">
-        <div class="video-subsection-heading"><span>FINAL INPUT</span><strong>最终口播输入</strong><small>${hasSpeech ? "已填写最终文案，产品简介可留空；提交时按此内容直接配音。" : "留空时会根据素材和 AI 内容参考生成文案，并在提交前弹窗预览、修改和确认。"}</small></div>
+        <div class="video-subsection-heading"><span>FINAL INPUT</span><strong>最终口播输入</strong><small>${hasSpeech ? "已填写最终文案，产品简介可留空；提交时按此内容直接配音。" : "留空时会根据素材和 AI 内容参考生成文案，并直接回填到此输入框供你修改。"}</small></div>
         <div class="video-form-grid video-form-grid--script">${renderKeys(["speech_text"])}</div>
       </section>
       <section class="video-form-subsection video-form-subsection--visual">
@@ -3851,7 +3844,10 @@
       }
       if (requiresPromptPreviewForSubmit(module, submitValues)) {
         if (!draft.values._prompt_preview_ready || !draft.values._prompt_preview) {
-          await generatePromptDraft({ autoSubmit: true });
+          // Generate into the editable speech field first. The user can
+          // review or revise the returned copy before submitting the video.
+          state.submitting = false;
+          await generatePromptDraft({ autoSubmit: false });
           return;
         }
         applyStoredPromptPreviewForSubmit(module, submitValues, draft);
