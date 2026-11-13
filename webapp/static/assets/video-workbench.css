@@ -224,6 +224,27 @@
   border-bottom: 1px solid var(--video-line);
 }
 
+.video-digital-human-settings { display: grid; gap: 13px; }
+.video-form-subsection {
+  display: grid;
+  gap: 11px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--video-panel);
+  border: 1px solid var(--video-line);
+  border-radius: 14px;
+}
+.video-form-subsection--reference { background: color-mix(in srgb, var(--video-soft) 58%, var(--video-panel)); }
+.video-form-subsection--script { border-color: color-mix(in srgb, var(--video-accent) 28%, var(--video-line)); }
+.video-form-subsection--visual { background: color-mix(in srgb, var(--video-soft) 82%, var(--video-panel)); }
+.video-subsection-heading { display: grid; gap: 3px; }
+.video-subsection-heading > span { color: var(--video-muted); font-size: 9px; font-weight: 850; letter-spacing: .12em; }
+.video-subsection-heading > strong { color: var(--video-ink); font-size: 14px; }
+.video-subsection-heading > small { color: var(--video-muted); font-size: 11px; font-weight: 450; line-height: 1.45; }
+.video-form-subsection .video-form-grid { gap: 10px; }
+.video-form-subsection .video-form-field { padding: 0; background: transparent; border: 0; box-shadow: none; }
+.video-form-grid--visual { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
 .video-section-heading {
   display: flex;
   align-items: center;
@@ -1588,6 +1609,25 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 8;
 }
+.video-prompt-preview-editor { display: grid; gap: 10px; padding-top: 2px; }
+.video-prompt-preview-field { display: grid; gap: 5px; }
+.video-prompt-preview-field > span { color: var(--video-ink); font-size: 12px; font-weight: 800; }
+.video-prompt-preview-field > small { color: var(--video-muted); font-size: 10px; line-height: 1.45; }
+.video-prompt-preview-field textarea {
+  width: 100%;
+  min-height: 96px;
+  padding: 10px 12px;
+  color: var(--video-ink);
+  background: var(--video-panel);
+  border: 1px solid var(--video-line);
+  border-radius: 8px;
+  outline: none;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.video-prompt-preview-field textarea:focus { border-color: var(--video-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
 
 .video-voice-current {
   display: grid;

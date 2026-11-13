@@ -190,11 +190,11 @@
           file("product", oral ? "场景图" : "产品图", "image/*", { required: true, multiple: !oral, maxFiles: oral ? 1 : 3, previewSlots: oral ? 1 : 3, help: oral ? "上传 1 张口播背景/场景图；口播模式固定单镜头，不生成分镜图" : "点击素材位逐个上传；最多保留 3 个素材位" }),
           file("audio", "参考音频/干音", "audio/*", { required: true }),
           text("product_name", oral ? "口播主题" : "产品/项目名称", { placeholder: oral ? "例如：东京租房避坑 / AI 工具干货 / 职场沟通技巧" : "例如：海景公寓 / 鱼油 / 汽车" }),
-          textarea("product_details", oral ? "文案需求" : "产品相关简介", { placeholder: oral ? "可选：说明口播主题、受众、核心观点、段落方向、语气风格；AI 会据此生成口播文案" : "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情；只用于 AI 生成文案或提示词", help: oral ? "作为 AI 生成口播文案的主题和方向参考；填写口播文案后，最终配音以口播文案为准，不会自动拼接" : "仅作为 AI 生成口播文案和画面提示词的事实参考；填写口播文案后，最终配音以口播文案为准，不会自动拼接", wide: true }),
+          textarea("product_details", oral ? "文案需求" : "产品相关简介", { placeholder: oral ? "可选：说明口播主题、受众、核心观点、段落方向、语气风格；AI 会据此生成口播文案" : "可选：补充产品卖点、适用人群、使用场景、价格/参数等详情；只用于 AI 生成文案或提示词", help: oral ? "仅作为 AI 生成口播文案的方向参考；填写口播文案后不会自动拼接" : "可选的 AI 事实参考；可以留空，已填写口播文案时不会影响最终配音", wide: true }),
           ...(oral ? [number("oral_target_duration_seconds", "目标口播时长（秒）", { default: 30, min: 5, max: 180, step: 1 })] : []),
           select("target_language", "口播语言", LANGUAGE_OPTIONS, { default: "Chinese", placement: "voice" }),
+          textarea("speech_text", "口播文案", { placeholder: oral ? "可手动输入成稿，也可留空让 AI 根据文案需求和场景图生成" : "可手动输入，也可留空让 AI 根据图片生成", help: oral ? "有内容时按此文案直接配音；留空时先生成 AI 文案，预览修改并确认后再提交" : "有内容时按此文案直接配音；留空时根据产品简介和图片生成 AI 文案，预览修改并确认后再提交", wide: true }),
           select("minimax_tts_model", "音频模型", RUNNINGHUB_SPEECH_MODEL_OPTIONS, { default: "speech-2.8-hd" }),
-          textarea("speech_text", "口播文案", { placeholder: oral ? "可手动输入成稿，也可留空让 AI 根据文案需求和场景图生成" : "可手动输入，也可留空让 AI 根据图片生成", help: oral ? "填写后作为最终配音文案；留空时由 AI 根据文案需求和场景图生成" : "填写后作为最终配音文案；留空时由 AI 根据产品简介和图片生成", wide: true }),
           select("ratio", "画面比例", VIDEO_RATIO_OPTIONS, { default: "9:16" }),
           select("image_resolution", "图片分辨率", IMAGE_RESOLUTION_OPTIONS, { default: "2K" }),
           ...(!oral ? [select("digital_human_short_mode", "分镜模式", [{ value: "storyboard", label: "多分镜" }, { value: "single", label: "单镜头" }], { default: "storyboard" })] : []),
@@ -1302,58 +1302,92 @@
     return payload;
   }
 
-  function chooseSpeechCandidate(preview) {
-    const candidates = Array.isArray(preview?.speech_candidates)
-      ? preview.speech_candidates.filter((item) => item && String(item.speech_text || "").trim()).slice(0, 3)
+  function editGeneratedPromptPreview(preview) {
+    const source = preview && typeof preview === "object" ? preview : {};
+    const candidates = Array.isArray(source.speech_candidates)
+      ? source.speech_candidates.filter((item) => item && String(item.speech_text || "").trim()).slice(0, 3)
       : [];
-    if (!candidates.length) return Promise.resolve(preview);
-    const preferred = Number(preview?.selected_speech_candidate_index);
+    const hasSpeech = Boolean(candidates.length || String(source.speech_text || "").trim());
+    const hasPrompt = Boolean(String(source.prompt_text || source.prompt || "").trim());
+    if (!hasSpeech && !hasPrompt) return Promise.resolve(source);
+    const preferred = Number(source.selected_speech_candidate_index);
     let selectedIndex = Number.isInteger(preferred) && preferred >= 0 && preferred < candidates.length ? preferred : 0;
+    let editedSpeech = String(candidates[selectedIndex]?.speech_text || source.speech_text || "").trim();
+    let editedPrompt = String(source.prompt_text || source.prompt || "").trim();
+    let errorMessage = "";
     return new Promise((resolve) => {
       const host = document.createElement("div");
-      const cards = () => candidates.map((candidate, index) => `
-        <button type="button" class="video-speech-candidate ${index === selectedIndex ? "is-selected" : ""}" data-video-speech-candidate="${index}">
-          <span class="video-speech-candidate-top"><strong>\u65b9\u6848 ${index + 1}</strong>${index === selectedIndex ? "<em>\u5df2\u9009\u62e9</em>" : ""}</span>
-          <span class="video-speech-candidate-title">${escapeHtml(candidate.title || `\u65b9\u6848 ${index + 1}`)}</span>
-          ${candidate.angle ? `<span class="small">${escapeHtml(candidate.angle)}</span>` : ""}
-          ${candidate.summary ? `<span>${escapeHtml(candidate.summary)}</span>` : ""}
-          <span class="video-speech-candidate-copy">${escapeHtml(String(candidate.speech_text || ""))}</span>
-        </button>`).join("");
-      const renderCandidateModal = () => {
+      const render = () => {
+        const cards = candidates.map((candidate, index) => `
+          <button type="button" class="video-speech-candidate ${index === selectedIndex ? "is-selected" : ""}" data-video-speech-candidate="${index}">
+            <span class="video-speech-candidate-top"><strong>方案 ${index + 1}</strong>${index === selectedIndex ? "<em>已选择</em>" : ""}</span>
+            <span class="video-speech-candidate-title">${escapeHtml(candidate.title || `方案 ${index + 1}`)}</span>
+            ${candidate.angle ? `<span class="small">${escapeHtml(candidate.angle)}</span>` : ""}
+            ${candidate.summary ? `<span>${escapeHtml(candidate.summary)}</span>` : ""}
+            <span class="video-speech-candidate-copy">${escapeHtml(String(candidate.speech_text || ""))}</span>
+          </button>`).join("");
         host.innerHTML = `<div class="console-modal video-speech-modal">
           <div class="console-modal-backdrop" data-video-speech-cancel></div>
           <section class="console-modal-dialog video-speech-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="videoSpeechCandidateTitle">
-            <div class="console-modal-head"><div><strong id="videoSpeechCandidateTitle">\u53e3\u64ad\u6587\u6848\u5019\u9009</strong><div class="small">\u5df2\u751f\u6210 ${candidates.length} \u6761\u4e0d\u540c\u5207\u5165\u89d2\u5ea6\u7684\u5b8c\u6574\u6587\u6848\uff0c\u8bf7\u9009\u62e9\u4e00\u6761\u4f7f\u7528\u3002</div></div><button type="button" class="console-modal-close" data-video-speech-cancel aria-label="\u5173\u95ed">&times;</button></div>
-            <div class="console-modal-content"><div class="video-speech-candidate-grid">${cards()}</div></div>
-            <div class="console-modal-actions"><button type="button" class="primary" data-video-speech-confirm>\u4f7f\u7528\u6b64\u6587\u6848</button><button type="button" data-video-speech-cancel>\u53d6\u6d88</button></div>
+            <div class="console-modal-head"><div><strong id="videoSpeechCandidateTitle">AI 文案预览与确认</strong><div class="small">${candidates.length ? `已生成 ${candidates.length} 条候选口播文案，可先选择再修改。` : "AI 已生成以下内容，请先检查和修改。"} 确认后才会提交最终视频任务。</div></div><button type="button" class="console-modal-close" data-video-speech-cancel aria-label="关闭">&times;</button></div>
+            <div class="console-modal-content">
+              ${candidates.length ? `<div class="video-speech-candidate-grid">${cards}</div>` : ""}
+              <div class="video-prompt-preview-editor">
+                ${hasSpeech ? `<label class="video-prompt-preview-field"><span>AI 口播文案</span><textarea rows="7" data-video-prompt-preview-speech>${escapeHtml(editedSpeech)}</textarea><small>可以直接修改；确认后按这里的最终文本配音，不会再自动拼接产品简介。</small></label>` : ""}
+                ${hasPrompt ? `<label class="video-prompt-preview-field"><span>画面提示词</span><textarea rows="5" data-video-prompt-preview-prompt>${escapeHtml(editedPrompt)}</textarea><small>用于生成画面，可在提交前调整。</small></label>` : ""}
+                ${errorMessage ? `<div class="video-inline-error" role="alert">${escapeHtml(errorMessage)}</div>` : ""}
+              </div>
+            </div>
+            <div class="console-modal-actions"><button type="button" class="primary" data-video-prompt-preview-confirm>确认并继续生成</button><button type="button" data-video-speech-cancel>取消</button></div>
           </section></div>`;
       };
       const finish = (value) => {
         host.remove();
         resolve(value);
       };
+      host.addEventListener("input", (event) => {
+        if (event.target.matches?.("[data-video-prompt-preview-speech]")) editedSpeech = event.target.value;
+        if (event.target.matches?.("[data-video-prompt-preview-prompt]")) editedPrompt = event.target.value;
+      });
       host.addEventListener("click", (event) => {
         const card = event.target.closest("[data-video-speech-candidate]");
         if (card) {
           selectedIndex = Number(card.dataset.videoSpeechCandidate) || 0;
-          renderCandidateModal();
+          editedSpeech = String(candidates[selectedIndex]?.speech_text || "").trim();
+          errorMessage = "";
+          render();
           return;
         }
-        if (event.target.closest("[data-video-speech-confirm]")) {
-          finish({
-            ...preview,
-            speech_candidates: candidates,
-            selected_speech_candidate_index: selectedIndex,
-            speech_text: String(candidates[selectedIndex]?.speech_text || "").trim(),
-          });
+        if (event.target.closest("[data-video-prompt-preview-confirm]")) {
+          editedSpeech = String(host.querySelector("[data-video-prompt-preview-speech]")?.value ?? editedSpeech).trim();
+          editedPrompt = String(host.querySelector("[data-video-prompt-preview-prompt]")?.value ?? editedPrompt).trim();
+          if (hasSpeech && !editedSpeech) {
+            errorMessage = "口播文案不能为空；请补充内容或取消本次生成。";
+            render();
+            return;
+          }
+          const result = {
+            ...source,
+            speech_text: editedSpeech,
+            prompt_text: editedPrompt,
+            ...(candidates.length ? {
+              speech_candidates: candidates.map((candidate, index) => index === selectedIndex ? { ...candidate, speech_text: editedSpeech } : candidate),
+              selected_speech_candidate_index: selectedIndex,
+            } : {}),
+          };
+          finish(result);
           return;
         }
         if (event.target.closest("[data-video-speech-cancel]")) finish(null);
       });
-      renderCandidateModal();
+      render();
       document.body.appendChild(host);
-      window.requestAnimationFrame(() => host.querySelector("[data-video-speech-confirm]")?.focus());
+      window.requestAnimationFrame(() => host.querySelector("[data-video-prompt-preview-speech], [data-video-prompt-preview-confirm]")?.focus());
     });
+  }
+
+  function chooseSpeechCandidate(preview) {
+    return editGeneratedPromptPreview(preview);
   }
 
   async function confirmPromptPreview(module, values) {
@@ -1390,14 +1424,29 @@
       }
       if (!preview) throw error;
     }
-    if (Array.isArray(preview?.speech_candidates) && preview.speech_candidates.length) {
-      return chooseSpeechCandidate(preview);
+    const hasPreviewContent = Boolean(
+      String(preview?.speech_text || preview?.prompt_text || preview?.prompt || "").trim()
+      || (Array.isArray(preview?.speech_candidates) && preview.speech_candidates.length)
+      || (preview?.storyboard && typeof preview.storyboard === "object")
+    );
+    if (!hasPreviewContent) {
+      throw new Error("AI 未返回可预览的文案或提示词，请补充产品简介/口播主题后重试。");
     }
-    return preview;
+    if (Array.isArray(preview?.speech_candidates) && preview.speech_candidates.length) return chooseSpeechCandidate(preview);
+    return editGeneratedPromptPreview(preview);
   }
 
   function requiresPromptPreview(module) {
     return VIDEO_PROMPT_MODULES.has(String(module?.id || module || ""));
+  }
+
+  function requiresPromptPreviewForSubmit(module, values) {
+    values = values && typeof values === "object" ? values : {};
+    if (!requiresPromptPreview(module)) return false;
+    if (String(module?.id || module || "") === "digital_human_video") {
+      return !String(values.speech_text || "").trim();
+    }
+    return true;
   }
 
   function requiresSimpleSubmitConfirmation(module) {
@@ -1416,6 +1465,9 @@
       submitValues.speech_text = promptPreview.speech_text;
       submitValues.speech_text = String(submitValues.speech_text || "");
       if (module.id === "ecommerce_short_video") submitValues.copy_text = submitValues.speech_text;
+    }
+    if (module.id === "digital_human_video" && String(submitValues.speech_text || "").trim()) {
+      submitValues.use_ai_copy = false;
     }
     if (Array.isArray(promptPreview.speech_candidates)) {
       submitValues.speech_candidates = promptPreview.speech_candidates;
@@ -1456,6 +1508,7 @@
     if (!requiresPromptPreview(module)) return;
     delete draft.values._prompt_preview;
     draft.values._prompt_preview_ready = false;
+    delete draft.values._prompt_preview_confirmed;
   }
 
   function applyStoredPromptPreviewForSubmit(module, submitValues, draft) {
@@ -1509,6 +1562,10 @@
       }
       draft.values._prompt_preview = preview;
       draft.values._prompt_preview_ready = true;
+      draft.values._prompt_preview_confirmed = true;
+      if (!String(values.speech_text || "").trim() && String(preview.speech_text || "").trim()) {
+        draft.values.speech_text = String(preview.speech_text).trim();
+      }
       saveDraft(module.id);
       if (autoSubmit) {
         const submitValues = publicSubmitValues(module, draft);
@@ -2094,6 +2151,26 @@
     </label>`;
   }
 
+  function renderDigitalHumanSettings(fields, draft) {
+    const fieldMap = new Map(fields.filter((field) => field.type !== "file").map((field) => [field.key, field]));
+    const renderKeys = (keys) => keys.map((key) => fieldMap.get(key)).filter(Boolean).map((field) => renderInputField(field, draft.values[field.key])).join("");
+    const hasSpeech = Boolean(String(draft.values.speech_text || "").trim());
+    return `<div class="video-digital-human-settings">
+      <section class="video-form-subsection video-form-subsection--reference">
+        <div class="video-subsection-heading"><span>CONTENT REFERENCE</span><strong>AI 内容参考</strong><small>产品名称和简介只用于 AI 生成文案、画面提示词及分镜参考。</small></div>
+        <div class="video-form-grid video-form-grid--content">${renderKeys(["product_name", "product_details"])}</div>
+      </section>
+      <section class="video-form-subsection video-form-subsection--script">
+        <div class="video-subsection-heading"><span>FINAL INPUT</span><strong>最终口播输入</strong><small>${hasSpeech ? "已填写最终文案，产品简介可留空；提交时按此内容直接配音。" : "留空时会根据素材和 AI 内容参考生成文案，并在提交前弹窗预览、修改和确认。"}</small></div>
+        <div class="video-form-grid video-form-grid--script">${renderKeys(["speech_text"])}</div>
+      </section>
+      <section class="video-form-subsection video-form-subsection--visual">
+        <div class="video-subsection-heading"><span>OUTPUT SETTINGS</span><strong>画面与音频设置</strong><small>口播语言和预设音色在素材区的“声音设置”中选择。</small></div>
+        <div class="video-form-grid video-form-grid--visual">${renderKeys(["minimax_tts_model", "ratio", "image_resolution", "digital_human_short_mode", "oral_target_duration_seconds"])}</div>
+      </section>
+    </div>`;
+  }
+
   function renderVoiceCurrentSource(module, draft) {
     const uploadedAudio = selectedFiles(module.id, "audio")[0];
     const selected = selectedVoiceForDraft(draft);
@@ -2304,6 +2381,9 @@
     const uploadTopFields = fields.filter((field) => field.type !== "file" && field.placement === "uploadTop");
     const uploadFooterFields = fields.filter((field) => field.type !== "file" && field.placement === "uploadFooter");
     const inputFields = fields.filter((field) => field.type !== "file" && !field.placement && !(VOICE_MODULES.has(module.id) && ["speaker", "voice_id"].includes(field.key)));
+    const settingsMarkup = module.id === "digital_human_video"
+      ? renderDigitalHumanSettings(fields, draft)
+      : (inputFields.length ? `<div class="video-form-grid">${inputFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : `<div class="video-workbench-state video-workbench-state--empty"><span>此模块没有额外生成参数。</span></div>`);
     return `<form id="videoWorkbenchForm" class="video-workbench-form" data-video-module-form="${escapeHtml(module.id)}">
       <div class="video-original-layout">
         <section class="video-form-section video-upload-panel">
@@ -2314,7 +2394,7 @@
         </section>
         <section class="video-form-section video-settings-panel">
           <div class="video-original-panel-head"><div><strong>生成内容</strong><small>仅显示原数字人项目对用户开放的参数。</small></div></div>
-          ${inputFields.length ? `<div class="video-form-grid">${inputFields.map((field) => renderInputField(field, draft.values[field.key])).join("")}</div>` : `<div class="video-workbench-state video-workbench-state--empty"><span>此模块没有额外生成参数。</span></div>`}
+          ${settingsMarkup}
         </section>
       </div>
       ${renderAdvancedSections(module, draft)}
@@ -3769,11 +3849,13 @@
           source_text: String(row.text || "").trim(),
         })).filter((row) => row.source_text && row.end_seconds > row.start_seconds);
       }
-      if (requiresPromptPreview(module)) {
+      if (requiresPromptPreviewForSubmit(module, submitValues)) {
         if (!draft.values._prompt_preview_ready || !draft.values._prompt_preview) {
           await generatePromptDraft({ autoSubmit: true });
           return;
         }
+        applyStoredPromptPreviewForSubmit(module, submitValues, draft);
+      } else if (requiresPromptPreview(module) && draft.values._prompt_preview_ready && draft.values._prompt_preview_confirmed) {
         applyStoredPromptPreviewForSubmit(module, submitValues, draft);
       } else if (requiresSimpleSubmitConfirmation(module) && !(await confirmVideoSubmit(module))) {
         return;

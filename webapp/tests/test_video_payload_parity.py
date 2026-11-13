@@ -132,6 +132,8 @@ def test_digital_human_ui_submission_keeps_module_provenance_server_owned() -> N
         module="digital_human_video",
         params_json=json.dumps({
             "speech_text": "Waterproof warmth for every ride.",
+            "product_details": "",
+            "use_ai_copy": False,
             "_file_roles": ["model", "product", "audio"],
         }),
         files=[
@@ -146,6 +148,9 @@ def test_digital_human_ui_submission_keeps_module_provenance_server_owned() -> N
     assert enqueued[0]["payload"]["_video_module_id"] == "digital_human_video"
     assert enqueued[0]["payload"]["model_image_local_path"].endswith("presenter.png")
     assert enqueued[0]["payload"]["product_image_local_path"].endswith("jacket.jpg")
+    assert enqueued[0]["payload"]["speech_text"] == "Waterproof warmth for every ride."
+    assert enqueued[0]["payload"]["product_details"] == ""
+    assert enqueued[0]["payload"]["use_ai_copy"] is False
 
 
 def test_language_upload_is_voice_reference_not_rendered_target_track() -> None:
@@ -346,4 +351,4 @@ def test_frontend_does_not_discard_or_stale_preview_speech() -> None:
     assert "const shouldRestoreEditableValue = (key, value) =>" in javascript
     assert "if (shouldRestoreEditableValue(key, value)) submitValues[key] = value;" in javascript
     assert 'if (["speech_text", "copy_text", "prompt_text"].includes(String(changedKey || ""))) return;' not in javascript
-    assert "最终配音以口播文案为准" in javascript
+    assert "有内容时按此文案直接配音" in javascript

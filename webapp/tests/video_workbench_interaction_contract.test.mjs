@@ -78,6 +78,10 @@ assert.match(confirmedPreview, /const hasAuthoredSpeech = Boolean\(String\(submi
 assert.match(confirmedPreview, /hasOwnProperty\.call\(promptPreview, "speech_text"\) && !hasAuthoredSpeech/);
 assert.match(confirmedPreview, /const hasAuthoredPrompt = Boolean\(String\(submitValues\.prompt_text/);
 assert.match(confirmedPreview, /hasOwnProperty\.call\(promptPreview, "prompt_text"\) && !hasAuthoredPrompt/);
+assert.match(source, /function editGeneratedPromptPreview\(/);
+assert.match(source, /data-video-prompt-preview-speech/);
+assert.match(source, /AI 文案预览与确认/);
+assert.match(source, /function requiresPromptPreviewForSubmit\(/);
 assert.match(functionBody("submit"), /!draft\.values\._prompt_preview_ready\s*\|\|\s*!draft\.values\._prompt_preview/);
 assert.match(functionBody("submit"), /await generatePromptDraft\(\{ autoSubmit: true \}\)/);
 assert.match(functionBody("submit"), /applyStoredPromptPreviewForSubmit\(module, submitValues, draft\)/);
@@ -125,11 +129,12 @@ const applyStoredPromptPreviewForSubmit = Function(
 )(applyConfirmedPromptPreview);
 const generatedSubmitValues = applyStoredPromptPreviewForSubmit(
   { id: "digital_human_video" },
-  { speech_text: "", prompt_text: "", prompt: "" },
+  { speech_text: "", prompt_text: "", prompt: "", use_ai_copy: true },
   { values: { _prompt_preview: { speech_text: "generated speech", prompt_text: "generated prompt" } } },
 );
 assert.equal(generatedSubmitValues.speech_text, "generated speech");
 assert.equal(generatedSubmitValues.prompt_text, "generated prompt");
+assert.equal(generatedSubmitValues.use_ai_copy, false);
 const customSubmitValues = applyStoredPromptPreviewForSubmit(
   { id: "digital_human_video" },
   { speech_text: "custom speech", prompt_text: "custom prompt", prompt: "custom prompt" },
@@ -138,6 +143,20 @@ const customSubmitValues = applyStoredPromptPreviewForSubmit(
 assert.equal(customSubmitValues.speech_text, "custom speech");
 assert.equal(customSubmitValues.prompt_text, "custom prompt");
 assert.equal(customSubmitValues.prompt, "custom prompt");
+
+const promptRequirement = functionBody("requiresPromptPreviewForSubmit");
+const requiresPromptPreviewForSubmit = Function(
+  "requiresPromptPreview",
+  `return function requiresPromptPreviewForSubmit(module, values = {}) {${promptRequirement}}`,
+)((module) => ["digital_human_video", "ecommerce_short_video"].includes(String(module?.id || module || "")));
+assert.equal(requiresPromptPreviewForSubmit({ id: "digital_human_video" }, { speech_text: "用户已填写的口播" }), false);
+assert.equal(requiresPromptPreviewForSubmit({ id: "digital_human_video" }, { speech_text: "" }), true);
+assert.equal(requiresPromptPreviewForSubmit({ id: "ecommerce_short_video" }, { speech_text: "用户已填写的口播" }), true);
+
+assert.match(source, /function renderDigitalHumanSettings\(/);
+assert.match(source, /AI 内容参考/);
+assert.match(source, /最终口播输入/);
+assert.match(source, /画面与音频设置/);
 
 const invalidatePreview = functionBody("invalidatePromptPreview");
 const invalidatePromptPreview = Function(
@@ -148,6 +167,7 @@ const staleDraft = { values: { _prompt_preview: { speech_text: "stale" }, _promp
 invalidatePromptPreview({ id: "digital_human_video" }, staleDraft, "speech_text");
 assert.equal(staleDraft.values._prompt_preview, undefined);
 assert.equal(staleDraft.values._prompt_preview_ready, false);
+assert.equal(staleDraft.values._prompt_preview_confirmed, undefined);
 
 const voiceMapping = functionBody("publicSubmitValues");
 assert.match(voiceMapping, /values\.speaker\s*=\s*draft\.values\.voice_name\s*\|\|\s*draft\.values\.speaker\s*\|\|\s*""/);
@@ -193,7 +213,7 @@ assert.deepEqual(explicitMissingSegments.map((item) => item.status), ["success",
 
 const submit = functionBody("submit");
 assert.match(submit, /source_text:\s*String\(row\.text/);
-assert.match(submit, /if \(requiresPromptPreview\(module\)\)/);
+assert.match(submit, /if \(requiresPromptPreviewForSubmit\(module, submitValues\)\)/);
 assert.doesNotMatch(submit, /regenerate:\s*true/);
 assert.doesNotMatch(submit, /regenerate_revision/);
 
