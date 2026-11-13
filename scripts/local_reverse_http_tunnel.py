@@ -11,7 +11,7 @@ from contextlib import suppress
 import paramiko
 
 
-SSH_HOST = os.getenv("REVERSE_TUNNEL_SSH_HOST", "47.250.188.76")
+SSH_HOST = os.getenv("REVERSE_TUNNEL_SSH_HOST", "8.211.183.190")
 SSH_USER = os.getenv("REVERSE_TUNNEL_SSH_USER", "root")
 SSH_PASSWORD = os.getenv("REVERSE_TUNNEL_SSH_PASSWORD", "")
 REMOTE_HOST = os.getenv("REVERSE_TUNNEL_REMOTE_HOST", "0.0.0.0")
