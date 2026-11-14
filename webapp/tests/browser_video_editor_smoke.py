@@ -78,8 +78,9 @@ def main() -> None:
 
             toolbar_box = page.locator("#videoStudioToolbar").bounding_box()
             tabs_box = page.locator("#videoStudioTabs").bounding_box()
-            heading_box = page.locator("#videoStudioHeadingHost .video-editor-heading").bounding_box()
+            heading_box = page.locator("#videoStudioHeadingHost .video-project-controls").bounding_box()
             assert toolbar_box and tabs_box and heading_box
+            assert page.locator("#videoStudioHeadingHost .video-editor-heading").count() == 0
             assert heading_box["x"] >= tabs_box["x"] + tabs_box["width"]
             assert abs((tabs_box["y"] + tabs_box["height"] / 2) - (heading_box["y"] + heading_box["height"] / 2)) < 10
 
@@ -331,7 +332,7 @@ def main() -> None:
             assert page.locator(".video-editor-inspector").is_visible()
             mobile_toolbar = page.locator("#videoStudioToolbar").bounding_box()
             mobile_tabs = page.locator("#videoStudioTabs").bounding_box()
-            mobile_heading = page.locator("#videoStudioHeadingHost .video-editor-heading").bounding_box()
+            mobile_heading = page.locator("#videoStudioHeadingHost .video-project-controls").bounding_box()
             assert mobile_toolbar and mobile_toolbar["x"] >= 0 and mobile_toolbar["x"] + mobile_toolbar["width"] <= 390
             assert mobile_tabs and mobile_heading and mobile_heading["x"] >= mobile_tabs["x"] + mobile_tabs["width"]
             assert abs(mobile_tabs["y"] - mobile_heading["y"]) < 10

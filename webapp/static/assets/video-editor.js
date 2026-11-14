@@ -770,8 +770,7 @@
     const host = headingRoot();
     if (!host) return;
     mountStudioTabs();
-    host.innerHTML = `<header class="video-editor-toolbar">
-      <div class="video-editor-heading"><span class="video-editor-mark" aria-hidden="true">${icon("scissors")}</span><div><span class="eyebrow">VECTO CUT ROOM</span><h2>视频素材与简易剪辑</h2><p>生成记录、本地素材、剪辑项目和导出成品统一保存。</p></div></div>
+    host.innerHTML = `<header class="video-editor-toolbar video-editor-toolbar--compact">
       ${state.project ? `<div class="video-project-controls">
         <label><span>当前项目</span><select data-project-select>${state.projects.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === state.project.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}</select></label>
         <button type="button" class="video-icon-button" data-project-new aria-label="新建项目" title="新建项目">${icon("plus")}</button>

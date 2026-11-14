@@ -37,28 +37,51 @@
 
 .video-studio-tabs {
   align-items: center;
-  background: #fff;
+  background: #e9f0f2;
   border: 1px solid #c8d3dd;
-  border-radius: 13px;
+  border-radius: 999px;
   display: flex;
-  gap: 6px;
+  gap: 0;
   margin: 0;
-  padding: 5px;
-  width: fit-content;
+  padding: 4px;
+  position: relative;
+  width: 250px;
+}
+
+.video-studio-tabs::before {
+  background: #203b49;
+  border-radius: 999px;
+  bottom: 4px;
+  content: "";
+  left: 4px;
+  position: absolute;
+  top: 4px;
+  transform: translateX(0);
+  transition: transform .18s ease;
+  width: calc(50% - 4px);
+}
+
+.video-studio-tabs.is-editor-active::before {
+  transform: translateX(100%);
 }
 
 .video-studio-tabs button {
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 9px;
+  border-radius: 999px;
   color: #526774;
   cursor: pointer;
   display: inline-flex;
+  flex: 1 1 0;
   font: 700 12px/1 Bahnschrift, "Microsoft YaHei UI", sans-serif;
   gap: 7px;
+  justify-content: center;
   min-height: 40px;
+  min-width: 0;
   padding: 8px 14px;
+  position: relative;
+  z-index: 1;
 }
 
 .video-studio-tabs button svg {
@@ -72,13 +95,11 @@
 }
 
 .video-studio-tabs button:hover {
-  background: #eef4f5;
+  background: rgb(255 255 255 / 42%);
   color: #203b49;
 }
 
 .video-studio-tabs button.is-active {
-  background: #203b49;
-  box-shadow: 0 4px 12px rgb(32 59 73 / 18%);
   color: #fff;
 }
 
@@ -198,7 +219,7 @@
   font-size: 15px;
 }
 
-.video-records-tools span {
+.video-records-tools > div:first-of-type > span {
   color: var(--editor-muted);
   font-size: 10px;
 }
@@ -498,6 +519,10 @@
   gap: 18px;
   justify-content: space-between;
   min-height: 58px;
+}
+
+.video-editor-toolbar--compact {
+  justify-content: flex-end;
 }
 
 .video-editor-heading,
@@ -2245,13 +2270,23 @@
   }
 
   .video-studio-tabs {
-    gap: 3px;
+    gap: 0;
     padding: 3px;
+    width: 116px;
+  }
+
+  .video-studio-tabs::before {
+    bottom: 3px;
+    left: 3px;
+    top: 3px;
+    width: calc(50% - 3px);
   }
 
   .video-studio-tabs button {
+    flex: 1 1 0;
     justify-content: center;
     min-height: 38px;
+    min-width: 0;
     padding: 7px 9px;
   }
 

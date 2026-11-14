@@ -68,6 +68,8 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertIn('.video-studio-toolbar', VIDEO_EDITOR_CSS)
         self.assertIn('grid-template-columns: max-content minmax(0, 1fr)', VIDEO_EDITOR_CSS)
         self.assertIn('.video-upload-drop.is-dragging', VIDEO_EDITOR_CSS)
+        self.assertIn('video-editor-toolbar--compact', VIDEO_EDITOR)
+        self.assertNotIn('class="video-editor-heading"', VIDEO_EDITOR)
 
     def test_records_tabs_share_the_search_row_without_the_obsolete_heading(self):
         self.assertIn('function mountStudioTabs(', VIDEO_RECORDS)
@@ -81,6 +83,15 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertIn('classList.toggle("is-records-view", activeStudioTab === "records")', VIDEO_PAGE)
         self.assertIn('.video-studio-toolbar.is-records-view', VIDEO_EDITOR_CSS)
         self.assertIn('.video-records-tools > .video-studio-tabs', VIDEO_EDITOR_CSS)
+
+    def test_studio_tabs_keep_a_stable_capsule_indicator_and_record_text_scope(self):
+        self.assertIn('videoStudioTabs.classList.toggle("is-editor-active"', VIDEO_PAGE)
+        self.assertIn('position: relative;', VIDEO_EDITOR_CSS)
+        self.assertIn('.video-studio-tabs::before', VIDEO_EDITOR_CSS)
+        self.assertIn('.video-studio-tabs.is-editor-active::before', VIDEO_EDITOR_CSS)
+        self.assertIn('flex: 1 1 0', VIDEO_EDITOR_CSS)
+        self.assertIn('.video-records-tools > div:first-of-type > span', VIDEO_EDITOR_CSS)
+        self.assertNotIn('.video-records-tools span {', VIDEO_EDITOR_CSS)
 
     def test_asset_project_and_export_closure_is_wired(self):
         for contract in (
