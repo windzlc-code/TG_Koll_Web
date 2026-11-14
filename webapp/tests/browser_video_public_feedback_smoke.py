@@ -180,6 +180,11 @@ def main() -> None:
             assert spinner.count() == 1
             assert spinner.evaluate("node => getComputedStyle(node).animationName") == "video-spin"
             assert spinner.evaluate("node => getComputedStyle(node).borderTopColor") != "rgb(255, 255, 255)"
+            prompt_field = page.locator(".video-form-field--generating .video-form-input-shell")
+            prompt_field.wait_for(state="visible")
+            assert prompt_field.count() == 1
+            assert prompt_field.evaluate("node => getComputedStyle(node, '::before').animationName") == "videoPromptBorderFlow"
+            assert prompt_field.evaluate("node => getComputedStyle(node, '::before').backgroundImage") != "none"
             page.locator('[data-video-field="speech_text"]').wait_for(state="visible")
             page.wait_for_function(
                 """expected => String(document.querySelector('[data-video-field="speech_text"]')?.value || '').trim() === expected""",

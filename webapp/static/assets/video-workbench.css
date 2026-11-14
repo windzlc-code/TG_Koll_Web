@@ -596,6 +596,78 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
+.video-form-input-shell {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  border-radius: 8px;
+}
+
+.video-form-input-shell > textarea {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+}
+
+.video-form-field--generating {
+  position: relative;
+  isolation: isolate;
+  --video-prompt-flow-deep: color-mix(in srgb, var(--video-accent-deep) 8%, #326f8e);
+  --video-prompt-flow-blue: color-mix(in srgb, var(--video-accent-deep) 10%, #2b83ad);
+  --video-prompt-flow-cyan: color-mix(in srgb, var(--video-accent) 22%, #12c9e6);
+  --video-prompt-flow-bright: color-mix(in srgb, var(--video-accent) 10%, #a8f5ff);
+  --video-prompt-flow-navy: #243b53;
+  --video-prompt-flow-gradient: linear-gradient(
+    90deg,
+    var(--video-prompt-flow-deep) 0%,
+    var(--video-prompt-flow-deep) 26%,
+    var(--video-prompt-flow-blue) 46%,
+    var(--video-prompt-flow-cyan) 62%,
+    var(--video-prompt-flow-bright) 72%,
+    var(--video-prompt-flow-cyan) 82%,
+    var(--video-prompt-flow-blue) 92%,
+    var(--video-prompt-flow-deep) 100%
+  );
+}
+
+.video-form-field--generating > :not(.sr-only) {
+  position: relative;
+  z-index: 1;
+}
+
+.video-form-field--generating .video-form-input-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 2px;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--video-prompt-flow-gradient);
+  background-size: 200% 100%;
+  background-repeat: repeat-x;
+  background-position: 0 0;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: videoPromptBorderFlow 2.8s linear infinite;
+}
+
+.video-form-field--generating textarea:focus {
+  box-shadow: none;
+}
+
+@keyframes videoPromptBorderFlow {
+  to { background-position: 200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .video-form-field--generating .video-form-input-shell::before {
+    animation: none;
+  }
+}
+
 .video-form-field > small { color: var(--video-muted); font-size: 11px; font-weight: 450; line-height: 1.45; }
 
 .video-choice-field { position: relative; }

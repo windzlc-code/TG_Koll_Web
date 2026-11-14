@@ -2199,6 +2199,8 @@
 
   function renderInputField(field, value) {
     const common = `data-video-field="${escapeHtml(field.key)}" id="videoField-${escapeHtml(field.key)}"`;
+    const isPromptGenerationField = state.promptGenerating && ["speech_text", "copy_text", "prompt_text"].includes(String(field.key));
+    const usesPromptInputShell = field.type === "textarea" && ["speech_text", "copy_text", "prompt_text"].includes(String(field.key));
     let control = "";
     if (field.type === "textarea") {
       control = `<textarea ${common} rows="4" ${field.required ? "required" : ""} placeholder="${escapeHtml(field.placeholder)}">${escapeHtml(value)}</textarea>`;
@@ -2227,9 +2229,10 @@
       const type = field.type === "number" ? "number" : (field.type === "url" ? "url" : "text");
       control = `<input type="${type}" ${common} value="${escapeHtml(value)}" ${field.required ? "required" : ""} ${field.min != null ? `min="${escapeHtml(field.min)}"` : ""} ${field.max != null ? `max="${escapeHtml(field.max)}"` : ""} ${field.step != null ? `step="${escapeHtml(field.step)}"` : ""} placeholder="${escapeHtml(field.placeholder)}" />`;
     }
-    return `<label class="video-form-field ${field.wide ? "video-form-field--wide" : ""}" for="videoField-${escapeHtml(field.key)}">
+    const controlMarkup = usesPromptInputShell ? `<span class="video-form-input-shell">${control}</span>` : control;
+    return `<label class="video-form-field ${field.wide ? "video-form-field--wide" : ""} ${isPromptGenerationField ? "video-form-field--generating" : ""}" for="videoField-${escapeHtml(field.key)}">
       <span>${escapeHtml(field.label)}${field.required ? '<em aria-hidden="true">*</em>' : ""}</span>
-      ${control}
+      ${controlMarkup}
       ${field.help ? `<small>${escapeHtml(field.help)}</small>` : ""}
     </label>`;
   }

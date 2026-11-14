@@ -172,6 +172,14 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn("const expire = () =>", self.public_feedback_js)
         self.assertIn("window.setTimeout(expire, 5000)", self.public_feedback_js)
 
+    def test_prompt_generation_highlights_the_generated_text_field(self):
+        self.assertIn('const isPromptGenerationField = state.promptGenerating && ["speech_text", "copy_text", "prompt_text"].includes(String(field.key));', self.workbench_js)
+        self.assertIn('class="video-form-input-shell"', self.workbench_js)
+        self.assertIn('video-form-field--generating', self.workbench_js)
+        self.assertIn(".video-form-field--generating .video-form-input-shell::before", self.workbench_css)
+        self.assertIn("@keyframes videoPromptBorderFlow", self.workbench_css)
+        self.assertIn("prefers-reduced-motion: reduce", self.workbench_css)
+
     def test_shared_toast_can_remain_persistent_while_a_task_runs(self):
         self.assertIn("persistent: Boolean(options.persistent)", self.console_js)
         self.assertIn('toast?.dataset?.toastPersistent === "true"', self.console_js)
