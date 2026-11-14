@@ -36,6 +36,13 @@
   const icon = (name, className = "") => window.VideoIcons?.render?.(name, className) || "";
   const brandIcon = (name, className = "") => window.VideoIcons?.renderBrand?.(name, className) || "";
 
+  function mountStudioTabs() {
+    const tabs = document.getElementById("videoStudioTabs");
+    const tools = root()?.querySelector(".video-records-tools");
+    if (!tabs || !tools || tabs.parentElement === tools) return;
+    tools.prepend(tabs);
+  }
+
   function mediaUrl(value) {
     const url = new URL(String(value || ""), window.location.origin);
     if (ADMIN_CONSOLE_SESSION) url.searchParams.set("admin_console", "1");
@@ -197,7 +204,7 @@
     if (!host) return;
     const hasStaleItems = state.items.length > 0;
     const heading = headingRoot();
-    if (heading) heading.innerHTML = `<header class="video-records-hero"><div class="video-records-heading"><span class="video-records-mark" aria-hidden="true">${icon("archive")}</span><div><span class="eyebrow">VIDEO ARCHIVE</span><h2>视频生成记录</h2><p>自动归档已经生成的视频，分页查看、预览、下载，并可直接送入剪辑器。</p></div></div></header>`;
+    if (heading) heading.innerHTML = "";
     host.innerHTML = `<div class="video-records-app">
       <section class="video-records-panel" aria-label="视频记录列表" ${state.loading ? 'aria-busy="true"' : ""}>
         <div class="video-records-tools">
@@ -218,6 +225,7 @@
         ${!state.error || hasStaleItems ? `<div class="video-records-grid">${state.items.length ? state.items.map(card).join("") : '<div class="video-records-state"><strong>暂时没有符合条件的视频</strong><span>完成视频生成后，记录会自动保存到这里。</span></div>'}</div>${renderPagination()}` : ""}
       </section>
     </div>`;
+    mountStudioTabs();
   }
 
   async function load({ sync = false } = {}) {

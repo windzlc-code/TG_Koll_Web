@@ -61,6 +61,13 @@
     .replaceAll("'", "&#039;");
   const icon = (name, className = "") => window.VideoIcons?.render?.(name, className) || "";
 
+  function mountStudioTabs() {
+    const tabs = document.getElementById("videoStudioTabs");
+    const toolbar = document.getElementById("videoStudioToolbar");
+    if (!tabs || !toolbar || tabs.parentElement === toolbar) return;
+    toolbar.prepend(tabs);
+  }
+
   function formatDuration(seconds) {
     const value = Math.max(0, Number(seconds) || 0);
     const hours = Math.floor(value / 3600);
@@ -762,6 +769,7 @@
   function renderHeading() {
     const host = headingRoot();
     if (!host) return;
+    mountStudioTabs();
     host.innerHTML = `<header class="video-editor-toolbar">
       <div class="video-editor-heading"><span class="video-editor-mark" aria-hidden="true">${icon("scissors")}</span><div><span class="eyebrow">VECTO CUT ROOM</span><h2>视频素材与简易剪辑</h2><p>生成记录、本地素材、剪辑项目和导出成品统一保存。</p></div></div>
       ${state.project ? `<div class="video-project-controls">

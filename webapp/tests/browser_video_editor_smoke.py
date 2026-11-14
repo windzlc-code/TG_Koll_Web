@@ -258,6 +258,11 @@ def main() -> None:
             assert page.locator("#videoEditorPage").is_hidden()
             assert page.locator('[data-studio-tab="records"]').get_attribute("aria-selected") == "true"
             assert page.locator('[data-video-module="video_editor"]').get_attribute("aria-current") == "page"
+            records_tabs_box = page.locator("#videoRecordsRoot .video-studio-tabs").bounding_box()
+            records_search_box = page.locator("[data-record-search]").bounding_box()
+            assert records_tabs_box and records_search_box
+            assert abs((records_tabs_box["y"] + records_tabs_box["height"] / 2) - (records_search_box["y"] + records_search_box["height"] / 2)) < 12
+            assert page.locator("#videoStudioHeadingHost .video-records-hero").count() == 0
             page.locator("[data-record-filter]").select_option("export")
             page.locator(".video-record-card").wait_for(state="visible")
             assert page.locator(".video-record-card").count() == 1

@@ -69,6 +69,17 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertIn('grid-template-columns: max-content minmax(0, 1fr)', VIDEO_EDITOR_CSS)
         self.assertIn('.video-upload-drop.is-dragging', VIDEO_EDITOR_CSS)
 
+    def test_records_tabs_share_the_search_row_without_the_obsolete_heading(self):
+        self.assertIn('function mountStudioTabs()', VIDEO_RECORDS)
+        self.assertIn('tools.prepend(tabs)', VIDEO_RECORDS)
+        self.assertIn('if (heading) heading.innerHTML = ""', VIDEO_RECORDS)
+        self.assertNotIn('VIDEO ARCHIVE', VIDEO_RECORDS)
+        self.assertIn('function mountStudioTabs()', VIDEO_EDITOR)
+        self.assertIn('toolbar.prepend(tabs)', VIDEO_EDITOR)
+        self.assertIn('classList.toggle("is-records-view", activeStudioTab === "records")', VIDEO_PAGE)
+        self.assertIn('.video-studio-toolbar.is-records-view', VIDEO_EDITOR_CSS)
+        self.assertIn('.video-records-tools > .video-studio-tabs', VIDEO_EDITOR_CSS)
+
     def test_asset_project_and_export_closure_is_wired(self):
         for contract in (
             '`${API}/assets/upload`',

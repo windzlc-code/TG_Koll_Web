@@ -84,6 +84,7 @@
 
   function showStudioTab(tab, options = {}) {
     activeStudioTab = tab === "records" ? "records" : "editor";
+    document.getElementById("videoStudioToolbar")?.classList.toggle("is-records-view", activeStudioTab === "records");
     document.querySelectorAll("[data-studio-tab]").forEach((button) => {
       const selected = button.dataset.studioTab === activeStudioTab;
       button.classList.toggle("is-active", selected);
