@@ -1934,6 +1934,12 @@ class ArchivedSourceBackend:
         if cached_voice_id:
             segment_payload["video_default_voice_id"] = cached_voice_id
             segment_payload["minimax_tts_voice_id"] = cached_voice_id
+        context.progress(
+            stage="digital_human_voice",
+            status="running",
+            message=f"正在生成第 {segment_index} 段口播音频",
+            progress=56,
+        )
         if tts_provider == "runninghub" and reference_audio:
             voice_payload = dict(segment_payload)
             # prepare_language_voice prefers target_script over speech_text. Force
@@ -1954,6 +1960,12 @@ class ArchivedSourceBackend:
                 payload=segment_payload,
                 context=context,
             )
+        context.progress(
+            stage="digital_human_voice",
+            status="success",
+            message=f"第 {segment_index} 段口播音频已完成",
+            progress=58,
+        )
         image_url = self._resolve_media(
             task_id=task_id,
             payload=segment_payload,
@@ -1982,6 +1994,12 @@ class ArchivedSourceBackend:
         provider_ids: list[str] = []
         workflow_ids = self._digital_human_workflow_ids(segment_payload)
         video_parts: list[Path] = []
+        context.progress(
+            stage="digital_human_video",
+            status="running",
+            message=f"正在生成第 {segment_index} 段数字人视频",
+            progress=60,
+        )
         for audio_part_index, (audio_part_path, audio_part_duration) in enumerate(audio_parts, start=1):
             audio_url = self._resolve_media(
                 task_id=task_id,

@@ -594,6 +594,42 @@
     },
   };
 
+  // Generation is asynchronous, but the public prompt should expose the
+  // meaningful user-facing work units instead of the provider's internal
+  // polling stages. Keep the list module-specific: an image-only module must
+  // not pretend that it is synthesizing audio or video.
+  const VIDEO_PROGRESS_GENERATION_SUBSTEPS = {
+    digital_human_video: [
+      { key: "image", label: "画面", description: "生成人物与产品画面" },
+      { key: "voice", label: "语音", description: "生成口播音频" },
+      { key: "video", label: "视频", description: "生成数字人视频" },
+    ],
+    ecommerce_short_video: [
+      { key: "voice", label: "语音", description: "生成口播音频" },
+      { key: "image", label: "画面", description: "生成商品与分镜画面" },
+      { key: "video", label: "视频", description: "合成广告视频片段" },
+    ],
+    video_language_replace: [
+      { key: "voice", label: "语音", description: "生成目标语言配音" },
+      { key: "video", label: "视频", description: "替换并合成视频音轨" },
+    ],
+    video_subject_replace: [
+      { key: "video", label: "视频", description: "生成替换后的视频片段" },
+    ],
+    ecommerce_image: [
+      { key: "image", label: "画面", description: "生成商品广告图片" },
+    ],
+    subject_replace: [
+      { key: "image", label: "画面", description: "生成主体替换图片" },
+    ],
+    poster_translate: [
+      { key: "image", label: "画面", description: "生成翻译后的海报" },
+    ],
+    subject_generate: [
+      { key: "image", label: "画面", description: "生成主体图片" },
+    ],
+  };
+
   function videoProgressInput(context = {}) {
     const taskInput = context?.task?.input && typeof context.task.input === "object" ? context.task.input : {};
     const values = context?.values && typeof context.values === "object" ? context.values : {};
@@ -635,6 +671,100 @@
       };
     }
     return source;
+  }
+
+  function videoProgressGenerationText(context = {}) {
+    const task = context?.task && typeof context.task === "object" ? context.task : {};
+    const event = context?.progressEvent && typeof context.progressEvent === "object" ? context.progressEvent : {};
+    const eventData = event.data && typeof event.data === "object" ? event.data : {};
+    const output = taskOutput(task);
+    const checkpoint = output?.video_checkpoint && typeof output.video_checkpoint === "object" ? output.video_checkpoint : {};
+    const rawResult = output?.raw_result && typeof output.raw_result === "object" ? output.raw_result : {};
+    return [
+      event.stage,
+      event.message,
+      event.state,
+      event.generation_kind,
+      eventData.stage,
+      eventData.status,
+      eventData.generation_kind,
+      task.progress_stage,
+      task.stage,
+      task.phase,
+      task.video_stage,
+      output?.stage,
+      output?.progress_stage,
+      output?.phase,
+      output?.video_stage,
+      checkpoint.stage,
+      checkpoint.current_stage,
+      checkpoint.generation_kind,
+      rawResult.stage,
+      rawResult.progress_stage,
+      rawResult.video_stage,
+      rawResult.generation_kind,
+    ].filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function videoProgressGenerationSubstepKey(context = {}) {
+    const raw = videoProgressGenerationText(context);
+    // Provider polling is generic. Prefer an explicit image/audio token in
+    // the event message before falling back to the provider's video work.
+    if (/(audio|voice|tts|speech|narrat|口播|配音|音频|语音|音色)/i.test(raw)) return "voice";
+    if (/(image|fusion|scene|picture|photo|cover|视角|画面|图片|生图|海报)/i.test(raw)) return "image";
+    if (/(video|video_render|lip|segment|merge|compose|concat|local_render|视频|合成|替换)/i.test(raw)) return "video";
+    return "";
+  }
+
+  function videoProgressGenerationSteps(stage = "generate", context = {}) {
+    const moduleId = videoProgressModuleId(context);
+    const definitions = (VIDEO_PROGRESS_GENERATION_SUBSTEPS[moduleId] || []).map((step) => ({ ...step }));
+    if (!definitions.length) return [];
+    const requested = String(stage || "generate").trim().toLowerCase();
+    const terminal = requested === "complete" || ["compose", "archive"].includes(requested);
+    const error = requested === "error";
+    const generationStarted = ["generate", "error"].includes(requested);
+    if (!generationStarted && !terminal) {
+      return definitions.map((step, index) => ({
+        ...step,
+        key: `generation-${step.key}`,
+        kind: "generation-substep",
+        label: `${step.label} ${index + 1}/${definitions.length}`,
+        description: "等待生成",
+        status: "pending",
+      }));
+    }
+    const currentKey = videoProgressGenerationSubstepKey(context);
+    let activeIndex = definitions.findIndex((step) => step.key === currentKey);
+    if (activeIndex < 0) activeIndex = 0;
+    const event = context?.progressEvent && typeof context.progressEvent === "object" ? context.progressEvent : {};
+    const eventState = String(event.state || event.data?.state || event.data?.status || "").trim().toLowerCase();
+    const eventCompleted = !terminal && eventState === "success";
+    const segments = videoProgressSegments(context);
+    const allSegmentsComplete = !segments.isMulti || segments.completedIndices.size >= segments.count;
+    const allGenerationComplete = terminal || (eventCompleted && activeIndex === definitions.length - 1 && allSegmentsComplete);
+    const completedCount = terminal ? definitions.length : eventCompleted ? Math.min(activeIndex + 1, definitions.length) : Math.max(0, activeIndex);
+    if (eventCompleted && activeIndex < definitions.length - 1) activeIndex += 1;
+    return definitions.map((step, index) => {
+      const isComplete = allGenerationComplete || (!error && index < activeIndex);
+      const isError = error && index === activeIndex;
+      const isActive = !allGenerationComplete && !isError && index === activeIndex;
+      const status = isError ? "error" : isComplete ? "complete" : isActive ? "active" : "pending";
+      return {
+        ...step,
+        key: `generation-${step.key}`,
+        kind: "generation-substep",
+        label: `${step.label} ${index + 1}/${definitions.length}`,
+        description: status === "complete"
+          ? `已完成 ${index + 1}/${definitions.length}`
+          : status === "active"
+          ? `${step.description} · 已完成 ${completedCount}/${definitions.length}`
+          : status === "error"
+          ? "处理失败"
+          : "等待处理",
+        status,
+      };
+    });
   }
 
   function videoProgressSegments(context = {}) {
@@ -766,13 +896,23 @@
         ? (index < activeIndex ? "complete" : index === activeIndex ? "error" : "pending")
         : (index < activeIndex ? "complete" : index === activeIndex ? "active" : "pending"),
     }));
+    const generationIndex = steps.findIndex((step) => step.key === "generate");
+    const generationSubsteps = videoProgressGenerationSteps(requested, context);
+    if (generationIndex >= 0 && generationSubsteps.length) {
+      const completedGenerationCount = generationSubsteps.filter((step) => step.status === "complete").length;
+      steps[generationIndex].description = `${steps[generationIndex].description} · 已完成 ${completedGenerationCount}/${generationSubsteps.length}`;
+      steps.splice(generationIndex + 1, 0, ...generationSubsteps);
+    }
     const segments = videoProgressSegments(context);
     if (!segments.isMulti) {
       if (segments.isOral) {
         const generate = steps.find((step) => step.key === "generate");
         if (generate) {
           generate.label = "单段口播";
-          generate.description = "生成单段口播画面与配音";
+          const generationSummary = generationSubsteps.length
+            ? ` · 已完成 ${generationSubsteps.filter((step) => step.status === "complete").length}/${generationSubsteps.length}`
+            : "";
+          generate.description = `生成单段口播画面与配音${generationSummary}`;
         }
       }
       return steps;
@@ -791,13 +931,17 @@
         status: errorIndex >= 0 && active ? "error" : complete ? "complete" : active ? "active" : "pending",
       };
     });
-    const generateIndex = steps.findIndex((step) => step.key === "generate");
-    if (generateIndex >= 0) {
-      steps[generateIndex].label = segments.isOral ? "多段口播" : "分段生成";
-      steps[generateIndex].description = segments.isOral
+    const generateStepIndex = steps.findIndex((step) => step.key === "generate");
+    if (generateStepIndex >= 0) {
+      steps[generateStepIndex].label = segments.isOral ? "多段口播" : "分段生成";
+      const segmentDescription = segments.isOral
         ? `按 ${segments.count} 段口播依次生成`
         : `按 ${segments.count} 个片段依次生成`;
-      steps.splice(generateIndex + 1, 0, ...segmentSteps);
+      const generationSummary = generationSubsteps.length
+        ? ` · 已完成 ${generationSubsteps.filter((step) => step.status === "complete").length}/${generationSubsteps.length}`
+        : "";
+      steps[generateStepIndex].description = `${segmentDescription}${generationSummary}`;
+      steps.splice(generateStepIndex + 1 + generationSubsteps.length, 0, ...segmentSteps);
     }
     return steps;
   }
@@ -1474,12 +1618,22 @@
     return VIDEO_PROMPT_MODULES.has(String(module?.id || module || ""));
   }
 
+  function hasAuthoredDigitalHumanSpeech(module, values = {}) {
+    if (String(module?.id || module || "") !== "digital_human_video") return false;
+    const speech = String(values?.speech_text || "").trim();
+    if (!speech) return false;
+    const source = String(values?._speech_text_source || "").trim().toLowerCase();
+    const generatedSpeech = String(values?._generated_speech_text || values?._prompt_preview?.speech_text || "").trim();
+    const isGenerated = source === "ai"
+      || (!source && Boolean(values?._prompt_preview_ready) && Boolean(generatedSpeech) && generatedSpeech === speech);
+    return !isGenerated;
+  }
+
   function requiresPromptPreviewForSubmit(module, values) {
     values = values && typeof values === "object" ? values : {};
     if (!requiresPromptPreview(module)) return false;
-    if (String(module?.id || module || "") === "digital_human_video") {
-      return !String(values.speech_text || "").trim();
-    }
+    if (hasAuthoredDigitalHumanSpeech(module, values)) return false;
+    if (String(module?.id || module || "") === "digital_human_video") return true;
     return true;
   }
 
@@ -3922,7 +4076,8 @@
           source_text: String(row.text || "").trim(),
         })).filter((row) => row.source_text && row.end_seconds > row.start_seconds);
       }
-      if (requiresPromptPreviewForSubmit(module, submitValues)) {
+      const hasAuthoredSpeech = hasAuthoredDigitalHumanSpeech(module, draft.values);
+      if (requiresPromptPreviewForSubmit(module, draft.values)) {
         if (!draft.values._prompt_preview_ready || !draft.values._prompt_preview) {
           // Generate into the editable speech field first. The user can
           // review or revise the returned copy before submitting the video.
@@ -3931,7 +4086,7 @@
           return;
         }
         applyStoredPromptPreviewForSubmit(module, submitValues, draft);
-      } else if (requiresPromptPreview(module) && draft.values._prompt_preview_ready && draft.values._prompt_preview_confirmed) {
+      } else if (requiresPromptPreview(module) && !hasAuthoredSpeech && draft.values._prompt_preview_ready && draft.values._prompt_preview_confirmed) {
         applyStoredPromptPreviewForSubmit(module, submitValues, draft);
       } else if (requiresSimpleSubmitConfirmation(module) && !(await confirmVideoSubmit(module))) {
         return;

@@ -983,7 +983,7 @@
   color: #166534;
   background: #dcfce7;
   border-color: #86efac;
-  animation: vecto-public-prompt-step-check 420ms ease-out both;
+  animation: none;
 }
 
 .vecto-public-prompt-step.is-complete .vecto-public-prompt-step-copy strong {
@@ -1003,11 +1003,6 @@
   border-top-color: var(--video-accent-deep, #335e73);
   border-radius: 50%;
   animation: video-spin 700ms linear infinite;
-}
-
-@keyframes vecto-public-prompt-step-check {
-  from { transform: scale(.72); opacity: .35; }
-  to { transform: scale(1); opacity: 1; }
 }
 
 .vecto-public-prompt-dots {
@@ -1103,8 +1098,7 @@
 @media (prefers-reduced-motion: reduce) {
   .vecto-public-prompt-dots,
   .vecto-public-prompt-spinner,
-  .vecto-public-prompt-step-spinner,
-  .vecto-public-prompt-step.is-complete .vecto-public-prompt-step-mark { animation: none; }
+  .vecto-public-prompt-step-spinner { animation: none; }
 }
 
 @media (max-width: 640px) {

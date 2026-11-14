@@ -14,7 +14,8 @@ function functionBody(name) {
   const marker = `function ${name}(`;
   const start = source.indexOf(marker);
   assert.notEqual(start, -1, `missing ${name}`);
-  const brace = source.indexOf("{", start);
+  const signatureEnd = source.indexOf(") {", start);
+  const brace = signatureEnd >= 0 ? signatureEnd + 2 : source.indexOf("{", start);
   let depth = 0;
   let quote = "";
   let escaped = false;
@@ -105,6 +106,80 @@ assert.match(source, /steps: progressStepsForMonitor\(monitor, monitor\.stage/);
 assert.match(source, /new window\.EventSource\(`/);
 assert.match(source, /key: `segment-\$\{index\}`/);
 assert.doesNotMatch(source, /applyConfirmedPromptPreview\(module, draft\.values, preview\)/);
+assert.match(source, /const VIDEO_PROGRESS_GENERATION_SUBSTEPS = \{/);
+assert.match(source, /label: `\$\{step\.label\} \$\{index \+ 1\}\/\$\{definitions\.length\}`/);
+assert.match(source, /已完成 \$\{completedCount\}\/\$\{definitions\.length\}/);
+assert.match(source, /const hasAuthoredSpeech = hasAuthoredDigitalHumanSpeech\(module, draft\.values\)/);
+assert.match(functionBody("submit"), /!hasAuthoredSpeech && draft\.values\._prompt_preview_ready/);
+assert.match(functionBody("hasAuthoredDigitalHumanSpeech"), /_speech_text_source/);
+const generationSubstepsBody = functionBody("videoProgressGenerationSteps");
+const generationSteps = Function(
+  "VIDEO_PROGRESS_GENERATION_SUBSTEPS",
+  "videoProgressModuleId",
+  "videoProgressGenerationSubstepKey",
+  "videoProgressSegments",
+  `return function videoProgressGenerationSteps(stage = "generate", context = {}) {${generationSubstepsBody}}`,
+)(
+  {
+    digital_human_video: [
+      { key: "image", label: "画面", description: "生成人物与产品画面" },
+      { key: "voice", label: "语音", description: "生成口播音频" },
+      { key: "video", label: "视频", description: "生成数字人视频" },
+    ],
+    video_language_replace: [
+      { key: "voice", label: "语音", description: "生成目标语言配音" },
+      { key: "video", label: "视频", description: "替换并合成视频音轨" },
+    ],
+  },
+  (context) => String(context?.moduleId || "digital_human_video"),
+  (context) => {
+    const stage = String(context?.progressEvent?.stage || "");
+    if (/voice|audio|speech|口播|配音|语音/i.test(stage)) return "voice";
+    if (/image|fusion|画面|图片/i.test(stage)) return "image";
+    if (/video|render|视频|合成/i.test(stage)) return "video";
+    return "";
+  },
+  (context) => ({
+    isMulti: Number(context?.segmentCount || 0) > 1,
+    count: Number(context?.segmentCount || 0),
+    completedIndices: new Set(context?.completedIndices || []),
+  }),
+);
+const generationContext = (stage, state = "running") => ({
+  moduleId: "digital_human_video",
+  progressEvent: { stage, state },
+});
+assert.deepEqual(
+  generationSteps("submit", generationContext("digital_human_image_fusion")).map((step) => step.status),
+  ["pending", "pending", "pending"],
+);
+assert.deepEqual(
+  generationSteps("generate", generationContext("digital_human_image_fusion")).map((step) => step.status),
+  ["active", "pending", "pending"],
+);
+assert.deepEqual(
+  generationSteps("generate", generationContext("digital_human_image_fusion", "success")).map((step) => step.status),
+  ["complete", "active", "pending"],
+);
+assert.deepEqual(
+  generationSteps("generate", generationContext("digital_human_voice")).map((step) => step.status),
+  ["complete", "active", "pending"],
+);
+assert.deepEqual(
+  generationSteps("generate", generationContext("digital_human_video")).map((step) => step.status),
+  ["complete", "complete", "active"],
+);
+assert.deepEqual(
+  generationSteps("generate", {
+    ...generationContext("digital_human_video", "success"),
+    segmentCount: 3,
+    completedIndices: [1],
+  }).map((step) => step.status),
+  ["complete", "complete", "active"],
+);
+assert.equal(generationSteps("generate", generationContext("digital_human_video"))[2].label, "视频 3/3");
+assert.ok(generationSteps("complete", generationContext("digital_human_video")).every((step) => step.status === "complete"));
+assert.equal(generationSteps("generate", { moduleId: "video_language_replace", progressEvent: { stage: "voice", state: "running" } }).length, 2);
 const applyConfirmedPromptPreview = Function(
   "requiresPromptPreview",
   `return function applyConfirmedPromptPreview(module, submitValues, promptPreview) {${confirmedPreview}}`,
@@ -174,10 +249,24 @@ assert.equal(authoredPreviewValues.use_ai_copy, false);
 const promptRequirement = functionBody("requiresPromptPreviewForSubmit");
 const requiresPromptPreviewForSubmit = Function(
   "requiresPromptPreview",
+  "hasAuthoredDigitalHumanSpeech",
   `return function requiresPromptPreviewForSubmit(module, values = {}) {${promptRequirement}}`,
-)((module) => ["digital_human_video", "ecommerce_short_video"].includes(String(module?.id || module || "")));
+)(
+  (module) => ["digital_human_video", "ecommerce_short_video"].includes(String(module?.id || module || "")),
+  (module, values) => {
+    if (String(module?.id || module || "") !== "digital_human_video") return false;
+    const speech = String(values?.speech_text || "").trim();
+    const source = String(values?._speech_text_source || "").trim().toLowerCase();
+    const generatedSpeech = String(values?._generated_speech_text || values?._prompt_preview?.speech_text || "").trim();
+    const isGenerated = source === "ai"
+      || (!source && Boolean(values?._prompt_preview_ready) && Boolean(generatedSpeech) && generatedSpeech === speech);
+    return Boolean(speech) && !isGenerated;
+  },
+);
 assert.equal(requiresPromptPreviewForSubmit({ id: "digital_human_video" }, { speech_text: "用户已填写的口播" }), false);
 assert.equal(requiresPromptPreviewForSubmit({ id: "digital_human_video" }, { speech_text: "" }), true);
+assert.equal(requiresPromptPreviewForSubmit({ id: "digital_human_video" }, { speech_text: "AI 回填文案", _speech_text_source: "ai" }), true);
+assert.equal(requiresPromptPreviewForSubmit({ id: "digital_human_video" }, { speech_text: "AI 回填文案", _prompt_preview_ready: true, _prompt_preview: { speech_text: "AI 回填文案" } }), true);
 assert.equal(requiresPromptPreviewForSubmit({ id: "ecommerce_short_video" }, { speech_text: "用户已填写的口播" }), true);
 
 assert.match(source, /function renderDigitalHumanSettings\(/);
@@ -278,7 +367,7 @@ assert.deepEqual(explicitMissingSegments.map((item) => item.status), ["success",
 
 const submit = functionBody("submit");
 assert.match(submit, /source_text:\s*String\(row\.text/);
-assert.match(submit, /if \(requiresPromptPreviewForSubmit\(module, submitValues\)\)/);
+assert.match(submit, /if \(requiresPromptPreviewForSubmit\(module, draft\.values\)\)/);
 assert.doesNotMatch(submit, /regenerate:\s*true/);
 assert.doesNotMatch(submit, /regenerate_revision/);
 

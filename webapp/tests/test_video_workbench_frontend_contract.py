@@ -152,6 +152,9 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn("VIDEO_PROGRESS_MODULE_COPY", self.workbench_js)
         self.assertIn("progressStepsForMonitor", self.workbench_js)
         self.assertIn("new window.EventSource", self.workbench_js)
+        self.assertIn("VIDEO_PROGRESS_GENERATION_SUBSTEPS", self.workbench_js)
+        self.assertIn("已完成 ${completedCount}/${definitions.length}", self.workbench_js)
+        self.assertIn("const hasAuthoredSpeech = hasAuthoredDigitalHumanSpeech(module, draft.values);", self.workbench_js)
         self.assertIn("单段口播", self.workbench_js)
         self.assertIn("多段口播", self.workbench_js)
         self.assertIn('key: `segment-${index}`', self.workbench_js)
@@ -179,6 +182,11 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn(".video-form-field--generating .video-form-input-shell::before", self.workbench_css)
         self.assertIn("@keyframes videoPromptBorderFlow", self.workbench_css)
         self.assertIn("prefers-reduced-motion: reduce", self.workbench_css)
+
+    def test_completed_progress_steps_do_not_animate(self):
+        self.assertIn(".vecto-public-prompt-step.is-complete .vecto-public-prompt-step-mark", self.workbench_css)
+        self.assertIn("animation: none;", self.workbench_css)
+        self.assertNotIn("@keyframes vecto-public-prompt-step-check", self.workbench_css)
 
     def test_shared_toast_can_remain_persistent_while_a_task_runs(self):
         self.assertIn("persistent: Boolean(options.persistent)", self.console_js)

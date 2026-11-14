@@ -65,11 +65,11 @@ def main() -> None:
                         fulfill_json(route, {"tasks": [{"id": "browser-feedback-final-task", "type": "create_video", "status": "queued", "title": "浏览器最终视频"}]})
                     return
                 task_state["polls"] += 1
-                if task_state["polls"] >= 2:
+                if task_state["polls"] >= 4:
                     review = task_mode["value"] == "review"
                     fulfill_json(route, {"tasks": [{"id": "browser-feedback-task", "type": "create_video", "status": "success", "title": "浏览器反馈验证任务", "has_download": True, "has_video_output": not review, "video_stage": "visual_review" if review else ""}]})
                     return
-                fulfill_json(route, {"tasks": [{"id": "browser-feedback-task", "type": "create_video", "status": "queued", "title": "浏览器反馈验证任务"}]})
+                fulfill_json(route, {"tasks": [{"id": "browser-feedback-task", "type": "create_video", "status": "running", "title": "浏览器反馈验证任务", "video_stage": "digital_human_image_fusion", "progress": 30}]})
                 return
             fulfill_json(route, {"tasks": []})
 
@@ -215,7 +215,11 @@ def main() -> None:
         page.locator("#videoWorkbenchRoot button[type='submit']").click()
         busy = page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]')
         busy.wait_for(state="visible")
-        assert busy.locator("[data-public-prompt-step]").count() == 3
+        assert busy.locator("[data-public-prompt-step]").count() == 6
+        generation_image = busy.locator('[data-public-prompt-step="generation-image"][data-public-prompt-step-status="active"]')
+        generation_image.wait_for(state="visible")
+        assert generation_image.count() == 1
+        assert "1/3" in busy.locator('[data-public-prompt-step="generation-image"]').inner_text()
         assert busy.locator('[data-public-prompt-step-status="active"]').count() >= 1
         first_progress = busy.locator("[data-public-prompt-message]").inner_text()
         page.wait_for_timeout(1700)
@@ -223,7 +227,7 @@ def main() -> None:
         assert first_progress == second_progress, (first_progress, second_progress)
         assert busy.locator(".vecto-public-prompt-dialog").evaluate("(node) => getComputedStyle(node).animationName === 'none'")
         busy = page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]')
-        assert busy.locator("[data-public-prompt-step]").count() == 3
+        assert busy.locator("[data-public-prompt-step]").count() == 6
         busy.locator("[data-public-prompt-minimize]").click()
         assert page.locator('.vecto-public-prompt[data-public-prompt-minimized="true"] [data-public-prompt-restore]').is_visible()
         page.wait_for_timeout(2500)
@@ -236,7 +240,8 @@ def main() -> None:
         page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
         assert "生成完成" in page.locator(".vecto-public-prompt").inner_text()
         assert "同步到视频记录" in page.locator(".vecto-public-prompt").inner_text()
-        assert page.locator('.vecto-public-prompt [data-public-prompt-step-status="complete"]').count() == 3
+        assert page.locator('.vecto-public-prompt [data-public-prompt-step-status="complete"]').count() == 6
+        assert page.locator('.vecto-public-prompt [data-public-prompt-step-status="complete"] .vecto-public-prompt-step-mark').first.evaluate("node => getComputedStyle(node).animationName") == "none"
         assert record_state["polls"] >= 2, record_state
         assert "继续生成视频" not in page.locator(".vecto-public-prompt").inner_text()
         page.locator(".vecto-public-prompt [data-public-prompt-close]").click()
@@ -275,6 +280,25 @@ def main() -> None:
         error_text = page.locator(".vecto-public-prompt").inner_text()
         assert "服务器处理失败" in error_text
         assert "Internal Server Error" not in error_text
+        page.locator(".vecto-public-prompt [data-public-prompt-close]").click()
+
+        task_mode["value"] = "success"
+        task_state["submitted"] = False
+        task_state["polls"] = 0
+        task_state["finalize_submitted"] = False
+        task_state["finalize_count"] = 0
+        task_state["final_polls"] = 0
+        upload_video_sources()
+        direct_speech = "用户已填写的口播文案应直接提交"
+        page.locator('[data-video-field="speech_text"]').fill(direct_speech)
+        prompt_posts_before = prompt_state["count"]
+        task_posts_before = task_state["task_post_count"]
+        page.locator("#videoWorkbenchRoot button[type='submit']").click()
+        direct_busy = page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]')
+        direct_busy.wait_for(state="visible")
+        assert prompt_state["count"] == prompt_posts_before, prompt_state
+        page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
+        assert task_state["task_post_count"] > task_posts_before, task_state
         page.locator(".vecto-public-prompt [data-public-prompt-close]").click()
 
         page.locator('[data-video-module="subject_generate"]').click(force=True)
