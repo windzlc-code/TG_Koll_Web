@@ -198,25 +198,28 @@
     </nav>`;
   }
 
+  function renderRecordsTools() {
+    return `<div class="video-records-tools">
+      <div><strong>视频记录</strong><span>${state.total} 个可用视频</span></div>
+      <div class="video-records-filters">
+        <input type="search" value="${escapeHtml(state.query)}" placeholder="搜索视频名称" aria-label="搜索视频生成记录" data-record-search />
+        <select aria-label="筛选视频来源" data-record-filter>
+          ${[["generated", "AI 生成记录"], ["export", "剪辑成品"], ["", "全部视频"]].map(([value, label]) => `<option value="${value}" ${state.sourceType === value ? "selected" : ""}>${label}</option>`).join("")}
+        </select>
+        <button class="video-icon-button" type="button" data-record-refresh aria-label="刷新视频记录" title="刷新">${icon("refresh")}</button>
+      </div>
+    </div>`;
+  }
+
   function render() {
     const host = root();
     if (!host) return;
     const hasStaleItems = state.items.length > 0;
     const studioTabs = document.getElementById("videoStudioTabs");
     const heading = headingRoot();
-    if (heading) heading.innerHTML = "";
+    if (heading) heading.innerHTML = renderRecordsTools();
     host.innerHTML = `<div class="video-records-app">
       <section class="video-records-panel" aria-label="视频记录列表" ${state.loading ? 'aria-busy="true"' : ""}>
-        <div class="video-records-tools">
-          <div><strong>视频记录</strong><span>${state.total} 个可用视频</span></div>
-          <div class="video-records-filters">
-            <input type="search" value="${escapeHtml(state.query)}" placeholder="搜索视频名称" aria-label="搜索视频生成记录" data-record-search />
-            <select aria-label="筛选视频来源" data-record-filter>
-              ${[["generated", "AI 生成记录"], ["export", "剪辑成品"], ["", "全部视频"]].map(([value, label]) => `<option value="${value}" ${state.sourceType === value ? "selected" : ""}>${label}</option>`).join("")}
-            </select>
-            <button class="video-icon-button" type="button" data-record-refresh aria-label="刷新视频记录" title="刷新">${icon("refresh")}</button>
-          </div>
-        </div>
         ${state.storage?.warning ? `<div class="video-storage-notice video-records-storage-notice" data-level="${state.storage.critical ? "critical" : "warning"}" role="status"><span aria-hidden="true">${icon("warning")}</span><div><strong>${state.storage.critical ? "素材容量已超过管理阈值" : "素材容量接近管理阈值"}</strong><small>已使用 ${formatBytes(state.storage.used_bytes)} / ${formatBytes(state.storage.soft_limit_bytes)}（${Math.round(Number(state.storage.usage_ratio || 0) * 100)}%），请删除不再使用的视频。</small></div></div>` : ""}
         ${state.loading && !hasStaleItems ? '<div class="video-records-state"><span class="video-workbench-loader"></span><strong>正在读取视频记录</strong></div>' : ""}
         ${state.loading && hasStaleItems ? '<div class="video-records-sync-status" role="status"><span class="video-workbench-loader" aria-hidden="true"></span>正在同步最新视频记录，现有内容保持可用</div>' : ""}
@@ -396,6 +399,21 @@
     const host = root();
     if (!host || host.dataset.bound === "1") return;
     host.dataset.bound = "1";
+    const handleFilterChange = (event) => {
+      if (!state.active || !event.target.matches("[data-record-filter]")) return;
+      state.sourceType = event.target.value;
+      state.page = 1;
+      state.openActionId = "";
+      void load();
+    };
+    const handleSearchInput = (event) => {
+      if (!state.active || !event.target.matches("[data-record-search]")) return;
+      state.query = event.target.value;
+      state.page = 1;
+      state.openActionId = "";
+      window.clearTimeout(state.searchTimer);
+      state.searchTimer = window.setTimeout(() => load(), 300);
+    };
     host.addEventListener("click", (event) => {
       const page = event.target.closest("[data-record-page]");
       if (page && !page.disabled) { state.page = Number(page.dataset.recordPage) || 1; void load(); return; }
@@ -423,21 +441,15 @@
       if (remove) { state.openActionId = ""; void deleteRecord(remove.dataset.recordDelete).catch((error) => { state.error = String(error?.message || error); render(); }); return; }
       if (event.target.closest("[data-record-refresh]")) void load({ sync: true });
     });
-    host.addEventListener("change", (event) => {
-      if (!event.target.matches("[data-record-filter]")) return;
-      state.sourceType = event.target.value;
-      state.page = 1;
-      state.openActionId = "";
-      void load();
+    host.addEventListener("change", handleFilterChange);
+    host.addEventListener("input", handleSearchInput);
+    const toolsHost = headingRoot();
+    toolsHost?.addEventListener("click", (event) => {
+      if (!state.active || !event.target.closest("[data-record-refresh]")) return;
+      void load({ sync: true });
     });
-    host.addEventListener("input", (event) => {
-      if (!event.target.matches("[data-record-search]")) return;
-      state.query = event.target.value;
-      state.page = 1;
-      state.openActionId = "";
-      window.clearTimeout(state.searchTimer);
-      state.searchTimer = window.setTimeout(() => load(), 300);
-    });
+    toolsHost?.addEventListener("change", handleFilterChange);
+    toolsHost?.addEventListener("input", handleSearchInput);
     document.addEventListener("click", (event) => {
       if (!state.active || !state.openActionId || event.target.closest(".video-record-quick-actions")) return;
       state.openActionId = "";

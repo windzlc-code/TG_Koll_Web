@@ -261,9 +261,19 @@ def main() -> None:
             assert page.locator('[data-video-module="video_editor"]').get_attribute("aria-current") == "page"
             records_tabs = page.locator("#videoStudioToolbar .video-studio-tabs")
             records_tabs_box = records_tabs.bounding_box()
+            page.locator("[data-record-search]").wait_for(state="visible", timeout=10_000)
             records_search_box = page.locator("[data-record-search]").bounding_box()
             assert records_tabs_box and records_search_box
             assert records_tabs.evaluate("node => node.parentElement?.id") == "videoStudioToolbar"
+            assert abs((records_tabs_box["y"] + records_tabs_box["height"] / 2) - (records_search_box["y"] + records_search_box["height"] / 2)) < 3
+            assert page.locator("#videoStudioTabs").evaluate("node => getComputedStyle(node).borderStyle") == "none"
+            assert page.locator("#videoStudioTabs").evaluate("node => getComputedStyle(node).backgroundColor") == "rgba(0, 0, 0, 0)"
+            assert page.locator('[data-studio-tab="records"]').evaluate("node => getComputedStyle(node).color") == "rgb(255, 255, 255)"
+            page.locator('[data-studio-tab="editor"]').hover()
+            assert page.locator('[data-studio-tab="records"]').evaluate("node => getComputedStyle(node).color") == "rgb(255, 255, 255)"
+            assert page.locator('[data-studio-tab="editor"]').evaluate("node => getComputedStyle(node).color") == "rgb(32, 59, 73)"
+            page.locator('[data-studio-tab="records"]').hover()
+            assert page.locator('[data-studio-tab="records"]').evaluate("node => getComputedStyle(node).color") == "rgb(255, 255, 255)"
             assert page.locator("#videoStudioHeadingHost .video-records-hero").count() == 0
 
             stable_tabs_box = records_tabs_box
