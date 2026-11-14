@@ -508,6 +508,17 @@
     { key: "archive", label: "归档", description: "同步到视频记录" },
   ];
 
+  // Keep internal routing stages for monitoring, but expose only the three
+  // milestones users can act on. Prompt/submit/compose are implementation
+  // details of the same prepare or generate milestone.
+  const VIDEO_PUBLIC_PROGRESS_KEYS = new Set(["prepare", "generate", "archive"]);
+  const VIDEO_PUBLIC_PROGRESS_STAGE_MAP = {
+    prompt: "prepare",
+    submit: "prepare",
+    compose: "generate",
+    error: "generate",
+  };
+
   const VIDEO_PROGRESS_MODULE_COPY = {
     digital_human_video: {
       name: "数字人口播视频",
@@ -738,14 +749,15 @@
     const definitions = VIDEO_PROGRESS_STEP_DEFINITIONS.map((step) => {
       const replacement = copy[step.key];
       return replacement ? { ...step, label: replacement[0], description: replacement[1] } : { ...step };
-    });
+    }).filter((step) => VIDEO_PUBLIC_PROGRESS_KEYS.has(step.key));
     const forceComplete = requested === "complete";
     const errorIndex = requested === "error"
       ? definitions.findIndex((step) => step.key === "generate")
       : -1;
+    const visibleStage = VIDEO_PUBLIC_PROGRESS_STAGE_MAP[requested] || requested;
     const activeIndex = errorIndex >= 0
       ? errorIndex
-      : Math.max(0, definitions.findIndex((step) => step.key === requested));
+      : Math.max(0, definitions.findIndex((step) => step.key === visibleStage));
     const steps = definitions.map((step, index) => ({
       ...step,
       status: forceComplete
@@ -827,11 +839,29 @@
     }) || null;
   }
 
+  function openVideoInfo(title, message, options = {}) {
+    const config = options && typeof options === "object" ? options : {};
+    const info = window.VectoPublicPrompt?.showInfo;
+    if (typeof info === "function") {
+      return info({
+        ...config,
+        title,
+        message: Array.isArray(message) ? message[0] : message,
+        status: config.status || "progress",
+        busy: config.busy !== false,
+        persistent: config.persistent ?? config.busy !== false,
+        key: config.key || "video-workbench:info",
+      });
+    }
+    return openVideoProgress(title, message, { ...config, steps: [] });
+  }
+
   function showVideoError(error, fallback, title = "操作失败", existingPrompt = null) {
     const message = videoErrorMessage(error, fallback);
     const code = String(error?.payload?.detail?.code || error?.payload?.code || error?.code || "").trim().toUpperCase();
     if (Number(error?.status) === 402 || code === "INSUFFICIENT_POINTS") {
-      window.VectoPublicPrompt?.showInsufficientPoints?.(existingPrompt);
+      if (existingPrompt?.isToast) existingPrompt.close?.();
+      window.VectoPublicPrompt?.showInsufficientPoints?.(existingPrompt?.isToast ? null : existingPrompt);
       return message;
     }
     if (existingPrompt?.isOpen?.()) {
@@ -1509,10 +1539,42 @@
   }
 
   function invalidatePromptPreview(module, draft, changedKey = "") {
-    if (!requiresPromptPreview(module)) return;
-    delete draft.values._prompt_preview;
-    draft.values._prompt_preview_ready = false;
-    delete draft.values._prompt_preview_confirmed;
+    if (!requiresPromptPreview(module) || !draft?.values) return false;
+    const values = draft.values;
+    const currentSpeech = String(values.speech_text || values.copy_text || "").trim();
+    const previewSpeech = String(values._prompt_preview?.speech_text || values._prompt_preview?.copy_text || "").trim();
+    const generatedSpeech = String(values._generated_speech_text || previewSpeech).trim();
+    const speechSource = String(values._speech_text_source || "").trim().toLowerCase();
+    let generatedSpeechInvalidated = false;
+    const generatedContextChanged = [
+      "product_name",
+      "product_details",
+      "target_language",
+      "digital_human_content_mode",
+      "oral_target_duration_seconds",
+      "model",
+      "product",
+    ].includes(String(changedKey || ""));
+    const generatedCopyMatchesCurrent = speechSource === "ai"
+      || (!speechSource && Boolean(values._prompt_preview_ready) && currentSpeech && generatedSpeech && currentSpeech === generatedSpeech);
+    if (generatedContextChanged && currentSpeech && generatedSpeech && generatedCopyMatchesCurrent) {
+      if (String(values.speech_text || "").trim() === generatedSpeech) values.speech_text = "";
+      if (String(values.copy_text || "").trim() === generatedSpeech) values.copy_text = "";
+      delete values._generated_speech_text;
+      delete values._speech_text_source;
+      values._prompt_preview_stale = true;
+      generatedSpeechInvalidated = true;
+    }
+    if (["speech_text", "copy_text"].includes(String(changedKey || ""))) {
+      const editedSpeech = String(values.speech_text || values.copy_text || "").trim();
+      values._speech_text_source = editedSpeech ? "manual" : "";
+      delete values._generated_speech_text;
+      values._prompt_preview_stale = false;
+    }
+    delete values._prompt_preview;
+    values._prompt_preview_ready = false;
+    delete values._prompt_preview_confirmed;
+    return generatedSpeechInvalidated;
   }
 
   function applyStoredPromptPreviewForSubmit(module, submitValues, draft) {
@@ -1552,11 +1614,9 @@
     state.promptGenerating = true;
     state.submitError = "";
     render();
-    const progress = openVideoProgress("正在生成提示词 / 文案", [
-      "正在整理产品信息和素材…",
-      "正在生成口播文案与画面提示词…",
-      "正在检查生成内容，请稍候…",
-    ], { stage: "prompt", moduleId: module.id, values: draft.values });
+    const progress = openVideoInfo("正在生成提示词 / 文案", "正在整理产品信息和素材…", {
+      key: "video-workbench:prompt-generation",
+    });
     try {
       const values = publicSubmitValues(module, draft);
       const preview = await confirmPromptPreview(module, values);
@@ -1569,7 +1629,10 @@
       draft.values._prompt_preview_confirmed = true;
       if (!String(values.speech_text || "").trim() && String(preview.speech_text || "").trim()) {
         draft.values.speech_text = String(preview.speech_text).trim();
+        draft.values._generated_speech_text = draft.values.speech_text;
+        draft.values._speech_text_source = "ai";
       }
+      draft.values._prompt_preview_stale = false;
       saveDraft(module.id);
       if (autoSubmit) {
         const submitValues = publicSubmitValues(module, draft);
@@ -1590,7 +1653,12 @@
         await submitPreparedVideoTask(module, draft, submitValues, progress, { requireTaskId: true });
         return true;
       }
-      progress?.close?.();
+      updateVideoSuccess(
+        progress,
+        "文案已生成",
+        "AI 文案已回填到口播输入框，请检查或修改后再提交。",
+        "产品简介只作为生成参考，最终配音以口播输入框中的文本为准。",
+      );
       return true;
     } catch (error) {
       state.submitError = showVideoError(error, "提示词 / 文案生成失败：请检查输入内容和素材后重试。", "提示词 / 文案生成失败", progress);
@@ -2146,7 +2214,13 @@
 
   function renderDigitalHumanSettings(fields, draft) {
     const fieldMap = new Map(fields.filter((field) => field.type !== "file").map((field) => [field.key, field]));
-    const renderKeys = (keys) => keys.map((key) => fieldMap.get(key)).filter(Boolean).map((field) => renderInputField(field, draft.values[field.key])).join("");
+    const renderKeys = (keys) => keys.map((key) => fieldMap.get(key)).filter(Boolean).map((field) => {
+      const staleSpeech = field.key === "speech_text" && draft.values._prompt_preview_stale;
+      const displayField = staleSpeech
+        ? { ...field, help: "产品简介已修改，上一版 AI 口播文案已过期；请重新生成并检查后再提交。" }
+        : field;
+      return renderInputField(displayField, draft.values[field.key]);
+    }).join("");
     return `<div class="video-digital-human-settings">
       <section class="video-form-subsection video-form-subsection--reference">
         <div class="video-form-grid video-form-grid--content">${renderKeys(["product_name", "product_details"])}</div>
@@ -3207,13 +3281,17 @@
       VOICE_PRESET_DRAFT_KEYS.forEach((key) => delete draft.values[key]);
       stopVoicePreview();
     }
-    invalidatePromptPreview(module, draft, field.key);
+    const generatedSpeechInvalidated = invalidatePromptPreview(module, draft, field.key);
     if (module.id === "video_language_replace" && field.key === "script_text") {
       draft.values.video_language_script_analyzed = false;
       draft.values.video_language_script_confirmed = false;
     }
     reconcileVideoCharacterOptions(draft.values, field.key);
     saveDraft(module.id);
+    if (generatedSpeechInvalidated) {
+      const speechInput = document.querySelector('#videoWorkbenchRoot [data-video-field="speech_text"]');
+      if (speechInput) speechInput.value = "";
+    }
     if (voiceLanguageChanged) {
       if (state.voiceModalOpen) refreshVoicePresetListInPlace(module, draft);
       else render();

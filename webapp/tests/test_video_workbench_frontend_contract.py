@@ -135,6 +135,9 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
 
     def test_public_feedback_replaces_native_prompts_with_localized_busy_and_error_states(self):
         self.assertIn("window.VectoPublicPrompt", self.public_feedback_js)
+        self.assertIn("function showInfo(options = {})", self.public_feedback_js)
+        self.assertIn("window.VectoConsoleFeedback", self.public_feedback_js)
+        self.assertIn('toast.dataset.vectoPublicInfoToast = "true"', self.public_feedback_js)
         self.assertIn("function showInsufficientPoints", self.public_feedback_js)
         self.assertIn("购买算力", self.public_feedback_js)
         self.assertIn("续费 / 购买会员", self.public_feedback_js)
@@ -155,11 +158,18 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn("服务器处理失败", self.public_feedback_js)
         self.assertIn("function openVideoProgress", self.workbench_js)
         self.assertIn("function showVideoError", self.workbench_js)
+        self.assertIn("function openVideoInfo", self.workbench_js)
         self.assertIn("async function confirmVideoSubmit", self.workbench_js)
         self.assertNotIn("window.confirm(", self.workbench_js)
         self.assertIn("await window.VideoWorkbench.confirmLeave", self.video_page_js)
         self.assertIn("navigationSequence", self.video_page_js)
         self.assertIn("页面提示组件加载失败", self.workbench_js)
+
+    def test_shared_toast_can_remain_persistent_while_a_task_runs(self):
+        self.assertIn("persistent: Boolean(options.persistent)", self.console_js)
+        self.assertIn('toast?.dataset?.toastPersistent === "true"', self.console_js)
+        self.assertIn("applyToastMeta(toast, { key: toastKey, ok, message, target, status, scheduled, persistent })", self.console_js)
+        self.assertIn("if (existingToast && !toastReplacementInProgress)", self.console_js)
 
     def test_history_media_urls_preserve_admin_workspace_context(self):
         self.assertIn("function authenticatedMediaUrl(value)", self.workbench_js)

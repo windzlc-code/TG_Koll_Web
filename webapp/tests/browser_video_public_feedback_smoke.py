@@ -133,8 +133,11 @@ def main() -> None:
             set_file("audio", "voice.wav", "audio/wav")
 
         def generate_copy_then_submit() -> None:
+            posts_before = task_state["task_post_count"]
             page.locator("#videoWorkbenchRoot button[type='submit']").click()
-            page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]').wait_for(state="visible")
+            info = page.locator('[data-vecto-public-info-toast="true"]')
+            info.wait_for(state="visible")
+            assert "正在生成提示词 / 文案" in info.inner_text()
             page.locator('[data-video-field="speech_text"]').wait_for(state="visible")
             page.wait_for_function(
                 """() => String(document.querySelector('[data-video-field="speech_text"]')?.value || '').trim() === '验证口播文案'"""
@@ -142,32 +145,22 @@ def main() -> None:
             assert page.locator(".video-speech-modal").count() == 0
             assert page.locator("[data-video-prompt-preview-prompt]").count() == 0
             page.wait_for_function("() => document.querySelectorAll('.vecto-public-prompt').length === 0")
-            assert task_state["task_post_count"] == 0, task_state
+            assert task_state["task_post_count"] == posts_before, task_state
             page.locator("#videoWorkbenchRoot button[type='submit']").click()
 
         upload_video_sources()
-
-        page.locator("#videoWorkbenchRoot button[type='submit']").click()
+        generate_copy_then_submit()
         busy = page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]')
         busy.wait_for(state="visible")
-        assert busy.locator("[data-public-prompt-step]").count() == 6
+        assert busy.locator("[data-public-prompt-step]").count() == 3
         assert busy.locator('[data-public-prompt-step-status="active"]').count() >= 1
         first_progress = busy.locator("[data-public-prompt-message]").inner_text()
         page.wait_for_timeout(1700)
         second_progress = busy.locator("[data-public-prompt-message]").inner_text()
         assert first_progress == second_progress, (first_progress, second_progress)
         assert busy.locator(".vecto-public-prompt-dialog").evaluate("(node) => getComputedStyle(node).animationName === 'none'")
-        assert page.locator(".video-speech-modal").count() == 0
-        assert page.locator("[data-video-prompt-preview-prompt]").count() == 0
-        page.wait_for_function(
-            """() => String(document.querySelector('[data-video-field="speech_text"]')?.value || '').trim() === '验证口播文案'"""
-        )
-        page.wait_for_function("() => document.querySelectorAll('.vecto-public-prompt').length === 0")
-        assert task_state["task_post_count"] == 0, task_state
-        page.locator("#videoWorkbenchRoot button[type='submit']").click()
         busy = page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]')
-        busy.wait_for(state="visible")
-        assert busy.locator("[data-public-prompt-step]").count() == 6
+        assert busy.locator("[data-public-prompt-step]").count() == 3
         busy.locator("[data-public-prompt-minimize]").click()
         assert page.locator('.vecto-public-prompt[data-public-prompt-minimized="true"] [data-public-prompt-restore]').is_visible()
         page.wait_for_timeout(2500)
@@ -180,7 +173,7 @@ def main() -> None:
         page.locator('.vecto-public-prompt[data-public-prompt-status="success"]').wait_for(state="visible")
         assert "生成完成" in page.locator(".vecto-public-prompt").inner_text()
         assert "同步到视频记录" in page.locator(".vecto-public-prompt").inner_text()
-        assert page.locator('.vecto-public-prompt [data-public-prompt-step-status="complete"]').count() == 6
+        assert page.locator('.vecto-public-prompt [data-public-prompt-step-status="complete"]').count() == 3
         assert record_state["polls"] >= 2, record_state
         assert "继续生成视频" not in page.locator(".vecto-public-prompt").inner_text()
         page.locator(".vecto-public-prompt [data-public-prompt-close]").click()

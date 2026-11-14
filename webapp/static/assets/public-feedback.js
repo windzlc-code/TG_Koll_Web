@@ -337,7 +337,144 @@
     return handle;
   }
 
-  window.VectoPublicPrompt = { open, confirm, showError, showInsufficientPoints, localizeError: extractError };
+  const infoToastState = { handle: null };
+
+  function infoToastText(config) {
+    return [config.title, config.message]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .join("：");
+  }
+
+  function infoToastIcon(status) {
+    const normalized = String(status || "info").trim().toLowerCase();
+    if (["progress", "running", "queued"].includes(normalized)) {
+      return `<svg class="toast-status-spinner" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5"></path></svg>`;
+    }
+    if (["error", "failed", "warning", "warn"].includes(normalized)) {
+      return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.5 8.5 7 7m0-7-7 7"></path></svg>`;
+    }
+    return `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7.5 12.25 3 3 6-6.5"></path></svg>`;
+  }
+
+  function createFallbackInfoToast(initialOptions = {}) {
+    if (infoToastState.handle?.isOpen?.()) infoToastState.handle.close();
+    const config = {
+      key: "vecto-public-info",
+      title: "操作提示",
+      message: "",
+      status: "info",
+      busy: false,
+      persistent: false,
+      ...initialOptions,
+    };
+    let closed = false;
+    let expiryTimer = 0;
+    const host = document.getElementById("toastHost") || (() => {
+      const node = document.createElement("div");
+      node.id = "toastHost";
+      node.className = "toast-host";
+      node.setAttribute("aria-live", "polite");
+      node.setAttribute("aria-atomic", "false");
+      document.body.appendChild(node);
+      return node;
+    })();
+    const toast = document.createElement("div");
+    toast.dataset.vectoPublicInfoToast = "true";
+    toast.dataset.toastKey = String(config.key || "vecto-public-info");
+    toast.innerHTML = `<span class="toast-message-status-icon" aria-hidden="true"></span><span class="toast-message-body"><span class="toast-message-text"></span></span><button type="button" class="toast-message-close" aria-label="关闭提示">×</button>`;
+    const clearExpiry = () => {
+      if (expiryTimer) window.clearTimeout(expiryTimer);
+      expiryTimer = 0;
+    };
+    const close = () => {
+      if (closed) return handle;
+      closed = true;
+      clearExpiry();
+      toast.remove();
+      if (infoToastState.handle === handle) infoToastState.handle = null;
+      return handle;
+    };
+    const render = () => {
+      if (closed) return;
+      const status = String(config.status || "info").trim().toLowerCase();
+      const failed = ["error", "failed"].includes(status);
+      const terminal = !config.busy || ["success", "error", "failed", "warning", "cancelled"].includes(status);
+      toast.className = `toast-message ${failed ? "is-bad" : "is-ok"} ${terminal ? "is-terminal" : "is-active"} is-status-${status || "success"}`;
+      toast.dataset.toastStatus = status || "success";
+      toast.dataset.toastPersistent = config.persistent ? "true" : "false";
+      toast.querySelector(".toast-message-status-icon").innerHTML = infoToastIcon(status);
+      toast.querySelector(".toast-message-text").textContent = infoToastText(config);
+      clearExpiry();
+      if (!config.persistent) expiryTimer = window.setTimeout(close, 5000);
+    };
+    const handle = {
+      element: toast,
+      isToast: true,
+      isOpen: () => !closed,
+      update(patch = {}) {
+        if (closed) return handle;
+        Object.assign(config, patch);
+        if (Object.prototype.hasOwnProperty.call(patch, "busy") && !Object.prototype.hasOwnProperty.call(patch, "persistent")) {
+          config.persistent = Boolean(config.busy);
+        }
+        render();
+        return handle;
+      },
+      close,
+    };
+    toast.querySelector(".toast-message-close").addEventListener("click", close);
+    host.appendChild(toast);
+    infoToastState.handle = handle;
+    render();
+    return handle;
+  }
+
+  function showInfo(options = {}) {
+    const initialOptions = {
+      title: options.title || "操作提示",
+      message: options.message || "",
+      status: options.status || (options.busy ? "progress" : "info"),
+      busy: Boolean(options.busy),
+      persistent: options.persistent ?? Boolean(options.busy),
+      key: options.key || "vecto-public-info",
+    };
+    const native = window.VectoConsoleFeedback;
+    if (!native?.show) return createFallbackInfoToast(initialOptions);
+    let closed = false;
+    let config = { ...initialOptions };
+    const emit = () => {
+      const status = String(config.status || "info").trim().toLowerCase();
+      native.show(infoToastText(config), !["error", "failed"].includes(status), {
+        key: config.key,
+        status,
+        persistent: Boolean(config.persistent),
+      });
+    };
+    const handle = {
+      isToast: true,
+      isOpen: () => !closed,
+      update(patch = {}) {
+        if (closed) return handle;
+        config = { ...config, ...patch };
+        if (Object.prototype.hasOwnProperty.call(patch, "busy") && !Object.prototype.hasOwnProperty.call(patch, "persistent")) {
+          config.persistent = Boolean(config.busy);
+        }
+        emit();
+        return handle;
+      },
+      close() {
+        if (closed) return handle;
+        closed = true;
+        native.dismiss?.(config.key, { manual: true });
+        return handle;
+      },
+    };
+    emit();
+    return handle;
+  }
+
+  window.VectoPublicPrompt = { open, confirm, showError, showInfo, showInsufficientPoints, localizeError: extractError };
   window.addEventListener("vecto:billing-insufficient", () => {
     if (document.body?.classList.contains("video-page")) showInsufficientPoints();
   });

@@ -85,7 +85,8 @@ assert.match(source, /data-video-prompt-preview-speech/);
 assert.match(source, /AI 文案预览与确认/);
 assert.match(source, /function requiresPromptPreviewForSubmit\(/);
 assert.match(source, /draft\.values\.speech_text = String\(preview\.speech_text\)\.trim\(\)/);
-assert.match(source, /progress\?\.close\?\.\(\)/);
+assert.match(source, /function openVideoInfo\(/);
+assert.match(source, /updateVideoSuccess\(\s*progress,/);
 assert.match(functionBody("submit"), /!draft\.values\._prompt_preview_ready\s*\|\|\s*!draft\.values\._prompt_preview/);
 assert.match(functionBody("submit"), /await generatePromptDraft\(\{ autoSubmit: false \}\)/);
 assert.doesNotMatch(functionBody("submit"), /await generatePromptDraft\(\{ autoSubmit: true \}\)/);
@@ -94,6 +95,8 @@ assert.match(source, /async function submitPreparedVideoTask\(/);
 assert.match(source, /async function submitVisualFinalizeTask\(/);
 assert.match(source, /stage: "auto_finalizing"/);
 assert.match(source, /const VIDEO_PROGRESS_STEP_DEFINITIONS = \[/);
+assert.match(source, /const VIDEO_PUBLIC_PROGRESS_KEYS = new Set\(\["prepare", "generate", "archive"\]\)/);
+assert.match(source, /const VIDEO_PUBLIC_PROGRESS_STAGE_MAP = \{/);
 assert.match(source, /label: "准备"/);
 assert.match(source, /label: "归档"/);
 assert.match(source, /function progressStepsForMonitor\(/);
@@ -176,6 +179,41 @@ invalidatePromptPreview({ id: "digital_human_video" }, staleDraft, "speech_text"
 assert.equal(staleDraft.values._prompt_preview, undefined);
 assert.equal(staleDraft.values._prompt_preview_ready, false);
 assert.equal(staleDraft.values._prompt_preview_confirmed, undefined);
+
+const generatedDraft = { values: {
+  product_details: "旧产品信息",
+  speech_text: "旧 AI 文案",
+  _prompt_preview: { speech_text: "旧 AI 文案" },
+  _generated_speech_text: "旧 AI 文案",
+  _prompt_preview_ready: true,
+} };
+const invalidatedGeneratedSpeech = invalidatePromptPreview({ id: "digital_human_video" }, generatedDraft, "product_details");
+assert.equal(invalidatedGeneratedSpeech, true);
+assert.equal(generatedDraft.values.speech_text, "");
+assert.equal(generatedDraft.values._prompt_preview_stale, true);
+
+const authoredDraft = { values: {
+  product_details: "旧产品信息",
+  speech_text: "用户自己写的文案",
+  _prompt_preview: { speech_text: "旧 AI 文案" },
+  _generated_speech_text: "旧 AI 文案",
+  _prompt_preview_ready: true,
+} };
+assert.equal(invalidatePromptPreview({ id: "digital_human_video" }, authoredDraft, "product_details"), false);
+assert.equal(authoredDraft.values.speech_text, "用户自己写的文案");
+
+const sameTextManualDraft = { values: {
+  product_details: "旧产品信息",
+  speech_text: "与 AI 相同的手动文案",
+  _prompt_preview: { speech_text: "与 AI 相同的手动文案" },
+  _generated_speech_text: "与 AI 相同的手动文案",
+  _speech_text_source: "ai",
+  _prompt_preview_ready: true,
+} };
+invalidatePromptPreview({ id: "digital_human_video" }, sameTextManualDraft, "speech_text");
+assert.equal(sameTextManualDraft.values._speech_text_source, "manual");
+assert.equal(invalidatePromptPreview({ id: "digital_human_video" }, sameTextManualDraft, "product_details"), false);
+assert.equal(sameTextManualDraft.values.speech_text, "与 AI 相同的手动文案");
 
 const voiceMapping = functionBody("publicSubmitValues");
 assert.match(voiceMapping, /values\.speaker\s*=\s*draft\.values\.voice_name\s*\|\|\s*draft\.values\.speaker\s*\|\|\s*""/);

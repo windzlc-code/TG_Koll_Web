@@ -2400,6 +2400,10 @@ function clearToastRemovalTimer(toast) {
 function scheduleToastExpiry(toast) {
   const existingTimer = toastTimers.get(toast);
   if (existingTimer) window.clearTimeout(existingTimer);
+  if (toast?.dataset?.toastPersistent === "true") {
+    toastTimers.delete(toast);
+    return;
+  }
   toastTimers.set(toast, window.setTimeout(() => dismissToast(toast), TOAST_DURATION));
 }
 
@@ -2567,7 +2571,7 @@ function toastStatusIconMarkup(status = "") {
   </svg>`;
 }
 
-function applyToastMeta(toast, { key, ok, message, target, status, scheduled }) {
+function applyToastMeta(toast, { key, ok, message, target, status, scheduled, persistent }) {
   if (!toast) return;
   const normalizedStatus = normalizeToastStatus(status, ok);
   const terminal = ["success", "failed", "error", "cancelled", "warning", "warn"].includes(normalizedStatus)
@@ -2587,6 +2591,7 @@ function applyToastMeta(toast, { key, ok, message, target, status, scheduled }) 
   } else {
     delete toast.dataset.toastScheduled;
   }
+  toast.dataset.toastPersistent = persistent ? "true" : "false";
   applyToastTargetMeta(toast, target, ok);
   const iconNode = toast.querySelector(".toast-message-status-icon");
   if (iconNode) iconNode.innerHTML = toastStatusIconMarkup(normalizedStatus);
@@ -2614,6 +2619,7 @@ function applyToastTargetMeta(toast, target, ok = true) {
 function updateToastInPlace(toast, request) {
   if (!toast) return;
   applyToastMeta(toast, request);
+  scheduleToastExpiry(toast);
   toast.classList.add("is-state-settled");
 }
 
@@ -2729,7 +2735,7 @@ async function openToastTarget(rawTarget) {
 }
 
 function createToast(request) {
-  const { host, toastKey, ok, message, target, status, scheduled, stack } = request;
+  const { host, toastKey, ok, message, target, status, scheduled, persistent, stack } = request;
   const toast = document.createElement("div");
   toast.innerHTML = `
     <span class="toast-message-status-icon" aria-hidden="true"></span>
@@ -2740,7 +2746,7 @@ function createToast(request) {
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"></path></svg>
     </button>
   `;
-  applyToastMeta(toast, { key: toastKey, ok, message, target, status, scheduled });
+  applyToastMeta(toast, { key: toastKey, ok, message, target, status, scheduled, persistent });
   if (stack) toast.dataset.toastStacked = "true";
   host.appendChild(toast);
   toast.querySelector(".toast-message-close")?.addEventListener("click", (event) => {
@@ -2812,6 +2818,7 @@ function showToast(text, ok = true, options = {}) {
     target,
     status,
     scheduled,
+    persistent: Boolean(options.persistent),
     stack: Boolean(options.stack),
   };
   if (deliverOnce) deliveredToastStateKeys.add(toastStateKey);
@@ -2853,6 +2860,14 @@ function showToast(text, ok = true, options = {}) {
   pendingToastRequest = request;
   return flushPendingToast() || existingToast;
 }
+
+// Expose the same single-card feedback lane to standalone workbenches. The
+// video page does not load the full console controller, but it can still use
+// this native toast implementation whenever it is embedded in console.html.
+window.VectoConsoleFeedback = {
+  show: (...args) => showToast(...args),
+  dismiss: (...args) => dismissToastByKey(...args),
+};
 
 function defaultToastTargetForMessage(id) {
   const cleanId = String(id || "").trim();
