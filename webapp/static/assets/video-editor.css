@@ -16,7 +16,7 @@
 
 .video-studio-toolbar {
   align-items: center;
-  background: linear-gradient(112deg, #f8fafb 0%, #eef4f5 58%, #e8f3f1 100%);
+  background: transparent;
   border: 0;
   border-radius: 15px;
   display: grid;
@@ -41,7 +41,7 @@
 .video-studio-tabs {
   align-items: center;
   background: #e9f0f2;
-  border: 1px solid #c8d3dd;
+  border: 2px solid #8fa4af;
   border-radius: 999px;
   display: flex;
   gap: 0;
