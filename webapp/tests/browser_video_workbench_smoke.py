@@ -63,8 +63,7 @@ def main() -> None:
             wait_until="networkidle",
         )
         page.locator("#videoWorkbenchRoot .video-workbench-shell").wait_for(state="visible")
-        hero_box = page.locator(".video-workbench-hero").bounding_box()
-        assert hero_box and 50 <= hero_box["height"] <= 56, hero_box
+        assert page.locator(".video-workbench-hero").count() == 0
         assert page.locator('#consoleSidebar [data-view="video_workspace"]').count() == 0
         assert page.locator("#consoleSidebar .nav-parent-toggle").count() == 0
         form_handle = page.locator("#videoWorkbenchForm").element_handle()
@@ -182,10 +181,7 @@ def main() -> None:
         for module_id in MODULES:
             page.locator(f'[data-video-module="{module_id}"]').first.click(force=True)
             page.locator(f'form[data-video-module-form="{module_id}"]').wait_for(state="visible")
-            hero_metrics = page.locator(".video-workbench-hero").evaluate(
-                "node => ({ clientHeight: node.clientHeight, scrollHeight: node.scrollHeight })"
-            )
-            assert hero_metrics["scrollHeight"] <= hero_metrics["clientHeight"], (module_id, hero_metrics)
+            assert page.locator(".video-workbench-hero").count() == 0
             query = parse_qs(urlparse(page.url).query)
             assert query.get("video_module") == [module_id]
 
@@ -283,8 +279,7 @@ def main() -> None:
             wait_until="networkidle",
         )
         page.locator("#videoWorkbenchRoot .video-workbench-shell").wait_for(state="visible")
-        mobile_hero_box = page.locator(".video-workbench-hero").bounding_box()
-        assert mobile_hero_box and 44 <= mobile_hero_box["height"] <= 50, mobile_hero_box
+        assert page.locator(".video-workbench-hero").count() == 0
         announcement = page.locator("[data-site-notification-broadcast]")
         if announcement.count() and announcement.first.is_visible():
             announcement.locator(".site-notification-broadcast-confirm").click()

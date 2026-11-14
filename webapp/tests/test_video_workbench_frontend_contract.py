@@ -211,7 +211,7 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertNotIn('class="video-module-switcher"', self.workbench_js)
         self.assertNotIn(".video-module-switcher", self.workbench_css)
         self.assertIn("function renderActiveModuleOnly()", self.workbench_js)
-        self.assertIn("currentHero.replaceWith(nextHero)", self.workbench_js)
+        self.assertNotIn("currentHero", self.workbench_js)
         self.assertIn("formPanel.innerHTML = renderForm(module)", self.workbench_js)
         self.assertIn("selectModule, refresh: loadTasks", self.workbench_js)
         self.assertIn('if (state.view === "video_workspace") {', self.console_js)
@@ -267,12 +267,11 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn("overflow: visible", self.workbench_css)
         self.assertNotIn("overflow-x: auto", self.workbench_css)
 
-    def test_editor_header_and_icons_follow_compact_vecto_visual_system(self):
-        hero = self.workbench_css.split(".video-workbench-hero {", 1)[1].split("}", 1)[0]
-        mark = self.workbench_css.split(".video-workbench-hero-mark {", 1)[1].split("}", 1)[0]
-        self.assertIn("min-height: 52px", hero)
-        self.assertIn("padding: 4px 10px", hero)
-        self.assertIn("var(--vecto-action-static-gradient", mark)
+    def test_workbench_removes_redundant_module_headers_and_keeps_compact_layout(self):
+        self.assertNotIn(".video-workbench-hero", self.workbench_css)
+        self.assertNotIn("function renderWorkbenchHero(", self.workbench_js)
+        self.assertIn("gap: 10px", self.workbench_css.split(".video-workbench-shell", 1)[1].split("}", 1)[0])
+        self.assertIn("padding: 11px 13px", self.workbench_css)
         self.assertIn("function workbenchIcon(name)", self.workbench_js)
         self.assertIn('workbenchIcon("refresh")', self.workbench_js)
         self.assertIn('workbenchIcon("play")', self.workbench_js)

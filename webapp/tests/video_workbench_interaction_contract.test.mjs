@@ -159,10 +159,12 @@ assert.equal(requiresPromptPreviewForSubmit({ id: "digital_human_video" }, { spe
 assert.equal(requiresPromptPreviewForSubmit({ id: "ecommerce_short_video" }, { speech_text: "用户已填写的口播" }), true);
 
 assert.match(source, /function renderDigitalHumanSettings\(/);
-assert.match(source, /AI 内容参考/);
-assert.match(source, /最终口播输入/);
-assert.match(source, /画面与音频设置/);
-assert.doesNotMatch(functionBody("renderDigitalHumanSettings"), /prompt_text/);
+const digitalHumanSettings = functionBody("renderDigitalHumanSettings");
+assert.doesNotMatch(digitalHumanSettings, /video-subsection-heading/);
+assert.doesNotMatch(digitalHumanSettings, /CONTENT REFERENCE|FINAL INPUT|OUTPUT SETTINGS/);
+assert.doesNotMatch(source, /function renderWorkbenchHero\(/);
+assert.doesNotMatch(source, /video-workbench-hero/);
+assert.doesNotMatch(digitalHumanSettings, /prompt_text/);
 
 const invalidatePreview = functionBody("invalidatePromptPreview");
 const invalidatePromptPreview = Function(

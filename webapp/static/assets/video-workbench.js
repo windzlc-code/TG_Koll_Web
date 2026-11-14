@@ -2147,18 +2147,14 @@
   function renderDigitalHumanSettings(fields, draft) {
     const fieldMap = new Map(fields.filter((field) => field.type !== "file").map((field) => [field.key, field]));
     const renderKeys = (keys) => keys.map((key) => fieldMap.get(key)).filter(Boolean).map((field) => renderInputField(field, draft.values[field.key])).join("");
-    const hasSpeech = Boolean(String(draft.values.speech_text || "").trim());
     return `<div class="video-digital-human-settings">
       <section class="video-form-subsection video-form-subsection--reference">
-        <div class="video-subsection-heading"><span>CONTENT REFERENCE</span><strong>AI 内容参考</strong><small>产品名称和简介只用于 AI 生成文案、画面提示词及分镜参考。</small></div>
         <div class="video-form-grid video-form-grid--content">${renderKeys(["product_name", "product_details"])}</div>
       </section>
       <section class="video-form-subsection video-form-subsection--script">
-        <div class="video-subsection-heading"><span>FINAL INPUT</span><strong>最终口播输入</strong><small>${hasSpeech ? "已填写最终文案，产品简介可留空；提交时按此内容直接配音。" : "留空时会根据素材和 AI 内容参考生成文案，并直接回填到此输入框供你修改。"}</small></div>
         <div class="video-form-grid video-form-grid--script">${renderKeys(["speech_text"])}</div>
       </section>
       <section class="video-form-subsection video-form-subsection--visual">
-        <div class="video-subsection-heading"><span>OUTPUT SETTINGS</span><strong>画面与音频设置</strong><small>口播语言和预设音色在素材区的“声音设置”中选择。</small></div>
         <div class="video-form-grid video-form-grid--visual">${renderKeys(["minimax_tts_model", "ratio", "image_resolution", "digital_human_short_mode", "oral_target_duration_seconds"])}</div>
       </section>
     </div>`;
@@ -3055,33 +3051,15 @@
     if (nextList) nextList.scrollTop = scrollTop;
   }
 
-  function renderWorkbenchHero(module) {
-    const moduleGroup = MODULE_ORDER.indexOf(module.id) < 4 ? "视频生成" : "图片素材";
-    return `<header class="video-workbench-hero">
-      <div class="video-workbench-hero-mark">${moduleIcon(module.id)}</div>
-      <div class="video-workbench-hero-copy">
-        <span>${escapeHtml(module.kicker)}</span>
-        <h3>${escapeHtml(module.label)}</h3>
-        <p>${escapeHtml(module.description)}</p>
-      </div>
-      <div class="video-workbench-hero-meta"><span><i></i>${escapeHtml(moduleGroup)}</span><small>草稿自动保存 · 任务统一管理</small></div>
-    </header>`;
-  }
-
   function renderActiveModuleOnly() {
     const root = document.getElementById("videoWorkbenchRoot");
-    const currentHero = root?.querySelector(".video-workbench-hero");
     const formPanel = root?.querySelector(".video-form-panel");
-    if (!root || !currentHero || !formPanel) {
+    if (!root || !formPanel) {
       render();
       return;
     }
     const module = currentModule();
     loadDraft(module);
-    const template = document.createElement("template");
-    template.innerHTML = renderWorkbenchHero(module).trim();
-    const nextHero = template.content.firstElementChild;
-    if (nextHero) currentHero.replaceWith(nextHero);
     formPanel.innerHTML = renderForm(module);
   }
 
@@ -3097,7 +3075,6 @@
     state.playingVoiceId = "";
     const voiceFields = resolvedFields(module, draft.values).filter((field) => field.type !== "file" && field.placement === "voice");
     root.innerHTML = `<div class="video-workbench-shell">
-      ${renderWorkbenchHero(module)}
       ${state.moduleError ? `<div class="video-catalog-notice is-fallback"><strong>已启用本地模块配置</strong><span>在线模块目录暂不可用，当前功能与字段仍可正常使用。</span><button type="button" data-video-retry-modules>重新连接</button></div>` : ""}
       ${state.moduleEmpty ? `<div class="video-catalog-notice"><strong>模块接口返回空列表</strong><span>已显示内置的 8 个模块合同。</span></div>` : ""}
       <div class="video-workbench-grid">
