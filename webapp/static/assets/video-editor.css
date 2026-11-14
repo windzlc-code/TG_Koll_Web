@@ -32,7 +32,10 @@
 }
 
 .video-studio-toolbar.is-records-view {
-  display: none;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  min-height: 76px;
 }
 
 .video-studio-tabs {

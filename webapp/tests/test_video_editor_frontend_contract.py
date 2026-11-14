@@ -71,10 +71,11 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertIn('video-editor-toolbar--compact', VIDEO_EDITOR)
         self.assertNotIn('class="video-editor-heading"', VIDEO_EDITOR)
 
-    def test_records_tabs_share_the_search_row_without_the_obsolete_heading(self):
+    def test_records_tabs_use_the_stable_toolbar_without_the_obsolete_heading(self):
         self.assertIn('function mountStudioTabs(', VIDEO_RECORDS)
         self.assertIn('const studioTabs = document.getElementById("videoStudioTabs")', VIDEO_RECORDS)
-        self.assertIn('tools.prepend(tabs)', VIDEO_RECORDS)
+        self.assertIn('const toolbar = document.getElementById("videoStudioToolbar")', VIDEO_RECORDS)
+        self.assertNotIn('tools.prepend(tabs)', VIDEO_RECORDS)
         self.assertIn('mountStudioTabs(studioTabs)', VIDEO_RECORDS)
         self.assertIn('if (heading) heading.innerHTML = ""', VIDEO_RECORDS)
         self.assertNotIn('VIDEO ARCHIVE', VIDEO_RECORDS)
@@ -82,7 +83,6 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertIn('toolbar.prepend(tabs)', VIDEO_EDITOR)
         self.assertIn('classList.toggle("is-records-view", activeStudioTab === "records")', VIDEO_PAGE)
         self.assertIn('.video-studio-toolbar.is-records-view', VIDEO_EDITOR_CSS)
-        self.assertIn('.video-records-tools > .video-studio-tabs', VIDEO_EDITOR_CSS)
 
     def test_studio_tabs_keep_a_stable_capsule_indicator_and_record_text_scope(self):
         self.assertIn('videoStudioTabs.classList.toggle("is-editor-active"', VIDEO_PAGE)
@@ -90,6 +90,7 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertIn('.video-studio-tabs::before', VIDEO_EDITOR_CSS)
         self.assertIn('.video-studio-tabs.is-editor-active::before', VIDEO_EDITOR_CSS)
         self.assertIn('flex: 1 1 0', VIDEO_EDITOR_CSS)
+        self.assertIn('min-height: 76px', VIDEO_EDITOR_CSS)
         self.assertIn('.video-records-tools > div:first-of-type > span', VIDEO_EDITOR_CSS)
         self.assertNotIn('.video-records-tools span {', VIDEO_EDITOR_CSS)
 

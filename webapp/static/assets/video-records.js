@@ -37,9 +37,9 @@
   const brandIcon = (name, className = "") => window.VideoIcons?.renderBrand?.(name, className) || "";
 
   function mountStudioTabs(tabs = document.getElementById("videoStudioTabs")) {
-    const tools = root()?.querySelector(".video-records-tools");
-    if (!tabs || !tools || tabs.parentElement === tools) return;
-    tools.prepend(tabs);
+    const toolbar = document.getElementById("videoStudioToolbar");
+    if (!tabs || !toolbar || tabs.parentElement === toolbar) return;
+    toolbar.prepend(tabs);
   }
 
   function mediaUrl(value) {
