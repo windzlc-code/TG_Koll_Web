@@ -70,8 +70,10 @@ class VideoEditorFrontendContractTests(unittest.TestCase):
         self.assertIn('.video-upload-drop.is-dragging', VIDEO_EDITOR_CSS)
 
     def test_records_tabs_share_the_search_row_without_the_obsolete_heading(self):
-        self.assertIn('function mountStudioTabs()', VIDEO_RECORDS)
+        self.assertIn('function mountStudioTabs(', VIDEO_RECORDS)
+        self.assertIn('const studioTabs = document.getElementById("videoStudioTabs")', VIDEO_RECORDS)
         self.assertIn('tools.prepend(tabs)', VIDEO_RECORDS)
+        self.assertIn('mountStudioTabs(studioTabs)', VIDEO_RECORDS)
         self.assertIn('if (heading) heading.innerHTML = ""', VIDEO_RECORDS)
         self.assertNotIn('VIDEO ARCHIVE', VIDEO_RECORDS)
         self.assertIn('function mountStudioTabs()', VIDEO_EDITOR)

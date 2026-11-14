@@ -36,8 +36,7 @@
   const icon = (name, className = "") => window.VideoIcons?.render?.(name, className) || "";
   const brandIcon = (name, className = "") => window.VideoIcons?.renderBrand?.(name, className) || "";
 
-  function mountStudioTabs() {
-    const tabs = document.getElementById("videoStudioTabs");
+  function mountStudioTabs(tabs = document.getElementById("videoStudioTabs")) {
     const tools = root()?.querySelector(".video-records-tools");
     if (!tabs || !tools || tabs.parentElement === tools) return;
     tools.prepend(tabs);
@@ -203,6 +202,7 @@
     const host = root();
     if (!host) return;
     const hasStaleItems = state.items.length > 0;
+    const studioTabs = document.getElementById("videoStudioTabs");
     const heading = headingRoot();
     if (heading) heading.innerHTML = "";
     host.innerHTML = `<div class="video-records-app">
@@ -225,7 +225,7 @@
         ${!state.error || hasStaleItems ? `<div class="video-records-grid">${state.items.length ? state.items.map(card).join("") : '<div class="video-records-state"><strong>暂时没有符合条件的视频</strong><span>完成视频生成后，记录会自动保存到这里。</span></div>'}</div>${renderPagination()}` : ""}
       </section>
     </div>`;
-    mountStudioTabs();
+    mountStudioTabs(studioTabs);
   }
 
   async function load({ sync = false } = {}) {
