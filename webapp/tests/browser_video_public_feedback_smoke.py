@@ -37,6 +37,7 @@ def main() -> None:
             "finalize_count": 0,
             "final_polls": 0,
         }
+        prompt_state = {"count": 0}
         record_asset_requests: list[str] = []
         record_state = {"polls": 0}
 
@@ -91,10 +92,12 @@ def main() -> None:
             fulfill_json(route, {"items": [{"id": "browser-record", "source_task_id": source_task_id, "source_type": "generated", "name": "浏览器反馈视频", "media_url": "/api/video/editor/assets/browser-record/media", "download_url": "/api/video/editor/assets/browser-record/download"}], "total": 1, "total_pages": 1})
 
         page.route("**/api/video/editor/assets**", handle_record_assets)
-        page.route(
-            "**/api/video/prompt-preview",
-            lambda route: fulfill_json(route, {"speech_text": "验证口播文案", "prompt_text": "验证画面提示词"}),
-        )
+        def handle_prompt_preview(route):
+            prompt_state["count"] += 1
+            speech = "验证口播文案" if prompt_state["count"] == 1 else f"刷新口播文案 {prompt_state['count']}"
+            fulfill_json(route, {"speech_text": speech, "prompt_text": "验证画面提示词"})
+
+        page.route("**/api/video/prompt-preview", handle_prompt_preview)
         page.route("**/api/video/voice-presets", lambda route: fulfill_json(route, {"items": []}))
         page.add_init_script(
             """
@@ -123,6 +126,33 @@ def main() -> None:
         announcement = page.locator("[data-site-notification-broadcast]")
         if announcement.count() and announcement.first.is_visible():
             announcement.locator(".site-notification-broadcast-confirm").click()
+        page.evaluate(
+            """() => {
+              window.__videoInfoExpiryHandle = window.VectoPublicPrompt.showInfo({
+                key: "browser-info-expiry",
+                title: "临时提示",
+                message: "这条提示应自动消失",
+                status: "progress",
+                busy: true,
+                persistent: false,
+              });
+            }"""
+        )
+        expiry_toast = page.locator('[data-vecto-public-info-toast="true"][data-toast-key="browser-info-expiry"]')
+        expiry_toast.wait_for(state="visible")
+        assert expiry_toast.get_attribute("data-toast-persistent") == "false"
+        page.wait_for_timeout(5200)
+        assert expiry_toast.count() == 0
+        page.evaluate(
+            """() => window.__videoInfoExpiryHandle.update({
+              title: "临时提示已恢复",
+              message: "更新后仍可继续显示",
+              status: "success",
+              busy: false,
+            })"""
+        )
+        page.locator('[data-vecto-public-info-toast="true"][data-toast-key="browser-info-expiry"]').wait_for(state="visible")
+        page.evaluate("() => window.__videoInfoExpiryHandle.close()")
 
         def set_file(field: str, filename: str, mime: str) -> None:
             page.locator(f'[data-video-file-field="{field}"] input[type="file"]').set_input_files({"name": filename, "mimeType": mime, "buffer": PNG_1X1})
@@ -132,24 +162,52 @@ def main() -> None:
             set_file("product", "product.png", "image/png")
             set_file("audio", "voice.wav", "audio/wav")
 
-        def generate_copy_then_submit() -> None:
+        def next_expected_speech() -> str:
+            return "验证口播文案" if prompt_state["count"] == 0 else f"刷新口播文案 {prompt_state['count'] + 1}"
+
+        def generate_copy_only() -> str:
             posts_before = task_state["task_post_count"]
+            expected_speech = next_expected_speech()
             page.locator("#videoWorkbenchRoot button[type='submit']").click()
-            info = page.locator('[data-vecto-public-info-toast="true"]')
+            info = page.locator('[data-vecto-public-info-toast="true"][data-toast-key="video-workbench:prompt-generation"]')
             info.wait_for(state="visible")
             assert "正在生成提示词 / 文案" in info.inner_text()
+            assert info.get_attribute("data-toast-persistent") == "false"
+            prompt_button = page.locator("[data-video-generate-prompt]")
+            prompt_button.wait_for(state="visible")
+            assert prompt_button.is_disabled()
+            spinner = prompt_button.locator(".video-button-spinner")
+            assert spinner.count() == 1
+            assert spinner.evaluate("node => getComputedStyle(node).animationName") == "video-spin"
+            assert spinner.evaluate("node => getComputedStyle(node).borderTopColor") != "rgb(255, 255, 255)"
             page.locator('[data-video-field="speech_text"]').wait_for(state="visible")
             page.wait_for_function(
-                """() => String(document.querySelector('[data-video-field="speech_text"]')?.value || '').trim() === '验证口播文案'"""
+                """expected => String(document.querySelector('[data-video-field="speech_text"]')?.value || '').trim() === expected""",
+                arg=expected_speech,
             )
             assert page.locator(".video-speech-modal").count() == 0
             assert page.locator("[data-video-prompt-preview-prompt]").count() == 0
             page.wait_for_function("() => document.querySelectorAll('.vecto-public-prompt').length === 0")
             assert task_state["task_post_count"] == posts_before, task_state
+
+            return expected_speech
+
+        def generate_copy_then_submit() -> None:
+            generate_copy_only()
             page.locator("#videoWorkbenchRoot button[type='submit']").click()
 
         upload_video_sources()
-        generate_copy_then_submit()
+        first_speech = generate_copy_only()
+        refreshed_speech = next_expected_speech()
+        page.locator("[data-video-generate-prompt]").click()
+        page.locator("[data-video-generate-prompt] .video-button-spinner").wait_for(state="visible")
+        page.wait_for_function(
+            """expected => String(document.querySelector('[data-video-field="speech_text"]')?.value || '').trim() === expected""",
+            arg=refreshed_speech,
+        )
+        assert refreshed_speech != first_speech
+        page.wait_for_function("() => document.querySelectorAll('.vecto-public-prompt').length === 0")
+        page.locator("#videoWorkbenchRoot button[type='submit']").click()
         busy = page.locator('.vecto-public-prompt[data-public-prompt-busy="true"]')
         busy.wait_for(state="visible")
         assert busy.locator("[data-public-prompt-step]").count() == 3

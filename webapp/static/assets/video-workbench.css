@@ -744,6 +744,11 @@
   animation: video-spin 700ms linear infinite;
 }
 
+.video-button--ghost .video-button-spinner {
+  border-color: color-mix(in srgb, var(--video-ink) 28%, transparent);
+  border-top-color: var(--video-ink);
+}
+
 .vecto-public-prompt-dialog {
   width: min(760px, calc(100vw - 32px));
   gap: 16px;

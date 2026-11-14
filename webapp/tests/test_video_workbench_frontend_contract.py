@@ -159,11 +159,18 @@ console.log(JSON.stringify({{ sameBucket, invalidAcrossBucket, compatibleAcrossB
         self.assertIn("function openVideoProgress", self.workbench_js)
         self.assertIn("function showVideoError", self.workbench_js)
         self.assertIn("function openVideoInfo", self.workbench_js)
+        self.assertIn("persistent: false", self.workbench_js)
         self.assertIn("async function confirmVideoSubmit", self.workbench_js)
         self.assertNotIn("window.confirm(", self.workbench_js)
         self.assertIn("await window.VideoWorkbench.confirmLeave", self.video_page_js)
         self.assertIn("navigationSequence", self.video_page_js)
         self.assertIn("页面提示组件加载失败", self.workbench_js)
+
+    def test_prompt_preview_button_has_visible_spinner_and_finite_info_toast(self):
+        self.assertIn(".video-button--ghost .video-button-spinner", self.workbench_css)
+        self.assertIn("border-top-color: var(--video-ink);", self.workbench_css)
+        self.assertIn("const expire = () =>", self.public_feedback_js)
+        self.assertIn("window.setTimeout(expire, 5000)", self.public_feedback_js)
 
     def test_shared_toast_can_remain_persistent_while_a_task_runs(self):
         self.assertIn("persistent: Boolean(options.persistent)", self.console_js)

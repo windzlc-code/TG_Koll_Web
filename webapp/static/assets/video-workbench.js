@@ -849,7 +849,7 @@
         message: Array.isArray(message) ? message[0] : message,
         status: config.status || "progress",
         busy: config.busy !== false,
-        persistent: config.persistent ?? config.busy !== false,
+        persistent: false,
         key: config.key || "video-workbench:info",
       });
     }
@@ -1598,6 +1598,28 @@
     return submitValues;
   }
 
+  function promptPreviewValues(module, draft) {
+    const values = publicSubmitValues(module, draft);
+    if (module?.id !== "digital_human_video") return values;
+    const draftValues = draft?.values && typeof draft.values === "object" ? draft.values : {};
+    const currentSpeech = String(draftValues.speech_text || "").trim();
+    const generatedSpeech = String(
+      draftValues._generated_speech_text
+      || draftValues._prompt_preview?.speech_text
+      || "",
+    ).trim();
+    const speechSource = String(draftValues._speech_text_source || "").trim().toLowerCase();
+    const canRefreshGeneratedSpeech = Boolean(
+      currentSpeech
+      && generatedSpeech
+      && (speechSource === "ai" || currentSpeech === generatedSpeech),
+    );
+    if (!canRefreshGeneratedSpeech) return values;
+    values.speech_text = "";
+    values.use_ai_copy = true;
+    return values;
+  }
+
   async function generatePromptDraft({ autoSubmit = false } = {}) {
     if (state.promptGenerating || (state.submitting && !autoSubmit)) return false;
     const module = currentModule();
@@ -1618,7 +1640,7 @@
       key: "video-workbench:prompt-generation",
     });
     try {
-      const values = publicSubmitValues(module, draft);
+      const values = promptPreviewValues(module, draft);
       const preview = await confirmPromptPreview(module, values);
       if (!preview) {
         updateVideoSuccess(progress, "已取消生成", "已取消提示词 / 文案生成。", "你仍可以修改输入后再次点击生成。");

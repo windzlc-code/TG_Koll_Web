@@ -387,16 +387,21 @@
       if (expiryTimer) window.clearTimeout(expiryTimer);
       expiryTimer = 0;
     };
-    const close = () => {
-      if (closed) return handle;
-      closed = true;
+    const expire = () => {
+      if (closed) return;
       clearExpiry();
       toast.remove();
+    };
+    const close = () => {
+      if (closed) return handle;
+      expire();
+      closed = true;
       if (infoToastState.handle === handle) infoToastState.handle = null;
       return handle;
     };
     const render = () => {
       if (closed) return;
+      if (!toast.parentNode) host.appendChild(toast);
       const status = String(config.status || "info").trim().toLowerCase();
       const failed = ["error", "failed"].includes(status);
       const terminal = !config.busy || ["success", "error", "failed", "warning", "cancelled"].includes(status);
@@ -406,7 +411,7 @@
       toast.querySelector(".toast-message-status-icon").innerHTML = infoToastIcon(status);
       toast.querySelector(".toast-message-text").textContent = infoToastText(config);
       clearExpiry();
-      if (!config.persistent) expiryTimer = window.setTimeout(close, 5000);
+      if (!config.persistent) expiryTimer = window.setTimeout(expire, 5000);
     };
     const handle = {
       element: toast,
